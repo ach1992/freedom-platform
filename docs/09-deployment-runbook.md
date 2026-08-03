@@ -133,6 +133,8 @@ Writable runtime directories live under shared `storage`; do not grant `0777`. C
 
 ## 7. Activation and verification
 
+Before activation, production `.env` must set `APP_ENV=production`, `APP_DEBUG=false`, `SESSION_SECURE_COOKIE=true`, `SESSION_HTTP_ONLY=true`, `SESSION_SAME_SITE=lax`, `SESSION_ENCRYPT=true`, and `REDIS_QUEUE_RETRY_AFTER=420` or a larger reviewed value. The Redis retry interval must remain greater than every Supervisor worker timeout.
+
 For upgrades use the application updater described in `docs/18-update-rollback-runbook.md`. For first activation, the supplied bootstrap performs an atomic relative symlink switch. Then run:
 
 ```bash

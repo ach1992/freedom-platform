@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Unit\Shared\Domain;
 
 use App\Shared\Domain\Money;
+use InvalidArgumentException;
 use PHPUnit\Framework\TestCase;
 
 final class MoneyTest extends TestCase
@@ -23,5 +24,12 @@ final class MoneyTest extends TestCase
         self::assertSame('125', Money::irr(1250)->tomanDecimal());
         self::assertSame('125.1', Money::irr(1251)->tomanDecimal());
         self::assertSame('-125.1', Money::irr(-1251)->tomanDecimal());
+    }
+
+    public function test_integer_overflow_is_rejected_instead_of_becoming_a_float(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+
+        Money::irr(PHP_INT_MAX)->add(Money::irr(1));
     }
 }

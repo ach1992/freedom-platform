@@ -19,6 +19,10 @@ final readonly class Money implements JsonSerializable
 
     public static function irr(int $amount): self
     {
+        if ($amount === PHP_INT_MIN) {
+            throw new InvalidArgumentException('Money amount is outside the supported integer range.');
+        }
+
         return new self($amount, 'IRR');
     }
 
@@ -36,12 +40,24 @@ final readonly class Money implements JsonSerializable
     {
         $this->assertSameCurrency($other);
 
+        if (($other->amount > 0 && $this->amount > PHP_INT_MAX - $other->amount)
+            || ($other->amount < 0 && $this->amount < PHP_INT_MIN - $other->amount)
+        ) {
+            throw new InvalidArgumentException('Money addition would overflow the integer range.');
+        }
+
         return new self($this->amount + $other->amount, $this->currency);
     }
 
     public function subtract(self $other): self
     {
         $this->assertSameCurrency($other);
+
+        if (($other->amount < 0 && $this->amount > PHP_INT_MAX + $other->amount)
+            || ($other->amount > 0 && $this->amount < PHP_INT_MIN + $other->amount)
+        ) {
+            throw new InvalidArgumentException('Money subtraction would overflow the integer range.');
+        }
 
         return new self($this->amount - $other->amount, $this->currency);
     }
