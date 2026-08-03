@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-use App\Shared\Infrastructure\Http\CorrelationIdMiddleware;
 use App\Modules\Installer\Presentation\Console\IssueInstallerTokenCommand;
 use App\Modules\Installer\Presentation\Http\Middleware\EnsureInstallerAvailable;
 use App\Modules\Installer\Presentation\Http\Middleware\EnsureInstallerHttps;
 use App\Modules\Installer\Presentation\Http\Middleware\EnsureInstallerUnlocked;
 use App\Modules\Operations\Presentation\Console\HealthCheckCommand;
+use App\Shared\Infrastructure\Http\CorrelationIdMiddleware;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;

@@ -5,14 +5,14 @@ declare(strict_types=1);
 namespace Tests\Unit\Shared\Infrastructure\Logging;
 
 use App\Shared\Infrastructure\Logging\RedactSensitiveDataProcessor;
-use RuntimeException;
 use PHPUnit\Framework\TestCase;
+use RuntimeException;
 
 final class RedactSensitiveDataProcessorTest extends TestCase
 {
     public function test_it_recursively_redacts_sensitive_keys(): void
     {
-        $result = (new RedactSensitiveDataProcessor())->sanitize([
+        $result = (new RedactSensitiveDataProcessor)->sanitize([
             'order_id' => 'order-1',
             'provider' => [
                 'api_token' => 'do-not-log',
@@ -29,7 +29,7 @@ final class RedactSensitiveDataProcessorTest extends TestCase
 
     public function test_it_handles_numeric_keys_and_sanitizes_messages_and_throwables(): void
     {
-        $processor = new RedactSensitiveDataProcessor();
+        $processor = new RedactSensitiveDataProcessor;
         $result = $processor->sanitize([
             0 => ['api_token' => 'secret-value'],
             'exception' => new RuntimeException('password=do-not-log', 17),

@@ -13,7 +13,7 @@ final class User extends Authenticatable
 
     protected static function booted(): void
     {
-        static::creating(function (self $user): void {
+        self::creating(function (self $user): void {
             if (! is_string($user->public_id) || $user->public_id === '') {
                 $user->public_id = (string) Str::ulid();
             }

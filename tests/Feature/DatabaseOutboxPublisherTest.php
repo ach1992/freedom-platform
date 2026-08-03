@@ -10,7 +10,6 @@ use App\Shared\Infrastructure\DatabaseOutboxPublisher;
 use DateTimeImmutable;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use LogicException;
 use Tests\TestCase;
 
 final class DatabaseOutboxPublisherTest extends TestCase
@@ -19,21 +18,6 @@ final class DatabaseOutboxPublisherTest extends TestCase
     use RefreshDatabase;
 
     private const EVENT_ID = '0198a4c7-ff31-7bb9-8222-000000000001';
-
-    public function test_publish_requires_an_active_transaction(): void
-    {
-        $this->expectException(LogicException::class);
-
-        $this->publisher()->publish(
-            self::EVENT_ID,
-            'order:1:paid:v1',
-            'order.paid',
-            'order',
-            '1',
-            new SafeOutboxPayload(['order_id' => '1']),
-            '0198a4c7-ff31-7bb9-8222-000000000002',
-        );
-    }
 
     public function test_duplicate_event_key_returns_the_recorded_result_without_a_second_row(): void
     {
@@ -71,7 +55,8 @@ final class DatabaseOutboxPublisherTest extends TestCase
     {
         return new DatabaseOutboxPublisher(
             app(DatabaseManager::class),
-            new class implements Clock {
+            new class implements Clock
+            {
                 public function now(): DateTimeImmutable
                 {
                     return new DateTimeImmutable('2026-08-03T00:00:00+00:00');

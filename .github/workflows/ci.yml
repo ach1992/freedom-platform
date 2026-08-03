@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -126,16 +127,22 @@ jobs:
           php-version: "8.4"
           extensions: bcmath, curl, dom, fileinfo, intl, mbstring, openssl, pcntl, pdo_mysql, redis, sodium, xml
           coverage: none
-          tools: composer:2.8.12
+          tools: composer:2.10.2
       - name: Install locked dependencies
         run: composer install --no-interaction --prefer-dist --no-progress
-      - name: Run static gates
+      - name: Code style
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p build/evidence/static
+          vendor/bin/pint --test --format=json 2>&1 | tee build/evidence/static/pint.json
+      - name: Static analysis and repository policy
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p build/evidence/static
           composer validate --strict --no-check-publish 2>&1 | tee build/evidence/static/composer-validate.log
-          composer ci:static 2>&1 | tee build/evidence/static/static.log
+          vendor/bin/phpstan analyse --no-progress --error-format=table 2>&1 | tee build/evidence/static/phpstan.log
           composer ci:forbidden-patterns 2>&1 | tee build/evidence/static/forbidden-patterns.log
           composer ci:architecture 2>&1 | tee build/evidence/static/architecture.log
       - name: Upload static evidence
@@ -160,7 +167,7 @@ jobs:
           php-version: "8.4"
           extensions: bcmath, curl, dom, fileinfo, intl, mbstring, openssl, pcntl, pdo_mysql, redis, sodium, xml
           coverage: pcov
-          tools: composer:2.8.12
+          tools: composer:2.10.2
       - name: Start disposable dependencies
         run: docker compose -f docker-compose.ci.yml up -d --wait
       - name: Install locked dependencies
@@ -171,7 +178,14 @@ jobs:
           set -euo pipefail
           mkdir -p build/evidence/tests build/evidence/coverage build/evidence/services
           docker compose -f docker-compose.ci.yml ps > build/evidence/services/compose-ps.txt
-          composer ci:test 2>&1 | tee build/evidence/tests/test.log
+          test -f .env || cp .env.example .env
+          php artisan config:clear --ansi
+          COLUMNS=240 php artisan test \
+            --display-warnings \
+            --fail-on-warning \
+            --log-junit build/evidence/tests/junit.xml \
+            --coverage-clover build/evidence/coverage/clover.xml \
+            2>&1 | tee build/evidence/tests/test.log
           test -s build/evidence/tests/junit.xml
           test -s build/evidence/coverage/clover.xml
       - name: Capture dependency service logs
@@ -206,7 +220,7 @@ jobs:
         with:
           php-version: "8.4"
           coverage: none
-          tools: composer:2.8.12
+          tools: composer:2.10.2
       - name: Install locked dependencies
         run: composer install --no-interaction --prefer-dist --no-progress
       - name: Audit dependencies and licenses

@@ -18,6 +18,6 @@ final class RedactSensitiveLogs
             throw new LogicException('Sensitive log redaction requires a Monolog channel.');
         }
 
-        $underlying->pushProcessor(new RedactSensitiveDataProcessor());
+        $underlying->pushProcessor(new RedactSensitiveDataProcessor);
     }
 }

@@ -3,7 +3,7 @@
 Document version: `0.1.0`  
 Source baseline: Master Execution Prompt `1.0.0` dated `2026-08-03`  
 Ledger state: `active`  
-Implementation state: `in-progress`
+Implementation state: `foundation-handoff-ready`
 
 ## Purpose and rules
 
@@ -13,7 +13,7 @@ This is the program control ledger. It records phase scope, ownership, decisions
 
 | Phase | Scope | Accountable owner | Required independent review | Status | Gate evidence (future path) |
 |---|---|---|---|---|---|
-| `0.1.0` | Requirements, journeys, architecture, ERD, state machines, permissions, risks, threat model, test strategy, ADRs, traceability | Lead / Product / Architect | Security, Finance, QA | `in-review` | `evidence/0.1.0/quality-gate.md` |
+| `0.1.0` | Requirements, journeys, architecture, ERD, state machines, permissions, risks, threat model, test strategy, ADRs, traceability | Lead / Product / Architect | Security, Finance, QA | `passed` | `evidence/0.1.0/quality-gate.md` |
 | `0.2.0` | Laravel foundation, module skeleton, CI, installer skeleton, health, Outbox, idempotency, base schema, deployment layout | Architect / Platform | SRE, Security, QA | `in-progress` | `evidence/0.2.0/quality-gate.md` |
 | `0.3.0` | Identity, customers, agents, ACL, OTP/SMS, identity items, audit | Identity & Access | Security, QA | `planned` | `evidence/0.3.0/quality-gate.md` |
 | `0.4.0` | Catalog, offerings, servers, panels, capacity, custom plans, trials | Catalog / Provisioning | Architect, QA | `planned` | `evidence/0.4.0/quality-gate.md` |
@@ -28,31 +28,31 @@ This is the program control ledger. It records phase scope, ownership, decisions
 
 | Workstream | Primary owner | Review owner | Initial phase | Status |
 |---|---|---|---|---|
-| Product scope and Persian terminology | Product Analyst | Lead | `0.1.0` | `planned` |
-| Modular architecture and contracts | Solution Architect | Security | `0.1.0` | `planned` |
-| Schema and financial integrity | Financial Integrity Engineer | QA | `0.1.0` | `planned` |
+| Product scope and Persian terminology | Product Analyst | Lead | `0.1.0` | `baseline-complete` |
+| Modular architecture and contracts | Solution Architect | Security | `0.1.0` | `foundation-active` |
+| Schema and financial integrity | Financial Integrity Engineer | QA | `0.1.0` | `foundation-active` |
 | Telegram transport and UX | Telegram Engineer | Product | `0.2.0` | `planned` |
 | Payment integrations | Payment Engineer | Finance/Security | `0.5.0` | `planned` |
 | Panel adapters and provisioning | Provisioning Engineer | Architect/QA | `0.4.0` | `planned` |
 | Identity, ACL, and support | Identity & Access Engineer | Security | `0.3.0` | `planned` |
-| Deployment, backup, update, observability | SRE/Release Engineer | Security/QA | `0.2.0` | `planned` |
-| Automated quality evidence | QA Engineer | Lead | `0.2.0` | `planned` |
+| Deployment, backup, update, observability | SRE/Release Engineer | Security/QA | `0.2.0` | `foundation-active` |
+| Automated quality evidence | QA Engineer | Lead | `0.2.0` | `active` |
 | Independent security sign-off | Security Reviewer | Lead | `0.9.0` | `planned` |
 
 ## Baseline decisions
 
 | Decision | Baseline | Authority | Status |
 |---|---|---|---|
-| Architecture | Laravel `13.x` modular monolith; Application Services are presentation-independent | Master Prompt §4 | `planned` |
-| Runtime | Ubuntu 22.04, PHP 8.4 CLI and LSPHP, MariaDB, authenticated Redis | Master Prompt §2 | `planned` |
-| User interface | Telegram-first; Persian visible default; English fallback; future web UI reuses services | Master Prompt §§1, 17, 18 | `planned` |
-| Money | Integer IRR at rest; explicit tested Toman display; fixed-precision crypto | Master Prompt §5.1 | `planned` |
-| Payments | Exactly one captured settlement per order; wallet is a complete method; provider return is never proof | Master Prompt §§1.2, 9, 10 | `planned` |
-| Financial history | Immutable balanced ledger; compensating entries only | Master Prompt §14 | `planned` |
-| External effects | Transactional Outbox, idempotency keys, database uniqueness, bounded retries | Master Prompt §§4.2, 9.6, 24 | `planned` |
-| Deployment | Atomic release directories with `current` symlink; only `public/` web-accessible | Master Prompt §2.4 | `planned` |
-| Scheduling | Exactly one Laravel Scheduler Cron; workers supervised separately | Master Prompt §2.5 | `planned` |
-| Default verification | Card and gift card use `automatic_then_manual`; fake and Generic REST implementations required | Master Prompt §§11.1, 12.2 | `planned` |
+| Architecture | Laravel `13.x` modular monolith; Application Services are presentation-independent | Master Prompt §4 | `accepted` |
+| Runtime | Ubuntu 22.04, PHP 8.4 CLI and LSPHP, MariaDB, authenticated Redis | Master Prompt §2 | `accepted` |
+| User interface | Telegram-first; Persian visible default; English fallback; future web UI reuses services | Master Prompt §§1, 17, 18 | `accepted` |
+| Money | Integer IRR at rest; explicit tested Toman display; fixed-precision crypto | Master Prompt §5.1 | `accepted` |
+| Payments | Exactly one captured settlement per order; wallet is a complete method; provider return is never proof | Master Prompt §§1.2, 9, 10 | `accepted` |
+| Financial history | Immutable balanced ledger; compensating entries only | Master Prompt §14 | `accepted` |
+| External effects | Transactional Outbox, idempotency keys, database uniqueness, bounded retries | Master Prompt §§4.2, 9.6, 24 | `accepted` |
+| Deployment | Atomic release directories with `current` symlink; only `public/` web-accessible | Master Prompt §2.4 | `accepted` |
+| Scheduling | Exactly one Laravel Scheduler Cron; workers supervised separately | Master Prompt §2.5 | `accepted` |
+| Default verification | Card and gift card use `automatic_then_manual`; fake and Generic REST implementations required | Master Prompt §§11.1, 12.2 | `accepted` |
 
 ## Deferred owner decisions (not current blockers)
 
@@ -90,4 +90,4 @@ No secret belongs in chat, source control, fixtures, logs, screenshots, or evide
 
 ## Current ledger note
 
-The reviewed planning baseline and a partial `0.2.0` Laravel foundation now exist. PHP runtime gates remain unverified until GitHub Actions produces retained evidence. No provider was contacted and no deployment was performed.
+Phase `0.1.0` is closed and the `0.2.0` Laravel foundation has passed automated CI on PHP 8.4, MariaDB 11.4 and authenticated Redis. The codebase is ready for implementation handoff under the traceability and gate rules. Phase `0.2.0` remains `in-review` until a clean aaPanel/OpenLiteSpeed staging installation and rollback rehearsal are recorded. No external provider was contacted and no production deployment was performed.
