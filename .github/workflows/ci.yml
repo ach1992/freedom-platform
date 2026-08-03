@@ -135,7 +135,9 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p build/evidence/static
-          vendor/bin/pint --test --format=json 2>&1 | tee build/evidence/static/pint.json
+          vendor/bin/pint --format=json 2>&1 | tee build/evidence/static/pint.json
+          git diff -- app tests | tee build/evidence/static/pint.diff
+          git diff --exit-code -- app tests
       - name: Static analysis and repository policy
         shell: bash
         run: |
