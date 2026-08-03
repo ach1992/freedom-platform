@@ -37,10 +37,10 @@ final class RedactSensitiveDataProcessor
         );
     }
 
-     /**
-      * @param  array<array-key, mixed>  $values
-      * @return array<array-key, mixed>
-      */
+    /**
+     * @param  array<array-key, mixed>  $values
+     * @return array<array-key, mixed>
+     */
     public function sanitize(array $values): array
     {
         $sanitized = [];
