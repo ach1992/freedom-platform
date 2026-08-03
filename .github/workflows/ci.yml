@@ -142,7 +142,7 @@ jobs:
           set -euo pipefail
           mkdir -p build/evidence/static
           composer validate --strict --no-check-publish 2>&1 | tee build/evidence/static/composer-validate.log
-          vendor/bin/phpstan analyse --no-progress --error-format=github 2>&1 | tee build/evidence/static/phpstan.log
+          vendor/bin/phpstan analyse --no-progress --error-format=table 2>&1 | tee build/evidence/static/phpstan.log
           composer ci:forbidden-patterns 2>&1 | tee build/evidence/static/forbidden-patterns.log
           composer ci:architecture 2>&1 | tee build/evidence/static/architecture.log
       - name: Upload static evidence
