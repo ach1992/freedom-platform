@@ -1,0 +1,3 @@
+# Install exactly once for the production application user through aaPanel Cron or crontab.
+* * * * * cd /www/acdomains/hell.hellpservice.ir/current && /www/server/php/84/bin/php artisan schedule:run >> /dev/null 2>&1
+

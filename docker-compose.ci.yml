@@ -1,0 +1,49 @@
+name: freedom-platform-ci
+
+services:
+  mariadb:
+    image: mariadb:11.4
+    environment:
+      MARIADB_DATABASE: freedom_platform_ci
+      MARIADB_USER: freedom_ci
+      MARIADB_PASSWORD: ci-only-database-password
+      MARIADB_ROOT_PASSWORD: ci-only-root-password
+      TZ: UTC
+    ports:
+      - "127.0.0.1:33067:3306"
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --transaction-isolation=READ-COMMITTED
+    healthcheck:
+      test: ["CMD-SHELL", "mariadb-admin ping -h 127.0.0.1 -u freedom_ci -pci-only-database-password --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /var/lib/mysql
+      - /tmp
+    restart: "no"
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "no", "--save", "", "--requirepass", "ci-only-redis-password"]
+    ports:
+      - "127.0.0.1:6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "ci-only-redis-password", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /data
+      - /tmp
+    restart: "no"
+
