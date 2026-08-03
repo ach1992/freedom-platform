@@ -4,7 +4,7 @@ Production-grade Telegram commerce and lifecycle-management platform for VPN/pro
 
 ## Status
 
-Active greenfield development. The authoritative scope is maintained in
+Phase `0.1.0` planning is closed and the `0.2.0` Laravel foundation has passed its automated quality gates. A target-like aaPanel/OpenLiteSpeed installation rehearsal is still required before closing `0.2.0`. The authoritative scope is maintained in
 [`docs/specification/master-execution-prompt.md`](docs/specification/master-execution-prompt.md).
 
 The repository follows gated semantic phases. No phase is complete until its documented quality gate passes, and no financial or provisioning behavior may be inferred from an incomplete phase.
