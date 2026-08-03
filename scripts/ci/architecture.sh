@@ -12,17 +12,17 @@ scan_forbidden_import() {
     local label="$1"
     local pattern="$2"
     local path="$3"
-    local rg_status
+    local grep_status
 
     set +e
-    rg --line-number "${pattern}" "${path}" >> "${report}"
-    rg_status=$?
+    grep --recursive --line-number --binary-files=without-match --extended-regexp "${pattern}" "${path}" >> "${report}"
+    grep_status=$?
     set -e
 
-    if [[ "${rg_status}" -eq 0 ]]; then
+    if [[ "${grep_status}" -eq 0 ]]; then
         printf 'Architecture violation: %s\n' "${label}" >&2
         status=1
-    elif [[ "${rg_status}" -gt 1 ]]; then
+    elif [[ "${grep_status}" -gt 1 ]]; then
         printf 'Architecture scanner failed: %s\n' "${label}" >&2
         exit 2
     fi

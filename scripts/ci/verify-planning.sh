@@ -24,7 +24,7 @@ required=(
 for path in "${required[@]}"; do
   test -s "${path}" || { echo "Missing or empty planning artifact: ${path}" >&2; exit 1; }
 
-  fence_count="$(rg --count '^```' "${path}" || true)"
+  fence_count="$(grep -c '^```' "${path}" || true)"
   if (( fence_count % 2 != 0 )); then
     echo "Unbalanced Markdown code fences: ${path}" >&2
     exit 1
@@ -36,12 +36,12 @@ trap 'rm -rf -- "${temporary}"' EXIT
 
 sed -n '/# 36\. Functional Requirement/,/# 37\. Definition of Done/p' \
   docs/specification/master-execution-prompt.md \
-  | rg -o '`[A-Z][A-Z0-9]+-[0-9]{3}`' \
+  | grep -oE '`[A-Z][A-Z0-9]+-[0-9]{3}`' \
   | tr -d '`' \
   | sort -u > "${temporary}/canonical"
 
 for path in docs/01-authoritative-requirements.md docs/02-requirement-traceability-matrix.md; do
-  rg -o '`[A-Z][A-Z0-9]+-[0-9]{3}`' "${path}" \
+  grep -oE '`[A-Z][A-Z0-9]+-[0-9]{3}`' "${path}" \
     | tr -d '`' \
     | sort -u > "${temporary}/candidate"
 

@@ -12,21 +12,22 @@ fail_if_found() {
     shift 2
 
     set +e
-    rg --line-number --hidden \
-        --glob '!vendor/**' \
-        --glob '!build/**' \
-        --glob '!docs/specification/**' \
-        --glob '!scripts/ci/forbidden-patterns.sh' \
+    grep --recursive --line-number --binary-files=without-match --perl-regexp \
+        --exclude-dir=.git \
+        --exclude-dir=vendor \
+        --exclude-dir=build \
+        --exclude-dir=specification \
+        --exclude=forbidden-patterns.sh \
         "${pattern}" "$@" >> "${report}"
-    local rg_status=$?
+    local grep_status=$?
     set -e
 
-    if [[ "${rg_status}" -eq 0 ]]; then
+    if [[ "${grep_status}" -eq 0 ]]; then
         printf 'Forbidden pattern detected: %s\n' "${label}" >&2
         return 1
     fi
 
-    if [[ "${rg_status}" -gt 1 ]]; then
+    if [[ "${grep_status}" -gt 1 ]]; then
         printf 'Pattern scanner failed while checking: %s\n' "${label}" >&2
         return 2
     fi
