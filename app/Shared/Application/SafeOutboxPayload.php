@@ -75,11 +75,10 @@ final readonly class SafeOutboxPayload
         }
     }
 
-    /**
-     * @param  array<array-key, mixed>  $values
-     *
-     * @return array<array-key, mixed>
-     */
+     /**
+      * @param  array<array-key, mixed>  $values
+      * @return array<array-key, mixed>
+      */
     private function canonicalize(array $values): array
     {
         if (! array_is_list($values)) {
