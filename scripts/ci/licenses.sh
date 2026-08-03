@@ -15,8 +15,8 @@ allowed='["MIT","BSD-2-Clause","BSD-3-Clause","Apache-2.0","ISC","CC0-1.0"]'
 if jq -e --argjson allowed "${allowed}" '
     .dependencies
     | to_entries[]
-    | select(any(.value.license[]; (. as $license | $allowed | index($license)) == null))
+    | select(all(.value.license[]; (. as $license | $allowed | index($license)) == null))
 ' build/evidence/dependencies/licenses.json >/dev/null; then
-    printf 'At least one dependency uses a license outside the approved SPDX allowlist.\n' >&2
+    printf 'At least one dependency has no compatible license in the approved SPDX allowlist.\n' >&2
     exit 1
 fi

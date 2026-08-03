@@ -27,7 +27,7 @@ final readonly class SafeOutboxPayload
         'token',
     ];
 
-    /** @param array<string, mixed> $values */
+    /** @param  array<string, mixed>  $values */
     public function __construct(private array $values)
     {
         $this->validate($values);
@@ -55,7 +55,7 @@ final readonly class SafeOutboxPayload
         return hash('sha256', $this->json());
     }
 
-    /** @param array<array-key, mixed> $values */
+    /** @param  array<array-key, mixed>  $values */
     private function validate(array $values): void
     {
         foreach ($values as $key => $value) {
@@ -76,7 +76,7 @@ final readonly class SafeOutboxPayload
     }
 
     /**
-     * @param array<array-key, mixed> $values
+     * @param  array<array-key, mixed>  $values
      *
      * @return array<array-key, mixed>
      */

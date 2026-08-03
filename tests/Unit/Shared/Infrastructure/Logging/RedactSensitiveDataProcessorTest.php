@@ -29,7 +29,7 @@ final class RedactSensitiveDataProcessorTest extends TestCase
 
     public function test_it_handles_numeric_keys_and_sanitizes_messages_and_throwables(): void
     {
-        $processor = new RedactSensitiveDataProcessor();
+        $processor = new RedactSensitiveDataProcessor;
         $result = $processor->sanitize([
             0 => ['api_token' => 'secret-value'],
             'exception' => new RuntimeException('password=do-not-log', 17),
