@@ -178,6 +178,7 @@ jobs:
           set -euo pipefail
           mkdir -p build/evidence/tests build/evidence/coverage build/evidence/services
           docker compose -f docker-compose.ci.yml ps > build/evidence/services/compose-ps.txt
+          test -f .env || cp .env.example .env
           php artisan config:clear --ansi
           COLUMNS=240 php artisan test \
             --display-warnings \
