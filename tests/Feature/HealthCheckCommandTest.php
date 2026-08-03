@@ -39,10 +39,10 @@ final class HealthCheckCommandTest extends TestCase
     {
         $this->getJson('/health/live')
             ->assertOk()
-            ->assertExactJson(['status' => 'alive', 'release' => '0.0.0-dev']);
+            ->assertExactJson(['status' => 'alive', 'release' => '0.2.0-dev']);
 
         $this->getJson('/health/ready')
             ->assertOk()
-            ->assertExactJson(['status' => 'healthy', 'release' => '0.0.0-dev']);
+            ->assertExactJson(['status' => 'healthy', 'release' => '0.2.0-dev']);
     }
 }
