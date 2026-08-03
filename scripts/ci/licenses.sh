@@ -3,7 +3,7 @@
 set -euo pipefail
 
 mkdir -p build/evidence/dependencies
-composer licenses --locked --format=json --no-interaction > build/evidence/dependencies/licenses.json
+composer licenses --format=json --no-interaction > build/evidence/dependencies/licenses.json
 
 if jq -e '.dependencies[] | select((.license | length) == 0)' build/evidence/dependencies/licenses.json >/dev/null; then
     printf 'At least one dependency has no declared license.\n' >&2

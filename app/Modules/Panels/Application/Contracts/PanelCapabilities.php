@@ -15,7 +15,9 @@ final readonly class PanelCapabilities
         public string $panelVersion,
         public array $operations,
         public array $protocolProfiles,
-    ) {}
+    ) {
+        // Immutable capability snapshot.
+    }
 
     public function supports(string $operation): bool
     {

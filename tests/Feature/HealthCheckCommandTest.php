@@ -6,6 +6,7 @@ namespace Tests\Feature;
 
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
+use Symfony\Component\Console\Output\BufferedOutput;
 use Tests\TestCase;
 
 final class HealthCheckCommandTest extends TestCase
@@ -14,20 +15,24 @@ final class HealthCheckCommandTest extends TestCase
 
     public function test_critical_health_check_passes_with_required_services(): void
     {
-        $exitCode = Artisan::call('health:check', ['--critical' => true, '--json' => true]);
+        $output = new BufferedOutput;
+        $exitCode = Artisan::call('health:check', ['--critical' => true, '--json' => true], $output);
+        $content = $output->fetch();
 
-        self::assertSame(0, $exitCode, Artisan::output());
-        self::assertStringContainsString('"status":"healthy"', Artisan::output());
+        self::assertSame(0, $exitCode, $content);
+        self::assertStringContainsString('"status":"healthy"', $content);
     }
 
     public function test_health_check_returns_failure_when_a_required_check_fails(): void
     {
         config()->set('app.key', '');
 
-        $exitCode = Artisan::call('health:check', ['--json' => true, '--redact' => true]);
+        $output = new BufferedOutput;
+        $exitCode = Artisan::call('health:check', ['--json' => true, '--redact' => true], $output);
+        $content = $output->fetch();
 
-        self::assertSame(1, $exitCode, Artisan::output());
-        self::assertStringContainsString('"status":"unhealthy"', Artisan::output());
+        self::assertSame(1, $exitCode, $content);
+        self::assertStringContainsString('"status":"unhealthy"', $content);
     }
 
     public function test_liveness_and_readiness_endpoints_are_safe_and_healthy(): void

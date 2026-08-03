@@ -127,7 +127,7 @@ jobs:
           php-version: "8.4"
           extensions: bcmath, curl, dom, fileinfo, intl, mbstring, openssl, pcntl, pdo_mysql, redis, sodium, xml
           coverage: none
-          tools: composer:2.8.12
+          tools: composer:2.10.2
       - name: Install locked dependencies
         run: composer install --no-interaction --prefer-dist --no-progress
       - name: Run static gates
@@ -161,7 +161,7 @@ jobs:
           php-version: "8.4"
           extensions: bcmath, curl, dom, fileinfo, intl, mbstring, openssl, pcntl, pdo_mysql, redis, sodium, xml
           coverage: pcov
-          tools: composer:2.8.12
+          tools: composer:2.10.2
       - name: Start disposable dependencies
         run: docker compose -f docker-compose.ci.yml up -d --wait
       - name: Install locked dependencies
@@ -207,7 +207,7 @@ jobs:
         with:
           php-version: "8.4"
           coverage: none
-          tools: composer:2.8.12
+          tools: composer:2.10.2
       - name: Install locked dependencies
         run: composer install --no-interaction --prefer-dist --no-progress
       - name: Audit dependencies and licenses

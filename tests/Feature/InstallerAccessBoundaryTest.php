@@ -26,18 +26,20 @@ final class InstallerAccessBoundaryTest extends TestCase
         $path = storage_path('framework/testing/installer-http-token.json');
         @unlink($path);
 
-        config()->set('app.env', 'production');
+        $this->app['env'] = 'production';
         config()->set('installer.access_file', $path);
         config()->set('installer.lock_path', storage_path('framework/testing/missing-installer-lock'));
 
         $store = new InstallerAccessTokenStore(
-            new class implements Clock {
+            new class implements Clock
+            {
                 public function now(): DateTimeImmutable
                 {
                     return new DateTimeImmutable('2026-08-03T00:00:00+00:00');
                 }
             },
-            new class implements RandomGenerator {
+            new class implements RandomGenerator
+            {
                 public function bytes(int $length): string
                 {
                     return str_repeat("\x01", $length);
@@ -56,6 +58,7 @@ final class InstallerAccessBoundaryTest extends TestCase
             $this->get('http://example.test/installer/unlock')->assertNotFound();
             $this->get('https://example.test/installer/unlock')->assertOk();
         } finally {
+            $this->app['env'] = 'testing';
             @unlink($path);
         }
     }

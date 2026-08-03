@@ -9,7 +9,6 @@ interface OutboxPublisher
     /**
      * Persist an event in the caller's current database transaction.
      * Payloads must contain identifiers and non-secret event data only.
-     *
      */
     public function publish(
         string $eventId,

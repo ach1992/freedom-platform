@@ -9,8 +9,11 @@ use JsonException;
 
 final readonly class SafeOutboxPayload
 {
-    /** @requirement PAY-003 OPS-001 SEC-008 */
-    /** @var list<string> */
+    /**
+     * @requirement PAY-003 OPS-001 SEC-008
+     *
+     * @var list<string>
+     */
     private const FORBIDDEN_KEY_PARTS = [
         'authorization',
         'credential',
@@ -74,6 +77,7 @@ final readonly class SafeOutboxPayload
 
     /**
      * @param array<array-key, mixed> $values
+     *
      * @return array<array-key, mixed>
      */
     private function canonicalize(array $values): array
