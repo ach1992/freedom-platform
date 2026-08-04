@@ -9,9 +9,7 @@ use RuntimeException;
 final class InstallerLock
 {
     /** @requirement INS-001 SEC-007 QUA-011 */
-    public function __construct(private readonly string $path)
-    {
-    }
+    public function __construct(private readonly string $path) {}
 
     public function exists(): bool
     {
