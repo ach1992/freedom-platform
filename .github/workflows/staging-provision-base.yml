@@ -1,9 +1,6 @@
 name: Staging Provision Base
 
 on:
-  pull_request:
-    paths:
-      - .github/workflows/staging-provision-base.yml
   workflow_dispatch:
 
 permissions:
