@@ -1,9 +1,7 @@
 name: Format Telegram Package Once
 
 on:
-  push:
-    branches:
-      - develop/v1.0.0-completion
+  pull_request:
     paths:
       - .github/workflows/format-telegram-once.yml
 
@@ -45,16 +43,14 @@ jobs:
           from pathlib import Path
           path = Path('.github/workflows/format-telegram-once.yml')
           text = path.read_text()
-          old = '''on:
-            push:
-              branches:
-                - develop/v1.0.0-completion
+          old = """on:
+            pull_request:
               paths:
                 - .github/workflows/format-telegram-once.yml
-          '''
-          new = '''on:
+          """
+          new = """on:
             workflow_dispatch:
-          '''
+          """
           if old not in text:
               raise SystemExit('Formatter trigger block was not found.')
           path.write_text(text.replace(old, new, 1))
