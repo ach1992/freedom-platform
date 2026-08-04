@@ -417,6 +417,7 @@ supervisorctl update >> "$EVIDENCE"
 sleep 5
 supervisorctl status 'freedom-platform-workers:*' >> "$EVIDENCE"
 
+runuser -u www -- "$PHP" "$ROOT/current/artisan" schedule:clear-cache --no-ansi --no-interaction >/dev/null
 runuser -u www -- "$PHP" "$ROOT/current/artisan" schedule:run --no-ansi --no-interaction >/dev/null
 sleep 45
 
@@ -432,7 +433,7 @@ test "$scheduler_count" -eq 1
 runuser -u www -- "$PHP" "$ROOT/current/artisan" operations:check-worker-heartbeats \
     --max-age=120 --json --no-ansi --no-interaction >> "$EVIDENCE"
 
-supervisorctl stop 'freedom-platform-bulk:*' >/dev/null
+supervisorctl stop 'freedom-platform-workers:freedom-platform-bulk_00' >/dev/null
 mariadb --protocol=socket -uroot freedom_platform -e \
     "UPDATE worker_heartbeats SET last_seen_at = UTC_TIMESTAMP(6) - INTERVAL 600 SECOND WHERE worker_id LIKE 'freedom-platform-bulk%';"
 
@@ -449,7 +450,7 @@ unresolved=$(mariadb --protocol=socket -N -uroot freedom_platform -e \
 echo "unresolved_stale_alerts=$unresolved" >> "$EVIDENCE"
 test "$unresolved" -ge 1
 
-supervisorctl start 'freedom-platform-bulk:*' >/dev/null
+supervisorctl start 'freedom-platform-workers:freedom-platform-bulk_00' >/dev/null
 sleep 45
 runuser -u www -- "$PHP" "$ROOT/current/artisan" schedule:run --no-ansi --no-interaction >/dev/null
 runuser -u www -- "$PHP" "$ROOT/current/artisan" operations:check-worker-heartbeats \
