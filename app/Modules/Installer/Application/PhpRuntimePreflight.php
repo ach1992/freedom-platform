@@ -34,7 +34,7 @@ final class PhpRuntimePreflight
     /** @var null|Closure(string, string): array{exit_code: int, stdout: string} */
     private ?Closure $runner;
 
-    /** @param null|Closure(string, string): array{exit_code: int, stdout: string} $runner */
+    /** @param  null|Closure(string, string): array{exit_code: int, stdout: string}  $runner */
     public function __construct(?Closure $runner = null)
     {
         $this->runner = $runner;
@@ -187,6 +187,7 @@ final class PhpRuntimePreflight
     }
 
     /**
+     * @param  list<string>  $requiredExtensions
      * @return array{
      *     name: string,
      *     binary: string,
@@ -205,7 +206,6 @@ final class PhpRuntimePreflight
      *     error: string
      * }
      */
-    /** @param  list<string>  $requiredExtensions */
     private function failure(string $name, string $binary, array $requiredExtensions, string $error): array
     {
         return [
