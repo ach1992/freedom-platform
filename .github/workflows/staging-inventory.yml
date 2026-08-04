@@ -1,9 +1,6 @@
 name: Staging Inventory
 
 on:
-  pull_request:
-    paths:
-      - .github/workflows/staging-inventory.yml
   workflow_dispatch:
 
 permissions:
