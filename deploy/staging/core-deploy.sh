@@ -319,6 +319,7 @@ prepare_release() {
     find "$release_path" -type d -exec chmod 0750 {} +
     find "$release_path" -type f -exec chmod 0640 {} +
     chmod 0750 "$release_path/artisan"
+    chmod 0750 "$release_path/deploy/bin/queue-worker-with-heartbeat.sh"
     install -d -o www -g www -m 0750 "$release_path/bootstrap/cache"
 }
 
