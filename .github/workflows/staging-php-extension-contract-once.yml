@@ -1,0 +1,71 @@
+name: Staging PHP Extension Contract Once
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/staging-php-extension-contract-once.yml
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Prepare SSH client
+        env:
+          STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          STAGING_KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$STAGING_SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$STAGING_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+
+      - name: Inspect extension installation contract
+        env:
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          STAGING_PORT: ${{ secrets.STAGING_PORT }}
+          STAGING_USER: ${{ secrets.STAGING_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 \
+            -p "$STAGING_PORT" "$STAGING_USER@$STAGING_HOST" \
+            'set -eu
+             echo "# PHP module state"
+             /www/server/php/84/bin/php --ini
+             /www/server/php/84/bin/php -i | grep -E "^extension_dir|^Scan this dir" | head -n 10 || true
+             find /www/server/php/84 -maxdepth 4 -type f \
+               | grep -Ei "/(redis|fileinfo|opcache)\\.(so|ini)$" \
+               | sort \
+               | head -n 100 \
+               || true
+             echo "# aaPanel extension symbols"
+             grep -RIn --include="*.py" -E "Install.*(Extension|Lib)|install.*(extension|lib)|fileinfo|redis|opcache" \
+               /www/server/panel/class/panelPHP.py \
+               /www/server/panel/class/panelPlugin.py \
+               /www/server/panel/mod 2>/dev/null \
+               | head -n 220 \
+               | sed -E "s#https?://[^[:space:]]+#URL_REDACTED#g" \
+               || true
+             echo "# installer scripts"
+             find /www/server/panel/install -maxdepth 4 -type f 2>/dev/null \
+               | grep -Ei "php|redis|fileinfo|opcache" \
+               | sort \
+               | head -n 160 \
+               || true
+             echo "# dispatcher references"
+             grep -RIn -E "php[-_ ]?ext|fileinfo|opcache|redis" \
+               /www/server/panel/install/install_soft.sh \
+               /www/server/panel/install/soft 2>/dev/null \
+               | head -n 220 \
+               | sed -E "s#https?://[^[:space:]]+#URL_REDACTED#g" \
+               || true'
+
+      - name: Remove SSH material
+        if: always()
+        run: rm -rf "$HOME/.ssh"
