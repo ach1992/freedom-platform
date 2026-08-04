@@ -67,7 +67,15 @@ jobs:
           /usr/local/lsws/bin/lswsctrl restart >/dev/null
           EOF
           chmod 755 /etc/letsencrypt/renewal-hooks/deploy/restart-openlitespeed
+          set +e
           /usr/local/lsws/bin/openlitespeed -t >/tmp/freedom-ols-https-test.log 2>&1
+          config_status=$?
+          set -e
+          if grep -Eqi '\[(ERROR|FATAL)\]|syntax error|failed to load' /tmp/freedom-ols-https-test.log; then
+            cat /tmp/freedom-ols-https-test.log >&2
+            exit 1
+          fi
+          echo "ols_config_status=$config_status warnings_only=yes"
           /usr/local/lsws/bin/lswsctrl restart >/dev/null
           sleep 5
           ss -lntH '( sport = :443 )' | grep -q .
