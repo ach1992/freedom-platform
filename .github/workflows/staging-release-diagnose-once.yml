@@ -1,0 +1,75 @@
+name: Staging Release Diagnose Once
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/staging-release-diagnose-once.yml
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Prepare SSH
+        env:
+          KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          KNOWN: ${{ secrets.STAGING_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$KNOWN" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+      - name: Inspect release state without secrets
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          PORT: ${{ secrets.STAGING_PORT }}
+          USER: ${{ secrets.STAGING_USER }}
+          DOMAIN: ${{ secrets.STAGING_DOMAIN }}
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -p "$PORT" "$USER@$HOST" "DOMAIN='$DOMAIN' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          ROOT="/www/acdomains/$DOMAIN"
+          PHP=/www/server/php/84/bin/php
+          echo "current_release=$(basename "$(readlink -f "$ROOT/current")")"
+          echo 'releases_begin'
+          find "$ROOT/releases" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort
+          echo 'releases_end'
+          echo 'journal_begin'
+          if [ -s "$ROOT/shared/release-journal.json" ]; then
+              python3 - "$ROOT/shared/release-journal.json" <<'PY'
+          import json, sys
+          data = json.load(open(sys.argv[1]))
+          allowed = {k: data.get(k) for k in ('status','release','previous_release','updated_at','failure_reason') if k in data}
+          print(json.dumps(allowed, sort_keys=True))
+          PY
+          else
+              echo 'journal=absent'
+          fi
+          echo 'journal_end'
+          for release in "$ROOT"/releases/staging-{a,b}-6bd32d82f3df; do
+              name=$(basename "$release")
+              if [ ! -d "$release" ]; then
+                  echo "$name=absent"
+                  continue
+              fi
+              echo "health_${name}_begin"
+              set +e
+              output=$(cd "$release" && runuser -u www -- "$PHP" artisan health:check --critical --json --redact --no-ansi --no-interaction 2>&1)
+              status=$?
+              set -e
+              echo "status=$status"
+              printf '%s\n' "$output" | head -c 2000
+              echo
+              echo "health_${name}_end"
+          done
+          echo 'supervisor_begin'
+          supervisorctl status 'freedom-platform-workers:*' || true
+          echo 'supervisor_end'
+          REMOTE
+      - if: always()
+        run: rm -rf "$HOME/.ssh"
