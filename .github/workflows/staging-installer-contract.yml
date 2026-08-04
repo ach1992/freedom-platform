@@ -52,7 +52,13 @@ jobs:
              echo "openlitespeed_context_end"
              echo "php84_context_begin"
              grep -n -A 18 -B 18 "\"version\": \"8.4\"" "$catalog" | head -n 100 || true
-             echo "php84_context_end"'
+             echo "php84_context_end"
+             echo "dispatcher_call_sites_begin"
+             grep -RIn --exclude-dir=logs --exclude=install_soft.sh "install_soft.sh" /www/server/panel \
+               | head -n 80 \
+               | sed -E "s#https?://[^[:space:]\"'"'"']+#URL_REDACTED#g" \
+               || true
+             echo "dispatcher_call_sites_end"'
 
       - name: Remove SSH material
         if: always()
