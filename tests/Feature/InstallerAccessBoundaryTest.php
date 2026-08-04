@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Modules\Installer\Application\Contracts\InstallerFinalizationRunner;
 use App\Modules\Installer\Application\InstallerAccessTokenStore;
 use App\Shared\Application\Clock;
 use App\Shared\Application\RandomGenerator;
@@ -90,6 +91,62 @@ final class InstallerAccessBoundaryTest extends TestCase
         }
     }
 
+    /** @requirement INS-001 SEC-003 SEC-007 SEC-008 QUA-011 */
+    public function test_unlocked_finalization_writes_environment_runs_fixed_steps_and_returns_no_secrets(): void
+    {
+        $paths = $this->finalizationPaths('success');
+        $runner = new HttpRecordingFinalizationRunner;
+        $this->configureFinalization($paths, $runner);
+        $this->accessStore($paths['access'])->issue(5);
+        $testSecret = 'test-only-database-secret';
+
+        try {
+            $response = $this->withSession([
+                'installer.unlocked_until' => now()->addMinute()->getTimestamp(),
+            ])->postJson('/installer/finalize', [
+                'environment' => [
+                    'DB_HOST' => 'database.internal',
+                    'DB_PASSWORD' => $testSecret,
+                ],
+            ]);
+
+            $response->assertOk()->assertExactJson(['status' => 'completed']);
+            $response->assertDontSee($testSecret);
+            $this->assertSame(['config_clear', 'migrations', 'config_cache'], $runner->actions);
+            $this->assertStringContainsString('DB_PASSWORD="'.$testSecret.'"', (string) file_get_contents($paths['environment']));
+            $this->assertFileExists($paths['lock']);
+            $this->assertFileDoesNotExist($paths['snapshot']);
+        } finally {
+            $this->cleanupFinalization($paths);
+        }
+    }
+
+    /** @requirement INS-001 SEC-003 SEC-007 SEC-008 QUA-011 */
+    public function test_finalization_rejects_unapproved_keys_without_disclosing_or_writing_values(): void
+    {
+        $paths = $this->finalizationPaths('invalid');
+        $runner = new HttpRecordingFinalizationRunner;
+        $this->configureFinalization($paths, $runner);
+        $this->accessStore($paths['access'])->issue(5);
+        $testSecret = 'test-only-unapproved-secret';
+
+        try {
+            $response = $this->withSession([
+                'installer.unlocked_until' => now()->addMinute()->getTimestamp(),
+            ])->postJson('/installer/finalize', [
+                'environment' => ['UNAPPROVED_KEY' => $testSecret],
+            ]);
+
+            $response->assertUnprocessable();
+            $response->assertDontSee($testSecret);
+            $this->assertSame([], $runner->actions);
+            $this->assertFileDoesNotExist($paths['environment']);
+            $this->assertFileDoesNotExist($paths['lock']);
+        } finally {
+            $this->cleanupFinalization($paths);
+        }
+    }
+
     private function accessStore(string $path): InstallerAccessTokenStore
     {
         return new InstallerAccessTokenStore(
@@ -114,5 +171,72 @@ final class InstallerAccessBoundaryTest extends TestCase
             },
             $path,
         );
+    }
+
+    /** @return array{directory: string, access: string, lock: string, journal: string, environment: string, snapshot: string} */
+    private function finalizationPaths(string $case): array
+    {
+        $directory = storage_path('framework/testing/installer-http-finalization-'.$case.'-'.bin2hex(random_bytes(4)));
+
+        return [
+            'directory' => $directory,
+            'access' => $directory.'/private/access.json',
+            'lock' => $directory.'/private/installer.lock',
+            'journal' => $directory.'/private/bootstrap-journal.json',
+            'environment' => $directory.'/.env',
+            'snapshot' => $directory.'/private/environment.snapshot',
+        ];
+    }
+
+    /** @param  array{access: string, lock: string, journal: string, environment: string, snapshot: string}  $paths */
+    private function configureFinalization(array $paths, InstallerFinalizationRunner $runner): void
+    {
+        config()->set('installer.access_file', $paths['access']);
+        config()->set('installer.lock_path', $paths['lock']);
+        config()->set('installer.bootstrap_journal_path', $paths['journal']);
+        config()->set('installer.environment.file_path', $paths['environment']);
+        config()->set('installer.environment.snapshot_path', $paths['snapshot']);
+        config()->set('installer.environment.allowed_keys', ['APP_KEY', 'DB_HOST', 'DB_PASSWORD']);
+        $this->app->instance(InstallerFinalizationRunner::class, $runner);
+    }
+
+    /** @param  array{directory: string, access: string, lock: string, journal: string, environment: string, snapshot: string}  $paths */
+    private function cleanupFinalization(array $paths): void
+    {
+        foreach ([
+            $paths['snapshot'].'.json',
+            $paths['snapshot'].'.lock',
+            $paths['snapshot'],
+            $paths['journal'],
+            $paths['lock'],
+            $paths['access'],
+            $paths['environment'],
+        ] as $path) {
+            @unlink($path);
+        }
+
+        @rmdir($paths['directory'].'/private');
+        @rmdir($paths['directory']);
+    }
+}
+
+final class HttpRecordingFinalizationRunner implements InstallerFinalizationRunner
+{
+    /** @var list<string> */
+    public array $actions = [];
+
+    public function clearConfiguration(): void
+    {
+        $this->actions[] = 'config_clear';
+    }
+
+    public function migrate(): void
+    {
+        $this->actions[] = 'migrations';
+    }
+
+    public function cacheConfiguration(): void
+    {
+        $this->actions[] = 'config_cache';
     }
 }
