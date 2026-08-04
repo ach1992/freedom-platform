@@ -66,8 +66,7 @@ final class PhpRuntimePreflight
         string $name,
         string $binary,
         array $requiredExtensions = self::COMMON_REQUIRED_EXTENSIONS,
-    ): array
-    {
+    ): array {
         $requiredExtensions = $this->stringList($requiredExtensions);
 
         if ($requiredExtensions === []) {
