@@ -9,7 +9,7 @@ Authoritative product baseline: `docs/specification/master-execution-prompt.md` 
 
 The repository is not an empty greenfield project. It contains a reviewed planning baseline and a tested Laravel/PHP foundation, but it is not yet a functional VPN commerce platform.
 
-The codebase has completed planning and architecture artifacts, strict CI, core reliability primitives, secure installer access, independent PHP runtime inspection, database/Redis and operational environment preflight, a recoverable bootstrap journal/lock flow, runtime health checks, deployment templates, typed external-integration contracts, and active worker-heartbeat monitoring. Most customer, administrator, financial, panel, provisioning, Telegram, support, reporting, backup, restore, updater, and release capabilities remain unimplemented.
+The codebase has completed planning and architecture artifacts, strict CI, core reliability primitives, secure installer access, independent PHP runtime inspection, database/Redis and operational environment preflight, recoverable bootstrap/finalization, atomic shared-environment mutation and rollback, runtime health checks, deployment templates, typed external-integration contracts, and active worker-heartbeat monitoring. Most customer, administrator, financial, panel, provisioning, Telegram, support, reporting, backup, restore, updater, and release capabilities remain unimplemented.
 
 ## Verified implemented baseline
 
@@ -23,8 +23,11 @@ The codebase has completed planning and architecture artifacts, strict CI, core 
 - independent target-path-aware CLI PHP and OpenLiteSpeed LSPHP inspection;
 - database and authenticated Redis installer checks;
 - allowlisted outbound HTTPS, minimum disk, runtime path permission and owner/group preflight;
-- one authoritative installer bootstrap orchestrator with atomic private journal and lock files;
-- tested bootstrap success, replay prevention, failure/retry and resume behavior;
+- one authoritative Installer bootstrap orchestrator with atomic private journal and lock files;
+- allowlisted atomic `.env` writer with generated `APP_KEY`, private snapshot/checksum and exact rollback;
+- fixed-process finalization for config clear, forced migrations and config cache;
+- protected finalization endpoint with no secret echo and unlock-session invalidation;
+- tested bootstrap/finalization success, replay prevention, failure/retry, resume and migration rollback;
 - health checks, Scheduler heartbeat, queue safety configuration and deployment templates;
 - operations/audit/alert foundation tables;
 - active worker heartbeat recording, stale detection, deduplicated critical alerts and recovery resolution;
@@ -32,21 +35,21 @@ The codebase has completed planning and architecture artifacts, strict CI, core 
 
 ## Latest verified increment
 
-Requirements `INS-001`, `SEC-004`, `SEC-007`, `QUA-011`, and `QUA-013` now have executable operational-preflight and recoverable-bootstrap evidence:
+Requirements `INS-001`, `SEC-003`, `SEC-007`, `SEC-008`, `QUA-011`, and `QUA-013` now have executable atomic-environment and finalization evidence:
 
-- `app/Modules/Installer/Application/InstallerEnvironmentPreflight.php`;
-- `app/Modules/Installer/Application/InstallerBootstrapOrchestrator.php`;
-- hardened `InstallerBootstrapJournal` and atomic `InstallerLock`;
-- real unit and HTTP-boundary tests for allowlisted network access, disk, permissions, ownership, success, lock replay, failure/retry and resume;
-- `evidence/0.2.0/INS-001-operational-preflight-bootstrap.md`;
-- GitHub Actions run `30907255419`: **47 tests, 120 assertions, zero warnings**, with all mandatory jobs passed.
+- `InstallerEnvironmentWriter`, `InstallerEnvironmentBootstrapper`, and `InstallerFinalizer`;
+- fixed `InstallerArtisanProcessRunner` behind `InstallerFinalizationRunner`;
+- protected `/installer/finalize` route;
+- unit and feature tests for key allowlisting, injection rejection, APP_KEY generation, safe quoting, unrelated-line preservation, exact rollback, migration failure, fixed argv, process-output non-disclosure, HTTP secret non-disclosure and replay;
+- `evidence/0.2.0/INS-001-environment-finalization.md`;
+- GitHub Actions run `30908827675`: **60 tests, 195 assertions, zero warnings**, with all mandatory jobs passed.
 
 ## Current delivery status
 
 | Phase | Status | Audit conclusion |
 |---|---|---|
 | `0.1.0` | passed | Planning, architecture, security, testing and traceability baseline exists. |
-| `0.2.0` | in progress | Runtime/operational preflight, recoverable bootstrap primitives and worker monitoring are green; atomic shared environment finalization, target aaPanel/OpenLiteSpeed install, Supervisor and rollback evidence remain. |
+| `0.2.0` | in progress | Installer software finalization and worker monitoring are green; release activation/rollback software, target aaPanel/OpenLiteSpeed install, Supervisor and target rollback evidence remain. |
 | `0.3.0` | planned | Identity, customers, agents and ACL are not implemented. |
 | `0.4.0` | planned | Catalog, offerings and actual panel adapters are not implemented. |
 | `0.5.0` | planned | Ledger, wallet, pricing, promotions and payment providers are not implemented. |
@@ -58,9 +61,9 @@ Requirements `INS-001`, `SEC-004`, `SEC-007`, `QUA-011`, and `QUA-013` now have 
 
 ## Primary next work
 
-Continue Phase `0.2.0` with a secret-safe `InstallerEnvironmentWriter` and integration into the authoritative bootstrap orchestrator. The next increment must atomically create/update the shared `.env`, generate `APP_KEY` when absent, retain a private rollback snapshot, restore after downstream failure, reject non-allowlisted keys and prove that secret values never enter logs, exceptions or evidence. Then connect migrations/config-cache finalization and the permanent lock.
+Continue Phase `0.2.0` with a filesystem-safe release activator and rollback service for the immutable `releases/<version>` plus atomic `current` symlink layout. The next increment must validate release containment and mandatory files, link only approved shared resources, atomically activate a candidate, verify it through an injected health check, restore the previous release after failure, retain a redacted journal, and prove traversal/symlink-escape rejection and interrupted-link recovery in disposable filesystem tests.
 
-After the software-only foundation work is exhausted, a target-like aaPanel/OpenLiteSpeed server will be required for installation, Supervisor heartbeat validation and rollback rehearsal.
+After the remaining software-only release/worker work is exhausted, a target-like aaPanel/OpenLiteSpeed server will be required for installation, Supervisor heartbeat validation and rollback rehearsal.
 
 ## Owner action
 
