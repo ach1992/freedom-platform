@@ -9,7 +9,7 @@ Authoritative product baseline: `docs/specification/master-execution-prompt.md` 
 
 The repository is not an empty greenfield project. It contains a reviewed planning baseline and a tested Laravel/PHP foundation, but it is not yet a functional VPN commerce platform.
 
-The codebase has completed planning and architecture artifacts, strict CI, core reliability primitives, installer access boundaries, runtime health checks, initial deployment templates, and typed external-integration contracts. Most customer, administrator, financial, panel, provisioning, Telegram, support, reporting, backup, restore, updater, and release capabilities remain unimplemented.
+The codebase has completed planning and architecture artifacts, strict CI, core reliability primitives, installer access boundaries, runtime health checks, initial deployment templates, typed external-integration contracts, and active worker-heartbeat monitoring. Most customer, administrator, financial, panel, provisioning, Telegram, support, reporting, backup, restore, updater, and release capabilities remain unimplemented.
 
 ## Verified implemented baseline
 
@@ -53,6 +53,10 @@ Requirements `OPS-001`, `OPS-003`, `RUN-003`, and `RUN-004` now have executable 
 
 ## Primary next work
 
-Continue Phase `0.2.0` by implementing the remaining environment preflight and journaled bootstrap/final-lock behavior. After the software-only foundation work is exhausted, a target-like aaPanel/OpenLiteSpeed server will be required for installation and rollback rehearsal.
+Continue Phase `0.2.0` by implementing the remaining environment preflight and journaled bootstrap/final-lock behavior. After the software-only foundation work is exhausted, a target-like aaPanel/OpenLiteSpeed server will be required for installation, Supervisor heartbeat validation, and rollback rehearsal.
+
+## Owner action
+
+No owner action is required now. The next owner request will be made only when target-server access or a genuinely non-replaceable input is needed.
 
 No phase or release should be inferred complete from this audit alone. The authoritative acceptance boundary remains the master execution prompt and its Definition of Done.
