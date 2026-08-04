@@ -1,0 +1,462 @@
+name: Staging Deploy Core
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-core:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      VERIFIED_APP_SHA: af1310d891d0b791139d7623dd0dd51b5ded50ee
+    steps:
+      - name: Check out verified application commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: af1310d891d0b791139d7623dd0dd51b5ded50ee
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Validate staging inputs
+        env:
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          STAGING_PORT: ${{ secrets.STAGING_PORT }}
+          STAGING_USER: ${{ secrets.STAGING_USER }}
+          STAGING_DOMAIN: ${{ secrets.STAGING_DOMAIN }}
+          TELEGRAM_TEST_BOT_TOKEN: ${{ secrets.TELEGRAM_TEST_BOT_TOKEN }}
+          STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          STAGING_KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in STAGING_HOST STAGING_PORT STAGING_USER STAGING_DOMAIN TELEGRAM_TEST_BOT_TOKEN STAGING_SSH_PRIVATE_KEY STAGING_KNOWN_HOSTS; do
+            test -n "${!name:-}" || { echo "Missing required secret: ${name}" >&2; exit 1; }
+          done
+          [[ "$STAGING_DOMAIN" =~ ^[A-Za-z0-9.-]+$ ]] || { echo 'Invalid staging domain.' >&2; exit 1; }
+
+      - name: Prepare deployment package and SSH client
+        env:
+          STAGING_DOMAIN: ${{ secrets.STAGING_DOMAIN }}
+          TELEGRAM_TEST_BOT_TOKEN: ${{ secrets.TELEGRAM_TEST_BOT_TOKEN }}
+          STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          STAGING_KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh" "$RUNNER_TEMP/freedom-staging"
+          printf '%s\n' "$STAGING_SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$STAGING_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+          printf '%s' "$STAGING_DOMAIN" > "$RUNNER_TEMP/freedom-staging/domain"
+          printf '%s' "$TELEGRAM_TEST_BOT_TOKEN" > "$RUNNER_TEMP/freedom-staging/telegram-token"
+          chmod 600 "$RUNNER_TEMP/freedom-staging/domain" "$RUNNER_TEMP/freedom-staging/telegram-token"
+          tar \
+            --exclude=.git \
+            --exclude=.env \
+            --exclude=vendor \
+            --exclude=build \
+            -czf "$RUNNER_TEMP/freedom-staging/application.tar.gz" .
+          test -s "$RUNNER_TEMP/freedom-staging/application.tar.gz"
+
+      - name: Upload verified package and private inputs
+        env:
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          STAGING_PORT: ${{ secrets.STAGING_PORT }}
+          STAGING_USER: ${{ secrets.STAGING_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -p "$STAGING_PORT" \
+            "$STAGING_USER@$STAGING_HOST" 'install -d -m 700 /root/freedom-bootstrap/incoming'
+          scp -q -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -P "$STAGING_PORT" \
+            "$RUNNER_TEMP/freedom-staging/application.tar.gz" \
+            "$RUNNER_TEMP/freedom-staging/domain" \
+            "$RUNNER_TEMP/freedom-staging/telegram-token" \
+            "$STAGING_USER@$STAGING_HOST:/root/freedom-bootstrap/incoming/"
+
+      - name: Deploy, activate, rollback, and verify runtime
+        env:
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          STAGING_PORT: ${{ secrets.STAGING_PORT }}
+          STAGING_USER: ${{ secrets.STAGING_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/evidence/staging
+          ssh \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=20 \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=10 \
+            -p "$STAGING_PORT" \
+            "$STAGING_USER@$STAGING_HOST" \
+            'bash -s' <<'REMOTE' | tee build/evidence/staging/core-deploy.txt
+          set -Eeuo pipefail
+          umask 077
+
+          VERIFIED_SHA='af1310d891d0b791139d7623dd0dd51b5ded50ee'
+          SHORT_SHA=${VERIFIED_SHA:0:12}
+          INPUT=/root/freedom-bootstrap/incoming
+          DOMAIN=$(cat "$INPUT/domain")
+          TELEGRAM_TOKEN=$(cat "$INPUT/telegram-token")
+          [[ "$DOMAIN" =~ ^[A-Za-z0-9.-]+$ ]] || { echo 'Invalid staging domain input.' >&2; exit 1; }
+          ROOT="/www/acdomains/$DOMAIN"
+          RELEASE_A="staging-a-$SHORT_SHA"
+          RELEASE_B="staging-b-$SHORT_SHA"
+          PHP=/www/server/php/84/bin/php
+          LSPHP=/usr/local/lsws/lsphp84/bin/lsphp
+          STATE=/root/freedom-bootstrap/application-secrets.env
+          ARCHIVE="$INPUT/application.tar.gz"
+          EVIDENCE=/root/freedom-bootstrap/core-deploy-evidence.txt
+
+          exec 9>/root/freedom-bootstrap/deploy.lock
+          flock -w 300 9 || { echo 'Deployment lock timeout.' >&2; exit 1; }
+
+          test -x "$PHP"
+          test -x "$LSPHP"
+          test -s "$ARCHIVE"
+          id www >/dev/null 2>&1
+          timedatectl set-timezone UTC
+          systemctl enable --now mariadb redis-server supervisor cron >/dev/null
+
+          required_extensions=(bcmath curl dom fileinfo intl mbstring openssl pcntl pdo_mysql redis sodium xml)
+          for binary in "$PHP" "$LSPHP"; do
+            missing=()
+            for extension in "${required_extensions[@]}"; do
+              "$binary" -r "exit(extension_loaded('$extension') ? 0 : 1);" || missing+=("$extension")
+            done
+            if ((${#missing[@]})); then
+              echo "Required PHP extensions missing for $(basename "$binary"): ${missing[*]}" >&2
+              exit 1
+            fi
+          done
+
+          if [ ! -s "$STATE" ]; then
+            DB_PASSWORD=$(openssl rand -hex 32)
+            REDIS_PASSWORD=$(openssl rand -hex 32)
+            APP_KEY="base64:$($PHP -r 'echo base64_encode(random_bytes(32));')"
+            WEBHOOK_SECRET=$(openssl rand -hex 32)
+            cat > "$STATE" <<EOF
+          DB_PASSWORD=$DB_PASSWORD
+          REDIS_PASSWORD=$REDIS_PASSWORD
+          APP_KEY=$APP_KEY
+          WEBHOOK_SECRET=$WEBHOOK_SECRET
+          EOF
+            chmod 600 "$STATE"
+          fi
+          # shellcheck disable=SC1090
+          . "$STATE"
+
+          mariadb --protocol=socket -uroot <<SQL
+          CREATE DATABASE IF NOT EXISTS freedom_platform CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+          CREATE USER IF NOT EXISTS 'freedom_platform'@'127.0.0.1' IDENTIFIED BY '$DB_PASSWORD';
+          ALTER USER 'freedom_platform'@'127.0.0.1' IDENTIFIED BY '$DB_PASSWORD';
+          GRANT ALL PRIVILEGES ON freedom_platform.* TO 'freedom_platform'@'127.0.0.1';
+          FLUSH PRIVILEGES;
+          SQL
+
+          cp -a /etc/redis/redis.conf /etc/redis/redis.conf.freedom-before-auth 2>/dev/null || true
+          python3 - "$STATE" <<'PY'
+          from pathlib import Path
+          import sys
+
+          state = {}
+          for line in Path(sys.argv[1]).read_text().splitlines():
+              if '=' in line:
+                  key, value = line.split('=', 1)
+                  state[key] = value
+          password = state['REDIS_PASSWORD']
+          path = Path('/etc/redis/redis.conf')
+          lines = path.read_text().splitlines()
+          managed = {'bind', 'protected-mode', 'requirepass'}
+          output = []
+          for line in lines:
+              stripped = line.strip()
+              token = stripped.lstrip('#').strip().split(maxsplit=1)[0] if stripped.lstrip('#').strip() else ''
+              if token in managed:
+                  continue
+              output.append(line)
+          output.extend([
+              'bind 127.0.0.1 ::1',
+              'protected-mode yes',
+              f'requirepass {password}',
+          ])
+          temporary = path.with_suffix('.conf.freedom-new')
+          temporary.write_text('\n'.join(output) + '\n')
+          temporary.chmod(0o640)
+          temporary.replace(path)
+          PY
+          chown redis:redis /etc/redis/redis.conf
+          systemctl restart redis-server
+          REDISCLI_AUTH="$REDIS_PASSWORD" redis-cli ping | grep -qx PONG
+
+          install -d -o www -g www -m 0750 "$ROOT" "$ROOT/releases" "$ROOT/shared"
+          install -d -o www -g www -m 0750 \
+            "$ROOT/shared/storage/app/public" \
+            "$ROOT/shared/storage/framework/cache" \
+            "$ROOT/shared/storage/framework/sessions" \
+            "$ROOT/shared/storage/framework/views" \
+            "$ROOT/shared/storage/logs"
+          install -d -o www -g www -m 0700 \
+            "$ROOT/shared/backups" \
+            "$ROOT/shared/update-packages" \
+            "$ROOT/shared/restore-work" \
+            "$ROOT/shared/provider-certificates"
+
+          cat > "$ROOT/shared/.env" <<EOF
+          APP_NAME="Freedom Platform"
+          APP_ENV=production
+          APP_KEY="$APP_KEY"
+          APP_DEBUG=false
+          APP_URL="https://$DOMAIN"
+          APP_VERSION="0.3.0-staging-$SHORT_SHA"
+          APP_TIMEZONE=UTC
+          BUSINESS_TIMEZONE=Asia/Tehran
+          APP_LOCALE=fa
+          APP_FALLBACK_LOCALE=en
+          APP_FAKER_LOCALE=en_US
+          APP_MAINTENANCE_DRIVER=file
+          BCRYPT_ROUNDS=12
+          LOG_CHANNEL=stack
+          LOG_STACK=daily
+          LOG_DEPRECATIONS_CHANNEL=null
+          LOG_LEVEL=info
+          DB_CONNECTION=mysql
+          DB_HOST=127.0.0.1
+          DB_PORT=3306
+          DB_DATABASE=freedom_platform
+          DB_USERNAME=freedom_platform
+          DB_PASSWORD="$DB_PASSWORD"
+          SESSION_DRIVER=database
+          SESSION_LIFETIME=120
+          SESSION_ENCRYPT=true
+          SESSION_PATH=/
+          SESSION_DOMAIN="$DOMAIN"
+          SESSION_SECURE_COOKIE=true
+          SESSION_HTTP_ONLY=true
+          SESSION_SAME_SITE=lax
+          BROADCAST_CONNECTION=log
+          FILESYSTEM_DISK=local
+          QUEUE_CONNECTION=redis
+          CACHE_STORE=redis
+          CACHE_PREFIX=freedom_platform
+          REDIS_CLIENT=phpredis
+          REDIS_HOST=127.0.0.1
+          REDIS_PASSWORD="$REDIS_PASSWORD"
+          REDIS_PORT=6379
+          REDIS_DB=0
+          REDIS_CACHE_DB=1
+          REDIS_QUEUE_RETRY_AFTER=420
+          WORKER_HEARTBEAT_ENABLED=false
+          WORKER_NAME=
+          WORKER_QUEUE_GROUP=default
+          WORKER_HEARTBEAT_INTERVAL_SECONDS=30
+          WORKER_HEARTBEAT_STALE_AFTER_SECONDS=480
+          TELEGRAM_BOT_TOKEN="$TELEGRAM_TOKEN"
+          TELEGRAM_WEBHOOK_SECRET="$WEBHOOK_SECRET"
+          OWNER_TELEGRAM_ID=
+          REPORT_CHAT_ID=
+          INSTALLER_LOCK_PATH="$ROOT/shared/installer.lock"
+          INSTALLER_ACCESS_FILE="$ROOT/shared/installer-access.json"
+          INSTALLER_BOOTSTRAP_JOURNAL_PATH="$ROOT/shared/installer-bootstrap.json"
+          INSTALLER_ENVIRONMENT_PATH="$ROOT/shared/.env"
+          INSTALLER_ENVIRONMENT_SNAPSHOT_PATH="$ROOT/shared/installer-environment.snapshot"
+          INSTALLER_PHP_CLI_BINARY="$PHP"
+          INSTALLER_PHP_LSPHP_BINARY="$LSPHP"
+          INSTALLER_FINALIZATION_TIMEOUT_SECONDS=300
+          INSTALLER_MINIMUM_FREE_BYTES=1073741824
+          INSTALLER_EXPECTED_OWNER=www
+          INSTALLER_EXPECTED_GROUP=www
+          MAIL_MAILER=log
+          MAIL_SCHEME=null
+          MAIL_HOST=127.0.0.1
+          MAIL_PORT=2525
+          MAIL_USERNAME=null
+          MAIL_PASSWORD=null
+          MAIL_FROM_ADDRESS="staging@$DOMAIN"
+          MAIL_FROM_NAME="Freedom Platform"
+          EOF
+          chown www:www "$ROOT/shared/.env"
+          chmod 600 "$ROOT/shared/.env"
+          rm -f "$INPUT/telegram-token" "$INPUT/domain"
+
+          if [ ! -x /usr/local/bin/composer ]; then
+            EXPECTED=$($PHP -r "copy('https://composer.github.io/installer.sig', 'php://stdout');")
+            $PHP -r "copy('https://getcomposer.org/installer', '/root/freedom-bootstrap/composer-setup.php');"
+            ACTUAL=$($PHP -r "echo hash_file('sha384', '/root/freedom-bootstrap/composer-setup.php');")
+            test "$EXPECTED" = "$ACTUAL"
+            $PHP /root/freedom-bootstrap/composer-setup.php \
+              --quiet --install-dir=/usr/local/bin --filename=composer --version=2.10.2
+            rm -f /root/freedom-bootstrap/composer-setup.php
+          fi
+          $PHP /usr/local/bin/composer --version --no-ansi >/dev/null
+
+          prepare_release() {
+            release_id="$1"
+            release_path="$ROOT/releases/$release_id"
+            if [ -e "$release_path" ]; then
+              echo "Release already exists: $release_id" >&2
+              exit 1
+            fi
+            install -d -o www -g www -m 0750 "$release_path"
+            tar -xzf "$ARCHIVE" -C "$release_path"
+            rm -rf "$release_path/storage" "$release_path/.env"
+            ln -s ../../shared/storage "$release_path/storage"
+            ln -s ../../shared/.env "$release_path/.env"
+            printf '%s\n' "$VERIFIED_SHA" > "$release_path/.staging-source-sha"
+            chown -R www:www "$release_path"
+            find "$release_path" -type d -exec chmod 0750 {} +
+            find "$release_path" -type f -exec chmod 0640 {} +
+            chmod 0750 "$release_path/artisan"
+            install -d -o www -g www -m 0750 "$release_path/bootstrap/cache"
+          }
+
+          prepare_release "$RELEASE_A"
+          install -d -o www -g www -m 0700 /tmp/freedom-composer-home
+          runuser -u www -- env HOME=/tmp/freedom-composer-home COMPOSER_HOME=/tmp/freedom-composer-home \
+            "$PHP" /usr/local/bin/composer install \
+            --working-dir="$ROOT/releases/$RELEASE_A" \
+            --no-dev --classmap-authoritative --no-interaction --prefer-dist --no-progress
+          runuser -u www -- env HOME=/tmp/freedom-composer-home COMPOSER_HOME=/tmp/freedom-composer-home \
+            "$PHP" /usr/local/bin/composer check-platform-reqs \
+            --working-dir="$ROOT/releases/$RELEASE_A" --no-dev
+
+          cp -a "$ROOT/releases/$RELEASE_A" "$ROOT/releases/$RELEASE_B"
+          chown -R www:www "$ROOT/releases/$RELEASE_B"
+
+          for release_id in "$RELEASE_A" "$RELEASE_B"; do
+            release_path="$ROOT/releases/$release_id"
+            runuser -u www -- "$PHP" "$release_path/artisan" optimize:clear --no-ansi --no-interaction
+          done
+
+          runuser -u www -- "$PHP" "$ROOT/releases/$RELEASE_A/artisan" migrate --force --no-ansi --no-interaction
+          runuser -u www -- "$PHP" "$ROOT/releases/$RELEASE_A/artisan" db:seed --force --no-ansi --no-interaction
+
+          for release_id in "$RELEASE_A" "$RELEASE_B"; do
+            release_path="$ROOT/releases/$release_id"
+            runuser -u www -- "$PHP" "$release_path/artisan" config:cache --no-ansi --no-interaction
+            runuser -u www -- "$PHP" "$release_path/artisan" route:cache --no-ansi --no-interaction
+            runuser -u www -- "$PHP" "$release_path/artisan" view:cache --no-ansi --no-interaction
+            runuser -u www -- "$PHP" "$release_path/artisan" health:check --critical --json --redact --no-ansi --no-interaction >/dev/null
+          done
+
+          switch_release() {
+            release_id="$1"
+            shift
+            runuser -u www -- "$PHP" "$ROOT/releases/$release_id/deploy/bin/release-switch.php" \
+              --root="$ROOT" \
+              --release="$release_id" \
+              --php="$PHP" \
+              --journal="$ROOT/shared/release-journal.json" \
+              --timeout=60 "$@"
+          }
+
+          {
+            echo '# staging core deployment evidence'
+            echo "verified_sha=$VERIFIED_SHA"
+            echo "utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "php_cli=$($PHP -r 'echo PHP_VERSION;')"
+            echo "php_cli_sapi=$($PHP -r 'echo PHP_SAPI;')"
+            echo "php_lsphp=$($LSPHP -r 'echo PHP_VERSION;')"
+            echo "php_lsphp_sapi=$($LSPHP -r 'echo PHP_SAPI;')"
+            echo "mariadb=$(mariadb --version | head -n 1)"
+            echo "redis=$(REDISCLI_AUTH="$REDIS_PASSWORD" redis-cli --version)"
+            echo "activation_a=$(switch_release "$RELEASE_A")"
+            echo "activation_b=$(switch_release "$RELEASE_B")"
+            echo "rollback_a=$(switch_release "$RELEASE_A" --rollback)"
+            echo "reactivation_b=$(switch_release "$RELEASE_B")"
+            echo "current_release=$(basename "$(readlink -f "$ROOT/current")")"
+            echo "env_mode=$(stat -c %a "$ROOT/shared/.env")"
+            echo "release_journal_mode=$(stat -c %a "$ROOT/shared/release-journal.json")"
+          } > "$EVIDENCE"
+
+          python3 - "$ROOT" <<'PY'
+          from pathlib import Path
+          import sys
+
+          root = sys.argv[1]
+          source = Path(root, 'current/deploy/supervisor/freedom-platform.conf').read_text()
+          source = source.replace('/www/acdomains/hell.hellpservice.ir', root)
+          destination = Path('/etc/supervisor/conf.d/freedom-platform.conf')
+          destination.write_text(source)
+          destination.chmod(0o644)
+          PY
+
+          cat > /etc/cron.d/freedom-platform <<EOF
+          SHELL=/bin/bash
+          PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+          * * * * * www cd $ROOT/current && $PHP artisan schedule:run >> /dev/null 2>&1
+          EOF
+          chmod 644 /etc/cron.d/freedom-platform
+          systemctl reload cron
+
+          supervisorctl reread >> "$EVIDENCE"
+          supervisorctl update >> "$EVIDENCE"
+          sleep 5
+          supervisorctl status 'freedom-platform-workers:*' >> "$EVIDENCE"
+          runuser -u www -- "$PHP" "$ROOT/current/artisan" schedule:run --no-ansi --no-interaction >/dev/null
+          sleep 45
+
+          worker_count=$(mariadb --protocol=socket -N -uroot freedom_platform -e \
+            "SELECT COUNT(*) FROM worker_heartbeats WHERE worker_id <> 'scheduler';")
+          scheduler_count=$(mariadb --protocol=socket -N -uroot freedom_platform -e \
+            "SELECT COUNT(*) FROM worker_heartbeats WHERE worker_id = 'scheduler';")
+          echo "worker_heartbeat_count=$worker_count" >> "$EVIDENCE"
+          echo "scheduler_heartbeat_count=$scheduler_count" >> "$EVIDENCE"
+          test "$worker_count" -ge 5
+          test "$scheduler_count" -eq 1
+          runuser -u www -- "$PHP" "$ROOT/current/artisan" operations:check-worker-heartbeats \
+            --max-age=120 --json --no-ansi --no-interaction >> "$EVIDENCE"
+
+          supervisorctl stop 'freedom-platform-bulk:*' >/dev/null
+          mariadb --protocol=socket -uroot freedom_platform -e \
+            "UPDATE worker_heartbeats SET last_seen_at = UTC_TIMESTAMP(6) - INTERVAL 600 SECOND WHERE worker_id LIKE 'freedom-platform-bulk%';"
+          set +e
+          stale_output=$(runuser -u www -- "$PHP" "$ROOT/current/artisan" operations:check-worker-heartbeats \
+            --max-age=120 --json --no-ansi --no-interaction 2>&1)
+          stale_status=$?
+          set -e
+          test "$stale_status" -ne 0
+          printf 'stale_check=%s\n' "$stale_output" >> "$EVIDENCE"
+          unresolved=$(mariadb --protocol=socket -N -uroot freedom_platform -e \
+            "SELECT COUNT(*) FROM alerts WHERE event_name='operations.worker_heartbeat_stale' AND resolved_at IS NULL;")
+          echo "unresolved_stale_alerts=$unresolved" >> "$EVIDENCE"
+          test "$unresolved" -ge 1
+
+          supervisorctl start 'freedom-platform-bulk:*' >/dev/null
+          sleep 45
+          runuser -u www -- "$PHP" "$ROOT/current/artisan" schedule:run --no-ansi --no-interaction >/dev/null
+          runuser -u www -- "$PHP" "$ROOT/current/artisan" operations:check-worker-heartbeats \
+            --max-age=120 --json --no-ansi --no-interaction >> "$EVIDENCE"
+          unresolved_after=$(mariadb --protocol=socket -N -uroot freedom_platform -e \
+            "SELECT COUNT(*) FROM alerts WHERE event_name='operations.worker_heartbeat_stale' AND resolved_at IS NULL;")
+          echo "unresolved_after_recovery=$unresolved_after" >> "$EVIDENCE"
+          test "$unresolved_after" -eq 0
+
+          runuser -u www -- "$PHP" "$ROOT/current/artisan" health:check \
+            --critical --json --redact --no-ansi --no-interaction >> "$EVIDENCE"
+          echo "cron_entries=$(grep -Fxc "* * * * * www cd $ROOT/current && $PHP artisan schedule:run >> /dev/null 2>&1" /etc/cron.d/freedom-platform)" >> "$EVIDENCE"
+          test "$(grep -Fxc "* * * * * www cd $ROOT/current && $PHP artisan schedule:run >> /dev/null 2>&1" /etc/cron.d/freedom-platform)" -eq 1
+
+          cat "$EVIDENCE"
+          rm -f "$ARCHIVE"
+          REMOTE
+
+      - name: Remove local SSH and secret material
+        if: always()
+        shell: bash
+        run: rm -rf "$HOME/.ssh" "$RUNNER_TEMP/freedom-staging"
+
+      - name: Upload sanitized core deployment evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: staging-core-deploy-${{ github.run_id }}
+          path: build/evidence/staging
+          if-no-files-found: warn
+          retention-days: 30
