@@ -1,0 +1,193 @@
+name: Staging Runtime Remediate Once
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/staging-runtime-remediate-once.yml
+
+permissions:
+  contents: read
+
+jobs:
+  remediate-runtime:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Prepare SSH client
+        env:
+          STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          STAGING_KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$STAGING_SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$STAGING_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+
+      - name: Install and verify required runtime extensions
+        env:
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          STAGING_PORT: ${{ secrets.STAGING_PORT }}
+          STAGING_USER: ${{ secrets.STAGING_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/evidence/staging
+          ssh \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=20 \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=10 \
+            -p "$STAGING_PORT" \
+            "$STAGING_USER@$STAGING_HOST" \
+            'bash -s' <<'REMOTE' | tee build/evidence/staging/runtime-remediation.txt
+          set -Eeuo pipefail
+          umask 077
+          CLI=/www/server/php/84/bin/php
+          LSPHP=/usr/local/lsws/lsphp84/bin/lsphp
+          PANEL_PY=/www/server/panel/pyenv/bin/python3
+          WORK=/root/freedom-bootstrap/runtime-extensions
+          PROBE=$WORK/runtime-probe.php
+          exec 9>/root/freedom-bootstrap/runtime-extensions.lock
+          flock -w 300 9 || { echo 'Runtime extension lock timeout.' >&2; exit 1; }
+          test -x "$CLI"
+          test -x "$LSPHP"
+          test -x "$PANEL_PY"
+          install -d -m 700 "$WORK"
+
+          mapfile -t panel_contract < <(
+            cd /www/server/panel
+            "$PANEL_PY" - <<'PY'
+          import public
+          from mod.project.php.aepgMod import main
+          print(public.get_url())
+          print(main().get_os_type())
+          PY
+          )
+          BASE_URL=${panel_contract[0]:-}
+          OS_TYPE=${panel_contract[1]:-}
+          [[ "$BASE_URL" =~ ^https?://[^[:space:]]+$ ]]
+          [[ "$OS_TYPE" =~ ^[0-9]+$ ]]
+
+          extension_loaded_cli() {
+            local extension=$1
+            "$CLI" -r "exit(extension_loaded('$extension') || ('$extension' === 'opcache' && extension_loaded('Zend OPcache')) ? 0 : 1);"
+          }
+
+          sanitize_failure() {
+            local log=$1
+            grep -Eai 'error|failed|failure|unsupported|not supported|denied|timeout|cannot|missing|abort|traceback' "$log" \
+              | tail -n 80 \
+              | sed -E 's#https?://[^[:space:]]+#URL_REDACTED#g; s#([Pp]assword|[Pp]asswd|[Tt]oken|[Ss]ecret|[Uu]sername|[Ll]ogin)[[:space:]:=]+[^[:space:]]+#\1=REDACTED#g' \
+              || true
+          }
+
+          for extension in fileinfo redis opcache; do
+            if extension_loaded_cli "$extension"; then
+              continue
+            fi
+            script="$WORK/$extension.sh"
+            log="$WORK/$extension.log"
+            wget -q -O "$script" "$BASE_URL/install/$OS_TYPE/$extension.sh"
+            chmod 700 "$script"
+            set +e
+            timeout 1800 bash "$script" install 84 > "$log" 2>&1
+            status=$?
+            set -e
+            if [ "$status" -ne 0 ] || ! extension_loaded_cli "$extension"; then
+              echo "PHP extension installation failed verification: $extension; status=$status" >&2
+              sanitize_failure "$log"
+              exit 1
+            fi
+          done
+
+          cat > "$PROBE" <<'PHP'
+          <?php
+          declare(strict_types=1);
+          echo 'version=' . PHP_VERSION . PHP_EOL;
+          echo 'version_id=' . PHP_VERSION_ID . PHP_EOL;
+          echo 'sapi=' . PHP_SAPI . PHP_EOL;
+          echo 'extension_dir=' . ini_get('extension_dir') . PHP_EOL;
+          echo 'ini=' . (php_ini_loaded_file() ?: 'none') . PHP_EOL;
+          echo 'redis=' . (extension_loaded('redis') ? 'present' : 'absent') . PHP_EOL;
+          echo 'fileinfo=' . (extension_loaded('fileinfo') ? 'present' : 'absent') . PHP_EOL;
+          echo 'opcache=' . (extension_loaded('Zend OPcache') || extension_loaded('opcache') ? 'present' : 'absent') . PHP_EOL;
+          PHP
+          chmod 600 "$PROBE"
+
+          CLI_VERSION=$($CLI -r 'echo PHP_VERSION;')
+          LSPHP_VERSION=$($LSPHP "$PROBE" | awk -F= '$1=="version" {print $2}')
+          CLI_EXT_DIR=$($CLI -r 'echo ini_get("extension_dir");')
+          LSPHP_EXT_DIR=$($LSPHP "$PROBE" | awk -F= '$1=="extension_dir" {print $2}')
+          test "$CLI_VERSION" = "$LSPHP_VERSION"
+          test -d "$CLI_EXT_DIR"
+          install -d -m 755 "$LSPHP_EXT_DIR"
+
+          set +e
+          "$LSPHP" "$PROBE" | grep -qx 'redis=present'
+          lsphp_has_redis=$?
+          set -e
+          if [ "$lsphp_has_redis" -ne 0 ]; then
+            CLI_REDIS_SO="$CLI_EXT_DIR/redis.so"
+            test -f "$CLI_REDIS_SO"
+            CLI_API=$(basename "$CLI_EXT_DIR" | grep -oE '[0-9]{8}$')
+            LSPHP_API=$(basename "$LSPHP_EXT_DIR" | grep -oE '[0-9]{8}$')
+            test -n "$CLI_API"
+            test "$CLI_API" = "$LSPHP_API"
+            install -o root -g root -m 755 "$CLI_REDIS_SO" "$LSPHP_EXT_DIR/redis.so"
+            LSPHP_INI=$($LSPHP "$PROBE" | awk -F= '$1=="ini" {print $2}')
+            test -f "$LSPHP_INI"
+            cp -a "$LSPHP_INI" "$LSPHP_INI.freedom-before-redis"
+            if ! grep -Eq '^[[:space:]]*extension[[:space:]]*=[[:space:]]*redis(\.so)?[[:space:]]*$' "$LSPHP_INI"; then
+              printf '\n; Freedom Platform required extension\nextension=redis.so\n' >> "$LSPHP_INI"
+            fi
+          fi
+
+          /usr/local/lsws/bin/lswsctrl restart >/dev/null
+          sleep 3
+
+          common=(bcmath curl dom fileinfo intl json mbstring openssl pdo pdo_mysql redis sodium tokenizer xml)
+          missing_cli=()
+          for extension in "${common[@]}" pcntl; do
+            "$CLI" -r "exit(extension_loaded('$extension') ? 0 : 1);" || missing_cli+=("$extension")
+          done
+          missing_lsphp=()
+          for extension in "${common[@]}"; do
+            cat > "$WORK/check.php" <<PHP
+          <?php exit(extension_loaded('$extension') ? 0 : 1);
+          PHP
+            "$LSPHP" "$WORK/check.php" || missing_lsphp+=("$extension")
+          done
+          rm -f "$WORK/check.php"
+
+          echo '# runtime remediation evidence'
+          echo "utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "cli_version=$CLI_VERSION"
+          echo "lsphp_version=$LSPHP_VERSION"
+          echo "cli_missing=${missing_cli[*]:-none}"
+          echo "lsphp_missing=${missing_lsphp[*]:-none}"
+          echo "cli_fileinfo=$($CLI -r 'echo extension_loaded("fileinfo") ? "present" : "absent";')"
+          echo "cli_redis=$($CLI -r 'echo extension_loaded("redis") ? "present" : "absent";')"
+          echo "cli_opcache=$($CLI -r 'echo extension_loaded("Zend OPcache") || extension_loaded("opcache") ? "present" : "absent";')"
+          "$LSPHP" "$PROBE" | grep -E '^(sapi|redis|fileinfo|opcache)='
+          echo "ols_processes=$(pgrep -fc 'lshttpd|litespeed' || true)"
+          test "${#missing_cli[@]}" -eq 0
+          test "${#missing_lsphp[@]}" -eq 0
+          rm -f "$PROBE"
+          REMOTE
+
+      - name: Remove SSH material
+        if: always()
+        run: rm -rf "$HOME/.ssh"
+
+      - name: Upload sanitized runtime evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: staging-runtime-remediation-${{ github.run_id }}
+          path: build/evidence/staging
+          if-no-files-found: warn
+          retention-days: 30
