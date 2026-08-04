@@ -25,11 +25,12 @@ Placeholder notation:
 | `C2C-003`, `GFT-003`, `INT-002` | `docs/15-integration-contracts.md`; typed contracts under `app/Modules/Payments/Application/Contracts/` | Fake/Generic REST implementations and contract/reconciliation tests |
 | `PRV-001`, `PRV-002`, `PRV-003` | `docs/15-integration-contracts.md`; `app/Modules/Panels/Application/Contracts/`; `ProvisioningState.php`; workflow tests | Marzban/PasarGuard/Fake adapters and orchestration tests |
 | `CNT-001`, `LOC-001`, `LOC-002` | `resources/lang/fa/installer.php`; `resources/lang/en/installer.php`; installer Blade views | Full product localization schema and placeholder tests |
-| `OPS-001`, `SEC-001`, `SEC-008` | correlation middleware; logging redaction processor/tap; operations migration; redaction tests | Audit/alert services, encrypted restricted payloads and full security suite |
-| `INS-001`, `SEC-004`, `SEC-007`, `QUA-011`, `QUA-013` | installer config/token store/controller/middleware/routes/views; `InstallerEnvironmentPreflight`; `InstallerBootstrapOrchestrator`; hardened `InstallerBootstrapJournal`; atomic `InstallerLock`; installer unit/feature tests; `evidence/0.2.0/INS-001-php-runtime-preflight.md`; `evidence/0.2.0/INS-001-operational-preflight-bootstrap.md`; CI run `30907255419` | Atomic shared `.env`/`APP_KEY` mutation and rollback, migration/cache finalization, Supervisor/target aaPanel/OpenLiteSpeed installation and rollback evidence |
-| `ARCH-001`, `ARCH-002`, `QUA-002`, `QUA-012`, `QUA-013` | `composer.json`; `phpstan.neon`; `.github/workflows/ci.yml`; `scripts/ci/`; `docs/19-ci-quality-gates.md`; CI run `30907255419` | Stronger module rules, target-like lifecycle evidence and release-gate manifests |
+| `OPS-001`, `OPS-003`, `RUN-003`, `RUN-004` | operations migrations/services; `WorkerHeartbeatService`; `QueueWorkerHeartbeatReporter`; `OperationsServiceProvider`; heartbeat commands/Scheduler; `deploy/supervisor/freedom-platform.conf`; `deploy/cron/freedom-platform.cron`; heartbeat/runtime configuration tests; `evidence/0.2.0/OPS-003-worker-heartbeats.md`; `evidence/0.2.0/RUN-002-release-worker-runtime.md`; CI run `30910236970` | Target Supervisor start, distinct live heartbeat rows, stale alert/recovery and single-Cron evidence |
+| `OPS-001`, `SEC-001`, `SEC-008` | correlation middleware; logging redaction processor/tap; operations migration; redaction tests; generic worker-heartbeat and release-process failure reporting | Encrypted restricted payloads and full security suite |
+| `INS-001`, `SEC-003`, `SEC-004`, `SEC-007`, `SEC-008`, `QUA-011`, `QUA-013` | installer access/config/controller/middleware/routes/views; dual runtime and operational preflight; `InstallerBootstrapOrchestrator`; `InstallerEnvironmentWriter`; `InstallerEnvironmentBootstrapper`; `InstallerFinalizer`; fixed Artisan finalization runner; atomic journal/lock; installer unit/feature/process tests; `evidence/0.2.0/INS-001-php-runtime-preflight.md`; `evidence/0.2.0/INS-001-operational-preflight-bootstrap.md`; `evidence/0.2.0/INS-001-environment-finalization.md`; CI runs `30907255419`, `30908827675` | Target aaPanel/OpenLiteSpeed installation/finalization evidence |
+| `RUN-001`, `RUN-002`, `RUN-003`, `SEC-008`, `SEC-010`, `QUA-011`, `QUA-013` | `FilesystemReleaseActivator`; `ArtisanReleaseHealthVerifier`; `deploy/bin/release-switch.php`; release activation/CLI/process/runtime tests; executable deployment and rollback runbooks; `evidence/0.2.0/RUN-002-release-worker-runtime.md`; CI run `30910236970` | Target immutable-release activation, OpenLiteSpeed `current/public`, live health and explicit rollback evidence |
+| `ARCH-001`, `ARCH-002`, `QUA-002`, `QUA-012`, `QUA-013` | `composer.json`; `phpstan.neon`; `.github/workflows/ci.yml`; `scripts/ci/`; `docs/19-ci-quality-gates.md`; CI run `30910236970` | Stronger later-phase module rules, target lifecycle evidence and release-gate manifests |
 | `DAT-001`, `DAT-002`, `DAT-003`, `DAT-004` | `Money.php`; `Clock.php`; state enums; foundation migrations; unit/migration tests | Complete domain schema, retention services and production migration evidence |
-| `RUN-001`, `RUN-003`, `RUN-004`, `QUA-003`, `QUA-004` | health probe/command/endpoints; Scheduler heartbeat; `deploy/cron`; `deploy/supervisor`; CI Compose; tests | aaPanel rehearsal, real Supervisor heartbeat validation and staging evidence |
 
 ## Canonical §36 requirements
 
@@ -142,20 +143,20 @@ Placeholder notation:
 | `DAT-003` | D:SchemaIntegrity / Data | C:Database,Modules | T:DAT-003 | E:0.2.0/DAT-003 | `in-progress` |
 | `DAT-004` | D:RecordRetention / Data | C:Database,Wallet,Operations | T:DAT-004 | E:0.2.0/DAT-004 | `in-progress` |
 | `RUN-001` | D:TargetRuntime / SRE | C:Installer,Deploy | T:RUN-001 | E:0.2.0/RUN-001 | `in-progress` |
-| `RUN-002` | D:ReleaseLayout / SRE | C:Deploy,Updater | T:RUN-002 | E:0.2.0/RUN-002 | `not-started` |
+| `RUN-002` | D:ReleaseLayout / SRE | C:Deploy,Updater | T:RUN-002 | E:0.2.0/RUN-002 | `in-progress` |
 | `RUN-003` | D:SchedulerWorkers / SRE | C:Deploy,Operations | T:RUN-003 | E:0.2.0/RUN-003 | `in-progress` |
 | `RUN-004` | D:ScheduledTaskPolicy / SRE | C:Operations | T:RUN-004 | E:0.8.0/RUN-004 | `in-progress` |
 | `RUN-005` | D:BackupProcessSafety / SRE | C:Operations | T:RUN-005 | E:0.8.0/RUN-005 | `not-started` |
 | `RUN-006` | D:PackageManifest / Release | C:ReleaseTooling | T:RUN-006 | E:0.9.0/RUN-006 | `not-started` |
 | `SEC-002` | D:AuthorizationThreats / Security | C:AccessControl | T:SEC-002 | E:0.3.0/SEC-002 | `not-started` |
-| `SEC-003` | D:DataProtection / Security | C:Shared,Identity,Payments | T:SEC-003 | E:0.3.0/SEC-003 | `not-started` |
+| `SEC-003` | D:DataProtection / Security | C:Shared,Identity,Payments | T:SEC-003 | E:0.3.0/SEC-003 | `in-progress` |
 | `SEC-004` | D:SSRF / Security | C:SharedHttp,Integrations | T:SEC-004 | E:0.5.0/SEC-004 | `in-progress` |
 | `SEC-005` | D:TLS / Security | C:SharedHttp,Integrations | T:SEC-005 | E:0.4.0/SEC-005 | `not-started` |
 | `SEC-006` | D:FileHandling / Security | C:SharedStorage,Telegram | T:SEC-006 | E:0.7.0/SEC-006 | `not-started` |
 | `SEC-007` | D:BrowserSecurity / Security | C:Installer,Updater | T:SEC-007 | E:0.8.0/SEC-007 | `in-progress` |
 | `SEC-008` | D:SecretLifecycle / Security | C:Config,Operations | T:SEC-008 | E:0.9.0/SEC-008 | `in-progress` |
 | `SEC-009` | D:WebhookBoundary / Security | C:Telegram,Payments | T:SEC-009 | E:0.5.0/SEC-009 | `not-started` |
-| `SEC-010` | D:ArtifactIntegrity / Security | C:Operations,Updater | T:SEC-010 | E:0.8.0/SEC-010 | `not-started` |
+| `SEC-010` | D:ArtifactIntegrity / Security | C:Operations,Updater | T:SEC-010 | E:0.8.0/SEC-010 | `in-progress` |
 | `LOC-001` | D:LocalizationSchema / Product | C:Content,Translations | T:LOC-001 | E:0.7.0/LOC-001 | `in-progress` |
 | `LOC-002` | D:PersianTerminology / Product | C:Translations,Presentation | T:LOC-002 | E:0.7.0/LOC-002 | `in-progress` |
 | `INT-001` | D:ContractEvidence / Integration | C:Docs,ContractTests | T:INT-001 | E:0.9.0/INT-001 | `not-started` |
