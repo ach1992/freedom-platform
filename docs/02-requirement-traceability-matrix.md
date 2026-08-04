@@ -26,10 +26,10 @@ Placeholder notation:
 | `PRV-001`, `PRV-002`, `PRV-003` | `docs/15-integration-contracts.md`; `app/Modules/Panels/Application/Contracts/`; `ProvisioningState.php`; workflow tests | Marzban/PasarGuard/Fake adapters and orchestration tests |
 | `CNT-001`, `LOC-001`, `LOC-002` | `resources/lang/fa/installer.php`; `resources/lang/en/installer.php`; installer Blade views | Full product localization schema and placeholder tests |
 | `OPS-001`, `SEC-001`, `SEC-008` | correlation middleware; logging redaction processor/tap; operations migration; redaction tests | Audit/alert services, encrypted restricted payloads and full security suite |
-| `INS-001`, `SEC-007`, `QUA-011` | installer config/token store/controller/middleware/routes/views; installer unit/feature tests | Full CLI/LSPHP, DB/Redis/outbound/integration bootstrap journal and final lock |
-| `ARCH-001`, `ARCH-002`, `QUA-002`, `QUA-012`, `QUA-013` | `composer.json`; `phpstan.neon`; `.github/workflows/ci.yml`; `scripts/ci/`; `docs/19-ci-quality-gates.md` | Green locked CI run, stronger module rules and retained evidence manifest |
+| `INS-001`, `SEC-004`, `SEC-007`, `QUA-011`, `QUA-013` | installer config/token store/controller/middleware/routes/views; `InstallerEnvironmentPreflight`; `InstallerBootstrapOrchestrator`; hardened `InstallerBootstrapJournal`; atomic `InstallerLock`; installer unit/feature tests; `evidence/0.2.0/INS-001-php-runtime-preflight.md`; `evidence/0.2.0/INS-001-operational-preflight-bootstrap.md`; CI run `30907255419` | Atomic shared `.env`/`APP_KEY` mutation and rollback, migration/cache finalization, Supervisor/target aaPanel/OpenLiteSpeed installation and rollback evidence |
+| `ARCH-001`, `ARCH-002`, `QUA-002`, `QUA-012`, `QUA-013` | `composer.json`; `phpstan.neon`; `.github/workflows/ci.yml`; `scripts/ci/`; `docs/19-ci-quality-gates.md`; CI run `30907255419` | Stronger module rules, target-like lifecycle evidence and release-gate manifests |
 | `DAT-001`, `DAT-002`, `DAT-003`, `DAT-004` | `Money.php`; `Clock.php`; state enums; foundation migrations; unit/migration tests | Complete domain schema, retention services and production migration evidence |
-| `RUN-001`, `RUN-003`, `RUN-004`, `QUA-003`, `QUA-004` | health probe/command/endpoints; Scheduler heartbeat; `deploy/cron`; `deploy/supervisor`; CI Compose; tests | aaPanel rehearsal, worker heartbeat service and staging evidence |
+| `RUN-001`, `RUN-003`, `RUN-004`, `QUA-003`, `QUA-004` | health probe/command/endpoints; Scheduler heartbeat; `deploy/cron`; `deploy/supervisor`; CI Compose; tests | aaPanel rehearsal, real Supervisor heartbeat validation and staging evidence |
 
 ## Canonical §36 requirements
 
@@ -149,7 +149,7 @@ Placeholder notation:
 | `RUN-006` | D:PackageManifest / Release | C:ReleaseTooling | T:RUN-006 | E:0.9.0/RUN-006 | `not-started` |
 | `SEC-002` | D:AuthorizationThreats / Security | C:AccessControl | T:SEC-002 | E:0.3.0/SEC-002 | `not-started` |
 | `SEC-003` | D:DataProtection / Security | C:Shared,Identity,Payments | T:SEC-003 | E:0.3.0/SEC-003 | `not-started` |
-| `SEC-004` | D:SSRF / Security | C:SharedHttp,Integrations | T:SEC-004 | E:0.5.0/SEC-004 | `not-started` |
+| `SEC-004` | D:SSRF / Security | C:SharedHttp,Integrations | T:SEC-004 | E:0.5.0/SEC-004 | `in-progress` |
 | `SEC-005` | D:TLS / Security | C:SharedHttp,Integrations | T:SEC-005 | E:0.4.0/SEC-005 | `not-started` |
 | `SEC-006` | D:FileHandling / Security | C:SharedStorage,Telegram | T:SEC-006 | E:0.7.0/SEC-006 | `not-started` |
 | `SEC-007` | D:BrowserSecurity / Security | C:Installer,Updater | T:SEC-007 | E:0.8.0/SEC-007 | `in-progress` |
