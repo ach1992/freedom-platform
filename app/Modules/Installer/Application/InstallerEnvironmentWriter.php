@@ -91,7 +91,10 @@ final class InstallerEnvironmentWriter
         });
     }
 
-    /** @param  array<string, string>  $values */
+    /**
+     * @param  array<string, string>  $values
+     * @return array<string, string>
+     */
     private function validateValues(array $values): array
     {
         $validated = [];
@@ -326,7 +329,12 @@ final class InstallerEnvironmentWriter
         }
     }
 
-    /** @template T @param  callable(): T  $callback @return T */
+    /**
+     * @template T
+     *
+     * @param  callable(): T  $callback
+     * @return T
+     */
     private function synchronized(callable $callback): mixed
     {
         $directory = dirname($this->snapshotPath);
