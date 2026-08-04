@@ -414,6 +414,7 @@ systemctl is-active --quiet cron
 
 supervisorctl reread >> "$EVIDENCE"
 supervisorctl update >> "$EVIDENCE"
+supervisorctl restart 'freedom-platform-workers:*' >> "$EVIDENCE"
 sleep 5
 supervisorctl status 'freedom-platform-workers:*' >> "$EVIDENCE"
 

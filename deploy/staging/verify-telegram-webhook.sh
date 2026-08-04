@@ -24,6 +24,9 @@ test -f "$ARTISAN"
 test -s "$ROOT/shared/.env"
 test "$(stat -c %a "$ROOT/shared/.env")" = '600'
 
+supervisorctl restart 'freedom-platform-workers:*' >/dev/null
+sleep 5
+
 CONFIGURE_OUTPUT=$(runuser -u www -- "$PHP" "$ARTISAN" telegram:webhook:configure --json --no-ansi --no-interaction)
 STATUS_OUTPUT=$(runuser -u www -- "$PHP" "$ARTISAN" telegram:webhook:configure --status-only --json --no-ansi --no-interaction)
 
@@ -105,6 +108,21 @@ if (! is_string($botToken) || preg_match('/\A([1-9][0-9]{5,19}):/', $botToken, $
 
 $botId = $matches[1];
 $updateId = 900000000000000000 + time();
+
+$database->connection()->table('processed_telegram_updates')
+    ->where('bot_id', $botId)
+    ->where('update_id', '>=', 900000000000000000)
+    ->delete();
+
+set_exception_handler(static function (Throwable $exception) use ($database, $botId, &$updateId): never {
+    $database->connection()->table('processed_telegram_updates')
+        ->where('bot_id', $botId)
+        ->where('update_id', $updateId)
+        ->delete();
+    fwrite(STDERR, "Telegram contract verification failed.\n");
+    exit(1);
+});
+
 $payload = [
     'update_id' => $updateId,
     'poll' => [
