@@ -1,0 +1,61 @@
+name: Staging Final Diagnose Once
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/staging-final-diagnose-once.yml
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Prepare SSH
+        env:
+          KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          KNOWN: ${{ secrets.STAGING_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$KNOWN" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+      - name: Read sanitized final checkpoint
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          PORT: ${{ secrets.STAGING_PORT }}
+          USER: ${{ secrets.STAGING_USER }}
+          DOMAIN: ${{ secrets.STAGING_DOMAIN }}
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -p "$PORT" "$USER@$HOST" "DOMAIN='$DOMAIN' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          ROOT="/www/acdomains/$DOMAIN"
+          echo "current_release=$(basename "$(readlink -f "$ROOT/current")")"
+          echo 'evidence_begin'
+          sed -n '1,280p' /root/freedom-bootstrap/core-deploy-evidence.txt
+          echo 'evidence_end'
+          echo 'supervisor_begin'
+          supervisorctl status 'freedom-platform-workers:*' || true
+          echo 'supervisor_end'
+          echo 'heartbeat_begin'
+          mariadb --protocol=socket -N -uroot freedom_platform -e \
+            "SELECT worker_id, queue, TIMESTAMPDIFF(SECOND,last_seen_at,UTC_TIMESTAMP(6)) AS age_seconds FROM worker_heartbeats ORDER BY worker_id; SELECT CONCAT('unresolved=',COUNT(*)) FROM alerts WHERE event_name='operations.worker_heartbeat_stale' AND resolved_at IS NULL;"
+          echo 'heartbeat_end'
+          echo 'wrapper_processes_begin'
+          ps -eo pid=,ppid=,etime=,stat=,cmd= | grep -E 'queue-worker-with-heartbeat|artisan queue:work' | grep -v grep || true
+          echo 'wrapper_processes_end'
+          echo 'wrapper_logs_begin'
+          for log in supervisor-critical.log supervisor-provisioning.log supervisor-bulk.log; do
+            echo "log=$log"
+            tail -n 30 "$ROOT/shared/storage/logs/$log" 2>/dev/null \
+              | grep -E 'heartbeat could not|wrapper configuration|ERROR|CRITICAL|Permission denied|not found' \
+              | tail -n 20 || true
+          done
+          echo 'wrapper_logs_end'
+          REMOTE
+      - if: always()
+        run: rm -rf "$HOME/.ssh"
