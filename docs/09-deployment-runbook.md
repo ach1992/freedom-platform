@@ -115,7 +115,17 @@ supervisorctl update
 supervisorctl status 'freedom-platform-workers:*'
 ```
 
-Expected: all configured processes become `RUNNING`; critical payments/provisioning are isolated from broadcast/report queues.
+Expected: all configured processes become `RUNNING`; critical payments/provisioning are isolated from broadcast/report queues. Each process receives a unique `WORKER_NAME`, queue-group metadata, heartbeat interval `30`, and stale threshold `480`. The application records heartbeats while idle and before/after/after-failure job lifecycle events; a heartbeat write failure is logged generically and does not terminate the worker.
+
+After at least one minute, verify database heartbeat freshness through the application command:
+
+```bash
+sudo -u www /www/server/php/84/bin/php \
+  /www/acdomains/hell.hellpservice.ir/current/artisan \
+  operations:check-worker-heartbeats --max-age=480 --json
+```
+
+Expected: every configured Supervisor process has a distinct current heartbeat. Stop one non-critical worker during the staging rehearsal, confirm one deduplicated critical alert is created after the threshold, restart it, and confirm the alert resolves.
 
 ## 6. Permissions
 
@@ -135,15 +145,44 @@ Writable runtime directories live under shared `storage`; do not grant `0777`. C
 
 Before activation, production `.env` must set `APP_ENV=production`, `APP_DEBUG=false`, `SESSION_SECURE_COOKIE=true`, `SESSION_HTTP_ONLY=true`, `SESSION_SAME_SITE=lax`, `SESSION_ENCRYPT=true`, and `REDIS_QUEUE_RETRY_AFTER=420` or a larger reviewed value. The Redis retry interval must remain greater than every Supervisor worker timeout.
 
-For upgrades use the application updater described in `docs/18-update-rollback-runbook.md`. For first activation, the supplied bootstrap performs an atomic relative symlink switch. Then run:
+The staged release must contain regular readable `artisan`, `public/index.php`, and `composer.lock`. Shared `.env` and shared `storage` must exist as direct resources under `/www/acdomains/hell.hellpservice.ir/shared`. Do not pre-create conflicting `.env` or `storage` paths inside the candidate.
+
+Activate the candidate only through the verified release switch primitive:
+
+```bash
+sudo -u www /www/server/php/84/bin/php \
+  /www/acdomains/hell.hellpservice.ir/releases/<RELEASE>/deploy/bin/release-switch.php \
+  --root=/www/acdomains/hell.hellpservice.ir \
+  --release=<RELEASE> \
+  --php=/www/server/php/84/bin/php \
+  --journal=/www/acdomains/hell.hellpservice.ir/shared/release-journal.json \
+  --timeout=60
+```
+
+The command:
+
+- validates the release identifier and realpath containment;
+- rejects traversal, candidate symlink escape, unsafe `current`, unapproved shared-resource paths, and missing mandatory files;
+- creates only relative links to `../../shared/.env` and `../../shared/storage`;
+- records the previous release and `composer.lock` SHA-256 in a mode-`0600` redacted journal;
+- removes only a stale `.current.next` symlink and refuses a regular file at that path;
+- atomically renames `.current.next` to `current`;
+- runs the fixed critical redacted health command against the activated candidate;
+- restores the previous `current`, or removes failed first activation, if health verification fails.
+
+Do not substitute `ln -sfn` because it bypasses containment, journaling, shared-link and automatic-health rollback controls.
+
+Then run:
 
 ```bash
 sudo -u www /www/server/php/84/bin/php /www/acdomains/hell.hellpservice.ir/current/artisan optimize
 sudo -u www /www/server/php/84/bin/php /www/acdomains/hell.hellpservice.ir/current/artisan queue:restart
+supervisorctl reread
+supervisorctl update
 supervisorctl status 'freedom-platform-workers:*'
 curl --fail --silent --show-error https://hell.hellpservice.ir/health/live
 curl --fail --silent --show-error https://hell.hellpservice.ir/health/ready
-sudo -u www /www/server/php/84/bin/php /www/acdomains/hell.hellpservice.ir/current/artisan health:check --redact
+sudo -u www /www/server/php/84/bin/php /www/acdomains/hell.hellpservice.ir/current/artisan health:check --critical --json --redact
 sudo -u www /www/server/php/84/bin/php /www/acdomains/hell.hellpservice.ir/current/artisan reconciliation:critical --fail-on-difference
 ```
 
@@ -161,13 +200,44 @@ Store redacted evidence under `storage/app/private/operations/evidence/<RELEASE>
 
 ## 8. Failure and rollback
 
-If failure occurs before the symlink switch, leave `current` unchanged and delete nothing until the staged journal is reviewed. If failure occurs after activation:
+If failure occurs before the symlink switch, leave `current` unchanged and delete nothing until the staged journal is reviewed. A failed candidate health check performed by `release-switch.php` automatically restores the previous release. If further failure occurs after activation:
 
 1. Enter maintenance mode if customer/financial safety is affected.
 2. Stop new provider captures/provisioning through the Operations Center.
-3. Preserve logs and update journal.
-4. Follow `docs/18-update-rollback-runbook.md`; switch code back only when schema compatibility permits.
-5. If schema is incompatible, restore the verified pre-update backup and explicitly accept the documented data-loss window.
-6. Re-run health, reconciliation, webhook, queue, and Scheduler checks before reopening.
+3. Preserve logs and the private release journal.
+4. Confirm schema compatibility before any code rollback.
+5. Run the guarded release switch with `--rollback`; never edit the symlink manually.
+6. If schema is incompatible, restore the verified pre-update backup and explicitly accept the documented data-loss window.
+7. Re-run health, reconciliation, webhook, queue, Scheduler and worker checks before reopening.
 
-Never run `migrate:rollback` blindly and never edit financial rows to make a deployment appear healthy.
+Compatible code rollback command:
+
+```bash
+sudo -u www /www/server/php/84/bin/php \
+  /www/acdomains/hell.hellpservice.ir/current/deploy/bin/release-switch.php \
+  --root=/www/acdomains/hell.hellpservice.ir \
+  --release=<PREVIOUS_RELEASE> \
+  --php=/www/server/php/84/bin/php \
+  --journal=/www/acdomains/hell.hellpservice.ir/shared/release-journal.json \
+  --timeout=60 \
+  --rollback
+```
+
+Never run `migrate:rollback` blindly and never edit financial rows to make a deployment appear healthy. Full update and rollback policy remains in `docs/18-update-rollback-runbook.md`.
+
+## 9. Target rehearsal evidence checklist
+
+The Phase `0.2.0` target rehearsal must retain sanitized evidence for the exact Git SHA and include:
+
+- independent CLI PHP and LSPHP preflight outputs;
+- aaPanel/OpenLiteSpeed document root resolving to `current/public`;
+- shared `.env` mode `0600`, shared storage, candidate links and `current` resolution;
+- release-switch activation JSON and private-journal metadata without secrets;
+- live/ready HTTP checks and `health:check --critical --json --redact`;
+- exactly one Scheduler Cron entry;
+- Supervisor `reread`, `update`, process status and unique fresh worker heartbeat rows;
+- controlled stale-worker alert creation and recovery;
+- explicit compatible rollback to the previous candidate followed by health checks;
+- reactivation of the intended release and final healthy state.
+
+Do not attach real credentials, raw `.env`, Telegram secrets, provider output, database passwords, or unrestricted aaPanel screenshots to the issue or repository.
