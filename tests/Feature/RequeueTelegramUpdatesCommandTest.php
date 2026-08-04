@@ -41,10 +41,11 @@ final class RequeueTelegramUpdatesCommandTest extends TestCase
             '--limit' => 10,
             '--json' => true,
         ]);
+        $output = Artisan::output();
 
         self::assertSame(0, $exitCode);
-        self::assertStringContainsString('"requeued":1', Artisan::output());
-        self::assertStringContainsString('"queue":"telegram-ingress"', Artisan::output());
+        self::assertStringContainsString('"requeued":1', $output);
+        self::assertStringContainsString('"queue":"telegram-ingress"', $output);
         Queue::assertPushedOn('telegram-ingress', ProcessTelegramUpdateJob::class);
         $this->assertDatabaseHas('processed_telegram_updates', [
             'bot_id' => '123456789',
