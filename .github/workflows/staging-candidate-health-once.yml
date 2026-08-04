@@ -25,7 +25,7 @@ jobs:
           printf '%s\n' "$STAGING_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
 
-      - name: Run redacted health on staged candidates
+      - name: Inspect candidate writable paths as www
         env:
           STAGING_HOST: ${{ secrets.STAGING_HOST }}
           STAGING_PORT: ${{ secrets.STAGING_PORT }}
@@ -45,24 +45,29 @@ jobs:
           set -Eeuo pipefail
           ROOT="/www/acdomains/$DOMAIN"
           PHP=/www/server/php/84/bin/php
-          echo '# staged candidate health'
+          echo '# staged candidate writable paths'
           echo "utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          echo "current_present=$([ -L "$ROOT/current" ] && echo yes || echo no)"
-          for release in "$ROOT"/releases/staging-*; do
+          for release in "$ROOT"/releases/staging-a-501a98ae0b3f "$ROOT"/releases/staging-b-501a98ae0b3f; do
             [ -d "$release" ] || continue
             echo "release=$(basename "$release")"
-            echo "source_sha=$(cat "$release/.staging-source-sha" 2>/dev/null || echo unavailable)"
-            echo "storage_link=$([ -L "$release/storage" ] && echo symlink || echo invalid)"
-            echo "env_link=$([ -L "$release/.env" ] && echo symlink || echo invalid)"
-            echo "storage_writable=$([ -w "$release/storage" ] && echo yes || echo no)"
-            echo "bootstrap_cache_writable=$([ -w "$release/bootstrap/cache" ] && echo yes || echo no)"
-            set +e
-            output=$(runuser -u www -- "$PHP" "$release/artisan" health:check \
-              --critical --json --redact --no-ansi --no-interaction 2>&1)
-            status=$?
-            set -e
-            printf 'health_status=%s\n' "$status"
-            printf 'health_output=%s\n' "$output"
+            for path in "$ROOT" "$ROOT/shared" "$ROOT/shared/storage" "$release" "$release/storage" "$release/bootstrap" "$release/bootstrap/cache"; do
+              echo "path=$(realpath -m "$path")"
+              stat -Lc 'mode=%a owner=%U group=%G type=%F' "$path"
+              if runuser -u www -- test -r "$path"; then echo 'www_readable=yes'; else echo 'www_readable=no'; fi
+              if runuser -u www -- test -x "$path"; then echo 'www_searchable=yes'; else echo 'www_searchable=no'; fi
+              if runuser -u www -- test -w "$path"; then echo 'www_writable=yes'; else echo 'www_writable=no'; fi
+            done
+            runuser -u www -- "$PHP" -r '
+              $paths = [$argv[1], $argv[2]];
+              foreach ($paths as $path) {
+                  echo "php_path=".$path.PHP_EOL;
+                  echo "php_realpath=".(realpath($path) ?: "false").PHP_EOL;
+                  echo "php_is_dir=".(is_dir($path) ? "yes" : "no").PHP_EOL;
+                  echo "php_is_writable=".(is_writable($path) ? "yes" : "no").PHP_EOL;
+                  $error = error_get_last();
+                  echo "php_error=".($error["message"] ?? "none").PHP_EOL;
+              }
+            ' "$release/storage" "$release/bootstrap/cache"
           done
           REMOTE
 
