@@ -38,6 +38,13 @@ return [
         ],
     ],
 
+    'finalization' => [
+        'php_binary' => env('INSTALLER_PHP_CLI_BINARY', '/www/server/php/84/bin/php'),
+        'artisan_path' => base_path('artisan'),
+        'working_directory' => base_path(),
+        'timeout_seconds' => (int) env('INSTALLER_FINALIZATION_TIMEOUT_SECONDS', 300),
+    ],
+
     'environment' => [
         'file_path' => env('INSTALLER_ENVIRONMENT_PATH', base_path('.env')),
         'snapshot_path' => env(
