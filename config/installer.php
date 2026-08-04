@@ -33,4 +33,24 @@ return [
             'lsphp' => [],
         ],
     ],
+
+    'environment' => [
+        'paths' => [
+            storage_path(),
+            base_path('bootstrap/cache'),
+        ],
+        'minimum_free_bytes' => (int) env('INSTALLER_MINIMUM_FREE_BYTES', 1_073_741_824),
+        'expected_owner' => env('INSTALLER_EXPECTED_OWNER', 'www'),
+        'expected_group' => env('INSTALLER_EXPECTED_GROUP', 'www'),
+        'outbound_urls' => [
+            'https://repo.packagist.org/packages.json',
+            'https://api.telegram.org',
+        ],
+        'outbound_allowed_hosts' => [
+            'repo.packagist.org',
+            'api.telegram.org',
+        ],
+        'connect_timeout_seconds' => 3,
+        'timeout_seconds' => 5,
+    ],
 ];
