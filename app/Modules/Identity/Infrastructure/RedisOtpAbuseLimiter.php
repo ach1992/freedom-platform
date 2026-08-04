@@ -56,8 +56,9 @@ final readonly class RedisOtpAbuseLimiter implements OtpAbuseLimiter
 
         $result = $this->redis->connection()->eval(
             self::LUA,
-            [...$keys, ...$arguments],
             count($keys),
+            ...$keys,
+            ...$arguments,
         );
 
         if (! is_int($result) && ! is_numeric($result)) {
