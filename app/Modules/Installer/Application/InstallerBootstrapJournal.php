@@ -9,9 +9,7 @@ use RuntimeException;
 final class InstallerBootstrapJournal
 {
     /** @requirement INS-001 SEC-007 QUA-011 */
-    public function __construct(private readonly string $path)
-    {
-    }
+    public function __construct(private readonly string $path) {}
 
     /** @return array{step: string, status: string, updated_at: string}|null */
     public function current(): ?array
