@@ -11,12 +11,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      VERIFIED_APP_SHA: af1310d891d0b791139d7623dd0dd51b5ded50ee
+      VERIFIED_APP_SHA: 434df370fa6f0fc9ecb8b54540b0683e1d43c88a
     steps:
       - name: Check out verified application commit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: af1310d891d0b791139d7623dd0dd51b5ded50ee
+          ref: 434df370fa6f0fc9ecb8b54540b0683e1d43c88a
           fetch-depth: 1
           persist-credentials: false
 
@@ -99,7 +99,7 @@ jobs:
           set -Eeuo pipefail
           umask 077
 
-          VERIFIED_SHA='af1310d891d0b791139d7623dd0dd51b5ded50ee'
+          VERIFIED_SHA='434df370fa6f0fc9ecb8b54540b0683e1d43c88a'
           SHORT_SHA=${VERIFIED_SHA:0:12}
           INPUT=/root/freedom-bootstrap/incoming
           DOMAIN=$(cat "$INPUT/domain")
