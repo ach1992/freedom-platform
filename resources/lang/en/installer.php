@@ -28,6 +28,8 @@ return [
     'checks' => [
         'php_runtimes' => 'CLI PHP and LSPHP',
         'https' => 'HTTPS',
+        'database' => 'Database connectivity',
+        'redis' => 'Authenticated Redis connectivity',
         'storage' => 'Writable storage',
         'utc' => 'UTC application timezone',
     ],
