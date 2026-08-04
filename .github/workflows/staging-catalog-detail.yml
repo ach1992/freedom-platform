@@ -1,0 +1,77 @@
+name: Staging Catalog Detail
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/staging-catalog-detail.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  catalog:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Prepare SSH client
+        env:
+          STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          STAGING_KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$STAGING_SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$STAGING_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+
+      - name: Parse OpenLiteSpeed and PHP catalog entries
+        env:
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          STAGING_PORT: ${{ secrets.STAGING_PORT }}
+          STAGING_USER: ${{ secrets.STAGING_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=20 \
+            -p "$STAGING_PORT" \
+            "$STAGING_USER@$STAGING_HOST" \
+            'python3 - <<'"'"'PY'"'"'
+import json
+from pathlib import Path
+
+path = Path("/www/server/panel/data/softList.conf")
+data = json.loads(path.read_text(encoding="utf-8"))
+
+
+def walk(value):
+    if isinstance(value, dict):
+        yield value
+        for child in value.values():
+            yield from walk(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from walk(child)
+
+for item in walk(data):
+    name = str(item.get("name", ""))
+    shell = str(item.get("shell", ""))
+    lowered = f"{name} {shell}".lower()
+    if "openlitespeed" not in lowered and not (name.lower() == "php" or shell.lower() == "php.sh"):
+        continue
+    safe = {
+        key: item.get(key)
+        for key in ("name", "title", "shell", "check", "versions", "version", "mtype", "type", "type_id")
+        if key in item
+    }
+    print(json.dumps(safe, ensure_ascii=True, sort_keys=True))
+PY'
+
+      - name: Remove SSH material
+        if: always()
+        shell: bash
+        run: rm -rf "$HOME/.ssh"
