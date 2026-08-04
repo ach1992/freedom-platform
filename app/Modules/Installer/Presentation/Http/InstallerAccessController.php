@@ -7,10 +7,13 @@ namespace App\Modules\Installer\Presentation\Http;
 use App\Http\Controllers\Controller;
 use App\Modules\Installer\Application\InstallerAccessTokenStore;
 use App\Modules\Installer\Application\InstallerEnvironmentPreflight;
+use App\Modules\Installer\Application\InstallerFinalizer;
 use App\Modules\Installer\Application\PhpRuntimePreflight;
 use App\Modules\Operations\Application\RuntimeHealthProbe;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
 
 final class InstallerAccessController extends Controller
@@ -93,23 +96,75 @@ final class InstallerAccessController extends Controller
         ]);
     }
 
+    /** @requirement INS-001 SEC-003 SEC-007 SEC-008 QUA-011 */
+    public function finalize(Request $request, InstallerFinalizer $finalizer): JsonResponse
+    {
+        $validated = $request->validate([
+            'environment' => ['required', 'array', 'min:1', 'max:40'],
+            'environment.*' => ['nullable', 'string', 'max:4096'],
+        ]);
+        $environment = $this->environmentMap($validated['environment'] ?? null);
+        $result = $finalizer->finalize($environment);
+
+        $request->session()->invalidate();
+        $request->session()->regenerateToken();
+
+        return response()->json(['status' => $result['status']]);
+    }
+
     /** @return list<string> */
     private function extensionList(mixed $value): array
+    {
+        $extensions = $this->stringList($value);
+        sort($extensions);
+
+        return $extensions;
+    }
+
+    /** @return array<string, string> */
+    private function environmentMap(mixed $value): array
+    {
+        $allowedKeys = $this->stringList(config('installer.environment.allowed_keys', []));
+
+        if (! is_array($value) || $allowedKeys === []) {
+            throw ValidationException::withMessages([
+                'environment' => __('installer.invalid_environment'),
+            ]);
+        }
+
+        $environment = [];
+
+        foreach ($value as $key => $item) {
+            if (! is_string($key)
+                || ! in_array($key, $allowedKeys, true)
+                || (! is_string($item) && $item !== null)
+            ) {
+                throw ValidationException::withMessages([
+                    'environment' => __('installer.invalid_environment'),
+                ]);
+            }
+
+            $environment[$key] = $item ?? '';
+        }
+
+        return $environment;
+    }
+
+    /** @return list<string> */
+    private function stringList(mixed $value): array
     {
         if (! is_array($value)) {
             return [];
         }
 
-        $extensions = [];
+        $items = [];
 
-        foreach ($value as $extension) {
-            if (is_string($extension) && $extension !== '') {
-                $extensions[] = $extension;
+        foreach ($value as $item) {
+            if (is_string($item) && $item !== '') {
+                $items[] = $item;
             }
         }
 
-        sort($extensions);
-
-        return array_values(array_unique($extensions));
+        return array_values(array_unique($items));
     }
 }
