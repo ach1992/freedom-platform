@@ -6,6 +6,7 @@ namespace App\Modules\Identity\Infrastructure;
 
 use App\Modules\Identity\Application\Contracts\OtpAbuseLimiter;
 use App\Modules\Identity\Application\Contracts\SmsProvider;
+use App\Modules\Identity\Application\Exceptions\OtpRateLimitExceeded;
 use App\Modules\Identity\Application\OtpRateLimitBucket;
 use App\Modules\Identity\Application\SmsDeliveryResult;
 use App\Modules\Identity\Application\SmsOtpMessage;
@@ -30,9 +31,13 @@ final readonly class RateLimitedSmsProvider implements SmsProvider
 
     public function sendOtp(SmsOtpMessage $message): SmsDeliveryResult
     {
-        $this->limiter->consume([
-            new OtpRateLimitBucket('provider', $this->code(), $this->dailyLimit, 86400),
-        ]);
+        try {
+            $this->limiter->consume([
+                new OtpRateLimitBucket('provider', $this->code(), $this->dailyLimit, 86400),
+            ]);
+        } catch (OtpRateLimitExceeded) {
+            return SmsDeliveryResult::definitiveFailure('provider_rate_limit');
+        }
 
         return $this->provider->sendOtp($message);
     }
