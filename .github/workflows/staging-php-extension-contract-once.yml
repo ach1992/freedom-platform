@@ -25,7 +25,7 @@ jobs:
           printf '%s\n' "$STAGING_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
 
-      - name: Inspect extension installation contract
+      - name: Inspect exact aaPanel extension API
         env:
           STAGING_HOST: ${{ secrets.STAGING_HOST }}
           STAGING_PORT: ${{ secrets.STAGING_PORT }}
@@ -36,35 +36,20 @@ jobs:
           ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 \
             -p "$STAGING_PORT" "$STAGING_USER@$STAGING_HOST" \
             'set -eu
-             echo "# PHP module state"
-             /www/server/php/84/bin/php --ini
-             /www/server/php/84/bin/php -i | grep -E "^extension_dir|^Scan this dir" | head -n 10 || true
-             find /www/server/php/84 -maxdepth 4 -type f \
-               | grep -Ei "/(redis|fileinfo|opcache)\\.(so|ini)$" \
-               | sort \
-               | head -n 100 \
-               || true
-             echo "# aaPanel extension symbols"
-             grep -RIn --include="*.py" -E "Install.*(Extension|Lib)|install.*(extension|lib)|fileinfo|redis|opcache" \
-               /www/server/panel/class/panelPHP.py \
-               /www/server/panel/class/panelPlugin.py \
-               /www/server/panel/mod 2>/dev/null \
-               | head -n 220 \
-               | sed -E "s#https?://[^[:space:]]+#URL_REDACTED#g" \
-               || true
-             echo "# installer scripts"
-             find /www/server/panel/install -maxdepth 4 -type f 2>/dev/null \
-               | grep -Ei "php|redis|fileinfo|opcache" \
-               | sort \
-               | head -n 160 \
-               || true
-             echo "# dispatcher references"
-             grep -RIn -E "php[-_ ]?ext|fileinfo|opcache|redis" \
-               /www/server/panel/install/install_soft.sh \
-               /www/server/panel/install/soft 2>/dev/null \
-               | head -n 220 \
-               | sed -E "s#https?://[^[:space:]]+#URL_REDACTED#g" \
-               || true'
+             echo "# php_async fileinfo behavior"
+             sed -n "285,325p" /www/server/panel/mod/project/php/php_asyncMod.py
+             echo "# aepg install_phplib"
+             sed -n "1135,1235p" /www/server/panel/mod/project/php/aepgMod.py
+             echo "# aepg callers one"
+             sed -n "1385,1435p" /www/server/panel/mod/project/php/aepgMod.py
+             echo "# aepg callers two"
+             sed -n "1640,1695p" /www/server/panel/mod/project/php/aepgMod.py
+             echo "# panel routes"
+             grep -RIn --include="*.py" -E "install_phplib|InstallLib|UninstallLib" \
+               /www/server/panel/class /www/server/panel/mod /www/server/panel/route 2>/dev/null \
+               | head -n 120 \
+               || true' \
+            | sed -E 's#https?://[^[:space:]"'"']+#URL_REDACTED#g'
 
       - name: Remove SSH material
         if: always()
