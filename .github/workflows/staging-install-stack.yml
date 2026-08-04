@@ -1,6 +1,9 @@
 name: Staging Install Stack
 
 on:
+  pull_request:
+    paths:
+      - .github/workflows/staging-install-stack.yml
   workflow_dispatch:
 
 permissions:
@@ -48,7 +51,7 @@ jobs:
              install -d -m 700 /root/freedom-bootstrap
              exec 9>/root/freedom-bootstrap/stack.lock
              flock -w 300 9 || { echo "Stack installation lock timeout." >&2; exit 1; }
-             test -x "$install_dir/install_soft.sh"
+             test -r "$install_dir/install_soft.sh"
 
              sanitize_log() {
                log_path="$1"
