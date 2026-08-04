@@ -10,6 +10,7 @@ use App\Modules\Operations\Presentation\Console\CheckWorkerHeartbeatsCommand;
 use App\Modules\Operations\Presentation\Console\HealthCheckCommand;
 use App\Modules\Operations\Presentation\Console\RecordWorkerHeartbeatCommand;
 use App\Modules\Telegram\Presentation\Console\ConfigureTelegramWebhookCommand;
+use App\Modules\Telegram\Presentation\Console\RequeueTelegramUpdatesCommand;
 use App\Modules\Telegram\Presentation\Http\Middleware\VerifyTelegramWebhookRequest;
 use App\Shared\Infrastructure\Http\CorrelationIdMiddleware;
 use Illuminate\Foundation\Application;
@@ -36,6 +37,7 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withCommands([
         CheckWorkerHeartbeatsCommand::class,
         ConfigureTelegramWebhookCommand::class,
+        RequeueTelegramUpdatesCommand::class,
         HealthCheckCommand::class,
         IssueInstallerTokenCommand::class,
         RecordWorkerHeartbeatCommand::class,

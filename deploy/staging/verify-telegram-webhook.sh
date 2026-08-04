@@ -26,6 +26,7 @@ test "$(stat -c %a "$ROOT/shared/.env")" = '600'
 
 supervisorctl restart 'freedom-platform-workers:*' >/dev/null
 sleep 5
+runuser -u www -- "$PHP" "$ARTISAN" queue:clear redis --queue=critical --force --no-ansi --no-interaction >/dev/null
 
 CONFIGURE_OUTPUT=$(runuser -u www -- "$PHP" "$ARTISAN" telegram:webhook:configure --json --no-ansi --no-interaction)
 STATUS_OUTPUT=$(runuser -u www -- "$PHP" "$ARTISAN" telegram:webhook:configure --status-only --json --no-ansi --no-interaction)
@@ -86,7 +87,8 @@ if (! is_string($root) || $root === '') {
 
 require $root.'/current/vendor/autoload.php';
 $app = require $root.'/current/bootstrap/app.php';
-$app->make(Kernel::class)->bootstrap();
+$kernel = $app->make(Kernel::class);
+$kernel->bootstrap();
 
 $config = $app->make(Repository::class);
 $database = $app->make(DatabaseManager::class);
@@ -122,6 +124,26 @@ set_exception_handler(static function (Throwable $exception) use ($database, $bo
     fwrite(STDERR, "Telegram contract verification failed.\n");
     exit(1);
 });
+
+$requeueStatus = $kernel->call('telegram:updates:requeue', [
+    '--older-than' => 0,
+    '--limit' => 100,
+    '--include-failed' => true,
+    '--json' => true,
+]);
+$requeueOutput = trim($kernel->output());
+
+if ($requeueStatus !== 0) {
+    throw new RuntimeException('Telegram stranded-update recovery failed.');
+}
+
+$requeueResult = json_decode($requeueOutput, true, 16, JSON_THROW_ON_ERROR);
+
+if (! is_array($requeueResult) || ! is_int($requeueResult['requeued'] ?? null)) {
+    throw new RuntimeException('Telegram stranded-update recovery returned invalid output.');
+}
+
+echo 'stranded_updates_requeued='.$requeueResult['requeued'].PHP_EOL;
 
 $payload = [
     'update_id' => $updateId,
