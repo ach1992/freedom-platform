@@ -25,7 +25,7 @@ jobs:
           printf '%s\n' "$STAGING_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
 
-      - name: Inspect exact site and SSL API methods
+      - name: Inspect site creation options and callers
         env:
           STAGING_HOST: ${{ secrets.STAGING_HOST }}
           STAGING_PORT: ${{ secrets.STAGING_PORT }}
@@ -43,35 +43,40 @@ jobs:
             'python3 -' <<'PY'
           from pathlib import Path
 
-          targets = [
-              ('/www/server/panel/class/panelSite.py', 'AddSite'),
-              ('/www/server/panel/class/panelSite.py', 'openlitespeed_add_site'),
-              ('/www/server/panel/class/panelSite.py', 'SetPath'),
-              ('/www/server/panel/class/panelSite.py', 'SetSSL'),
-              ('/www/server/panel/class/acme_v2.py', 'apply_cert'),
-          ]
+          path = Path('/www/server/panel/class/panelSite.py')
+          lines = path.read_text(errors='replace').splitlines()
 
-          for filename, function in targets:
-              path = Path(filename)
-              print(f'# {path.name}:{function}')
-              if not path.exists():
-                  print('file_absent')
-                  continue
-              lines = path.read_text(errors='replace').splitlines()
-              markers = [f'    def {function}(', f'def {function}(']
-              start = next((i for i, line in enumerate(lines) if any(line.startswith(marker) for marker in markers)), None)
+          for function in ('_set_ssl', '_set_redirect'):
+              print(f'# panelSite.py:{function}')
+              marker = f'    def {function}('
+              start = next((i for i, line in enumerate(lines) if line.startswith(marker)), None)
               if start is None:
                   print('not_found')
                   continue
-              indent = len(lines[start]) - len(lines[start].lstrip())
               end = len(lines)
               for i in range(start + 1, len(lines)):
-                  stripped = lines[i].lstrip()
-                  current_indent = len(lines[i]) - len(stripped)
-                  if stripped.startswith('def ') and current_indent == indent:
+                  if lines[i].startswith('    def '):
                       end = i
                       break
-              print('\n'.join(lines[start:min(end, start + 260)]))
+              print('\n'.join(lines[start:min(end, start + 180)]))
+
+          print('# AddSite callers')
+          roots = [Path('/www/server/panel/class'), Path('/www/server/panel/mod'), Path('/www/server/panel/script')]
+          shown = 0
+          for root in roots:
+              for source in root.rglob('*.py'):
+                  try:
+                      source_lines = source.read_text(errors='replace').splitlines()
+                  except OSError:
+                      continue
+                  for index, line in enumerate(source_lines):
+                      if '.AddSite(' not in line and 'AddSite(args' not in line and 'AddSite(get' not in line:
+                          continue
+                      print(f'## {source}:{index + 1}')
+                      print('\n'.join(source_lines[max(0, index - 20):min(len(source_lines), index + 8)]))
+                      shown += 1
+                      if shown >= 12:
+                          raise SystemExit(0)
           PY
 
       - name: Remove SSH material
