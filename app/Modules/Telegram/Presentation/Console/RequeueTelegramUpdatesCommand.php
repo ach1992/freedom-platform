@@ -36,7 +36,8 @@ final class RequeueTelegramUpdatesCommand extends Command
         $rows = $database->connection()->table('processed_telegram_updates')
             ->whereIn('state', $states)
             ->where('updated_at', '<=', $cutoff)
-            ->orderBy('id')
+            ->orderBy('bot_id')
+            ->orderBy('update_id')
             ->limit($limit)
             ->get(['bot_id', 'update_id']);
 
