@@ -1,0 +1,52 @@
+name: Patch Staging Cron Once
+
+on:
+  push:
+    branches:
+      - develop/v1.0.0-completion
+    paths:
+      - .github/workflows/patch-staging-cron-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out development branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: develop/v1.0.0-completion
+          fetch-depth: 1
+          persist-credentials: true
+
+      - name: Replace unsupported cron reload with readiness assertion
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('deploy/staging/core-deploy.sh')
+          original = path.read_text()
+          old = 'systemctl reload cron'
+          new = 'systemctl is-active --quiet cron'
+          count = original.count(old)
+          if count != 1:
+              raise SystemExit(f'expected exactly one cron reload line, found {count}')
+          path.write_text(original.replace(old, new))
+          PY
+          git diff --check
+          grep -Fx 'systemctl is-active --quiet cron' deploy/staging/core-deploy.sh
+          ! grep -Fx 'systemctl reload cron' deploy/staging/core-deploy.sh
+
+      - name: Commit compatibility fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add deploy/staging/core-deploy.sh
+          git commit -m 'fix(staging): validate cron service readiness'
+          git push origin HEAD:develop/v1.0.0-completion
