@@ -1,0 +1,45 @@
+name: Staging Vhost Template Once
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/staging-vhost-template-once.yml
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Prepare SSH
+        env:
+          KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          KNOWN: ${{ secrets.STAGING_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$KNOWN" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+      - name: Read OLS templates
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          PORT: ${{ secrets.STAGING_PORT }}
+          USER: ${{ secrets.STAGING_USER }}
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -p "$PORT" "$USER@$HOST" '
+            set -eu
+            echo MAIN_BEGIN
+            sed -n "1,180p" /www/server/panel/vhost/openlitespeed/default.conf
+            echo MAIN_END
+            echo DETAIL_BEGIN
+            sed -n "1,260p" /www/server/panel/vhost/openlitespeed/detail/default.conf
+            echo DETAIL_END
+            echo LISTEN_BEGIN
+            sed -n "1,180p" /www/server/panel/vhost/openlitespeed/listen/80.conf
+            echo LISTEN_END
+          '
+      - if: always()
+        run: rm -rf "$HOME/.ssh"
