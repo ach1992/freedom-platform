@@ -1,0 +1,89 @@
+name: Staging Worker Diagnose Once
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/staging-worker-diagnose-once.yml
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose-workers:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Prepare SSH client
+        env:
+          STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          STAGING_KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$STAGING_SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$STAGING_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+
+      - name: Inspect sanitized worker runtime state
+        env:
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          STAGING_PORT: ${{ secrets.STAGING_PORT }}
+          STAGING_USER: ${{ secrets.STAGING_USER }}
+          STAGING_DOMAIN: ${{ secrets.STAGING_DOMAIN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=20 \
+            -p "$STAGING_PORT" \
+            "$STAGING_USER@$STAGING_HOST" \
+            "DOMAIN='$STAGING_DOMAIN' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          ROOT="/www/acdomains/$DOMAIN"
+          PHP=/www/server/php/84/bin/php
+
+          echo '# worker runtime diagnostic'
+          echo "utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "current_release=$(basename "$(readlink -f "$ROOT/current" 2>/dev/null || echo absent)")"
+          echo "supervisor_active=$(systemctl is-active supervisor || true)"
+          echo "cron_active=$(systemctl is-active cron || true)"
+          echo 'supervisor_status_begin'
+          supervisorctl status || true
+          echo 'supervisor_status_end'
+          echo "cron_entries=$(grep -Fxc "* * * * * www cd $ROOT/current && $PHP artisan schedule:run >> /dev/null 2>&1" /etc/cron.d/freedom-platform 2>/dev/null || true)"
+
+          echo 'heartbeat_summary_begin'
+          mariadb --protocol=socket -N -uroot freedom_platform -e \
+            "SELECT worker_id, queue, TIMESTAMPDIFF(SECOND,last_seen_at,UTC_TIMESTAMP(6)) AS age_seconds FROM worker_heartbeats ORDER BY worker_id;" \
+            || true
+          echo 'heartbeat_summary_end'
+          echo "worker_count=$(mariadb --protocol=socket -N -uroot freedom_platform -e "SELECT COUNT(*) FROM worker_heartbeats WHERE worker_id <> 'scheduler';" 2>/dev/null || echo unavailable)"
+          echo "scheduler_count=$(mariadb --protocol=socket -N -uroot freedom_platform -e "SELECT COUNT(*) FROM worker_heartbeats WHERE worker_id = 'scheduler';" 2>/dev/null || echo unavailable)"
+          echo "unresolved_stale_alerts=$(mariadb --protocol=socket -N -uroot freedom_platform -e "SELECT COUNT(*) FROM alerts WHERE event_name='operations.worker_heartbeat_stale' AND resolved_at IS NULL;" 2>/dev/null || echo unavailable)"
+
+          if [ -s /root/freedom-bootstrap/core-deploy-evidence.txt ]; then
+            echo 'partial_evidence_begin'
+            sed -E 's#https?://[^[:space:]]+#URL_REDACTED#g' /root/freedom-bootstrap/core-deploy-evidence.txt
+            echo 'partial_evidence_end'
+          fi
+
+          echo 'worker_logs_begin'
+          for log in "$ROOT"/shared/storage/logs/supervisor-*.log; do
+            [ -f "$log" ] || continue
+            echo "log=$(basename "$log")"
+            tail -n 80 "$log" \
+              | grep -Eai 'error|exception|fatal|failed|denied|undefined|disabled|redis|database|heartbeat' \
+              | tail -n 40 \
+              | sed -E 's#https?://[^[:space:]]+#URL_REDACTED#g; s#([Pp]assword|[Pp]asswd|[Tt]oken|[Ss]ecret)[[:space:]:=]+[^[:space:]]+#\1=REDACTED#g' \
+              || true
+          done
+          echo 'worker_logs_end'
+          REMOTE
+
+      - name: Remove SSH material
+        if: always()
+        run: rm -rf "$HOME/.ssh"
