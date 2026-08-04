@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Installer\Infrastructure;
 
+use App\Modules\Installer\Application\Contracts\InstallerFinalizationRunner;
 use App\Modules\Installer\Application\InstallerAccessTokenStore;
 use App\Modules\Installer\Application\InstallerBootstrapJournal;
 use App\Modules\Installer\Application\InstallerBootstrapOrchestrator;
@@ -67,6 +68,16 @@ final class InstallerServiceProvider extends ServiceProvider
                 $application->make(InstallerEnvironmentWriter::class),
                 $application->make(InstallerBootstrapOrchestrator::class),
                 $application->make(InstallerBootstrapJournal::class),
+            ),
+        );
+
+        $this->app->singleton(
+            InstallerFinalizationRunner::class,
+            fn (): InstallerFinalizationRunner => new InstallerArtisanProcessRunner(
+                (string) config('installer.finalization.php_binary'),
+                (string) config('installer.finalization.artisan_path'),
+                (string) config('installer.finalization.working_directory'),
+                max(1, (int) config('installer.finalization.timeout_seconds', 300)),
             ),
         );
     }
