@@ -1,0 +1,70 @@
+name: Staging Verify Telegram Webhook
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/staging-verify-telegram-webhook.yml
+      - deploy/staging/verify-telegram-webhook.sh
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out verified controls
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: develop/v1.0.0-completion
+          persist-credentials: false
+      - name: Prepare SSH client
+        env:
+          STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          STAGING_KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$STAGING_SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$STAGING_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+      - name: Upload verification script
+        env:
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          STAGING_PORT: ${{ secrets.STAGING_PORT }}
+          STAGING_USER: ${{ secrets.STAGING_USER }}
+        run: |
+          set -euo pipefail
+          scp -q -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -P "$STAGING_PORT" \
+            deploy/staging/verify-telegram-webhook.sh \
+            "$STAGING_USER@$STAGING_HOST:/root/freedom-bootstrap/verify-telegram-webhook.sh"
+      - name: Configure and verify real Telegram webhook
+        env:
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          STAGING_PORT: ${{ secrets.STAGING_PORT }}
+          STAGING_USER: ${{ secrets.STAGING_USER }}
+          STAGING_DOMAIN: ${{ secrets.STAGING_DOMAIN }}
+        run: |
+          set -euo pipefail
+          mkdir -p build/evidence/staging
+          ssh \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=20 \
+            -p "$STAGING_PORT" \
+            "$STAGING_USER@$STAGING_HOST" \
+            "chmod 700 /root/freedom-bootstrap/verify-telegram-webhook.sh && /root/freedom-bootstrap/verify-telegram-webhook.sh '$STAGING_DOMAIN'" \
+            | tee build/evidence/staging/telegram-webhook-verification.txt
+      - name: Remove SSH material
+        if: always()
+        run: rm -rf "$HOME/.ssh"
+      - name: Upload sanitized verification evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: staging-telegram-webhook-${{ github.run_id }}
+          path: build/evidence/staging
+          if-no-files-found: warn
+          retention-days: 30
