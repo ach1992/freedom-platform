@@ -19,8 +19,7 @@ final readonly class TelegramUpdateProcessor
         private StringEncrypter $encrypter,
         private TelegramIdentitySynchronizer $identitySynchronizer,
         private TelegramRuntimeConfiguration $configuration,
-    ) {
-    }
+    ) {}
 
     public function process(string $botId, int $updateId): void
     {

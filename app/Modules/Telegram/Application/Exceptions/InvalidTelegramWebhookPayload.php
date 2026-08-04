@@ -6,6 +6,4 @@ namespace App\Modules\Telegram\Application\Exceptions;
 
 use RuntimeException;
 
-final class InvalidTelegramWebhookPayload extends RuntimeException
-{
-}
+final class InvalidTelegramWebhookPayload extends RuntimeException {}

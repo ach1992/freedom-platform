@@ -10,6 +10,5 @@ final readonly class TelegramWebhookReceipt
         public string $botId,
         public int $updateId,
         public bool $duplicate,
-    ) {
-    }
+    ) {}
 }

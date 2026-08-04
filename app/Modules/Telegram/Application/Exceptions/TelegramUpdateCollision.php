@@ -6,6 +6,4 @@ namespace App\Modules\Telegram\Application\Exceptions;
 
 use RuntimeException;
 
-final class TelegramUpdateCollision extends RuntimeException
-{
-}
+final class TelegramUpdateCollision extends RuntimeException {}

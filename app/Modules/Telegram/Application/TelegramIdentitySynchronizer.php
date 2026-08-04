@@ -15,8 +15,7 @@ final readonly class TelegramIdentitySynchronizer
     public function __construct(
         private DatabaseManager $database,
         private StringEncrypter $encrypter,
-    ) {
-    }
+    ) {}
 
     /** @param array<string, mixed> $update */
     public function synchronize(string $botId, int $updateId, array $update): ?int
@@ -165,7 +164,7 @@ final readonly class TelegramIdentitySynchronizer
     }
 
     /**
-     * @param array<string, mixed> $update
+     * @param  array<string, mixed>  $update
      * @return array<string, mixed>|null
      */
     private function extractTelegramUser(array $update): ?array

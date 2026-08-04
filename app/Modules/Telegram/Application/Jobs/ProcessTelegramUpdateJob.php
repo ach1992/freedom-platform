@@ -29,8 +29,7 @@ final class ProcessTelegramUpdateJob implements ShouldQueue
     public function __construct(
         public readonly string $botId,
         public readonly int $updateId,
-    ) {
-    }
+    ) {}
 
     public function handle(TelegramUpdateProcessor $processor): void
     {

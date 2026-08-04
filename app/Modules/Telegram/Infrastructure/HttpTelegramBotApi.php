@@ -16,8 +16,7 @@ final readonly class HttpTelegramBotApi implements TelegramBotApi
     public function __construct(
         private Factory $http,
         private TelegramRuntimeConfiguration $configuration,
-    ) {
-    }
+    ) {}
 
     public function configureWebhook(string $url, string $secretToken, bool $dropPendingUpdates): TelegramWebhookInfo
     {
@@ -70,8 +69,7 @@ final readonly class HttpTelegramBotApi implements TelegramBotApi
     }
 
     /**
-     * @param array<string, mixed> $payload
-     * @return mixed
+     * @param  array<string, mixed>  $payload
      */
     private function request(string $method, array $payload = []): mixed
     {

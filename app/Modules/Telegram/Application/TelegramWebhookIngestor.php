@@ -19,8 +19,7 @@ final readonly class TelegramWebhookIngestor
         private DatabaseManager $database,
         private StringEncrypter $encrypter,
         private TelegramRuntimeConfiguration $configuration,
-    ) {
-    }
+    ) {}
 
     public function ingest(string $rawPayload, string $correlationId): TelegramWebhookReceipt
     {

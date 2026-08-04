@@ -16,9 +16,7 @@ use Throwable;
 final readonly class TelegramWebhookController
 {
     /** @requirement ONB-001 PAY-003 SEC-009 */
-    public function __construct(private TelegramWebhookIngestor $ingestor)
-    {
-    }
+    public function __construct(private TelegramWebhookIngestor $ingestor) {}
 
     public function __invoke(Request $request): JsonResponse
     {

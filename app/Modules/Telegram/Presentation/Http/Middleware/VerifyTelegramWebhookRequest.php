@@ -13,9 +13,7 @@ use Symfony\Component\HttpFoundation\Response;
 final readonly class VerifyTelegramWebhookRequest
 {
     /** @requirement SEC-001 SEC-009 */
-    public function __construct(private TelegramRuntimeConfiguration $configuration)
-    {
-    }
+    public function __construct(private TelegramRuntimeConfiguration $configuration) {}
 
     public function handle(Request $request, Closure $next): Response
     {

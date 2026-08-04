@@ -11,6 +11,5 @@ final readonly class TelegramWebhookInfo
         public bool $targetsExpectedUrl,
         public int $pendingUpdateCount,
         public bool $lastErrorPresent,
-    ) {
-    }
+    ) {}
 }
