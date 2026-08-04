@@ -32,7 +32,7 @@ final class RequeueTelegramUpdatesCommand extends Command
         $states = $includeFailed ? ['accepted', 'queued', 'failed'] : ['accepted', 'queued'];
         $cutoff = now('UTC')->subSeconds($olderThan)->format('Y-m-d H:i:s.u');
 
-        /** @var Collection<int, object> $rows */
+        /** @var Collection<int, object{bot_id: string, update_id: int}> $rows */
         $rows = $database->connection()->table('processed_telegram_updates')
             ->whereIn('state', $states)
             ->where('updated_at', '<=', $cutoff)
@@ -50,8 +50,8 @@ final class RequeueTelegramUpdatesCommand extends Command
                 $states,
             ): bool {
                 $row = $database->connection()->table('processed_telegram_updates')
-                    ->where('bot_id', (string) $candidate->bot_id)
-                    ->where('update_id', (int) $candidate->update_id)
+                    ->where('bot_id', $candidate->bot_id)
+                    ->where('update_id', $candidate->update_id)
                     ->lockForUpdate()
                     ->first(['state']);
 
@@ -60,14 +60,14 @@ final class RequeueTelegramUpdatesCommand extends Command
                 }
 
                 ProcessTelegramUpdateJob::dispatch(
-                    (string) $candidate->bot_id,
-                    (int) $candidate->update_id,
+                    $candidate->bot_id,
+                    $candidate->update_id,
                 )->onQueue($configuration->queue)->afterCommit();
 
                 $now = now('UTC')->format('Y-m-d H:i:s.u');
                 $database->connection()->table('processed_telegram_updates')
-                    ->where('bot_id', (string) $candidate->bot_id)
-                    ->where('update_id', (int) $candidate->update_id)
+                    ->where('bot_id', $candidate->bot_id)
+                    ->where('update_id', $candidate->update_id)
                     ->update([
                         'state' => 'queued',
                         'queued_at' => $now,
