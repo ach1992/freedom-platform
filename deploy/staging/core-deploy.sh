@@ -410,7 +410,7 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 * * * * * www cd $ROOT/current && $PHP artisan schedule:run >> /dev/null 2>&1
 EOF
 chmod 644 /etc/cron.d/freedom-platform
-systemctl reload cron
+systemctl is-active --quiet cron
 
 supervisorctl reread >> "$EVIDENCE"
 supervisorctl update >> "$EVIDENCE"
