@@ -168,7 +168,11 @@ return new class extends Migration
             $table->bigIncrements('id');
             $table->foreignId('administrator_id')->constrained('administrators')->restrictOnDelete();
             $table->foreignId('role_id')->constrained()->restrictOnDelete();
-            $table->foreignId('granted_by_administrator_id')->nullable()->constrained('administrators')->restrictOnDelete();
+            $table->foreignId('granted_by_administrator_id')->nullable();
+            $table->foreign('granted_by_administrator_id', 'admin_role_granter_fk')
+                ->references('id')
+                ->on('administrators')
+                ->restrictOnDelete();
             $table->timestamp('granted_at', 6);
             $table->timestamp('revoked_at', 6)->nullable();
             $table->timestamps(6);
@@ -181,7 +185,11 @@ return new class extends Migration
             $table->foreignId('administrator_id')->constrained('administrators')->restrictOnDelete();
             $table->foreignId('permission_id')->constrained()->restrictOnDelete();
             $table->string('effect', 16)->default('inherit');
-            $table->foreignId('changed_by_administrator_id')->nullable()->constrained('administrators')->restrictOnDelete();
+            $table->foreignId('changed_by_administrator_id')->nullable();
+            $table->foreign('changed_by_administrator_id', 'admin_override_changer_fk')
+                ->references('id')
+                ->on('administrators')
+                ->restrictOnDelete();
             $table->string('reason_code', 64)->nullable();
             $table->text('reason')->nullable();
             $table->timestamps(6);
