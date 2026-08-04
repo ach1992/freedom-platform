@@ -8,7 +8,8 @@ LSPHP=/usr/local/lsws/lsphp84/bin/lsphp
 WORK=/root/freedom-bootstrap/php-functions
 PROBE="$WORK/probe.php"
 COMMON_FUNCTIONS=(putenv proc_open proc_close proc_get_status proc_terminate)
-CLI_FUNCTIONS=("${COMMON_FUNCTIONS[@]}" symlink)
+QUEUE_SIGNAL_FUNCTIONS=(pcntl_signal pcntl_async_signals pcntl_alarm)
+CLI_FUNCTIONS=("${COMMON_FUNCTIONS[@]}" "${QUEUE_SIGNAL_FUNCTIONS[@]}" symlink)
 LSPHP_FUNCTIONS=("${COMMON_FUNCTIONS[@]}")
 
 exec 9>/root/freedom-bootstrap/php-functions.lock
@@ -114,6 +115,7 @@ echo "utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 printf '%s\n' "$CLI_OUTPUT" | grep -E '^(version|sapi|missing)='
 printf '%s\n' "$LSPHP_OUTPUT" | grep -E '^(version|sapi|missing)='
 echo "cli_symlink=$($CLI -r 'echo function_exists("symlink") ? "present" : "absent";')"
+echo "cli_queue_signals=$($CLI -r 'echo function_exists("pcntl_signal") && function_exists("pcntl_async_signals") && function_exists("pcntl_alarm") ? "present" : "absent";')"
 echo "lsphp_symlink=$($LSPHP "$PROBE" symlink 2>/dev/null | awk -F= '$1=="missing" {print $2=="none" ? "present" : "absent"}')"
 echo "ols_processes=$(pgrep -fc 'lshttpd|litespeed' || true)"
 
