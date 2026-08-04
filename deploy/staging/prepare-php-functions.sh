@@ -7,7 +7,9 @@ CLI=/www/server/php/84/bin/php
 LSPHP=/usr/local/lsws/lsphp84/bin/lsphp
 WORK=/root/freedom-bootstrap/php-functions
 PROBE="$WORK/probe.php"
-REQUIRED_FUNCTIONS=(putenv proc_open proc_close proc_get_status proc_terminate)
+COMMON_FUNCTIONS=(putenv proc_open proc_close proc_get_status proc_terminate)
+CLI_FUNCTIONS=("${COMMON_FUNCTIONS[@]}" symlink)
+LSPHP_FUNCTIONS=("${COMMON_FUNCTIONS[@]}")
 
 exec 9>/root/freedom-bootstrap/php-functions.lock
 flock -w 300 9 || {
@@ -40,57 +42,65 @@ PHP
 chmod 600 "$PROBE"
 
 CLI_INI=$($CLI -r 'echo php_ini_loaded_file();')
-LSPHP_OUTPUT=$($LSPHP "$PROBE" "${REQUIRED_FUNCTIONS[@]}" 2>&1 || true)
+LSPHP_OUTPUT=$($LSPHP "$PROBE" "${LSPHP_FUNCTIONS[@]}" 2>&1 || true)
 LSPHP_INI=$(printf '%s\n' "$LSPHP_OUTPUT" | awk -F= '$1=="ini" {print $2}')
 
 test -f "$CLI_INI"
 test -f "$LSPHP_INI"
 
-python3 - "$CLI_INI" "$LSPHP_INI" "${REQUIRED_FUNCTIONS[@]}" <<'PY'
+update_disable_functions() {
+    local ini_path=$1
+    shift
+
+    python3 - "$ini_path" "$@" <<'PY'
 from pathlib import Path
 import os
 import re
 import shutil
 import sys
 
-required = set(sys.argv[3:])
-for raw_path in dict.fromkeys(sys.argv[1:3]):
-    path = Path(raw_path)
-    backup = path.with_name(path.name + '.freedom-before-process-functions')
-    if not backup.exists():
-        shutil.copy2(path, backup)
+path = Path(sys.argv[1])
+required = set(sys.argv[2:])
+backup = path.with_name(path.name + '.freedom-before-process-functions')
 
-    original = path.read_text()
-    output = []
-    changed = False
+if not backup.exists():
+    shutil.copy2(path, backup)
 
-    for line in original.splitlines():
-        match = re.match(r'^(\s*disable_functions\s*=\s*)(.*)$', line, re.IGNORECASE)
-        if not match:
-            output.append(line)
-            continue
+original = path.read_text()
+output = []
+changed = False
 
-        functions = [item.strip() for item in match.group(2).split(',') if item.strip()]
-        filtered = [item for item in functions if item not in required]
-        replacement = match.group(1) + ','.join(filtered)
-        output.append(replacement)
-        changed = changed or replacement != line
+for line in original.splitlines():
+    match = re.match(r'^(\s*disable_functions\s*=\s*)(.*)$', line, re.IGNORECASE)
+    if not match:
+        output.append(line)
+        continue
 
-    if changed:
-        temporary = path.with_name(path.name + '.freedom-new')
-        temporary.write_text('\n'.join(output) + '\n')
-        os.chmod(temporary, path.stat().st_mode & 0o777)
-        os.chown(temporary, path.stat().st_uid, path.stat().st_gid)
-        temporary.replace(path)
+    functions = [item.strip() for item in match.group(2).split(',') if item.strip()]
+    filtered = [item for item in functions if item not in required]
+    replacement = match.group(1) + ','.join(filtered)
+    output.append(replacement)
+    changed = changed or replacement != line
+
+if changed:
+    temporary = path.with_name(path.name + '.freedom-new')
+    temporary.write_text('\n'.join(output) + '\n')
+    os.chmod(temporary, path.stat().st_mode & 0o777)
+    os.chown(temporary, path.stat().st_uid, path.stat().st_gid)
+    temporary.replace(path)
 PY
+}
+
+update_disable_functions "$CLI_INI" "${CLI_FUNCTIONS[@]}"
+update_disable_functions "$LSPHP_INI" "${LSPHP_FUNCTIONS[@]}"
 
 /usr/local/lsws/bin/lswsctrl restart >/dev/null
 sleep 3
 
 set +e
-CLI_OUTPUT=$($CLI "$PROBE" "${REQUIRED_FUNCTIONS[@]}" 2>&1)
+CLI_OUTPUT=$($CLI "$PROBE" "${CLI_FUNCTIONS[@]}" 2>&1)
 CLI_STATUS=$?
-LSPHP_OUTPUT=$($LSPHP "$PROBE" "${REQUIRED_FUNCTIONS[@]}" 2>&1)
+LSPHP_OUTPUT=$($LSPHP "$PROBE" "${LSPHP_FUNCTIONS[@]}" 2>&1)
 LSPHP_STATUS=$?
 set -e
 
@@ -103,6 +113,8 @@ echo '# PHP function readiness evidence'
 echo "utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 printf '%s\n' "$CLI_OUTPUT" | grep -E '^(version|sapi|missing)='
 printf '%s\n' "$LSPHP_OUTPUT" | grep -E '^(version|sapi|missing)='
+echo "cli_symlink=$($CLI -r 'echo function_exists("symlink") ? "present" : "absent";')"
+echo "lsphp_symlink=$($LSPHP "$PROBE" symlink 2>/dev/null | awk -F= '$1=="missing" {print $2=="none" ? "present" : "absent"}')"
 echo "ols_processes=$(pgrep -fc 'lshttpd|litespeed' || true)"
 
 rm -f "$PROBE"
