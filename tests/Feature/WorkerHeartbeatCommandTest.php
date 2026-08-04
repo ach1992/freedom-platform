@@ -44,7 +44,7 @@ final class WorkerHeartbeatCommandTest extends TestCase
         self::assertSame(0, DB::table('worker_heartbeats')->count());
     }
 
-    public function test_stale_heartbeat_creates_one_deduplicated_critical_alert(): void
+    public function test_stale_heartbeat_creates_one_deduplicated_critical_alert_and_recovery_resolves_it(): void
     {
         Artisan::call('operations:worker-heartbeat', [
             'worker-id' => 'provisioning-01',
@@ -66,6 +66,7 @@ final class WorkerHeartbeatCommandTest extends TestCase
             'severity' => 'critical',
             'event_name' => 'operations.worker_heartbeat_stale',
             'occurrence_count' => 1,
+            'resolved_at' => null,
         ]);
 
         $secondExitCode = Artisan::call('operations:check-worker-heartbeats', [
@@ -76,6 +77,13 @@ final class WorkerHeartbeatCommandTest extends TestCase
         self::assertSame(1, $secondExitCode);
         self::assertSame(1, DB::table('alerts')->count());
         self::assertSame(2, DB::table('alerts')->value('occurrence_count'));
+
+        Artisan::call('operations:worker-heartbeat', [
+            'worker-id' => 'provisioning-01',
+            '--queue' => 'provisioning',
+        ]);
+
+        self::assertNotNull(DB::table('alerts')->value('resolved_at'));
     }
 
     public function test_fresh_heartbeats_do_not_create_alerts(): void
