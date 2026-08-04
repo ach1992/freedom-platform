@@ -40,7 +40,7 @@ jobs:
           echo 'deploy_evidence_end'
           echo 'worker_rows_begin'
           mariadb --protocol=socket -N -uroot freedom_platform -e \
-            "SELECT worker_id, queue_group, TIMESTAMPDIFF(SECOND,last_seen_at,UTC_TIMESTAMP(6)) AS age_seconds FROM worker_heartbeats ORDER BY worker_id; SELECT CONCAT('unresolved_stale=',COUNT(*)) FROM alerts WHERE event_name='operations.worker_heartbeat_stale' AND resolved_at IS NULL;"
+            "SELECT worker_id, queue, TIMESTAMPDIFF(SECOND,last_seen_at,UTC_TIMESTAMP(6)) AS age_seconds FROM worker_heartbeats ORDER BY worker_id; SELECT CONCAT('unresolved_stale=',COUNT(*)) FROM alerts WHERE event_name='operations.worker_heartbeat_stale' AND resolved_at IS NULL;"
           echo 'worker_rows_end'
           echo 'supervisor_begin'
           supervisorctl status 'freedom-platform-workers:*' || true
