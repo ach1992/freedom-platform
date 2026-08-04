@@ -101,7 +101,9 @@ final class InstallerAccessBoundaryTest extends TestCase
         $testSecret = 'test-only-database-secret';
 
         try {
-            $response = $this->withSession([
+            $response = $this->withServerVariables([
+                'REMOTE_ADDR' => '198.51.100.10',
+            ])->withSession([
                 'installer.unlocked_until' => now()->addMinute()->getTimestamp(),
             ])->postJson('/installer/finalize', [
                 'environment' => [
@@ -131,7 +133,9 @@ final class InstallerAccessBoundaryTest extends TestCase
         $testSecret = 'test-only-unapproved-secret';
 
         try {
-            $response = $this->withSession([
+            $response = $this->withServerVariables([
+                'REMOTE_ADDR' => '198.51.100.11',
+            ])->withSession([
                 'installer.unlocked_until' => now()->addMinute()->getTimestamp(),
             ])->postJson('/installer/finalize', [
                 'environment' => ['UNAPPROVED_KEY' => $testSecret],
