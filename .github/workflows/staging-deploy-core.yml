@@ -46,6 +46,7 @@ jobs:
           done
           [[ "$STAGING_DOMAIN" =~ ^[A-Za-z0-9.-]+$ ]] || { echo 'Invalid staging domain.' >&2; exit 1; }
           test -f control/deploy/staging/core-deploy.sh
+          test -f control/deploy/staging/prepare-php-functions.sh
           test -f application/composer.lock
 
       - name: Prepare package and SSH client
@@ -64,6 +65,7 @@ jobs:
           printf '%s' "$STAGING_DOMAIN" > "$RUNNER_TEMP/freedom-staging/domain"
           printf '%s' "$TELEGRAM_TEST_BOT_TOKEN" > "$RUNNER_TEMP/freedom-staging/telegram-token"
           install -m 700 control/deploy/staging/core-deploy.sh "$RUNNER_TEMP/freedom-staging/core-deploy.sh"
+          install -m 700 control/deploy/staging/prepare-php-functions.sh "$RUNNER_TEMP/freedom-staging/prepare-php-functions.sh"
           tar \
             --exclude=.git \
             --exclude=.env \
@@ -91,6 +93,7 @@ jobs:
             "$RUNNER_TEMP/freedom-staging/domain" \
             "$RUNNER_TEMP/freedom-staging/telegram-token" \
             "$RUNNER_TEMP/freedom-staging/core-deploy.sh" \
+            "$RUNNER_TEMP/freedom-staging/prepare-php-functions.sh" \
             "$STAGING_USER@$STAGING_HOST:/root/freedom-bootstrap/incoming/"
 
       - name: Deploy, activate, rollback, and verify core runtime
@@ -111,7 +114,7 @@ jobs:
             -o ServerAliveCountMax=10 \
             -p "$STAGING_PORT" \
             "$STAGING_USER@$STAGING_HOST" \
-            "chmod 700 /root/freedom-bootstrap/incoming/core-deploy.sh && /root/freedom-bootstrap/incoming/core-deploy.sh '$VERIFIED_APP_SHA'" \
+            "chmod 700 /root/freedom-bootstrap/incoming/prepare-php-functions.sh /root/freedom-bootstrap/incoming/core-deploy.sh && /root/freedom-bootstrap/incoming/prepare-php-functions.sh && /root/freedom-bootstrap/incoming/core-deploy.sh '$VERIFIED_APP_SHA'" \
             | tee build/evidence/staging/core-deploy.txt
 
       - name: Remove local SSH and secret material
