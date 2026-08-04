@@ -39,22 +39,6 @@ jobs:
             routes/api.php \
             bootstrap/app.php \
             bootstrap/providers.php
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path('.github/workflows/format-telegram-once.yml')
-          text = path.read_text()
-          old = """on:
-            pull_request:
-              paths:
-                - .github/workflows/format-telegram-once.yml
-          """
-          new = """on:
-            workflow_dispatch:
-          """
-          if old not in text:
-              raise SystemExit('Formatter trigger block was not found.')
-          path.write_text(text.replace(old, new, 1))
-          PY
       - name: Commit formatter result
         run: |
           set -euo pipefail
@@ -63,8 +47,7 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add app/Modules/Telegram tests config/telegram.php \
             database/migrations/2026_08_04_000400_extend_telegram_ingress_foundation.php \
-            routes/api.php bootstrap/app.php bootstrap/providers.php \
-            .github/workflows/format-telegram-once.yml
+            routes/api.php bootstrap/app.php bootstrap/providers.php
           if git diff --cached --quiet; then
             echo 'No formatter changes required.'
             exit 0
