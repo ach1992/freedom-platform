@@ -1,7 +1,9 @@
 name: Staging Verify Telegram Webhook
 
 on:
-  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/staging-verify-telegram-webhook.yml
 
 permissions:
   contents: read
