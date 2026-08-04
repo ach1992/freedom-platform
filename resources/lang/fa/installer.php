@@ -28,6 +28,8 @@ return [
     'checks' => [
         'php_runtimes' => 'PHP خط فرمان و LSPHP',
         'https' => 'HTTPS',
+        'database' => 'اتصال پایگاه داده',
+        'redis' => 'اتصال Redis احراز هویت‌شده',
         'storage' => 'قابلیت نوشتن در فضای ذخیره‌سازی',
         'utc' => 'منطقه زمانی UTC برنامه',
     ],
