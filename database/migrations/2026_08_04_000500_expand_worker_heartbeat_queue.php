@@ -24,7 +24,7 @@ return new class extends Migration
             ->value('maximum_length');
 
         if (is_numeric($longestQueue) && (int) $longestQueue > 64) {
-            throw new \RuntimeException('Cannot contract worker heartbeat queue while values exceed 64 characters.');
+            throw new RuntimeException('Cannot contract worker heartbeat queue while values exceed 64 characters.');
         }
 
         Schema::table('worker_heartbeats', function (Blueprint $table): void {
