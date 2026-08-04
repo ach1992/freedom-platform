@@ -1,0 +1,79 @@
+name: Staging Site API Contract Once
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/staging-site-api-contract-once.yml
+
+permissions:
+  contents: read
+
+jobs:
+  inspect-site-api:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Prepare SSH client
+        env:
+          STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          STAGING_KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$STAGING_SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$STAGING_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+
+      - name: Inspect exact site and SSL API methods
+        env:
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          STAGING_PORT: ${{ secrets.STAGING_PORT }}
+          STAGING_USER: ${{ secrets.STAGING_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=20 \
+            -p "$STAGING_PORT" \
+            "$STAGING_USER@$STAGING_HOST" \
+            'python3 -' <<'PY'
+          from pathlib import Path
+
+          targets = [
+              ('/www/server/panel/class/panelSite.py', 'AddSite'),
+              ('/www/server/panel/class/panelSite.py', 'openlitespeed_add_site'),
+              ('/www/server/panel/class/panelSite.py', 'SetPath'),
+              ('/www/server/panel/class/panelSite.py', 'SetSSL'),
+              ('/www/server/panel/class/acme_v2.py', 'apply_cert'),
+          ]
+
+          for filename, function in targets:
+              path = Path(filename)
+              print(f'# {path.name}:{function}')
+              if not path.exists():
+                  print('file_absent')
+                  continue
+              lines = path.read_text(errors='replace').splitlines()
+              markers = [f'    def {function}(', f'def {function}(']
+              start = next((i for i, line in enumerate(lines) if any(line.startswith(marker) for marker in markers)), None)
+              if start is None:
+                  print('not_found')
+                  continue
+              indent = len(lines[start]) - len(lines[start].lstrip())
+              end = len(lines)
+              for i in range(start + 1, len(lines)):
+                  stripped = lines[i].lstrip()
+                  current_indent = len(lines[i]) - len(stripped)
+                  if stripped.startswith('def ') and current_indent == indent:
+                      end = i
+                      break
+              print('\n'.join(lines[start:min(end, start + 260)]))
+          PY
+
+      - name: Remove SSH material
+        if: always()
+        run: rm -rf "$HOME/.ssh"
