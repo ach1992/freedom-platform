@@ -25,7 +25,7 @@ jobs:
           printf '%s\n' "$STAGING_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
 
-      - name: Inspect exact aaPanel extension API
+      - name: Inspect exact PHP extension installers
         env:
           STAGING_HOST: ${{ secrets.STAGING_HOST }}
           STAGING_PORT: ${{ secrets.STAGING_PORT }}
@@ -40,22 +40,30 @@ jobs:
             -o ConnectTimeout=20 \
             -p "$STAGING_PORT" \
             "$STAGING_USER@$STAGING_HOST" \
-            'bash -s' <<'REMOTE'
-          set -eu
-          echo '# php_async fileinfo behavior'
-          sed -n '285,325p' /www/server/panel/mod/project/php/php_asyncMod.py
-          echo '# aepg install_phplib'
-          sed -n '1135,1235p' /www/server/panel/mod/project/php/aepgMod.py
-          echo '# aepg callers one'
-          sed -n '1385,1435p' /www/server/panel/mod/project/php/aepgMod.py
-          echo '# aepg callers two'
-          sed -n '1640,1695p' /www/server/panel/mod/project/php/aepgMod.py
-          echo '# panel routes'
-          grep -RIn --include='*.py' -E 'install_phplib|InstallLib|UninstallLib' \
-            /www/server/panel/class /www/server/panel/mod /www/server/panel/route 2>/dev/null \
-            | head -n 120 \
-            || true
-          REMOTE
+            'python3 -' <<'PY'
+          from pathlib import Path
+
+          targets = [
+              ('/www/server/panel/class/ajax.py', 'InstallLib'),
+              ('/www/server/panel/class/ajax.py', 'UninstallLib'),
+              ('/www/server/panel/mod/project/php/aepgMod.py', 'install_env_soft'),
+          ]
+
+          for filename, function in targets:
+              lines = Path(filename).read_text(errors='replace').splitlines()
+              marker = f'    def {function}('
+              start = next((index for index, line in enumerate(lines) if line.startswith(marker)), None)
+              print(f'# {filename}:{function}')
+              if start is None:
+                  print('not_found')
+                  continue
+              end = len(lines)
+              for index in range(start + 1, len(lines)):
+                  if lines[index].startswith('    def '):
+                      end = index
+                      break
+              print('\n'.join(lines[start:end]))
+          PY
 
       - name: Remove SSH material
         if: always()
