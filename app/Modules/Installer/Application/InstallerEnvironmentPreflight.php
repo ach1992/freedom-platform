@@ -38,7 +38,10 @@ final class InstallerEnvironmentPreflight
         ];
     }
 
-    /** @param list<string> $urls @param list<string> $allowedHosts */
+    /**
+     * @param list<string> $urls
+     * @param list<string> $allowedHosts
+     */
     private function outboundHttps(array $urls, array $allowedHosts, int $connectTimeout, int $timeout): bool
     {
         if ($urls === [] || $allowedHosts === []) {
@@ -139,32 +142,24 @@ final class InstallerEnvironmentPreflight
 
     private function expectedUserId(?string $owner): ?int
     {
-        if ($owner === null) {
-            return null;
-        }
-
-        if (! function_exists('posix_getpwnam')) {
+        if ($owner === null || ! function_exists('posix_getpwnam')) {
             return null;
         }
 
         $account = posix_getpwnam($owner);
 
-        return is_array($account) && isset($account['uid']) && is_int($account['uid']) ? $account['uid'] : null;
+        return is_array($account) ? $account['uid'] : null;
     }
 
     private function expectedGroupId(?string $group): ?int
     {
-        if ($group === null) {
-            return null;
-        }
-
-        if (! function_exists('posix_getgrnam')) {
+        if ($group === null || ! function_exists('posix_getgrnam')) {
             return null;
         }
 
         $account = posix_getgrnam($group);
 
-        return is_array($account) && isset($account['gid']) && is_int($account['gid']) ? $account['gid'] : null;
+        return is_array($account) ? $account['gid'] : null;
     }
 
     /** @return list<string> */
