@@ -20,23 +20,40 @@ final class OperationsServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->singleton(
+            WorkerRuntimeConfiguration::class,
+            static fn (): WorkerRuntimeConfiguration => WorkerRuntimeConfiguration::resolve([
+                'enabled' => config('operations.worker_heartbeat.enabled', false),
+                'worker_id' => config('operations.worker_heartbeat.worker_id'),
+                'queue_group' => config('operations.worker_heartbeat.queue_group', 'default'),
+                'release_version' => config('operations.worker_heartbeat.release_version'),
+                'interval_seconds' => config('operations.worker_heartbeat.interval_seconds', 30),
+            ]),
+        );
+
+        $this->app->singleton(
             QueueWorkerHeartbeatReporter::class,
-            fn (Application $application): QueueWorkerHeartbeatReporter => new QueueWorkerHeartbeatReporter(
-                $application->make(WorkerHeartbeatService::class),
-                $application->make(Clock::class),
-                $application->make(LoggerInterface::class),
-                (bool) config('operations.worker_heartbeat.enabled', false),
-                (string) config('operations.worker_heartbeat.worker_id', ''),
-                (string) config('operations.worker_heartbeat.queue_group', 'default'),
-                $this->nullableString(config('operations.worker_heartbeat.release_version')),
-                max(1, (int) config('operations.worker_heartbeat.interval_seconds', 30)),
-            ),
+            function (Application $application): QueueWorkerHeartbeatReporter {
+                $runtime = $application->make(WorkerRuntimeConfiguration::class);
+
+                return new QueueWorkerHeartbeatReporter(
+                    $application->make(WorkerHeartbeatService::class),
+                    $application->make(Clock::class),
+                    $application->make(LoggerInterface::class),
+                    $runtime->enabled,
+                    $runtime->workerId,
+                    $runtime->queueGroup,
+                    $runtime->releaseVersion,
+                    $runtime->intervalSeconds,
+                );
+            },
         );
     }
 
     public function boot(): void
     {
-        if (! (bool) config('operations.worker_heartbeat.enabled', false)) {
+        $runtime = $this->app->make(WorkerRuntimeConfiguration::class);
+
+        if (! $runtime->enabled) {
             return;
         }
 
@@ -54,10 +71,5 @@ final class OperationsServiceProvider extends ServiceProvider
         Queue::exceptionOccurred(static function (JobExceptionOccurred $event) use ($reporter): void {
             $reporter->reportSafely($event->job->getQueue());
         });
-    }
-
-    private function nullableString(mixed $value): ?string
-    {
-        return is_string($value) && $value !== '' ? $value : null;
     }
 }
