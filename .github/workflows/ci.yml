@@ -4,7 +4,11 @@ name: CI
 
 on:
   push:
+    branches:
+      - main
   pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -32,16 +36,25 @@ env:
   REDIS_PASSWORD: ci-only-redis-password
   CACHE_STORE: redis
   QUEUE_CONNECTION: redis
+  CI_PHP_IMAGE: freedom-platform-ci-php:8.4
 
 jobs:
   preflight:
     name: Repository preflight
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
     outputs:
       application: ${{ steps.mode.outputs.application }}
     steps:
       - name: Check out source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Prepare self-hosted workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose.ci.yml down --volumes --remove-orphans >/dev/null 2>&1 || true
+          docker version
+          docker compose version
 
       - name: Determine phase mode
         id: mode
@@ -97,6 +110,7 @@ jobs:
             echo "- Git SHA: $GITHUB_SHA"
             echo "- Run ID: $GITHUB_RUN_ID"
             echo "- Runner: $RUNNER_OS/$RUNNER_ARCH"
+            echo "- Runner name: $RUNNER_NAME"
             echo "- UTC: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
           } >> build/evidence/preflight/summary.md
 
@@ -112,39 +126,34 @@ jobs:
             build/evidence/preflight
             build/evidence/planning
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 7
 
   static:
     name: PHP static quality
     needs: preflight
     if: needs.preflight.outputs.application == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - name: Set up PHP
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
-        with:
-          php-version: "8.4"
-          extensions: bcmath, curl, dom, fileinfo, intl, mbstring, openssl, pcntl, pdo_mysql, redis, sodium, xml
-          coverage: none
-          tools: composer:2.10.2
+      - name: Build cached PHP 8.4 CI image
+        run: docker build --file docker/ci/php84.Dockerfile --tag "$CI_PHP_IMAGE" docker/ci
       - name: Install locked dependencies
-        run: composer install --no-interaction --prefer-dist --no-progress
+        run: bash scripts/ci/run-php-container.sh composer install --no-interaction --prefer-dist --no-progress
       - name: Code style
         shell: bash
         run: |
           set -o pipefail
           mkdir -p build/evidence/static
-          vendor/bin/pint --test --format=json 2>&1 | tee build/evidence/static/pint.json
+          bash scripts/ci/run-php-container.sh vendor/bin/pint --test --format=json 2>&1 | tee build/evidence/static/pint.json
       - name: Static analysis and repository policy
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p build/evidence/static
-          composer validate --strict --no-check-publish 2>&1 | tee build/evidence/static/composer-validate.log
-          vendor/bin/phpstan analyse --no-progress --error-format=table 2>&1 | tee build/evidence/static/phpstan.log
-          composer ci:forbidden-patterns 2>&1 | tee build/evidence/static/forbidden-patterns.log
-          composer ci:architecture 2>&1 | tee build/evidence/static/architecture.log
+          bash scripts/ci/run-php-container.sh composer validate --strict --no-check-publish 2>&1 | tee build/evidence/static/composer-validate.log
+          bash scripts/ci/run-php-container.sh vendor/bin/phpstan analyse --no-progress --error-format=table 2>&1 | tee build/evidence/static/phpstan.log
+          bash scripts/ci/run-php-container.sh composer ci:forbidden-patterns 2>&1 | tee build/evidence/static/forbidden-patterns.log
+          bash scripts/ci/run-php-container.sh composer ci:architecture 2>&1 | tee build/evidence/static/architecture.log
       - name: Upload static evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -152,26 +161,25 @@ jobs:
           name: static-evidence-${{ github.run_id }}
           path: build/evidence/static
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 7
 
   integration:
     name: MariaDB and Redis tests
     needs: preflight
     if: needs.preflight.outputs.application == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - name: Set up PHP
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
-        with:
-          php-version: "8.4"
-          extensions: bcmath, curl, dom, fileinfo, intl, mbstring, openssl, pcntl, pdo_mysql, redis, sodium, xml
-          coverage: pcov
-          tools: composer:2.10.2
+      - name: Build cached PHP 8.4 CI image
+        run: docker build --file docker/ci/php84.Dockerfile --tag "$CI_PHP_IMAGE" docker/ci
       - name: Start disposable dependencies
-        run: docker compose -f docker-compose.ci.yml up -d --wait
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose.ci.yml down --volumes --remove-orphans >/dev/null 2>&1 || true
+          docker compose -f docker-compose.ci.yml up -d --wait
       - name: Install locked dependencies
-        run: composer install --no-interaction --prefer-dist --no-progress
+        run: bash scripts/ci/run-php-container.sh composer install --no-interaction --prefer-dist --no-progress
       - name: Run complete automated suite
         shell: bash
         run: |
@@ -179,8 +187,8 @@ jobs:
           mkdir -p build/evidence/tests build/evidence/coverage build/evidence/services
           docker compose -f docker-compose.ci.yml ps > build/evidence/services/compose-ps.txt
           test -f .env || cp .env.example .env
-          php artisan config:clear --ansi
-          COLUMNS=240 php artisan test \
+          bash scripts/ci/run-php-container.sh php artisan config:clear --ansi
+          COLUMNS=240 bash scripts/ci/run-php-container.sh php artisan test \
             --display-warnings \
             --fail-on-warning \
             --log-junit build/evidence/tests/junit.xml \
@@ -195,7 +203,7 @@ jobs:
           docker compose -f docker-compose.ci.yml logs --no-color > build/evidence/services/compose.log 2>&1 || true
       - name: Stop disposable dependencies
         if: always()
-        run: docker compose -f docker-compose.ci.yml down --volumes
+        run: docker compose -f docker-compose.ci.yml down --volumes --remove-orphans
       - name: Upload test evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -206,30 +214,26 @@ jobs:
             build/evidence/coverage
             build/evidence/services
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 7
 
   dependencies:
     name: Dependency and license policy
     needs: preflight
     if: needs.preflight.outputs.application == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - name: Set up PHP
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
-        with:
-          php-version: "8.4"
-          coverage: none
-          tools: composer:2.10.2
+      - name: Build cached PHP 8.4 CI image
+        run: docker build --file docker/ci/php84.Dockerfile --tag "$CI_PHP_IMAGE" docker/ci
       - name: Install locked dependencies
-        run: composer install --no-interaction --prefer-dist --no-progress
+        run: bash scripts/ci/run-php-container.sh composer install --no-interaction --prefer-dist --no-progress
       - name: Audit dependencies and licenses
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p build/evidence/dependencies
-          composer audit --locked --abandoned=fail --format=json > build/evidence/dependencies/audit.json
-          composer ci:licenses
+          bash scripts/ci/run-php-container.sh composer audit --locked --abandoned=fail --format=json > build/evidence/dependencies/audit.json
+          bash scripts/ci/run-php-container.sh composer ci:licenses
           test -s build/evidence/dependencies/licenses.json
       - name: Upload dependency evidence
         if: always()
@@ -238,11 +242,11 @@ jobs:
           name: dependency-evidence-${{ github.run_id }}
           path: build/evidence/dependencies
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 7
 
   secrets:
     name: Secret scan
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
