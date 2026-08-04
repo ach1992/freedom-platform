@@ -1,0 +1,130 @@
+name: Staging Install Stack
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/staging-install-stack.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  install-stack:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Prepare SSH client
+        env:
+          STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          STAGING_KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$STAGING_SSH_PRIVATE_KEY"
+          test -n "$STAGING_KNOWN_HOSTS"
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$STAGING_SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$STAGING_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+
+      - name: Install OpenLiteSpeed and PHP 8.4
+        env:
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          STAGING_PORT: ${{ secrets.STAGING_PORT }}
+          STAGING_USER: ${{ secrets.STAGING_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/evidence/staging
+          ssh \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=20 \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=10 \
+            -p "$STAGING_PORT" \
+            "$STAGING_USER@$STAGING_HOST" \
+            'set -Eeuo pipefail
+             install_dir=/www/server/panel/install
+             install -d -m 700 /root/freedom-bootstrap
+             exec 9>/root/freedom-bootstrap/stack.lock
+             flock -w 300 9 || { echo "Stack installation lock timeout." >&2; exit 1; }
+             test -x "$install_dir/install_soft.sh"
+
+             sanitize_log() {
+               log_path="$1"
+               if [ -f "$log_path" ]; then
+                 grep -Eai "error|failed|failure|unsupported|not supported|denied|timeout|cannot|missing|abort|traceback" "$log_path" \
+                   | tail -n 60 \
+                   | sed -E "s#https?://[^[:space:]]+#URL_REDACTED#g; s#([Pp]assword|[Pp]asswd|[Tt]oken|[Ss]ecret|[Uu]sername|[Ll]ogin)[[:space:]:=]+[^[:space:]]+#\1=REDACTED#g" \
+                   || true
+               fi
+             }
+
+             if [ ! -x /usr/local/lsws/bin/litespeed ]; then
+               set +e
+               cd "$install_dir" && timeout 2700 bash install_soft.sh 3 install openlitespeed 1.9 \
+                 > /var/log/freedom-openlitespeed-install.log 2>&1
+               ols_status=$?
+               set -e
+               if [ "$ols_status" -ne 0 ] || [ ! -x /usr/local/lsws/bin/litespeed ]; then
+                 echo "OpenLiteSpeed installation failed verification; status=${ols_status}." >&2
+                 sanitize_log /var/log/freedom-openlitespeed-install.log
+                 exit 1
+               fi
+             fi
+
+             if [ ! -x /www/server/php/84/bin/php ]; then
+               set +e
+               cd "$install_dir" && timeout 2700 bash install_soft.sh 3 install php 8.4 \
+                 > /var/log/freedom-php84-install.log 2>&1
+               php_status=$?
+               set -e
+               if [ "$php_status" -ne 0 ] || [ ! -x /www/server/php/84/bin/php ]; then
+                 echo "PHP 8.4 installation failed verification; status=${php_status}." >&2
+                 sanitize_log /var/log/freedom-php84-install.log
+                 exit 1
+               fi
+             fi
+
+             if [ ! -x /usr/local/lsws/lsphp84/bin/lsphp ]; then
+               set +e
+               cd "$install_dir" && timeout 2700 bash install_soft.sh 3 install php-ols 84 \
+                 > /var/log/freedom-php84-ols-install.log 2>&1
+               lsphp_status=$?
+               set -e
+               if [ "$lsphp_status" -ne 0 ] || [ ! -x /usr/local/lsws/lsphp84/bin/lsphp ]; then
+                 echo "LSPHP 8.4 handler installation failed verification; status=${lsphp_status}." >&2
+                 sanitize_log /var/log/freedom-php84-ols-install.log
+                 exit 1
+               fi
+             fi
+
+             /usr/local/lsws/bin/lswsctrl start >/dev/null 2>&1 || /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
+
+             echo "# staging stack installation"
+             echo "utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+             echo "openlitespeed=$(/usr/local/lsws/bin/litespeed -v 2>&1 | head -n 1)"
+             echo "php84=$(/www/server/php/84/bin/php -r "echo PHP_VERSION;")"
+             echo "php84_sapi=$(/www/server/php/84/bin/php -r "echo PHP_SAPI;")"
+             echo "lsphp84=$(/usr/local/lsws/lsphp84/bin/lsphp -r "echo PHP_VERSION;")"
+             echo "lsphp84_sapi=$(/usr/local/lsws/lsphp84/bin/lsphp -r "echo PHP_SAPI;")"
+             echo "ols_processes=$(pgrep -fc "lshttpd|litespeed" || true)"
+             ss -lnt 2>/dev/null | awk "NR==1 || /:(80|443|7080)[[:space:]]/"' \
+            | tee build/evidence/staging/stack-install.txt
+
+      - name: Remove SSH material
+        if: always()
+        shell: bash
+        run: rm -rf "$HOME/.ssh"
+
+      - name: Upload sanitized stack evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: staging-stack-install-${{ github.run_id }}
+          path: build/evidence/staging
+          if-no-files-found: warn
+          retention-days: 7
