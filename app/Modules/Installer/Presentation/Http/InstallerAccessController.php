@@ -7,6 +7,7 @@ namespace App\Modules\Installer\Presentation\Http;
 use App\Http\Controllers\Controller;
 use App\Modules\Installer\Application\InstallerAccessTokenStore;
 use App\Modules\Installer\Application\PhpRuntimePreflight;
+use App\Modules\Operations\Application\RuntimeHealthProbe;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\View\View;
@@ -37,8 +38,11 @@ final class InstallerAccessController extends Controller
         return redirect()->route('installer.preflight');
     }
 
-    public function preflight(Request $request, PhpRuntimePreflight $runtimePreflight): View
-    {
+    public function preflight(
+        Request $request,
+        PhpRuntimePreflight $runtimePreflight,
+        RuntimeHealthProbe $healthProbe,
+    ): View {
         $commonExtensions = $this->extensionList(config('installer.php_runtimes.required_extensions.common', []));
         $cliExtensions = array_values(array_unique([
             ...$commonExtensions,
@@ -71,9 +75,12 @@ final class InstallerAccessController extends Controller
             }
         }
 
+        $serviceChecks = $healthProbe->checks();
         $checks = [
             'php_runtimes' => $runtimesPassed,
             'https' => $request->isSecure() || app()->environment('local', 'testing'),
+            'database' => $serviceChecks['database']['passed'] ?? false,
+            'redis' => $serviceChecks['redis']['passed'] ?? false,
             'storage' => is_writable(storage_path()) && is_writable(base_path('bootstrap/cache')),
             'utc' => date_default_timezone_get() === 'UTC',
         ];
