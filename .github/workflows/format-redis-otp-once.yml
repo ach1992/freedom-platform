@@ -1,9 +1,7 @@
 name: Format Redis OTP Limiter Once
 
 on:
-  push:
-    branches:
-      - develop/v1.0.0-completion
+  pull_request:
     paths:
       - .github/workflows/format-redis-otp-once.yml
 
@@ -12,7 +10,6 @@ permissions:
 
 jobs:
   format:
-    if: github.event.head_commit.message == 'ci: format Redis OTP limiter once'
     runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
     timeout-minutes: 10
     steps:
