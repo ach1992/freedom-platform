@@ -209,7 +209,7 @@ final readonly class TelegramIdentitySynchronizer
 
         $parameter = $matches[1] ?? null;
 
-        if (! is_string($parameter) || $parameter === '') {
+        if (! is_string($parameter)) {
             return;
         }
 
