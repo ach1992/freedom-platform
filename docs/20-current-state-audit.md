@@ -9,7 +9,7 @@ Authoritative product baseline: `docs/specification/master-execution-prompt.md` 
 
 The repository is not an empty greenfield project. It contains a reviewed planning baseline and a tested Laravel/PHP foundation, but it is not yet a functional VPN commerce platform.
 
-The codebase has completed planning and architecture artifacts, strict CI, core reliability primitives, secure installer access, independent PHP runtime inspection, database/Redis and operational environment preflight, recoverable bootstrap/finalization, atomic shared-environment mutation and rollback, runtime health checks, deployment templates, typed external-integration contracts, and active worker-heartbeat monitoring. Most customer, administrator, financial, panel, provisioning, Telegram, support, reporting, backup, restore, updater, and release capabilities remain unimplemented.
+The codebase has completed planning and architecture artifacts, strict CI, core reliability primitives, secure installer access, independent PHP runtime inspection, database/Redis and operational environment preflight, recoverable bootstrap/finalization, atomic shared-environment mutation and rollback, atomic release activation/health rollback, runtime health checks, deployment templates, live queue-worker heartbeat integration, typed external-integration contracts, and worker alerting. Most customer, administrator, financial, panel, provisioning, Telegram, support, reporting, backup, restore, updater, and release capabilities remain unimplemented.
 
 ## Verified implemented baseline
 
@@ -27,30 +27,37 @@ The codebase has completed planning and architecture artifacts, strict CI, core 
 - allowlisted atomic `.env` writer with generated `APP_KEY`, private snapshot/checksum and exact rollback;
 - fixed-process finalization for config clear, forced migrations and config cache;
 - protected finalization endpoint with no secret echo and unlock-session invalidation;
-- tested bootstrap/finalization success, replay prevention, failure/retry, resume and migration rollback;
+- immutable candidate validation, approved shared links, atomic `current` activation and health-based automatic rollback;
+- fixed redacted release-health subprocess and secret-safe `release-switch.php` CLI;
+- tested activation, upgrade, explicit rollback, failed-health restoration, first-activation cleanup, traversal/symlink escape rejection and stale temporary-link recovery;
 - health checks, Scheduler heartbeat, queue safety configuration and deployment templates;
 - operations/audit/alert foundation tables;
+- queue lifecycle heartbeat reporting while idle, before/after jobs and after failures;
+- unique Supervisor heartbeat identities and queue groups;
+- stale threshold aligned above worker timeouts;
 - active worker heartbeat recording, stale detection, deduplicated critical alerts and recovery resolution;
+- automated exactly-one-Cron and Supervisor configuration validation;
 - CI gates for preflight, secrets, Pint, PHPStan/Larastan, architecture/forbidden patterns, dependencies/licenses, MariaDB and authenticated Redis tests.
 
 ## Latest verified increment
 
-Requirements `INS-001`, `SEC-003`, `SEC-007`, `SEC-008`, `QUA-011`, and `QUA-013` now have executable atomic-environment and finalization evidence:
+Requirements `RUN-001`, `RUN-002`, `RUN-003`, `RUN-004`, `OPS-001`, `OPS-003`, `INS-001`, `SEC-008`, `SEC-010`, `QUA-011`, and `QUA-013` now have software-side release/runtime evidence:
 
-- `InstallerEnvironmentWriter`, `InstallerEnvironmentBootstrapper`, and `InstallerFinalizer`;
-- fixed `InstallerArtisanProcessRunner` behind `InstallerFinalizationRunner`;
-- protected `/installer/finalize` route;
-- unit and feature tests for key allowlisting, injection rejection, APP_KEY generation, safe quoting, unrelated-line preservation, exact rollback, migration failure, fixed argv, process-output non-disclosure, HTTP secret non-disclosure and replay;
-- `evidence/0.2.0/INS-001-environment-finalization.md`;
-- GitHub Actions run `30908827675`: **60 tests, 195 assertions, zero warnings**, with all mandatory jobs passed.
+- `FilesystemReleaseActivator` and `ArtisanReleaseHealthVerifier`;
+- `deploy/bin/release-switch.php` with real subprocess acceptance tests;
+- `QueueWorkerHeartbeatReporter` and `OperationsServiceProvider` queue lifecycle hooks;
+- version-controlled Supervisor heartbeat environment and config-driven stale threshold;
+- deployment/runbook commands for activation, rollback, health, Supervisor and target evidence;
+- `evidence/0.2.0/RUN-002-release-worker-runtime.md`;
+- GitHub Actions run `30910236970`: **77 tests, 267 assertions, zero failures/errors/warnings**, with all mandatory jobs passed.
 
 ## Current delivery status
 
 | Phase | Status | Audit conclusion |
 |---|---|---|
 | `0.1.0` | passed | Planning, architecture, security, testing and traceability baseline exists. |
-| `0.2.0` | in progress | Installer software finalization and worker monitoring are green; release activation/rollback software, target aaPanel/OpenLiteSpeed install, Supervisor and target rollback evidence remain. |
-| `0.3.0` | planned | Identity, customers, agents and ACL are not implemented. |
+| `0.2.0` | target rehearsal required | Identified software-side Installer, release activation/rollback, Scheduler and Supervisor heartbeat packages are green. Actual aaPanel/OpenLiteSpeed/Supervisor/rollback evidence remains mandatory. |
+| `0.3.0` | planned / safe foundations may start | Identity, customers, agents and ACL are not implemented. Schema/domain work can proceed while target rehearsal is scheduled, but Phase 0.2 remains a release gate. |
 | `0.4.0` | planned | Catalog, offerings and actual panel adapters are not implemented. |
 | `0.5.0` | planned | Ledger, wallet, pricing, promotions and payment providers are not implemented. |
 | `0.6.0` | planned | Order aggregates, provisioning orchestration and service lifecycle are not implemented. |
@@ -61,12 +68,21 @@ Requirements `INS-001`, `SEC-003`, `SEC-007`, `SEC-008`, `QUA-011`, and `QUA-013
 
 ## Primary next work
 
-Continue Phase `0.2.0` with a filesystem-safe release activator and rollback service for the immutable `releases/<version>` plus atomic `current` symlink layout. The next increment must validate release containment and mandatory files, link only approved shared resources, atomically activate a candidate, verify it through an injected health check, restore the previous release after failure, retain a redacted journal, and prove traversal/symlink-escape rejection and interrupted-link recovery in disposable filesystem tests.
+Phase `0.2.0` now requires the target aaPanel/OpenLiteSpeed rehearsal documented in `docs/09-deployment-runbook.md` and `evidence/0.2.0/RUN-002-release-worker-runtime.md`:
 
-After the remaining software-only release/worker work is exhausted, a target-like aaPanel/OpenLiteSpeed server will be required for installation, Supervisor heartbeat validation and rollback rehearsal.
+- independent actual CLI PHP/LSPHP preflight;
+- protected Installer finalization using fake/sandbox integration values;
+- OpenLiteSpeed document root `current/public`;
+- atomic activation and explicit compatible rollback;
+- exactly one Scheduler Cron entry;
+- Supervisor worker start, distinct fresh heartbeat rows, controlled stale alert and recovery;
+- live/ready and critical redacted health checks;
+- retained sanitized evidence.
+
+This requires root/aaPanel/Supervisor access to the target host or owner execution of the exact commands. Until access is available, development can continue with dependency-safe Phase `0.3.0` identity/customer/agent/authorization schema and domain foundations, without marking Phase `0.2.0` passed.
 
 ## Owner action
 
-No owner action is required now. The next owner request will be made only when target-server access or a genuinely non-replaceable input is needed.
+Target server validation is now required to close Issue #4 and pass Phase `0.2.0`. Provide an approved access method for the aaPanel/OpenLiteSpeed host, or execute the documented rehearsal steps and return sanitized outputs. No production provider credentials are required.
 
 No phase or release should be inferred complete from this audit alone. The authoritative acceptance boundary remains the master execution prompt and its Definition of Done.
