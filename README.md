@@ -4,7 +4,7 @@ Production-grade Telegram commerce and lifecycle-management platform for VPN/pro
 
 ## Status
 
-Phase `0.1.0` planning is closed and the `0.2.0` Laravel foundation has passed its automated quality gates. A target-like aaPanel/OpenLiteSpeed installation rehearsal is still required before closing `0.2.0`. The authoritative scope is maintained in
+Phase `0.1.0` planning is closed and the `0.2.0` Laravel foundation continues on `develop/v1.0.0-completion`. Automated CI currently covers PHP 8.4, MariaDB, authenticated Redis, installer/runtime foundations, transactional reliability, and active worker-heartbeat detection. A target-like aaPanel/OpenLiteSpeed installation and rollback rehearsal is still required before closing `0.2.0`. The authoritative scope is maintained in
 [`docs/specification/master-execution-prompt.md`](docs/specification/master-execution-prompt.md).
 
 The repository follows gated semantic phases. No phase is complete until its documented quality gate passes, and no financial or provisioning behavior may be inferred from an incomplete phase.
