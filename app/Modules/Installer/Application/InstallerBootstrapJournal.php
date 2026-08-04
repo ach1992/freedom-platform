@@ -18,9 +18,27 @@ final class InstallerBootstrapJournal
             return null;
         }
 
-        $data = json_decode((string) file_get_contents($this->path), true);
+        $contents = file_get_contents($this->path);
 
-        return is_array($data) ? $data : null;
+        if (! is_string($contents)) {
+            return null;
+        }
+
+        $data = json_decode($contents, true);
+
+        if (! is_array($data)
+            || ! is_string($data['step'] ?? null)
+            || ! is_string($data['status'] ?? null)
+            || ! is_string($data['updated_at'] ?? null)
+        ) {
+            return null;
+        }
+
+        return [
+            'step' => $data['step'],
+            'status' => $data['status'],
+            'updated_at' => $data['updated_at'],
+        ];
     }
 
     public function record(string $step, string $status): void
@@ -42,13 +60,21 @@ final class InstallerBootstrapJournal
         }
 
         try {
-            file_put_contents($temporary, json_encode([
+            if (file_put_contents($temporary, json_encode([
                 'step' => $step,
                 'status' => $status,
                 'updated_at' => gmdate(DATE_ATOM),
-            ], JSON_THROW_ON_ERROR), LOCK_EX);
-            chmod($temporary, 0600);
-            rename($temporary, $this->path);
+            ], JSON_THROW_ON_ERROR), LOCK_EX) === false) {
+                throw new RuntimeException('Could not write bootstrap journal file.');
+            }
+
+            if (! chmod($temporary, 0600)) {
+                throw new RuntimeException('Could not secure bootstrap journal permissions.');
+            }
+
+            if (! rename($temporary, $this->path)) {
+                throw new RuntimeException('Could not activate bootstrap journal file.');
+            }
         } finally {
             if (is_file($temporary)) {
                 unlink($temporary);
