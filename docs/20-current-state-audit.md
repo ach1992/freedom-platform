@@ -1,88 +1,88 @@
 # Current Implementation Audit
 
-Audit date: `2026-08-04`  
+Audit date: `2026-08-05`  
 Audited ref: `develop/v1.0.0-completion`  
-Base commit: `1227cce28aedd2d799f2cd510891309deaacd0fb`  
-Authoritative product baseline: `docs/specification/master-execution-prompt.md` version `1.0.0`
+Base branch: `main` at `1227cce28aedd2d799f2cd510891309deaacd0fb`  
+Authoritative baseline: `docs/specification/master-execution-prompt.md` version `1.0.0`
 
 ## Executive finding
 
-The repository is not an empty greenfield project. It contains a reviewed planning baseline and a tested Laravel/PHP foundation, but it is not yet a functional VPN commerce platform.
+The repository now has a verified target-like runtime and an in-progress identity/Telegram foundation. Phase `0.2.0` is complete on a disposable aaPanel/OpenLiteSpeed staging host. Phase `0.3.0` has started but is not complete. The commercial catalog, finance, payments, provisioning, complete Telegram UX, support, reporting, backup/restore, updater, hardening and final release package remain future phases.
 
-The codebase has completed planning and architecture artifacts, strict CI, core reliability primitives, secure installer access, independent PHP runtime inspection, database/Redis and operational environment preflight, recoverable bootstrap/finalization, atomic shared-environment mutation and rollback, atomic release activation/health rollback, runtime health checks, deployment templates, live queue-worker heartbeat integration, typed external-integration contracts, and worker alerting. Most customer, administrator, financial, panel, provisioning, Telegram, support, reporting, backup, restore, updater, and release capabilities remain unimplemented.
+## Verified implementation
 
-## Verified implemented baseline
+### Foundation and runtime
 
-- Laravel 13/PHP 8.4 project and locked dependencies;
-- modular directory skeleton and typed state/provider contracts;
-- `Money`, injectable clock/random abstractions, workflow state enums;
-- database-enforced idempotency and processed Telegram update tables;
-- transactional Outbox persistence and transaction-boundary tests;
-- structured correlation IDs and sensitive-log redaction;
-- SSH-issued expiring one-time installer access with HTTPS and permanent-lock boundaries;
-- independent target-path-aware CLI PHP and OpenLiteSpeed LSPHP inspection;
-- database and authenticated Redis installer checks;
-- allowlisted outbound HTTPS, minimum disk, runtime path permission and owner/group preflight;
-- one authoritative Installer bootstrap orchestrator with atomic private journal and lock files;
-- allowlisted atomic `.env` writer with generated `APP_KEY`, private snapshot/checksum and exact rollback;
-- fixed-process finalization for config clear, forced migrations and config cache;
-- protected finalization endpoint with no secret echo and unlock-session invalidation;
-- immutable candidate validation, approved shared links, atomic `current` activation and health-based automatic rollback;
-- fixed redacted release-health subprocess and secret-safe `release-switch.php` CLI;
-- tested activation, upgrade, explicit rollback, failed-health restoration, first-activation cleanup, traversal/symlink escape rejection and stale temporary-link recovery;
-- health checks, Scheduler heartbeat, queue safety configuration and deployment templates;
-- operations/audit/alert foundation tables;
-- queue lifecycle heartbeat reporting while idle, before/after jobs and after failures;
-- unique Supervisor heartbeat identities and queue groups;
-- stale threshold aligned above worker timeouts;
-- active worker heartbeat recording, stale detection, deduplicated critical alerts and recovery resolution;
-- automated exactly-one-Cron and Supervisor configuration validation;
-- CI gates for preflight, secrets, Pint, PHPStan/Larastan, architecture/forbidden patterns, dependencies/licenses, MariaDB and authenticated Redis tests.
+- Laravel 13 / PHP 8.4 modular-monolith foundation and locked dependencies;
+- strict self-hosted CI using a cached PHP 8.4 container, disposable MariaDB and authenticated Redis;
+- secret, style, static-analysis, architecture, dependency, license, migration and coverage gates;
+- secure Installer access, independent CLI/LSPHP inspection, operational preflight, recoverable bootstrap, atomic environment mutation and permanent lock;
+- immutable releases, atomic activation, critical health checks, automatic failure restoration and explicit rollback;
+- aaPanel/OpenLiteSpeed staging vhost, HTTPS, live/ready endpoints and production-safe configuration;
+- one Scheduler Cron and five separated Supervisor workers;
+- per-process heartbeats, stale detection, deduplicated critical alert and recovery resolution.
 
-## Latest verified increment
+### Identity, access and Telegram foundations
 
-Requirements `RUN-001`, `RUN-002`, `RUN-003`, `RUN-004`, `OPS-001`, `OPS-003`, `INS-001`, `SEC-008`, `SEC-010`, `QUA-011`, and `QUA-013` now have software-side release/runtime evidence:
+- Telegram account/customer synchronization with transaction and race handling;
+- customer tiers, profiles, histories, tags and globally unique active phone-hash schema;
+- OTP challenge schema;
+- agent application/profile lifecycle schema and state enums;
+- roles, permissions, multi-role assignments, per-admin tri-state override and deny-precedence resolver;
+- sensitive-action approval schema and state machine;
+- secure Telegram webhook secret validation, encrypted payload persistence, database deduplication/collision detection, asynchronous processing, stranded-update recovery and encrypted `/start` attribution;
+- real staging Telegram webhook contract verified.
 
-- `FilesystemReleaseActivator` and `ArtisanReleaseHealthVerifier`;
-- `deploy/bin/release-switch.php` with real subprocess acceptance tests;
-- `QueueWorkerHeartbeatReporter` and `OperationsServiceProvider` queue lifecycle hooks;
-- version-controlled Supervisor heartbeat environment and config-driven stale threshold;
-- deployment/runbook commands for activation, rollback, health, Supervisor and target evidence;
-- `evidence/0.2.0/RUN-002-release-worker-runtime.md`;
-- GitHub Actions run `30910236970`: **77 tests, 267 assertions, zero failures/errors/warnings**, with all mandatory jobs passed.
+## Latest evidence
 
-## Current delivery status
+### CI
+
+Final workflow-only head `a01008e14264b1dace3b11e417afbb68f27da6b9` passed self-hosted CI run `30958332620`.
+
+- **119 tests, 537 assertions, zero failures/errors/skips**;
+- preflight, secret scan, Pint, PHPStan/Larastan, architecture, repository policy, dependency audit and license policy: passed.
+
+### Target runtime
+
+Application SHA `f3f460b1ae5deabfa1590a17b479e8de4d8bf2af` passed staging run `30958022781`:
+
+- PHP CLI/LSPHP `8.4.23`;
+- MariaDB `10.6.23`, Redis `7.4.2`;
+- migration/seed/caches;
+- Release A/B activation, rollback and reactivation;
+- five workers/five fresh heartbeats;
+- one Scheduler heartbeat/one Cron;
+- stale alert creation and zero unresolved alerts after recovery;
+- healthy redacted critical check;
+- active release `staging-b-f3f460b1ae5d`.
+
+Telegram run `30958272387` passed secret rejection, valid ingestion, exact-duplicate idempotency, collision rejection, stranded-update recovery, one processing attempt, cleanup and final `pending_update_count=0`.
+
+## Delivery status
 
 | Phase | Status | Audit conclusion |
 |---|---|---|
-| `0.1.0` | passed | Planning, architecture, security, testing and traceability baseline exists. |
-| `0.2.0` | target rehearsal required | Identified software-side Installer, release activation/rollback, Scheduler and Supervisor heartbeat packages are green. Actual aaPanel/OpenLiteSpeed/Supervisor/rollback evidence remains mandatory. |
-| `0.3.0` | planned / safe foundations may start | Identity, customers, agents and ACL are not implemented. Schema/domain work can proceed while target rehearsal is scheduled, but Phase 0.2 remains a release gate. |
-| `0.4.0` | planned | Catalog, offerings and actual panel adapters are not implemented. |
-| `0.5.0` | planned | Ledger, wallet, pricing, promotions and payment providers are not implemented. |
-| `0.6.0` | planned | Order aggregates, provisioning orchestration and service lifecycle are not implemented. |
-| `0.7.0` | planned | Telegram product UX, content, support and broadcast are not implemented. |
-| `0.8.0` | planned | Reports, Operations Center, backup/restore and updater are not implemented. |
-| `0.9.0` | planned | Full hardening and release-candidate evidence do not exist. |
-| `1.0.0` | planned | No production package or acceptance release exists. |
+| `0.1.0` | passed | Planning, architecture, security, testing and canonical traceability baseline exists. |
+| `0.2.0` | passed | Target aaPanel/OpenLiteSpeed install, HTTPS, release activation/rollback, Supervisor/Scheduler heartbeat and recovery evidence retained. |
+| `0.3.0` | in progress | Identity/customer/agent/ACL schema and secure Telegram ingress exist. Phone/contact/OTP, SMS providers, application services, complete agent lifecycle, hardened owner actions and append-only transition audit remain. |
+| `0.4.0` | planned | Catalog, offerings, capacity, trials and panel adapters remain. |
+| `0.5.0` | planned | Ledger, wallet, pricing, promotions and payment methods remain. |
+| `0.6.0` | planned | Orders, provisioning and service lifecycle remain. |
+| `0.7.0` | planned | Complete Telegram UX, content, support and broadcast remain. |
+| `0.8.0` | planned | Reporting, Operations Center, backup/restore and updater remain. |
+| `0.9.0` | planned | Independent hardening, performance/chaos and release candidate remain. |
+| `1.0.0` | planned | Production package, handover and owner acceptance remain. |
 
-## Primary next work
+## Current exact work package
 
-Phase `0.2.0` now requires the target aaPanel/OpenLiteSpeed rehearsal documented in `docs/09-deployment-runbook.md` and `evidence/0.2.0/RUN-002-release-worker-runtime.md`:
+Continue Phase `0.3.0` with:
 
-- independent actual CLI PHP/LSPHP preflight;
-- protected Installer finalization using fake/sandbox integration values;
-- OpenLiteSpeed document root `current/public`;
-- atomic activation and explicit compatible rollback;
-- exactly one Scheduler Cron entry;
-- Supervisor worker start, distinct fresh heartbeat rows, controlled stale alert and recovery;
-- live/ready and critical redacted health checks;
-- retained sanitized evidence.
+1. Iranian mobile normalization with Persian/Arabic digit support and canonical E.164 representation;
+2. phone verification policy/version model;
+3. Telegram contact ownership verification and globally unique active number binding;
+4. OTP issuance/verification/invalidation, cooldown, expiry, attempt limits and abuse controls;
+5. SMS contract, deterministic fake provider and definitive-failure-only fallback semantics;
+6. Melli Payamak and Kavenegar adapters with fake HTTP contract tests before any real credential activation;
+7. append-only transition/audit evidence and concurrency tests.
 
-This requires root/aaPanel/Supervisor access to the target host or owner execution of the exact commands. Until access is available, development can continue with dependency-safe Phase `0.3.0` identity/customer/agent/authorization schema and domain foundations, without marking Phase `0.2.0` passed.
-
-## Owner action
-
-Target server validation is now required to close Issue #4 and pass Phase `0.2.0`. Provide an approved access method for the aaPanel/OpenLiteSpeed host, or execute the documented rehearsal steps and return sanitized outputs. No production provider credentials are required.
-
-No phase or release should be inferred complete from this audit alone. The authoritative acceptance boundary remains the master execution prompt and its Definition of Done.
+No owner action is required for this fake/sandbox package. Real SMS credentials remain just-in-time inputs for a later activation gate.

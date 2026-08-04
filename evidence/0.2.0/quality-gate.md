@@ -1,97 +1,69 @@
 # Phase 0.2.0 quality gate
 
-Status: `target-rehearsal-required`  
-Scope: Laravel foundation, secure installer and target runtime readiness  
-Code baseline: `0.2.0-dev`  
-Latest software-side verified commit: `766ff01481fe716ffe082f4e171250b79197552a`
+Status: `passed`  
+Scope: Laravel foundation, secure Installer, release/runtime controls and target rehearsal  
+Final verified application SHA: `f3f460b1ae5deabfa1590a17b479e8de4d8bf2af`  
+Final workflow-only head: `a01008e14264b1dace3b11e417afbb68f27da6b9`
 
 ## Delivered
 
-- Laravel 13 / PHP 8.4 application and modular-monolith boundaries
-- locked Composer dependency graph and pinned GitHub Actions
-- configuration and secret-handling framework
-- SSH-issued, expiring, one-time installer access with HTTPS enforcement and lock boundary
-- independent, configurable CLI PHP and OpenLiteSpeed LSPHP preflight probes
-- runtime inspection for version, SAPI, loaded `php.ini`, timezone, extensions, disabled functions, limits and OPcache
-- database and authenticated Redis installer checks
-- allowlisted outbound HTTPS checks with bounded timeouts and redirects disabled
-- minimum free-disk, runtime path readability/writability and expected owner/group checks
-- one authoritative recoverable bootstrap orchestrator
-- atomic private bootstrap journal and permanent installer lock
-- allowlisted atomic `.env` creation/update with safe quoting and unrelated-line preservation
-- cryptographically generated `APP_KEY` when absent
-- private checksum-protected rollback snapshots and restoration/removal after downstream failure
-- fixed-process finalization sequence: config clear, forced migrations and config cache
-- protected finalization HTTP endpoint with secret-safe responses and session invalidation
-- immutable release validation and approved shared-resource linking
-- exclusive, journaled atomic `current` symlink activation
-- fixed critical redacted health verification and automatic restoration of the previous release
-- explicit guarded compatible code rollback through the same controls
-- secret-safe `deploy/bin/release-switch.php` CLI wiring with subprocess tests
-- liveness, readiness and critical dependency health checks
-- transactional Outbox, deterministic idempotency keys and safe/redacted payload handling
-- explicit order, payment and provisioning state-transition foundations
-- typed payment, verification and panel adapter contracts
-- MariaDB base/reliability/operations migrations
-- authenticated Redis queue configuration with enforced timeout invariant
-- aaPanel/OpenLiteSpeed deployment, Supervisor and scheduler templates
-- queue lifecycle heartbeat reporting while idle, before/after jobs and after job exceptions
-- unique per-process Supervisor heartbeat identity and queue-group metadata
-- stale threshold aligned above the longest worker timeout
-- active worker heartbeat persistence, stale-worker detection, deduplicated critical alerts and recovery resolution
-- automated validation of exactly one Scheduler Cron entry
-- CI evidence for style, static analysis, architecture, secrets, dependencies, licenses and runtime tests
+- Laravel 13 / PHP 8.4 modular-monolith foundation and locked dependency graph;
+- strict self-hosted CI with cached PHP 8.4 container, MariaDB, authenticated Redis, PCOV, Pint, PHPStan/Larastan, architecture, secret, dependency and license gates;
+- secure Installer access, dual CLI/LSPHP preflight, operational environment checks, recoverable bootstrap, atomic environment writer and permanent Installer lock;
+- immutable release layout, journaled atomic activation, critical health verification, automatic failed-health restoration and explicit compatible rollback;
+- aaPanel/OpenLiteSpeed vhost and HTTPS target runtime;
+- one Scheduler Cron, separated Supervisor worker groups and per-process heartbeat identities;
+- stale-worker detection, deduplicated critical alert creation and recovery resolution;
+- secure idempotent Telegram webhook ingress foundation and real staging contract rehearsal.
 
-## Automated evidence
+## Final automated evidence
 
-| Milestone | GitHub Actions run | Result |
-|---|---:|---|
-| Foundation baseline | `30790038444` | 30 tests, 55 assertions |
-| Dual PHP runtime preflight | `30870232289` | 34 tests, 77 assertions |
-| Worker heartbeat persistence/alerts | `30870967798` | 38 tests, 89 assertions |
-| Consolidated bootstrap and operational preflight | `30907255419` | 47 tests, 120 assertions |
-| Atomic environment writer | `30908040319` | 54 tests, 170 assertions |
-| Installer environment/finalization | `30908827675` | 60 tests, 195 assertions |
-| Release activation, CLI wiring and Supervisor runtime docs | `30910236970` | **77 tests, 267 assertions, zero failures/errors/warnings** |
+Self-hosted CI run `30958332620` passed every mandatory job:
 
-Run `30910236970` passed:
-
-- Repository preflight and canonical traceability validation;
-- Secret scan;
+- Repository preflight;
+- canonical planning/traceability validation;
+- secret scan;
 - Pint;
 - PHPStan/Larastan;
-- architecture and forbidden-pattern policies;
+- architecture and forbidden-pattern policy;
 - dependency audit and license policy;
-- complete MariaDB and password-authenticated Redis suite.
+- MariaDB/authenticated Redis suite: **119 tests, 537 assertions, zero failures/errors/skips**.
 
-Detailed requirement evidence is retained in:
+Artifacts:
+
+| Evidence | Artifact | SHA-256 |
+|---|---:|---|
+| Tests/coverage/services | `8912044150` | `683827e46b885e9109f848093ef9b2602f9572c3d9536eaee9bb94e663bfaba1` |
+| Static quality | `8912035487` | `e6164e9f16623835b178a4bb73da86a93bd239a4df458b175d9dffe17375a9db` |
+| Dependency/license | `8912024348` | `27718e2d5db97eb1679378395876ed1f79f5dca2e8e02a344f2f2187a23084c6` |
+| Secret scan | `8912018346` | `dc526852a79908431f412e078690a350a477fd113366eb3923565e79a0a8c684` |
+
+## Target evidence
+
+Staging Core run `30958022781` passed with artifact `8911885060` (`768339b067f359ace93d6b8056f86e5ce0183f5e7f62331718f4100570547802`).
+
+- CLI/LSPHP `8.4.23` and required extensions: passed;
+- MariaDB `10.6.23`, authenticated Redis `7.4.2`: passed;
+- migration, seed and production caches: passed;
+- Release A/B activation, rollback and reactivation: passed;
+- five workers and five fresh heartbeats: passed;
+- one Scheduler heartbeat and one Cron: passed;
+- controlled stale alert and recovery: passed;
+- redacted critical health: healthy;
+- Installer lock/environment/journal permissions: passed.
+
+Staging Telegram run `30958272387` passed with artifact `8911998888` (`42aef797e0a7244c2b6da1046de54561f0ff8f0a702a3a68a90382068db0e006`). Secret rejection, valid ingestion, exact duplicate idempotency, collision rejection, stranded-update recovery, one processing attempt, cleanup and final zero pending updates all passed.
+
+## Gate conclusion
+
+Phase `0.2.0` is passed. Its acceptance does not imply completion of later identity/authorization, catalog, financial, provisioning, Telegram UX, backup/restore, updater, hardening or release-package gates.
+
+Detailed evidence:
 
 - [`INS-001-php-runtime-preflight.md`](INS-001-php-runtime-preflight.md)
 - [`INS-001-operational-preflight-bootstrap.md`](INS-001-operational-preflight-bootstrap.md)
 - [`INS-001-environment-finalization.md`](INS-001-environment-finalization.md)
 - [`OPS-003-worker-heartbeats.md`](OPS-003-worker-heartbeats.md)
+- [`RUN-001-target-staging-rehearsal.md`](RUN-001-target-staging-rehearsal.md)
 - [`RUN-002-release-worker-runtime.md`](RUN-002-release-worker-runtime.md)
-
-## Remaining closure evidence
-
-All currently identified Phase `0.2.0` software-side packages are implemented and green. The remaining gate is target-like infrastructure evidence:
-
-- one clean installation rehearsal on Ubuntu 22.04 with aaPanel/OpenLiteSpeed;
-- actual independent CLI PHP and LSPHP preflight output;
-- actual MariaDB and password-authenticated Redis checks;
-- aaPanel/OpenLiteSpeed document root resolving to `current/public`;
-- actual shared `.env`/storage ownership and permissions;
-- actual release-switch activation and compatible rollback;
-- actual Supervisor `reread`/`update`, all configured processes `RUNNING`, and distinct fresh heartbeat rows;
-- controlled stale-worker alert and recovery;
-- exactly one Scheduler Cron entry;
-- live/ready HTTP and critical redacted health checks;
-- retained sanitized command/results and aaPanel/vhost snapshot.
-
-Phase `0.2.0` must not be marked passed or Issue #4 closed until this target rehearsal succeeds. No production provider credentials are needed, but root/aaPanel/Supervisor access or owner-executed commands are required.
-
-## Next exact work package
-
-Perform the target aaPanel/OpenLiteSpeed rehearsal defined in `evidence/0.2.0/RUN-002-release-worker-runtime.md` and `docs/09-deployment-runbook.md`. Use fake/sandbox application integrations, retain no secrets, and update Issue #4/PR #6 with exact commands, output summaries, environment facts, release IDs, heartbeat/alert evidence, rollback result and final health state.
-
-If target access is not immediately available, the next dependency-safe code package may begin Phase `0.3.0` identity/customer/agent/authorization schema and domain foundations from Issue #5, but Phase `0.2.0` remains an open release gate.
+- [`PHASE-CLOSURE.md`](PHASE-CLOSURE.md)

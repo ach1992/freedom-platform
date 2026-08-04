@@ -4,102 +4,87 @@ Requirements: `RUN-001`, `RUN-002`, `RUN-003`, `RUN-004`, `INS-001`, `OPS-001`, 
 
 ## Scope
 
-This evidence records the sanitized target-host rehearsal required to close the Phase `0.2.0` foundation gate. The host is a disposable Ubuntu staging VPS using aaPanel and OpenLiteSpeed. No production provider account, payment credential, customer data, or production secret was used.
+This evidence records the sanitized disposable-host rehearsal that closes the Phase `0.2.0` target runtime gate. The target is Ubuntu 22.04 with aaPanel and OpenLiteSpeed. No production provider account, customer data or production credential was used.
 
 ## Verified environment
 
-- Ubuntu `22.04` target host;
-- aaPanel installed and active;
-- OpenLiteSpeed installed and serving the configured staging virtual host;
-- PHP CLI and LSPHP `8.4.23`, independently inspected with required extensions present;
-- MariaDB `10.6.23` and authenticated localhost-only Redis `7.4.2`;
-- Composer production dependencies installed from the lock file;
-- application document root set to `/www/acdomains/hell.hellservice.top/current/public`;
-- valid HTTPS certificate, automatic Certbot renewal and OpenLiteSpeed restart hook;
-- shared `.env`, Installer lock and release journal retained with mode `600`.
+- aaPanel and OpenLiteSpeed active;
+- PHP CLI `8.4.23` / `cli` and LSPHP `8.4.23` / `litespeed` with all required extensions;
+- MariaDB `10.6.23` and password-authenticated localhost-only Redis `7.4.2`;
+- staging document root `/www/acdomains/hell.hellservice.top/current/public`;
+- valid HTTPS and public live/ready endpoints;
+- shared environment, Installer lock and release journal mode `600`;
+- Supervisor workers and one Scheduler Cron entry.
 
-## Exact execution controls
+## Final CI baseline
 
-The rehearsal used the version-controlled controls below:
+Workflow-only cleanup head `a01008e14264b1dace3b11e417afbb68f27da6b9` passed self-hosted CI run `30958332620`.
 
-```text
-deploy/staging/prepare-php-functions.sh
-deploy/staging/prepare-runtime-paths.sh
-deploy/staging/recover-operations-migration.sh
-deploy/staging/core-deploy.sh <verified-commit-sha>
-deploy/bin/release-switch.php
-```
-
-Application operations executed by the deployment control included:
-
-```text
-/www/server/php/84/bin/php artisan optimize:clear --no-ansi --no-interaction
-/www/server/php/84/bin/php artisan migrate --force --no-ansi --no-interaction
-/www/server/php/84/bin/php artisan db:seed --force --no-ansi --no-interaction
-/www/server/php/84/bin/php artisan config:cache --no-ansi --no-interaction
-/www/server/php/84/bin/php artisan route:cache --no-ansi --no-interaction
-/www/server/php/84/bin/php artisan view:cache --no-ansi --no-interaction
-/www/server/php/84/bin/php artisan health:check --critical --json --redact --no-ansi --no-interaction
-/www/server/php/84/bin/php artisan operations:check-worker-heartbeats --max-age=120 --json --no-ansi --no-interaction
-```
-
-## Results
-
-### Initial target rehearsal
-
-- GitHub Actions run: `30939724164`;
-- artifact ID: `8904686608`;
-- artifact ZIP SHA-256: `bc5048c72ec641208f21c0365978e6936df83562b14ddbbedd571c0acaa01e65`;
-- immutable Release A activation: passed;
-- immutable Release B activation: passed;
-- explicit rollback to Release A: passed;
-- reactivation of Release B: passed;
-- five distinct Supervisor worker processes and heartbeat rows: passed;
-- exactly one Scheduler heartbeat and one Cron entry: passed;
-- controlled stale-worker alert creation and recovery resolution: passed;
-- redacted critical health check: passed;
-- Installer permanent lock mode `600`: passed.
-
-### HTTPS and public health
-
-- GitHub Actions run: `30940469345`;
-- public `/health/live`: HTTP `200`;
-- public `/health/ready`: HTTP `200`;
-- local and public HTTPS verification: passed;
-- certificate renewal timer and restart hook: installed.
-
-### Latest application deployment rehearsal
-
-- verified application SHA: `949aa723772f90aaa0171fb1ea29ba8e57c9f6df`;
-- GitHub Actions deployment run: `30943711851`;
-- deployment artifact ID: `8906271720`;
-- deployment artifact ZIP SHA-256: `21008a3cd8c6e39dc30ade609abb2d25ecd91aef28676f6117374099b243f8e5`;
-- active release: `staging-b-949aa723772f`;
-- migration `2026_08_04_000400_extend_telegram_ingress_foundation`: passed;
-- A/B activation, explicit rollback and reactivation: passed;
-- five Supervisor workers: running;
-- worker heartbeat count: `5`;
-- Scheduler heartbeat count: `1`;
-- stale alert count after controlled failure: at least `1`;
-- unresolved stale alerts after recovery: `0`;
-- exactly-one-Cron check: `1`;
-- critical health status: healthy.
-
-## CI correlation
-
-Application SHA `949aa723772f90aaa0171fb1ea29ba8e57c9f6df` passed GitHub Actions run `30943562438`:
-
-- Repository preflight and canonical traceability: passed;
+- Repository preflight and canonical planning validation: passed;
 - secret scan: passed;
 - Pint: passed;
 - PHPStan/Larastan, architecture and repository policy: passed;
 - dependency audit and license policy: passed;
-- MariaDB and authenticated Redis suite: **108 tests, 491 assertions, zero failures**;
-- test artifact ID: `8906139420`;
-- test artifact ZIP SHA-256: `936f68f11e424e21b4e4f400c15000f8948db99e3aa347f9c0b0aeff50f0fdb9`.
+- MariaDB and authenticated Redis suite: **119 tests, 537 assertions, zero failures/errors/skips**;
+- test artifact `8912044150`, SHA-256 `683827e46b885e9109f848093ef9b2602f9572c3d9536eaee9bb94e663bfaba1`;
+- static artifact `8912035487`, SHA-256 `e6164e9f16623835b178a4bb73da86a93bd239a4df458b175d9dffe17375a9db`;
+- dependency artifact `8912024348`, SHA-256 `27718e2d5db97eb1679378395876ed1f79f5dca2e8e02a344f2f2187a23084c6`;
+- secret-scan artifact `8912018346`, SHA-256 `dc526852a79908431f412e078690a350a477fd113366eb3923565e79a0a8c684`.
+
+## Final application deployment rehearsal
+
+Verified application SHA `f3f460b1ae5deabfa1590a17b479e8de4d8bf2af` was deployed in Staging Core run `30958022781`.
+
+Artifact:
+
+- ID `8911885060`;
+- SHA-256 `768339b067f359ace93d6b8056f86e5ce0183f5e7f62331718f4100570547802`.
+
+Results:
+
+- migration `2026_08_04_000500_expand_worker_heartbeat_queue`: passed;
+- immutable Release A activation: passed;
+- immutable Release B activation: passed;
+- explicit rollback to Release A: passed;
+- reactivation of Release B: passed;
+- active release: `staging-b-f3f460b1ae5d`;
+- five Supervisor workers: `RUNNING`;
+- distinct fresh worker heartbeat rows: `5`;
+- Scheduler heartbeat rows: `1`;
+- initial worker health: healthy;
+- controlled bulk-worker stale result: unhealthy with exactly the expected worker ID;
+- unresolved stale alerts after controlled failure: `1`;
+- health after recovery: healthy;
+- unresolved stale alerts after recovery: `0`;
+- exactly-one-Cron result: `1`;
+- critical redacted health: healthy for application key, operational/business timezone, production debug, database, Redis, queue, cache and storage.
+
+A duplicate idempotent rehearsal caused by temporary PR triggering also passed. Both staging workflows are now manual-only.
+
+## Telegram contract rehearsal
+
+Staging Telegram run `30958272387` passed.
+
+Artifact:
+
+- ID `8911998888`;
+- SHA-256 `42aef797e0a7244c2b6da1046de54561f0ff8f0a702a3a68a90382068db0e006`.
+
+Results:
+
+- webhook configured to the expected HTTPS endpoint;
+- initial and final `pending_update_count=0`;
+- missing secret: HTTP `403`;
+- incorrect secret: HTTP `403`;
+- valid synthetic update: HTTP `200`;
+- exact duplicate: HTTP `200`, one persisted effect;
+- conflicting duplicate: HTTP `409`;
+- one stranded update requeued;
+- synthetic row count `1`, state `processed`, attempt count `1`;
+- synthetic cleanup complete.
 
 ## Gate conclusion
 
-The target aaPanel/OpenLiteSpeed installation, release activation/rollback, Scheduler, Supervisor heartbeat, stale-alert recovery, health and HTTPS portions of Phase `0.2.0` passed on the disposable staging host. No Critical/High finding remains for the Phase `0.2.0` foundation gate.
+The target installation, independent PHP runtimes, database/Redis, immutable release activation and rollback, Supervisor/Scheduler operation, worker heartbeat/stale-alert recovery, HTTPS health and secure Telegram ingress prerequisites passed on the disposable target-like host. No known Critical/High finding remains for Phase `0.2.0`.
 
-Later production release readiness still requires the later-phase backup/restore, updater, provider, financial, authorization and complete acceptance gates defined by the authoritative specification; this Phase result does not waive them.
+Later backup/restore, updater, financial, authorization, provider, panel, provisioning, full Telegram UX and release-candidate gates remain mandatory in their own phases.
