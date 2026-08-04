@@ -1,0 +1,83 @@
+name: Staging Wrapper Diagnose Once
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/staging-wrapper-diagnose-once.yml
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Prepare SSH
+        env:
+          KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          KNOWN: ${{ secrets.STAGING_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$KNOWN" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+      - name: Inspect wrapper release checkpoint
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          PORT: ${{ secrets.STAGING_PORT }}
+          USER: ${{ secrets.STAGING_USER }}
+          DOMAIN: ${{ secrets.STAGING_DOMAIN }}
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -p "$PORT" "$USER@$HOST" "DOMAIN='$DOMAIN' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          ROOT="/www/acdomains/$DOMAIN"
+          PHP=/www/server/php/84/bin/php
+          echo "current_release=$(basename "$(readlink -f "$ROOT/current")")"
+          echo 'journal_begin'
+          if [ -s "$ROOT/shared/release-journal.json" ]; then
+              python3 - "$ROOT/shared/release-journal.json" <<'PY'
+          import json, sys
+          data = json.load(open(sys.argv[1]))
+          allowed = {k: data.get(k) for k in ('status','release','previous_release','updated_at','failure_reason') if k in data}
+          print(json.dumps(allowed, sort_keys=True))
+          PY
+          else
+              echo 'journal=absent'
+          fi
+          echo 'journal_end'
+          echo 'releases_begin'
+          find "$ROOT/releases" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort | tail -n 12
+          echo 'releases_end'
+          echo 'wrapper_files_begin'
+          for path in "$ROOT"/releases/staging-{a,b}-69ad5f4ff697/deploy/bin/queue-worker-with-heartbeat.sh; do
+              if [ -e "$path" ]; then
+                  stat -Lc 'path=%n mode=%a owner=%U group=%G' "$path"
+                  bash -n "$path" && echo "syntax=$(basename "$(dirname "$(dirname "$path")")")-ok"
+              else
+                  echo "path=$path absent"
+              fi
+          done
+          echo 'wrapper_files_end'
+          echo 'supervisor_begin'
+          supervisorctl status 'freedom-platform-workers:*' || true
+          echo 'supervisor_end'
+          echo 'logs_begin'
+          for log in supervisor-critical.log supervisor-provisioning.log supervisor-bulk.log; do
+              echo "log=$log"
+              tail -n 40 "$ROOT/shared/storage/logs/$log" 2>/dev/null \
+                | grep -E 'heartbeat wrapper|heartbeat could not|invalid|ERROR|CRITICAL|not found|Permission denied' \
+                | tail -n 20 || true
+          done
+          echo 'logs_end'
+          echo 'health_begin'
+          set +e
+          runuser -u www -- "$PHP" "$ROOT/current/artisan" health:check --critical --json --redact --no-ansi --no-interaction
+          echo "health_status=$?"
+          set -e
+          echo 'health_end'
+          REMOTE
+      - if: always()
+        run: rm -rf "$HOME/.ssh"
