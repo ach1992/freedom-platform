@@ -29,7 +29,9 @@ final readonly class InstallerEnvironmentBootstrapper
         }
 
         $steps = [
-            'environment' => fn (): array => $this->environmentWriter->write($environment),
+            'environment' => function () use ($environment): void {
+                $this->environmentWriter->write($environment);
+            },
             ...$downstreamSteps,
         ];
 
