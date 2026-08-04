@@ -40,21 +40,51 @@ jobs:
             -o ConnectTimeout=20 \
             -p "$STAGING_PORT" \
             "$STAGING_USER@$STAGING_HOST" \
-            'set -eu
-             dispatcher=/www/server/panel/install/install_soft.sh
-             catalog=/www/server/panel/data/softList.conf
-             test -r "$dispatcher"
-             test -r "$catalog"
-             echo "dispatcher_begin"
-             sed -n "1,220p" "$dispatcher" \
-               | sed -E "s#https?://[^[:space:]\"'"'"']+#URL_REDACTED#g"
-             echo "dispatcher_end"
-             echo "catalog_matches_begin"
-             grep -Eai "openlitespeed|litespeed|php[-_ ]?8\.4|php84|8\.4" "$catalog" \
-               | head -n 120 \
-               | sed -E "s#https?://[^[:space:]\"'"'"']+#URL_REDACTED#g" \
-               || true
-             echo "catalog_matches_end"'
+            'python3 - <<'"'"'PY'"'"'
+import json
+from pathlib import Path
+
+catalog_path = Path("/www/server/panel/data/softList.conf")
+dispatcher_path = Path("/www/server/panel/install/install_soft.sh")
+
+if not catalog_path.is_file() or not dispatcher_path.is_file():
+    raise SystemExit("aaPanel installer contract is incomplete")
+
+print("dispatcher_args=mtype action name version")
+print("dispatcher_sha256=" + __import__("hashlib").sha256(dispatcher_path.read_bytes()).hexdigest())
+
+data = json.loads(catalog_path.read_text(encoding="utf-8"))
+
+
+def walk(value, path="root"):
+    if isinstance(value, dict):
+        yield path, value
+        for key, child in value.items():
+            yield from walk(child, f"{path}.{key}")
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            yield from walk(child, f"{path}[{index}]")
+
+matches = []
+for path, item in walk(data):
+    name = str(item.get("name", ""))
+    shell = str(item.get("shell", ""))
+    text = f"{name} {shell}".lower()
+    if "openlitespeed" in text or name.lower() == "php" or shell.lower() == "php.sh":
+        safe = {
+            key: item.get(key)
+            for key in (
+                "name", "title", "shell", "check", "version", "versions",
+                "mtype", "type", "type_id", "status", "install_version"
+            )
+            if key in item
+        }
+        matches.append((path, safe))
+
+for path, safe in matches:
+    print("catalog_path=" + path)
+    print(json.dumps(safe, ensure_ascii=True, sort_keys=True))
+PY'
 
       - name: Remove SSH material
         if: always()
