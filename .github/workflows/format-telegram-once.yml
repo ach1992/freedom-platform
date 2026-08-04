@@ -1,0 +1,77 @@
+name: Format Telegram Package Once
+
+on:
+  push:
+    branches:
+      - develop/v1.0.0-completion
+    paths:
+      - .github/workflows/format-telegram-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: develop/v1.0.0-completion
+          fetch-depth: 1
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240
+        with:
+          php-version: '8.4'
+          extensions: bcmath, curl, dom, fileinfo, intl, mbstring, openssl, pcntl, pdo_mysql, redis, sodium, xml
+          coverage: none
+          tools: composer:2.10.2
+          ini-file: production
+      - run: composer install --no-interaction --prefer-dist --no-progress
+      - name: Format the cohesive Telegram package
+        run: |
+          set -euo pipefail
+          vendor/bin/pint \
+            app/Modules/Telegram \
+            tests/Feature/TelegramWebhookIngressTest.php \
+            tests/Feature/TelegramUpdateProcessorTest.php \
+            tests/Feature/ConfigureTelegramWebhookCommandTest.php \
+            tests/Unit/Modules/Telegram \
+            config/telegram.php \
+            database/migrations/2026_08_04_000400_extend_telegram_ingress_foundation.php \
+            routes/api.php \
+            bootstrap/app.php \
+            bootstrap/providers.php
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('.github/workflows/format-telegram-once.yml')
+          text = path.read_text()
+          old = '''on:
+            push:
+              branches:
+                - develop/v1.0.0-completion
+              paths:
+                - .github/workflows/format-telegram-once.yml
+          '''
+          new = '''on:
+            workflow_dispatch:
+          '''
+          if old not in text:
+              raise SystemExit('Formatter trigger block was not found.')
+          path.write_text(text.replace(old, new, 1))
+          PY
+      - name: Commit formatter result
+        run: |
+          set -euo pipefail
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/Modules/Telegram tests config/telegram.php \
+            database/migrations/2026_08_04_000400_extend_telegram_ingress_foundation.php \
+            routes/api.php bootstrap/app.php bootstrap/providers.php \
+            .github/workflows/format-telegram-once.yml
+          if git diff --cached --quiet; then
+            echo 'No formatter changes required.'
+            exit 0
+          fi
+          git commit -m 'style(telegram): apply locked Pint formatting'
+          git push origin HEAD:develop/v1.0.0-completion
