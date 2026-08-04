@@ -1,9 +1,6 @@
 name: Staging Provision Diagnose
 
 on:
-  pull_request:
-    paths:
-      - .github/workflows/staging-provision-diagnose.yml
   workflow_dispatch:
 
 permissions:
