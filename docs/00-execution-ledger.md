@@ -14,7 +14,7 @@ This is the program control ledger. It records phase scope, ownership, decisions
 | Phase | Scope | Status | Current evidence |
 |---|---|---|---|
 | `0.1.0` | Requirements, architecture, risks, test strategy and traceability | `passed` | `evidence/0.1.0/quality-gate.md` |
-| `0.2.0` | Foundation, installer, health, Outbox, idempotency, runtime/deployment | `in-progress` | Runtime preflight and worker-heartbeat evidence are green; target aaPanel/OpenLiteSpeed rehearsal remains |
+| `0.2.0` | Foundation, installer, health, Outbox, idempotency, runtime/deployment | `in-progress` | Issue `#4`; runtime preflight and worker-heartbeat evidence are green; target aaPanel/OpenLiteSpeed rehearsal remains |
 | `0.3.0` | Identity, customers, agents, ACL, OTP/SMS and audit | `planned` | Issue `#5` |
 | `0.4.0` | Catalog, offerings, panels, capacity, custom plans and trials | `planned` | Issue `#7` |
 | `0.5.0` | Ledger, wallet, pricing, promotions and payment providers | `planned` | Issue `#8` |
@@ -23,6 +23,8 @@ This is the program control ledger. It records phase scope, ownership, decisions
 | `0.8.0` | Reports, Operations Center, backup/restore and updater | `planned` | Issue `#11` |
 | `0.9.0` | Regression, security, load/chaos and release candidate | `planned` | Issue `#12` |
 | `1.0.0` | Production package, reports, runbooks and handover | `planned` | Issue `#13` |
+
+Active integration review: Draft PR `#6`.
 
 ## Latest verified increment
 
