@@ -1,0 +1,120 @@
+name: Staging Provision Base
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/staging-provision-base.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  provision-base:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Validate staging secrets
+        env:
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          STAGING_PORT: ${{ secrets.STAGING_PORT }}
+          STAGING_USER: ${{ secrets.STAGING_USER }}
+          STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          STAGING_KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in STAGING_HOST STAGING_PORT STAGING_USER STAGING_SSH_PRIVATE_KEY STAGING_KNOWN_HOSTS; do
+            test -n "${!name:-}" || { echo "Missing required secret: ${name}" >&2; exit 1; }
+          done
+
+      - name: Prepare SSH client
+        env:
+          STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          STAGING_KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$STAGING_SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$STAGING_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+
+      - name: Install aaPanel and base services
+        env:
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          STAGING_PORT: ${{ secrets.STAGING_PORT }}
+          STAGING_USER: ${{ secrets.STAGING_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/evidence/staging
+          ssh \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=20 \
+            -p "$STAGING_PORT" \
+            "$STAGING_USER@$STAGING_HOST" \
+            'set -Eeuo pipefail
+             export DEBIAN_FRONTEND=noninteractive
+             export NEEDRESTART_MODE=a
+             install -d -m 700 /root/freedom-bootstrap
+             exec 9>/root/freedom-bootstrap/provision.lock
+             flock -n 9 || { echo "Another staging provision is already running." >&2; exit 1; }
+
+             apt-get update -y >/var/log/freedom-apt-update.log 2>&1
+             apt-get install -y ca-certificates curl wget git unzip zip rsync jq openssl acl cron supervisor mariadb-server redis-server >/var/log/freedom-apt-install.log 2>&1
+
+             systemctl enable --now cron
+             systemctl enable --now supervisor
+             systemctl enable --now mariadb
+             systemctl enable --now redis-server
+
+             if [ ! -d /www/server/panel ]; then
+               curl -fsSLo /root/freedom-bootstrap/install_panel_en.sh https://www.aapanel.com/script/install_panel_en.sh
+               chmod 700 /root/freedom-bootstrap/install_panel_en.sh
+               yes y | bash /root/freedom-bootstrap/install_panel_en.sh forum >/var/log/freedom-aapanel-install.log 2>&1
+             fi
+
+             if [ -x /etc/init.d/bt ]; then
+               /etc/init.d/bt start >/var/log/freedom-aapanel-start.log 2>&1 || true
+             fi
+
+             test -d /www/server/panel
+             test -x /etc/init.d/bt
+
+             echo "# staging base provision"
+             echo "utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+             if [ -r /etc/os-release ]; then . /etc/os-release; echo "os=${PRETTY_NAME}"; fi
+             echo "aapanel=present"
+             echo "aapanel_service=$(/etc/init.d/bt status 2>/dev/null | head -n 1 || true)"
+             for service in ssh cron supervisor mariadb redis-server; do
+               echo "service_${service}=$(systemctl is-active "$service" 2>/dev/null || true)"
+             done
+             for command in git curl wget unzip jq openssl supervisorctl mysql redis-cli; do
+               path=$(command -v "$command" 2>/dev/null || true)
+               [ -n "$path" ] || path=missing
+               echo "command_${command}=${path}"
+             done
+             echo "disk_available_kib=$(df -P / | awk "NR==2 {print \$4}")"
+             echo "memory_kib=$(awk "/MemTotal/ {print \$2}" /proc/meminfo)"
+             ss -lnt 2>/dev/null | awk "NR==1 || /:(22|80|443|31750)[[:space:]]/"' \
+            | tee build/evidence/staging/base-provision.txt
+
+      - name: Remove SSH material
+        if: always()
+        shell: bash
+        run: rm -rf "$HOME/.ssh"
+
+      - name: Upload sanitized provision evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: staging-base-provision-${{ github.run_id }}
+          path: build/evidence/staging
+          if-no-files-found: warn
+          retention-days: 7
