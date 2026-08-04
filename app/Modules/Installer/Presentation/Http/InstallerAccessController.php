@@ -6,6 +6,7 @@ namespace App\Modules\Installer\Presentation\Http;
 
 use App\Http\Controllers\Controller;
 use App\Modules\Installer\Application\InstallerAccessTokenStore;
+use App\Modules\Installer\Application\InstallerEnvironmentPreflight;
 use App\Modules\Installer\Application\PhpRuntimePreflight;
 use App\Modules\Operations\Application\RuntimeHealthProbe;
 use Illuminate\Http\RedirectResponse;
@@ -42,6 +43,7 @@ final class InstallerAccessController extends Controller
         Request $request,
         PhpRuntimePreflight $runtimePreflight,
         RuntimeHealthProbe $healthProbe,
+        InstallerEnvironmentPreflight $environmentPreflight,
     ): View {
         $commonExtensions = $this->extensionList(config('installer.php_runtimes.required_extensions.common', []));
         $cliExtensions = array_values(array_unique([
@@ -81,7 +83,7 @@ final class InstallerAccessController extends Controller
             'https' => $request->isSecure() || app()->environment('local', 'testing'),
             'database' => $serviceChecks['database']['passed'] ?? false,
             'redis' => $serviceChecks['redis']['passed'] ?? false,
-            'storage' => is_writable(storage_path()) && is_writable(base_path('bootstrap/cache')),
+            ...$environmentPreflight->checks(),
             'utc' => date_default_timezone_get() === 'UTC',
         ];
 
