@@ -1,0 +1,66 @@
+name: Staging Runtime Progress Once
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/staging-runtime-progress-once.yml
+
+permissions:
+  contents: read
+
+jobs:
+  progress:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Prepare SSH client
+        env:
+          STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          STAGING_KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$STAGING_SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$STAGING_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+
+      - name: Read non-sensitive runtime progress
+        env:
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          STAGING_PORT: ${{ secrets.STAGING_PORT }}
+          STAGING_USER: ${{ secrets.STAGING_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 \
+            -p "$STAGING_PORT" "$STAGING_USER@$STAGING_HOST" \
+            'set -eu
+             CLI=/www/server/php/84/bin/php
+             LSPHP=/usr/local/lsws/lsphp84/bin/lsphp
+             WORK=/root/freedom-bootstrap/runtime-extensions
+             echo "utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+             echo "installer_processes=$(pgrep -fc "fileinfo.sh|redis.sh|opcache.sh|phpize|make|gcc|g\\+\\+" || true)"
+             for extension in fileinfo redis opcache; do
+               if "$CLI" -r "exit(extension_loaded(\"$extension\") || (\"$extension\" === \"opcache\" && extension_loaded(\"Zend OPcache\")) ? 0 : 1);"; then
+                 echo "cli_${extension}=present"
+               else
+                 echo "cli_${extension}=absent"
+               fi
+               log="$WORK/$extension.log"
+               if [ -f "$log" ]; then
+                 echo "${extension}_log_bytes=$(stat -c %s "$log")"
+                 echo "${extension}_log_mtime=$(stat -c %Y "$log")"
+               else
+                 echo "${extension}_log=absent"
+               fi
+             done
+             probe="$WORK/progress-probe.php"
+             printf "%s\n" "<?php echo extension_loaded(\"redis\") ? \"present\" : \"absent\";" > "$probe"
+             chmod 600 "$probe"
+             echo "lsphp_redis=$($LSPHP "$probe")"
+             rm -f "$probe"'
+
+      - name: Remove SSH material
+        if: always()
+        run: rm -rf "$HOME/.ssh"
