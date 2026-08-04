@@ -67,6 +67,7 @@ final class IdentityAccessDomainTest extends TestCase
 
     /**
      * @template T of \BackedEnum
+     *
      * @param  list<T>  $cases
      * @return list<int|string>
      */
