@@ -39,8 +39,8 @@ final class InstallerEnvironmentPreflight
     }
 
     /**
-     * @param list<string> $urls
-     * @param list<string> $allowedHosts
+     * @param  list<string>  $urls
+     * @param  list<string>  $allowedHosts
      */
     private function outboundHttps(array $urls, array $allowedHosts, int $connectTimeout, int $timeout): bool
     {
@@ -76,7 +76,7 @@ final class InstallerEnvironmentPreflight
         return true;
     }
 
-    /** @param list<string> $paths */
+    /** @param  list<string>  $paths */
     private function hasDiskSpace(array $paths, int $minimumFreeBytes): bool
     {
         if ($paths === []) {
@@ -94,7 +94,7 @@ final class InstallerEnvironmentPreflight
         return true;
     }
 
-    /** @param list<string> $paths */
+    /** @param  list<string>  $paths */
     private function pathsAreUsable(array $paths): bool
     {
         if ($paths === []) {
@@ -110,7 +110,7 @@ final class InstallerEnvironmentPreflight
         return true;
     }
 
-    /** @param list<string> $paths */
+    /** @param  list<string>  $paths */
     private function pathsHaveExpectedOwnership(array $paths, ?string $expectedOwner, ?string $expectedGroup): bool
     {
         if ($paths === []) {
