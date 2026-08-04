@@ -1,7 +1,9 @@
 name: Staging Deploy Core
 
 on:
-  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/staging-deploy-core.yml
 
 permissions:
   contents: read
@@ -11,7 +13,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      VERIFIED_APP_SHA: 6bd32d82f3df3e893e1010fac1ca7dba39c68a60
+      VERIFIED_APP_SHA: 5764d56d344e53c1df15f3e52e05a1872bbf339a
     steps:
       - name: Check out deployment controls
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -24,7 +26,7 @@ jobs:
       - name: Check out verified application commit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 6bd32d82f3df3e893e1010fac1ca7dba39c68a60
+          ref: 5764d56d344e53c1df15f3e52e05a1872bbf339a
           path: application
           fetch-depth: 1
           persist-credentials: false
