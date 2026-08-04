@@ -18,7 +18,7 @@ final class DeploymentRuntimeConfigurationTest extends TestCase
         $this->assertSame(3, substr_count($configuration, 'WORKER_HEARTBEAT_INTERVAL_SECONDS="30"'));
         $this->assertSame(3, substr_count($configuration, 'WORKER_HEARTBEAT_STALE_AFTER_SECONDS="480"'));
         $this->assertStringContainsString('WORKER_QUEUE_GROUP="critical-payments,bank-verification,gift-card-verification"', $configuration);
-        $this->assertStringContainsString('WORKER_QUEUE_GROUP="provisioning,telegram-delivery,synchronization,default"', $configuration);
+        $this->assertStringContainsString('WORKER_QUEUE_GROUP="provisioning,telegram-ingress,telegram-delivery,synchronization,default"', $configuration);
         $this->assertStringContainsString('WORKER_QUEUE_GROUP="broadcasts,reports,backups,maintenance"', $configuration);
     }
 
