@@ -2,8 +2,9 @@
 
 Evidence date: `2026-08-04`  
 Branch: `develop/v1.0.0-completion`  
-Verified head: `0ef036dcc1b68d90f1f2f7cab900e92b0c8b7b9d`  
-Requirements: `OPS-001`, `OPS-003`
+Verified implementation head: `0ef036dcc1b68d90f1f2f7cab900e92b0c8b7b9d`  
+Traceability update head: `8551aca2937f8b095dc815193e6433fb23d16c7a`  
+Requirements: `OPS-001`, `OPS-003`, `RUN-003`, `RUN-004`
 
 ## Implemented behavior
 
@@ -24,6 +25,7 @@ Requirements: `OPS-001`, `OPS-003`
 - `bootstrap/app.php`
 - `routes/console.php`
 - `tests/Feature/WorkerHeartbeatCommandTest.php`
+- `docs/02-requirement-traceability-matrix.md`
 
 ## Verification environment
 
@@ -31,10 +33,10 @@ GitHub Actions run: `30870967798`
 
 - runner: Ubuntu `24.04`
 - PHP: `8.4.24`
-- database: disposable MariaDB service
-- coordination/cache/queue: disposable authenticated Redis service
-- application timezone: `UTC`
-- business timezone: `Asia/Tehran`
+- database: disposable MariaDB service;
+- coordination/cache/queue: disposable authenticated Redis service;
+- application timezone: `UTC`;
+- business timezone: `Asia/Tehran`.
 
 ## Exact mandatory commands/gates
 
@@ -67,8 +69,8 @@ composer ci:licenses
 
 ## Failure and correction record
 
-An earlier CI run correctly rejected unsafe casts of Symfony Console input values during PHPStan analysis. The command was changed to validate argument and option values as strings before use. The final verified head above passed all mandatory gates.
+An earlier CI run correctly rejected unsafe casts of Symfony Console input values during PHPStan analysis. The command was changed to validate argument and option values as strings before use. The final verified implementation head above passed all mandatory gates.
 
 ## Remaining phase gap
 
-This evidence closes only the worker-heartbeat increment. Phase `0.2.0` remains open pending the remaining installer/bootstrap work and a target-like aaPanel/OpenLiteSpeed installation and rollback rehearsal.
+This evidence closes only the worker-heartbeat increment. Phase `0.2.0` remains open pending the remaining installer/bootstrap work, real Supervisor integration, and a target-like aaPanel/OpenLiteSpeed installation and rollback rehearsal.
