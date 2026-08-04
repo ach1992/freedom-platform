@@ -24,11 +24,9 @@ final class RecordWorkerHeartbeatCommand extends Command
     {
         try {
             $heartbeats->record(
-                (string) $this->argument('worker-id'),
-                (string) $this->option('queue'),
-                $this->option('release') !== null
-                    ? (string) $this->option('release')
-                    : (string) config('app.version', 'unversioned'),
+                $this->stringArgument('worker-id'),
+                $this->stringOption('queue'),
+                $this->releaseVersion(),
             );
         } catch (InvalidArgumentException $exception) {
             $this->error($exception->getMessage());
@@ -39,5 +37,44 @@ final class RecordWorkerHeartbeatCommand extends Command
         $this->info('Worker heartbeat recorded.');
 
         return self::SUCCESS;
+    }
+
+    private function stringArgument(string $name): string
+    {
+        $value = $this->argument($name);
+
+        if (! is_string($value)) {
+            throw new InvalidArgumentException(sprintf('Argument %s must be a string.', $name));
+        }
+
+        return $value;
+    }
+
+    private function stringOption(string $name): string
+    {
+        $value = $this->option($name);
+
+        if (! is_string($value)) {
+            throw new InvalidArgumentException(sprintf('Option %s must be a string.', $name));
+        }
+
+        return $value;
+    }
+
+    private function releaseVersion(): string
+    {
+        $override = $this->option('release');
+
+        if ($override !== null) {
+            if (! is_string($override)) {
+                throw new InvalidArgumentException('Release option must be a string.');
+            }
+
+            return $override;
+        }
+
+        $configured = config('app.version', 'unversioned');
+
+        return is_string($configured) ? $configured : 'unversioned';
     }
 }
