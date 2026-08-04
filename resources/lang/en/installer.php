@@ -7,6 +7,7 @@ return [
     'token' => 'One-time installer token',
     'unlock' => 'Unlock installer',
     'invalid_token' => 'The installer token is invalid, expired, or already used.',
+    'invalid_environment' => 'The installer environment contains an unsupported key or value.',
     'preflight' => 'Environment preflight',
     'passed' => 'Passed',
     'failed' => 'Failed',
