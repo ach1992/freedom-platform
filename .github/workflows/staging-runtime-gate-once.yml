@@ -1,9 +1,7 @@
 name: Staging Runtime Gate Once
 
 on:
-  pull_request:
-    paths:
-      - .github/workflows/staging-runtime-gate-once.yml
+  workflow_dispatch:
 
 permissions:
   contents: read
