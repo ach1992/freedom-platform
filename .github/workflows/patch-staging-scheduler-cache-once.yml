@@ -1,0 +1,60 @@
+name: Patch Staging Scheduler Cache Once
+
+on:
+  push:
+    branches:
+      - develop/v1.0.0-completion
+    paths:
+      - .github/workflows/patch-staging-scheduler-cache-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out development branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: develop/v1.0.0-completion
+          fetch-depth: 1
+          persist-credentials: true
+
+      - name: Add scheduler mutex recovery before rehearsal
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('deploy/staging/core-deploy.sh')
+          original = path.read_text()
+          old = '''supervisorctl status 'freedom-platform-workers:*' >> "$EVIDENCE"
+
+runuser -u www -- "$PHP" "$ROOT/current/artisan" schedule:run --no-ansi --no-interaction >/dev/null
+sleep 45
+'''
+          new = '''supervisorctl status 'freedom-platform-workers:*' >> "$EVIDENCE"
+
+runuser -u www -- "$PHP" "$ROOT/current/artisan" schedule:clear-cache --no-ansi --no-interaction >/dev/null
+runuser -u www -- "$PHP" "$ROOT/current/artisan" schedule:run --no-ansi --no-interaction >/dev/null
+sleep 45
+'''
+          count = original.count(old)
+          if count != 1:
+              raise SystemExit(f'expected exactly one scheduler rehearsal block, found {count}')
+          path.write_text(original.replace(old, new))
+          PY
+          git diff --check
+          grep -F 'schedule:clear-cache --no-ansi --no-interaction' deploy/staging/core-deploy.sh
+
+      - name: Commit scheduler recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add deploy/staging/core-deploy.sh
+          git commit -m 'fix(staging): clear scheduler mutexes before rehearsal'
+          git push origin HEAD:develop/v1.0.0-completion
