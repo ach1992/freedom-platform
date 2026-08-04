@@ -50,6 +50,23 @@ id www >/dev/null 2>&1
 
 timedatectl set-timezone UTC
 systemctl enable --now mariadb redis-server supervisor cron >/dev/null
+systemctl restart mariadb >/dev/null
+
+mariadb_ready=0
+for _attempt in $(seq 1 60); do
+    if mariadb-admin --protocol=socket ping --silent >/dev/null 2>&1; then
+        mariadb_ready=1
+        break
+    fi
+    sleep 1
+done
+
+if [ "$mariadb_ready" -ne 1 ]; then
+    echo 'MariaDB did not become ready within 60 seconds.' >&2
+    systemctl --no-pager --full status mariadb 2>&1 | tail -n 60 >&2 || true
+    journalctl -u mariadb --no-pager -n 80 2>&1 | tail -n 80 >&2 || true
+    exit 70
+fi
 
 cat > "$RUNTIME_PROBE" <<'PHP'
 <?php
