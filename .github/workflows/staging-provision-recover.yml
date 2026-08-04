@@ -1,9 +1,6 @@
 name: Staging Provision Recover
 
 on:
-  pull_request:
-    paths:
-      - .github/workflows/staging-provision-recover.yml
   workflow_dispatch:
 
 permissions:
