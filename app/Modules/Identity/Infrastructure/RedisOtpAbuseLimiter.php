@@ -6,7 +6,6 @@ namespace App\Modules\Identity\Infrastructure;
 
 use App\Modules\Identity\Application\Contracts\OtpAbuseLimiter;
 use App\Modules\Identity\Application\Exceptions\OtpRateLimitExceeded;
-use App\Modules\Identity\Application\OtpRateLimitBucket;
 use Illuminate\Redis\RedisManager;
 use RuntimeException;
 
