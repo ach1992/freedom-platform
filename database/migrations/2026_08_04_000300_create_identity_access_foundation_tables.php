@@ -19,8 +19,8 @@ return new class extends Migration
             $table->string('username', 64)->nullable();
             $table->string('language_code', 16)->nullable();
             $table->boolean('is_bot')->default(false);
-            $table->timestamp('first_seen_at', 6);
-            $table->timestamp('last_seen_at', 6);
+            $table->dateTime('first_seen_at', 6);
+            $table->dateTime('last_seen_at', 6);
             $table->timestamps(6);
             $table->unique(['bot_id', 'telegram_user_id'], 'telegram_account_identity_unique');
             $table->unique(['bot_id', 'user_id'], 'telegram_account_user_bot_unique');
@@ -57,7 +57,7 @@ return new class extends Migration
             $table->string('status', 32)->default('active');
             $table->boolean('is_owner')->default(false);
             $table->unsignedBigInteger('permission_version')->default(1);
-            $table->timestamp('last_authenticated_at', 6)->nullable();
+            $table->dateTime('last_authenticated_at', 6)->nullable();
             $table->timestamps(6);
             $table->index(['status', 'is_owner']);
         });
@@ -99,8 +99,8 @@ return new class extends Migration
             $table->foreignId('user_id')->constrained()->restrictOnDelete();
             $table->foreignId('tag_id')->constrained('customer_tags')->restrictOnDelete();
             $table->foreignId('assigned_by_administrator_id')->nullable()->constrained('administrators')->restrictOnDelete();
-            $table->timestamp('assigned_at', 6);
-            $table->timestamp('removed_at', 6)->nullable();
+            $table->dateTime('assigned_at', 6);
+            $table->dateTime('removed_at', 6)->nullable();
             $table->timestamps(6);
             $table->unique(['user_id', 'tag_id'], 'customer_tag_assignment_unique');
             $table->index(['tag_id', 'removed_at']);
@@ -114,8 +114,8 @@ return new class extends Migration
             $table->char('active_lookup_hash', 64)->nullable()->unique();
             $table->unsignedSmallInteger('hash_key_version');
             $table->string('status', 32)->default('unverified');
-            $table->timestamp('verified_at', 6)->nullable();
-            $table->timestamp('released_at', 6)->nullable();
+            $table->dateTime('verified_at', 6)->nullable();
+            $table->dateTime('released_at', 6)->nullable();
             $table->timestamps(6);
             $table->unique(['user_id', 'lookup_hash'], 'phone_user_lookup_unique');
             $table->index(['user_id', 'status']);
@@ -130,9 +130,9 @@ return new class extends Migration
             $table->char('code_hash', 64);
             $table->unsignedSmallInteger('attempt_count')->default(0);
             $table->unsignedSmallInteger('maximum_attempts');
-            $table->timestamp('expires_at', 6);
-            $table->timestamp('consumed_at', 6)->nullable();
-            $table->timestamp('invalidated_at', 6)->nullable();
+            $table->dateTime('expires_at', 6);
+            $table->dateTime('consumed_at', 6)->nullable();
+            $table->dateTime('invalidated_at', 6)->nullable();
             $table->timestamps(6);
             $table->index(['destination_lookup_hash', 'purpose', 'expires_at'], 'otp_destination_purpose_expiry_index');
             $table->index(['user_id', 'created_at']);
@@ -173,8 +173,8 @@ return new class extends Migration
                 ->references('id')
                 ->on('administrators')
                 ->restrictOnDelete();
-            $table->timestamp('granted_at', 6);
-            $table->timestamp('revoked_at', 6)->nullable();
+            $table->dateTime('granted_at', 6);
+            $table->dateTime('revoked_at', 6)->nullable();
             $table->timestamps(6);
             $table->unique(['administrator_id', 'role_id'], 'administrator_role_unique');
             $table->index(['role_id', 'revoked_at']);
@@ -208,8 +208,8 @@ return new class extends Migration
             $table->string('state', 32)->default('pending');
             $table->string('decision_reason_code', 64)->nullable();
             $table->text('decision_reason')->nullable();
-            $table->timestamp('expires_at', 6);
-            $table->timestamp('decided_at', 6)->nullable();
+            $table->dateTime('expires_at', 6);
+            $table->dateTime('decided_at', 6)->nullable();
             $table->timestamps(6);
             $table->index(['state', 'expires_at']);
             $table->index(['target_type', 'target_id']);
@@ -226,9 +226,9 @@ return new class extends Migration
             $table->string('decision_reason_code', 64)->nullable();
             $table->text('decision_reason')->nullable();
             $table->unsignedInteger('application_version')->default(1);
-            $table->timestamp('submitted_at', 6);
-            $table->timestamp('claimed_at', 6)->nullable();
-            $table->timestamp('decided_at', 6)->nullable();
+            $table->dateTime('submitted_at', 6);
+            $table->dateTime('claimed_at', 6)->nullable();
+            $table->dateTime('decided_at', 6)->nullable();
             $table->timestamps(6);
             $table->index(['state', 'submitted_at']);
             $table->index(['claimed_by_administrator_id', 'state'], 'agent_claimed_state_index');
@@ -253,8 +253,8 @@ return new class extends Migration
             $table->string('pricing_profile_code', 64)->nullable();
             $table->foreignId('approved_application_id')->unique()->constrained('agent_applications')->restrictOnDelete();
             $table->foreignId('approved_by_administrator_id')->nullable()->constrained('administrators')->restrictOnDelete();
-            $table->timestamp('approved_at', 6);
-            $table->timestamp('suspended_at', 6)->nullable();
+            $table->dateTime('approved_at', 6);
+            $table->dateTime('suspended_at', 6)->nullable();
             $table->timestamps(6);
             $table->index(['status', 'pricing_profile_code']);
         });
