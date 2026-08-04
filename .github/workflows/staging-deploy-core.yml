@@ -2,6 +2,9 @@ name: Staging Deploy Core
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/staging-deploy-core.yml
 
 permissions:
   contents: read
@@ -11,7 +14,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      VERIFIED_APP_SHA: 434df370fa6f0fc9ecb8b54540b0683e1d43c88a
+      VERIFIED_APP_SHA: 68aa7fbb08095d2f998c7c55c9ebeb992d00b4e1
     steps:
       - name: Check out deployment controls
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -24,7 +27,7 @@ jobs:
       - name: Check out verified application commit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 434df370fa6f0fc9ecb8b54540b0683e1d43c88a
+          ref: 68aa7fbb08095d2f998c7c55c9ebeb992d00b4e1
           path: application
           fetch-depth: 1
           persist-credentials: false
@@ -47,6 +50,7 @@ jobs:
           [[ "$STAGING_DOMAIN" =~ ^[A-Za-z0-9.-]+$ ]] || { echo 'Invalid staging domain.' >&2; exit 1; }
           test -f control/deploy/staging/core-deploy.sh
           test -f control/deploy/staging/prepare-php-functions.sh
+          test -f control/deploy/staging/recover-operations-migration.sh
           test -f application/composer.lock
 
       - name: Prepare package and SSH client
@@ -66,6 +70,7 @@ jobs:
           printf '%s' "$TELEGRAM_TEST_BOT_TOKEN" > "$RUNNER_TEMP/freedom-staging/telegram-token"
           install -m 700 control/deploy/staging/core-deploy.sh "$RUNNER_TEMP/freedom-staging/core-deploy.sh"
           install -m 700 control/deploy/staging/prepare-php-functions.sh "$RUNNER_TEMP/freedom-staging/prepare-php-functions.sh"
+          install -m 700 control/deploy/staging/recover-operations-migration.sh "$RUNNER_TEMP/freedom-staging/recover-operations-migration.sh"
           tar \
             --exclude=.git \
             --exclude=.env \
@@ -94,9 +99,10 @@ jobs:
             "$RUNNER_TEMP/freedom-staging/telegram-token" \
             "$RUNNER_TEMP/freedom-staging/core-deploy.sh" \
             "$RUNNER_TEMP/freedom-staging/prepare-php-functions.sh" \
+            "$RUNNER_TEMP/freedom-staging/recover-operations-migration.sh" \
             "$STAGING_USER@$STAGING_HOST:/root/freedom-bootstrap/incoming/"
 
-      - name: Deploy, activate, rollback, and verify core runtime
+      - name: Recover, deploy, activate, rollback, and verify core runtime
         env:
           STAGING_HOST: ${{ secrets.STAGING_HOST }}
           STAGING_PORT: ${{ secrets.STAGING_PORT }}
@@ -114,7 +120,7 @@ jobs:
             -o ServerAliveCountMax=10 \
             -p "$STAGING_PORT" \
             "$STAGING_USER@$STAGING_HOST" \
-            "chmod 700 /root/freedom-bootstrap/incoming/prepare-php-functions.sh /root/freedom-bootstrap/incoming/core-deploy.sh && /root/freedom-bootstrap/incoming/prepare-php-functions.sh && /root/freedom-bootstrap/incoming/core-deploy.sh '$VERIFIED_APP_SHA'" \
+            "chmod 700 /root/freedom-bootstrap/incoming/prepare-php-functions.sh /root/freedom-bootstrap/incoming/recover-operations-migration.sh /root/freedom-bootstrap/incoming/core-deploy.sh && /root/freedom-bootstrap/incoming/prepare-php-functions.sh && /root/freedom-bootstrap/incoming/recover-operations-migration.sh && /root/freedom-bootstrap/incoming/core-deploy.sh '$VERIFIED_APP_SHA'" \
             | tee build/evidence/staging/core-deploy.txt
 
       - name: Remove local SSH and secret material
