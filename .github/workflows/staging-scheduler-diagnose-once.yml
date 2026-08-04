@@ -1,0 +1,90 @@
+name: Staging Scheduler Diagnose Once
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/staging-scheduler-diagnose-once.yml
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose-scheduler:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Prepare SSH client
+        env:
+          STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          STAGING_KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$STAGING_SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$STAGING_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+
+      - name: Diagnose and clear scheduler mutexes
+        env:
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          STAGING_PORT: ${{ secrets.STAGING_PORT }}
+          STAGING_USER: ${{ secrets.STAGING_USER }}
+          STAGING_DOMAIN: ${{ secrets.STAGING_DOMAIN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=20 \
+            -p "$STAGING_PORT" \
+            "$STAGING_USER@$STAGING_HOST" \
+            "DOMAIN='$STAGING_DOMAIN' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          ROOT="/www/acdomains/$DOMAIN"
+          PHP=/www/server/php/84/bin/php
+          APP="$ROOT/current/artisan"
+
+          echo '# scheduler diagnostic'
+          echo "utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo 'schedule_list_begin'
+          runuser -u www -- "$PHP" "$APP" schedule:list --no-ansi
+          echo 'schedule_list_end'
+
+          echo 'schedule_run_before_clear_begin'
+          set +e
+          before=$(runuser -u www -- "$PHP" "$APP" schedule:run -vvv --no-ansi 2>&1)
+          before_status=$?
+          set -e
+          echo "before_status=$before_status"
+          printf '%s\n' "$before"
+          echo 'schedule_run_before_clear_end'
+          echo "scheduler_count_before_clear=$(mariadb --protocol=socket -N -uroot freedom_platform -e "SELECT COUNT(*) FROM worker_heartbeats WHERE worker_id='scheduler';")"
+
+          echo 'schedule_clear_cache_begin'
+          runuser -u www -- "$PHP" "$APP" schedule:clear-cache --no-ansi
+          echo 'schedule_clear_cache_end'
+
+          echo 'schedule_run_after_clear_begin'
+          set +e
+          after=$(runuser -u www -- "$PHP" "$APP" schedule:run -vvv --no-ansi 2>&1)
+          after_status=$?
+          set -e
+          echo "after_status=$after_status"
+          printf '%s\n' "$after"
+          echo 'schedule_run_after_clear_end'
+
+          scheduler_count=$(mariadb --protocol=socket -N -uroot freedom_platform -e \
+            "SELECT COUNT(*) FROM worker_heartbeats WHERE worker_id='scheduler';")
+          echo "scheduler_count_after_clear=$scheduler_count"
+          if [ "$scheduler_count" -gt 0 ]; then
+            mariadb --protocol=socket -N -uroot freedom_platform -e \
+              "SELECT worker_id,queue,TIMESTAMPDIFF(SECOND,last_seen_at,UTC_TIMESTAMP(6)) FROM worker_heartbeats WHERE worker_id='scheduler';"
+          fi
+          REMOTE
+
+      - name: Remove SSH material
+        if: always()
+        run: rm -rf "$HOME/.ssh"
