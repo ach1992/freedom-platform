@@ -1,4 +1,4 @@
-name: Staging Deploy Identity Once
+name: Staging Verify Identity Phone Once
 
 on:
   pull_request:
@@ -9,75 +9,28 @@ permissions:
   contents: read
 
 jobs:
-  deploy:
+  verify:
     runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
-    timeout-minutes: 45
-    env:
-      VERIFIED_APP_SHA: 750bcdf994f864859d1a0a2c0e5fda476793bfc9
+    timeout-minutes: 10
     steps:
-      - name: Check out verified head
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          ref: 750bcdf994f864859d1a0a2c0e5fda476793bfc9
-          fetch-depth: 1
-          persist-credentials: false
-
-      - name: Prepare verified package and temporary SSH client
+      - name: Prepare temporary SSH client
         env:
-          STAGING_DOMAIN: ${{ secrets.STAGING_DOMAIN }}
-          TELEGRAM_TEST_BOT_TOKEN: ${{ secrets.TELEGRAM_TEST_BOT_TOKEN }}
           STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
           STAGING_KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
         shell: bash
         run: |
           set -euo pipefail
-          for name in STAGING_DOMAIN TELEGRAM_TEST_BOT_TOKEN STAGING_SSH_PRIVATE_KEY STAGING_KNOWN_HOSTS; do
-            test -n "${!name:-}" || { echo "Missing required secret: ${name}" >&2; exit 1; }
-          done
-          install -d -m 700 "$RUNNER_TEMP/identity-deploy/ssh" "$RUNNER_TEMP/identity-deploy/package"
-          printf '%s\n' "$STAGING_SSH_PRIVATE_KEY" > "$RUNNER_TEMP/identity-deploy/ssh/id_ed25519"
-          printf '%s\n' "$STAGING_KNOWN_HOSTS" > "$RUNNER_TEMP/identity-deploy/ssh/known_hosts"
-          chmod 600 "$RUNNER_TEMP/identity-deploy/ssh/id_ed25519" "$RUNNER_TEMP/identity-deploy/ssh/known_hosts"
-          printf '%s' "$STAGING_DOMAIN" > "$RUNNER_TEMP/identity-deploy/package/domain"
-          printf '%s' "$TELEGRAM_TEST_BOT_TOKEN" > "$RUNNER_TEMP/identity-deploy/package/telegram-token"
-          install -m 700 deploy/staging/core-deploy.sh "$RUNNER_TEMP/identity-deploy/package/core-deploy.sh"
-          install -m 700 deploy/staging/prepare-php-functions.sh "$RUNNER_TEMP/identity-deploy/package/prepare-php-functions.sh"
-          install -m 700 deploy/staging/prepare-runtime-paths.sh "$RUNNER_TEMP/identity-deploy/package/prepare-runtime-paths.sh"
-          install -m 700 deploy/staging/recover-operations-migration.sh "$RUNNER_TEMP/identity-deploy/package/recover-operations-migration.sh"
-          tar --exclude=.git --exclude=.env --exclude=vendor --exclude=build -czf "$RUNNER_TEMP/identity-deploy/package/application.tar.gz" .
-          chmod 600 "$RUNNER_TEMP/identity-deploy/package/domain" "$RUNNER_TEMP/identity-deploy/package/telegram-token" "$RUNNER_TEMP/identity-deploy/package/application.tar.gz"
+          install -d -m 700 "$RUNNER_TEMP/identity-smoke/ssh"
+          printf '%s\n' "$STAGING_SSH_PRIVATE_KEY" > "$RUNNER_TEMP/identity-smoke/ssh/id_ed25519"
+          printf '%s\n' "$STAGING_KNOWN_HOSTS" > "$RUNNER_TEMP/identity-smoke/ssh/known_hosts"
+          chmod 600 "$RUNNER_TEMP/identity-smoke/ssh/id_ed25519" "$RUNNER_TEMP/identity-smoke/ssh/known_hosts"
 
-      - name: Upload deployment package
+      - name: Verify migration, PHP 8.4 binding, and HTTPS health
         env:
           STAGING_HOST: ${{ secrets.STAGING_HOST }}
           STAGING_PORT: ${{ secrets.STAGING_PORT }}
           STAGING_USER: ${{ secrets.STAGING_USER }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          ssh_base=(
-            -o BatchMode=yes
-            -o IdentitiesOnly=yes
-            -o StrictHostKeyChecking=yes
-            -o "UserKnownHostsFile=$RUNNER_TEMP/identity-deploy/ssh/known_hosts"
-            -i "$RUNNER_TEMP/identity-deploy/ssh/id_ed25519"
-          )
-          ssh "${ssh_base[@]}" -p "$STAGING_PORT" "$STAGING_USER@$STAGING_HOST" 'install -d -m 700 /root/freedom-bootstrap/incoming'
-          scp "${ssh_base[@]}" -P "$STAGING_PORT" \
-            "$RUNNER_TEMP/identity-deploy/package/application.tar.gz" \
-            "$RUNNER_TEMP/identity-deploy/package/domain" \
-            "$RUNNER_TEMP/identity-deploy/package/telegram-token" \
-            "$RUNNER_TEMP/identity-deploy/package/core-deploy.sh" \
-            "$RUNNER_TEMP/identity-deploy/package/prepare-php-functions.sh" \
-            "$RUNNER_TEMP/identity-deploy/package/prepare-runtime-paths.sh" \
-            "$RUNNER_TEMP/identity-deploy/package/recover-operations-migration.sh" \
-            "$STAGING_USER@$STAGING_HOST:/root/freedom-bootstrap/incoming/"
-
-      - name: Deploy, rollback, reactivate, and verify
-        env:
-          STAGING_HOST: ${{ secrets.STAGING_HOST }}
-          STAGING_PORT: ${{ secrets.STAGING_PORT }}
-          STAGING_USER: ${{ secrets.STAGING_USER }}
+          STAGING_DOMAIN: ${{ secrets.STAGING_DOMAIN }}
         shell: bash
         run: |
           set -euo pipefail
@@ -86,44 +39,23 @@ jobs:
             -o BatchMode=yes \
             -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes \
-            -o "UserKnownHostsFile=$RUNNER_TEMP/identity-deploy/ssh/known_hosts" \
-            -i "$RUNNER_TEMP/identity-deploy/ssh/id_ed25519" \
+            -o "UserKnownHostsFile=$RUNNER_TEMP/identity-smoke/ssh/known_hosts" \
+            -i "$RUNNER_TEMP/identity-smoke/ssh/id_ed25519" \
             -o ConnectTimeout=20 \
-            -o ServerAliveInterval=30 \
-            -o ServerAliveCountMax=10 \
             -p "$STAGING_PORT" \
             "$STAGING_USER@$STAGING_HOST" \
-            "chmod 700 /root/freedom-bootstrap/incoming/*.sh && /root/freedom-bootstrap/incoming/prepare-php-functions.sh && /root/freedom-bootstrap/incoming/prepare-runtime-paths.sh && /root/freedom-bootstrap/incoming/recover-operations-migration.sh && /root/freedom-bootstrap/incoming/core-deploy.sh '$VERIFIED_APP_SHA'" \
-            | tee build/evidence/staging/identity-deploy.txt
-
-      - name: Verify phone foundation schema and runtime binding
-        env:
-          STAGING_HOST: ${{ secrets.STAGING_HOST }}
-          STAGING_PORT: ${{ secrets.STAGING_PORT }}
-          STAGING_USER: ${{ secrets.STAGING_USER }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          ssh \
-            -o BatchMode=yes \
-            -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=yes \
-            -o "UserKnownHostsFile=$RUNNER_TEMP/identity-deploy/ssh/known_hosts" \
-            -i "$RUNNER_TEMP/identity-deploy/ssh/id_ed25519" \
-            -p "$STAGING_PORT" \
-            "$STAGING_USER@$STAGING_HOST" \
-            "cd /www/acdomains/hell.hellservice.top/current && php artisan migrate:status --no-ansi | grep '2026_08_04_000600_extend_phone_verification_foundation' && php -r 'require \"vendor/autoload.php\"; \$app=require \"bootstrap/app.php\"; \$app->make(Illuminate\\Contracts\\Console\\Kernel::class)->bootstrap(); \$hasher=\$app->make(App\\Modules\\Identity\\Application\\Contracts\\PhoneLookupHasher::class); \$hash=\$hasher->hash(App\\Modules\\Identity\\Domain\\IranianMobileNumber::fromString(\"09123456789\")); if (strlen(\$hash->value)!==64 || \$hash->keyVersion<1) { exit(1); } echo \"identity_phone_binding=ok\\n\";'" \
+            "set -euo pipefail; cd /www/acdomains/$STAGING_DOMAIN/current; PHP84=/www/server/php/84/bin/php; \"\$PHP84\" -v | head -n 1; \"\$PHP84\" artisan migrate:status --no-ansi | grep '2026_08_04_000600_extend_phone_verification_foundation'; \"\$PHP84\" -r 'require \"vendor/autoload.php\"; \$app=require \"bootstrap/app.php\"; \$app->make(Illuminate\\Contracts\\Console\\Kernel::class)->bootstrap(); \$hasher=\$app->make(App\\Modules\\Identity\\Application\\Contracts\\PhoneLookupHasher::class); \$number=App\\Modules\\Identity\\Domain\\IranianMobileNumber::fromString(\"۰۹۱۲ ۳۴۵-۶۷۸۹\"); \$hash=\$hasher->hash(\$number); if (\$number->e164()!==\"+989123456789\" || strlen(\$hash->value)!==64 || \$hash->keyVersion<1) { exit(1); } echo \"identity_phone_binding=ok\\n\";'; curl -fsS --max-time 15 \"https://$STAGING_DOMAIN/health/ready\" >/dev/null; echo 'https_ready=ok'" \
             | tee build/evidence/staging/identity-phone-smoke.txt
 
-      - name: Remove temporary material
+      - name: Remove temporary SSH material
         if: always()
-        run: rm -rf "$RUNNER_TEMP/identity-deploy"
+        run: rm -rf "$RUNNER_TEMP/identity-smoke"
 
-      - name: Upload sanitized evidence
+      - name: Upload sanitized smoke evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: staging-identity-phone-${{ github.run_id }}
+          name: staging-identity-phone-smoke-${{ github.run_id }}
           path: build/evidence/staging
           if-no-files-found: warn
           retention-days: 7
