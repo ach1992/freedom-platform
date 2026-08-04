@@ -6,6 +6,7 @@ namespace App\Modules\Identity\Domain;
 
 enum SmsDeliveryStatus: string
 {
+    case Pending = 'pending';
     case Accepted = 'accepted';
     case DefinitiveFailure = 'definitive_failure';
     case Uncertain = 'uncertain';

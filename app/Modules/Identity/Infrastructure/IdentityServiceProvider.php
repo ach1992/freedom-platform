@@ -4,13 +4,20 @@ declare(strict_types=1);
 
 namespace App\Modules\Identity\Infrastructure;
 
+use App\Modules\Identity\Application\Contracts\OtpAbuseLimiter;
+use App\Modules\Identity\Application\Contracts\OtpCodeHasher;
 use App\Modules\Identity\Application\Contracts\PhoneLookupHasher;
 use App\Modules\Identity\Application\Contracts\SmsDeliveryAttemptRecorder;
+use App\Modules\Identity\Application\FallbackSmsDispatcher;
+use App\Modules\Identity\Application\OtpChallengeIssuer;
+use App\Modules\Identity\Application\OtpChallengeVerifier;
 use App\Shared\Application\Clock;
+use App\Shared\Application\RandomGenerator;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Contracts\Encryption\StringEncrypter;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Database\DatabaseManager;
+use Illuminate\Redis\RedisManager;
 use Illuminate\Support\ServiceProvider;
 use RuntimeException;
 
@@ -18,20 +25,18 @@ final class IdentityServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
-        $this->app->singleton(
-            PhoneLookupHasher::class,
-            function (Application $application): PhoneLookupHasher {
-                $repository = $application->make(Repository::class);
-                $configuration = $repository->get('identity');
-                $applicationKey = $repository->get('app.key');
-                $configuredKey = is_array($configuration) ? ($configuration['phone_lookup_key'] ?? null) : null;
-                $configuredVersion = is_array($configuration)
-                    ? ($configuration['phone_lookup_key_version'] ?? 1)
-                    : 1;
+        $this->registerHashers();
 
-                return new HmacPhoneLookupHasher(
-                    self::resolveLookupKey($configuredKey, $applicationKey),
-                    is_numeric($configuredVersion) ? (int) $configuredVersion : 1,
+        $this->app->singleton(
+            OtpAbuseLimiter::class,
+            function (Application $application): OtpAbuseLimiter {
+                $configuration = self::identityConfiguration($application);
+                $otp = is_array($configuration['otp'] ?? null) ? $configuration['otp'] : [];
+                $prefix = $otp['redis_prefix'] ?? 'freedom:otp-limit:';
+
+                return new RedisOtpAbuseLimiter(
+                    $application->make(RedisManager::class),
+                    is_string($prefix) ? $prefix : 'freedom:otp-limit:',
                 );
             },
         );
@@ -45,9 +50,122 @@ final class IdentityServiceProvider extends ServiceProvider
                 $application->make(Clock::class),
             ),
         );
+
+        $this->app->singleton(
+            FallbackSmsDispatcher::class,
+            function (Application $application): FallbackSmsDispatcher {
+                $configuration = self::identityConfiguration($application);
+                $sms = is_array($configuration['sms'] ?? null) ? $configuration['sms'] : [];
+                $providerDailyLimit = self::positiveInteger($sms['provider_daily_limit'] ?? 10000, 10000);
+                $limiter = $application->make(OtpAbuseLimiter::class);
+
+                return new FallbackSmsDispatcher(
+                    new RateLimitedSmsProvider(
+                        new FakeSmsProvider('fake_primary'),
+                        $limiter,
+                        $providerDailyLimit,
+                    ),
+                    new RateLimitedSmsProvider(
+                        new FakeSmsProvider('fake_fallback'),
+                        $limiter,
+                        $providerDailyLimit,
+                    ),
+                    $application->make(SmsDeliveryAttemptRecorder::class),
+                );
+            },
+        );
+
+        $this->app->singleton(
+            OtpChallengeIssuer::class,
+            function (Application $application): OtpChallengeIssuer {
+                $configuration = self::identityConfiguration($application);
+                $otp = is_array($configuration['otp'] ?? null) ? $configuration['otp'] : [];
+
+                return new OtpChallengeIssuer(
+                    $application->make(DatabaseManager::class),
+                    $application->make(StringEncrypter::class),
+                    $application->make(PhoneLookupHasher::class),
+                    $application->make(OtpCodeHasher::class),
+                    $application->make(OtpAbuseLimiter::class),
+                    $application->make(FallbackSmsDispatcher::class),
+                    $application->make(RandomGenerator::class),
+                    $application->make(Clock::class),
+                    self::positiveInteger($otp['ttl_seconds'] ?? 120, 120),
+                    self::positiveInteger($otp['resend_cooldown_seconds'] ?? 60, 60),
+                    self::positiveInteger($otp['maximum_attempts'] ?? 5, 5),
+                    self::positiveInteger($otp['daily_phone_limit'] ?? 10, 10),
+                    self::positiveInteger($otp['daily_telegram_account_limit'] ?? 10, 10),
+                    self::positiveInteger($otp['daily_ip_limit'] ?? 20, 20),
+                );
+            },
+        );
+
+        $this->app->singleton(
+            OtpChallengeVerifier::class,
+            fn (Application $application): OtpChallengeVerifier => new OtpChallengeVerifier(
+                $application->make(DatabaseManager::class),
+                $application->make(OtpCodeHasher::class),
+                $application->make(Clock::class),
+            ),
+        );
     }
 
-    private static function resolveLookupKey(mixed $configuredKey, mixed $applicationKey): string
+    private function registerHashers(): void
+    {
+        $this->app->singleton(
+            PhoneLookupHasher::class,
+            function (Application $application): PhoneLookupHasher {
+                $configuration = self::identityConfiguration($application);
+
+                return new HmacPhoneLookupHasher(
+                    self::resolveKey(
+                        $configuration['phone_lookup_key'] ?? null,
+                        self::applicationKey($application),
+                        'freedom-platform/phone-lookup/v1',
+                    ),
+                    self::positiveInteger($configuration['phone_lookup_key_version'] ?? 1, 1),
+                );
+            },
+        );
+
+        $this->app->singleton(
+            OtpCodeHasher::class,
+            function (Application $application): OtpCodeHasher {
+                $configuration = self::identityConfiguration($application);
+                $otp = is_array($configuration['otp'] ?? null) ? $configuration['otp'] : [];
+
+                return new HmacOtpCodeHasher(
+                    self::resolveKey(
+                        $otp['hash_key'] ?? null,
+                        self::applicationKey($application),
+                        'freedom-platform/otp-code/v1',
+                    ),
+                    self::positiveInteger($otp['hash_key_version'] ?? 1, 1),
+                );
+            },
+        );
+    }
+
+    /** @return array<string, mixed> */
+    private static function identityConfiguration(Application $application): array
+    {
+        $configuration = $application->make(Repository::class)->get('identity');
+
+        return is_array($configuration) ? $configuration : [];
+    }
+
+    private static function applicationKey(Application $application): string
+    {
+        $key = $application->make(Repository::class)->get('app.key');
+
+        if (! is_string($key) || $key === '') {
+            throw new RuntimeException('Application key is required for identity hashing.');
+        }
+
+        return $key;
+    }
+
+    private static function resolveKey(mixed $configuredKey, string $applicationKey, string $context): string
     {
         if (is_string($configuredKey) && trim($configuredKey) !== '') {
             $key = trim($configuredKey);
@@ -56,7 +174,7 @@ final class IdentityServiceProvider extends ServiceProvider
                 $decoded = base64_decode(substr($key, 7), true);
 
                 if (! is_string($decoded)) {
-                    throw new RuntimeException('Configured phone lookup key is not valid base64.');
+                    throw new RuntimeException('Configured identity key is not valid base64.');
                 }
 
                 return $decoded;
@@ -65,10 +183,11 @@ final class IdentityServiceProvider extends ServiceProvider
             return $key;
         }
 
-        if (! is_string($applicationKey) || $applicationKey === '') {
-            throw new RuntimeException('Application key is required to derive the phone lookup key.');
-        }
+        return hash_hkdf('sha256', $applicationKey, 32, $context);
+    }
 
-        return hash_hkdf('sha256', $applicationKey, 32, 'freedom-platform/phone-lookup/v1');
+    private static function positiveInteger(mixed $value, int $default): int
+    {
+        return is_numeric($value) && (int) $value > 0 ? (int) $value : $default;
     }
 }
