@@ -34,6 +34,7 @@ final readonly class WorkerHeartbeatService
         }
 
         $now = $this->clock->now();
+        $timestamp = $now->format('Y-m-d H:i:s.u');
 
         $this->database->table('worker_heartbeats')->updateOrInsert(
             ['worker_id' => $workerId],
@@ -41,11 +42,20 @@ final readonly class WorkerHeartbeatService
                 'queue' => $queue,
                 'host_hash' => hash('sha256', gethostname() ?: 'unknown'),
                 'release_version' => $releaseVersion,
-                'last_seen_at' => $now->format('Y-m-d H:i:s.u'),
-                'created_at' => $now->format('Y-m-d H:i:s.u'),
-                'updated_at' => $now->format('Y-m-d H:i:s.u'),
+                'last_seen_at' => $timestamp,
+                'created_at' => $timestamp,
+                'updated_at' => $timestamp,
             ],
         );
+
+        $this->database->table('alerts')
+            ->where('event_name', 'operations.worker_heartbeat_stale')
+            ->where('deduplication_key', $this->deduplicationKey($workerId))
+            ->whereNull('resolved_at')
+            ->update([
+                'resolved_at' => $timestamp,
+                'updated_at' => $timestamp,
+            ]);
     }
 
     /**
@@ -58,6 +68,7 @@ final readonly class WorkerHeartbeatService
         }
 
         $now = $this->clock->now();
+        $timestamp = $now->format('Y-m-d H:i:s.u');
         $cutoff = $now->sub(new DateInterval(sprintf('PT%dS', $maxAgeSeconds)));
 
         /** @var list<object{worker_id:string, queue:string, last_seen_at:string}> $stale */
@@ -69,7 +80,7 @@ final readonly class WorkerHeartbeatService
             ->all();
 
         foreach ($stale as $heartbeat) {
-            $deduplicationKey = hash('sha256', 'worker-heartbeat-stale:'.$heartbeat->worker_id);
+            $deduplicationKey = $this->deduplicationKey($heartbeat->worker_id);
             $safeContext = json_encode([
                 'worker_id' => $heartbeat->worker_id,
                 'queue' => $heartbeat->queue,
@@ -77,6 +88,7 @@ final readonly class WorkerHeartbeatService
                 'max_age_seconds' => $maxAgeSeconds,
             ], JSON_THROW_ON_ERROR);
 
+            /** @var null|object{id:string, occurrence_count:int} $existing */
             $existing = $this->database->table('alerts')
                 ->where('event_name', 'operations.worker_heartbeat_stale')
                 ->where('deduplication_key', $deduplicationKey)
@@ -91,10 +103,10 @@ final readonly class WorkerHeartbeatService
                     'correlation_id' => (string) Str::uuid(),
                     'safe_context' => $safeContext,
                     'occurrence_count' => 1,
-                    'first_seen_at' => $now->format('Y-m-d H:i:s.u'),
-                    'last_seen_at' => $now->format('Y-m-d H:i:s.u'),
-                    'created_at' => $now->format('Y-m-d H:i:s.u'),
-                    'updated_at' => $now->format('Y-m-d H:i:s.u'),
+                    'first_seen_at' => $timestamp,
+                    'last_seen_at' => $timestamp,
+                    'created_at' => $timestamp,
+                    'updated_at' => $timestamp,
                 ]);
 
                 continue;
@@ -104,10 +116,10 @@ final readonly class WorkerHeartbeatService
                 ->where('id', $existing->id)
                 ->update([
                     'safe_context' => $safeContext,
-                    'occurrence_count' => ((int) $existing->occurrence_count) + 1,
-                    'last_seen_at' => $now->format('Y-m-d H:i:s.u'),
+                    'occurrence_count' => $existing->occurrence_count + 1,
+                    'last_seen_at' => $timestamp,
                     'resolved_at' => null,
-                    'updated_at' => $now->format('Y-m-d H:i:s.u'),
+                    'updated_at' => $timestamp,
                 ]);
         }
 
@@ -115,5 +127,10 @@ final readonly class WorkerHeartbeatService
             static fn (object $heartbeat): string => $heartbeat->worker_id,
             $stale,
         );
+    }
+
+    private function deduplicationKey(string $workerId): string
+    {
+        return hash('sha256', 'worker-heartbeat-stale:'.$workerId);
     }
 }
