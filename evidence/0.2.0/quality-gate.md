@@ -3,7 +3,7 @@
 Status: `in-review`  
 Scope: Laravel foundation and installer skeleton  
 Code baseline: `0.2.0-dev`  
-Latest reviewed implementation commit: `f0bfa38e7b2b808316479ea8e6be24532515c522`
+Latest verified implementation commit: `0ef036dcc1b68d90f1f2f7cab900e92b0c8b7b9d`
 
 ## Delivered
 
@@ -20,29 +20,35 @@ Latest reviewed implementation commit: `f0bfa38e7b2b808316479ea8e6be24532515c522
 - MariaDB base/reliability/operations migrations
 - authenticated Redis queue configuration with enforced timeout invariant
 - aaPanel/OpenLiteSpeed deployment, Supervisor and scheduler templates
+- active worker heartbeat persistence, stale-worker detection, deduplicated critical alerts, and recovery resolution
 - CI evidence for style, static analysis, architecture, secrets, dependencies, licenses and runtime tests
 
 ## Automated evidence
 
 The original foundation baseline passed GitHub Actions run `30790038444` with 30 tests and 55 assertions.
 
-The dual-runtime preflight increment passed all mandatory jobs in GitHub Actions run `30870232289`:
+The dual-runtime preflight increment passed all mandatory jobs in GitHub Actions run `30870232289` with 34 tests and 77 assertions.
+
+The worker-heartbeat increment passed all mandatory jobs in GitHub Actions run `30870967798`:
 
 - Repository preflight: passed;
 - Secret scan: passed;
 - Pint, Larastan/PHPStan, architecture and forbidden-pattern policies: passed;
 - dependency audit and license policy: passed;
-- MariaDB 11.4 and authenticated Redis suite: **34 tests, 77 assertions, zero warnings**.
+- MariaDB and authenticated Redis suite: **38 tests, 89 assertions, zero warnings**.
 
-Detailed requirement evidence is retained in [`INS-001-php-runtime-preflight.md`](INS-001-php-runtime-preflight.md).
+Detailed requirement evidence is retained in:
+
+- [`INS-001-php-runtime-preflight.md`](INS-001-php-runtime-preflight.md)
+- [`OPS-003-worker-heartbeats.md`](OPS-003-worker-heartbeats.md)
 
 ## Remaining closure evidence
 
 - complete database, authenticated Redis, Telegram, outbound-network, disk-space and filesystem/ownership installer checks
 - implement journaled atomic environment/bootstrap operations and final permanent installer lock
-- implement active worker heartbeat writes and stale-worker alerting
+- connect Supervisor-managed workers to active heartbeat recording
 - perform one clean installation rehearsal on an Ubuntu 22.04 aaPanel/OpenLiteSpeed staging host
-- execute the new preflight against the actual CLI PHP and LSPHP binaries and retain sanitized results
+- execute the preflight against the actual CLI PHP and LSPHP binaries and retain sanitized results
 - verify the `current` symlink, web root, Supervisor workers and single scheduler Cron on that host
 - run `php artisan app:health --critical` after installation
 - execute and record one rollback rehearsal
