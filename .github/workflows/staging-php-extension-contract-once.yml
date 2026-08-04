@@ -33,23 +33,29 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 \
-            -p "$STAGING_PORT" "$STAGING_USER@$STAGING_HOST" \
-            'set -eu
-             echo "# php_async fileinfo behavior"
-             sed -n "285,325p" /www/server/panel/mod/project/php/php_asyncMod.py
-             echo "# aepg install_phplib"
-             sed -n "1135,1235p" /www/server/panel/mod/project/php/aepgMod.py
-             echo "# aepg callers one"
-             sed -n "1385,1435p" /www/server/panel/mod/project/php/aepgMod.py
-             echo "# aepg callers two"
-             sed -n "1640,1695p" /www/server/panel/mod/project/php/aepgMod.py
-             echo "# panel routes"
-             grep -RIn --include="*.py" -E "install_phplib|InstallLib|UninstallLib" \
-               /www/server/panel/class /www/server/panel/mod /www/server/panel/route 2>/dev/null \
-               | head -n 120 \
-               || true' \
-            | sed -E 's#https?://[^[:space:]"'"']+#URL_REDACTED#g'
+          ssh \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=20 \
+            -p "$STAGING_PORT" \
+            "$STAGING_USER@$STAGING_HOST" \
+            'bash -s' <<'REMOTE'
+          set -eu
+          echo '# php_async fileinfo behavior'
+          sed -n '285,325p' /www/server/panel/mod/project/php/php_asyncMod.py
+          echo '# aepg install_phplib'
+          sed -n '1135,1235p' /www/server/panel/mod/project/php/aepgMod.py
+          echo '# aepg callers one'
+          sed -n '1385,1435p' /www/server/panel/mod/project/php/aepgMod.py
+          echo '# aepg callers two'
+          sed -n '1640,1695p' /www/server/panel/mod/project/php/aepgMod.py
+          echo '# panel routes'
+          grep -RIn --include='*.py' -E 'install_phplib|InstallLib|UninstallLib' \
+            /www/server/panel/class /www/server/panel/mod /www/server/panel/route 2>/dev/null \
+            | head -n 120 \
+            || true
+          REMOTE
 
       - name: Remove SSH material
         if: always()
