@@ -29,8 +29,8 @@ final readonly class WorkerHeartbeatService
             throw new InvalidArgumentException('Worker ID must contain between 1 and 191 characters.');
         }
 
-        if ($queue === '' || mb_strlen($queue) > 64) {
-            throw new InvalidArgumentException('Queue name must contain between 1 and 64 characters.');
+        if ($queue === '' || mb_strlen($queue) > 191) {
+            throw new InvalidArgumentException('Queue name must contain between 1 and 191 characters.');
         }
 
         $now = $this->clock->now();
