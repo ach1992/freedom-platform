@@ -103,3 +103,56 @@ If backup restore is required, follow `docs/17-backup-restore-runbook.md`. Never
 - Preserve package, manifest, backup ID, logs, timestamps, and symlink state as incident evidence.
 
 Every release candidate must demonstrate success, failed smoke-test rollback, failed migration handling, interrupted-before/after-switch recovery, and incompatible rollback rejection in staging.
+
+## Verified low-level release switch primitive
+
+The repository now includes the software-only activation/rollback primitive at `deploy/bin/release-switch.php`. It is intended for the Installer/bootstrap flow and as the final guarded symlink operation used by the future updater. It does not replace package signature, backup, schema-compatibility, approval, queue-drain, or reconciliation controls described above.
+
+Before running it, the staged candidate must already exist at `/www/acdomains/hell.hellpservice.ir/releases/<RELEASE>` and include readable regular files `artisan`, `public/index.php`, and `composer.lock`. The shared directory must contain regular `.env` and directory `storage`; the candidate must not contain conflicting `.env` or `storage` paths.
+
+Activate as `www`:
+
+```bash
+sudo -u www /www/server/php/84/bin/php \
+  /www/acdomains/hell.hellpservice.ir/releases/<RELEASE>/deploy/bin/release-switch.php \
+  --root=/www/acdomains/hell.hellpservice.ir \
+  --release=<RELEASE> \
+  --php=/www/server/php/84/bin/php \
+  --journal=/www/acdomains/hell.hellpservice.ir/shared/release-journal.json \
+  --timeout=60
+```
+
+The command validates containment, creates only the approved relative links to `../../shared/.env` and `../../shared/storage`, records the current release, atomically renames `.current.next` to `current`, and runs this fixed candidate-health command in a new process:
+
+```bash
+/www/server/php/84/bin/php artisan health:check --critical --json --redact --no-ansi --no-interaction
+```
+
+If candidate health fails, the previous `current` target is restored automatically. If it was a first activation, the failed `current` link is removed. The command prints only redacted status metadata on success and the generic line `Release switch failed.` on failure.
+
+Perform an explicit compatible code rollback as `www`:
+
+```bash
+sudo -u www /www/server/php/84/bin/php \
+  /www/acdomains/hell.hellpservice.ir/current/deploy/bin/release-switch.php \
+  --root=/www/acdomains/hell.hellpservice.ir \
+  --release=<PREVIOUS_RELEASE> \
+  --php=/www/server/php/84/bin/php \
+  --journal=/www/acdomains/hell.hellpservice.ir/shared/release-journal.json \
+  --timeout=60 \
+  --rollback
+```
+
+Do not use this low-level rollback when schema compatibility is unknown or false. Follow the rollback decision table, and use backup restore when required. Never replace it with `ln -sfn`; that bypasses containment, shared-link, health, journal, and automatic-restore checks.
+
+After either command, verify:
+
+```bash
+readlink -f /www/acdomains/hell.hellpservice.ir/current
+sudo -u www /www/server/php/84/bin/php /www/acdomains/hell.hellpservice.ir/current/artisan health:check --critical --json --redact
+supervisorctl reread
+supervisorctl update
+supervisorctl status 'freedom-platform-workers:*'
+```
+
+The private journal `/www/acdomains/hell.hellpservice.ir/shared/release-journal.json` records only release identifiers, action/status, timestamp, previous release, and `composer.lock` SHA-256. It must remain mode `0600` and must never contain environment values or provider output.
