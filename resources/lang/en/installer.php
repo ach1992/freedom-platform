@@ -30,7 +30,10 @@ return [
         'https' => 'HTTPS',
         'database' => 'Database connectivity',
         'redis' => 'Authenticated Redis connectivity',
-        'storage' => 'Writable storage',
+        'outbound_https' => 'Allowlisted outbound HTTPS connectivity',
+        'disk_space' => 'Minimum free disk space',
+        'storage' => 'Readable and writable runtime paths',
+        'ownership' => 'Runtime path ownership',
         'utc' => 'UTC application timezone',
     ],
     'runtime' => [
