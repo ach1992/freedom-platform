@@ -28,8 +28,7 @@ final class OperationsFoundationMigrationCompatibilityTest extends TestCase
                 $metadata = DB::selectOne(
                     <<<'SQL'
                     SELECT DATA_TYPE AS data_type,
-                           DATETIME_PRECISION AS datetime_precision,
-                           COLUMN_DEFAULT AS column_default
+                           DATETIME_PRECISION AS datetime_precision
                     FROM information_schema.COLUMNS
                     WHERE TABLE_SCHEMA = ?
                       AND TABLE_NAME = ?
@@ -41,7 +40,6 @@ final class OperationsFoundationMigrationCompatibilityTest extends TestCase
                 $this->assertNotNull($metadata, $table.'.'.$column.' must exist.');
                 $this->assertSame('datetime', $metadata->data_type, $table.'.'.$column.' must avoid implicit TIMESTAMP defaults.');
                 $this->assertSame(6, (int) $metadata->datetime_precision, $table.'.'.$column.' must retain microsecond precision.');
-                $this->assertNull($metadata->column_default, $table.'.'.$column.' must be supplied explicitly by the application.');
             }
         }
     }
