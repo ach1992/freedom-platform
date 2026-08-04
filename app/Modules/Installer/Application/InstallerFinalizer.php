@@ -21,9 +21,15 @@ final readonly class InstallerFinalizer
     public function finalize(array $environment): array
     {
         return $this->bootstrapper->run($environment, [
-            'config_clear' => fn (): mixed => $this->runner->clearConfiguration(),
-            'migrations' => fn (): mixed => $this->runner->migrate(),
-            'config_cache' => fn (): mixed => $this->runner->cacheConfiguration(),
+            'config_clear' => function (): void {
+                $this->runner->clearConfiguration();
+            },
+            'migrations' => function (): void {
+                $this->runner->migrate();
+            },
+            'config_cache' => function (): void {
+                $this->runner->cacheConfiguration();
+            },
         ]);
     }
 }
