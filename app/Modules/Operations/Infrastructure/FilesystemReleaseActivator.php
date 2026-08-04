@@ -221,9 +221,7 @@ final readonly class FilesystemReleaseActivator
         }
 
         if (! symlink($relativeTarget, $linkPath) || realpath($linkPath) !== $expectedRealPath) {
-            if (is_link($linkPath)) {
-                unlink($linkPath);
-            }
+            @unlink($linkPath);
 
             throw new RuntimeException('The shared deployment link could not be prepared.');
         }
@@ -346,7 +344,12 @@ final readonly class FilesystemReleaseActivator
         }
     }
 
-    /** @template T @param  callable(): T  $callback @return T */
+    /**
+     * @template T
+     *
+     * @param  callable(): T  $callback
+     * @return T
+     */
     private function synchronized(callable $callback): mixed
     {
         $root = $this->validatedRoot();
