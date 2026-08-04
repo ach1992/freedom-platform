@@ -18,7 +18,7 @@ final readonly class FilesystemReleaseActivator
     ) {}
 
     /**
-     * @return array{status: 'activated'|'already_active', release: string, previous_release: string|null}
+     * @return array{status: 'activated'|'rolled_back'|'already_active', release: string, previous_release: string|null}
      */
     public function activate(string $releaseId): array
     {
@@ -26,7 +26,7 @@ final readonly class FilesystemReleaseActivator
     }
 
     /**
-     * @return array{status: 'rolled_back'|'already_active', release: string, previous_release: string|null}
+     * @return array{status: 'activated'|'rolled_back'|'already_active', release: string, previous_release: string|null}
      */
     public function rollbackTo(string $releaseId): array
     {
