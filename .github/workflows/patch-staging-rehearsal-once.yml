@@ -1,0 +1,64 @@
+name: Patch Staging Rehearsal Once
+
+on:
+  push:
+    branches:
+      - develop/v1.0.0-completion
+    paths:
+      - .github/workflows/patch-staging-rehearsal-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out development branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: develop/v1.0.0-completion
+          fetch-depth: 1
+          persist-credentials: true
+
+      - name: Patch exact Supervisor targets and scheduler recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('deploy/staging/core-deploy.sh')
+          original = path.read_text()
+          replacements = {
+              "supervisorctl stop 'freedom-platform-bulk:*' >/dev/null":
+                  "supervisorctl stop 'freedom-platform-workers:freedom-platform-bulk_00' >/dev/null",
+              "supervisorctl start 'freedom-platform-bulk:*' >/dev/null":
+                  "supervisorctl start 'freedom-platform-workers:freedom-platform-bulk_00' >/dev/null",
+              "supervisorctl status 'freedom-platform-workers:*' >> \"$EVIDENCE\"\n\nrunuser -u www -- \"$PHP\" \"$ROOT/current/artisan\" schedule:run --no-ansi --no-interaction >/dev/null":
+                  "supervisorctl status 'freedom-platform-workers:*' >> \"$EVIDENCE\"\n\nrunuser -u www -- \"$PHP\" \"$ROOT/current/artisan\" schedule:clear-cache --no-ansi --no-interaction >/dev/null\nrunuser -u www -- \"$PHP\" \"$ROOT/current/artisan\" schedule:run --no-ansi --no-interaction >/dev/null",
+          }
+
+          updated = original
+          for old, new in replacements.items():
+              count = updated.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected exactly one occurrence, found {count}: {old}')
+              updated = updated.replace(old, new)
+
+          path.write_text(updated)
+          PY
+          git diff --check
+          grep -F "supervisorctl stop 'freedom-platform-workers:freedom-platform-bulk_00'" deploy/staging/core-deploy.sh
+          grep -F "supervisorctl start 'freedom-platform-workers:freedom-platform-bulk_00'" deploy/staging/core-deploy.sh
+          grep -F 'schedule:clear-cache --no-ansi --no-interaction' deploy/staging/core-deploy.sh
+
+      - name: Commit rehearsal compatibility fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add deploy/staging/core-deploy.sh
+          git commit -m 'fix(staging): align worker recovery rehearsal'
+          git push origin HEAD:develop/v1.0.0-completion
