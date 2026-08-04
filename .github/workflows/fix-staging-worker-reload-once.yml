@@ -1,0 +1,139 @@
+name: Fix Staging Worker Reload Once
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/fix-staging-worker-reload-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: develop/v1.0.0-completion
+          fetch-depth: 1
+      - name: Patch deployment and verification contracts
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          core = Path('deploy/staging/core-deploy.sh')
+          text = core.read_text()
+          old = '''supervisorctl reread >> "$EVIDENCE"
+          supervisorctl update >> "$EVIDENCE"
+          sleep 5
+          supervisorctl status 'freedom-platform-workers:*' >> "$EVIDENCE"
+          '''
+          new = '''supervisorctl reread >> "$EVIDENCE"
+          supervisorctl update >> "$EVIDENCE"
+          supervisorctl restart 'freedom-platform-workers:*' >> "$EVIDENCE"
+          sleep 5
+          supervisorctl status 'freedom-platform-workers:*' >> "$EVIDENCE"
+          '''
+          if old not in text:
+              raise SystemExit('Supervisor lifecycle block not found.')
+          core.write_text(text.replace(old, new, 1))
+
+          verify = Path('deploy/staging/verify-telegram-webhook.sh')
+          text = verify.read_text()
+          old = '''test -s "$ROOT/shared/.env"
+          test "$(stat -c %a "$ROOT/shared/.env")" = '600'
+
+          CONFIGURE_OUTPUT='''
+          new = '''test -s "$ROOT/shared/.env"
+          test "$(stat -c %a "$ROOT/shared/.env")" = '600'
+
+          supervisorctl restart 'freedom-platform-workers:*' >/dev/null
+          sleep 5
+
+          CONFIGURE_OUTPUT='''
+          if old not in text:
+              raise SystemExit('Verification preflight block not found.')
+          text = text.replace(old, new, 1)
+
+          old = '''$botId = $matches[1];
+          $updateId = 900000000000000000 + time();
+          $payload = [
+          '''
+          new = '''$botId = $matches[1];
+          $updateId = 900000000000000000 + time();
+
+          $database->connection()->table('processed_telegram_updates')
+              ->where('bot_id', $botId)
+              ->where('update_id', '>=', 900000000000000000)
+              ->delete();
+
+          set_exception_handler(static function (Throwable $exception) use ($database, $botId, &$updateId): never {
+              $database->connection()->table('processed_telegram_updates')
+                  ->where('bot_id', $botId)
+                  ->where('update_id', $updateId)
+                  ->delete();
+              fwrite(STDERR, "Telegram contract verification failed.\\n");
+              exit(1);
+          });
+
+          $payload = [
+          '''
+          if old not in text:
+              raise SystemExit('Synthetic update block not found.')
+          verify.write_text(text.replace(old, new, 1))
+
+          test = Path('tests/Unit/Deployment/StagingDeploymentScriptContractTest.php')
+          test.parent.mkdir(parents=True, exist_ok=True)
+          test.write_text('''<?php
+
+          declare(strict_types=1);
+
+          namespace Tests\\Unit\\Deployment;
+
+          use PHPUnit\\Framework\\TestCase;
+
+          final class StagingDeploymentScriptContractTest extends TestCase
+          {
+              /** @requirement RUN-003 OPS-003 QUA-013 */
+              public function test_release_deployment_restarts_workers_before_runtime_evidence(): void
+              {
+                  $script = file_get_contents(dirname(__DIR__, 3).'/deploy/staging/core-deploy.sh');
+                  self::assertIsString($script);
+
+                  $update = strpos($script, 'supervisorctl update');
+                  $restart = strpos($script, "supervisorctl restart 'freedom-platform-workers:*'");
+                  $status = strpos($script, "supervisorctl status 'freedom-platform-workers:*'");
+
+                  self::assertIsInt($update);
+                  self::assertIsInt($restart);
+                  self::assertIsInt($status);
+                  self::assertLessThan($restart, $update);
+                  self::assertLessThan($status, $restart);
+              }
+
+              /** @requirement SEC-009 OPS-003 QUA-013 */
+              public function test_telegram_verification_restarts_workers_and_fails_closed(): void
+              {
+                  $script = file_get_contents(dirname(__DIR__, 3).'/deploy/staging/verify-telegram-webhook.sh');
+                  self::assertIsString($script);
+                  self::assertStringContainsString("supervisorctl restart 'freedom-platform-workers:*'", $script);
+                  self::assertStringContainsString('set_exception_handler', $script);
+                  self::assertStringContainsString('exit(1);', $script);
+              }
+          }
+          ''')
+          PY
+          chmod 755 deploy/staging/core-deploy.sh deploy/staging/verify-telegram-webhook.sh
+          git diff --check
+      - name: Commit corrected runtime contracts
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add deploy/staging/core-deploy.sh \
+            deploy/staging/verify-telegram-webhook.sh \
+            tests/Unit/Deployment/StagingDeploymentScriptContractTest.php
+          git commit -m 'fix(staging): restart workers after release activation'
+          git push origin HEAD:develop/v1.0.0-completion
