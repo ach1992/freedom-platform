@@ -77,6 +77,7 @@ final class RequeueTelegramUpdatesCommandTest extends TestCase
             'update_id' => $updateId,
             'payload_hash' => hash('sha256', (string) $updateId),
             'state' => $state,
+            'correlation_id' => 'requeue-test-'.$updateId,
             'attempt_count' => 0,
             'created_at' => $now,
             'updated_at' => $now,
