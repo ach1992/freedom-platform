@@ -59,8 +59,10 @@ jobs:
           install -d -m 700 "$WORK"
 
           mapfile -t panel_contract < <(
-            cd /www/server/panel
             "$PANEL_PY" - <<'PY'
+          import sys
+          sys.path.insert(0, '/www/server/panel')
+          sys.path.insert(0, '/www/server/panel/class')
           import public
           from mod.project.php.aepgMod import main
           print(public.get_url())
