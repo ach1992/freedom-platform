@@ -14,8 +14,7 @@ final readonly class InstallerBootstrapOrchestrator
     public function __construct(
         private InstallerBootstrapJournal $journal,
         private InstallerLock $lock,
-    ) {
-    }
+    ) {}
 
     /**
      * Execute idempotent bootstrap steps in order and resume from the last journaled step.
