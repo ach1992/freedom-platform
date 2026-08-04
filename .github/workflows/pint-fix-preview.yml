@@ -1,0 +1,35 @@
+name: Pint Fix Preview
+
+on:
+  pull_request:
+    paths:
+      - app/Modules/Installer/Application/PhpRuntimePreflight.php
+      - .github/workflows/pint-fix-preview.yml
+
+permissions:
+  contents: read
+
+jobs:
+  preview:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Set up PHP 8.4
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
+        with:
+          php-version: '8.4'
+          extensions: bcmath, curl, dom, fileinfo, intl, mbstring, openssl, pcntl, pdo_mysql, redis, sodium, xml
+          coverage: none
+          tools: composer:2.10.2
+      - name: Install locked dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+      - name: Format target file
+        run: vendor/bin/pint app/Modules/Installer/Application/PhpRuntimePreflight.php
+      - name: Upload formatted preview
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pint-fixed-preview
+          path: app/Modules/Installer/Application/PhpRuntimePreflight.php
+          if-no-files-found: error
+          retention-days: 1
