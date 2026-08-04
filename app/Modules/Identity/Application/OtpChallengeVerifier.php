@@ -32,6 +32,38 @@ final readonly class OtpChallengeVerifier
         string $code,
         ?string $correlationId = null,
     ): OtpVerificationReceipt {
+        $this->assertInput($userId, $challengeId, $code, $correlationId);
+
+        $outcome = $this->database->connection()->transaction(
+            fn (): OtpVerificationOutcome => $this->verifyWithinTransaction(
+                $userId,
+                $challengeId,
+                $code,
+                $correlationId,
+            ),
+        );
+
+        if ($outcome->receipt !== null) {
+            return $outcome->receipt;
+        }
+
+        if ($outcome->failure === 'expired') {
+            throw new OtpChallengeExpired;
+        }
+
+        if ($outcome->failure === 'invalid_code' && $outcome->remainingAttempts !== null) {
+            throw new InvalidOtpCode($outcome->remainingAttempts);
+        }
+
+        throw new OtpChallengeInactive;
+    }
+
+    private function assertInput(
+        int $userId,
+        string $challengeId,
+        string $code,
+        ?string $correlationId,
+    ): void {
         if ($userId < 1 || preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/', $challengeId) !== 1) {
             throw new InvalidArgumentException('OTP verification identity is invalid.');
         }
@@ -43,15 +75,6 @@ final readonly class OtpChallengeVerifier
         if ($correlationId !== null && preg_match('/\A[A-Za-z0-9-]{8,64}\z/', $correlationId) !== 1) {
             throw new InvalidArgumentException('OTP correlation ID is invalid.');
         }
-
-        return $this->database->connection()->transaction(
-            fn (): OtpVerificationReceipt => $this->verifyWithinTransaction(
-                $userId,
-                $challengeId,
-                $code,
-                $correlationId,
-            ),
-        );
     }
 
     private function verifyWithinTransaction(
@@ -59,7 +82,7 @@ final readonly class OtpChallengeVerifier
         string $challengeId,
         string $code,
         ?string $correlationId,
-    ): OtpVerificationReceipt {
+    ): OtpVerificationOutcome {
         $connection = $this->database->connection();
         $now = $this->clock->now();
         $nowString = $now->format('Y-m-d H:i:s.u');
@@ -87,14 +110,13 @@ final readonly class OtpChallengeVerifier
             throw new OtpChallengeNotFound;
         }
 
-        $phoneNumberId = (int) $challenge->phone_number_id;
-        $policy = PhoneVerificationPolicy::from($challenge->verification_policy);
-        $policyVersion = (int) $challenge->verification_policy_version;
-
         if ($challenge->consumed_at !== null || $challenge->invalidated_at !== null) {
             throw new OtpChallengeInactive;
         }
 
+        $phoneNumberId = (int) $challenge->phone_number_id;
+        $policyVersion = (int) $challenge->verification_policy_version;
+        $telegramAccountId = (int) $challenge->telegram_account_id;
         $expiresAt = new DateTimeImmutable($challenge->expires_at, new DateTimeZone('UTC'));
 
         if ($expiresAt <= $now) {
@@ -108,11 +130,12 @@ final readonly class OtpChallengeVerifier
                 $phoneNumberId,
                 'otp_expired',
                 $policyVersion,
-                (int) $challenge->telegram_account_id,
+                $telegramAccountId,
                 $correlationId,
                 $nowString,
             );
-            throw new OtpChallengeExpired;
+
+            return OtpVerificationOutcome::expired();
         }
 
         $attempts = (int) $challenge->attempt_count;
@@ -138,13 +161,15 @@ final readonly class OtpChallengeVerifier
                 $phoneNumberId,
                 $remaining === 0 ? 'otp_locked' : 'otp_failed',
                 $policyVersion,
-                (int) $challenge->telegram_account_id,
+                $telegramAccountId,
                 $correlationId,
                 $nowString,
             );
-            throw new InvalidOtpCode($remaining);
+
+            return OtpVerificationOutcome::invalidCode($remaining);
         }
 
+        $policy = PhoneVerificationPolicy::from($challenge->verification_policy);
         $connection->table('otp_challenges')->where('id', $challengeId)->update([
             'consumed_at' => $nowString,
             'active_scope_hash' => null,
@@ -157,24 +182,7 @@ final readonly class OtpChallengeVerifier
             ->whereNull('invalidated_at')
             ->update(['invalidated_at' => $nowString, 'active_scope_hash' => null, 'updated_at' => $nowString]);
 
-        $connection->table('phone_verification_evidences')->insertOrIgnore([
-            'phone_number_id' => $phoneNumberId,
-            'method' => PhoneVerificationMethod::SmsOtp->value,
-            'policy_version' => $policyVersion,
-            'verified_at' => $nowString,
-            'created_at' => $nowString,
-            'updated_at' => $nowString,
-        ]);
-        $connection->table('phone_verification_evidences')
-            ->where('phone_number_id', $phoneNumberId)
-            ->where('method', PhoneVerificationMethod::SmsOtp->value)
-            ->update([
-                'policy_version' => $policyVersion,
-                'verified_at' => $nowString,
-                'invalidated_at' => null,
-                'updated_at' => $nowString,
-            ]);
-
+        $this->recordOtpEvidence($phoneNumberId, $policyVersion, $nowString);
         $methods = $connection->table('phone_verification_evidences')
             ->where('phone_number_id', $phoneNumberId)
             ->whereNull('invalidated_at')
@@ -203,19 +211,41 @@ final readonly class OtpChallengeVerifier
             $phoneNumberId,
             'otp_verified',
             $policyVersion,
-            (int) $challenge->telegram_account_id,
+            $telegramAccountId,
             $correlationId,
             $nowString,
             $status,
         );
 
-        return new OtpVerificationReceipt(
+        return OtpVerificationOutcome::verified(new OtpVerificationReceipt(
             $challengeId,
             $phoneNumberId,
             $policy,
             $policyVersion,
             $policySatisfied,
-        );
+        ));
+    }
+
+    private function recordOtpEvidence(int $phoneNumberId, int $policyVersion, string $now): void
+    {
+        $connection = $this->database->connection();
+        $connection->table('phone_verification_evidences')->insertOrIgnore([
+            'phone_number_id' => $phoneNumberId,
+            'method' => PhoneVerificationMethod::SmsOtp->value,
+            'policy_version' => $policyVersion,
+            'verified_at' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $connection->table('phone_verification_evidences')
+            ->where('phone_number_id', $phoneNumberId)
+            ->where('method', PhoneVerificationMethod::SmsOtp->value)
+            ->update([
+                'policy_version' => $policyVersion,
+                'verified_at' => $now,
+                'invalidated_at' => null,
+                'updated_at' => $now,
+            ]);
     }
 
     private function recordEvent(
