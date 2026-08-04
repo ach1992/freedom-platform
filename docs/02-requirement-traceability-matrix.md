@@ -2,7 +2,7 @@
 
 Baseline: Master Execution Prompt `1.0.0`  
 Matrix status: `active`  
-Implementation/test/evidence status: `in-progress` for the explicitly marked foundation rows; all evidence remains unverified until a recorded CI run exists.
+Implementation/test/evidence status: `in-progress` for the explicitly marked foundation rows; exact automated evidence is verified only where a retained CI run and evidence manifest are cited.
 
 ## Traceability contract
 
@@ -26,8 +26,8 @@ Placeholder notation:
 | `PRV-001`, `PRV-002`, `PRV-003` | `docs/15-integration-contracts.md`; `app/Modules/Panels/Application/Contracts/`; `ProvisioningState.php`; workflow tests | Marzban/PasarGuard/Fake adapters and orchestration tests |
 | `CNT-001`, `LOC-001`, `LOC-002` | `resources/lang/fa/installer.php`; `resources/lang/en/installer.php`; installer Blade views | Full product localization schema and placeholder tests |
 | `OPS-001`, `SEC-001`, `SEC-008` | correlation middleware; logging redaction processor/tap; operations migration; redaction tests | Audit/alert services, encrypted restricted payloads and full security suite |
-| `INS-001`, `SEC-007`, `QUA-011` | installer config/token store/controller/middleware/routes/views; installer unit/feature tests | Full CLI/LSPHP, DB/Redis/outbound/integration bootstrap journal and final lock |
-| `ARCH-001`, `ARCH-002`, `QUA-002`, `QUA-012`, `QUA-013` | `composer.json`; `phpstan.neon`; `.github/workflows/ci.yml`; `scripts/ci/`; `docs/19-ci-quality-gates.md` | Green locked CI run, stronger module rules and retained evidence manifest |
+| `INS-001`, `SEC-007`, `QUA-011` | installer config/token store/controller/middleware/routes/views; `app/Modules/Installer/Application/PhpRuntimePreflight.php`; `.env.example`; bilingual runtime diagnostics; `tests/Unit/Modules/Installer/PhpRuntimePreflightTest.php`; installer unit/feature tests; `evidence/0.2.0/INS-001-php-runtime-preflight.md`; CI run `30870232289` | DB/Redis/Telegram/outbound/disk/ownership preflight, journaled bootstrap, final lock, worker heartbeat, and target aaPanel/OpenLiteSpeed install/rollback evidence |
+| `ARCH-001`, `ARCH-002`, `QUA-002`, `QUA-012`, `QUA-013` | `composer.json`; `phpstan.neon`; `.github/workflows/ci.yml`; `scripts/ci/`; `docs/19-ci-quality-gates.md` | Stronger module rules and complete retained phase evidence manifest |
 | `DAT-001`, `DAT-002`, `DAT-003`, `DAT-004` | `Money.php`; `Clock.php`; state enums; foundation migrations; unit/migration tests | Complete domain schema, retention services and production migration evidence |
 | `RUN-001`, `RUN-003`, `RUN-004`, `QUA-003`, `QUA-004` | health probe/command/endpoints; Scheduler heartbeat; `deploy/cron`; `deploy/supervisor`; CI Compose; tests | aaPanel rehearsal, worker heartbeat service and staging evidence |
 
