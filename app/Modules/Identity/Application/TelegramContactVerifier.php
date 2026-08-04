@@ -28,7 +28,7 @@ final readonly class TelegramContactVerifier
     ) {}
 
     /**
-     * @param array<string, mixed> $contact
+     * @param  array<string, mixed>  $contact
      *
      * @requirement ONB-004 ONB-005 USR-001 SEC-003 DAT-003
      */
@@ -41,6 +41,57 @@ final readonly class TelegramContactVerifier
         int $policyVersion,
         ?string $correlationId = null,
     ): PhoneVerificationReceipt {
+        $this->assertRequestIsValid(
+            $userId,
+            $botId,
+            $senderTelegramUserId,
+            $contact,
+            $policy,
+            $policyVersion,
+            $correlationId,
+        );
+
+        /** @var string $phoneValue */
+        $phoneValue = $contact['phone_number'];
+        $number = IranianMobileNumber::fromString($phoneValue);
+        $lookup = $this->hasher->hash($number);
+
+        try {
+            return $this->database->connection()->transaction(
+                fn (): PhoneVerificationReceipt => $this->verifyWithinTransaction(
+                    $userId,
+                    $botId,
+                    $senderTelegramUserId,
+                    $number,
+                    $lookup,
+                    $policy,
+                    $policyVersion,
+                    $correlationId,
+                ),
+            );
+        } catch (QueryException $exception) {
+            $owner = $this->database->connection()->table('phone_numbers')
+                ->where('active_lookup_hash', $lookup->value)
+                ->value('user_id');
+
+            if (is_numeric($owner) && (int) $owner !== $userId) {
+                throw new PhoneAlreadyAssigned($exception);
+            }
+
+            throw $exception;
+        }
+    }
+
+    /** @param array<string, mixed> $contact */
+    private function assertRequestIsValid(
+        int $userId,
+        string $botId,
+        int $senderTelegramUserId,
+        array $contact,
+        PhoneVerificationPolicy $policy,
+        int $policyVersion,
+        ?string $correlationId,
+    ): void {
         if ($userId < 1 || $senderTelegramUserId < 1 || preg_match('/\A[1-9][0-9]{0,19}\z/', $botId) !== 1) {
             throw new InvalidArgumentException('Telegram contact verification identity is invalid.');
         }
@@ -63,211 +114,282 @@ final readonly class TelegramContactVerifier
             throw new TelegramContactOwnershipMismatch;
         }
 
-        $phoneValue = $contact['phone_number'] ?? null;
-
-        if (! is_string($phoneValue)) {
+        if (! is_string($contact['phone_number'] ?? null)) {
             throw new InvalidArgumentException('Telegram contact phone number is missing.');
         }
+    }
 
-        $number = IranianMobileNumber::fromString($phoneValue);
-        $lookup = $this->hasher->hash($number);
+    private function verifyWithinTransaction(
+        int $userId,
+        string $botId,
+        int $senderTelegramUserId,
+        IranianMobileNumber $number,
+        PhoneLookupHash $lookup,
+        PhoneVerificationPolicy $policy,
+        int $policyVersion,
+        ?string $correlationId,
+    ): PhoneVerificationReceipt {
+        $now = $this->clock->now()->format('Y-m-d H:i:s.u');
+        $telegramAccountId = $this->telegramAccountId($userId, $botId, $senderTelegramUserId);
+        $this->assertPhoneIsAvailable($lookup, $userId);
+        $this->releasePreviousPhones(
+            $userId,
+            $lookup,
+            $policyVersion,
+            $telegramAccountId,
+            $correlationId,
+            $now,
+        );
 
-        try {
-            return $this->database->connection()->transaction(function () use (
-                $userId,
-                $botId,
-                $senderTelegramUserId,
-                $policy,
-                $policyVersion,
-                $correlationId,
-                $number,
-                $lookup,
-            ): PhoneVerificationReceipt {
-                $connection = $this->database->connection();
-                $now = $this->clock->now()->format('Y-m-d H:i:s.u');
+        [$phoneNumberId, $previousStatus] = $this->findOrCreatePhone(
+            $userId,
+            $number,
+            $lookup,
+            $policy,
+            $policyVersion,
+            $telegramAccountId,
+            $now,
+        );
+        $this->recordContactEvidence($phoneNumberId, $policyVersion, $telegramAccountId, $now);
 
-                /** @var object{id: int|string}|null $telegramAccount */
-                $telegramAccount = $connection->table('telegram_accounts')
-                    ->where('user_id', $userId)
-                    ->where('bot_id', $botId)
-                    ->where('telegram_user_id', $senderTelegramUserId)
-                    ->lockForUpdate()
-                    ->first(['id']);
+        $policySatisfied = $this->isPolicySatisfied($phoneNumberId, $policy);
+        $status = $policySatisfied ? 'verified' : 'pending';
+        $this->activatePhone(
+            $phoneNumberId,
+            $userId,
+            $number,
+            $lookup,
+            $policy,
+            $policyVersion,
+            $telegramAccountId,
+            $policySatisfied,
+            $status,
+            $now,
+        );
+        $this->updateCustomerProfile($userId, $status, $now);
+        $this->recordEvent(
+            $userId,
+            $phoneNumberId,
+            $previousStatus === null ? 'contact_verified' : 'contact_reverified',
+            $previousStatus,
+            $status,
+            PhoneVerificationMethod::TelegramContact,
+            $policyVersion,
+            $telegramAccountId,
+            null,
+            $correlationId,
+            $now,
+        );
 
-                if ($telegramAccount === null) {
-                    throw new TelegramIdentityNotFound;
-                }
+        return new PhoneVerificationReceipt(
+            $phoneNumberId,
+            $number,
+            PhoneVerificationMethod::TelegramContact,
+            $policy,
+            $policyVersion,
+            $policySatisfied,
+        );
+    }
 
-                $telegramAccountId = (int) $telegramAccount->id;
+    private function telegramAccountId(int $userId, string $botId, int $senderTelegramUserId): int
+    {
+        /** @var object{id: int|string}|null $account */
+        $account = $this->database->connection()->table('telegram_accounts')
+            ->where('user_id', $userId)
+            ->where('bot_id', $botId)
+            ->where('telegram_user_id', $senderTelegramUserId)
+            ->lockForUpdate()
+            ->first(['id']);
 
-                /** @var object{user_id: int|string}|null $conflict */
-                $conflict = $connection->table('phone_numbers')
-                    ->where('active_lookup_hash', $lookup->value)
-                    ->lockForUpdate()
-                    ->first(['user_id']);
-
-                if ($conflict !== null && (int) $conflict->user_id !== $userId) {
-                    throw new PhoneAlreadyAssigned;
-                }
-
-                /** @var iterable<int, object{id: int|string, status: string}> $releasedPhones */
-                $releasedPhones = $connection->table('phone_numbers')
-                    ->where('active_user_id', $userId)
-                    ->where('lookup_hash', '<>', $lookup->value)
-                    ->lockForUpdate()
-                    ->get(['id', 'status']);
-
-                foreach ($releasedPhones as $releasedPhone) {
-                    $releasedPhoneId = (int) $releasedPhone->id;
-                    $connection->table('phone_numbers')->where('id', $releasedPhoneId)->update([
-                        'active_user_id' => null,
-                        'active_lookup_hash' => null,
-                        'status' => 'released',
-                        'released_at' => $now,
-                        'updated_at' => $now,
-                    ]);
-                    $connection->table('phone_verification_evidences')
-                        ->where('phone_number_id', $releasedPhoneId)
-                        ->whereNull('invalidated_at')
-                        ->update(['invalidated_at' => $now, 'updated_at' => $now]);
-                    $this->recordEvent(
-                        $userId,
-                        $releasedPhoneId,
-                        'released',
-                        $releasedPhone->status,
-                        'released',
-                        null,
-                        $policyVersion,
-                        $telegramAccountId,
-                        'number_changed',
-                        $correlationId,
-                        $now,
-                    );
-                }
-
-                /** @var object{id: int|string, status: string}|null $existingPhone */
-                $existingPhone = $connection->table('phone_numbers')
-                    ->where('user_id', $userId)
-                    ->where('lookup_hash', $lookup->value)
-                    ->lockForUpdate()
-                    ->first(['id', 'status']);
-
-                if ($existingPhone === null) {
-                    $phoneNumberId = (int) $connection->table('phone_numbers')->insertGetId([
-                        'user_id' => $userId,
-                        'active_user_id' => $userId,
-                        'encrypted_value' => $this->encrypter->encryptString($number->e164()),
-                        'lookup_hash' => $lookup->value,
-                        'active_lookup_hash' => $lookup->value,
-                        'hash_key_version' => $lookup->keyVersion,
-                        'status' => 'pending',
-                        'verification_policy' => $policy->value,
-                        'verification_policy_version' => $policyVersion,
-                        'last_verification_method' => PhoneVerificationMethod::TelegramContact->value,
-                        'verified_via_telegram_account_id' => $telegramAccountId,
-                        'created_at' => $now,
-                        'updated_at' => $now,
-                    ]);
-                    $previousStatus = null;
-                } else {
-                    $phoneNumberId = (int) $existingPhone->id;
-                    $previousStatus = $existingPhone->status;
-                }
-
-                $connection->table('phone_verification_evidences')->insertOrIgnore([
-                    'phone_number_id' => $phoneNumberId,
-                    'method' => PhoneVerificationMethod::TelegramContact->value,
-                    'policy_version' => $policyVersion,
-                    'verified_at' => $now,
-                    'telegram_account_id' => $telegramAccountId,
-                    'created_at' => $now,
-                    'updated_at' => $now,
-                ]);
-                $connection->table('phone_verification_evidences')
-                    ->where('phone_number_id', $phoneNumberId)
-                    ->where('method', PhoneVerificationMethod::TelegramContact->value)
-                    ->update([
-                        'policy_version' => $policyVersion,
-                        'verified_at' => $now,
-                        'invalidated_at' => null,
-                        'telegram_account_id' => $telegramAccountId,
-                        'updated_at' => $now,
-                    ]);
-
-                $methodValues = $connection->table('phone_verification_evidences')
-                    ->where('phone_number_id', $phoneNumberId)
-                    ->whereNull('invalidated_at')
-                    ->pluck('method')
-                    ->all();
-                $contactVerified = in_array(PhoneVerificationMethod::TelegramContact->value, $methodValues, true);
-                $otpVerified = in_array(PhoneVerificationMethod::SmsOtp->value, $methodValues, true);
-                $policySatisfied = $policy->isSatisfied($contactVerified, $otpVerified);
-                $status = $policySatisfied ? 'verified' : 'pending';
-
-                $connection->table('phone_numbers')->where('id', $phoneNumberId)->update([
-                    'active_user_id' => $userId,
-                    'encrypted_value' => $this->encrypter->encryptString($number->e164()),
-                    'active_lookup_hash' => $lookup->value,
-                    'hash_key_version' => $lookup->keyVersion,
-                    'status' => $status,
-                    'verification_policy' => $policy->value,
-                    'verification_policy_version' => $policyVersion,
-                    'last_verification_method' => PhoneVerificationMethod::TelegramContact->value,
-                    'verified_via_telegram_account_id' => $telegramAccountId,
-                    'verified_at' => $policySatisfied ? $now : null,
-                    'released_at' => null,
-                    'updated_at' => $now,
-                ]);
-
-                $tierId = $connection->table('customer_tiers')->where('code', 'new')->value('id');
-                $connection->table('customer_profiles')->insertOrIgnore([
-                    'user_id' => $userId,
-                    'current_tier_id' => is_numeric($tierId) ? (int) $tierId : null,
-                    'tier_locked' => false,
-                    'phone_verification_status' => 'unverified',
-                    'identity_verification_status' => 'unverified',
-                    'created_at' => $now,
-                    'updated_at' => $now,
-                ]);
-                $connection->table('customer_profiles')->where('user_id', $userId)->update([
-                    'phone_verification_status' => $status,
-                    'updated_at' => $now,
-                ]);
-
-                $this->recordEvent(
-                    $userId,
-                    $phoneNumberId,
-                    $previousStatus === null ? 'contact_verified' : 'contact_reverified',
-                    $previousStatus,
-                    $status,
-                    PhoneVerificationMethod::TelegramContact,
-                    $policyVersion,
-                    $telegramAccountId,
-                    null,
-                    $correlationId,
-                    $now,
-                );
-
-                return new PhoneVerificationReceipt(
-                    $phoneNumberId,
-                    $number,
-                    PhoneVerificationMethod::TelegramContact,
-                    $policy,
-                    $policyVersion,
-                    $policySatisfied,
-                );
-            });
-        } catch (QueryException $exception) {
-            $owner = $this->database->connection()->table('phone_numbers')
-                ->where('active_lookup_hash', $lookup->value)
-                ->value('user_id');
-
-            if (is_numeric($owner) && (int) $owner !== $userId) {
-                throw new PhoneAlreadyAssigned($exception);
-            }
-
-            throw $exception;
+        if ($account === null) {
+            throw new TelegramIdentityNotFound;
         }
+
+        return (int) $account->id;
+    }
+
+    private function assertPhoneIsAvailable(PhoneLookupHash $lookup, int $userId): void
+    {
+        /** @var object{user_id: int|string}|null $conflict */
+        $conflict = $this->database->connection()->table('phone_numbers')
+            ->where('active_lookup_hash', $lookup->value)
+            ->lockForUpdate()
+            ->first(['user_id']);
+
+        if ($conflict !== null && (int) $conflict->user_id !== $userId) {
+            throw new PhoneAlreadyAssigned;
+        }
+    }
+
+    private function releasePreviousPhones(
+        int $userId,
+        PhoneLookupHash $lookup,
+        int $policyVersion,
+        int $telegramAccountId,
+        ?string $correlationId,
+        string $now,
+    ): void {
+        /** @var iterable<int, object{id: int|string, status: string}> $phones */
+        $phones = $this->database->connection()->table('phone_numbers')
+            ->where('active_user_id', $userId)
+            ->where('lookup_hash', '<>', $lookup->value)
+            ->lockForUpdate()
+            ->get(['id', 'status']);
+
+        foreach ($phones as $phone) {
+            $phoneNumberId = (int) $phone->id;
+            $this->database->connection()->table('phone_numbers')->where('id', $phoneNumberId)->update([
+                'active_user_id' => null,
+                'active_lookup_hash' => null,
+                'status' => 'released',
+                'released_at' => $now,
+                'updated_at' => $now,
+            ]);
+            $this->database->connection()->table('phone_verification_evidences')
+                ->where('phone_number_id', $phoneNumberId)
+                ->whereNull('invalidated_at')
+                ->update(['invalidated_at' => $now, 'updated_at' => $now]);
+            $this->recordEvent(
+                $userId,
+                $phoneNumberId,
+                'released',
+                $phone->status,
+                'released',
+                null,
+                $policyVersion,
+                $telegramAccountId,
+                'number_changed',
+                $correlationId,
+                $now,
+            );
+        }
+    }
+
+    /** @return array{int, string|null} */
+    private function findOrCreatePhone(
+        int $userId,
+        IranianMobileNumber $number,
+        PhoneLookupHash $lookup,
+        PhoneVerificationPolicy $policy,
+        int $policyVersion,
+        int $telegramAccountId,
+        string $now,
+    ): array {
+        /** @var object{id: int|string, status: string}|null $phone */
+        $phone = $this->database->connection()->table('phone_numbers')
+            ->where('user_id', $userId)
+            ->where('lookup_hash', $lookup->value)
+            ->lockForUpdate()
+            ->first(['id', 'status']);
+
+        if ($phone !== null) {
+            return [(int) $phone->id, $phone->status];
+        }
+
+        $phoneNumberId = (int) $this->database->connection()->table('phone_numbers')->insertGetId([
+            'user_id' => $userId,
+            'active_user_id' => $userId,
+            'encrypted_value' => $this->encrypter->encryptString($number->e164()),
+            'lookup_hash' => $lookup->value,
+            'active_lookup_hash' => $lookup->value,
+            'hash_key_version' => $lookup->keyVersion,
+            'status' => 'pending',
+            'verification_policy' => $policy->value,
+            'verification_policy_version' => $policyVersion,
+            'last_verification_method' => PhoneVerificationMethod::TelegramContact->value,
+            'verified_via_telegram_account_id' => $telegramAccountId,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        return [$phoneNumberId, null];
+    }
+
+    private function recordContactEvidence(
+        int $phoneNumberId,
+        int $policyVersion,
+        int $telegramAccountId,
+        string $now,
+    ): void {
+        $this->database->connection()->table('phone_verification_evidences')->insertOrIgnore([
+            'phone_number_id' => $phoneNumberId,
+            'method' => PhoneVerificationMethod::TelegramContact->value,
+            'policy_version' => $policyVersion,
+            'verified_at' => $now,
+            'telegram_account_id' => $telegramAccountId,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $this->database->connection()->table('phone_verification_evidences')
+            ->where('phone_number_id', $phoneNumberId)
+            ->where('method', PhoneVerificationMethod::TelegramContact->value)
+            ->update([
+                'policy_version' => $policyVersion,
+                'verified_at' => $now,
+                'invalidated_at' => null,
+                'telegram_account_id' => $telegramAccountId,
+                'updated_at' => $now,
+            ]);
+    }
+
+    private function isPolicySatisfied(int $phoneNumberId, PhoneVerificationPolicy $policy): bool
+    {
+        $methods = $this->database->connection()->table('phone_verification_evidences')
+            ->where('phone_number_id', $phoneNumberId)
+            ->whereNull('invalidated_at')
+            ->pluck('method')
+            ->all();
+
+        return $policy->isSatisfied(
+            in_array(PhoneVerificationMethod::TelegramContact->value, $methods, true),
+            in_array(PhoneVerificationMethod::SmsOtp->value, $methods, true),
+        );
+    }
+
+    private function activatePhone(
+        int $phoneNumberId,
+        int $userId,
+        IranianMobileNumber $number,
+        PhoneLookupHash $lookup,
+        PhoneVerificationPolicy $policy,
+        int $policyVersion,
+        int $telegramAccountId,
+        bool $policySatisfied,
+        string $status,
+        string $now,
+    ): void {
+        $this->database->connection()->table('phone_numbers')->where('id', $phoneNumberId)->update([
+            'active_user_id' => $userId,
+            'encrypted_value' => $this->encrypter->encryptString($number->e164()),
+            'active_lookup_hash' => $lookup->value,
+            'hash_key_version' => $lookup->keyVersion,
+            'status' => $status,
+            'verification_policy' => $policy->value,
+            'verification_policy_version' => $policyVersion,
+            'last_verification_method' => PhoneVerificationMethod::TelegramContact->value,
+            'verified_via_telegram_account_id' => $telegramAccountId,
+            'verified_at' => $policySatisfied ? $now : null,
+            'released_at' => null,
+            'updated_at' => $now,
+        ]);
+    }
+
+    private function updateCustomerProfile(int $userId, string $status, string $now): void
+    {
+        $tierId = $this->database->connection()->table('customer_tiers')->where('code', 'new')->value('id');
+        $this->database->connection()->table('customer_profiles')->insertOrIgnore([
+            'user_id' => $userId,
+            'current_tier_id' => is_numeric($tierId) ? (int) $tierId : null,
+            'tier_locked' => false,
+            'phone_verification_status' => 'unverified',
+            'identity_verification_status' => 'unverified',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $this->database->connection()->table('customer_profiles')->where('user_id', $userId)->update([
+            'phone_verification_status' => $status,
+            'updated_at' => $now,
+        ]);
     }
 
     private function recordEvent(
