@@ -2,9 +2,6 @@ name: Staging Deploy Core
 
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - .github/workflows/staging-deploy-core.yml
 
 permissions:
   contents: read
