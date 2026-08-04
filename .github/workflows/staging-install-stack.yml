@@ -1,9 +1,6 @@
 name: Staging Install Stack
 
 on:
-  pull_request:
-    paths:
-      - .github/workflows/staging-install-stack.yml
   workflow_dispatch:
 
 permissions:
