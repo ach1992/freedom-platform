@@ -9,6 +9,7 @@ use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Str;
 use Tests\TestCase;
 
 /** @requirement ONB-001 ONB-004 ONB-005 USR-001 USR-002 USR-003 AGT-001 AGT-002 ACL-001 ACL-002 ACL-003 SEC-002 SEC-003 */
@@ -58,8 +59,8 @@ final class IdentityAccessFoundationMigrationTest extends TestCase
 
     public function test_telegram_identity_is_unique_per_bot_and_one_account_maps_once_per_bot(): void
     {
-        $firstUser = $this->user('telegram-one@example.test');
-        $secondUser = $this->user('telegram-two@example.test');
+        $firstUser = $this->user();
+        $secondUser = $this->user();
         $now = now('UTC');
 
         DB::table('telegram_accounts')->insert([
@@ -87,8 +88,8 @@ final class IdentityAccessFoundationMigrationTest extends TestCase
 
     public function test_active_phone_hash_is_globally_unique_but_released_history_remains_reusable(): void
     {
-        $firstUser = $this->user('phone-one@example.test');
-        $secondUser = $this->user('phone-two@example.test');
+        $firstUser = $this->user();
+        $secondUser = $this->user();
         $hash = hash('sha256', 'test-only-normalized-phone');
         $now = now('UTC');
 
@@ -129,7 +130,7 @@ final class IdentityAccessFoundationMigrationTest extends TestCase
 
     public function test_database_allows_only_one_active_agent_application_per_customer(): void
     {
-        $customer = $this->user('agent-application@example.test');
+        $customer = $this->user();
         $now = now('UTC');
 
         DB::table('agent_applications')->insert([
@@ -181,7 +182,7 @@ final class IdentityAccessFoundationMigrationTest extends TestCase
     public function test_permission_override_and_sensitive_request_fingerprint_are_unique(): void
     {
         $this->seed(IdentityAccessFoundationSeeder::class);
-        $administrator = $this->administrator('access-admin@example.test');
+        $administrator = $this->administrator();
         $permission = (int) DB::table('permissions')->where('code', 'access.permissions.override')->value('id');
         $now = now('UTC');
 
@@ -236,23 +237,26 @@ final class IdentityAccessFoundationMigrationTest extends TestCase
         ]);
     }
 
-    private function user(string $email): int
+    private function user(): int
     {
+        $now = now('UTC');
+
         return (int) DB::table('users')->insertGetId([
-            'name' => 'Test User',
-            'email' => $email,
-            'password' => 'test-only-password-hash',
+            'public_id' => (string) Str::ulid(),
             'account_type' => 'customer',
             'account_status' => 'active',
-            'created_at' => now('UTC'),
-            'updated_at' => now('UTC'),
+            'locale' => 'fa',
+            'first_seen_at' => $now,
+            'last_seen_at' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
         ]);
     }
 
-    private function administrator(string $email): int
+    private function administrator(): int
     {
         return (int) DB::table('administrators')->insertGetId([
-            'user_id' => $this->user($email),
+            'user_id' => $this->user(),
             'status' => 'active',
             'is_owner' => false,
             'permission_version' => 1,
