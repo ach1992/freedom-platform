@@ -25,7 +25,10 @@ Schedule::call(function (): void {
     ->withoutOverlapping()
     ->onOneServer();
 
-Schedule::command('operations:check-worker-heartbeats --max-age=120 --json')
+Schedule::command('operations:check-worker-heartbeats', [
+    '--max-age' => max(1, (int) config('operations.worker_heartbeat.stale_after_seconds', 480)),
+    '--json' => true,
+])
     ->name('operations.check-worker-heartbeats')
     ->everyMinute()
     ->withoutOverlapping()
