@@ -1,0 +1,71 @@
+name: Staging Candidate Health Once
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/staging-candidate-health-once.yml
+
+permissions:
+  contents: read
+
+jobs:
+  candidate-health:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Prepare SSH client
+        env:
+          STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          STAGING_KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$STAGING_SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$STAGING_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+
+      - name: Run redacted health on staged candidates
+        env:
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          STAGING_PORT: ${{ secrets.STAGING_PORT }}
+          STAGING_USER: ${{ secrets.STAGING_USER }}
+          STAGING_DOMAIN: ${{ secrets.STAGING_DOMAIN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=20 \
+            -p "$STAGING_PORT" \
+            "$STAGING_USER@$STAGING_HOST" \
+            "DOMAIN='$STAGING_DOMAIN' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          ROOT="/www/acdomains/$DOMAIN"
+          PHP=/www/server/php/84/bin/php
+          echo '# staged candidate health'
+          echo "utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "current_present=$([ -L "$ROOT/current" ] && echo yes || echo no)"
+          for release in "$ROOT"/releases/staging-*; do
+            [ -d "$release" ] || continue
+            echo "release=$(basename "$release")"
+            echo "source_sha=$(cat "$release/.staging-source-sha" 2>/dev/null || echo unavailable)"
+            echo "storage_link=$([ -L "$release/storage" ] && echo symlink || echo invalid)"
+            echo "env_link=$([ -L "$release/.env" ] && echo symlink || echo invalid)"
+            echo "storage_writable=$([ -w "$release/storage" ] && echo yes || echo no)"
+            echo "bootstrap_cache_writable=$([ -w "$release/bootstrap/cache" ] && echo yes || echo no)"
+            set +e
+            output=$(runuser -u www -- "$PHP" "$release/artisan" health:check \
+              --critical --json --redact --no-ansi --no-interaction 2>&1)
+            status=$?
+            set -e
+            printf 'health_status=%s\n' "$status"
+            printf 'health_output=%s\n' "$output"
+          done
+          REMOTE
+
+      - name: Remove SSH material
+        if: always()
+        run: rm -rf "$HOME/.ssh"
