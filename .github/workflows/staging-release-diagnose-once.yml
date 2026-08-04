@@ -1,0 +1,99 @@
+name: Staging Release Diagnose Once
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/staging-release-diagnose-once.yml
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Prepare SSH client
+        env:
+          STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          STAGING_KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$STAGING_SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$STAGING_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+
+      - name: Inspect sanitized release switch state
+        env:
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          STAGING_PORT: ${{ secrets.STAGING_PORT }}
+          STAGING_USER: ${{ secrets.STAGING_USER }}
+          STAGING_DOMAIN: ${{ secrets.STAGING_DOMAIN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=20 \
+            -p "$STAGING_PORT" \
+            "$STAGING_USER@$STAGING_HOST" \
+            "DOMAIN='$STAGING_DOMAIN' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          ROOT="/www/acdomains/$DOMAIN"
+          PHP=/www/server/php/84/bin/php
+          RELEASE=staging-a-501a98ae0b3f
+          CANDIDATE="$ROOT/releases/$RELEASE"
+
+          echo '# release switch diagnostic'
+          echo "utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "current_kind=$([ -L "$ROOT/current" ] && echo symlink || { [ -e "$ROOT/current" ] && echo non_symlink || echo absent; })"
+          echo "current_target=$(readlink "$ROOT/current" 2>/dev/null || echo none)"
+          echo "temporary_kind=$([ -L "$ROOT/.current.next" ] && echo symlink || { [ -e "$ROOT/.current.next" ] && echo non_symlink || echo absent; })"
+          echo "temporary_target=$(readlink "$ROOT/.current.next" 2>/dev/null || echo none)"
+
+          for path in "$ROOT" "$ROOT/releases" "$ROOT/shared" "$ROOT/shared/release-activation.lock" "$ROOT/shared/release-journal.json" "$CANDIDATE" "$CANDIDATE/.env" "$CANDIDATE/storage"; do
+            if [ -e "$path" ] || [ -L "$path" ]; then
+              echo "path=$(basename "$path")"
+              stat -Lc 'mode=%a owner=%U group=%G type=%F' "$path"
+              if runuser -u www -- test -w "$path"; then echo 'www_writable=yes'; else echo 'www_writable=no'; fi
+            else
+              echo "path=$(basename "$path") absent"
+            fi
+          done
+
+          if [ -s "$ROOT/shared/release-journal.json" ]; then
+            echo 'journal_begin'
+            python3 - "$ROOT/shared/release-journal.json" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          data = json.loads(Path(sys.argv[1]).read_text())
+          allowed = {
+              'version', 'action', 'release', 'previous_release', 'status',
+              'composer_lock_sha256', 'updated_at',
+          }
+          print(json.dumps({key: data.get(key) for key in allowed}, sort_keys=True))
+          PY
+            echo 'journal_end'
+          else
+            echo 'journal=absent'
+          fi
+
+          echo "proc_open=$($PHP -r 'echo function_exists("proc_open") ? "present" : "absent";')"
+          set +e
+          health_output=$(runuser -u www -- "$PHP" "$CANDIDATE/artisan" health:check \
+            --critical --json --redact --no-ansi --no-interaction 2>&1)
+          health_status=$?
+          set -e
+          echo "health_status=$health_status"
+          echo "health_output=$health_output"
+          REMOTE
+
+      - name: Remove SSH material
+        if: always()
+        run: rm -rf "$HOME/.ssh"
