@@ -13,23 +13,23 @@ use RuntimeException;
 final readonly class RedisOtpAbuseLimiter implements OtpAbuseLimiter
 {
     private const LUA = <<<'LUA'
-local bucket_count = #KEYS
-for index = 1, bucket_count do
-    local current = tonumber(redis.call('GET', KEYS[index]) or '0')
-    local limit = tonumber(ARGV[((index - 1) * 2) + 1])
-    if current >= limit then
-        return index
-    end
-end
-for index = 1, bucket_count do
-    local value = redis.call('INCR', KEYS[index])
-    local window = tonumber(ARGV[((index - 1) * 2) + 2])
-    if value == 1 then
-        redis.call('EXPIRE', KEYS[index], window)
-    end
-end
-return 0
-LUA;
+        local bucket_count = #KEYS
+        for index = 1, bucket_count do
+            local current = tonumber(redis.call('GET', KEYS[index]) or '0')
+            local limit = tonumber(ARGV[((index - 1) * 2) + 1])
+            if current >= limit then
+                return index
+            end
+        end
+        for index = 1, bucket_count do
+            local value = redis.call('INCR', KEYS[index])
+            local window = tonumber(ARGV[((index - 1) * 2) + 2])
+            if value == 1 then
+                redis.call('EXPIRE', KEYS[index], window)
+            end
+        end
+        return 0
+        LUA;
 
     public function __construct(
         private RedisManager $redis,
