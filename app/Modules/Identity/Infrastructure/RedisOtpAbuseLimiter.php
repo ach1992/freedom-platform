@@ -56,9 +56,8 @@ final readonly class RedisOtpAbuseLimiter implements OtpAbuseLimiter
 
         $result = $this->redis->connection()->eval(
             self::LUA,
+            [...$keys, ...$arguments],
             count($keys),
-            ...$keys,
-            ...$arguments,
         );
 
         if (! is_int($result) && ! is_numeric($result)) {
@@ -67,9 +66,12 @@ final readonly class RedisOtpAbuseLimiter implements OtpAbuseLimiter
 
         $blockedIndex = (int) $result;
 
+        if ($blockedIndex < 0 || $blockedIndex > count($buckets)) {
+            throw new RuntimeException('OTP rate limiter returned an invalid bucket index.');
+        }
+
         if ($blockedIndex > 0) {
-            $bucket = $buckets[$blockedIndex - 1] ?? null;
-            throw new OtpRateLimitExceeded($bucket?->name ?? 'unknown');
+            throw new OtpRateLimitExceeded($buckets[$blockedIndex - 1]->name);
         }
     }
 }
