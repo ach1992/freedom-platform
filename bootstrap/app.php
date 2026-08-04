@@ -6,7 +6,9 @@ use App\Modules\Installer\Presentation\Console\IssueInstallerTokenCommand;
 use App\Modules\Installer\Presentation\Http\Middleware\EnsureInstallerAvailable;
 use App\Modules\Installer\Presentation\Http\Middleware\EnsureInstallerHttps;
 use App\Modules\Installer\Presentation\Http\Middleware\EnsureInstallerUnlocked;
+use App\Modules\Operations\Presentation\Console\CheckWorkerHeartbeatsCommand;
 use App\Modules\Operations\Presentation\Console\HealthCheckCommand;
+use App\Modules\Operations\Presentation\Console\RecordWorkerHeartbeatCommand;
 use App\Shared\Infrastructure\Http\CorrelationIdMiddleware;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
@@ -28,8 +30,10 @@ return Application::configure(basePath: dirname(__DIR__))
         ]);
     })
     ->withCommands([
+        CheckWorkerHeartbeatsCommand::class,
         HealthCheckCommand::class,
         IssueInstallerTokenCommand::class,
+        RecordWorkerHeartbeatCommand::class,
     ])
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(
