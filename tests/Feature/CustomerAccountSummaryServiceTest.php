@@ -49,7 +49,7 @@ final class CustomerAccountSummaryServiceTest extends TestCase
             'active_lookup_hash' => $phoneHash,
             'hash_key_version' => 1,
             'status' => 'verified',
-            'verification_method' => 'sms_otp',
+            'last_verification_method' => 'sms_otp',
             'verified_at' => $now,
             'created_at' => $now,
             'updated_at' => $now,
