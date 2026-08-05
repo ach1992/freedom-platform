@@ -522,7 +522,6 @@ final readonly class SensitiveActionApprovalService
         return $row;
     }
 
-    /** @return object|null */
     private function requestByFingerprint(
         Connection $connection,
         string $requestFingerprint,
