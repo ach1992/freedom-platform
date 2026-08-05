@@ -2,6 +2,8 @@
 
 Status: implementation prepared; mandatory CI evidence pending.
 
+Implementation head: `747905cbef18205fd023dd6254c17815ca932324`.
+
 Requirements: `ONB-005`, `USR-002`, `USR-003`, `SEC-002`, `QUA-001`, `QUA-011`.
 
 ## Delivered boundary
