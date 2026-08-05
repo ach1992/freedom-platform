@@ -129,7 +129,7 @@ final readonly class PanelMutationAudit
             ) {
                 throw new RuntimeException('Stored panel mutation receipt is invalid.');
             }
-            $safe[$key] => $value;
+            $safe[$key] = $value;
         }
 
         return $safe;
