@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Identity\Infrastructure;
 
+use App\Modules\AccessControl\Application\AdministratorPermissionAuthorizer;
 use App\Modules\Identity\Application\Contracts\OtpAbuseLimiter;
 use App\Modules\Identity\Application\Contracts\OtpCodeHasher;
 use App\Modules\Identity\Application\Contracts\PhoneLookupHasher;
@@ -11,6 +12,8 @@ use App\Modules\Identity\Application\Contracts\SmsDeliveryAttemptRecorder;
 use App\Modules\Identity\Application\Contracts\SmsOtpMessageRenderer;
 use App\Modules\Identity\Application\Contracts\SmsProvider;
 use App\Modules\Identity\Application\FallbackSmsDispatcher;
+use App\Modules\Identity\Application\IdentityItemService;
+use App\Modules\Identity\Application\IdentityMutationAudit;
 use App\Modules\Identity\Application\OtpChallengeIssuer;
 use App\Modules\Identity\Application\OtpChallengeVerifier;
 use App\Shared\Application\Clock;
@@ -30,6 +33,35 @@ final class IdentityServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->registerHashers();
+
+        $this->app->singleton(
+            IdentityMutationAudit::class,
+            fn (Application $application): IdentityMutationAudit => new IdentityMutationAudit(
+                $application->make(DatabaseManager::class),
+                $application->make(Clock::class),
+            ),
+        );
+
+        $this->app->singleton(
+            IdentityItemService::class,
+            function (Application $application): IdentityItemService {
+                $configuration = self::identityConfiguration($application);
+                $items = is_array($configuration['identity_items'] ?? null)
+                    ? $configuration['identity_items']
+                    : [];
+
+                return new IdentityItemService(
+                    $application->make(DatabaseManager::class),
+                    $application->make(StringEncrypter::class),
+                    $application->make(PhoneLookupHasher::class),
+                    $application->make(AdministratorPermissionAuthorizer::class),
+                    $application->make(IdentityMutationAudit::class),
+                    $application->make(Clock::class),
+                    self::positiveInteger($items['hash_key_version'] ?? 1, 1),
+                    self::stringList($items['required_types'] ?? null, ['national_id', 'full_name']),
+                );
+            },
+        );
 
         $this->app->singleton(
             OtpAbuseLimiter::class,
@@ -168,11 +200,9 @@ final class IdentityServiceProvider extends ServiceProvider
 
         $providers = is_array($sms['providers'] ?? null) ? $sms['providers'] : [];
         $providerConfiguration = $providers[$providerCode] ?? null;
-
         if (! is_array($providerConfiguration)) {
             throw new RuntimeException('Selected SMS provider configuration is missing.');
         }
-
         if (! self::boolean($providerConfiguration['enabled'] ?? false)) {
             throw new RuntimeException('Selected SMS provider is disabled.');
         }
@@ -207,7 +237,6 @@ final class IdentityServiceProvider extends ServiceProvider
     private static function applicationKey(Application $application): string
     {
         $key = $application->make(Repository::class)->get('app.key');
-
         if (! is_string($key) || $key === '') {
             throw new RuntimeException('Application key is required for identity hashing.');
         }
@@ -219,10 +248,8 @@ final class IdentityServiceProvider extends ServiceProvider
     {
         if (is_string($configuredKey) && trim($configuredKey) !== '') {
             $key = trim($configuredKey);
-
             if (str_starts_with($key, 'base64:')) {
                 $decoded = base64_decode(substr($key, 7), true);
-
                 if (! is_string($decoded)) {
                     throw new RuntimeException('Configured identity key is not valid base64.');
                 }
@@ -239,7 +266,6 @@ final class IdentityServiceProvider extends ServiceProvider
     private static function providerCode(mixed $value, string $default): string
     {
         $providerCode = is_string($value) ? trim($value) : $default;
-
         if (preg_match('/\A[a-z0-9_-]{2,64}\z/', $providerCode) !== 1) {
             throw new RuntimeException('Configured SMS provider code is invalid.');
         }
@@ -252,7 +278,6 @@ final class IdentityServiceProvider extends ServiceProvider
         if (is_bool($value)) {
             return $value;
         }
-
         if (is_int($value)) {
             return $value === 1;
         }
@@ -263,5 +288,26 @@ final class IdentityServiceProvider extends ServiceProvider
     private static function positiveInteger(mixed $value, int $default): int
     {
         return is_numeric($value) && (int) $value > 0 ? (int) $value : $default;
+    }
+
+    /**
+     * @param  list<string>  $default
+     * @return list<string>
+     */
+    private static function stringList(mixed $value, array $default): array
+    {
+        if (! is_array($value)) {
+            return $default;
+        }
+
+        $result = [];
+        foreach ($value as $item) {
+            if (! is_string($item) || trim($item) === '') {
+                throw new RuntimeException('Configured identity item type list is invalid.');
+            }
+            $result[] = trim($item);
+        }
+
+        return $result;
     }
 }
