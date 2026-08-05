@@ -36,7 +36,6 @@ final readonly class AdministratorPermissionAuthorizer
 
         $permissionId = $connection->table('permissions')
             ->where('code', $permissionCode)
-            ->where('is_active', true)
             ->value('id');
 
         if (! is_int($permissionId) && ! is_string($permissionId)) {
