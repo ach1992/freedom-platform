@@ -41,7 +41,7 @@ SQL);
                 ->references('id')
                 ->on('administrators')
                 ->restrictOnDelete();
-            $table->char('request_fingerprint', 64)->unique();
+            $table->string('request_fingerprint', 128)->unique();
             $table->char('signed_intent_hash', 64)->unique();
             $table->string('state', 32)->default('pending');
             $table->string('reason_code', 64);
