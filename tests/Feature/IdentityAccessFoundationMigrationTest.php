@@ -29,6 +29,8 @@ final class IdentityAccessFoundationMigrationTest extends TestCase
             'customer_tag_assignments',
             'phone_numbers',
             'otp_challenges',
+            'identity_items',
+            'identity_item_histories',
             'administrators',
             'roles',
             'permissions',
@@ -49,7 +51,7 @@ final class IdentityAccessFoundationMigrationTest extends TestCase
 
         $this->assertSame(4, DB::table('customer_tiers')->count());
         $this->assertSame(4, DB::table('roles')->count());
-        $this->assertSame(10, DB::table('permissions')->count());
+        $this->assertSame(12, DB::table('permissions')->count());
         $this->assertDatabaseHas('customer_tiers', ['code' => 'vip', 'is_active' => true]);
         $this->assertDatabaseHas('permissions', [
             'code' => 'access.permissions.override',
@@ -59,6 +61,16 @@ final class IdentityAccessFoundationMigrationTest extends TestCase
         $this->assertDatabaseHas('permissions', [
             'code' => 'admins.transfer_ownership',
             'risk_level' => 'critical',
+            'requires_approval' => true,
+        ]);
+        $this->assertDatabaseHas('permissions', [
+            'code' => 'identity.verified_data.view',
+            'risk_level' => 'critical',
+            'requires_approval' => true,
+        ]);
+        $this->assertDatabaseHas('permissions', [
+            'code' => 'identity.verifications.manage',
+            'risk_level' => 'high',
             'requires_approval' => true,
         ]);
     }
