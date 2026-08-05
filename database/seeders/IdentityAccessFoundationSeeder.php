@@ -11,7 +11,7 @@ use RuntimeException;
 
 final class IdentityAccessFoundationSeeder extends Seeder
 {
-    /** @requirement USR-002 USR-003 ACL-001 ACL-002 AGT-002 */
+    /** @requirement USR-002 USR-003 ACL-001 ACL-002 ACL-003 AGT-002 ADM-002 */
     public function run(): void
     {
         $now = now('UTC');
@@ -68,6 +68,7 @@ final class IdentityAccessFoundationSeeder extends Seeder
             $this->permission('access.roles.manage', 'access_control', 'critical', true, $now),
             $this->permission('access.permissions.override', 'access_control', 'critical', true, $now),
             $this->permission('access.sensitive_actions.approve', 'access_control', 'critical', true, $now),
+            $this->permission('admins.transfer_ownership', 'access_control', 'critical', true, $now),
         ], ['code'], ['module', 'risk_level', 'requires_approval', 'updated_at']);
 
         /** @var list<array{0: string, 1: string}> $grants */
