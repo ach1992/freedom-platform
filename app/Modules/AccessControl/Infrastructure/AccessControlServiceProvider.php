@@ -7,10 +7,12 @@ namespace App\Modules\AccessControl\Infrastructure;
 use App\Modules\AccessControl\Application\AccessMutationAudit;
 use App\Modules\AccessControl\Application\AdministratorAccessService;
 use App\Modules\AccessControl\Application\AdministratorPermissionAuthorizer;
+use App\Modules\AccessControl\Application\OwnerTransferService;
 use App\Modules\AccessControl\Application\SensitiveActionApprovalService;
 use App\Modules\AccessControl\Application\SensitiveApprovalAudit;
 use App\Modules\AccessControl\Domain\PermissionResolver;
 use App\Shared\Application\Clock;
+use Illuminate\Contracts\Config\Repository;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Support\ServiceProvider;
@@ -66,6 +68,21 @@ final class AccessControlServiceProvider extends ServiceProvider
                 $application->make(SensitiveApprovalAudit::class),
                 $application->make(Clock::class),
             ),
+        );
+
+        $this->app->singleton(
+            OwnerTransferService::class,
+            function (Application $application): OwnerTransferService {
+                $key = $application->make(Repository::class)->get('app.key');
+
+                return new OwnerTransferService(
+                    $application->make(DatabaseManager::class),
+                    $application->make(AdministratorPermissionAuthorizer::class),
+                    $application->make(AccessMutationAudit::class),
+                    $application->make(Clock::class),
+                    is_string($key) ? $key : '',
+                );
+            },
         );
     }
 }
