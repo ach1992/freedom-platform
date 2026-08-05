@@ -36,6 +36,7 @@ final class IdentityAccessFoundationMigrationTest extends TestCase
             'administrator_role_assignments',
             'administrator_permission_overrides',
             'sensitive_action_approvals',
+            'owner_transfer_requests',
             'agent_applications',
             'agent_application_histories',
             'agent_profiles',
@@ -48,10 +49,15 @@ final class IdentityAccessFoundationMigrationTest extends TestCase
 
         $this->assertSame(4, DB::table('customer_tiers')->count());
         $this->assertSame(4, DB::table('roles')->count());
-        $this->assertSame(9, DB::table('permissions')->count());
+        $this->assertSame(10, DB::table('permissions')->count());
         $this->assertDatabaseHas('customer_tiers', ['code' => 'vip', 'is_active' => true]);
         $this->assertDatabaseHas('permissions', [
             'code' => 'access.permissions.override',
+            'risk_level' => 'critical',
+            'requires_approval' => true,
+        ]);
+        $this->assertDatabaseHas('permissions', [
+            'code' => 'admins.transfer_ownership',
             'risk_level' => 'critical',
             'requires_approval' => true,
         ]);
