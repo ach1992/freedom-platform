@@ -225,7 +225,7 @@ final readonly class AgentApplicationService
                     'decision_reason_code' => $context->reasonCode,
                     'decision_reason' => $context->reason,
                     'decided_at' => $now->format('Y-m-d H:i:s.u'),
-                    'reapply_allowed_at' => $now->add(new DateInterval('P'.$this->reapplicationCooldownDays.'D'))->format('Y-m-d H:i:s.u'),
+                    'reapply_allowed_at' => $now->add(new DateInterval('P' . $this->reapplicationCooldownDays . 'D'))->format('Y-m-d H:i:s.u'),
                     'updated_at' => $now->format('Y-m-d H:i:s.u'),
                 ]);
             },
@@ -305,7 +305,7 @@ final readonly class AgentApplicationService
     }
 
     /**
-     * @param callable(Connection, AgentApplicationRecord): void $mutation
+     * @param  callable(Connection, AgentApplicationRecord): void  $mutation
      */
     private function reviewTransition(
         string $action,
@@ -347,7 +347,7 @@ final readonly class AgentApplicationService
     }
 
     /**
-     * @param callable(Connection): AgentMutationReceipt $operation
+     * @param  callable(Connection): AgentMutationReceipt  $operation
      */
     private function idempotentTransaction(
         string $action,
@@ -366,7 +366,7 @@ final readonly class AgentApplicationService
         }
     }
 
-    /** @param object{state: string, reapply_allowed_at: ?string, reapplication_released_at: ?string}|null $latest */
+    /** @param  object{state: string, reapply_allowed_at: ?string, reapplication_released_at: ?string}|null  $latest */
     private function assertReapplicationAllowed(?object $latest): void
     {
         if ($latest === null || $latest->state === AgentApplicationState::Withdrawn->value) {
