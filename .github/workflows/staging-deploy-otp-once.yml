@@ -1,0 +1,315 @@
+name: Staging Deploy OTP Once
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/staging-deploy-otp-once.yml
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
+    timeout-minutes: 45
+    env:
+      VERIFIED_APP_SHA: 82363cda52c9df2ede7c548faae9f0c55a215b3c
+    steps:
+      - name: Check out verified application
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 82363cda52c9df2ede7c548faae9f0c55a215b3c
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Prepare verified package, smoke script, and SSH client
+        env:
+          STAGING_DOMAIN: ${{ secrets.STAGING_DOMAIN }}
+          TELEGRAM_TEST_BOT_TOKEN: ${{ secrets.TELEGRAM_TEST_BOT_TOKEN }}
+          STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          STAGING_KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in STAGING_DOMAIN TELEGRAM_TEST_BOT_TOKEN STAGING_SSH_PRIVATE_KEY STAGING_KNOWN_HOSTS; do
+            test -n "${!name:-}" || { echo "Missing required secret: ${name}" >&2; exit 1; }
+          done
+
+          root="$RUNNER_TEMP/otp-deploy"
+          install -d -m 700 "$root/ssh" "$root/package"
+          printf '%s\n' "$STAGING_SSH_PRIVATE_KEY" > "$root/ssh/id_ed25519"
+          printf '%s\n' "$STAGING_KNOWN_HOSTS" > "$root/ssh/known_hosts"
+          chmod 600 "$root/ssh/id_ed25519" "$root/ssh/known_hosts"
+          printf '%s' "$STAGING_DOMAIN" > "$root/package/domain"
+          printf '%s' "$TELEGRAM_TEST_BOT_TOKEN" > "$root/package/telegram-token"
+          install -m 700 deploy/staging/core-deploy.sh "$root/package/core-deploy.sh"
+          install -m 700 deploy/staging/prepare-php-functions.sh "$root/package/prepare-php-functions.sh"
+          install -m 700 deploy/staging/prepare-runtime-paths.sh "$root/package/prepare-runtime-paths.sh"
+          install -m 700 deploy/staging/recover-operations-migration.sh "$root/package/recover-operations-migration.sh"
+          tar --exclude=.git --exclude=.env --exclude=vendor --exclude=build -czf "$root/package/application.tar.gz" .
+          chmod 600 "$root/package/domain" "$root/package/telegram-token" "$root/package/application.tar.gz"
+
+          cat > "$root/package/verify-otp.php" <<'PHP'
+          <?php
+
+          declare(strict_types=1);
+
+          use App\Modules\Identity\Application\Contracts\OtpAbuseLimiter;
+          use App\Modules\Identity\Application\Contracts\SmsDeliveryAttemptRecorder;
+          use App\Modules\Identity\Application\Exceptions\InvalidOtpCode;
+          use App\Modules\Identity\Application\Exceptions\OtpRateLimitExceeded;
+          use App\Modules\Identity\Application\FallbackSmsDispatcher;
+          use App\Modules\Identity\Application\OtpChallengeIssuer;
+          use App\Modules\Identity\Application\OtpChallengeVerifier;
+          use App\Modules\Identity\Application\OtpIssueRequest;
+          use App\Modules\Identity\Application\OtpRateLimitBucket;
+          use App\Modules\Identity\Application\SmsDeliveryAttempt;
+          use App\Modules\Identity\Application\SmsOtpMessage;
+          use App\Modules\Identity\Domain\IranianMobileNumber;
+          use App\Modules\Identity\Domain\PhoneVerificationPolicy;
+          use App\Modules\Identity\Infrastructure\DatabaseSmsDeliveryAttemptRecorder;
+          use App\Modules\Identity\Infrastructure\FakeSmsProvider;
+          use App\Modules\Identity\Infrastructure\HmacOtpCodeHasher;
+          use App\Modules\Identity\Infrastructure\HmacPhoneLookupHasher;
+          use App\Modules\Identity\Infrastructure\RedisOtpAbuseLimiter;
+          use App\Shared\Application\Clock;
+          use App\Shared\Application\RandomGenerator;
+          use Illuminate\Contracts\Encryption\StringEncrypter;
+          use Illuminate\Contracts\Console\Kernel;
+          use Illuminate\Database\DatabaseManager;
+          use Illuminate\Redis\RedisManager;
+          use Illuminate\Support\Str;
+
+          require __DIR__.'/vendor/autoload.php';
+          $app = require __DIR__.'/bootstrap/app.php';
+          $app->make(Kernel::class)->bootstrap();
+
+          $database = $app->make(DatabaseManager::class);
+          $connection = $database->connection();
+          $encrypter = $app->make(StringEncrypter::class);
+          $clock = $app->make(Clock::class);
+          $redis = $app->make(RedisManager::class);
+          $phoneHasher = new HmacPhoneLookupHasher(str_repeat('s', 32), 99);
+          $otpHasher = new HmacOtpCodeHasher(str_repeat('o', 32), 99);
+          $prefix = 'staging:otp-smoke:'.Str::uuid().':';
+          $limiter = new RedisOtpAbuseLimiter($redis, $prefix);
+          $primary = new FakeSmsProvider('staging_fake_primary');
+          $fallback = new FakeSmsProvider('staging_fake_fallback');
+          $recorder = new DatabaseSmsDeliveryAttemptRecorder(
+              $database,
+              $encrypter,
+              $phoneHasher,
+              $clock,
+          );
+          $dispatcher = new FallbackSmsDispatcher($primary, $fallback, $recorder);
+          $random = new class implements RandomGenerator {
+              public function bytes(int $length): string
+              {
+                  return str_repeat('x', $length);
+              }
+
+              public function integer(int $minimum, int $maximum): int
+              {
+                  return 246810;
+              }
+          };
+          $issuer = new OtpChallengeIssuer(
+              $database,
+              $encrypter,
+              $phoneHasher,
+              $otpHasher,
+              $limiter,
+              $dispatcher,
+              $random,
+              $clock,
+              120,
+              60,
+              5,
+              10,
+              10,
+              20,
+          );
+          $verifier = new OtpChallengeVerifier($database, $otpHasher, $clock);
+
+          $connection->beginTransaction();
+
+          try {
+              $now = $clock->now()->format('Y-m-d H:i:s.u');
+              $telegramUserId = random_int(700000000, 799999999);
+              $botId = 1001;
+              $userId = (int) $connection->table('users')->insertGetId([
+                  'public_id' => (string) Str::ulid(),
+                  'account_type' => 'customer',
+                  'account_status' => 'active',
+                  'locale' => 'fa',
+                  'first_seen_at' => $now,
+                  'last_seen_at' => $now,
+                  'created_at' => $now,
+                  'updated_at' => $now,
+              ]);
+              $telegramAccountId = (int) $connection->table('telegram_accounts')->insertGetId([
+                  'user_id' => $userId,
+                  'bot_id' => $botId,
+                  'telegram_user_id' => $telegramUserId,
+                  'first_seen_at' => $now,
+                  'last_seen_at' => $now,
+                  'created_at' => $now,
+                  'updated_at' => $now,
+              ]);
+              $request = new OtpIssueRequest(
+                  $userId,
+                  $telegramAccountId,
+                  IranianMobileNumber::fromString('۰۹۱۲ ۳۴۵-۶۷۸۹'),
+                  PhoneVerificationPolicy::SmsOtpOnly,
+                  1,
+                  'phone_verification',
+                  '203.0.113.10',
+                  'staging-otp-smoke:'.Str::uuid(),
+                  'staging-otp-smoke-0001',
+              );
+
+              $first = $issuer->issue($request);
+              $duplicate = $issuer->issue($request);
+
+              if ($first->challengeId !== $duplicate->challengeId || $primary->sentCount() !== 1) {
+                  throw new RuntimeException('OTP issuance idempotency smoke failed.');
+              }
+
+              $challenge = $connection->table('otp_challenges')->where('id', $first->challengeId)->first();
+
+              if ($challenge === null || strlen((string) $challenge->code_hash) !== 64 || (string) $challenge->code_hash === '246810') {
+                  throw new RuntimeException('OTP hash-at-rest smoke failed.');
+              }
+
+              try {
+                  $verifier->verify($userId, $first->challengeId, '000000', 'staging-otp-wrong-0001');
+                  throw new RuntimeException('Incorrect OTP was accepted.');
+              } catch (InvalidOtpCode $exception) {
+                  if ($exception->remainingAttempts !== 4) {
+                      throw new RuntimeException('OTP failed-attempt count smoke failed.');
+                  }
+              }
+
+              if ((int) $connection->table('otp_challenges')->where('id', $first->challengeId)->value('attempt_count') !== 1) {
+                  throw new RuntimeException('OTP failed-attempt persistence smoke failed.');
+              }
+
+              $verified = $verifier->verify($userId, $first->challengeId, '246810', 'staging-otp-ok-0001');
+
+              if (! $verified->policySatisfied) {
+                  throw new RuntimeException('OTP policy completion smoke failed.');
+              }
+
+              if ($connection->table('otp_challenges')->where('id', $first->challengeId)->value('consumed_at') === null) {
+                  throw new RuntimeException('OTP consumption smoke failed.');
+              }
+
+              $bucket = new OtpRateLimitBucket('smoke', 'single', 1, 60);
+              $limiter->consume([$bucket]);
+
+              try {
+                  $limiter->consume([$bucket]);
+                  throw new RuntimeException('OTP Redis limiter did not block.');
+              } catch (OtpRateLimitExceeded $exception) {
+                  if ($exception->bucketName !== 'smoke') {
+                      throw new RuntimeException('OTP Redis limiter returned the wrong bucket.');
+                  }
+              }
+
+              echo "otp_migration=ok\n";
+              echo "otp_issue_idempotency=ok\n";
+              echo "otp_hash_at_rest=ok\n";
+              echo "otp_failed_attempt_commit=ok\n";
+              echo "otp_success_consumption=ok\n";
+              echo "otp_redis_limit=ok\n";
+          } finally {
+              if ($connection->transactionLevel() > 0) {
+                  $connection->rollBack();
+              }
+
+              $keys = $redis->connection()->keys($prefix.'*');
+
+              if (is_array($keys) && $keys !== []) {
+                  $redis->connection()->del(...$keys);
+              }
+          }
+          PHP
+          chmod 600 "$root/package/verify-otp.php"
+
+      - name: Upload deployment inputs
+        env:
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          STAGING_PORT: ${{ secrets.STAGING_PORT }}
+          STAGING_USER: ${{ secrets.STAGING_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/otp-deploy"
+          ssh_base=(
+            -o BatchMode=yes
+            -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking=yes
+            -o "UserKnownHostsFile=$root/ssh/known_hosts"
+            -i "$root/ssh/id_ed25519"
+          )
+          ssh "${ssh_base[@]}" -p "$STAGING_PORT" "$STAGING_USER@$STAGING_HOST" \
+            'install -d -m 700 /root/freedom-bootstrap/incoming'
+          scp "${ssh_base[@]}" -P "$STAGING_PORT" \
+            "$root/package/application.tar.gz" \
+            "$root/package/domain" \
+            "$root/package/telegram-token" \
+            "$root/package/core-deploy.sh" \
+            "$root/package/prepare-php-functions.sh" \
+            "$root/package/prepare-runtime-paths.sh" \
+            "$root/package/recover-operations-migration.sh" \
+            "$root/package/verify-otp.php" \
+            "$STAGING_USER@$STAGING_HOST:/root/freedom-bootstrap/incoming/"
+
+      - name: Deploy, rollback, reactivate, and verify OTP runtime
+        env:
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          STAGING_PORT: ${{ secrets.STAGING_PORT }}
+          STAGING_USER: ${{ secrets.STAGING_USER }}
+          STAGING_DOMAIN: ${{ secrets.STAGING_DOMAIN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/otp-deploy"
+          mkdir -p build/evidence/staging
+          ssh \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o "UserKnownHostsFile=$root/ssh/known_hosts" \
+            -i "$root/ssh/id_ed25519" \
+            -o ConnectTimeout=20 \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=10 \
+            -p "$STAGING_PORT" \
+            "$STAGING_USER@$STAGING_HOST" \
+            "chmod 700 /root/freedom-bootstrap/incoming/*.sh && /root/freedom-bootstrap/incoming/prepare-php-functions.sh && /root/freedom-bootstrap/incoming/prepare-runtime-paths.sh && /root/freedom-bootstrap/incoming/recover-operations-migration.sh && /root/freedom-bootstrap/incoming/core-deploy.sh '$VERIFIED_APP_SHA'" \
+            | tee build/evidence/staging/otp-deploy.txt
+
+          ssh \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o "UserKnownHostsFile=$root/ssh/known_hosts" \
+            -i "$root/ssh/id_ed25519" \
+            -p "$STAGING_PORT" \
+            "$STAGING_USER@$STAGING_HOST" \
+            "set -euo pipefail; cd /www/acdomains/$STAGING_DOMAIN/current; PHP84=/www/server/php/84/bin/php; \"\$PHP84\" artisan migrate:status --no-ansi | grep '2026_08_04_000700_extend_otp_challenge_lifecycle'; cp /root/freedom-bootstrap/incoming/verify-otp.php ./verify-otp-smoke.php; chmod 600 ./verify-otp-smoke.php; \"\$PHP84\" ./verify-otp-smoke.php; rm -f ./verify-otp-smoke.php; curl -fsS --max-time 15 \"https://$STAGING_DOMAIN/health/ready\" >/dev/null; echo 'https_ready=ok'" \
+            | tee build/evidence/staging/otp-smoke.txt
+
+      - name: Remove temporary material
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/otp-deploy"
+
+      - name: Upload sanitized evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: staging-otp-lifecycle-${{ github.run_id }}
+          path: build/evidence/staging
+          if-no-files-found: warn
+          retention-days: 7
