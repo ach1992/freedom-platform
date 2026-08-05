@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace App\Modules\Agents\Infrastructure;
 
 use App\Modules\AccessControl\Application\AdministratorPermissionAuthorizer;
-use App\Modules\AccessControl\Domain\PermissionResolver;
 use App\Modules\Agents\Application\AgentApplicationService;
 use App\Modules\Agents\Application\AgentMutationAudit;
 use App\Modules\Agents\Application\AgentProfileService;
@@ -20,14 +19,6 @@ final class AgentsServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
-        $this->app->singleton(
-            AdministratorPermissionAuthorizer::class,
-            fn (Application $application): AdministratorPermissionAuthorizer => new AdministratorPermissionAuthorizer(
-                $application->make(DatabaseManager::class),
-                new PermissionResolver,
-            ),
-        );
-
         $this->app->singleton(
             AgentMutationAudit::class,
             fn (Application $application): AgentMutationAudit => new AgentMutationAudit(
