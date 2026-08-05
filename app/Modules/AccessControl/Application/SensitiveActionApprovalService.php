@@ -14,6 +14,26 @@ use Illuminate\Database\QueryException;
 use Illuminate\Support\Str;
 use RuntimeException;
 
+/**
+ * @phpstan-type SensitiveApprovalRow object{
+ *     id: string,
+ *     requested_by_administrator_id: int|string,
+ *     permission_id: int|string|null,
+ *     decided_by_administrator_id: int|string|null,
+ *     action: string,
+ *     target_type: ?string,
+ *     target_id: ?string,
+ *     request_fingerprint: string,
+ *     independent_approval_required: int|bool,
+ *     requester_permission_version: int|string|null,
+ *     approver_permission_version: int|string|null,
+ *     state: string,
+ *     expires_at: string,
+ *     execution_fingerprint: ?string,
+ *     consumed_by_administrator_id: int|string|null,
+ *     consumed_at: ?string
+ * }
+ */
 final readonly class SensitiveActionApprovalService
 {
     private const APPROVE_PERMISSION = 'access.sensitive_actions.approve';
@@ -467,26 +487,7 @@ final readonly class SensitiveActionApprovalService
         return $administrator;
     }
 
-    /**
-     * @return object{
-     *     id: string,
-     *     requested_by_administrator_id: int|string,
-     *     permission_id: int|string|null,
-     *     decided_by_administrator_id: int|string|null,
-     *     action: string,
-     *     target_type: ?string,
-     *     target_id: ?string,
-     *     request_fingerprint: string,
-     *     independent_approval_required: int|bool,
-     *     requester_permission_version: int|string|null,
-     *     approver_permission_version: int|string|null,
-     *     state: string,
-     *     expires_at: string,
-     *     execution_fingerprint: ?string,
-     *     consumed_by_administrator_id: int|string|null,
-     *     consumed_at: ?string
-     * }
-     */
+    /** @return SensitiveApprovalRow */
     private function approval(Connection $connection, string $approvalId, bool $lock): object
     {
         $query = $connection->table('sensitive_action_approvals')->where('id', $approvalId);
@@ -495,7 +496,7 @@ final readonly class SensitiveActionApprovalService
             $query->lockForUpdate();
         }
 
-        /** @var object|null $row */
+        /** @var SensitiveApprovalRow|null $row */
         $row = $query->first([
             'id',
             'requested_by_administrator_id',
@@ -522,6 +523,7 @@ final readonly class SensitiveActionApprovalService
         return $row;
     }
 
+    /** @return SensitiveApprovalRow|null */
     private function requestByFingerprint(
         Connection $connection,
         string $requestFingerprint,
@@ -534,7 +536,8 @@ final readonly class SensitiveActionApprovalService
             $query->lockForUpdate();
         }
 
-        return $query->first([
+        /** @var SensitiveApprovalRow|null $row */
+        $row = $query->first([
             'id',
             'requested_by_administrator_id',
             'permission_id',
@@ -552,8 +555,11 @@ final readonly class SensitiveActionApprovalService
             'consumed_by_administrator_id',
             'consumed_at',
         ]);
+
+        return $row;
     }
 
+    /** @param SensitiveApprovalRow $row */
     private function assertRequestMatches(
         object $row,
         string $permissionCode,
@@ -578,6 +584,7 @@ final readonly class SensitiveActionApprovalService
         }
     }
 
+    /** @param SensitiveApprovalRow $row */
     private function assertBoundAction(
         object $row,
         string $action,
@@ -602,6 +609,7 @@ final readonly class SensitiveActionApprovalService
         return $permissionCode;
     }
 
+    /** @param SensitiveApprovalRow $row */
     private function receiptFromRow(
         string $action,
         object $row,
@@ -617,7 +625,10 @@ final readonly class SensitiveActionApprovalService
         );
     }
 
-    /** @return array<string, bool|int|string|null> */
+    /**
+     * @param  SensitiveApprovalRow  $row
+     * @return array<string, bool|int|string|null>
+     */
     private function safeState(object $row): array
     {
         return [
