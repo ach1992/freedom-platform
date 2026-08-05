@@ -101,8 +101,8 @@ trait ProductServiceSupport
     }
 
     /**
-     * @param array<string, bool|int|string|null>|null $before
-     * @param array<string, bool|int|string|null> $after
+     * @param  array<string, bool|int|string|null>|null  $before
+     * @param  array<string, bool|int|string|null>  $after
      */
     private function history(
         Connection $connection,

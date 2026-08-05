@@ -52,8 +52,8 @@ final readonly class CatalogMutationAudit
     }
 
     /**
-     * @param array<string, bool|int|string|null> $before
-     * @param array<string, bool|int|string|null> $after
+     * @param  array<string, bool|int|string|null>  $before
+     * @param  array<string, bool|int|string|null>  $after
      */
     public function record(
         Connection $connection,
@@ -107,7 +107,7 @@ final readonly class CatalogMutationAudit
     }
 
     /**
-     * @param array<string, bool|int|string|null> $state
+     * @param  array<string, bool|int|string|null>  $state
      * @return array<string, bool|int|string|null>
      */
     private function entityState(array $state): array

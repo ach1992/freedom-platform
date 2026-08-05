@@ -136,7 +136,24 @@ return new class extends Migration
 
         DB::statement("ALTER TABLE product_categories ADD CONSTRAINT product_categories_state_chk CHECK (`state` IN ('draft', 'active', 'archived'))");
         DB::statement('ALTER TABLE product_categories ADD CONSTRAINT product_categories_version_chk CHECK (`version` >= 1)');
-        DB::statement('ALTER TABLE product_categories ADD CONSTRAINT product_categories_parent_self_chk CHECK (`parent_id` IS NULL OR `parent_id` <> `id`)');
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER product_categories_reject_self_parent_insert
+BEFORE INSERT ON product_categories FOR EACH ROW
+BEGIN
+    IF NEW.parent_id IS NOT NULL AND NEW.parent_id = NEW.id THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Category cannot parent itself';
+    END IF;
+END
+SQL);
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER product_categories_reject_self_parent_update
+BEFORE UPDATE ON product_categories FOR EACH ROW
+BEGIN
+    IF NEW.parent_id IS NOT NULL AND NEW.parent_id = NEW.id THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Category cannot parent itself';
+    END IF;
+END
+SQL);
         DB::statement("ALTER TABLE products ADD CONSTRAINT products_state_chk CHECK (`state` IN ('draft', 'active', 'archived'))");
         DB::statement("ALTER TABLE products ADD CONSTRAINT products_visibility_chk CHECK (`visibility` IN ('hidden', 'visible'))");
         DB::statement("ALTER TABLE products ADD CONSTRAINT products_visible_active_chk CHECK (`visibility` = 'hidden' OR `state` = 'active')");
@@ -148,6 +165,8 @@ return new class extends Migration
 
     public function down(): void
     {
+        DB::unprepared('DROP TRIGGER IF EXISTS product_categories_reject_self_parent_update');
+        DB::unprepared('DROP TRIGGER IF EXISTS product_categories_reject_self_parent_insert');
         Schema::dropIfExists('product_variant_histories');
         Schema::dropIfExists('product_histories');
         Schema::dropIfExists('product_category_histories');

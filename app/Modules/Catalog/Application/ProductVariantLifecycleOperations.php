@@ -100,5 +100,4 @@ trait ProductVariantLifecycleOperations
             },
         );
     }
-
 }

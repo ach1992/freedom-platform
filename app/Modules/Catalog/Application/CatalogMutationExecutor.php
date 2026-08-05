@@ -22,7 +22,7 @@ final readonly class CatalogMutationExecutor
     ) {}
 
     /**
-     * @param callable(Connection): CatalogMutationReceipt $operation
+     * @param  callable(Connection): CatalogMutationReceipt  $operation
      */
     public function execute(
         string $action,

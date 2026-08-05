@@ -6,35 +6,34 @@ namespace App\Modules\Catalog\Application;
 
 use App\Modules\Catalog\Domain\CatalogCode;
 use App\Modules\Catalog\Domain\CatalogState;
-use App\Modules\Catalog\Domain\ProductVisibility;
 use DomainException;
 use Illuminate\Database\Connection;
 use RuntimeException;
 
-trait ProductDefinitionOperations
+trait ProductCategoryDefinitionOperations
 {
-    /** @requirement CAT-002 ACL-002 SEC-002 DAT-003 QUA-001 */
+    /** @requirement CAT-001 ACL-002 SEC-002 DAT-003 QUA-001 */
     public function create(
-        int $categoryId,
         string $code,
         string $nameFa,
         ?string $nameEn,
         ?string $descriptionFa,
         ?string $descriptionEn,
+        ?int $parentId,
         int $sortOrder,
         CatalogChangeContext $context,
     ): CatalogMutationReceipt {
-        CatalogInput::positiveId($categoryId, 'Category ID');
         $normalizedCode = CatalogCode::fromInput($code)->value;
         $content = CatalogInput::localized($nameFa, $nameEn, $descriptionFa, $descriptionEn);
+        $normalizedParentId = CatalogInput::positiveId($parentId, 'Category parent ID', true);
         $normalizedSortOrder = CatalogInput::sortOrder($sortOrder);
         $payloadHash = CatalogPayloadHash::make([
-            'category_id' => $categoryId,
             'code' => $normalizedCode,
             'content' => $content,
+            'parent_id' => $normalizedParentId,
             'sort_order' => $normalizedSortOrder,
         ]);
-        $action = 'catalog.product.create';
+        $action = 'catalog.category.create';
 
         return $this->executor->execute(
             $action,
@@ -44,29 +43,28 @@ trait ProductDefinitionOperations
             $context,
             function (Connection $connection) use (
                 $action,
-                $categoryId,
                 $normalizedCode,
                 $content,
+                $normalizedParentId,
                 $normalizedSortOrder,
                 $payloadHash,
                 $context,
             ): CatalogMutationReceipt {
-                $this->lockedCategory($connection, $categoryId, false);
+                $this->assertParentChain($connection, $normalizedParentId, null, false);
 
-                if ($connection->table('products')->where('code', $normalizedCode)->lockForUpdate()->exists()) {
-                    throw new RuntimeException('Product code already exists.');
+                if ($connection->table('product_categories')->where('code', $normalizedCode)->lockForUpdate()->exists()) {
+                    throw new RuntimeException('Category code already exists.');
                 }
 
                 $now = $this->timestamp();
-                $productId = (int) $connection->table('products')->insertGetId([
-                    'category_id' => $categoryId,
+                $categoryId = (int) $connection->table('product_categories')->insertGetId([
+                    'parent_id' => $normalizedParentId,
                     'code' => $normalizedCode,
                     'name_fa' => $content['name_fa'],
                     'name_en' => $content['name_en'],
                     'description_fa' => $content['description_fa'],
                     'description_en' => $content['description_en'],
                     'state' => CatalogState::Draft->value,
-                    'visibility' => ProductVisibility::Hidden->value,
                     'sort_order' => $normalizedSortOrder,
                     'version' => 1,
                     'created_at' => $now,
@@ -74,23 +72,22 @@ trait ProductDefinitionOperations
                 ]);
 
                 $after = $this->safeState(
-                    $productId,
-                    $normalizedCode,
                     $categoryId,
+                    $normalizedCode,
+                    $normalizedParentId,
                     CatalogState::Draft,
-                    ProductVisibility::Hidden,
                     $normalizedSortOrder,
                     1,
                     $content['content_hash'],
                     $payloadHash,
                 );
-                $this->history($connection, $productId, 1, $action, null, $after, $context);
+                $this->history($connection, $categoryId, 1, $action, null, $after, $context);
 
                 return $this->audit->record(
                     $connection,
                     $action,
                     self::TARGET_TYPE,
-                    $productId,
+                    $categoryId,
                     $context,
                     ['request_payload_hash' => $payloadHash],
                     $after,
@@ -100,86 +97,83 @@ trait ProductDefinitionOperations
         );
     }
 
-    /** @requirement CAT-002 ACL-002 SEC-002 DAT-003 QUA-001 */
+    /** @requirement CAT-001 ACL-002 SEC-002 DAT-003 QUA-001 */
     public function update(
-        int $productId,
-        int $expectedVersion,
         int $categoryId,
+        int $expectedVersion,
         string $nameFa,
         ?string $nameEn,
         ?string $descriptionFa,
         ?string $descriptionEn,
+        ?int $parentId,
         int $sortOrder,
         CatalogChangeContext $context,
     ): CatalogMutationReceipt {
-        CatalogInput::positiveId($productId, 'Product ID');
         CatalogInput::positiveId($categoryId, 'Category ID');
         $normalizedExpectedVersion = CatalogInput::expectedVersion($expectedVersion);
         $content = CatalogInput::localized($nameFa, $nameEn, $descriptionFa, $descriptionEn);
+        $normalizedParentId = CatalogInput::positiveId($parentId, 'Category parent ID', true);
         $normalizedSortOrder = CatalogInput::sortOrder($sortOrder);
         $payloadHash = CatalogPayloadHash::make([
-            'product_id' => $productId,
-            'expected_version' => $normalizedExpectedVersion,
             'category_id' => $categoryId,
+            'expected_version' => $normalizedExpectedVersion,
             'content' => $content,
+            'parent_id' => $normalizedParentId,
             'sort_order' => $normalizedSortOrder,
         ]);
-        $action = 'catalog.product.update';
+        $action = 'catalog.category.update';
 
         return $this->executor->execute(
             $action,
             self::TARGET_TYPE,
-            $productId,
+            $categoryId,
             $payloadHash,
             $context,
             function (Connection $connection) use (
                 $action,
-                $productId,
-                $normalizedExpectedVersion,
                 $categoryId,
+                $normalizedExpectedVersion,
                 $content,
+                $normalizedParentId,
                 $normalizedSortOrder,
                 $payloadHash,
                 $context,
             ): CatalogMutationReceipt {
-                $product = $this->lockedProduct($connection, $productId);
-                $this->assertVersion((int) $product->version, $normalizedExpectedVersion);
-                $state = $this->storedState((string) $product->state);
-                $visibility = $this->storedVisibility((string) $product->visibility);
+                $category = $this->lockedCategory($connection, $categoryId);
+                $this->assertVersion((int) $category->version, $normalizedExpectedVersion);
+                $state = $this->storedState((string) $category->state);
                 if ($state === CatalogState::Archived) {
-                    throw new DomainException('Archived products are immutable.');
+                    throw new DomainException('Archived categories are immutable.');
                 }
 
-                $currentCategoryId = (int) $product->category_id;
-                if ($categoryId !== $currentCategoryId
-                    && ($state !== CatalogState::Draft || $visibility !== ProductVisibility::Hidden)
-                ) {
-                    throw new DomainException('Only hidden draft products can change category.');
-                }
+                $this->assertParentChain(
+                    $connection,
+                    $normalizedParentId,
+                    $categoryId,
+                    $state === CatalogState::Active,
+                );
 
-                $this->lockedCategory($connection, $categoryId, $state === CatalogState::Active);
-                $beforeContentHash = $this->contentHash($product);
+                $beforeContentHash = $this->contentHash($category);
                 $before = $this->safeState(
-                    $productId,
-                    (string) $product->code,
-                    $currentCategoryId,
+                    $categoryId,
+                    (string) $category->code,
+                    $category->parent_id === null ? null : (int) $category->parent_id,
                     $state,
-                    $visibility,
-                    (int) $product->sort_order,
-                    (int) $product->version,
+                    (int) $category->sort_order,
+                    (int) $category->version,
                     $beforeContentHash,
                     $payloadHash,
                 );
-                $changed = $currentCategoryId !== $categoryId
-                    || $beforeContentHash !== $content['content_hash']
-                    || (int) $product->sort_order !== $normalizedSortOrder;
+                $changed = $beforeContentHash !== $content['content_hash']
+                    || ($category->parent_id === null ? null : (int) $category->parent_id) !== $normalizedParentId
+                    || (int) $category->sort_order !== $normalizedSortOrder;
 
                 if (! $changed) {
                     return $this->audit->record(
                         $connection,
                         $action,
                         self::TARGET_TYPE,
-                        $productId,
+                        $categoryId,
                         $context,
                         $before,
                         $before,
@@ -187,9 +181,9 @@ trait ProductDefinitionOperations
                     );
                 }
 
-                $nextVersion = (int) $product->version + 1;
-                $connection->table('products')->where('id', $productId)->update([
-                    'category_id' => $categoryId,
+                $nextVersion = (int) $category->version + 1;
+                $connection->table('product_categories')->where('id', $categoryId)->update([
+                    'parent_id' => $normalizedParentId,
                     'name_fa' => $content['name_fa'],
                     'name_en' => $content['name_en'],
                     'description_fa' => $content['description_fa'],
@@ -198,24 +192,24 @@ trait ProductDefinitionOperations
                     'version' => $nextVersion,
                     'updated_at' => $this->timestamp(),
                 ]);
+
                 $after = $this->safeState(
-                    $productId,
-                    (string) $product->code,
                     $categoryId,
+                    (string) $category->code,
+                    $normalizedParentId,
                     $state,
-                    $visibility,
                     $normalizedSortOrder,
                     $nextVersion,
                     $content['content_hash'],
                     $payloadHash,
                 );
-                $this->history($connection, $productId, $nextVersion, $action, $before, $after, $context);
+                $this->history($connection, $categoryId, $nextVersion, $action, $before, $after, $context);
 
                 return $this->audit->record(
                     $connection,
                     $action,
                     self::TARGET_TYPE,
-                    $productId,
+                    $categoryId,
                     $context,
                     $before,
                     $after,
