@@ -11,44 +11,16 @@ use RuntimeException;
 
 final class IdentityAccessFoundationSeeder extends Seeder
 {
-    /** @requirement USR-001 USR-002 USR-003 ACL-001 ACL-002 ACL-003 AGT-002 ADM-002 SEC-003 */
+    /** @requirement USR-001 USR-002 USR-003 ACL-001 ACL-002 ACL-003 AGT-002 ADM-001 ADM-002 SEC-003 */
     public function run(): void
     {
         $now = now('UTC');
 
         DB::table('customer_tiers')->upsert([
-            $this->tier(
-                CustomerTierCode::New,
-                'customer_tiers.new',
-                10,
-                0,
-                0,
-                $now,
-            ),
-            $this->tier(
-                CustomerTierCode::Normal,
-                'customer_tiers.normal',
-                20,
-                1,
-                0,
-                $now,
-            ),
-            $this->tier(
-                CustomerTierCode::Loyal,
-                'customer_tiers.loyal',
-                30,
-                3,
-                30,
-                $now,
-            ),
-            $this->tier(
-                CustomerTierCode::Vip,
-                'customer_tiers.vip',
-                40,
-                10,
-                90,
-                $now,
-            ),
+            $this->tier(CustomerTierCode::New, 'customer_tiers.new', 10, 0, 0, $now),
+            $this->tier(CustomerTierCode::Normal, 'customer_tiers.normal', 20, 1, 0, $now),
+            $this->tier(CustomerTierCode::Loyal, 'customer_tiers.loyal', 30, 3, 30, $now),
+            $this->tier(CustomerTierCode::Vip, 'customer_tiers.vip', 40, 10, 90, $now),
         ], ['code'], ['name_translation_key', 'sort_order', 'is_active', 'policy', 'updated_at']);
 
         DB::table('roles')->upsert([
@@ -70,6 +42,7 @@ final class IdentityAccessFoundationSeeder extends Seeder
             $this->permission('access.roles.manage', 'access_control', 'critical', true, $now),
             $this->permission('access.permissions.override', 'access_control', 'critical', true, $now),
             $this->permission('access.sensitive_actions.approve', 'access_control', 'critical', true, $now),
+            $this->permission('admins.accounts.manage', 'access_control', 'critical', true, $now),
             $this->permission('admins.transfer_ownership', 'access_control', 'critical', true, $now),
         ], ['code'], ['module', 'risk_level', 'requires_approval', 'updated_at']);
 
