@@ -74,6 +74,10 @@ final readonly class AdministratorAccessService
             $action,
             $administratorId,
             $context,
+            [
+                'permission_code' => $permissionCode,
+                'effect' => $effect->value,
+            ],
             function (Connection $connection) use (
                 $action,
                 $administratorId,
@@ -220,6 +224,10 @@ final readonly class AdministratorAccessService
             $action,
             $administratorId,
             $context,
+            [
+                'role_code' => $roleCode,
+                'assigned' => $assigned,
+            ],
             function (Connection $connection) use (
                 $action,
                 $administratorId,
@@ -462,12 +470,14 @@ final readonly class AdministratorAccessService
     }
 
     /**
+     * @param  array<string, bool|string>  $expectedAfter
      * @param  callable(Connection): AccessMutationReceipt  $operation
      */
     private function idempotentTransaction(
         string $action,
         int $targetAdministratorId,
         AccessChangeContext $context,
+        array $expectedAfter,
         callable $operation,
     ): AccessMutationReceipt {
         try {
@@ -481,6 +491,10 @@ final readonly class AdministratorAccessService
                 $context->requestFingerprint,
             );
             if ($existing !== null) {
+                foreach ($expectedAfter as $key => $expected) {
+                    $this->assertReceiptValue($existing, $key, $expected);
+                }
+
                 return $existing;
             }
 
