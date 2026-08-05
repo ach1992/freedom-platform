@@ -25,7 +25,7 @@ final readonly class IdentityItemService
     private array $requiredTypes;
 
     /**
-     * @param list<IdentityItemType|string> $requiredTypes
+     * @param  list<IdentityItemType|string>  $requiredTypes
      */
     public function __construct(
         private DatabaseManager $database,
@@ -395,7 +395,7 @@ final readonly class IdentityItemService
     }
 
     /**
-     * @param callable(Connection, IdentityItemRecord): array<string, bool|int|string|null> $mutation
+     * @param  callable(Connection, IdentityItemRecord): array<string, bool|int|string|null>  $mutation
      */
     private function reviewTransaction(
         string $action,
