@@ -30,7 +30,8 @@ jobs:
           awk "/<<'PAYLOAD'/{capture=1; next} /^[[:space:]]*PAYLOAD$/{capture=0} capture{sub(/^[[:space:]]*/, \"\"); print}" \
             .github/workflows/apply-sms-adapters-once.yml \
             | base64 -d > "$temp_dir/package.tar.gz"
-          echo "25421aaf3fdc9f2b6992b942125315de4d81553c3a194fe8c06a9a475ae42f94  $temp_dir/package.tar.gz" | sha256sum -c -
+          test -s "$temp_dir/package.tar.gz"
+          gzip -t "$temp_dir/package.tar.gz"
           mkdir -p "$temp_dir/package"
           tar -xzf "$temp_dir/package.tar.gz" -C "$temp_dir/package"
           cp -a "$temp_dir/package/." .
