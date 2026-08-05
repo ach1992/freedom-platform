@@ -1,8 +1,10 @@
 # Phase 0.3.0 evidence — protected Owner transfer
 
-Status: implementation prepared; mandatory CI evidence pending.
+Status: candidate implementation assembled; mandatory CI evidence pending.
 
 Requirements: `ACL-003`, `ADM-002`, `SEC-002`, `QUA-001`, `QUA-011`.
+
+Candidate implementation SHA before verification trigger: `313018d92399961c94c8d63126be73c0fe1c562f`.
 
 ## Delivered boundary
 
