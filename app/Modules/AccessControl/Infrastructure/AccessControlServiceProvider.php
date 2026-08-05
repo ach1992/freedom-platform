@@ -6,6 +6,7 @@ namespace App\Modules\AccessControl\Infrastructure;
 
 use App\Modules\AccessControl\Application\AccessMutationAudit;
 use App\Modules\AccessControl\Application\AdministratorAccessService;
+use App\Modules\AccessControl\Application\AdministratorLifecycleService;
 use App\Modules\AccessControl\Application\AdministratorPermissionAuthorizer;
 use App\Modules\AccessControl\Application\OwnerTransferService;
 use App\Modules\AccessControl\Application\SensitiveActionApprovalService;
@@ -53,6 +54,16 @@ final class AccessControlServiceProvider extends ServiceProvider
         $this->app->singleton(
             AdministratorAccessService::class,
             fn (Application $application): AdministratorAccessService => new AdministratorAccessService(
+                $application->make(DatabaseManager::class),
+                $application->make(AdministratorPermissionAuthorizer::class),
+                $application->make(AccessMutationAudit::class),
+                $application->make(Clock::class),
+            ),
+        );
+
+        $this->app->singleton(
+            AdministratorLifecycleService::class,
+            fn (Application $application): AdministratorLifecycleService => new AdministratorLifecycleService(
                 $application->make(DatabaseManager::class),
                 $application->make(AdministratorPermissionAuthorizer::class),
                 $application->make(AccessMutationAudit::class),
