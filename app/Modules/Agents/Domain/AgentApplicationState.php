@@ -7,23 +7,22 @@ namespace App\Modules\Agents\Domain;
 enum AgentApplicationState: string
 {
     case Submitted = 'submitted';
-    case Claimed = 'claimed';
+    case UnderReview = 'under_review';
     case Approved = 'approved';
     case Rejected = 'rejected';
     case Withdrawn = 'withdrawn';
 
-    public function canTransitionTo(self $next): bool
+    public function canTransitionTo(self $target): bool
     {
         return match ($this) {
-            self::Submitted => in_array($next, [self::Claimed, self::Rejected, self::Withdrawn], true),
-            self::Claimed => in_array($next, [self::Submitted, self::Approved, self::Rejected], true),
-            self::Rejected => $next === self::Submitted,
-            self::Approved, self::Withdrawn => false,
+            self::Submitted => in_array($target, [self::UnderReview, self::Withdrawn], true),
+            self::UnderReview => in_array($target, [self::Submitted, self::Approved, self::Rejected], true),
+            self::Approved, self::Rejected, self::Withdrawn => false,
         };
     }
 
     public function keepsActiveApplicationSlot(): bool
     {
-        return in_array($this, [self::Submitted, self::Claimed], true);
+        return in_array($this, [self::Submitted, self::UnderReview], true);
     }
 }
