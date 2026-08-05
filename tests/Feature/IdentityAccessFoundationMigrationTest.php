@@ -12,7 +12,7 @@ use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Tests\TestCase;
 
-/** @requirement ONB-001 ONB-004 ONB-005 USR-001 USR-002 USR-003 AGT-001 AGT-002 ACL-001 ACL-002 ACL-003 SEC-002 SEC-003 */
+/** @requirement ONB-001 ONB-004 ONB-005 USR-001 USR-002 USR-003 AGT-001 AGT-002 ACL-001 ACL-002 ACL-003 ADM-001 SEC-002 SEC-003 */
 final class IdentityAccessFoundationMigrationTest extends TestCase
 {
     use RefreshDatabase;
@@ -32,6 +32,7 @@ final class IdentityAccessFoundationMigrationTest extends TestCase
             'identity_items',
             'identity_item_histories',
             'administrators',
+            'administrator_status_histories',
             'roles',
             'permissions',
             'role_permissions',
@@ -51,10 +52,15 @@ final class IdentityAccessFoundationMigrationTest extends TestCase
 
         $this->assertSame(4, DB::table('customer_tiers')->count());
         $this->assertSame(4, DB::table('roles')->count());
-        $this->assertSame(12, DB::table('permissions')->count());
+        $this->assertSame(13, DB::table('permissions')->count());
         $this->assertDatabaseHas('customer_tiers', ['code' => 'vip', 'is_active' => true]);
         $this->assertDatabaseHas('permissions', [
             'code' => 'access.permissions.override',
+            'risk_level' => 'critical',
+            'requires_approval' => true,
+        ]);
+        $this->assertDatabaseHas('permissions', [
+            'code' => 'admins.accounts.manage',
             'risk_level' => 'critical',
             'requires_approval' => true,
         ]);
