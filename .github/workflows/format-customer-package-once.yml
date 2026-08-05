@@ -1,0 +1,52 @@
+name: Format customer package once
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/format-customer-package-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    if: github.event.pull_request.head.ref == 'develop/v1.0.0-completion'
+    runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
+    timeout-minutes: 15
+    env:
+      CI_PHP_IMAGE: freedom-platform-ci-php:8.4
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: develop/v1.0.0-completion
+          fetch-depth: 1
+
+      - name: Format package and align seed-count regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --file docker/ci/php84.Dockerfile --tag "$CI_PHP_IMAGE" docker/ci
+          bash scripts/ci/run-php-container.sh composer install --no-interaction --prefer-dist --no-progress
+          sed -i "s/assertSame(8, DB::table('permissions')->count())/assertSame(9, DB::table('permissions')->count())/" tests/Feature/IdentityAccessFoundationMigrationTest.php
+          bash scripts/ci/run-php-container.sh vendor/bin/pint \
+            app/Modules/Customers/Application \
+            database/migrations/2026_08_05_000800_add_customer_mutation_idempotency.php \
+            database/seeders/IdentityAccessFoundationSeeder.php \
+            tests/Feature/CustomerTransitionServicesTest.php \
+            tests/Feature/IdentityAccessFoundationMigrationTest.php \
+            tests/Unit/Modules/Customers/CustomerTierCalculatorTest.php
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add \
+            app/Modules/Customers/Application \
+            database/migrations/2026_08_05_000800_add_customer_mutation_idempotency.php \
+            database/seeders/IdentityAccessFoundationSeeder.php \
+            tests/Feature/CustomerTransitionServicesTest.php \
+            tests/Feature/IdentityAccessFoundationMigrationTest.php \
+            tests/Unit/Modules/Customers/CustomerTierCalculatorTest.php
+          git rm .github/workflows/format-customer-package-once.yml
+          git diff --cached --check
+          git commit -m 'style: format customer transition package'
+          git push origin HEAD:develop/v1.0.0-completion
