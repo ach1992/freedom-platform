@@ -48,12 +48,12 @@ final readonly class CustomerAccountSummaryService
                 'profiles.identity_verification_status',
             ]);
 
-        /** @var object{verification_method: ?string, status: string, verified_at: ?string}|null $phone */
+        /** @var object{last_verification_method: ?string, status: string, verified_at: ?string}|null $phone */
         $phone = $connection->table('phone_numbers')
             ->where('user_id', $userId)
             ->whereNotNull('active_lookup_hash')
             ->orderByDesc('id')
-            ->first(['verification_method', 'status', 'verified_at']);
+            ->first(['last_verification_method', 'status', 'verified_at']);
 
         /** @var iterable<int, object{type: string, masked_value: string, state: string, ownership_check_status: string, version: int|string}> $identityRows */
         $identityRows = $connection->table('identity_items')
@@ -116,7 +116,7 @@ final readonly class CustomerAccountSummaryService
             $profile?->tier_code,
             $tierLocked,
             $phoneVerificationStatus,
-            $phone?->verification_method,
+            $phone?->last_verification_method,
             $phone?->verified_at,
             $identityVerificationStatus,
             $identityItems,
