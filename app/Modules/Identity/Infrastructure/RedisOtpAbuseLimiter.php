@@ -54,12 +54,11 @@ final readonly class RedisOtpAbuseLimiter implements OtpAbuseLimiter
             $arguments[] = (string) $bucket->windowSeconds;
         }
 
-        $result = $this->redis->connection()->eval(
+        $result = $this->redis->connection()->command('eval', [
             self::LUA,
+            [...$keys, ...$arguments],
             count($keys),
-            ...$keys,
-            ...$arguments,
-        );
+        ]);
 
         if (! is_int($result) && ! is_numeric($result)) {
             throw new RuntimeException('OTP rate limiter returned an invalid response.');
