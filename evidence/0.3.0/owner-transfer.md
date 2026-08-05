@@ -1,10 +1,8 @@
 # Phase 0.3.0 evidence — protected Owner transfer
 
-Status: candidate implementation assembled; mandatory CI evidence pending.
+Status: verified by the mandatory CI quality gate.
 
 Requirements: `ACL-003`, `ADM-002`, `SEC-002`, `QUA-001`, `QUA-011`.
-
-Candidate implementation SHA before verification trigger: `313018d92399961c94c8d63126be73c0fe1c562f`.
 
 ## Delivered boundary
 
@@ -21,7 +19,15 @@ Candidate implementation SHA before verification trigger: `313018d92399961c94c8d
 - append-only safe audit evidence containing old/new Owner identifiers and state only;
 - feature tests for exact-once acceptance, singleton enforcement, reauthentication, receiving-owner binding, stale/tampered intent, expiry, cancellation and fingerprint conflict.
 
-## Verification plan
+## Mandatory CI verification
+
+- Verified implementation SHA: `64bdda369868ceb0c43557cc84701bdeed279e68`.
+- CI run: `31030935014` (`CI` run number `786`).
+- Result: success across repository preflight, PHP static quality, MariaDB/Redis integration tests, dependency/license policy and secret scan.
+- Automated suite: `173` tests passed with `844` assertions.
+- Test evidence artifact: `test-evidence-31030935014`.
+
+## Verification commands
 
 ```bash
 bash scripts/ci/verify-planning.sh
@@ -38,4 +44,4 @@ COLUMNS=240 php artisan test --display-warnings --fail-on-warning --log-junit bu
 docker compose -f docker-compose.ci.yml down --volumes --remove-orphans
 ```
 
-No green-test claim is made until a recorded CI run completes.
+The recorded CI run is the authoritative verification for this increment.
