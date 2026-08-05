@@ -97,6 +97,15 @@ final readonly class CustomerAccountSummaryService
             ->where('user_id', $userId)
             ->first(['status', 'is_owner']);
 
+        $tierLocked = $profile === null ? false : (bool) $profile->tier_locked;
+        $phoneVerificationStatus = $profile === null
+            ? VerificationStatus::Unverified->value
+            : $profile->phone_verification_status;
+        $identityVerificationStatus = $profile === null
+            ? VerificationStatus::Unverified->value
+            : $profile->identity_verification_status;
+        $isOwner = $administrator === null ? false : (bool) $administrator->is_owner;
+
         return new CustomerAccountSummary(
             $user->public_id,
             $user->account_type,
@@ -105,18 +114,18 @@ final readonly class CustomerAccountSummaryService
             $user->first_seen_at,
             $user->last_seen_at,
             $profile?->tier_code,
-            (bool) ($profile?->tier_locked ?? false),
-            $profile?->phone_verification_status ?? VerificationStatus::Unverified->value,
+            $tierLocked,
+            $phoneVerificationStatus,
             $phone?->verification_method,
             $phone?->verified_at,
-            $profile?->identity_verification_status ?? VerificationStatus::Unverified->value,
+            $identityVerificationStatus,
             $identityItems,
             $tags,
             $agent?->status,
             $agent?->approved_at,
             $application?->state,
             $administrator?->status,
-            (bool) ($administrator?->is_owner ?? false),
+            $isOwner,
         );
     }
 }
