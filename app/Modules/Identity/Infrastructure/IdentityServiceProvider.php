@@ -8,6 +8,8 @@ use App\Modules\Identity\Application\Contracts\OtpAbuseLimiter;
 use App\Modules\Identity\Application\Contracts\OtpCodeHasher;
 use App\Modules\Identity\Application\Contracts\PhoneLookupHasher;
 use App\Modules\Identity\Application\Contracts\SmsDeliveryAttemptRecorder;
+use App\Modules\Identity\Application\Contracts\SmsOtpMessageRenderer;
+use App\Modules\Identity\Application\Contracts\SmsProvider;
 use App\Modules\Identity\Application\FallbackSmsDispatcher;
 use App\Modules\Identity\Application\OtpChallengeIssuer;
 use App\Modules\Identity\Application\OtpChallengeVerifier;
@@ -16,7 +18,9 @@ use App\Shared\Application\RandomGenerator;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Contracts\Encryption\StringEncrypter;
 use Illuminate\Contracts\Foundation\Application;
+use Illuminate\Contracts\Translation\Translator;
 use Illuminate\Database\DatabaseManager;
+use Illuminate\Http\Client\Factory;
 use Illuminate\Redis\RedisManager;
 use Illuminate\Support\ServiceProvider;
 use RuntimeException;
@@ -52,21 +56,30 @@ final class IdentityServiceProvider extends ServiceProvider
         );
 
         $this->app->singleton(
+            SmsOtpMessageRenderer::class,
+            fn (Application $application): SmsOtpMessageRenderer => new LocalizedSmsOtpMessageRenderer(
+                $application->make(Translator::class),
+            ),
+        );
+
+        $this->app->singleton(
             FallbackSmsDispatcher::class,
             function (Application $application): FallbackSmsDispatcher {
                 $configuration = self::identityConfiguration($application);
                 $sms = is_array($configuration['sms'] ?? null) ? $configuration['sms'] : [];
                 $providerDailyLimit = self::positiveInteger($sms['provider_daily_limit'] ?? 10000, 10000);
+                $primaryCode = self::providerCode($sms['primary_provider'] ?? 'fake_primary', 'fake_primary');
+                $fallbackCode = self::providerCode($sms['fallback_provider'] ?? 'fake_fallback', 'fake_fallback');
                 $limiter = $application->make(OtpAbuseLimiter::class);
 
                 return new FallbackSmsDispatcher(
                     new RateLimitedSmsProvider(
-                        new FakeSmsProvider('fake_primary'),
+                        self::smsProvider($application, $sms, $primaryCode),
                         $limiter,
                         $providerDailyLimit,
                     ),
                     new RateLimitedSmsProvider(
-                        new FakeSmsProvider('fake_fallback'),
+                        self::smsProvider($application, $sms, $fallbackCode),
                         $limiter,
                         $providerDailyLimit,
                     ),
@@ -146,6 +159,43 @@ final class IdentityServiceProvider extends ServiceProvider
         );
     }
 
+    /** @param array<string, mixed> $sms */
+    private static function smsProvider(Application $application, array $sms, string $providerCode): SmsProvider
+    {
+        if ($providerCode === 'fake_primary' || $providerCode === 'fake_fallback') {
+            return new FakeSmsProvider($providerCode);
+        }
+
+        $providers = is_array($sms['providers'] ?? null) ? $sms['providers'] : [];
+        $providerConfiguration = $providers[$providerCode] ?? null;
+
+        if (! is_array($providerConfiguration)) {
+            throw new RuntimeException('Selected SMS provider configuration is missing.');
+        }
+
+        if (! self::boolean($providerConfiguration['enabled'] ?? false)) {
+            throw new RuntimeException('Selected SMS provider is disabled.');
+        }
+
+        $timeoutSeconds = self::positiveInteger($sms['timeout_seconds'] ?? 15, 15);
+        $http = $application->make(Factory::class);
+        $renderer = $application->make(SmsOtpMessageRenderer::class);
+
+        return match ($providerCode) {
+            'melli_payamak' => new MelliPayamakSmsProvider(
+                $http,
+                MelliPayamakSmsConfiguration::fromArray($providerConfiguration, $timeoutSeconds),
+                $renderer,
+            ),
+            'kavenegar' => new KavenegarSmsProvider(
+                $http,
+                KavenegarSmsConfiguration::fromArray($providerConfiguration, $timeoutSeconds),
+                $renderer,
+            ),
+            default => throw new RuntimeException('Selected SMS provider is unsupported.'),
+        };
+    }
+
     /** @return array<string, mixed> */
     private static function identityConfiguration(Application $application): array
     {
@@ -184,6 +234,30 @@ final class IdentityServiceProvider extends ServiceProvider
         }
 
         return hash_hkdf('sha256', $applicationKey, 32, $context);
+    }
+
+    private static function providerCode(mixed $value, string $default): string
+    {
+        $providerCode = is_string($value) ? trim($value) : $default;
+
+        if (preg_match('/\A[a-z0-9_-]{2,64}\z/', $providerCode) !== 1) {
+            throw new RuntimeException('Configured SMS provider code is invalid.');
+        }
+
+        return $providerCode;
+    }
+
+    private static function boolean(mixed $value): bool
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        if (is_int($value)) {
+            return $value === 1;
+        }
+
+        return is_string($value) && in_array(strtolower(trim($value)), ['1', 'true', 'yes', 'on'], true);
     }
 
     private static function positiveInteger(mixed $value, int $default): int

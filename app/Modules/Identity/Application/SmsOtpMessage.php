@@ -16,6 +16,7 @@ final readonly class SmsOtpMessage
         public string $idempotencyKey,
         public ?int $userId = null,
         public ?string $challengeId = null,
+        public string $locale = 'fa',
     ) {
         if (preg_match('/\A[0-9]{6}\z/', $code) !== 1) {
             throw new InvalidArgumentException('OTP code must contain exactly six ASCII digits.');
@@ -36,6 +37,10 @@ final readonly class SmsOtpMessage
         if ($challengeId !== null && preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/', $challengeId) !== 1) {
             throw new InvalidArgumentException('OTP challenge ID must be a ULID.');
         }
+
+        if (preg_match('/\A[a-z]{2}(?:-[A-Z]{2})?\z/', $locale) !== 1) {
+            throw new InvalidArgumentException('SMS locale is invalid.');
+        }
     }
 
     /** @return array<string, int|string|null> */
@@ -48,6 +53,7 @@ final readonly class SmsOtpMessage
             'idempotency_key' => '[REDACTED]',
             'user_id' => $this->userId,
             'challenge_id' => $this->challengeId,
+            'locale' => $this->locale,
         ];
     }
 }

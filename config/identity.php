@@ -17,6 +17,24 @@ return [
         'redis_prefix' => env('OTP_REDIS_PREFIX', 'freedom:otp-limit:'),
     ],
     'sms' => [
+        'primary_provider' => env('SMS_PRIMARY_PROVIDER', 'fake_primary'),
+        'fallback_provider' => env('SMS_FALLBACK_PROVIDER', 'fake_fallback'),
         'provider_daily_limit' => (int) env('SMS_PROVIDER_DAILY_LIMIT', 10000),
+        'timeout_seconds' => (int) env('SMS_PROVIDER_TIMEOUT_SECONDS', 15),
+        'providers' => [
+            'melli_payamak' => [
+                'enabled' => filter_var(env('MELLI_PAYAMAK_ENABLED', false), FILTER_VALIDATE_BOOL),
+                'username' => env('MELLI_PAYAMAK_USERNAME'),
+                'password' => env('MELLI_PAYAMAK_PASSWORD'),
+                'sender' => env('MELLI_PAYAMAK_SENDER'),
+                'timeout_seconds' => (int) env('MELLI_PAYAMAK_TIMEOUT_SECONDS', 15),
+            ],
+            'kavenegar' => [
+                'enabled' => filter_var(env('KAVENEGAR_ENABLED', false), FILTER_VALIDATE_BOOL),
+                'api_key' => env('KAVENEGAR_API_KEY'),
+                'sender' => env('KAVENEGAR_SENDER'),
+                'timeout_seconds' => (int) env('KAVENEGAR_TIMEOUT_SECONDS', 15),
+            ],
+        ],
     ],
 ];
