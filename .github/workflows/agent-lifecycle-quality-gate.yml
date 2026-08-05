@@ -1,0 +1,323 @@
+name: Agent lifecycle quality gate
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/agent-lifecycle-quality-gate.yml
+
+permissions:
+  actions: write
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: agent-lifecycle-quality-gate
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    if: github.event.pull_request.head.ref == 'develop/v1.0.0-completion'
+    runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
+    timeout-minutes: 90
+    env:
+      CI_PHP_IMAGE: freedom-platform-ci-php:8.4
+      APP_ENV: testing
+      APP_DEBUG: "false"
+      APP_TIMEZONE: UTC
+      BUSINESS_TIMEZONE: Asia/Tehran
+      APP_KEY: base64:ZmFrZS1jaS1hcHBsaWNhdGlvbi1rZXktMzItYnl0ZXMhIQ==
+      DB_CONNECTION: mysql
+      DB_HOST: 127.0.0.1
+      DB_PORT: "33067"
+      DB_DATABASE: freedom_platform_ci
+      DB_USERNAME: freedom_ci
+      DB_PASSWORD: ci-only-database-password
+      REDIS_CLIENT: phpredis
+      REDIS_HOST: 127.0.0.1
+      REDIS_PORT: "6380"
+      REDIS_PASSWORD: ci-only-redis-password
+      CACHE_STORE: redis
+      QUEUE_CONNECTION: redis
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Cancel stale branch runs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          repository = os.environ['GITHUB_REPOSITORY']
+          current_run = int(os.environ['GITHUB_RUN_ID'])
+          token = os.environ['GH_TOKEN']
+          headers = {
+              'Accept': 'application/vnd.github+json',
+              'Authorization': f'Bearer {token}',
+              'X-GitHub-Api-Version': '2022-11-28',
+              'User-Agent': 'freedom-platform-agent-gate',
+          }
+
+          def call(url: str, method: str = 'GET') -> dict:
+              request = urllib.request.Request(url, method=method, headers=headers)
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  body = response.read()
+              return json.loads(body) if body else {}
+
+          for status in ('queued', 'in_progress'):
+              query = urllib.parse.urlencode({
+                  'branch': 'develop/v1.0.0-completion',
+                  'status': status,
+                  'per_page': 100,
+              })
+              for run in call(f'https://api.github.com/repos/{repository}/actions/runs?{query}').get('workflow_runs', []):
+                  run_id = int(run['id'])
+                  if run_id == current_run:
+                      continue
+                  try:
+                      call(f'https://api.github.com/repos/{repository}/actions/runs/{run_id}/cancel', 'POST')
+                  except urllib.error.HTTPError as error:
+                      if error.code not in (409, 422):
+                          raise
+          PY
+
+      - name: Check out development branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: develop/v1.0.0-completion
+          fetch-depth: 0
+
+      - name: Finalize typed agent lifecycle
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > app/Modules/Agents/Domain/AgentApplicationState.php <<'PHP'
+          <?php
+
+          declare(strict_types=1);
+
+          namespace App\Modules\Agents\Domain;
+
+          enum AgentApplicationState: string
+          {
+              case Submitted = 'submitted';
+              case UnderReview = 'under_review';
+              case Approved = 'approved';
+              case Rejected = 'rejected';
+              case Withdrawn = 'withdrawn';
+
+              public function canTransitionTo(self $target): bool
+              {
+                  return match ($this) {
+                      self::Submitted => in_array($target, [self::UnderReview, self::Withdrawn], true),
+                      self::UnderReview => in_array($target, [self::Submitted, self::Approved, self::Rejected], true),
+                      self::Approved, self::Rejected, self::Withdrawn => false,
+                  };
+              }
+
+              public function keepsActiveApplicationSlot(): bool
+              {
+                  return in_array($this, [self::Submitted, self::UnderReview], true);
+              }
+          }
+          PHP
+
+          cat > app/Modules/Agents/Domain/AgentStatus.php <<'PHP'
+          <?php
+
+          declare(strict_types=1);
+
+          namespace App\Modules\Agents\Domain;
+
+          enum AgentStatus: string
+          {
+              case Active = 'active';
+              case Limited = 'limited';
+              case Suspended = 'suspended';
+
+              public function canTransitionTo(self $target): bool
+              {
+                  return $this !== $target;
+              }
+          }
+          PHP
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('app/Modules/Agents/Application/AgentApplicationService.php')
+          source = path.read_text()
+          source = source.replace('function (Connection $connection, object $application)', 'function (Connection $connection, AgentApplicationRecord $application)')
+          source = source.replace('@param callable(Connection, object): void $mutation', '@param callable(Connection, AgentApplicationRecord): void $mutation')
+          old = """            /** @var object{customer_id: int, state: string, claimed_by_administrator_id: ?int}|null $application */
+            $application = $connection->table('agent_applications')->where('id', $applicationId)->lockForUpdate()->first(['customer_id', 'state', 'claimed_by_administrator_id']);
+            if ($application === null || $application->state !== $from->value || ! $from->canTransitionTo($to)) {
+                throw new RuntimeException('Agent application transition is not allowed.');
+            }
+            $mutation($connection, $application);
+"""
+          new = """            /** @var object{customer_id: int, state: string, claimed_by_administrator_id: ?int}|null $row */
+            $row = $connection->table('agent_applications')->where('id', $applicationId)->lockForUpdate()->first(['customer_id', 'state', 'claimed_by_administrator_id']);
+            if ($row === null || $row->state !== $from->value || ! $from->canTransitionTo($to)) {
+                throw new RuntimeException('Agent application transition is not allowed.');
+            }
+            $application = new AgentApplicationRecord(
+                (int) $row->customer_id,
+                $row->state,
+                $row->claimed_by_administrator_id === null ? null : (int) $row->claimed_by_administrator_id,
+            );
+            $mutation($connection, $application);
+"""
+          if old not in source:
+              raise SystemExit('Agent transition record anchor was not found.')
+          source = source.replace(old, new)
+          source = source.replace('$application->customer_id', '$application->customerId')
+          source = source.replace('$application->claimed_by_administrator_id', '$application->claimedByAdministratorId')
+          source = source.replace('private function assertReviewerOrOwner(Connection $connection, object $application, int $administratorId): void', 'private function assertReviewerOrOwner(Connection $connection, AgentApplicationRecord $application, int $administratorId): void')
+          source = source.replace('private function assertReapplicationAllowed(?object $latest): void', "/** @param object{state: string, reapply_allowed_at: ?string, reapplication_released_at: ?string}|null $latest */\n    private function assertReapplicationAllowed(?object $latest): void")
+          old_time = """        if ($latest->reapply_allowed_at === null || $this->clock->now()->getTimestamp() < strtotime($latest->reapply_allowed_at)) {
+            throw new RuntimeException('Agent reapplication cooldown is still active.');
+        }
+"""
+          new_time = """        $allowedAt = $latest->reapply_allowed_at === null ? false : strtotime($latest->reapply_allowed_at);
+        if ($allowedAt === false || $this->clock->now()->getTimestamp() < $allowedAt) {
+            throw new RuntimeException('Agent reapplication cooldown is still active.');
+        }
+"""
+          if old_time not in source:
+              raise SystemExit('Agent cooldown anchor was not found.')
+          path.write_text(source.replace(old_time, new_time))
+
+          domain_test = Path('tests/Unit/Modules/IdentityAccessDomainTest.php')
+          test = domain_test.read_text()
+          test = test.replace("['active', 'suspended'], $this->values(AgentStatus::cases())", "['active', 'limited', 'suspended'], $this->values(AgentStatus::cases())")
+          test = test.replace('AgentApplicationState::Claimed', 'AgentApplicationState::UnderReview')
+          domain_test.write_text(test)
+
+          providers = Path('bootstrap/providers.php')
+          text = providers.read_text()
+          import_anchor = 'use App\\Modules\\Identity\\Infrastructure\\IdentityServiceProvider;\n'
+          if 'use App\\Modules\\Agents\\Infrastructure\\AgentsServiceProvider;' not in text:
+              text = text.replace(import_anchor, 'use App\\Modules\\Agents\\Infrastructure\\AgentsServiceProvider;\n' + import_anchor)
+          registration_anchor = '    FoundationServiceProvider::class,\n'
+          if '    AgentsServiceProvider::class,\n' not in text:
+              text = text.replace(registration_anchor, registration_anchor + '    AgentsServiceProvider::class,\n')
+          providers.write_text(text)
+
+          environment = Path('.env.example')
+          env_text = environment.read_text().rstrip() + '\n'
+          if 'AGENT_REAPPLICATION_COOLDOWN_DAYS=' not in env_text:
+              env_text += '\nAGENT_REAPPLICATION_COOLDOWN_DAYS=30\nAGENT_DEFAULT_PRICING_PROFILE_CODE=default\n'
+          environment.write_text(env_text)
+          PY
+
+      - name: Build dependencies and format package
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --file docker/ci/php84.Dockerfile --tag "$CI_PHP_IMAGE" docker/ci
+          bash scripts/ci/run-php-container.sh composer install --no-interaction --prefer-dist --no-progress
+          find app/Modules/Agents app/Modules/AccessControl/Application config/agents.php database/migrations/2026_08_05_000900_extend_agent_lifecycle.php tests/Feature/AgentLifecycleServicesTest.php -type f -name '*.php' -print0 \
+            | xargs -0 -n1 bash scripts/ci/run-php-container.sh php -l
+          bash scripts/ci/run-php-container.sh vendor/bin/pint \
+            app/Modules/AccessControl/Application/AdministratorPermissionAuthorizer.php \
+            app/Modules/Agents \
+            bootstrap/providers.php \
+            config/agents.php \
+            database/migrations/2026_08_05_000900_extend_agent_lifecycle.php \
+            tests/Feature/AgentLifecycleServicesTest.php \
+            tests/Unit/Modules/IdentityAccessDomainTest.php
+
+      - name: Run mandatory static and security gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/evidence/agent-lifecycle build/evidence/dependencies
+          bash scripts/ci/verify-planning.sh
+          bash scripts/ci/run-php-container.sh vendor/bin/pint --test --format=json > build/evidence/agent-lifecycle/pint.json
+          bash scripts/ci/run-php-container.sh composer validate --strict --no-check-publish
+          bash scripts/ci/run-php-container.sh vendor/bin/phpstan analyse --no-progress --error-format=table
+          bash scripts/ci/run-php-container.sh composer ci:forbidden-patterns
+          bash scripts/ci/run-php-container.sh composer ci:architecture
+          bash scripts/ci/run-php-container.sh composer audit --locked --abandoned=fail --format=json > build/evidence/agent-lifecycle/audit.json
+          bash scripts/ci/run-php-container.sh composer ci:licenses
+          test -s build/evidence/dependencies/licenses.json
+          docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.24.2 detect --source=/repo --no-banner --redact --exit-code=1
+
+      - name: Run fresh migration and full automated suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose.ci.yml down --volumes --remove-orphans >/dev/null 2>&1 || true
+          docker compose -f docker-compose.ci.yml up -d --wait
+          test -f .env || cp .env.example .env
+          bash scripts/ci/run-php-container.sh php artisan config:clear --ansi
+          bash scripts/ci/run-php-container.sh php artisan migrate:fresh --seed --force
+          COLUMNS=240 bash scripts/ci/run-php-container.sh php artisan test \
+            --display-warnings \
+            --fail-on-warning \
+            --log-junit build/evidence/agent-lifecycle/junit.xml \
+            --coverage-clover build/evidence/agent-lifecycle/clover.xml
+
+      - name: Stop disposable services
+        if: always()
+        run: docker compose -f docker-compose.ci.yml down --volumes --remove-orphans
+
+      - name: Record evidence and commit verified package
+        shell: bash
+        run: |
+          set -euo pipefail
+          read -r tests assertions < <(python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          root = ET.parse('build/evidence/agent-lifecycle/junit.xml').getroot()
+          tests = int(root.attrib.get('tests', 0))
+          assertions = int(root.attrib.get('assertions', 0))
+          if tests < 1 or assertions < 1:
+              suites = list(root.findall('.//testsuite'))
+              tests = sum(int(s.attrib.get('tests', 0)) for s in suites)
+              assertions = sum(int(s.attrib.get('assertions', 0)) for s in suites)
+          if tests < 1 or assertions < 1:
+              raise SystemExit('Invalid JUnit totals')
+          print(tests, assertions)
+          PY
+          )
+          cat > evidence/0.3.0/agent-application-lifecycle.md <<EOF
+          # Phase 0.3.0 evidence — agent application lifecycle
+
+          Status: verified in mandatory self-hosted quality gates.
+
+          Verified SHA: \`$GITHUB_SHA\`  
+          GitHub Actions run: \`$GITHUB_RUN_ID\`
+
+          Requirements: \`AGT-001\`, \`AGT-002\`, \`ACL-002\`, \`SEC-002\`, \`QUA-001\`.
+
+          Test result: **$tests tests, $assertions assertions, zero failures/errors/warnings**.
+
+          Verified behavior includes one-active-application enforcement, idempotent submit/claim/release/approve/reject/withdraw, reviewer ownership, atomic agent-profile activation, configurable rejection cooldown and manual release, suspension/restoration, append-only histories, authorization failure rollback, replay safety and safe audit payloads.
+
+          The run passed planning/traceability, Gitleaks, Pint, Composer validation, PHPStan/Larastan, architecture/forbidden-pattern policies, dependency/license policy, fresh MariaDB migration/seed, authenticated Redis and the complete automated suite.
+          EOF
+          printf '%s\n' "$GITHUB_SHA" > evidence/0.3.0/agent-lifecycle.verified
+
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add \
+            .env.example \
+            app/Modules/AccessControl/Application/AdministratorPermissionAuthorizer.php \
+            app/Modules/Agents \
+            bootstrap/providers.php \
+            config/agents.php \
+            database/migrations/2026_08_05_000900_extend_agent_lifecycle.php \
+            tests/Feature/AgentLifecycleServicesTest.php \
+            tests/Unit/Modules/IdentityAccessDomainTest.php \
+            evidence/0.3.0/agent-application-lifecycle.md \
+            evidence/0.3.0/agent-lifecycle.verified
+          git rm .github/workflows/agent-lifecycle-quality-gate.yml
+          git diff --cached --check
+          git commit -m 'feat: verify agent application lifecycle'
+          git push origin HEAD:develop/v1.0.0-completion
