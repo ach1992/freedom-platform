@@ -2,7 +2,7 @@
 
 Date: 2026-08-05
 
-This document supersedes the Phase 0.3 observations in `docs/20-current-state-audit.md`. It does not replace the authoritative product contract.
+This document supersedes the Phase 0.3 observations in `docs/20-current-state-audit.md`. It does not replace the authoritative product contract in `docs/specification/master-execution-prompt.md`.
 
 ## Repository position
 
@@ -11,7 +11,8 @@ This document supersedes the Phase 0.3 observations in `docs/20-current-state-au
 - Base branch: `main`.
 - `main` has not been modified by the completion work.
 - Phase 0.3 backend/domain foundations are complete and verified.
-- Phase 0.4 product and ordering foundations are the next active dependency boundary.
+- Phase 0.4 `Catalog, Panels, and Offerings` is the next active dependency boundary under Issue #7.
+- Duplicate Issue #14 was closed because it mixed Phase 0.4 catalog work with Phase 0.5 pricing/payment and Phase 0.6 order work.
 
 ## Verified Phase 0.3 boundaries
 
@@ -29,31 +30,46 @@ This document supersedes the Phase 0.3 observations in `docs/20-current-state-au
 | Customer My Account summary | `evidence/0.3.0/customer-account-summary.md` | `31033653827` |
 | Administrator lifecycle | `evidence/0.3.0/administrator-lifecycle.md` | `31034601238` |
 
-Every listed run passed repository preflight, PHP static quality, MariaDB/Redis integration tests, dependency/license policy and secret scan.
+Final phase verification:
 
-## Invariants established
+- closure trigger SHA: `979b0c99d79dbcc8cff273ccdfad2ea612796a0c`;
+- mandatory CI: `31035712555` (`CI` run number `798`) — success;
+- automated suite: 194 tests, 958 assertions;
+- artifact: `test-evidence-31035712555`;
+- evidence: `evidence/0.3.0/phase-closure-verification.md`.
+
+## Code-backed invariants established
 
 - one canonical user may have independent customer, agent and administrator context without conflating commercial account classification;
 - active phone ownership and sensitive identity uniqueness are database constrained;
 - canonical phone and identity values are encrypted at rest and absent from safe projections/audit payloads;
 - customer status, tier, tags, agent state and administrator state retain append-only histories;
 - explicit permission deny overrides role grants;
-- protected mutations reauthorize the current actor inside the transaction;
+- protected mutations reauthorize the current actor inside the transaction and lock current actor/target rows;
 - sensitive approvals are short-lived, action/target-bound, independently approvable when required and consumable once;
 - exactly one Owner exists and transfer requires a short-lived, HMAC-bound two-party intent with recent authentication;
 - administrator suspension and revocation immediately invalidate effective authorization and authentication continuity;
 - request fingerprints prevent duplicate business effects and reject conflicting replay.
 
-## Deferred by design
+Representative implementation and test references include:
 
-The following are not Phase 0.3 gaps and remain scheduled for later dependency phases:
+- `app/Modules/AccessControl/Application/AdministratorPermissionAuthorizer.php`;
+- `app/Modules/AccessControl/Application/AdministratorAccessService.php`;
+- `app/Modules/Identity/Application/IdentityItemService.php`;
+- `app/Modules/Agents/Application/AgentApplicationService.php`;
+- `tests/Feature/AdministratorAccessManagementTest.php` and the other Phase 0.3 feature/unit suites.
 
-- product, variant, add-on and pricing-profile models — Phase 0.4;
-- order intake, quote snapshots and payment-proof lifecycle — Phase 0.4;
-- fulfillment, finance and reporting — Phase 0.5;
-- complete Telegram menus and web operator surfaces — Phase 0.7;
-- legacy import and production release hardening — Phase 0.8.
+## Deferred by authoritative phase design
+
+The following are not Phase 0.3 gaps:
+
+- categories, products, Plan Offerings, panels, targets, capabilities, capacity, custom plans and trials — Phase 0.4;
+- balanced ledger, pricing/discount/referral/agent-price resolution, immutable quote snapshots and all payment providers/proofs — Phase 0.5;
+- order state machine, provisioning orchestration and service lifecycle — Phase 0.6;
+- complete Persian Telegram product journeys, support/content/membership/broadcast — Phase 0.7;
+- reporting, Operations Center, backup/restore and updater/rollback — Phase 0.8;
+- independent hardening/release-candidate and final production handover — Phases 0.9 and 1.0.
 
 ## Closure decision
 
-Phase 0.3 is accepted as complete for its backend/domain scope. No later phase may weaken its uniqueness, authorization, encryption, audit, replay or Owner invariants.
+Phase 0.3 remains accepted as complete for its implemented and CI-verified backend/domain scope. No later phase may weaken its uniqueness, authorization, encryption, audit, replay, locking or Owner invariants. See `docs/22-phase-boundary-reconciliation.md` for the cross-Issue audit rule.
