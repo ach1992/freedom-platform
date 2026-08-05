@@ -22,7 +22,7 @@ Requirements: `ADM-001`, `ACL-002`, `SEC-002`, `QUA-001`, `QUA-011`.
 ## Mandatory CI verification
 
 - Verified implementation SHA: `48d0b9e8a0abb87fc7cd3d2a6b5267e8c171cb1d`.
-- CI run: `31034601238` (`CI` run number `796`).
+- CI run: `31034601238` (`CI` run number `795`).
 - Result: success across repository preflight, PHP static quality, MariaDB/Redis integration tests, dependency/license policy and secret scan.
 - Automated suite: `194` tests passed with `958` assertions.
 - Test evidence artifact: `test-evidence-31034601238`.
