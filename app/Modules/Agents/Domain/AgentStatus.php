@@ -7,10 +7,11 @@ namespace App\Modules\Agents\Domain;
 enum AgentStatus: string
 {
     case Active = 'active';
+    case Limited = 'limited';
     case Suspended = 'suspended';
 
-    public function canTransitionTo(self $next): bool
+    public function canTransitionTo(self $target): bool
     {
-        return $this !== $next;
+        return $this !== $target;
     }
 }
