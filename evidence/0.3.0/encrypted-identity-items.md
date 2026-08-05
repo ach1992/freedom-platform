@@ -1,10 +1,8 @@
 # Phase 0.3.0 evidence — encrypted identity items
 
-Status: candidate implementation assembled; mandatory CI evidence pending.
+Status: verified by the mandatory CI quality gate.
 
 Requirements: `USR-001`, `ACL-002`, `SEC-003`, `DAT-003`, `QUA-001`, `QUA-011`.
-
-Candidate implementation SHA before verification trigger: `967daee6ff352fc5d3ed574377f4690054ed08ba`.
 
 ## Delivered boundary
 
@@ -23,7 +21,15 @@ Candidate implementation SHA before verification trigger: `967daee6ff352fc5d3ed5
 - masked My Account summary projection without sensitive value decryption;
 - feature and unit tests for encryption, masking, uniqueness, validation, replay, ownership checks, authorization and aggregate status.
 
-## Verification plan
+## Mandatory CI verification
+
+- Verified implementation SHA: `83cf9035879011c4aa20d1ede209fff29231b99a`.
+- CI run: `31032286457` (`CI` run number `788`).
+- Result: success across repository preflight, PHP static quality, MariaDB/Redis integration tests, dependency/license policy and secret scan.
+- Automated suite: `185` tests passed with `886` assertions.
+- Test evidence artifact: `test-evidence-31032286457`.
+
+## Verification commands
 
 ```bash
 bash scripts/ci/verify-planning.sh
@@ -40,4 +46,4 @@ COLUMNS=240 php artisan test --display-warnings --fail-on-warning --log-junit bu
 docker compose -f docker-compose.ci.yml down --volumes --remove-orphans
 ```
 
-No green-test claim is made until a recorded CI run completes.
+The recorded CI run is the authoritative verification for this increment.
