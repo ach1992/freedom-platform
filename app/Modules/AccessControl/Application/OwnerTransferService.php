@@ -100,11 +100,9 @@ final readonly class OwnerTransferService
 
             $owner = $this->currentOwner($connection);
             $ownerId = (int) $owner->id;
-
             if ($ownerId !== $context->actorAdministratorId) {
                 throw new AuthorizationException('Only the current Owner can request ownership transfer.');
             }
-
             $this->assertRecentAuthentication($owner);
             $this->authorizer->authorize($ownerId, self::TRANSFER_PERMISSION);
 
@@ -118,7 +116,6 @@ final readonly class OwnerTransferService
                 if (! $this->isExpired($active->expires_at)) {
                     throw new RuntimeException('An active Owner transfer already exists.');
                 }
-
                 $this->expireTransfer($connection, $active, $context);
             }
 
@@ -128,16 +125,6 @@ final readonly class OwnerTransferService
             $expiresAt = $now->add(new DateInterval('PT'.$ttlSeconds.'S'))->format('Y-m-d H:i:s.u');
             $ownerVersion = (int) $owner->permission_version;
             $targetVersion = (int) $target->permission_version;
-            $intentHash = $this->intentHash(
-                $transferId,
-                $ownerId,
-                $targetAdministratorId,
-                $context->requestFingerprint,
-                $context->correlationId,
-                $ownerVersion,
-                $targetVersion,
-                $expiresAt,
-            );
 
             $connection->table('owner_transfer_requests')->insert([
                 'id' => $transferId,
@@ -146,7 +133,16 @@ final readonly class OwnerTransferService
                 'active_current_owner_id' => $ownerId,
                 'active_target_administrator_id' => $targetAdministratorId,
                 'request_fingerprint' => $context->requestFingerprint,
-                'signed_intent_hash' => $intentHash,
+                'signed_intent_hash' => $this->intentHash(
+                    $transferId,
+                    $ownerId,
+                    $targetAdministratorId,
+                    $context->requestFingerprint,
+                    $context->correlationId,
+                    $ownerVersion,
+                    $targetVersion,
+                    $expiresAt,
+                ),
                 'state' => OwnerTransferState::Pending->value,
                 'reason_code' => $context->reasonCode,
                 'reason' => $context->reason,
@@ -215,8 +211,7 @@ final readonly class OwnerTransferService
                 return $existing;
             }
 
-            $state = $this->state($transfer->state);
-            if ($state !== OwnerTransferState::Pending) {
+            if ($this->state($transfer->state) !== OwnerTransferState::Pending) {
                 throw new RuntimeException('Owner transfer is already terminal.');
             }
 
@@ -241,7 +236,6 @@ final readonly class OwnerTransferService
             $owner = $this->administrator($connection, $ownerId, true);
             $target = $this->administrator($connection, $targetId, true);
             $singleton = $this->currentOwner($connection);
-
             if ((int) $singleton->id !== $ownerId
                 || $owner->status !== 'active'
                 || ! (bool) $owner->is_owner
@@ -251,7 +245,6 @@ final readonly class OwnerTransferService
             }
 
             $this->assertRecentAuthentication($target);
-
             if ((int) $owner->permission_version !== (int) $transfer->current_owner_permission_version
                 || (int) $target->permission_version !== (int) $transfer->target_permission_version) {
                 throw new RuntimeException('Owner transfer intent is stale.');
@@ -274,7 +267,6 @@ final readonly class OwnerTransferService
             $now = $this->timestamp();
             $ownerVersion = (int) $owner->permission_version + 1;
             $targetVersion = (int) $target->permission_version + 1;
-
             $connection->table('administrators')->where('id', $ownerId)->update([
                 'is_owner' => false,
                 'permission_version' => $ownerVersion,
@@ -361,12 +353,11 @@ final readonly class OwnerTransferService
             $next = $this->isExpired($transfer->expires_at)
                 ? OwnerTransferState::Expired
                 : OwnerTransferState::Cancelled;
-            $now = $this->timestamp();
             $this->releaseTransfer(
                 $connection,
                 $transferId,
                 $next,
-                $next === OwnerTransferState::Cancelled ? $now : null,
+                $next === OwnerTransferState::Cancelled ? $this->timestamp() : null,
             );
 
             return $this->audit->record(
@@ -418,7 +409,6 @@ final readonly class OwnerTransferService
             'permission_version',
             'last_authenticated_at',
         ]);
-
         if ($administrator === null) {
             throw new RuntimeException('Administrator does not exist.');
         }
@@ -575,7 +565,10 @@ final readonly class OwnerTransferService
         return $normalized;
     }
 
-    /** @param OwnerTransferRow $transfer */
+    /**
+     * @param  OwnerTransferRow  $transfer
+     * @return array<string, bool|int|string|null>
+     */
     private function safeState(object $transfer): array
     {
         return [
