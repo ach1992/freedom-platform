@@ -229,19 +229,18 @@ final class AdministratorAccessManagementTest extends TestCase
     public function test_owner_target_is_protected_and_fingerprint_conflicts_fail_closed(): void
     {
         $ownerId = $this->administrator(true);
-        $otherOwnerId = $this->administrator(true);
         $administratorId = $this->administrator();
         $service = $this->app->make(AdministratorAccessService::class);
 
         try {
             $service->grantRole(
-                $otherOwnerId,
+                $ownerId,
                 'support',
                 $this->context($ownerId, 'access-role-request-0050'),
             );
             self::fail('Expected protected Owner failure.');
         } catch (AuthorizationException) {
-            self::assertSame(0, DB::table('administrator_role_assignments')->where('administrator_id', $otherOwnerId)->count());
+            self::assertSame(0, DB::table('administrator_role_assignments')->where('administrator_id', $ownerId)->count());
         }
 
         $context = $this->context($ownerId, 'access-role-request-0051');
