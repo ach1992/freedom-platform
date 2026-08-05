@@ -41,7 +41,7 @@ final class PanelConnectionServiceTest extends TestCase
             $this->app->make(PanelApprovalGate::class),
         );
 
-        $this->approvalGate = new RecordingPanelApprovalGate();
+        $this->approvalGate = new RecordingPanelApprovalGate;
         $this->app->instance(PanelApprovalGate::class, $this->approvalGate);
     }
 

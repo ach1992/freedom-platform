@@ -7,8 +7,8 @@ namespace App\Modules\Panels\Application;
 final readonly class PanelMutationReceipt
 {
     /**
-     * @param array<string, bool|int|string|null> $before
-     * @param array<string, bool|int|string|null> $after
+     * @param  array<string, bool|int|string|null>  $before
+     * @param  array<string, bool|int|string|null>  $after
      */
     public function __construct(
         public string $action,

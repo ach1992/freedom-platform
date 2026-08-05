@@ -18,7 +18,8 @@ use RuntimeException;
 trait PanelConnectionDefinitionOperations
 {
     /**
-     * @param array<string, mixed> $credentials
+     * @param  array<string, mixed>  $credentials
+     *
      * @requirement PRV-001 ACL-002 ACL-003 SEC-001 SEC-002 DAT-003 QUA-001
      */
     public function create(
@@ -262,7 +263,8 @@ trait PanelConnectionDefinitionOperations
     }
 
     /**
-     * @param array<string, mixed> $credentials
+     * @param  array<string, mixed>  $credentials
+     *
      * @requirement PRV-001 ACL-002 ACL-003 SEC-001 SEC-002 DAT-003 QUA-001
      */
     public function rotateCredentials(

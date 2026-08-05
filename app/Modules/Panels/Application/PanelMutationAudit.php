@@ -58,8 +58,8 @@ final readonly class PanelMutationAudit
     }
 
     /**
-     * @param array<string, bool|int|string|null> $before
-     * @param array<string, bool|int|string|null> $after
+     * @param  array<string, bool|int|string|null>  $before
+     * @param  array<string, bool|int|string|null>  $after
      */
     public function record(
         Connection $connection,
@@ -129,7 +129,7 @@ final readonly class PanelMutationAudit
             ) {
                 throw new RuntimeException('Stored panel mutation receipt is invalid.');
             }
-            $safe[$key] = $value;
+            $safe[$key] => $value;
         }
 
         return $safe;

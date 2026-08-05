@@ -26,7 +26,7 @@ final readonly class PanelPayloadHasher
     }
 
     /**
-     * @param array<array-key, mixed> $payload
+     * @param  array<array-key, mixed>  $payload
      * @return array<array-key, mixed>
      */
     private function normalize(array $payload): array

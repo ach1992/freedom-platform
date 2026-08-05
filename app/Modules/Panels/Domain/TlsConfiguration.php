@@ -9,8 +9,11 @@ use InvalidArgumentException;
 final readonly class TlsConfiguration
 {
     public TlsPolicy $policy;
+
     public ?string $customCaDisk;
+
     public ?string $customCaPath;
+
     public ?string $certificatePinSha256;
 
     public function __construct(

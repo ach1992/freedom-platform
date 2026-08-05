@@ -20,8 +20,8 @@ final readonly class PanelMutationExecutor
     ) {}
 
     /**
-     * @param list<string> $permissions
-     * @param callable(Connection): PanelMutationReceipt $operation
+     * @param  list<string>  $permissions
+     * @param  callable(Connection): PanelMutationReceipt  $operation
      */
     public function execute(
         string $action,
