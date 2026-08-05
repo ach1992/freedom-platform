@@ -121,9 +121,7 @@ final readonly class AdministratorLifecycleService
                 $connection->table('administrators')->where('id', $administratorId)->update([
                     'status' => $next->value,
                     'permission_version' => $permissionVersion,
-                    'last_authenticated_at' => $next === AdministratorStatus::Active
-                        ? $row->status === AdministratorStatus::Suspended->value ? null : null
-                        : null,
+                    'last_authenticated_at' => null,
                     'suspended_at' => $next === AdministratorStatus::Suspended ? $now : null,
                     'revoked_at' => $next === AdministratorStatus::Revoked ? $now : null,
                     'status_reason_code' => $context->reasonCode,
