@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\Modules\Agents\Infrastructure\AgentsServiceProvider;
 use App\Modules\Identity\Infrastructure\IdentityServiceProvider;
 use App\Modules\Installer\Infrastructure\InstallerServiceProvider;
 use App\Modules\Operations\Infrastructure\OperationsServiceProvider;
@@ -12,6 +13,7 @@ use App\Providers\FoundationServiceProvider;
 return [
     AppServiceProvider::class,
     FoundationServiceProvider::class,
+    AgentsServiceProvider::class,
     IdentityServiceProvider::class,
     InstallerServiceProvider::class,
     OperationsServiceProvider::class,
