@@ -1,8 +1,8 @@
 # Phase 0.3.0 evidence — customer transitions, tiers and tags
 
-Status: implementation prepared; mandatory CI evidence pending.
+Status: verified in mandatory self-hosted CI.
 
-Implementation head: `e000d691d9b990e512c8fb3957ecc865fa3cafd3`.
+Verified head: `733d10d11cbe6a56dbd041b11a435fb18542fc8d`.
 
 Requirements: `ONB-005`, `USR-002`, `USR-003`, `SEC-002`, `QUA-001`, `QUA-011`.
 
@@ -21,11 +21,11 @@ Requirements: `ONB-005`, `USR-002`, `USR-003`, `SEC-002`, `QUA-001`, `QUA-011`.
 - active-administrator checks and transaction rollback on authorization failure;
 - unit and MariaDB integration tests for thresholds, status replay, tier lock/promotion/no-downgrade, tags and uniqueness.
 
-## Previous verification cycle
+## Verification
 
-CI run `30966541940` executed **150 tests and 728 assertions**. All new customer service tests passed. The only integration failure was an existing seed-count assertion that still expected 8 permissions after adding the ninth customer-tag permission. Pint also reported package formatting differences. Both findings were corrected without changing the business invariants. No green-gate claim is made for that run.
+GitHub Actions run: `30966783453`
 
-## Verification plan
+Commands executed by the mandatory CI pipeline:
 
 ```bash
 bash scripts/ci/verify-planning.sh
@@ -42,4 +42,21 @@ COLUMNS=240 php artisan test --display-warnings --fail-on-warning --log-junit bu
 docker compose -f docker-compose.ci.yml down --volumes --remove-orphans
 ```
 
-No green-test claim is made until a recorded CI run completes.
+Results:
+
+- repository preflight and traceability: passed;
+- Gitleaks secret scan: passed;
+- Pint: passed;
+- PHPStan/Larastan: passed;
+- architecture and forbidden-pattern policies: passed;
+- Composer validation, dependency audit and license policy: passed;
+- MariaDB and authenticated Redis suite: **150 tests, 730 assertions, zero failures/errors/warnings**;
+- test artifact `8915032432`, SHA-256 `8105512d817140a2f03223f6ba2c91cdf62d2d261bb11de560e5767bdd18d399`;
+- static artifact `8915044753`, SHA-256 `2b89f60df4f4fe67e4ed1349d92b017d0b683fbd3b6add85a417167bbc84d5ae`;
+- dependency artifact `8915023135`, SHA-256 `6672525bc4c7244b181c4f16107cfb3a124cdf9e3f28188f21afd02e3e04d825`;
+- preflight artifact `8915012258`, SHA-256 `5e0851a9aeba94c0c3740cd4a37e2c762f2fc788f1b0331f4d2634b8937b18c1`;
+- Gitleaks SARIF artifact `8915017818`, SHA-256 `6842f09aea89640cdc5b40480571ea8c0f6c5f5ed28fe60224237b0ac81a819d`.
+
+## Gate conclusion
+
+The customer state/tier/tag increment has no known Critical/High finding. Customer transitions are transactional and idempotent, tier policies preserve manual locks and the no-downgrade default, tag history is retained, and every mutation records append-only safe audit evidence. Phase `0.3.0` remains open for the agent lifecycle and authorization-management packages.
