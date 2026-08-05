@@ -24,20 +24,20 @@ final class IdentityAccessDomainTest extends TestCase
         $this->assertSame(['active', 'limited', 'suspended', 'blocked'], $this->values(AccountStatus::cases()));
         $this->assertSame(['unverified', 'pending', 'verified', 'rejected'], $this->values(VerificationStatus::cases()));
         $this->assertSame(['new', 'normal', 'loyal', 'vip'], $this->values(CustomerTierCode::cases()));
-        $this->assertSame(['active', 'suspended'], $this->values(AgentStatus::cases()));
+        $this->assertSame(['active', 'limited', 'suspended'], $this->values(AgentStatus::cases()));
     }
 
-    public function test_agent_application_lifecycle_supports_claim_release_decision_and_reapplication(): void
+    public function test_agent_application_lifecycle_supports_claim_release_and_terminal_decisions(): void
     {
-        $this->assertTrue(AgentApplicationState::Submitted->canTransitionTo(AgentApplicationState::Claimed));
-        $this->assertTrue(AgentApplicationState::Claimed->canTransitionTo(AgentApplicationState::Submitted));
-        $this->assertTrue(AgentApplicationState::Claimed->canTransitionTo(AgentApplicationState::Approved));
-        $this->assertTrue(AgentApplicationState::Claimed->canTransitionTo(AgentApplicationState::Rejected));
-        $this->assertTrue(AgentApplicationState::Rejected->canTransitionTo(AgentApplicationState::Submitted));
+        $this->assertTrue(AgentApplicationState::Submitted->canTransitionTo(AgentApplicationState::UnderReview));
+        $this->assertTrue(AgentApplicationState::UnderReview->canTransitionTo(AgentApplicationState::Submitted));
+        $this->assertTrue(AgentApplicationState::UnderReview->canTransitionTo(AgentApplicationState::Approved));
+        $this->assertTrue(AgentApplicationState::UnderReview->canTransitionTo(AgentApplicationState::Rejected));
+        $this->assertFalse(AgentApplicationState::Rejected->canTransitionTo(AgentApplicationState::Submitted));
         $this->assertFalse(AgentApplicationState::Approved->canTransitionTo(AgentApplicationState::Rejected));
         $this->assertFalse(AgentApplicationState::Withdrawn->canTransitionTo(AgentApplicationState::Submitted));
         $this->assertTrue(AgentApplicationState::Submitted->keepsActiveApplicationSlot());
-        $this->assertTrue(AgentApplicationState::Claimed->keepsActiveApplicationSlot());
+        $this->assertTrue(AgentApplicationState::UnderReview->keepsActiveApplicationSlot());
         $this->assertFalse(AgentApplicationState::Rejected->keepsActiveApplicationSlot());
     }
 
