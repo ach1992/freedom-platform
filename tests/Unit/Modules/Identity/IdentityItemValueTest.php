@@ -59,7 +59,7 @@ final class IdentityItemValueTest extends TestCase
     {
         yield 'national ID checksum' => [IdentityItemType::NationalId, '1234567890'];
         yield 'repeated national ID' => [IdentityItemType::NationalId, '1111111111'];
-        yield 'bank card checksum' => [IdentityItemType::BankCard, '6037997515477777'];
+        yield 'bank card checksum' => [IdentityItemType::BankCard, '6037997515477778'];
         yield 'full name digits' => [IdentityItemType::FullName, 'علی 123'];
         yield 'full name control character' => [IdentityItemType::FullName, "علی\x00رضایی"];
     }
