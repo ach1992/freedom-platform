@@ -7,6 +7,8 @@ namespace App\Modules\AccessControl\Infrastructure;
 use App\Modules\AccessControl\Application\AccessMutationAudit;
 use App\Modules\AccessControl\Application\AdministratorAccessService;
 use App\Modules\AccessControl\Application\AdministratorPermissionAuthorizer;
+use App\Modules\AccessControl\Application\SensitiveActionApprovalService;
+use App\Modules\AccessControl\Application\SensitiveApprovalAudit;
 use App\Modules\AccessControl\Domain\PermissionResolver;
 use App\Shared\Application\Clock;
 use Illuminate\Contracts\Foundation\Application;
@@ -39,11 +41,29 @@ final class AccessControlServiceProvider extends ServiceProvider
         );
 
         $this->app->singleton(
+            SensitiveApprovalAudit::class,
+            fn (Application $application): SensitiveApprovalAudit => new SensitiveApprovalAudit(
+                $application->make(DatabaseManager::class),
+                $application->make(Clock::class),
+            ),
+        );
+
+        $this->app->singleton(
             AdministratorAccessService::class,
             fn (Application $application): AdministratorAccessService => new AdministratorAccessService(
                 $application->make(DatabaseManager::class),
                 $application->make(AdministratorPermissionAuthorizer::class),
                 $application->make(AccessMutationAudit::class),
+                $application->make(Clock::class),
+            ),
+        );
+
+        $this->app->singleton(
+            SensitiveActionApprovalService::class,
+            fn (Application $application): SensitiveActionApprovalService => new SensitiveActionApprovalService(
+                $application->make(DatabaseManager::class),
+                $application->make(AdministratorPermissionAuthorizer::class),
+                $application->make(SensitiveApprovalAudit::class),
                 $application->make(Clock::class),
             ),
         );
