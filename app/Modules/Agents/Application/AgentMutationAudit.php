@@ -48,8 +48,8 @@ final readonly class AgentMutationAudit
     }
 
     /**
-     * @param array<string, bool|int|string|null> $before
-     * @param array<string, bool|int|string|null> $after
+     * @param  array<string, bool|int|string|null>  $before
+     * @param  array<string, bool|int|string|null>  $after
      */
     public function record(
         Connection $connection,
