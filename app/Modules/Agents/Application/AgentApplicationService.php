@@ -225,7 +225,7 @@ final readonly class AgentApplicationService
                     'decision_reason_code' => $context->reasonCode,
                     'decision_reason' => $context->reason,
                     'decided_at' => $now->format('Y-m-d H:i:s.u'),
-                    'reapply_allowed_at' => $now->add(new DateInterval('P' . $this->reapplicationCooldownDays . 'D'))->format('Y-m-d H:i:s.u'),
+                    'reapply_allowed_at' => $now->add(new DateInterval('P'.$this->reapplicationCooldownDays.'D'))->format('Y-m-d H:i:s.u'),
                     'updated_at' => $now->format('Y-m-d H:i:s.u'),
                 ]);
             },
