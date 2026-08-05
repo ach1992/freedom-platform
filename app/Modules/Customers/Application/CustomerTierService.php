@@ -332,7 +332,7 @@ final readonly class CustomerTierService
 
         $decoded = json_decode($policy, true, flags: JSON_THROW_ON_ERROR);
 
-        if (! is_array($ecoded)) {
+        if (! is_array($decoded)) {
             throw new RuntimeException('Customer tier policy is invalid.');
         }
 
