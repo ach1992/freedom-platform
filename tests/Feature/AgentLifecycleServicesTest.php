@@ -121,7 +121,7 @@ final class AgentLifecycleServicesTest extends TestCase
     public function test_suspension_restoration_and_duplicate_click_create_one_effect_each(): void
     {
         $agentId = $this->approvedAgent();
-        $ownerId = $this->administrator(true);
+        $ownerId = (int) DB::table('administrators')->where('is_owner', true)->value('id');
         $service = $this->app->make(AgentProfileService::class);
         $suspendContext = $this->adminContext($ownerId, 'agent-status-request-0030', 'agent-status-correlation-0030', 'risk_suspend', 'Agent suspended after review.');
 
