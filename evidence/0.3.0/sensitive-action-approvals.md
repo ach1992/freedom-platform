@@ -1,6 +1,6 @@
 # Phase 0.3.0 evidence — sensitive action approvals
 
-Status: implementation prepared; mandatory CI evidence pending.
+Status: verified by the mandatory CI quality gate.
 
 Requirements: `ACL-003`, `SEC-002`, `QUA-001`, `QUA-011`.
 
@@ -18,7 +18,15 @@ Requirements: `ACL-003`, `SEC-002`, `QUA-001`, `QUA-011`.
 - append-only sanitized audit evidence with reason and correlation metadata;
 - feature tests for independent approval, one-time consumption, permission revocation, approver revocation, terminal states, target binding and fingerprint conflicts.
 
-## Verification plan
+## Mandatory CI verification
+
+- Verified implementation SHA: `5e6ef5a240b2ab82873e88d757191a56b6eded32`.
+- CI run: `31029222468` (`CI` run number `780`).
+- Result: success across repository preflight, PHP static quality, MariaDB/Redis integration tests, dependency/license policy and secret scan.
+- Automated suite: `167` tests passed with `802` assertions.
+- Test evidence artifact: `test-evidence-31029222468`.
+
+## Verification commands
 
 ```bash
 bash scripts/ci/verify-planning.sh
@@ -35,4 +43,4 @@ COLUMNS=240 php artisan test --display-warnings --fail-on-warning --log-junit bu
 docker compose -f docker-compose.ci.yml down --volumes --remove-orphans
 ```
 
-No green-test claim is made until a recorded CI run completes.
+The recorded CI run is the authoritative verification for this increment.
