@@ -7,7 +7,7 @@ Authoritative baseline: `docs/specification/master-execution-prompt.md` version 
 
 ## Executive finding
 
-The repository now has a verified target-like runtime and an in-progress identity/Telegram foundation. Phase `0.2.0` is complete on a disposable aaPanel/OpenLiteSpeed staging host. Phase `0.3.0` has started but is not complete. The commercial catalog, finance, payments, provisioning, complete Telegram UX, support, reporting, backup/restore, updater, hardening and final release package remain future phases.
+The repository now has a verified target-like runtime and an in-progress identity/Telegram foundation. Phase `0.2.0` is complete on a disposable aaPanel/OpenLiteSpeed staging host. Phase `0.3.0` has verified phone/contact/OTP/SMS and customer-transition increments but remains open for the complete agent and authorization-management lifecycles. The commercial catalog, finance, payments, provisioning, complete Telegram UX, support, reporting, backup/restore, updater, hardening and final release package remain future phases.
 
 ## Verified implementation
 
@@ -22,7 +22,7 @@ The repository now has a verified target-like runtime and an in-progress identit
 - one Scheduler Cron and five separated Supervisor workers;
 - per-process heartbeats, stale detection, deduplicated critical alert and recovery resolution.
 
-### Identity, access and Telegram foundations
+### Identity, customers, access and Telegram foundations
 
 - Telegram account/customer synchronization with transaction and race handling;
 - customer tiers, profiles, histories, tags and globally unique active phone-hash schema;
@@ -34,6 +34,10 @@ The repository now has a verified target-like runtime and an in-progress identit
 - fake-tested Melli Payamak and Kavenegar HTTPS adapters with fixed endpoints, TLS verification, bounded timeouts and no automatic send retry;
 - accepted, definitive-failure and uncertain SMS outcome taxonomy with fallback only after definitive primary failure;
 - fake providers active and real SMS adapters disabled by default until protected credentials and a controlled acceptance test are available;
+- transactional customer account-state transitions with active-administrator checks, row locking, append-only history and replay-safe audit;
+- configurable `new`, `normal`, `loyal` and `vip` tier policies, manual override/lock, append-only tier history, automatic promotion and default no-downgrade behavior;
+- customer tag assignment/removal/reactivation with retained historical assignment and append-only audit;
+- database uniqueness for customer mutation request fingerprints;
 - agent application/profile lifecycle schema and state enums;
 - roles, permissions, multi-role assignments, per-admin tri-state override and deny-precedence resolver;
 - sensitive-action approval schema and state machine;
@@ -57,6 +61,13 @@ SMS adapter application SHA `5a9efad6932d2f26719f0f92d8e6c20995dbe5ce` passed se
 - fake HTTP contracts covered localized rendering, accepted/rejected/rate-limited/malformed/transport/provider-unavailable outcomes, Kavenegar idempotent `localid`, fallback semantics and credential redaction;
 - retained evidence: `evidence/0.3.0/sms-provider-http-adapters.md`.
 
+Customer transition verified head `733d10d11cbe6a56dbd041b11a435fb18542fc8d` passed self-hosted CI run `30966783453`:
+
+- **150 tests, 730 assertions, zero failures/errors/warnings**;
+- preflight, Gitleaks, Pint, PHPStan/Larastan, architecture, forbidden patterns, dependency audit and license policy: passed;
+- MariaDB tests verified account-state replay safety, transaction rollback, tier thresholds, manual locks, promotion/no-downgrade behavior, tag assignment/removal/reactivation and mutation uniqueness;
+- retained evidence: `evidence/0.3.0/customer-transitions-tier-tags.md`.
+
 ### Target runtime
 
 Application SHA `f3f460b1ae5deabfa1590a17b479e8de4d8bf2af` passed staging run `30958022781`:
@@ -79,7 +90,7 @@ Telegram run `30958272387` passed secret rejection, valid ingestion, exact-dupli
 |---|---|---|
 | `0.1.0` | passed | Planning, architecture, security, testing and canonical traceability baseline exists. |
 | `0.2.0` | passed | Target aaPanel/OpenLiteSpeed install, HTTPS, release activation/rollback, Supervisor/Scheduler heartbeat and recovery evidence retained. |
-| `0.3.0` | in progress | Secure Telegram identity, contact/OTP and fake-tested SMS adapters exist. Customer transition services, complete agent lifecycle, reusable authorization policies, hardened Owner actions and append-only transition audit remain. |
+| `0.3.0` | in progress | Secure Telegram identity, contact/OTP, fake-tested SMS adapters and audited customer state/tier/tag transitions exist. Complete agent lifecycle, reusable authorization policies, hardened Owner actions and sensitive approvals remain. |
 | `0.4.0` | planned | Catalog, offerings, capacity, trials and panel adapters remain. |
 | `0.5.0` | planned | Ledger, wallet, pricing, promotions and payment methods remain. |
 | `0.6.0` | planned | Orders, provisioning and service lifecycle remain. |
@@ -92,12 +103,14 @@ Telegram run `30958272387` passed secret rejection, valid ingestion, exact-dupli
 
 Continue Phase `0.3.0` with the next dependency-safe package:
 
-1. customer account-state transition service with explicit actor, reason, previous/new state and concurrency control;
-2. configurable tier recalculation, manual override/lock and append-only tier history;
-3. customer tag assignment/removal services with uniqueness, authorization-ready boundaries and append-only audit evidence;
-4. focused unit, MariaDB integration, race, rollback and privacy tests;
-5. traceability and retained evidence updates after green CI.
+1. idempotent agent cooperation submission with one-active-application enforcement;
+2. authorized claim and transition to `under_review` with row locking;
+3. atomic approval that creates/activates the agent profile, assigns a pricing profile and changes the commercial account type;
+4. rejection with mandatory reason, configurable reapplication release/cooldown, suspension and restoration while preserving history;
+5. append-only actor/reason/previous/new-state history and safe audit evidence for every transition;
+6. focused state-machine, authorization, uniqueness, concurrency, rollback and replay tests;
+7. traceability and retained evidence updates after green CI.
 
-After that package, continue with agent claim/review/approve/reject/reapply/suspend/restore application services, then reusable authorization policies, hardened Owner behavior and sensitive-action approvals.
+After the agent package, continue with reusable authorization policies, multi-role management, hardened Owner behavior and sensitive-action approvals.
 
 No owner action is required for the current package. Real SMS credentials remain a just-in-time input for a later activation gate.
