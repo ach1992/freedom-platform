@@ -7,6 +7,7 @@ namespace Database\Seeders;
 use App\Modules\Customers\Domain\CustomerTierCode;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
+use RuntimeException;
 
 final class IdentityAccessFoundationSeeder extends Seeder
 {
@@ -68,6 +69,22 @@ final class IdentityAccessFoundationSeeder extends Seeder
             $this->permission('access.permissions.override', 'access_control', 'critical', true, $now),
             $this->permission('access.sensitive_actions.approve', 'access_control', 'critical', true, $now),
         ], ['code'], ['module', 'risk_level', 'requires_approval', 'updated_at']);
+
+        /** @var list<array{0: string, 1: string}> $grants */
+        $grants = [
+            ['finance', 'identity.customers.view'],
+            ['support', 'identity.customers.view'],
+            ['technical', 'identity.customers.view'],
+            ['sales_content', 'identity.customers.view'],
+            ['sales_content', 'identity.customers.manage_tier'],
+            ['sales_content', 'identity.customers.manage_tags'],
+            ['sales_content', 'agents.applications.review'],
+            ['sales_content', 'agents.accounts.manage'],
+        ];
+
+        foreach ($grants as [$roleCode, $permissionCode]) {
+            $this->grant($roleCode, $permissionCode, $now);
+        }
     }
 
     /** @return array{code: string, name_translation_key: string, sort_order: int, is_active: bool, policy: string, created_at: mixed, updated_at: mixed} */
@@ -126,5 +143,24 @@ final class IdentityAccessFoundationSeeder extends Seeder
             'created_at' => $now,
             'updated_at' => $now,
         ];
+    }
+
+    private function grant(string $roleCode, string $permissionCode, mixed $now): void
+    {
+        $roleId = DB::table('roles')->where('code', $roleCode)->value('id');
+        $permissionId = DB::table('permissions')->where('code', $permissionCode)->value('id');
+
+        if ((! is_int($roleId) && ! is_string($roleId)) || (! is_int($permissionId) && ! is_string($permissionId))) {
+            throw new RuntimeException('Seed access grant references an unknown role or permission.');
+        }
+
+        DB::table('role_permissions')->upsert([
+            [
+                'role_id' => (int) $roleId,
+                'permission_id' => (int) $permissionId,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
+        ], ['role_id', 'permission_id'], ['updated_at']);
     }
 }
