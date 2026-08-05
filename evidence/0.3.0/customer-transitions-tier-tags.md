@@ -2,7 +2,7 @@
 
 Status: implementation prepared; mandatory CI evidence pending.
 
-Implementation head: `747905cbef18205fd023dd6254c17815ca932324`.
+Implementation head: `e000d691d9b990e512c8fb3957ecc865fa3cafd3`.
 
 Requirements: `ONB-005`, `USR-002`, `USR-003`, `SEC-002`, `QUA-001`, `QUA-011`.
 
@@ -20,6 +20,10 @@ Requirements: `ONB-005`, `USR-002`, `USR-003`, `SEC-002`, `QUA-001`, `QUA-011`.
 - unique `(action, request_fingerprint)` database barrier for mutation idempotency;
 - active-administrator checks and transaction rollback on authorization failure;
 - unit and MariaDB integration tests for thresholds, status replay, tier lock/promotion/no-downgrade, tags and uniqueness.
+
+## Previous verification cycle
+
+CI run `30966541940` executed **150 tests and 728 assertions**. All new customer service tests passed. The only integration failure was an existing seed-count assertion that still expected 8 permissions after adding the ninth customer-tag permission. Pint also reported package formatting differences. Both findings were corrected without changing the business invariants. No green-gate claim is made for that run.
 
 ## Verification plan
 
