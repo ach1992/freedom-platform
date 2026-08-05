@@ -11,7 +11,7 @@ use RuntimeException;
 
 final class IdentityAccessFoundationSeeder extends Seeder
 {
-    /** @requirement USR-002 USR-003 ACL-001 ACL-002 ACL-003 AGT-002 ADM-002 */
+    /** @requirement USR-001 USR-002 USR-003 ACL-001 ACL-002 ACL-003 AGT-002 ADM-002 SEC-003 */
     public function run(): void
     {
         $now = now('UTC');
@@ -63,6 +63,8 @@ final class IdentityAccessFoundationSeeder extends Seeder
             $this->permission('identity.customers.manage_status', 'identity', 'high', true, $now),
             $this->permission('identity.customers.manage_tier', 'identity', 'high', true, $now),
             $this->permission('identity.customers.manage_tags', 'identity', 'high', true, $now),
+            $this->permission('identity.verified_data.view', 'identity', 'critical', true, $now),
+            $this->permission('identity.verifications.manage', 'identity', 'high', true, $now),
             $this->permission('agents.applications.review', 'agents', 'high', true, $now),
             $this->permission('agents.accounts.manage', 'agents', 'high', true, $now),
             $this->permission('access.roles.manage', 'access_control', 'critical', true, $now),
