@@ -116,7 +116,7 @@ final readonly class AgentApplicationService
             $context,
             AgentApplicationState::Submitted,
             AgentApplicationState::UnderReview,
-            function (Connection $connection, object $application) use ($applicationId, $administratorId): void {
+            function (Connection $connection, AgentApplicationRecord $application) use ($applicationId, $administratorId): void {
                 $connection->table('agent_applications')->where('id', $applicationId)->update([
                     'state' => AgentApplicationState::UnderReview->value,
                     'claimed_by_administrator_id' => $administratorId,
@@ -139,7 +139,7 @@ final readonly class AgentApplicationService
             $context,
             AgentApplicationState::UnderReview,
             AgentApplicationState::Submitted,
-            function (Connection $connection, object $application) use ($applicationId, $administratorId): void {
+            function (Connection $connection, AgentApplicationRecord $application) use ($applicationId, $administratorId): void {
                 $this->assertReviewerOrOwner($connection, $application, $administratorId);
                 $connection->table('agent_applications')->where('id', $applicationId)->update([
                     'state' => AgentApplicationState::Submitted->value,
@@ -171,11 +171,11 @@ final readonly class AgentApplicationService
             $context,
             AgentApplicationState::UnderReview,
             AgentApplicationState::Approved,
-            function (Connection $connection, object $application) use ($applicationId, $administratorId, $pricing): void {
+            function (Connection $connection, AgentApplicationRecord $application) use ($applicationId, $administratorId, $pricing, $context): void {
                 $this->assertReviewerOrOwner($connection, $application, $administratorId);
                 $now = $this->timestamp();
                 $connection->table('agent_profiles')->insert([
-                    'user_id' => $application->customer_id,
+                    'user_id' => $application->customerId,
                     'approved_application_id' => $applicationId,
                     'status' => 'active',
                     'pricing_profile_code' => $pricing,
@@ -185,7 +185,7 @@ final readonly class AgentApplicationService
                     'created_at' => $now,
                     'updated_at' => $now,
                 ]);
-                $connection->table('users')->where('id', $application->customer_id)->update([
+                $connection->table('users')->where('id', $application->customerId)->update([
                     'account_type' => 'agent',
                     'updated_at' => $now,
                 ]);
@@ -215,7 +215,7 @@ final readonly class AgentApplicationService
             $context,
             AgentApplicationState::UnderReview,
             AgentApplicationState::Rejected,
-            function (Connection $connection, object $application) use ($applicationId, $administratorId, $context): void {
+            function (Connection $connection, AgentApplicationRecord $application) use ($applicationId, $administratorId, $context): void {
                 $this->assertReviewerOrOwner($connection, $application, $administratorId);
                 $now = $this->clock->now();
                 $connection->table('agent_applications')->where('id', $applicationId)->update([
@@ -245,11 +245,13 @@ final readonly class AgentApplicationService
             if ($existing !== null) {
                 return $existing;
             }
+
             /** @var object{state: string, reapplication_released_at: ?string}|null $application */
             $application = $connection->table('agent_applications')->where('id', $applicationId)->lockForUpdate()->first(['state', 'reapplication_released_at']);
             if ($application === null || $application->state !== AgentApplicationState::Rejected->value) {
                 throw new RuntimeException('Only a rejected agent application can be released.');
             }
+
             $before = ['state' => $application->state, 'reapplication_released' => $application->reapplication_released_at !== null];
             $after = ['state' => $application->state, 'reapplication_released' => true];
             if ($application->reapplication_released_at === null) {
@@ -277,11 +279,13 @@ final readonly class AgentApplicationService
             if ($existing !== null) {
                 return $existing;
             }
+
             /** @var object{customer_id: int, state: string}|null $application */
             $application = $connection->table('agent_applications')->where('id', $applicationId)->lockForUpdate()->first(['customer_id', 'state']);
             if ($application === null || (int) $application->customer_id !== $customerId || $application->state !== AgentApplicationState::Submitted->value) {
                 throw new AuthorizationException('Agent application withdrawal failed.');
             }
+
             $connection->table('agent_applications')->where('id', $applicationId)->update([
                 'active_customer_id' => null,
                 'state' => AgentApplicationState::Withdrawn->value,
@@ -289,7 +293,11 @@ final readonly class AgentApplicationService
             ]);
             $this->history($connection, $applicationId, AgentApplicationState::Submitted, AgentApplicationState::Withdrawn, $context);
 
-            return $this->audit->record($connection, $action, $applicationId, $context,
+            return $this->audit->record(
+                $connection,
+                $action,
+                $applicationId,
+                $context,
                 ['state' => AgentApplicationState::Submitted->value],
                 ['state' => AgentApplicationState::Withdrawn->value],
             );
@@ -297,7 +305,7 @@ final readonly class AgentApplicationService
     }
 
     /**
-     * @param callable(Connection, object): void $mutation
+     * @param callable(Connection, AgentApplicationRecord): void $mutation
      */
     private function reviewTransition(
         string $action,
@@ -312,15 +320,26 @@ final readonly class AgentApplicationService
             if ($existing !== null) {
                 return $existing;
             }
-            /** @var object{customer_id: int, state: string, claimed_by_administrator_id: ?int}|null $application */
-            $application = $connection->table('agent_applications')->where('id', $applicationId)->lockForUpdate()->first(['customer_id', 'state', 'claimed_by_administrator_id']);
-            if ($application === null || $application->state !== $from->value || ! $from->canTransitionTo($to)) {
+
+            /** @var object{customer_id: int, state: string, claimed_by_administrator_id: ?int}|null $row */
+            $row = $connection->table('agent_applications')->where('id', $applicationId)->lockForUpdate()->first(['customer_id', 'state', 'claimed_by_administrator_id']);
+            if ($row === null || $row->state !== $from->value || ! $from->canTransitionTo($to)) {
                 throw new RuntimeException('Agent application transition is not allowed.');
             }
+
+            $application = new AgentApplicationRecord(
+                (int) $row->customer_id,
+                $row->state,
+                $row->claimed_by_administrator_id === null ? null : (int) $row->claimed_by_administrator_id,
+            );
             $mutation($connection, $application);
             $this->history($connection, $applicationId, $from, $to, $context);
 
-            return $this->audit->record($connection, $action, $applicationId, $context,
+            return $this->audit->record(
+                $connection,
+                $action,
+                $applicationId,
+                $context,
                 ['state' => $from->value],
                 ['state' => $to->value],
             );
@@ -347,6 +366,7 @@ final readonly class AgentApplicationService
         }
     }
 
+    /** @param object{state: string, reapply_allowed_at: ?string, reapplication_released_at: ?string}|null $latest */
     private function assertReapplicationAllowed(?object $latest): void
     {
         if ($latest === null || $latest->state === AgentApplicationState::Withdrawn->value) {
@@ -358,17 +378,27 @@ final readonly class AgentApplicationService
         if ($latest->reapplication_released_at !== null) {
             return;
         }
-        if ($latest->reapply_allowed_at === null || $this->clock->now()->getTimestamp() < strtotime($latest->reapply_allowed_at)) {
+
+        $allowedAt = $latest->reapply_allowed_at === null ? false : strtotime($latest->reapply_allowed_at);
+        if ($allowedAt === false || $this->clock->now()->getTimestamp() < $allowedAt) {
             throw new RuntimeException('Agent reapplication cooldown is still active.');
         }
     }
 
-    private function assertReviewerOrOwner(Connection $connection, object $application, int $administratorId): void
-    {
-        if ((int) ($application->claimed_by_administrator_id ?? 0) === $administratorId) {
+    private function assertReviewerOrOwner(
+        Connection $connection,
+        AgentApplicationRecord $application,
+        int $administratorId,
+    ): void {
+        if ($application->claimedByAdministratorId === $administratorId) {
             return;
         }
-        $owner = $connection->table('administrators')->where('id', $administratorId)->where('status', 'active')->where('is_owner', true)->exists();
+
+        $owner = $connection->table('administrators')
+            ->where('id', $administratorId)
+            ->where('status', 'active')
+            ->where('is_owner', true)
+            ->exists();
         if (! $owner) {
             throw new AuthorizationException('Agent application review ownership failed.');
         }
