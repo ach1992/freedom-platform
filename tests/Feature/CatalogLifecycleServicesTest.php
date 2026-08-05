@@ -9,6 +9,7 @@ use App\Modules\Catalog\Application\CatalogChangeContext;
 use App\Modules\Catalog\Application\ProductCategoryService;
 use App\Modules\Catalog\Application\ProductService;
 use App\Modules\Catalog\Application\ProductVariantService;
+use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
@@ -27,6 +28,7 @@ final class CatalogLifecycleServicesTest extends TestCase
     {
         parent::setUp();
         $this->seed(IdentityAccessFoundationSeeder::class);
+        $this->seed(CatalogAccessFoundationSeeder::class);
     }
 
     public function test_category_product_and_variant_lifecycle_is_audited_replay_safe_and_dependency_guarded(): void

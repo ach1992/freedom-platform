@@ -11,8 +11,9 @@ use RuntimeException;
 
 trait ProductCategoryServiceSupport
 {
-    private function lockedCategory(Connection $connection, int $categoryId): object
+    private function lockedCategory(Connection $connection, int $categoryId): ProductCategoryRecord
     {
+        /** @var object{id: int|string, parent_id: int|string|null, code: string, name_fa: string, name_en: ?string, description_fa: ?string, description_en: ?string, state: string, sort_order: int|string, version: int|string}|null $category */
         $category = $connection->table('product_categories')
             ->where('id', $categoryId)
             ->lockForUpdate()
@@ -25,7 +26,18 @@ trait ProductCategoryServiceSupport
             throw new RuntimeException('Category does not exist.');
         }
 
-        return $category;
+        return new ProductCategoryRecord(
+            (int) $category->id,
+            $category->parent_id === null ? null : (int) $category->parent_id,
+            $category->code,
+            $category->name_fa,
+            $category->name_en,
+            $category->description_fa,
+            $category->description_en,
+            $category->state,
+            (int) $category->sort_order,
+            (int) $category->version,
+        );
     }
 
     private function assertParentChain(
@@ -97,8 +109,7 @@ trait ProductCategoryServiceSupport
         return CatalogState::tryFrom($state) ?? throw new RuntimeException('Stored category state is invalid.');
     }
 
-    /** @param object{name_fa: string, name_en: ?string, description_fa: ?string, description_en: ?string} $category */
-    private function contentHash(object $category): string
+    private function contentHash(ProductCategoryRecord $category): string
     {
         return CatalogPayloadHash::make([
             'name_fa' => $category->name_fa,

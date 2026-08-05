@@ -11,8 +11,9 @@ use RuntimeException;
 
 trait ProductVariantServiceSupport
 {
-    private function lockedVariant(Connection $connection, int $variantId): object
+    private function lockedVariant(Connection $connection, int $variantId): ProductVariantRecord
     {
+        /** @var object{id: int|string, product_id: int|string, code: string, sku: string, name_fa: string, name_en: ?string, description_fa: ?string, description_en: ?string, state: string, sort_order: int|string, version: int|string}|null $variant */
         $variant = $connection->table('product_variants')
             ->where('id', $variantId)
             ->lockForUpdate()
@@ -24,10 +25,22 @@ trait ProductVariantServiceSupport
             throw new RuntimeException('Variant does not exist.');
         }
 
-        return $variant;
+        return new ProductVariantRecord(
+            (int) $variant->id,
+            (int) $variant->product_id,
+            $variant->code,
+            $variant->sku,
+            $variant->name_fa,
+            $variant->name_en,
+            $variant->description_fa,
+            $variant->description_en,
+            $variant->state,
+            (int) $variant->sort_order,
+            (int) $variant->version,
+        );
     }
 
-    private function lockedProduct(Connection $connection, int $productId, bool $requireActive): object
+    private function lockedProduct(Connection $connection, int $productId, bool $requireActive): void
     {
         /** @var object{id: int|string, category_id: int|string, state: string}|null $product */
         $product = $connection->table('products')
@@ -53,8 +66,6 @@ trait ProductVariantServiceSupport
                 throw new DomainException('Product category must be active before variant activation.');
             }
         }
-
-        return $product;
     }
 
     private function assertVersion(int $currentVersion, int $expectedVersion): void
@@ -69,8 +80,7 @@ trait ProductVariantServiceSupport
         return CatalogState::tryFrom($state) ?? throw new RuntimeException('Stored catalog state is invalid.');
     }
 
-    /** @param object{name_fa: string, name_en: ?string, description_fa: ?string, description_en: ?string} $variant */
-    private function contentHash(object $variant): string
+    private function contentHash(ProductVariantRecord $variant): string
     {
         return CatalogPayloadHash::make([
             'name_fa' => $variant->name_fa,

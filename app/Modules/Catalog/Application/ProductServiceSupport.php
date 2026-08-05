@@ -12,8 +12,9 @@ use RuntimeException;
 
 trait ProductServiceSupport
 {
-    private function lockedProduct(Connection $connection, int $productId): object
+    private function lockedProduct(Connection $connection, int $productId): ProductRecord
     {
+        /** @var object{id: int|string, category_id: int|string, code: string, name_fa: string, name_en: ?string, description_fa: ?string, description_en: ?string, state: string, visibility: string, sort_order: int|string, version: int|string}|null $product */
         $product = $connection->table('products')
             ->where('id', $productId)
             ->lockForUpdate()
@@ -25,10 +26,22 @@ trait ProductServiceSupport
             throw new RuntimeException('Product does not exist.');
         }
 
-        return $product;
+        return new ProductRecord(
+            (int) $product->id,
+            (int) $product->category_id,
+            $product->code,
+            $product->name_fa,
+            $product->name_en,
+            $product->description_fa,
+            $product->description_en,
+            $product->state,
+            $product->visibility,
+            (int) $product->sort_order,
+            (int) $product->version,
+        );
     }
 
-    private function lockedCategory(Connection $connection, int $categoryId, bool $requireActive): object
+    private function lockedCategory(Connection $connection, int $categoryId, bool $requireActive): void
     {
         /** @var object{id: int|string, state: string}|null $category */
         $category = $connection->table('product_categories')
@@ -43,8 +56,6 @@ trait ProductServiceSupport
         if ($state === CatalogState::Archived || ($requireActive && $state !== CatalogState::Active)) {
             throw new DomainException('Category state does not allow this product operation.');
         }
-
-        return $category;
     }
 
     private function assertVersion(int $currentVersion, int $expectedVersion): void
@@ -64,8 +75,7 @@ trait ProductServiceSupport
         return ProductVisibility::tryFrom($visibility) ?? throw new RuntimeException('Stored product visibility is invalid.');
     }
 
-    /** @param object{name_fa: string, name_en: ?string, description_fa: ?string, description_en: ?string} $product */
-    private function contentHash(object $product): string
+    private function contentHash(ProductRecord $product): string
     {
         return CatalogPayloadHash::make([
             'name_fa' => $product->name_fa,

@@ -11,7 +11,7 @@ use RuntimeException;
 
 final class IdentityAccessFoundationSeeder extends Seeder
 {
-    /** @requirement USR-001 USR-002 USR-003 AGT-002 ACL-001 ACL-002 ACL-003 CAT-001 CAT-002 ADM-001 ADM-002 SEC-003 */
+    /** @requirement USR-001 USR-002 USR-003 ACL-001 ACL-002 ACL-003 AGT-002 ADM-001 ADM-002 SEC-003 */
     public function run(): void
     {
         $now = now('UTC');
@@ -44,8 +44,6 @@ final class IdentityAccessFoundationSeeder extends Seeder
             $this->permission('access.sensitive_actions.approve', 'access_control', 'critical', true, $now),
             $this->permission('admins.accounts.manage', 'access_control', 'critical', true, $now),
             $this->permission('admins.transfer_ownership', 'access_control', 'critical', true, $now),
-            $this->permission('catalog.view', 'catalog', 'standard', false, $now),
-            $this->permission('catalog.manage', 'catalog', 'high', false, $now),
         ], ['code'], ['module', 'risk_level', 'requires_approval', 'updated_at']);
 
         /** @var list<array{0: string, 1: string}> $grants */
@@ -58,11 +56,6 @@ final class IdentityAccessFoundationSeeder extends Seeder
             ['sales_content', 'identity.customers.manage_tags'],
             ['sales_content', 'agents.applications.review'],
             ['sales_content', 'agents.accounts.manage'],
-            ['finance', 'catalog.view'],
-            ['support', 'catalog.view'],
-            ['technical', 'catalog.view'],
-            ['sales_content', 'catalog.view'],
-            ['sales_content', 'catalog.manage'],
         ];
 
         foreach ($grants as [$roleCode, $permissionCode]) {
