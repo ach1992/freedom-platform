@@ -5,6 +5,10 @@ declare(strict_types=1);
 return [
     'phone_lookup_key' => env('PHONE_LOOKUP_KEY'),
     'phone_lookup_key_version' => (int) env('PHONE_LOOKUP_KEY_VERSION', 1),
+    'identity_items' => [
+        'hash_key_version' => (int) env('IDENTITY_ITEM_HASH_KEY_VERSION', 1),
+        'required_types' => ['national_id', 'full_name'],
+    ],
     'otp' => [
         'hash_key' => env('OTP_HASH_KEY'),
         'hash_key_version' => (int) env('OTP_HASH_KEY_VERSION', 1),
