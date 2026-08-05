@@ -48,7 +48,7 @@ final class IdentityAccessFoundationMigrationTest extends TestCase
 
         $this->assertSame(4, DB::table('customer_tiers')->count());
         $this->assertSame(4, DB::table('roles')->count());
-        $this->assertSame(8, DB::table('permissions')->count());
+        $this->assertSame(9, DB::table('permissions')->count());
         $this->assertDatabaseHas('customer_tiers', ['code' => 'vip', 'is_active' => true]);
         $this->assertDatabaseHas('permissions', [
             'code' => 'access.permissions.override',

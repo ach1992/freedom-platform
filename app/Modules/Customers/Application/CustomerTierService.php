@@ -76,7 +76,7 @@ final readonly class CustomerTierService
     }
 
     /**
-     * @param callable(Connection): CustomerMutationReceipt $operation
+     * @param  callable(Connection): CustomerMutationReceipt  $operation
      */
     private function executeIdempotently(
         string $action,

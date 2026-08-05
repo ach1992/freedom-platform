@@ -9,7 +9,7 @@ use RuntimeException;
 final readonly class CustomerTierCalculator
 {
     /**
-     * @param list<CustomerTierPolicy> $policies
+     * @param  list<CustomerTierPolicy>  $policies
      */
     public function determine(array $policies, CustomerTierMetrics $metrics): CustomerTierPolicy
     {
