@@ -30,7 +30,10 @@ The repository now has a verified target-like runtime and an in-progress identit
 - Telegram contact ownership verification, one-active-number constraints, policy/version evidence and number-change invalidation;
 - HMAC-only OTP issue/verify/invalidate lifecycle with two-minute expiry, sixty-second cooldown and five-attempt lockout;
 - idempotent OTP issuance and atomic Redis abuse controls by phone, Telegram account, IP and provider;
-- safe SMS delivery taxonomy, fake providers and definitive-failure-only fallback semantics;
+- localized SMS OTP rendering with Persian default and English fallback;
+- fake-tested Melli Payamak and Kavenegar HTTPS adapters with fixed endpoints, TLS verification, bounded timeouts and no automatic send retry;
+- accepted, definitive-failure and uncertain SMS outcome taxonomy with fallback only after definitive primary failure;
+- fake providers active and real SMS adapters disabled by default until protected credentials and a controlled acceptance test are available;
 - agent application/profile lifecycle schema and state enums;
 - roles, permissions, multi-role assignments, per-admin tri-state override and deny-precedence resolver;
 - sensitive-action approval schema and state machine;
@@ -41,10 +44,18 @@ The repository now has a verified target-like runtime and an in-progress identit
 
 ### CI
 
-Final workflow-only head `a01008e14264b1dace3b11e417afbb68f27da6b9` passed self-hosted CI run `30958332620`.
+Phase `0.2.0` closure head `a01008e14264b1dace3b11e417afbb68f27da6b9` passed self-hosted CI run `30958332620` with **119 tests, 537 assertions**.
 
-- **119 tests, 537 assertions, zero failures/errors/skips**;
-- preflight, secret scan, Pint, PHPStan/Larastan, architecture, repository policy, dependency audit and license policy: passed.
+Phone/contact application SHA `750bcdf994f864859d1a0a2c0e5fda476793bfc9` passed CI run `30959686735` with **129 tests, 619 assertions** and target runs `30959844808` / `30960110251`.
+
+OTP application SHA `82363cda52c9df2ede7c548faae9f0c55a215b3c` passed CI run `30961861886` with **135 tests, 662 assertions** and staging run `30962042217`, including migration, A/B rollback, hash-at-rest, failed-attempt commit, successful consumption and Redis limiter smoke checks.
+
+SMS adapter application SHA `5a9efad6932d2f26719f0f92d8e6c20995dbe5ce` passed self-hosted CI run `30965519559`:
+
+- **143 tests, 703 assertions, zero failures/errors/warnings**;
+- preflight, secret scan, Pint, PHPStan/Larastan, architecture, forbidden patterns, dependency audit and license policy: passed;
+- fake HTTP contracts covered localized rendering, accepted/rejected/rate-limited/malformed/transport/provider-unavailable outcomes, Kavenegar idempotent `localid`, fallback semantics and credential redaction;
+- retained evidence: `evidence/0.3.0/sms-provider-http-adapters.md`.
 
 ### Target runtime
 
@@ -62,17 +73,13 @@ Application SHA `f3f460b1ae5deabfa1590a17b479e8de4d8bf2af` passed staging run `3
 
 Telegram run `30958272387` passed secret rejection, valid ingestion, exact-duplicate idempotency, collision rejection, stranded-update recovery, one processing attempt, cleanup and final `pending_update_count=0`.
 
-Phone/contact application SHA `750bcdf994f864859d1a0a2c0e5fda476793bfc9` passed CI run `30959686735` with **129 tests, 619 assertions** and target runs `30959844808` / `30960110251`.
-
-OTP application SHA `82363cda52c9df2ede7c548faae9f0c55a215b3c` passed CI run `30961861886` with **135 tests, 662 assertions** and staging run `30962042217`, including migration, A/B rollback, hash-at-rest, failed-attempt commit, successful consumption and Redis limiter smoke checks.
-
 ## Delivery status
 
 | Phase | Status | Audit conclusion |
 |---|---|---|
 | `0.1.0` | passed | Planning, architecture, security, testing and canonical traceability baseline exists. |
 | `0.2.0` | passed | Target aaPanel/OpenLiteSpeed install, HTTPS, release activation/rollback, Supervisor/Scheduler heartbeat and recovery evidence retained. |
-| `0.3.0` | in progress | Identity/customer/agent/ACL schema and secure Telegram ingress exist. Phone/contact/OTP, SMS providers, application services, complete agent lifecycle, hardened owner actions and append-only transition audit remain. |
+| `0.3.0` | in progress | Secure Telegram identity, contact/OTP and fake-tested SMS adapters exist. Customer transition services, complete agent lifecycle, reusable authorization policies, hardened Owner actions and append-only transition audit remain. |
 | `0.4.0` | planned | Catalog, offerings, capacity, trials and panel adapters remain. |
 | `0.5.0` | planned | Ledger, wallet, pricing, promotions and payment methods remain. |
 | `0.6.0` | planned | Orders, provisioning and service lifecycle remain. |
@@ -83,13 +90,14 @@ OTP application SHA `82363cda52c9df2ede7c548faae9f0c55a215b3c` passed CI run `30
 
 ## Current exact work package
 
-Continue Phase `0.3.0` with:
+Continue Phase `0.3.0` with the next dependency-safe package:
 
-1. Melli Payamak and Kavenegar adapters behind the existing `SmsProvider` contract;
-2. fake HTTP contract tests for accepted, definitive rejection, rate limit, malformed response, transport timeout and ambiguous server outcomes;
-3. configuration that keeps fake providers active and real adapters disabled until credentials are supplied;
-4. customer state/tier/tag transition services with append-only audit;
-5. agent claim/review/approve/reject/reapply/suspend/restore application services;
-6. reusable authorization policies, multi-role resolution, hardened Owner behavior and sensitive-action approvals.
+1. customer account-state transition service with explicit actor, reason, previous/new state and concurrency control;
+2. configurable tier recalculation, manual override/lock and append-only tier history;
+3. customer tag assignment/removal services with uniqueness, authorization-ready boundaries and append-only audit evidence;
+4. focused unit, MariaDB integration, race, rollback and privacy tests;
+5. traceability and retained evidence updates after green CI.
 
-No owner action is required for the fake HTTP adapter package. Real SMS credentials remain just-in-time inputs for a later activation gate.
+After that package, continue with agent claim/review/approve/reject/reapply/suspend/restore application services, then reusable authorization policies, hardened Owner behavior and sensitive-action approvals.
+
+No owner action is required for the current package. Real SMS credentials remain a just-in-time input for a later activation gate.
