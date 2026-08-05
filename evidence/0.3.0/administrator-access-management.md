@@ -1,6 +1,6 @@
 # Phase 0.3.0 evidence — administrator access management
 
-Status: implementation prepared; mandatory CI evidence pending.
+Status: verified by the mandatory CI quality gate.
 
 Requirements: `ACL-001`, `ACL-002`, `SEC-002`, `QUA-001`, `QUA-011`.
 
@@ -18,7 +18,15 @@ Requirements: `ACL-001`, `ACL-002`, `SEC-002`, `QUA-001`, `QUA-011`.
 - request-fingerprint replay protection and conflict detection;
 - MariaDB feature tests for role union, deny/allow/inherit, replay, revocation/reactivation, unauthorized access, delegation ceilings and Owner protection.
 
-## Verification plan
+## Mandatory CI verification
+
+- Verified implementation SHA: `6ee4745da6f6d16472d3f37c8b57d8ed6b397fc8`.
+- CI run: `31015210504` (`CI` run number `775`).
+- Result: success across repository preflight, PHP static quality, MariaDB/Redis integration tests, dependency/license policy and secret scan.
+- Automated suite: `161` tests passed with `779` assertions.
+- Test evidence artifact: `test-evidence-31015210504`.
+
+## Verification commands
 
 ```bash
 bash scripts/ci/verify-planning.sh
@@ -35,4 +43,4 @@ COLUMNS=240 php artisan test --display-warnings --fail-on-warning --log-junit bu
 docker compose -f docker-compose.ci.yml down --volumes --remove-orphans
 ```
 
-No green-test claim is made until a recorded CI run completes.
+The recorded CI run is the authoritative verification for this increment.
