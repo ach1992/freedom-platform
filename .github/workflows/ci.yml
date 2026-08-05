@@ -142,9 +142,17 @@ jobs:
       - name: Code style
         shell: bash
         run: |
-          set -o pipefail
+          set -uo pipefail
           mkdir -p build/evidence/static
+          set +e
           bash scripts/ci/run-php-container.sh vendor/bin/pint --test --format=json 2>&1 | tee build/evidence/static/pint.json
+          pint_status=${PIPESTATUS[0]}
+          set -e
+          if (( pint_status != 0 )); then
+            bash scripts/ci/run-php-container.sh vendor/bin/pint >/dev/null
+            git diff -- . ':(exclude)build' | tee build/evidence/static/pint.diff
+            exit "$pint_status"
+          fi
       - name: Static analysis and repository policy
         shell: bash
         run: |
