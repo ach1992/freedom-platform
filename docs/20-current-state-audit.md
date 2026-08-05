@@ -26,12 +26,16 @@ The repository now has a verified target-like runtime and an in-progress identit
 
 - Telegram account/customer synchronization with transaction and race handling;
 - customer tiers, profiles, histories, tags and globally unique active phone-hash schema;
-- OTP challenge schema;
+- Iranian mobile normalization with Persian/Arabic digits, encrypted canonical values and keyed searchable hashes;
+- Telegram contact ownership verification, one-active-number constraints, policy/version evidence and number-change invalidation;
+- HMAC-only OTP issue/verify/invalidate lifecycle with two-minute expiry, sixty-second cooldown and five-attempt lockout;
+- idempotent OTP issuance and atomic Redis abuse controls by phone, Telegram account, IP and provider;
+- safe SMS delivery taxonomy, fake providers and definitive-failure-only fallback semantics;
 - agent application/profile lifecycle schema and state enums;
 - roles, permissions, multi-role assignments, per-admin tri-state override and deny-precedence resolver;
 - sensitive-action approval schema and state machine;
 - secure Telegram webhook secret validation, encrypted payload persistence, database deduplication/collision detection, asynchronous processing, stranded-update recovery and encrypted `/start` attribution;
-- real staging Telegram webhook contract verified.
+- real staging Telegram webhook, contact foundation and OTP lifecycle contracts verified.
 
 ## Latest evidence
 
@@ -58,6 +62,10 @@ Application SHA `f3f460b1ae5deabfa1590a17b479e8de4d8bf2af` passed staging run `3
 
 Telegram run `30958272387` passed secret rejection, valid ingestion, exact-duplicate idempotency, collision rejection, stranded-update recovery, one processing attempt, cleanup and final `pending_update_count=0`.
 
+Phone/contact application SHA `750bcdf994f864859d1a0a2c0e5fda476793bfc9` passed CI run `30959686735` with **129 tests, 619 assertions** and target runs `30959844808` / `30960110251`.
+
+OTP application SHA `82363cda52c9df2ede7c548faae9f0c55a215b3c` passed CI run `30961861886` with **135 tests, 662 assertions** and staging run `30962042217`, including migration, A/B rollback, hash-at-rest, failed-attempt commit, successful consumption and Redis limiter smoke checks.
+
 ## Delivery status
 
 | Phase | Status | Audit conclusion |
@@ -77,12 +85,11 @@ Telegram run `30958272387` passed secret rejection, valid ingestion, exact-dupli
 
 Continue Phase `0.3.0` with:
 
-1. Iranian mobile normalization with Persian/Arabic digit support and canonical E.164 representation;
-2. phone verification policy/version model;
-3. Telegram contact ownership verification and globally unique active number binding;
-4. OTP issuance/verification/invalidation, cooldown, expiry, attempt limits and abuse controls;
-5. SMS contract, deterministic fake provider and definitive-failure-only fallback semantics;
-6. Melli Payamak and Kavenegar adapters with fake HTTP contract tests before any real credential activation;
-7. append-only transition/audit evidence and concurrency tests.
+1. Melli Payamak and Kavenegar adapters behind the existing `SmsProvider` contract;
+2. fake HTTP contract tests for accepted, definitive rejection, rate limit, malformed response, transport timeout and ambiguous server outcomes;
+3. configuration that keeps fake providers active and real adapters disabled until credentials are supplied;
+4. customer state/tier/tag transition services with append-only audit;
+5. agent claim/review/approve/reject/reapply/suspend/restore application services;
+6. reusable authorization policies, multi-role resolution, hardened Owner behavior and sensitive-action approvals.
 
-No owner action is required for this fake/sandbox package. Real SMS credentials remain just-in-time inputs for a later activation gate.
+No owner action is required for the fake HTTP adapter package. Real SMS credentials remain just-in-time inputs for a later activation gate.

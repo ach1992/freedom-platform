@@ -2,7 +2,7 @@
 
 Baseline: Master Execution Prompt `1.0.0`  
 Matrix status: `active`  
-Implementation/test/evidence status: `in-progress` for the explicitly marked foundation rows; all evidence remains unverified until a recorded CI run exists.
+Implementation/test/evidence status: `in-progress` for explicitly marked foundation rows; retained CI and target evidence is cited below, while phase completion still requires every remaining gap to close.
 
 ## Traceability contract
 
@@ -31,28 +31,30 @@ Placeholder notation:
 | `RUN-001`, `RUN-002`, `RUN-003`, `SEC-008`, `SEC-010`, `QUA-011`, `QUA-013` | `FilesystemReleaseActivator`; `ArtisanReleaseHealthVerifier`; `deploy/bin/release-switch.php`; release activation/CLI/process/runtime tests; executable deployment and rollback runbooks; `evidence/0.2.0/RUN-002-release-worker-runtime.md`; CI run `30910236970` | Target immutable-release activation, OpenLiteSpeed `current/public`, live health and explicit rollback evidence |
 | `ARCH-001`, `ARCH-002`, `QUA-002`, `QUA-012`, `QUA-013` | `composer.json`; `phpstan.neon`; `.github/workflows/ci.yml`; `scripts/ci/`; `docs/19-ci-quality-gates.md`; CI run `30910236970` | Stronger later-phase module rules, target lifecycle evidence and release-gate manifests |
 | `DAT-001`, `DAT-002`, `DAT-003`, `DAT-004` | `Money.php`; `Clock.php`; state enums; foundation migrations; unit/migration tests | Complete domain schema, retention services and production migration evidence |
+| `ONB-001`, `ONB-004`, `ONB-005`, `USR-001`, `SEC-003`, `DAT-003`, `INT-002` | Telegram identity/webhook services; `IranianMobileNumber`; verification policy/method enums; `TelegramContactVerifier`; `OtpChallengeIssuer`; `OtpChallengeVerifier`; HMAC phone/OTP hashers; atomic Redis limiter; fake/rate-limited SMS providers; phone/OTP migrations; contact/OTP/Redis tests; `evidence/0.3.0/identity-phone-contact-sms-foundation.md`; `evidence/0.3.0/otp-lifecycle-abuse-controls.md`; CI runs `30959686735`, `30961861886`; staging runs `30959844808`, `30960110251`, `30962042217` | Melli Payamak/Kavenegar HTTP adapters, identity-admin release/reverification policies and complete Phase application flows |
+| `USR-002`, `USR-003`, `AGT-001`, `AGT-002`, `ACL-001`, `ACL-002`, `ACL-003`, `SEC-002` | identity/customer/agent/ACL migration; tier/role/permission seeders; account/tier/agent/approval enums; deny-precedence resolver; foundation migration/domain tests | Customer transition services, full agent lifecycle services, authorization policies, hardened Owner/approval flows and append-only audit coverage |
 
 ## Canonical §36 requirements
 
 | Requirement | Design / owner | Planned code boundary | Required test prefix | Evidence prefix | Status |
 |---|---|---|---|---|---|
-| `ONB-001` | D:Onboarding / Identity | C:Identity,Telegram | T:ONB-001 | E:0.3.0/ONB-001 | `not-started` |
+| `ONB-001` | D:Onboarding / Identity | C:Identity,Telegram | T:ONB-001 | E:0.3.0/ONB-001 | `in-progress` |
 | `ONB-002` | D:Onboarding / Promotions | C:Identity,Referrals | T:ONB-002 | E:0.3.0/ONB-002 | `not-started` |
 | `ONB-003` | D:Membership / Identity | C:Identity,Telegram | T:ONB-003 | E:0.7.0/ONB-003 | `not-started` |
-| `ONB-004` | D:Identity / Identity | C:Identity,Notifications | T:ONB-004 | E:0.3.0/ONB-004 | `not-started` |
-| `ONB-005` | D:AccountPolicy / Identity | C:Customers,Telegram | T:ONB-005 | E:0.3.0/ONB-005 | `not-started` |
-| `USR-001` | D:CustomerAccount / Identity | C:Customers,Wallet | T:USR-001 | E:0.3.0/USR-001 | `not-started` |
-| `USR-002` | D:TierPolicy / Product | C:Customers | T:USR-002 | E:0.3.0/USR-002 | `not-started` |
-| `USR-003` | D:CustomerAdmin / Identity | C:Customers,AccessControl | T:USR-003 | E:0.3.0/USR-003 | `not-started` |
-| `AGT-001` | D:AgentLifecycle / Product | C:Agents | T:AGT-001 | E:0.3.0/AGT-001 | `not-started` |
-| `AGT-002` | D:AgentLifecycle / Identity | C:Agents,AccessControl | T:AGT-002 | E:0.3.0/AGT-002 | `not-started` |
+| `ONB-004` | D:Identity / Identity | C:Identity,Notifications | T:ONB-004 | E:0.3.0/ONB-004 | `in-progress` |
+| `ONB-005` | D:AccountPolicy / Identity | C:Customers,Telegram | T:ONB-005 | E:0.3.0/ONB-005 | `in-progress` |
+| `USR-001` | D:CustomerAccount / Identity | C:Customers,Wallet | T:USR-001 | E:0.3.0/USR-001 | `in-progress` |
+| `USR-002` | D:TierPolicy / Product | C:Customers | T:USR-002 | E:0.3.0/USR-002 | `in-progress` |
+| `USR-003` | D:CustomerAdmin / Identity | C:Customers,AccessControl | T:USR-003 | E:0.3.0/USR-003 | `in-progress` |
+| `AGT-001` | D:AgentLifecycle / Product | C:Agents | T:AGT-001 | E:0.3.0/AGT-001 | `in-progress` |
+| `AGT-002` | D:AgentLifecycle / Identity | C:Agents,AccessControl | T:AGT-002 | E:0.3.0/AGT-002 | `in-progress` |
 | `AGT-003` | D:AgentPurchase / Orders | C:Agents,Orders,Payments | T:AGT-003 | E:0.6.0/AGT-003 | `not-started` |
 | `AGT-004` | D:BulkOrder / Orders | C:Agents,Orders,Provisioning | T:AGT-004 | E:0.6.0/AGT-004 | `not-started` |
 | `AGT-005` | D:AgentPricing / Finance | C:Agents,Catalog,Promotions | T:AGT-005 | E:0.5.0/AGT-005 | `not-started` |
 | `AGT-006` | D:AgentReporting / Reporting | C:Agents,Reporting | T:AGT-006 | E:0.7.0/AGT-006 | `not-started` |
-| `ACL-001` | D:PermissionModel / Access | C:AccessControl | T:ACL-001 | E:0.3.0/ACL-001 | `not-started` |
-| `ACL-002` | D:CommandAuthorization / Access | C:AccessControl,Telegram | T:ACL-002 | E:0.3.0/ACL-002 | `not-started` |
-| `ACL-003` | D:SensitiveApproval / Access | C:AccessControl | T:ACL-003 | E:0.3.0/ACL-003 | `not-started` |
+| `ACL-001` | D:PermissionModel / Access | C:AccessControl | T:ACL-001 | E:0.3.0/ACL-001 | `in-progress` |
+| `ACL-002` | D:CommandAuthorization / Access | C:AccessControl,Telegram | T:ACL-002 | E:0.3.0/ACL-002 | `in-progress` |
+| `ACL-003` | D:SensitiveApproval / Access | C:AccessControl | T:ACL-003 | E:0.3.0/ACL-003 | `in-progress` |
 | `CAT-001` | D:Catalog / Catalog | C:Catalog | T:CAT-001 | E:0.4.0/CAT-001 | `not-started` |
 | `CAT-002` | D:OfferingModel / Catalog | C:Catalog,Panels | T:CAT-002 | E:0.4.0/CAT-002 | `not-started` |
 | `CAT-003` | D:ServiceMode / Catalog | C:Catalog | T:CAT-003 | E:0.4.0/CAT-003 | `not-started` |
@@ -148,7 +150,7 @@ Placeholder notation:
 | `RUN-004` | D:ScheduledTaskPolicy / SRE | C:Operations | T:RUN-004 | E:0.8.0/RUN-004 | `in-progress` |
 | `RUN-005` | D:BackupProcessSafety / SRE | C:Operations | T:RUN-005 | E:0.8.0/RUN-005 | `not-started` |
 | `RUN-006` | D:PackageManifest / Release | C:ReleaseTooling | T:RUN-006 | E:0.9.0/RUN-006 | `not-started` |
-| `SEC-002` | D:AuthorizationThreats / Security | C:AccessControl | T:SEC-002 | E:0.3.0/SEC-002 | `not-started` |
+| `SEC-002` | D:AuthorizationThreats / Security | C:AccessControl | T:SEC-002 | E:0.3.0/SEC-002 | `in-progress` |
 | `SEC-003` | D:DataProtection / Security | C:Shared,Identity,Payments | T:SEC-003 | E:0.3.0/SEC-003 | `in-progress` |
 | `SEC-004` | D:SSRF / Security | C:SharedHttp,Integrations | T:SEC-004 | E:0.5.0/SEC-004 | `in-progress` |
 | `SEC-005` | D:TLS / Security | C:SharedHttp,Integrations | T:SEC-005 | E:0.4.0/SEC-005 | `not-started` |
