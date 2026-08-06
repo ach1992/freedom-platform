@@ -14,6 +14,7 @@ use App\Modules\Panels\Application\Contracts\PasarGuardGateway;
 use App\Modules\Panels\Application\Contracts\RemoteServiceSnapshot;
 use App\Modules\Panels\Application\Contracts\SensitiveDeliveryArtifacts;
 use DateTimeImmutable;
+use RuntimeException;
 
 final class UnavailablePanelGateway implements MarzbanGateway, PasarGuardGateway
 {
@@ -91,7 +92,7 @@ final class UnavailablePanelGateway implements MarzbanGateway, PasarGuardGateway
 
     public function getDeliveryArtifacts(string $remoteId): SensitiveDeliveryArtifacts
     {
-        return new SensitiveDeliveryArtifacts([]);
+        throw new RuntimeException('Panel gateway is not configured.');
     }
 
     public function synchronize(string $remoteId): PanelOperationResult
