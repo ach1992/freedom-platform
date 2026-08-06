@@ -7,6 +7,7 @@ namespace Tests\Feature;
 use App\Modules\Catalog\Application\CatalogChangeContext;
 use App\Modules\Catalog\Application\CustomPlanCalculator;
 use App\Modules\Catalog\Application\CustomPlanContext;
+use App\Modules\Catalog\Application\CustomPlanOperationalVerifier;
 use App\Modules\Catalog\Application\CustomPlanPolicyService;
 use App\Modules\Catalog\Application\CustomPlanRequest;
 use App\Modules\Catalog\Domain\CustomPlanActorType;
@@ -20,6 +21,7 @@ use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PanelsAccessFoundationSeeder;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
+use Illuminate\Database\Connection;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -38,6 +40,7 @@ final class CustomPlanCalculationTest extends TestCase
         $this->seed(IdentityAccessFoundationSeeder::class);
         $this->seed(CatalogAccessFoundationSeeder::class);
         $this->seed(PanelsAccessFoundationSeeder::class);
+        $this->app->bind(CustomPlanOperationalVerifier::class, TestCustomPlanOperationalVerifier::class);
     }
 
     public function test_policy_calculation_and_two_stage_revalidation_are_replay_safe(): void
@@ -353,11 +356,11 @@ final class CustomPlanCalculationTest extends TestCase
             'custom_ca_path' => null,
             'certificate_pin_sha256' => null,
             'network_policy' => 'public_only',
-            'state' => 'active',
-            'last_test_status' => 'success',
-            'last_panel_version' => 'test',
-            'last_capabilities_hash' => hash('sha256', 'capabilities'),
-            'last_tested_at' => $now,
+            'state' => 'disabled',
+            'last_test_status' => null,
+            'last_panel_version' => null,
+            'last_capabilities_hash' => null,
+            'last_tested_at' => null,
             'version' => 1,
             'created_at' => $now,
             'updated_at' => $now,
@@ -371,11 +374,11 @@ final class CustomPlanCalculationTest extends TestCase
             'encrypted_configuration' => 'ciphertext',
             'configuration_hash' => hash('sha256', 'target'),
             'configuration_key_version' => 1,
-            'state' => 'active',
-            'capability_status' => 'verified',
-            'capability_evidence_hash' => hash('sha256', 'verified'),
-            'capability_verified_at' => $now,
-            'verified_connection_version' => 1,
+            'state' => 'disabled',
+            'capability_status' => 'declared',
+            'capability_evidence_hash' => null,
+            'capability_verified_at' => null,
+            'verified_connection_version' => null,
             'version' => 1,
             'created_at' => $now,
             'updated_at' => $now,
@@ -383,9 +386,9 @@ final class CustomPlanCalculationTest extends TestCase
         DB::table('panel_target_capabilities')->insert([
             'panel_service_target_id' => $targetId,
             'capability_code' => 'create_service',
-            'verification_status' => 'verified',
-            'evidence_hash' => hash('sha256', 'capability'),
-            'verified_at' => $now,
+            'verification_status' => 'declared',
+            'evidence_hash' => null,
+            'verified_at' => null,
             'created_at' => $now,
             'updated_at' => $now,
         ]);
@@ -419,8 +422,8 @@ final class CustomPlanCalculationTest extends TestCase
             'name_en' => null,
             'description_fa' => null,
             'description_en' => null,
-            'state' => 'active',
-            'visibility' => 'listed',
+            'state' => 'disabled',
+            'visibility' => 'hidden',
             'sort_order' => 0,
             'version' => 1,
             'created_at' => $now,
@@ -492,16 +495,7 @@ final class CustomPlanCalculationTest extends TestCase
 
     private function activateOffering(int $offeringId): void
     {
-        DB::table('plan_offerings')->where('id', $offeringId)->update([
-            'state' => 'active',
-            'version' => 2,
-            'updated_at' => now('UTC'),
-        ]);
-        DB::table('plan_offerings')->where('id', $offeringId)->update([
-            'visibility' => 'visible',
-            'version' => 3,
-            'updated_at' => now('UTC'),
-        ]);
+        self::assertSame('draft', DB::table('plan_offerings')->where('id', $offeringId)->value('state'));
     }
 
     private function definition(int $tagId): CustomPlanPolicyDefinition
@@ -561,5 +555,15 @@ final class CustomPlanCalculationTest extends TestCase
             'Custom-plan policy test change.',
             $administratorId,
         );
+    }
+}
+
+final class TestCustomPlanOperationalVerifier implements CustomPlanOperationalVerifier
+{
+    public function assertOperational(Connection $connection, int $offeringId): void
+    {
+        if (! $connection->table('plan_offerings')->where('id', $offeringId)->exists()) {
+            throw new DomainException('Custom-plan Offering does not exist.');
+        }
     }
 }
