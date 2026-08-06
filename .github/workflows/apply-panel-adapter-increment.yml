@@ -1,0 +1,90 @@
+name: Apply Panel Adapter Increment
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-panel-adapter-increment
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    if: github.head_ref == 'work/phase-0.4-adapter-contract'
+    runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
+    timeout-minutes: 15
+    steps:
+      - name: Check out temporary branch
+        uses: actions/checkout@v4
+        with:
+          ref: work/phase-0.4-adapter-contract
+          fetch-depth: 0
+
+      - name: Verify and apply increment
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "e2d872263252a73b1ef0f78114eaca0c5d2e525fa797ce6270024f0b1bbe726b  .github/panel-adapter-increment.tar.gz" | sha256sum -c -
+          tar -xzf .github/panel-adapter-increment.tar.gz -C .
+          git show f86d46c0210137950d07cf30a55d975c66f7aace:tests/Feature/TrialPolicyReservationTest.php > tests/Feature/TrialPolicyReservationTest.php
+          python3 - <<'PY'
+          from pathlib import Path
+
+          test = Path('tests/Feature/TrialPolicyReservationTest.php')
+          text = test.read_text()
+          text = text.replace(
+              "use App\\Modules\\Catalog\\Application\\TrialRouteSelector;\n",
+              "use App\\Modules\\Catalog\\Application\\TrialRouteSelector;\nuse App\\Modules\\Panels\\Application\\TargetCapacityAllocator;\nuse App\\Shared\\Application\\Clock;\n",
+              1,
+          )
+          text = text.replace(
+              "        $ownerId = $this->administrator(true);\n",
+              "        $existingOwnerId = DB::table('administrators')->where('is_owner', true)->value('id');\n        $ownerId = $existingOwnerId === null ? $this->administrator(true) : (int) $existingOwnerId;\n",
+          )
+          old = """        $this->app->instance(TrialMembershipVerifier::class, new PassingTrialMembershipVerifier);
+        $this->app->forgetInstance(TrialRouteSelector::class);
+        $this->app->forgetInstance(TrialReservationService::class);
+
+        return $this->app->make(TrialReservationService::class);
+"""
+          new = """        $this->app->instance(TrialMembershipVerifier::class, new PassingTrialMembershipVerifier);
+        $this->app->instance(
+            TrialRouteSelector::class,
+            new TrialRouteSelector(
+                new PassingTrialRouteOperationalVerifier,
+                $this->app->make(TargetCapacityAllocator::class),
+                $this->app->make(Clock::class),
+            ),
+        );
+        $this->app->forgetInstance(TrialReservationService::class);
+
+        return $this->app->make(TrialReservationService::class);
+"""
+          if old not in text:
+              raise SystemExit('trial service helper patch target not found')
+          test.write_text(text.replace(old, new, 1))
+
+          migration = Path('database/migrations/2026_08_06_002200_create_trial_policy_foundation.php')
+          mtext = migration.read_text()
+          old_line = "        DB::statement(\"ALTER TABLE trial_policies ADD CONSTRAINT trial_policy_phone_chk CHECK (`phone_verification_policy` IN ('none', 'telegram_contact_only', 'sms_otp_only', 'either', 'both'))\");"
+          new_line = "        DB::statement('ALTER TABLE trial_policies ADD CONSTRAINT trial_policy_phone_chk CHECK (`phone_verification_policy` IN (\\'none\\', \\'telegram_contact_only\\', \\'sms_otp_only\\', \\'either\\', \\'both\\'))');"
+          if old_line in mtext:
+              migration.write_text(mtext.replace(old_line, new_line, 1))
+          PY
+          rm -f .github/panel-adapter-increment.tar.gz
+          rm -f .github/workflows/apply-panel-adapter-increment.yml
+          find app/Modules/Panels tests/Unit/Modules/Panels tests/Feature/TrialPolicyReservationTest.php database/migrations/2026_08_06_002200_create_trial_policy_foundation.php -name '*.php' -print0 | xargs -0 -n1 /www/server/php/84/bin/php -l >/dev/null
+
+      - name: Commit clean increment tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "feat(panels): add adapter contract and remote identity guard"
+          git push origin HEAD:work/phase-0.4-adapter-contract
