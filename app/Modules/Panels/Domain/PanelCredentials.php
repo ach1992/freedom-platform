@@ -5,8 +5,9 @@ declare(strict_types=1);
 namespace App\Modules\Panels\Domain;
 
 use InvalidArgumentException;
+use Stringable;
 
-final readonly class PanelCredentials
+final readonly class PanelCredentials implements Stringable
 {
     /** @param array<string, string> $values */
     private function __construct(
@@ -38,5 +39,16 @@ final readonly class PanelCredentials
         ksort($normalized);
 
         return new self($normalized, json_encode($normalized, JSON_THROW_ON_ERROR));
+    }
+
+    /** @return array{redacted: true} */
+    public function __debugInfo(): array
+    {
+        return ['redacted' => true];
+    }
+
+    public function __toString(): string
+    {
+        return '[PANEL_CREDENTIALS]';
     }
 }
