@@ -162,7 +162,7 @@ trait PlanOfferingDependencyChecks
         if ($operational) {
             $query->where('verification_status', 'verified');
         }
-        if ($query->lockForUpdate()->get(['capability_code'])->count() !== count($capabilities)) {
+        if ($query->lockForUpdate()->count('capability_code') !== count($capabilities)) {
             throw new DomainException('Service target does not satisfy offering capability requirements.');
         }
     }
@@ -235,8 +235,7 @@ trait PlanOfferingDependencyChecks
             ->whereIn('id', $profileIds)
             ->where('state', 'active')
             ->lockForUpdate()
-            ->get(['id'])
-            ->count() !== count($profileIds)
+            ->count('id') !== count($profileIds)
         ) {
             throw new DomainException('Offering activation requires active protocol profiles.');
         }
@@ -244,8 +243,7 @@ trait PlanOfferingDependencyChecks
             ->where('panel_service_target_id', $record->serviceTargetId)
             ->whereIn('panel_protocol_profile_id', $profileIds)
             ->lockForUpdate()
-            ->get(['panel_protocol_profile_id'])
-            ->count() !== count($profileIds)
+            ->count('panel_protocol_profile_id') !== count($profileIds)
         ) {
             throw new DomainException('Offering protocol profile is incompatible with its service target.');
         }
@@ -272,8 +270,7 @@ trait PlanOfferingDependencyChecks
                 ->whereIn('capability_code', $capabilities)
                 ->where('verification_status', 'verified')
                 ->lockForUpdate()
-                ->get(['capability_code'])
-                ->count() !== count($capabilities)
+                ->count('capability_code') !== count($capabilities)
         ) {
             throw new DomainException('Offering activation requires verified target capabilities.');
         }
