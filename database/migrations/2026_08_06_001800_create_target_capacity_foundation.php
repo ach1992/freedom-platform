@@ -223,14 +223,14 @@ SQL);
 
     private function dropTriggers(): void
     {
-        foreach ([
-            'capacity_reservations_insert_guard', 'capacity_reservations_after_insert',
-            'capacity_reservations_update_guard', 'capacity_reservations_after_update',
-            'capacity_reservations_delete_guard', 'capacity_events_update_guard',
-            'capacity_events_delete_guard', 'target_capacity_histories_update_guard',
-            'target_capacity_histories_delete_guard',
-        ] as $trigger) {
-            DB::unprepared('DROP TRIGGER IF EXISTS '.$trigger);
-        }
+        DB::unprepared('DROP TRIGGER IF EXISTS capacity_reservations_insert_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS capacity_reservations_after_insert');
+        DB::unprepared('DROP TRIGGER IF EXISTS capacity_reservations_update_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS capacity_reservations_after_update');
+        DB::unprepared('DROP TRIGGER IF EXISTS capacity_reservations_delete_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS capacity_events_update_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS capacity_events_delete_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS target_capacity_histories_update_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS target_capacity_histories_delete_guard');
     }
 };
