@@ -217,6 +217,32 @@ final class PanelAdapterContractTest extends TestCase
         self::assertSame($mismatch, $result->service);
     }
 
+    public function test_conflicting_idempotency_key_reuse_cannot_overwrite_remote_service(): void
+    {
+        $canonicalizer = new PanelServiceCanonicalizer;
+        $adapter = new FakePanelAdapter($canonicalizer);
+        $firstRequest = $this->request();
+        $first = $this->coordinator($canonicalizer)->createOrAdopt($adapter, $firstRequest);
+        self::assertSame(PanelOperationOutcome::Success, $first->outcome);
+
+        $conflictingRequest = new PanelCreateServiceRequest(
+            'operation-00000002',
+            $firstRequest->idempotencyKey,
+            'fp_user_002',
+            $firstRequest->targetReference,
+            $firstRequest->dataLimitBytes,
+            $firstRequest->expiresAt,
+            $firstRequest->validatedAttributes,
+        );
+        $conflict = $this->coordinator($canonicalizer)->createOrAdopt($adapter, $conflictingRequest);
+
+        self::assertSame(PanelOperationOutcome::DefinitiveFailure, $conflict->outcome);
+        self::assertSame('fake_idempotency_conflict', $conflict->providerCode);
+        self::assertSame(1, $adapter->serviceCount());
+        self::assertNotNull($adapter->findByDeterministicUsername($firstRequest->username));
+        self::assertNull($adapter->findByDeterministicUsername($conflictingRequest->username));
+    }
+
     public function test_uncertain_fake_create_is_adopted_without_duplicate_remote_service(): void
     {
         $canonicalizer = new PanelServiceCanonicalizer;
