@@ -117,7 +117,7 @@ final class TrialPolicyReservationTest extends TestCase
 
     public function test_fallback_policy_controls_route_substitution_and_disclosure_snapshot(): void
     {
-        $scenario = $this->scenario(dailyCapacity: 3);
+        $scenario = $this->scenario(dailyCapacity: 3, primaryCapacity: 1);
         $this->fillPrimaryCapacity($scenario['primary_capacity_id']);
         $this->app->make(TrialPolicyService::class)->create(
             $scenario['offering_id'],
@@ -133,7 +133,11 @@ final class TrialPolicyReservationTest extends TestCase
         self::assertSame($scenario['fallback_target_id'], $reserved->serviceTargetId);
         self::assertSame('سرور جایگزین آزمایشی انتخاب شد.', $reserved->disclosureFa);
 
-        $disabledScenario = $this->scenario(dailyCapacity: 3, ownerId: $scenario['owner_id']);
+        $disabledScenario = $this->scenario(
+            dailyCapacity: 3,
+            ownerId: $scenario['owner_id'],
+            primaryCapacity: 1,
+        );
         $this->fillPrimaryCapacity($disabledScenario['primary_capacity_id']);
         $this->app->make(TrialPolicyService::class)->create(
             $disabledScenario['offering_id'],
@@ -246,8 +250,12 @@ final class TrialPolicyReservationTest extends TestCase
     }
 
     /** @return array<string, int> */
-    private function scenario(int $dailyCapacity, string $phoneEvidence = 'none', ?int $ownerId = null): array
-    {
+    private function scenario(
+        int $dailyCapacity,
+        string $phoneEvidence = 'none',
+        ?int $ownerId = null,
+        ?int $primaryCapacity = null,
+    ): array {
         $this->scenarioDailyCapacity = $dailyCapacity;
         $now = now('UTC');
         $ownerId ??= $this->administrator(true);
@@ -411,7 +419,7 @@ final class TrialPolicyReservationTest extends TestCase
             'created_at' => $now,
             'updated_at' => $now,
         ]);
-        $primaryCapacityId = $this->capacity($primaryTargetId, 1, $now);
+        $primaryCapacityId = $this->capacity($primaryTargetId, $primaryCapacity ?? $dailyCapacity, $now);
         $fallbackCapacityId = $this->capacity($fallbackTargetId, 5, $now);
 
         return [
