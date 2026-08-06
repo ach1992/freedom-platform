@@ -1,5 +1,6 @@
 name: Apply Trial Format Fix
 
+# All checksum parts are staged on this branch before execution.
 on:
   pull_request:
     branches:
