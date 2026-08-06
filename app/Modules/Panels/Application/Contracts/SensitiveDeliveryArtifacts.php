@@ -8,14 +8,21 @@ use Stringable;
 
 final readonly class SensitiveDeliveryArtifacts implements Stringable
 {
+    /** @var list<string> */
+    private array $subscriptionLinks;
+
+    /** @var list<string> */
+    private array $qrSources;
+
     /**
      * @param list<string> $subscriptionLinks
-     * @param list<string> $qrSources
+     * @param list<string>|null $qrSources
      */
-    public function __construct(
-        private array $subscriptionLinks,
-        private array $qrSources = [],
-    ) {}
+    public function __construct(array $subscriptionLinks, ?array $qrSources = null)
+    {
+        $this->subscriptionLinks = $subscriptionLinks;
+        $this->qrSources = $qrSources ?? $subscriptionLinks;
+    }
 
     /**
      * Compatibility accessor for authorized subscription delivery.
