@@ -9,7 +9,9 @@ use InvalidArgumentException;
 final readonly class OfferingPackageDefinition
 {
     public string $code;
+
     public string $nameFa;
+
     public ?string $nameEn;
 
     public function __construct(

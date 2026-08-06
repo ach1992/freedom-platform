@@ -9,7 +9,9 @@ use InvalidArgumentException;
 final readonly class PlanOfferingServiceMode
 {
     public string $code;
+
     public string $labelFa;
+
     public ?string $labelEn;
 
     public function __construct(string $code, string $labelFa, ?string $labelEn)
