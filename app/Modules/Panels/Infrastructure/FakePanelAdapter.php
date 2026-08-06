@@ -73,20 +73,34 @@ final class FakePanelAdapter implements PanelAdapter
     public function createService(PanelCreateServiceRequest $request): PanelOperationResult
     {
         $expectedHash = $this->canonicalizer->hashCreateRequest($request);
+        $fingerprint = $this->operationFingerprint('create_service', [
+            'canonical_hash' => $expectedHash,
+        ]);
+        $replayed = $this->replayedOperation($request->idempotencyKey, $fingerprint);
+        if ($replayed !== null) {
+            return $replayed;
+        }
+
         $existing = $this->findByDeterministicUsername($request->username);
         if ($existing !== null) {
-            return hash_equals($expectedHash, $existing->canonicalHash)
+            $result = hash_equals($expectedHash, $existing->canonicalHash)
                 ? $this->success($existing, 'fake_service_adopted')
                 : $this->failure('fake_remote_conflict', 'Fake remote service conflicts with the request.', $existing);
+
+            return $this->rememberOperation($request->idempotencyKey, $fingerprint, $result);
         }
 
         $remoteId = 'fake-'.substr(hash('sha256', $request->idempotencyKey), 0, 24);
         $existingByOperation = $this->findByRemoteId($remoteId);
         if ($existingByOperation !== null) {
-            return $this->failure(
-                'fake_idempotency_conflict',
-                'Fake panel idempotency key conflicts with an existing remote service.',
-                $existingByOperation,
+            return $this->rememberOperation(
+                $request->idempotencyKey,
+                $fingerprint,
+                $this->failure(
+                    'fake_idempotency_conflict',
+                    'Fake panel idempotency key conflicts with an existing remote service.',
+                    $existingByOperation,
+                ),
             );
         }
 
@@ -106,15 +120,23 @@ final class FakePanelAdapter implements PanelAdapter
         if ($this->nextCreateIsUncertain) {
             $this->nextCreateIsUncertain = false;
 
-            return new PanelOperationResult(
-                PanelOperationOutcome::UncertainResult,
-                null,
-                'fake_timeout_after_create',
-                'Fake panel timed out after create.',
+            return $this->rememberOperation(
+                $request->idempotencyKey,
+                $fingerprint,
+                new PanelOperationResult(
+                    PanelOperationOutcome::UncertainResult,
+                    null,
+                    'fake_timeout_after_create',
+                    'Fake panel timed out after create.',
+                ),
             );
         }
 
-        return $this->success($service, 'fake_service_created');
+        return $this->rememberOperation(
+            $request->idempotencyKey,
+            $fingerprint,
+            $this->success($service, 'fake_service_created'),
+        );
     }
 
     public function fetchStatus(string $remoteId): PanelOperationResult
@@ -281,20 +303,36 @@ final class FakePanelAdapter implements PanelAdapter
         string $fingerprint,
         Closure $operation,
     ): PanelOperationResult {
-        $existing = $this->operationResults[$idempotencyKey] ?? null;
-        if ($existing !== null) {
-            if (! hash_equals($existing['fingerprint'], $fingerprint)) {
-                return $this->failure(
-                    'fake_idempotency_conflict',
-                    'Fake panel idempotency key conflicts with a different remote operation.',
-                    $existing['result']->service,
-                );
-            }
-
-            return $existing['result'];
+        $replayed = $this->replayedOperation($idempotencyKey, $fingerprint);
+        if ($replayed !== null) {
+            return $replayed;
         }
 
-        $result = $operation();
+        return $this->rememberOperation($idempotencyKey, $fingerprint, $operation());
+    }
+
+    private function replayedOperation(string $idempotencyKey, string $fingerprint): ?PanelOperationResult
+    {
+        $existing = $this->operationResults[$idempotencyKey] ?? null;
+        if ($existing === null) {
+            return null;
+        }
+        if (! hash_equals($existing['fingerprint'], $fingerprint)) {
+            return $this->failure(
+                'fake_idempotency_conflict',
+                'Fake panel idempotency key conflicts with a different remote operation.',
+                $existing['result']->service,
+            );
+        }
+
+        return $existing['result'];
+    }
+
+    private function rememberOperation(
+        string $idempotencyKey,
+        string $fingerprint,
+        PanelOperationResult $result,
+    ): PanelOperationResult {
         $this->operationResults[$idempotencyKey] = [
             'fingerprint' => $fingerprint,
             'result' => $result,
