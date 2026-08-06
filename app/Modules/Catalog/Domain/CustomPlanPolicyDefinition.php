@@ -22,10 +22,10 @@ final readonly class CustomPlanPolicyDefinition
     public array $reservedWords;
 
     /**
-     * @param list<string> $eligibleTierCodes
-     * @param list<int> $eligibleTagIds
-     * @param list<string> $allowedSeparators
-     * @param list<string> $reservedWords
+     * @param  list<string>  $eligibleTierCodes
+     * @param  list<int>  $eligibleTagIds
+     * @param  list<string>  $allowedSeparators
+     * @param  list<string>  $reservedWords
      */
     public function __construct(
         public bool $enabled,
