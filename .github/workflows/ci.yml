@@ -6,6 +6,7 @@ on:
   push:
     branches:
       - main
+      - develop/v1.0.0-completion
   pull_request:
     branches:
       - main
