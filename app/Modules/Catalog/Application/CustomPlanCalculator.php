@@ -397,7 +397,7 @@ final readonly class CustomPlanCalculator
      *  customer_base_price_irr: int, customer_price_per_gb_irr: int, customer_price_per_day_irr: int, customer_minimum_order_amount_irr: int,
      *  agent_base_price_irr: int, agent_price_per_gb_irr: int, agent_price_per_day_irr: int, agent_minimum_order_amount_irr: int
      * } $policy
-     * @param object{data_gb: int, days: int, base_price_irr: int, price_per_gb_irr: int, price_per_day_irr: int, data_price_irr: int, day_price_irr: int, subtotal_irr: int, minimum_order_amount_irr: int, minimum_adjustment_irr: int, final_price_irr: int} $calculation
+     * @param  object{data_gb: int, days: int, base_price_irr: int, price_per_gb_irr: int, price_per_day_irr: int, data_price_irr: int, day_price_irr: int, subtotal_irr: int, minimum_order_amount_irr: int, minimum_adjustment_irr: int, final_price_irr: int}  $calculation
      */
     private function assertStoredArithmetic(object $policy, object $calculation, CustomPlanActorType $actorType): void
     {
