@@ -14,11 +14,17 @@ final class PanelCredentialPolicy
     {
         $values = $credentials->values;
 
-        match ($provider) {
-            PanelProviderType::Fake => null,
-            PanelProviderType::Marzban => $this->requireUsernameAndPassword($values, 'Marzban'),
-            PanelProviderType::PasarGuard => $this->requireTokenOrCredentials($values),
-        };
+        if ($provider === PanelProviderType::Fake) {
+            return;
+        }
+
+        if ($provider === PanelProviderType::Marzban) {
+            $this->requireUsernameAndPassword($values, 'Marzban');
+
+            return;
+        }
+
+        $this->requireTokenOrCredentials($values);
     }
 
     /** @param array<string, string> $values */
