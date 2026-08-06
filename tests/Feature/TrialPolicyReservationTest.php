@@ -27,7 +27,6 @@ use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
-use RuntimeException;
 use Tests\TestCase;
 
 /** @requirement CAT-006 CAT-008 ACL-002 SEC-002 DAT-003 QUA-001 */
