@@ -14,7 +14,10 @@ final readonly class PasarGuardAdapterFactory implements PanelAdapterFactory
 {
     public function __construct(private PasarGuardGatewayFactory $gateways) {}
 
-    public function providerType(): PanelProviderType { return PanelProviderType::PasarGuard; }
+    public function providerType(): PanelProviderType
+    {
+        return PanelProviderType::PasarGuard;
+    }
 
     public function make(PanelAdapterSession $session): PanelAdapter
     {

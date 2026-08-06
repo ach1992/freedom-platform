@@ -14,7 +14,10 @@ final readonly class MarzbanAdapterFactory implements PanelAdapterFactory
 {
     public function __construct(private MarzbanGatewayFactory $gateways) {}
 
-    public function providerType(): PanelProviderType { return PanelProviderType::Marzban; }
+    public function providerType(): PanelProviderType
+    {
+        return PanelProviderType::Marzban;
+    }
 
     public function make(PanelAdapterSession $session): PanelAdapter
     {

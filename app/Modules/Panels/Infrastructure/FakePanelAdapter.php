@@ -194,9 +194,18 @@ final class FakePanelAdapter implements PanelAdapter
         ]];
     }
 
-    public function makeNextCreateUncertain(): void { $this->nextCreateIsUncertain = true; }
-    public function makeAuthoritativeLookupUnavailable(): void { $this->authoritativeLookup = false; }
-    public function serviceCount(): int { return count($this->services); }
+    public function makeNextCreateUncertain(): void
+    {
+        $this->nextCreateIsUncertain = true;
+    }
+    public function makeAuthoritativeLookupUnavailable(): void
+    {
+        $this->authoritativeLookup = false;
+    }
+    public function serviceCount(): int
+    {
+        return count($this->services);
+    }
 
     public function seed(RemoteServiceSnapshot $service): void
     {

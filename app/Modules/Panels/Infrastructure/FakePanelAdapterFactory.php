@@ -14,7 +14,10 @@ final readonly class FakePanelAdapterFactory implements PanelAdapterFactory
 {
     public function __construct(private PanelServiceCanonicalizer $canonicalizer) {}
 
-    public function providerType(): PanelProviderType { return PanelProviderType::Fake; }
+    public function providerType(): PanelProviderType
+    {
+        return PanelProviderType::Fake;
+    }
 
     public function make(PanelAdapterSession $session): PanelAdapter
     {
