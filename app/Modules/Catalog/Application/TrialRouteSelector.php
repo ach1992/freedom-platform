@@ -235,7 +235,7 @@ final readonly class TrialRouteSelector
     }
 
     /**
-     * @param list<object{id: int, sales_server_id: int, panel_service_target_id: int, route_type: string, customer_selectable: bool, disclosure_fa: ?string}> $routes
+     * @param  list<object{id: int, sales_server_id: int, panel_service_target_id: int, route_type: string, customer_selectable: bool, disclosure_fa: ?string}>  $routes
      * @return list<object{id: int, sales_server_id: int, panel_service_target_id: int, route_type: string, customer_selectable: bool, disclosure_fa: ?string}>
      */
     private function orderedCandidates(
