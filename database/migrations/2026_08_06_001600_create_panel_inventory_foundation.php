@@ -137,7 +137,7 @@ return new class extends Migration
 
     private function createHistoryTable(string $tableName, string $foreignKey, string $parentTable): void
     {
-        Schema::create($tableName, function (Blueprint $table) use ($foreignKey, $parentTable): void {
+        Schema::create($tableName, function (Blueprint $table) use ($tableName, $foreignKey, $parentTable): void {
             $table->bigIncrements('id');
             $table->foreignId($foreignKey)->constrained($parentTable)->restrictOnDelete();
             $table->unsignedBigInteger('version');
@@ -235,27 +235,55 @@ BEGIN
 END
 SQL);
 
-        foreach (['panel_protocol_profile_histories', 'panel_service_target_histories', 'sales_server_histories'] as $table) {
-            DB::unprepared("CREATE TRIGGER {$table}_update_guard BEFORE UPDATE ON {$table} FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'History rows are append-only.'");
-            DB::unprepared("CREATE TRIGGER {$table}_delete_guard BEFORE DELETE ON {$table} FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'History rows are append-only.'");
-        }
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER panel_protocol_profile_histories_update_guard
+BEFORE UPDATE ON panel_protocol_profile_histories
+FOR EACH ROW
+SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'History rows are append-only.'
+SQL);
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER panel_protocol_profile_histories_delete_guard
+BEFORE DELETE ON panel_protocol_profile_histories
+FOR EACH ROW
+SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'History rows are append-only.'
+SQL);
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER panel_service_target_histories_update_guard
+BEFORE UPDATE ON panel_service_target_histories
+FOR EACH ROW
+SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'History rows are append-only.'
+SQL);
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER panel_service_target_histories_delete_guard
+BEFORE DELETE ON panel_service_target_histories
+FOR EACH ROW
+SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'History rows are append-only.'
+SQL);
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER sales_server_histories_update_guard
+BEFORE UPDATE ON sales_server_histories
+FOR EACH ROW
+SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'History rows are append-only.'
+SQL);
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER sales_server_histories_delete_guard
+BEFORE DELETE ON sales_server_histories
+FOR EACH ROW
+SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'History rows are append-only.'
+SQL);
     }
 
     private function dropTriggers(): void
     {
-        foreach ([
-            'panel_connections_archive_targets_guard',
-            'panel_profiles_update_guard',
-            'panel_targets_insert_guard',
-            'panel_targets_update_guard',
-            'panel_protocol_profile_histories_update_guard',
-            'panel_protocol_profile_histories_delete_guard',
-            'panel_service_target_histories_update_guard',
-            'panel_service_target_histories_delete_guard',
-            'sales_server_histories_update_guard',
-            'sales_server_histories_delete_guard',
-        ] as $trigger) {
-            DB::unprepared("DROP TRIGGER IF EXISTS {$trigger}");
-        }
+        DB::unprepared('DROP TRIGGER IF EXISTS panel_connections_archive_targets_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS panel_profiles_update_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS panel_targets_insert_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS panel_targets_update_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS panel_protocol_profile_histories_update_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS panel_protocol_profile_histories_delete_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS panel_service_target_histories_update_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS panel_service_target_histories_delete_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS sales_server_histories_update_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS sales_server_histories_delete_guard');
     }
 };
