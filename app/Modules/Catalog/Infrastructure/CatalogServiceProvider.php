@@ -7,6 +7,7 @@ namespace App\Modules\Catalog\Infrastructure;
 use App\Modules\AccessControl\Application\AdministratorPermissionAuthorizer;
 use App\Modules\Catalog\Application\CatalogMutationAudit;
 use App\Modules\Catalog\Application\CatalogMutationExecutor;
+use App\Modules\Catalog\Application\PlanOfferingService;
 use App\Modules\Catalog\Application\ProductCategoryService;
 use App\Modules\Catalog\Application\ProductService;
 use App\Modules\Catalog\Application\ProductVariantService;
@@ -57,6 +58,15 @@ final class CatalogServiceProvider extends ServiceProvider
         $this->app->singleton(
             ProductVariantService::class,
             fn (Application $application): ProductVariantService => new ProductVariantService(
+                $application->make(CatalogMutationExecutor::class),
+                $application->make(CatalogMutationAudit::class),
+                $application->make(Clock::class),
+            ),
+        );
+
+        $this->app->singleton(
+            PlanOfferingService::class,
+            fn (Application $application): PlanOfferingService => new PlanOfferingService(
                 $application->make(CatalogMutationExecutor::class),
                 $application->make(CatalogMutationAudit::class),
                 $application->make(Clock::class),
