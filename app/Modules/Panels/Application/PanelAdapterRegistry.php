@@ -11,6 +11,7 @@ use InvalidArgumentException;
 
 final class PanelAdapterRegistry
 {
+    /** @param iterable<PanelAdapterFactory> $factories */
     public function __construct(
         iterable $factories,
         private readonly PanelCredentialPolicy $credentials,
