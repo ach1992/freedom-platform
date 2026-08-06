@@ -25,9 +25,14 @@ use App\Modules\Panels\Domain\TlsConfiguration;
 use App\Modules\Panels\Domain\TlsPolicy;
 use App\Modules\Panels\Infrastructure\FakePanelAdapter;
 use App\Modules\Panels\Infrastructure\FakePanelAdapterFactory;
+use App\Modules\Panels\Infrastructure\MarzbanAdapterFactory;
+use App\Modules\Panels\Infrastructure\PasarGuardAdapterFactory;
+use App\Modules\Panels\Infrastructure\UnavailableMarzbanGatewayFactory;
+use App\Modules\Panels\Infrastructure\UnavailablePasarGuardGatewayFactory;
 use DateTimeImmutable;
 use InvalidArgumentException;
 use PHPUnit\Framework\TestCase;
+use RuntimeException;
 
 /** @requirement PRV-001 PRV-002 PRV-003 SEC-001 SEC-002 QUA-001 */
 final class PanelAdapterContractTest extends TestCase
@@ -351,6 +356,32 @@ final class PanelAdapterContractTest extends TestCase
         self::assertInstanceOf(FakePanelAdapter::class, $adapter);
     }
 
+    public function test_unconfigured_marzban_shell_fails_closed_before_create_and_delivery(): void
+    {
+        $registry = new PanelAdapterRegistry(
+            [new MarzbanAdapterFactory(new UnavailableMarzbanGatewayFactory)],
+            new PanelCredentialPolicy,
+        );
+        $this->assertUnavailableProviderShell(
+            $registry,
+            PanelProviderType::Marzban,
+            ['username' => 'test', 'password' => 'secret'],
+        );
+    }
+
+    public function test_unconfigured_pasarguard_shell_fails_closed_before_create_and_delivery(): void
+    {
+        $registry = new PanelAdapterRegistry(
+            [new PasarGuardAdapterFactory(new UnavailablePasarGuardGatewayFactory)],
+            new PanelCredentialPolicy,
+        );
+        $this->assertUnavailableProviderShell(
+            $registry,
+            PanelProviderType::PasarGuard,
+            ['api_token' => 'secret-token'],
+        );
+    }
+
     public function test_registry_rejects_duplicate_provider_factory_registration(): void
     {
         $factory = new FakePanelAdapterFactory(new PanelServiceCanonicalizer);
@@ -366,6 +397,35 @@ final class PanelAdapterContractTest extends TestCase
         $this->expectExceptionMessage('System CA policy cannot include custom CA or certificate pin data.');
 
         new TlsConfiguration(TlsPolicy::SystemCa, 'private', 'panel-ca.pem', null);
+    }
+
+    /** @param array<string, string> $credentials */
+    private function assertUnavailableProviderShell(
+        PanelAdapterRegistry $registry,
+        PanelProviderType $provider,
+        array $credentials,
+    ): void {
+        $canonicalizer = new PanelServiceCanonicalizer;
+        $adapter = $registry->make($provider, new PanelAdapterSession(
+            PanelEndpoint::fromInput('https://panel.example.com'),
+            PanelCredentials::fromInput($credentials),
+            new TlsConfiguration(TlsPolicy::SystemCa, null, null, null),
+        ));
+
+        $connection = $adapter->testConnection();
+        self::assertSame(PanelOperationOutcome::DefinitiveFailure, $connection->outcome);
+        self::assertSame('panel_gateway_unconfigured', $connection->providerCode);
+
+        $result = $this->coordinator($canonicalizer)->createOrAdopt($adapter, $this->request());
+        self::assertSame(PanelOperationOutcome::UncertainResult, $result->outcome);
+        self::assertSame('authoritative_username_lookup_unavailable', $result->providerCode);
+
+        try {
+            $adapter->getDeliveryArtifacts('remote-service-0001');
+            self::fail('Expected unavailable panel delivery to fail closed.');
+        } catch (RuntimeException $exception) {
+            self::assertSame('Panel gateway is not configured.', $exception->getMessage());
+        }
     }
 
     private function coordinator(PanelServiceCanonicalizer $canonicalizer): PanelCreateCoordinator
