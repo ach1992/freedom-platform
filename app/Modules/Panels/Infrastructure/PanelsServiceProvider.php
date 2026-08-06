@@ -5,12 +5,19 @@ declare(strict_types=1);
 namespace App\Modules\Panels\Infrastructure;
 
 use App\Modules\AccessControl\Application\AdministratorPermissionAuthorizer;
+use App\Modules\Panels\Application\Contracts\MarzbanGatewayFactory;
+use App\Modules\Panels\Application\Contracts\PasarGuardGatewayFactory;
+use App\Modules\Panels\Application\PanelAdapterRegistry;
 use App\Modules\Panels\Application\PanelApprovalGate;
 use App\Modules\Panels\Application\PanelConnectionService;
+use App\Modules\Panels\Application\PanelCreateCoordinator;
+use App\Modules\Panels\Application\PanelCredentialPolicy;
 use App\Modules\Panels\Application\PanelInventoryService;
 use App\Modules\Panels\Application\PanelMutationAudit;
 use App\Modules\Panels\Application\PanelMutationExecutor;
 use App\Modules\Panels\Application\PanelPayloadHasher;
+use App\Modules\Panels\Application\PanelServiceCanonicalizer;
+use App\Modules\Panels\Application\RemoteIdentityResolver;
 use App\Modules\Panels\Application\SensitivePanelApprovalGate;
 use App\Modules\Panels\Application\TargetCapacityAllocator;
 use App\Modules\Panels\Application\TargetCapacityService;
@@ -27,10 +34,31 @@ final class PanelsServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->bind(PanelApprovalGate::class, SensitivePanelApprovalGate::class);
+        $this->app->bind(MarzbanGatewayFactory::class, UnavailableMarzbanGatewayFactory::class);
+        $this->app->bind(PasarGuardGatewayFactory::class, UnavailablePasarGuardGatewayFactory::class);
+
+        $this->app->singleton(PanelServiceCanonicalizer::class);
+        $this->app->singleton(PanelCredentialPolicy::class);
+        $this->app->singleton(RemoteIdentityResolver::class);
+        $this->app->singleton(PanelCreateCoordinator::class);
+        $this->app->singleton(FakePanelAdapterFactory::class);
+        $this->app->singleton(MarzbanAdapterFactory::class);
+        $this->app->singleton(PasarGuardAdapterFactory::class);
+        $this->app->singleton(
+            PanelAdapterRegistry::class,
+            fn (Application $application): PanelAdapterRegistry => new PanelAdapterRegistry(
+                [
+                    $application->make(FakePanelAdapterFactory::class),
+                    $application->make(MarzbanAdapterFactory::class),
+                    $application->make(PasarGuardAdapterFactory::class),
+                ],
+                $application->make(PanelCredentialPolicy::class),
+            ),
+        );
 
         $this->app->singleton(
             PanelPayloadHasher::class,
-            static function (Application $application): PanelPayloadHasher {
+            static function (Appplication $application): PanelPayloadHasher {
                 $configured = $application->make(ConfigRepository::class)->get('app.key');
                 if (! is_string($configured) || $configured === '') {
                     throw new RuntimeException('Application key is unavailable for panel mutation hashing.');
