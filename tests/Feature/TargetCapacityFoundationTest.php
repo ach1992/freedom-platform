@@ -34,6 +34,15 @@ final class TargetCapacityFoundationTest extends TestCase
         $this->seed(PanelsAccessFoundationSeeder::class);
     }
 
+    protected function tearDown(): void
+    {
+        try {
+            $this->truncateTablesForAllConnections();
+        } finally {
+            parent::tearDown();
+        }
+    }
+
     public function test_configuration_and_reservation_lifecycle_are_replay_safe(): void
     {
         foreach (['panel_target_capacities', 'panel_capacity_reservations', 'panel_capacity_reservation_events', 'panel_target_capacity_histories'] as $table) {
