@@ -5,9 +5,10 @@ declare(strict_types=1);
 namespace App\Modules\Panels\Domain;
 
 use InvalidArgumentException;
+use JsonSerializable;
 use Stringable;
 
-final readonly class PanelCredentials implements Stringable
+final readonly class PanelCredentials implements JsonSerializable, Stringable
 {
     /** @param array<string, string> $values */
     private function __construct(
@@ -39,6 +40,12 @@ final readonly class PanelCredentials implements Stringable
         ksort($normalized);
 
         return new self($normalized, json_encode($normalized, JSON_THROW_ON_ERROR));
+    }
+
+    /** @return array{redacted: true} */
+    public function jsonSerialize(): array
+    {
+        return ['redacted' => true];
     }
 
     /** @return array{redacted: true} */
