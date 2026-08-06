@@ -277,7 +277,7 @@ final readonly class CustomPlanCalculator
      */
     private function lockedPolicy(Connection $connection, int $offeringId): object
     {
-        /** @var object|null $row */
+        /** @var object{id: int|string, version: int|string, configuration_hash: string, enabled: bool|int, minimum_data_gb: int|string, maximum_data_gb: int|string, data_step_gb: int|string, minimum_days: int|string, maximum_days: int|string, day_step: int|string, customer_base_price_irr: int|string, customer_price_per_gb_irr: int|string, customer_price_per_day_irr: int|string, customer_minimum_order_amount_irr: int|string, agent_base_price_irr: int|string, agent_price_per_gb_irr: int|string, agent_price_per_day_irr: int|string, agent_minimum_order_amount_irr: int|string, discount_eligible: bool|int, tag_match_mode: string, username_mode: string, username_minimum_length: int|string, username_maximum_length: int|string}|null $row */
         $row = $connection->table('custom_plan_policies')
             ->where('plan_offering_id', $offeringId)
             ->lockForUpdate()
@@ -289,7 +289,7 @@ final readonly class CustomPlanCalculator
         return (object) [
             'id' => (int) $row->id,
             'version' => (int) $row->version,
-            'configuration_hash' => (string) $row->configuration_hash,
+            'configuration_hash' => $row->configuration_hash,
             'enabled' => (bool) $row->enabled,
             'minimum_data_gb' => (int) $row->minimum_data_gb,
             'maximum_data_gb' => (int) $row->maximum_data_gb,
@@ -306,8 +306,8 @@ final readonly class CustomPlanCalculator
             'agent_price_per_day_irr' => (int) $row->agent_price_per_day_irr,
             'agent_minimum_order_amount_irr' => (int) $row->agent_minimum_order_amount_irr,
             'discount_eligible' => (bool) $row->discount_eligible,
-            'tag_match_mode' => (string) $row->tag_match_mode,
-            'username_mode' => (string) $row->username_mode,
+            'tag_match_mode' => $row->tag_match_mode,
+            'username_mode' => $row->username_mode,
             'username_minimum_length' => (int) $row->username_minimum_length,
             'username_maximum_length' => (int) $row->username_maximum_length,
         ];
@@ -359,7 +359,7 @@ final readonly class CustomPlanCalculator
     /** @return object{plan_offering_id: int, custom_plan_policy_id: int, custom_plan_policy_version: int, policy_configuration_hash: string, user_id: int, actor_type: string, data_gb: int, days: int, normalized_username: string, base_price_irr: int, price_per_gb_irr: int, price_per_day_irr: int, data_price_irr: int, day_price_irr: int, subtotal_irr: int, minimum_order_amount_irr: int, minimum_adjustment_irr: int, final_price_irr: int} */
     private function lockedCalculation(Connection $connection, int $calculationId): object
     {
-        /** @var object|null $row */
+        /** @var object{plan_offering_id: int|string, custom_plan_policy_id: int|string, custom_plan_policy_version: int|string, policy_configuration_hash: string, user_id: int|string, actor_type: string, data_gb: int|string, days: int|string, normalized_username: string, base_price_irr: int|string, price_per_gb_irr: int|string, price_per_day_irr: int|string, data_price_irr: int|string, day_price_irr: int|string, subtotal_irr: int|string, minimum_order_amount_irr: int|string, minimum_adjustment_irr: int|string, final_price_irr: int|string}|null $row */
         $row = $connection->table('custom_plan_calculations')
             ->where('id', $calculationId)
             ->lockForUpdate()
@@ -372,12 +372,12 @@ final readonly class CustomPlanCalculator
             'plan_offering_id' => (int) $row->plan_offering_id,
             'custom_plan_policy_id' => (int) $row->custom_plan_policy_id,
             'custom_plan_policy_version' => (int) $row->custom_plan_policy_version,
-            'policy_configuration_hash' => (string) $row->policy_configuration_hash,
+            'policy_configuration_hash' => $row->policy_configuration_hash,
             'user_id' => (int) $row->user_id,
-            'actor_type' => (string) $row->actor_type,
+            'actor_type' => $row->actor_type,
             'data_gb' => (int) $row->data_gb,
             'days' => (int) $row->days,
-            'normalized_username' => (string) $row->normalized_username,
+            'normalized_username' => $row->normalized_username,
             'base_price_irr' => (int) $row->base_price_irr,
             'price_per_gb_irr' => (int) $row->price_per_gb_irr,
             'price_per_day_irr' => (int) $row->price_per_day_irr,
@@ -446,12 +446,12 @@ final readonly class CustomPlanCalculator
         if ($lock) {
             $query->lockForUpdate();
         }
-        /** @var object|null $row */
+        /** @var object{id: int|string, payload_hash: string, plan_offering_id: int|string, custom_plan_policy_id: int|string, custom_plan_policy_version: int|string, policy_configuration_hash: string, actor_type: string, data_gb: int|string, days: int|string, normalized_username: string, base_price_irr: int|string, price_per_gb_irr: int|string, price_per_day_irr: int|string, data_price_irr: int|string, day_price_irr: int|string, subtotal_irr: int|string, minimum_order_amount_irr: int|string, minimum_adjustment_irr: int|string, final_price_irr: int|string, discount_eligible: bool|int}|null $row */
         $row = $query->first();
         if ($row === null) {
             return null;
         }
-        if (! hash_equals((string) $row->payload_hash, $payloadHash)) {
+        if (! hash_equals($row->payload_hash, $payloadHash)) {
             throw new RuntimeException('Custom-plan command key conflict.');
         }
 
@@ -460,11 +460,11 @@ final readonly class CustomPlanCalculator
             (int) $row->plan_offering_id,
             (int) $row->custom_plan_policy_id,
             (int) $row->custom_plan_policy_version,
-            (string) $row->policy_configuration_hash,
-            (string) $row->actor_type,
+            $row->policy_configuration_hash,
+            $row->actor_type,
             (int) $row->data_gb,
             (int) $row->days,
-            (string) $row->normalized_username,
+            $row->normalized_username,
             (int) $row->base_price_irr,
             (int) $row->price_per_gb_irr,
             (int) $row->price_per_day_irr,
