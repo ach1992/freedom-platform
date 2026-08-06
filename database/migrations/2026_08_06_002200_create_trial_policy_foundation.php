@@ -178,7 +178,7 @@ return new class extends Migration
     private function addChecks(): void
     {
         DB::statement('ALTER TABLE trial_policies ADD CONSTRAINT trial_policy_positive_chk CHECK (`data_bytes` >= 1 AND `duration_days` >= 1 AND `daily_capacity` >= 1)');
-        DB::statement("ALTER TABLE trial_policies ADD CONSTRAINT trial_policy_phone_chk CHECK (`phone_verification_policy` IN ('none', 'telegram_contact_only', 'sms_otp_only', 'either', 'both'))");
+        DB::statement('ALTER TABLE trial_policies ADD CONSTRAINT trial_policy_phone_chk CHECK (`phone_verification_policy` IN (\'none\', \'telegram_contact_only\', \'sms_otp_only\', \'either\', \'both\'))');
         DB::statement("ALTER TABLE trial_policies ADD CONSTRAINT trial_policy_tag_match_chk CHECK (`tag_match_mode` IN ('any', 'all'))");
         DB::statement('ALTER TABLE trial_policies ADD CONSTRAINT trial_policy_abuse_chk CHECK (`one_per_user` = 1 OR `one_per_phone` = 1)');
         DB::statement("ALTER TABLE trial_policies ADD CONSTRAINT trial_policy_phone_only_chk CHECK (`one_per_user` = 1 OR `phone_verification_policy` <> 'none')");
@@ -248,102 +248,67 @@ CREATE TRIGGER trial_policies_delete_guard
 BEFORE DELETE ON trial_policies
 FOR EACH ROW
 BEGIN
-    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial policies are not deleted.';
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial policies are immutable and cannot be deleted.';
 END
 SQL);
     }
 
     private function createPolicyChildGuards(): void
     {
-        foreach ([
-            'trial_policy_tiers' => 'trial_policy_id',
-            'trial_policy_tags' => 'trial_policy_id',
-        ] as $table => $foreignKey) {
-            DB::unprepared(sprintf(<<<'SQL'
-CREATE TRIGGER %1$s_insert_guard
-BEFORE INSERT ON %1$s
-FOR EACH ROW
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM trial_policies policy
-        JOIN plan_offerings offering ON offering.id = policy.plan_offering_id
-        WHERE policy.id = NEW.%2$s AND offering.state = 'draft' AND offering.trial_allowed = 1
-    ) THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial policy children require a draft trial-enabled Offering.';
-    END IF;
-END
-SQL, $table, $foreignKey));
-            DB::unprepared(sprintf(<<<'SQL'
-CREATE TRIGGER %1$s_update_guard
-BEFORE UPDATE ON %1$s
-FOR EACH ROW
-BEGIN
-    IF NOT (OLD.%2$s <=> NEW.%2$s) OR NOT EXISTS (
-        SELECT 1 FROM trial_policies policy
-        JOIN plan_offerings offering ON offering.id = policy.plan_offering_id
-        WHERE policy.id = OLD.%2$s AND offering.state = 'draft' AND offering.trial_allowed = 1
-    ) THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial policy children are immutable outside draft configuration.';
-    END IF;
-END
-SQL, $table, $foreignKey));
-            DB::unprepared(sprintf(<<<'SQL'
-CREATE TRIGGER %1$s_delete_guard
-BEFORE DELETE ON %1$s
-FOR EACH ROW
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM trial_policies policy
-        JOIN plan_offerings offering ON offering.id = policy.plan_offering_id
-        WHERE policy.id = OLD.%2$s AND offering.state = 'draft' AND offering.trial_allowed = 1
-    ) THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial policy children are immutable outside draft configuration.';
-    END IF;
-END
-SQL, $table, $foreignKey));
+        foreach (['trial_policy_tiers', 'trial_policy_tags'] as $table) {
+            DB::unprepared("CREATE TRIGGER {$table}_insert_guard BEFORE INSERT ON {$table} FOR EACH ROW BEGIN IF NOT EXISTS (SELECT 1 FROM trial_policies tp JOIN plan_offerings po ON po.id = tp.plan_offering_id WHERE tp.id = NEW.trial_policy_id AND po.state = 'draft') THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial policy children require a draft Offering.'; END IF; END");
+            DB::unprepared("CREATE TRIGGER {$table}_update_guard BEFORE UPDATE ON {$table} FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial policy child rows are immutable; replace through service.'; END");
+            DB::unprepared("CREATE TRIGGER {$table}_delete_guard BEFORE DELETE ON {$table} FOR EACH ROW BEGIN IF NOT EXISTS (SELECT 1 FROM trial_policies tp JOIN plan_offerings po ON po.id = tp.plan_offering_id WHERE tp.id = OLD.trial_policy_id AND po.state = 'draft') THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial policy children require a draft Offering.'; END IF; END");
         }
     }
 
     private function createCounterGuards(): void
     {
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER trial_daily_capacity_insert_guard
+CREATE TRIGGER trial_capacity_insert_guard
 BEFORE INSERT ON trial_daily_capacity_counters
 FOR EACH ROW
 BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM trial_policies
-        WHERE id = NEW.trial_policy_id
-          AND enabled = 1
-          AND daily_capacity = NEW.hard_limit_snapshot
-    ) THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial daily capacity snapshot does not match the active policy.';
+    IF NEW.reserved_count <> 0 OR NEW.committed_count <> 0 OR NEW.released_count <> 0 OR NEW.expired_count <> 0 OR NEW.version <> 1 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial capacity counters must start empty.';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM trial_policies WHERE id = NEW.trial_policy_id AND enabled = 1) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial capacity requires an enabled policy.';
     END IF;
 END
 SQL);
 
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER trial_daily_capacity_update_guard
+CREATE TRIGGER trial_capacity_update_guard
 BEFORE UPDATE ON trial_daily_capacity_counters
 FOR EACH ROW
 BEGIN
     IF NOT (OLD.trial_policy_id <=> NEW.trial_policy_id)
        OR NOT (OLD.capacity_date <=> NEW.capacity_date)
        OR NOT (OLD.hard_limit_snapshot <=> NEW.hard_limit_snapshot) THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial daily capacity identity is immutable.';
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial capacity identity and hard limit are immutable.';
     END IF;
     IF NEW.version <> OLD.version + 1 THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial daily capacity version must advance exactly once.';
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial capacity version must advance exactly once.';
+    END IF;
+    IF NEW.reserved_count < OLD.reserved_count
+       OR NEW.committed_count < OLD.committed_count
+       OR NEW.released_count < OLD.released_count
+       OR NEW.expired_count < OLD.expired_count THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial capacity counters are monotonic.';
+    END IF;
+    IF (NEW.reserved_count - OLD.reserved_count) + (NEW.committed_count - OLD.committed_count) + (NEW.released_count - OLD.released_count) + (NEW.expired_count - OLD.expired_count) <> 1 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial capacity updates must account for one transition.';
     END IF;
 END
 SQL);
 
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER trial_daily_capacity_delete_guard
+CREATE TRIGGER trial_capacity_delete_guard
 BEFORE DELETE ON trial_daily_capacity_counters
 FOR EACH ROW
 BEGIN
-    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial daily capacity counters are not deleted.';
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial capacity counters are immutable.';
 END
 SQL);
     }
@@ -355,48 +320,36 @@ CREATE TRIGGER trial_reservations_insert_guard
 BEFORE INSERT ON trial_reservations
 FOR EACH ROW
 BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM trial_policies policy
-        JOIN plan_offerings offering ON offering.id = policy.plan_offering_id
-        WHERE policy.id = NEW.trial_policy_id
-          AND policy.plan_offering_id = NEW.plan_offering_id
-          AND policy.enabled = 1
-          AND policy.version = NEW.trial_policy_version
-          AND policy.configuration_hash = NEW.policy_configuration_hash
-          AND policy.data_bytes = NEW.data_bytes
-          AND policy.duration_days = NEW.duration_days
-          AND policy.daily_capacity = NEW.daily_capacity_snapshot
-          AND policy.phone_verification_policy = NEW.phone_verification_policy_snapshot
-          AND policy.membership_required = NEW.membership_required_snapshot
-          AND policy.one_per_user = NEW.one_per_user_snapshot
-          AND policy.one_per_phone = NEW.one_per_phone_snapshot
-          AND policy.fallback_allowed = NEW.fallback_allowed_snapshot
-          AND policy.delivery_template_key = NEW.delivery_template_key_snapshot
-          AND offering.state IN ('draft', 'active')
-          AND offering.trial_allowed = 1
-    ) THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial reservation policy snapshot is not operational.';
+    IF NEW.state <> 'reserved' OR NEW.version <> 1 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial reservations must start reserved at version one.';
     END IF;
     IF NOT EXISTS (
-        SELECT 1 FROM trial_daily_capacity_counters counter
-        WHERE counter.id = NEW.trial_daily_capacity_counter_id
-          AND counter.trial_policy_id = NEW.trial_policy_id
-          AND counter.capacity_date = NEW.capacity_date
-          AND counter.hard_limit_snapshot = NEW.daily_capacity_snapshot
+        SELECT 1 FROM trial_policies
+        WHERE id = NEW.trial_policy_id
+          AND enabled = 1
+          AND version = NEW.trial_policy_version
+          AND configuration_hash = NEW.policy_configuration_hash
+          AND plan_offering_id = NEW.plan_offering_id
     ) THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial reservation daily capacity snapshot is invalid.';
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial reservation policy snapshot is stale or invalid.';
     END IF;
     IF NOT EXISTS (
-        SELECT 1 FROM plan_offering_route_selections selection
-        WHERE selection.id = NEW.plan_offering_route_selection_id
-          AND selection.plan_offering_id = NEW.plan_offering_id
-          AND selection.user_id = NEW.user_id
-          AND selection.units = 1
-          AND selection.fallback_used = NEW.fallback_used_snapshot
-          AND (selection.disclosure_fa_snapshot <=> NEW.disclosure_fa_snapshot)
-          AND (NEW.fallback_used_snapshot = 0 OR NEW.fallback_allowed_snapshot = 1)
+        SELECT 1 FROM trial_daily_capacity_counters
+        WHERE id = NEW.trial_daily_capacity_counter_id
+          AND trial_policy_id = NEW.trial_policy_id
+          AND capacity_date = NEW.capacity_date
+          AND hard_limit_snapshot = NEW.daily_capacity_snapshot
     ) THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial reservation route selection is invalid.';
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial reservation capacity snapshot is invalid.';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM plan_offering_route_selections
+        WHERE id = NEW.plan_offering_route_selection_id
+          AND plan_offering_id = NEW.plan_offering_id
+          AND purpose_code = 'trial'
+          AND state = 'held'
+    ) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial reservation requires a held trial route selection.';
     END IF;
 END
 SQL);
@@ -432,29 +385,18 @@ BEGIN
        OR NOT (OLD.expires_at <=> NEW.expires_at)
        OR NOT (OLD.correlation_id <=> NEW.correlation_id)
        OR NOT (OLD.source_code <=> NEW.source_code)
-       OR NOT (OLD.reason_code <=> NEW.reason_code) THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial reservation snapshot is immutable.';
+       OR NOT (OLD.reason_code <=> NEW.reason_code)
+       OR NOT (OLD.created_at <=> NEW.created_at) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial reservation immutable snapshot cannot change.';
     END IF;
     IF NEW.version <> OLD.version + 1 THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial reservation version must advance exactly once.';
     END IF;
-    IF NOT (OLD.state <=> NEW.state) THEN
-        IF OLD.state <> 'reserved' OR NEW.state NOT IN ('committed', 'released', 'expired') THEN
-            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial reservation transition is invalid.';
-        END IF;
-        IF NOT (OLD.eligibility_reset_at <=> NEW.eligibility_reset_at)
-           OR NOT (OLD.eligibility_reset_by_administrator_id <=> NEW.eligibility_reset_by_administrator_id) THEN
-            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial transition cannot reset eligibility.';
-        END IF;
-    ELSE
-        IF OLD.state <> 'committed'
-           OR OLD.eligibility_reset_at IS NOT NULL
-           OR NEW.eligibility_reset_at IS NULL
-           OR NEW.eligibility_reset_by_administrator_id IS NULL
-           OR NEW.active_user_id IS NOT NULL
-           OR NEW.active_phone_number_id IS NOT NULL THEN
-            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial eligibility reset is invalid.';
-        END IF;
+    IF NOT (
+        (OLD.state = 'reserved' AND NEW.state IN ('committed', 'released', 'expired'))
+        OR (OLD.state = 'committed' AND NEW.state = 'committed' AND OLD.eligibility_reset_at IS NULL AND NEW.eligibility_reset_at IS NOT NULL)
+    ) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Invalid trial reservation transition.';
     END IF;
 END
 SQL);
@@ -464,59 +406,33 @@ CREATE TRIGGER trial_reservations_delete_guard
 BEFORE DELETE ON trial_reservations
 FOR EACH ROW
 BEGIN
-    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial reservations are not deleted.';
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial reservations are immutable.';
 END
 SQL);
     }
 
     private function createImmutableGuards(): void
     {
-        DB::unprepared(<<<'SQL'
-CREATE TRIGGER trial_policy_histories_update_guard
-BEFORE UPDATE ON trial_policy_histories
-FOR EACH ROW
-BEGIN
-    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial policy histories are immutable.';
-END
-SQL);
-        DB::unprepared(<<<'SQL'
-CREATE TRIGGER trial_policy_histories_delete_guard
-BEFORE DELETE ON trial_policy_histories
-FOR EACH ROW
-BEGIN
-    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial policy histories are immutable.';
-END
-SQL);
-        DB::unprepared(<<<'SQL'
-CREATE TRIGGER trial_reservation_events_update_guard
-BEFORE UPDATE ON trial_reservation_events
-FOR EACH ROW
-BEGIN
-    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial reservation events are immutable.';
-END
-SQL);
-        DB::unprepared(<<<'SQL'
-CREATE TRIGGER trial_reservation_events_delete_guard
-BEFORE DELETE ON trial_reservation_events
-FOR EACH ROW
-BEGIN
-    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial reservation events are immutable.';
-END
-SQL);
+        foreach (['trial_policy_histories', 'trial_reservation_events'] as $table) {
+            DB::unprepared("CREATE TRIGGER {$table}_update_guard BEFORE UPDATE ON {$table} FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial history and event rows are immutable.'; END");
+            DB::unprepared("CREATE TRIGGER {$table}_delete_guard BEFORE DELETE ON {$table} FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial history and event rows are immutable.'; END");
+        }
     }
 
     private function createOfferingActivationGuard(): void
     {
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER trial_plan_offering_activation_guard
+CREATE TRIGGER trial_offering_activation_guard
 BEFORE UPDATE ON plan_offerings
 FOR EACH ROW
 BEGIN
-    IF NEW.state = 'active' AND NEW.trial_allowed = 1 AND NOT EXISTS (
-        SELECT 1 FROM trial_policies
-        WHERE plan_offering_id = NEW.id AND enabled = 1
-    ) THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial-enabled Offering requires an enabled trial policy.';
+    IF NEW.state = 'active' AND OLD.state <> 'active' AND NEW.trial_allowed = 1 THEN
+        IF NOT EXISTS (
+            SELECT 1 FROM trial_policies
+            WHERE plan_offering_id = NEW.id AND enabled = 1
+        ) THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial-enabled Offering requires an enabled trial policy.';
+        END IF;
     END IF;
 END
 SQL);
@@ -525,7 +441,7 @@ SQL);
     private function dropTriggers(): void
     {
         foreach ([
-            'trial_plan_offering_activation_guard',
+            'trial_offering_activation_guard',
             'trial_reservation_events_delete_guard',
             'trial_reservation_events_update_guard',
             'trial_policy_histories_delete_guard',
@@ -533,9 +449,9 @@ SQL);
             'trial_reservations_delete_guard',
             'trial_reservations_update_guard',
             'trial_reservations_insert_guard',
-            'trial_daily_capacity_delete_guard',
-            'trial_daily_capacity_update_guard',
-            'trial_daily_capacity_insert_guard',
+            'trial_capacity_delete_guard',
+            'trial_capacity_update_guard',
+            'trial_capacity_insert_guard',
             'trial_policy_tags_delete_guard',
             'trial_policy_tags_update_guard',
             'trial_policy_tags_insert_guard',
@@ -546,7 +462,7 @@ SQL);
             'trial_policies_update_guard',
             'trial_policies_insert_guard',
         ] as $trigger) {
-            DB::unprepared('DROP TRIGGER IF EXISTS '.$trigger);
+            DB::unprepared("DROP TRIGGER IF EXISTS {$trigger}");
         }
     }
 };
