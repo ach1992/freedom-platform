@@ -4,12 +4,6 @@ on:
   push:
     branches:
       - develop/v1.0.0-completion
-  pull_request:
-    branches:
-      - main
-    types:
-      - synchronize
-      - ready_for_review
 
 permissions:
   contents: write
@@ -20,9 +14,7 @@ concurrency:
 
 jobs:
   cleanup:
-    if: >-
-      (github.event_name == 'push' && github.event.head_commit.message == 'chore(repo): consolidate development branches') ||
-      (github.event_name == 'pull_request' && github.head_ref == 'develop/v1.0.0-completion')
+    if: github.ref_name == 'develop/v1.0.0-completion'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
@@ -53,6 +45,7 @@ jobs:
               'work/trial-format-fix',
               'work/verify-phase-0.4-adapter-575000d',
               'work/verify-phase-0.4-hosted-ci',
+              'work/branch-consolidation-finalizer',
           ]
 
           headers = {
