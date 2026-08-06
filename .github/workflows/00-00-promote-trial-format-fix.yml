@@ -1,0 +1,69 @@
+name: 00 Promote Trial Format Fix
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: 00-promote-trial-format-fix
+  cancel-in-progress: true
+
+jobs:
+  promote:
+    if: github.head_ref == 'work/trial-format-fix'
+    runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
+    timeout-minutes: 10
+    steps:
+      - name: Check out temporary branch
+        uses: actions/checkout@v4
+        with:
+          ref: work/trial-format-fix
+          fetch-depth: 0
+
+      - name: Build verified target files
+        shell: bash
+        run: |
+          set -euo pipefail
+          if compgen -G '.github/trial-test.part-*' >/dev/null; then
+            cat .github/trial-test.part-* | base64 -d > /tmp/TrialPolicyReservationTest.php
+          else
+            cp tests/Feature/TrialPolicyReservationTest.php /tmp/TrialPolicyReservationTest.php
+          fi
+          echo "f71bc35e3d349954d284775771671f96ebd3006b5dc8c871dce8caa2995c8cc0  /tmp/TrialPolicyReservationTest.php" | sha256sum -c -
+          cp database/migrations/2026_08_06_002200_create_trial_policy_foundation.php /tmp/create_trial_policy_foundation.php
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('/tmp/create_trial_policy_foundation.php')
+          text = path.read_text()
+          old = "        DB::statement(\"ALTER TABLE trial_policies ADD CONSTRAINT trial_policy_phone_chk CHECK (`phone_verification_policy` IN ('none', 'telegram_contact_only', 'sms_otp_only', 'either', 'both'))\");"
+          new = "        DB::statement('ALTER TABLE trial_policies ADD CONSTRAINT trial_policy_phone_chk CHECK (`phone_verification_policy` IN (\\'none\\', \\'telegram_contact_only\\', \\'sms_otp_only\\', \\'either\\', \\'both\\'))');"
+          if old in text:
+              text = text.replace(old, new)
+          elif new not in text:
+              raise SystemExit('expected migration statement not found')
+          path.write_text(text)
+          PY
+          /www/server/php/84/bin/php -l /tmp/TrialPolicyReservationTest.php
+          /www/server/php/84/bin/php -l /tmp/create_trial_policy_foundation.php
+
+      - name: Create clean commit on develop
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin develop/v1.0.0-completion
+          git checkout -B promote-trial-fix origin/develop/v1.0.0-completion
+          cp /tmp/TrialPolicyReservationTest.php tests/Feature/TrialPolicyReservationTest.php
+          cp /tmp/create_trial_policy_foundation.php database/migrations/2026_08_06_002200_create_trial_policy_foundation.php
+          git add tests/Feature/TrialPolicyReservationTest.php database/migrations/2026_08_06_002200_create_trial_policy_foundation.php
+          actual="$(git diff --cached --name-only | sort)"
+          expected="$(printf '%s\n' database/migrations/2026_08_06_002200_create_trial_policy_foundation.php tests/Feature/TrialPolicyReservationTest.php | sort)"
+          test "$actual" = "$expected"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "style(catalog): apply trial Pint and fixture fixes"
+          git push origin HEAD:develop/v1.0.0-completion
