@@ -6,6 +6,4 @@ namespace App\Modules\Catalog\Domain;
 
 use DomainException;
 
-final class RouteCandidateUnavailable extends DomainException
-{
-}
+final class RouteCandidateUnavailable extends DomainException {}
