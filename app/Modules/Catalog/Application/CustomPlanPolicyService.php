@@ -283,7 +283,7 @@ final readonly class CustomPlanPolicyService
     }
 
     /**
-     * @param object{configuration_hash: string, version: int|string, enabled: bool|int} $policy
+     * @param  object{configuration_hash: string, version: int|string, enabled: bool|int}  $policy
      * @return array<string, bool|int|string>
      */
     private function safeExistingState(
