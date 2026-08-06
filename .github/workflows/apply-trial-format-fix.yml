@@ -24,6 +24,13 @@ jobs:
           ref: work/trial-format-fix
           fetch-depth: 0
 
+      - name: Rebuild and verify trial test file
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .github/trial-test.part-* | base64 -d > tests/Feature/TrialPolicyReservationTest.php
+          echo "f71bc35e3d349954d284775771671f96ebd3006b5dc8c871dce8caa2995c8cc0  tests/Feature/TrialPolicyReservationTest.php" | sha256sum -c -
+
       - name: Apply exact Pint migration fix
         shell: bash
         run: |
@@ -38,6 +45,7 @@ jobs:
               raise SystemExit('expected migration statement not found exactly once')
           path.write_text(text.replace(old, new))
           PY
+          rm -f .github/trial-test.part-*
           rm -f .github/workflows/apply-trial-format-fix.yml
           /www/server/php/84/bin/php -l database/migrations/2026_08_06_002200_create_trial_policy_foundation.php
           /www/server/php/84/bin/php -l tests/Feature/TrialPolicyReservationTest.php
