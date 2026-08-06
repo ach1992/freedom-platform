@@ -21,6 +21,11 @@ use App\Modules\Catalog\Application\ProductService;
 use App\Modules\Catalog\Application\ProductVariantService;
 use App\Modules\Catalog\Application\RouteOperationalVerifier;
 use App\Modules\Catalog\Application\ServiceUsernameAvailability;
+use App\Modules\Catalog\Application\TrialEligibility;
+use App\Modules\Catalog\Application\TrialMembershipVerifier;
+use App\Modules\Catalog\Application\TrialPolicyService;
+use App\Modules\Catalog\Application\TrialReservationService;
+use App\Modules\Catalog\Application\TrialRouteSelector;
 use App\Modules\Panels\Application\TargetCapacityAllocator;
 use App\Shared\Application\Clock;
 use Illuminate\Contracts\Foundation\Application;
@@ -34,6 +39,7 @@ final class CatalogServiceProvider extends ServiceProvider
         $this->app->bind(RouteOperationalVerifier::class, DatabaseRouteOperationalVerifier::class);
         $this->app->bind(CustomPlanOperationalVerifier::class, DatabaseCustomPlanOperationalVerifier::class);
         $this->app->bind(ServiceUsernameAvailability::class, DatabaseServiceUsernameAvailability::class);
+        $this->app->bind(TrialMembershipVerifier::class, UnavailableTrialMembershipVerifier::class);
 
         $this->app->singleton(
             CatalogMutationAudit::class,
@@ -125,6 +131,37 @@ final class CatalogServiceProvider extends ServiceProvider
                 $application->make(ServiceUsernameAvailability::class),
                 $application->make(CustomPlanArithmetic::class),
                 $application->make(CustomPlanOperationalVerifier::class),
+                $application->make(Clock::class),
+            ),
+        );
+
+        $this->app->singleton(
+            TrialPolicyService::class,
+            fn (Application $application): TrialPolicyService => new TrialPolicyService(
+                $application->make(CatalogMutationExecutor::class),
+                $application->make(CatalogMutationAudit::class),
+                $application->make(Clock::class),
+            ),
+        );
+
+        $this->app->singleton(
+            TrialRouteSelector::class,
+            fn (Application $application): TrialRouteSelector => new TrialRouteSelector(
+                $application->make(RouteOperationalVerifier::class),
+                $application->make(TargetCapacityAllocator::class),
+                $application->make(Clock::class),
+            ),
+        );
+
+        $this->app->singleton(
+            TrialReservationService::class,
+            fn (Application $application): TrialReservationService => new TrialReservationService(
+                $application->make(DatabaseManager::class),
+                $application->make(TrialEligibility::class),
+                $application->make(TrialMembershipVerifier::class),
+                $application->make(TrialRouteSelector::class),
+                $application->make(TargetCapacityAllocator::class),
+                $application->make(AdministratorPermissionAuthorizer::class),
                 $application->make(Clock::class),
             ),
         );
