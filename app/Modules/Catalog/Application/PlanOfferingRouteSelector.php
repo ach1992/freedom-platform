@@ -91,6 +91,7 @@ final readonly class PlanOfferingRouteSelector
                         if ($exception->getMessage() !== 'Insufficient target capacity.') {
                             throw $exception;
                         }
+
                         continue;
                     }
 
@@ -221,8 +222,8 @@ final readonly class PlanOfferingRouteSelector
     }
 
     /**
-     * @param object{id: int, audience: string, server_selection_mode: string, protocol_selection_mode: string, tag_match_mode: string} $offering
-     * @param object{tier_code: ?string, tag_ids: list<int>} $actor
+     * @param  object{id: int, audience: string, server_selection_mode: string, protocol_selection_mode: string, tag_match_mode: string}  $offering
+     * @param  object{tier_code: ?string, tag_ids: list<int>}  $actor
      */
     private function assertEligibility(Connection $connection, object $offering, object $actor): void
     {
@@ -255,7 +256,7 @@ final readonly class PlanOfferingRouteSelector
     }
 
     /**
-     * @param object{id: int, audience: string, server_selection_mode: string, protocol_selection_mode: string, tag_match_mode: string} $offering
+     * @param  object{id: int, audience: string, server_selection_mode: string, protocol_selection_mode: string, tag_match_mode: string}  $offering
      */
     private function resolveProtocol(Connection $connection, object $offering, ?int $requestedProtocolProfileId): int
     {
@@ -330,7 +331,7 @@ final readonly class PlanOfferingRouteSelector
     }
 
     /**
-     * @param list<object{id: int, sales_server_id: int, panel_service_target_id: int, route_type: string, priority: int, customer_selectable: bool, disclosure_fa: ?string}> $routes
+     * @param  list<object{id: int, sales_server_id: int, panel_service_target_id: int, route_type: string, priority: int, customer_selectable: bool, disclosure_fa: ?string}>  $routes
      * @return list<object{id: int, sales_server_id: int, panel_service_target_id: int, route_type: string, priority: int, customer_selectable: bool, disclosure_fa: ?string}>
      */
     private function orderedCandidates(array $routes, string $modeValue, ?int $requestedRouteId): array
