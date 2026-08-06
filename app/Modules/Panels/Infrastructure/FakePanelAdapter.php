@@ -77,6 +77,15 @@ final class FakePanelAdapter implements PanelAdapter
         }
 
         $remoteId = 'fake-'.substr(hash('sha256', $request->idempotencyKey), 0, 24);
+        $existingByOperation = $this->findByRemoteId($remoteId);
+        if ($existingByOperation !== null) {
+            return $this->failure(
+                'fake_idempotency_conflict',
+                'Fake panel idempotency key conflicts with an existing remote service.',
+                $existingByOperation,
+            );
+        }
+
         $service = new RemoteServiceSnapshot(
             $remoteId,
             $request->username,
@@ -198,10 +207,12 @@ final class FakePanelAdapter implements PanelAdapter
     {
         $this->nextCreateIsUncertain = true;
     }
+
     public function makeAuthoritativeLookupUnavailable(): void
     {
         $this->authoritativeLookup = false;
     }
+
     public function serviceCount(): int
     {
         return count($this->services);
