@@ -13,7 +13,7 @@ use Database\Seeders\PanelsAccessFoundationSeeder;
 use DateTimeImmutable;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\QueryException;
-use Illuminate\Foundation\Testing\DatabaseMigrations;
+use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
@@ -25,7 +25,7 @@ use Tests\TestCase;
 /** @requirement CAT-008 ACL-002 SEC-002 DAT-003 QUA-001 */
 final class TargetCapacityFoundationTest extends TestCase
 {
-    use DatabaseMigrations;
+    use DatabaseTruncation;
 
     protected function setUp(): void
     {
