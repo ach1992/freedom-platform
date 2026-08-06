@@ -111,6 +111,107 @@ final class PanelAdapterContractTest extends TestCase
         self::assertNull($result->service);
     }
 
+    public function test_success_without_authoritative_snapshot_is_treated_as_uncertain(): void
+    {
+        $canonicalizer = new PanelServiceCanonicalizer;
+        $request = $this->request();
+        $adapter = $this->createMock(PanelAdapter::class);
+        $adapter->method('capabilities')->willReturn($this->authoritativeCapabilities());
+        $adapter->expects(self::once())
+            ->method('findByDeterministicUsername')
+            ->with($request->username)
+            ->willReturn(null);
+        $adapter->expects(self::once())
+            ->method('createService')
+            ->with($request)
+            ->willReturn(new PanelOperationResult(
+                PanelOperationOutcome::Success,
+                null,
+                'provider_created_without_snapshot',
+                'Provider reported success without a service snapshot.',
+            ));
+
+        $result = $this->coordinator($canonicalizer)->createOrAdopt($adapter, $request);
+
+        self::assertSame(PanelOperationOutcome::UncertainResult, $result->outcome);
+        self::assertSame('remote_create_missing_snapshot', $result->providerCode);
+        self::assertNull($result->service);
+    }
+
+    public function test_success_with_mismatched_snapshot_is_a_conflict(): void
+    {
+        $canonicalizer = new PanelServiceCanonicalizer;
+        $request = $this->request();
+        $mismatch = new RemoteServiceSnapshot(
+            'remote-mismatch-0001',
+            $request->username,
+            PanelServiceStatus::Active,
+            $request->dataLimitBytes,
+            0,
+            $request->expiresAt,
+            hash('sha256', 'different-create-attributes'),
+        );
+        $adapter = $this->createMock(PanelAdapter::class);
+        $adapter->method('capabilities')->willReturn($this->authoritativeCapabilities());
+        $adapter->expects(self::once())
+            ->method('findByDeterministicUsername')
+            ->with($request->username)
+            ->willReturn(null);
+        $adapter->expects(self::once())
+            ->method('createService')
+            ->with($request)
+            ->willReturn(new PanelOperationResult(
+                PanelOperationOutcome::Success,
+                $mismatch,
+                'provider_service_created',
+                'Provider reported a created service.',
+            ));
+
+        $result = $this->coordinator($canonicalizer)->createOrAdopt($adapter, $request);
+
+        self::assertSame(PanelOperationOutcome::DefinitiveFailure, $result->outcome);
+        self::assertSame('remote_attributes_mismatch', $result->providerCode);
+        self::assertSame($mismatch, $result->service);
+    }
+
+    public function test_uncertain_create_followed_by_mismatch_is_a_conflict_without_second_create(): void
+    {
+        $canonicalizer = new PanelServiceCanonicalizer;
+        $request = $this->request();
+        $mismatch = new RemoteServiceSnapshot(
+            'remote-mismatch-0002',
+            $request->username,
+            PanelServiceStatus::Active,
+            1,
+            0,
+            null,
+            hash('sha256', 'different-discovered-attributes'),
+        );
+        $adapter = $this->createMock(PanelAdapter::class);
+        $adapter->expects(self::exactly(2))
+            ->method('capabilities')
+            ->willReturn($this->authoritativeCapabilities());
+        $adapter->expects(self::exactly(2))
+            ->method('findByDeterministicUsername')
+            ->with($request->username)
+            ->willReturnOnConsecutiveCalls(null, $mismatch);
+        $adapter->expects(self::once())
+            ->method('createService')
+            ->with($request)
+            ->willReturn(new PanelOperationResult(
+                PanelOperationOutcome::UncertainResult,
+                null,
+                'provider_timeout_after_create',
+                'Remote create result is uncertain.',
+            ));
+
+        $result = $this->coordinator($canonicalizer)->createOrAdopt($adapter, $request);
+
+        self::assertSame(PanelOperationOutcome::DefinitiveFailure, $result->outcome);
+        self::assertSame('remote_attributes_mismatch', $result->providerCode);
+        self::assertSame($mismatch, $result->service);
+    }
+
     public function test_uncertain_fake_create_is_adopted_without_duplicate_remote_service(): void
     {
         $canonicalizer = new PanelServiceCanonicalizer;
