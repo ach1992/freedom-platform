@@ -19,10 +19,16 @@ final class FakePanelMutationIdempotencyTest extends TestCase
     public function test_mutation_replays_do_not_duplicate_effects_and_conflicts_fail_closed(): void
     {
         $adapter = new FakePanelAdapter(new PanelServiceCanonicalizer);
-        $created = $adapter->createService($this->request());
+        $request = $this->request();
+        $created = $adapter->createService($request);
         self::assertSame(PanelOperationOutcome::Success, $created->outcome);
         self::assertNotNull($created->service);
         $remoteId = $created->service->remoteId;
+
+        $createKeyConflict = $adapter->suspend($request->idempotencyKey, $remoteId);
+        self::assertSame(PanelOperationOutcome::DefinitiveFailure, $createKeyConflict->outcome);
+        self::assertSame('fake_idempotency_conflict', $createKeyConflict->providerCode);
+        self::assertSame(PanelServiceStatus::Active, $adapter->fetchStatus($remoteId)->service?->status);
 
         $first = $adapter->updateDataAllowance(
             'panel:add-data:idempotent-0001',
