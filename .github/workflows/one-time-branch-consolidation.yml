@@ -9,6 +9,7 @@ on:
       - main
     types:
       - synchronize
+      - ready_for_review
 
 permissions:
   contents: write
