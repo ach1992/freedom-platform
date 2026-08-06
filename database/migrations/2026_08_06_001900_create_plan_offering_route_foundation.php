@@ -51,7 +51,9 @@ return new class extends Migration
             $table->char('configuration_hash', 64);
             $table->unsignedInteger('route_count');
             $table->unsignedInteger('fallback_count');
-            $table->foreignId('actor_administrator_id')->constrained('administrators')->restrictOnDelete();
+            $table->unsignedBigInteger('actor_administrator_id');
+            $table->foreign('actor_administrator_id', 'route_history_actor_fk')
+                ->references('id')->on('administrators')->restrictOnDelete();
             $table->string('reason_code', 64);
             $table->text('reason');
             $table->string('correlation_id', 64);
@@ -132,7 +134,7 @@ return new class extends Migration
         DB::statement("ALTER TABLE plan_offering_route_selections ADD CONSTRAINT route_selection_mode_chk CHECK (`selection_mode` IN ('customer_selects', 'system_selects', 'hybrid'))");
         DB::statement('ALTER TABLE plan_offering_route_selections ADD CONSTRAINT route_selection_units_chk CHECK (`units` >= 1)');
         DB::statement('ALTER TABLE plan_offering_route_selections ADD CONSTRAINT route_selection_capacity_chk CHECK (`capacity_hard_limit` >= 1 AND `capacity_held_units` + `capacity_committed_units` <= `capacity_hard_limit` AND `capacity_available_units` = `capacity_hard_limit` - `capacity_held_units` - `capacity_committed_units`)');
-        DB::statement("ALTER TABLE plan_offering_route_selections ADD CONSTRAINT route_selection_disclosure_chk CHECK (`fallback_used` = 0 OR (`disclosure_fa_snapshot` IS NOT NULL AND CHAR_LENGTH(TRIM(`disclosure_fa_snapshot`)) > 0))");
+        DB::statement('ALTER TABLE plan_offering_route_selections ADD CONSTRAINT route_selection_disclosure_chk CHECK (`fallback_used` = 0 OR (`disclosure_fa_snapshot` IS NOT NULL AND CHAR_LENGTH(TRIM(`disclosure_fa_snapshot`)) > 0))');
     }
 
     private function createPolicyGuards(): void
