@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  workflow_dispatch:
   pull_request:
     branches:
       - main
@@ -12,7 +13,9 @@ permissions:
 
 jobs:
   consolidate-branches:
-    if: github.head_ref == 'develop/v1.0.0-completion'
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && github.head_ref == 'develop/v1.0.0-completion')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
