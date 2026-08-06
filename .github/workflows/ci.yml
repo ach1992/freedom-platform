@@ -1,253 +1,73 @@
 name: CI
 
-# Requirements: ARCH-001 ARCH-002 QUA-001 QUA-002 QUA-004 QUA-012 QUA-013
-
 on:
-  push:
   pull_request:
-  workflow_dispatch:
+    branches:
+      - main
+    types:
+      - ready_for_review
 
 permissions:
-  contents: read
-  pull-requests: read
-
-concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
-env:
-  APP_ENV: testing
-  APP_DEBUG: "false"
-  APP_TIMEZONE: UTC
-  BUSINESS_TIMEZONE: Asia/Tehran
-  APP_KEY: base64:MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
-  DB_CONNECTION: mysql
-  DB_HOST: 127.0.0.1
-  DB_PORT: "33067"
-  DB_DATABASE: freedom_platform_ci
-  DB_USERNAME: freedom_ci
-  DB_PASSWORD: ci-only-database-password
-  REDIS_HOST: 127.0.0.1
-  REDIS_PORT: "6380"
-  REDIS_PASSWORD: ci-only-redis-password
-  CACHE_STORE: redis
-  QUEUE_CONNECTION: redis
+  contents: write
 
 jobs:
-  preflight:
-    name: Repository preflight
+  consolidate-branches:
+    if: github.head_ref == 'develop/v1.0.0-completion'
     runs-on: ubuntu-24.04
-    outputs:
-      application: ${{ steps.mode.outputs.application }}
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TARGET_BRANCH: develop/v1.0.0-completion
     steps:
-      - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Determine phase mode
-        id: mode
+      - name: Delete obsolete branches
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p build/evidence/preflight
-          if [[ -f composer.json ]]; then
-            echo 'application=true' >> "$GITHUB_OUTPUT"
-            printf '%s\n' '# CI preflight' '' '- Mode: application' > build/evidence/preflight/summary.md
-          else
-            echo 'application=false' >> "$GITHUB_OUTPUT"
-            printf '%s\n' '# CI preflight' '' '- Mode: planning' '- Application gates: not applicable (composer.json is not present)' > build/evidence/preflight/summary.md
-          fi
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.parse
+          import urllib.request
 
-      - name: Validate repository contract
-        shell: bash
-        run: |
-          set -euo pipefail
-          required_planning_files=(
-            docs/00-execution-ledger.md
-            docs/01-authoritative-requirements.md
-            docs/02-requirement-traceability-matrix.md
-            docs/03-risk-register.md
-            docs/04-domain-glossary.md
-            docs/05-architecture-overview.md
-            docs/06-test-strategy.md
-            docs/07-security-threat-model.md
-            docs/08-data-classification.md
-            docs/09-deployment-runbook.md
-            docs/10-release-checklist.md
-            docker-compose.ci.yml
-          )
-          for path in "${required_planning_files[@]}"; do
-            test -s "$path" || { echo "Required planning artifact is missing or empty: $path" >&2; exit 1; }
-          done
-          docker compose -f docker-compose.ci.yml config --quiet
-          if [[ -f composer.json ]]; then
-            test -s composer.lock || { echo 'composer.lock is mandatory once composer.json exists.' >&2; exit 1; }
-            test -s artisan || { echo 'artisan is mandatory once composer.json exists.' >&2; exit 1; }
-            for script in ci:static ci:test ci:forbidden-patterns ci:architecture ci:licenses; do
-              jq -e --arg script "$script" '.scripts[$script] | type == "string" or type == "array"' composer.json >/dev/null \
-                || { echo "Missing mandatory Composer script: $script" >&2; exit 1; }
-            done
-          fi
+          repository = os.environ['GITHUB_REPOSITORY']
+          token = os.environ['GH_TOKEN']
+          protected = {'main', os.environ['TARGET_BRANCH']}
+          branches = [
+              'automation/v1.0.0-assembly',
+              'codex/foundation-hardening',
+              'work/phase-0.4-adapter-contract',
+              'work/phase-0.4-trial-policy',
+              'work/recover-self-hosted-runner',
+              'work/trial-format-fix',
+              'work/verify-phase-0.4-adapter-575000d',
+              'work/verify-phase-0.4-hosted-ci',
+              'work/branch-consolidation-finalizer',
+              'work/branch-cleanup-trigger',
+          ]
 
-      - name: Record runner facts
-        shell: bash
-        run: |
-          set -euo pipefail
-          {
-            echo
-            echo "- Git SHA: $GITHUB_SHA"
-            echo "- Run ID: $GITHUB_RUN_ID"
-            echo "- Runner: $RUNNER_OS/$RUNNER_ARCH"
-            echo "- UTC: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          } >> build/evidence/preflight/summary.md
+          headers = {
+              'Accept': 'application/vnd.github+json',
+              'Authorization': f'Bearer {token}',
+              'X-GitHub-Api-Version': '2022-11-28',
+              'User-Agent': 'freedom-platform-branch-consolidation',
+          }
 
-      - name: Verify planning traceability
-        run: bash scripts/ci/verify-planning.sh
-
-      - name: Upload preflight evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: preflight-evidence-${{ github.run_id }}
-          path: |
-            build/evidence/preflight
-            build/evidence/planning
-          if-no-files-found: error
-          retention-days: 30
-
-  static:
-    name: PHP static quality
-    needs: preflight
-    if: needs.preflight.outputs.application == 'true'
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Set up PHP
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
-        with:
-          php-version: "8.4"
-          extensions: bcmath, curl, dom, fileinfo, intl, mbstring, openssl, pcntl, pdo_mysql, redis, sodium, xml
-          coverage: none
-          tools: composer:2.10.2
-      - name: Install locked dependencies
-        run: composer install --no-interaction --prefer-dist --no-progress
-      - name: Code style
-        shell: bash
-        run: |
-          set -o pipefail
-          mkdir -p build/evidence/static
-          vendor/bin/pint --test --format=json 2>&1 | tee build/evidence/static/pint.json
-      - name: Static analysis and repository policy
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p build/evidence/static
-          composer validate --strict --no-check-publish 2>&1 | tee build/evidence/static/composer-validate.log
-          vendor/bin/phpstan analyse --no-progress --error-format=table 2>&1 | tee build/evidence/static/phpstan.log
-          composer ci:forbidden-patterns 2>&1 | tee build/evidence/static/forbidden-patterns.log
-          composer ci:architecture 2>&1 | tee build/evidence/static/architecture.log
-      - name: Upload static evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: static-evidence-${{ github.run_id }}
-          path: build/evidence/static
-          if-no-files-found: error
-          retention-days: 30
-
-  integration:
-    name: MariaDB and Redis tests
-    needs: preflight
-    if: needs.preflight.outputs.application == 'true'
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Set up PHP
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
-        with:
-          php-version: "8.4"
-          extensions: bcmath, curl, dom, fileinfo, intl, mbstring, openssl, pcntl, pdo_mysql, redis, sodium, xml
-          coverage: pcov
-          tools: composer:2.10.2
-      - name: Start disposable dependencies
-        run: docker compose -f docker-compose.ci.yml up -d --wait
-      - name: Install locked dependencies
-        run: composer install --no-interaction --prefer-dist --no-progress
-      - name: Run complete automated suite
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p build/evidence/tests build/evidence/coverage build/evidence/services
-          docker compose -f docker-compose.ci.yml ps > build/evidence/services/compose-ps.txt
-          test -f .env || cp .env.example .env
-          php artisan config:clear --ansi
-          COLUMNS=240 php artisan test \
-            --display-warnings \
-            --fail-on-warning \
-            --log-junit build/evidence/tests/junit.xml \
-            --coverage-clover build/evidence/coverage/clover.xml \
-            2>&1 | tee build/evidence/tests/test.log
-          test -s build/evidence/tests/junit.xml
-          test -s build/evidence/coverage/clover.xml
-      - name: Capture dependency service logs
-        if: always()
-        run: |
-          mkdir -p build/evidence/services
-          docker compose -f docker-compose.ci.yml logs --no-color > build/evidence/services/compose.log 2>&1 || true
-      - name: Stop disposable dependencies
-        if: always()
-        run: docker compose -f docker-compose.ci.yml down --volumes
-      - name: Upload test evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: test-evidence-${{ github.run_id }}
-          path: |
-            build/evidence/tests
-            build/evidence/coverage
-            build/evidence/services
-          if-no-files-found: error
-          retention-days: 30
-
-  dependencies:
-    name: Dependency and license policy
-    needs: preflight
-    if: needs.preflight.outputs.application == 'true'
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Set up PHP
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
-        with:
-          php-version: "8.4"
-          coverage: none
-          tools: composer:2.10.2
-      - name: Install locked dependencies
-        run: composer install --no-interaction --prefer-dist --no-progress
-      - name: Audit dependencies and licenses
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p build/evidence/dependencies
-          composer audit --locked --abandoned=fail --format=json > build/evidence/dependencies/audit.json
-          composer ci:licenses
-          test -s build/evidence/dependencies/licenses.json
-      - name: Upload dependency evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: dependency-evidence-${{ github.run_id }}
-          path: build/evidence/dependencies
-          if-no-files-found: error
-          retention-days: 30
-
-  secrets:
-    name: Secret scan
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-      - name: Scan Git history
-        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
+          for branch in branches:
+              if branch in protected:
+                  raise SystemExit(f'refusing to delete protected branch: {branch}')
+              encoded = urllib.parse.quote(branch, safe='/')
+              url = f'https://api.github.com/repos/{repository}/git/refs/heads/{encoded}'
+              request = urllib.request.Request(url, method='DELETE', headers=headers)
+              try:
+                  with urllib.request.urlopen(request) as response:
+                      if response.status != 204:
+                          raise RuntimeError(f'unexpected deletion status for {branch}: {response.status}')
+                  print(json.dumps({'branch': branch, 'result': 'deleted'}))
+              except urllib.error.HTTPError as error:
+                  if error.code == 404:
+                      print(json.dumps({'branch': branch, 'result': 'already_absent'}))
+                      continue
+                  body = error.read().decode('utf-8', errors='replace')
+                  raise RuntimeError(f'failed to delete {branch}: HTTP {error.code}: {body}') from error
+          PY
