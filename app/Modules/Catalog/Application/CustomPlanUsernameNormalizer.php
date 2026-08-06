@@ -10,8 +10,8 @@ use DomainException;
 final class CustomPlanUsernameNormalizer
 {
     /**
-     * @param list<string> $allowedSeparators
-     * @param list<string> $reservedWords
+     * @param  list<string>  $allowedSeparators
+     * @param  list<string>  $reservedWords
      */
     public function normalize(
         CustomPlanUsernameMode $mode,
