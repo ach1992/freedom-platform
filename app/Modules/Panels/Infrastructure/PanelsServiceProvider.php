@@ -58,7 +58,7 @@ final class PanelsServiceProvider extends ServiceProvider
 
         $this->app->singleton(
             PanelPayloadHasher::class,
-            static function (Appplication $application): PanelPayloadHasher {
+            static function (Application $application): PanelPayloadHasher {
                 $configured = $application->make(ConfigRepository::class)->get('app.key');
                 if (! is_string($configured) || $configured === '') {
                     throw new RuntimeException('Application key is unavailable for panel mutation hashing.');
