@@ -16,7 +16,7 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref_name }}
   cancel-in-progress: true
 
 env:
@@ -40,6 +40,7 @@ env:
 jobs:
   preflight:
     name: Repository preflight
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
     outputs:
       application: ${{ steps.mode.outputs.application }}
@@ -121,7 +122,7 @@ jobs:
   static:
     name: PHP static quality
     needs: preflight
-    if: needs.preflight.outputs.application == 'true'
+    if: ${{ needs.preflight.outputs.application == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -161,7 +162,7 @@ jobs:
   integration:
     name: MariaDB and Redis tests
     needs: preflight
-    if: needs.preflight.outputs.application == 'true'
+    if: ${{ needs.preflight.outputs.application == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -215,7 +216,7 @@ jobs:
   dependencies:
     name: Dependency and license policy
     needs: preflight
-    if: needs.preflight.outputs.application == 'true'
+    if: ${{ needs.preflight.outputs.application == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -247,6 +248,7 @@ jobs:
 
   secrets:
     name: Secret scan
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
