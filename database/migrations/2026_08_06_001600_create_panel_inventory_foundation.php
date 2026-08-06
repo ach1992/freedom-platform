@@ -91,9 +91,24 @@ return new class extends Migration
             $table->index(['visibility', 'state', 'sort_order'], 'sales_servers_listing_idx');
         });
 
-        $this->createHistoryTable('panel_protocol_profile_histories', 'panel_protocol_profile_id', 'panel_protocol_profiles');
-        $this->createHistoryTable('panel_service_target_histories', 'panel_service_target_id', 'panel_service_targets');
-        $this->createHistoryTable('sales_server_histories', 'sales_server_id', 'sales_servers');
+        $this->createHistoryTable(
+            'panel_protocol_profile_histories',
+            'panel_protocol_profile_id',
+            'panel_protocol_profiles',
+            'panel_profile_history_parent_fk',
+        );
+        $this->createHistoryTable(
+            'panel_service_target_histories',
+            'panel_service_target_id',
+            'panel_service_targets',
+            'panel_target_history_parent_fk',
+        );
+        $this->createHistoryTable(
+            'sales_server_histories',
+            'sales_server_id',
+            'sales_servers',
+            'sales_server_history_parent_fk',
+        );
 
         DB::statement("ALTER TABLE panel_protocol_profiles ADD CONSTRAINT panel_profiles_state_chk CHECK (`state` IN ('disabled', 'active', 'maintenance', 'archived'))");
         DB::statement('ALTER TABLE panel_protocol_profiles ADD CONSTRAINT panel_profiles_name_chk CHECK (CHAR_LENGTH(`name_fa`) > 0)');
@@ -135,11 +150,19 @@ return new class extends Migration
         Schema::dropIfExists('panel_protocol_profiles');
     }
 
-    private function createHistoryTable(string $tableName, string $foreignKey, string $parentTable): void
-    {
-        Schema::create($tableName, function (Blueprint $table) use ($tableName, $foreignKey, $parentTable): void {
+    private function createHistoryTable(
+        string $tableName,
+        string $foreignKey,
+        string $parentTable,
+        string $parentForeignName,
+    ): void {
+        Schema::create($tableName, function (Blueprint $table) use ($tableName, $foreignKey, $parentTable, $parentForeignName): void {
             $table->bigIncrements('id');
-            $table->foreignId($foreignKey)->constrained($parentTable)->restrictOnDelete();
+            $table->unsignedBigInteger($foreignKey);
+            $table->foreign($foreignKey, $parentForeignName)
+                ->references('id')
+                ->on($parentTable)
+                ->restrictOnDelete();
             $table->unsignedBigInteger('version');
             $table->string('action', 96);
             $table->json('before_safe_data')->nullable();
