@@ -10,6 +10,7 @@ use App\Modules\Catalog\Application\CatalogMutationExecutor;
 use App\Modules\Catalog\Application\CustomPlanArithmetic;
 use App\Modules\Catalog\Application\CustomPlanCalculator;
 use App\Modules\Catalog\Application\CustomPlanEligibility;
+use App\Modules\Catalog\Application\CustomPlanOperationalVerifier;
 use App\Modules\Catalog\Application\CustomPlanPolicyService;
 use App\Modules\Catalog\Application\CustomPlanUsernameNormalizer;
 use App\Modules\Catalog\Application\PlanOfferingRoutePolicyService;
@@ -31,6 +32,7 @@ final class CatalogServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->bind(RouteOperationalVerifier::class, DatabaseRouteOperationalVerifier::class);
+        $this->app->bind(CustomPlanOperationalVerifier::class, DatabaseCustomPlanOperationalVerifier::class);
         $this->app->bind(ServiceUsernameAvailability::class, DatabaseServiceUsernameAvailability::class);
 
         $this->app->singleton(
@@ -122,6 +124,7 @@ final class CatalogServiceProvider extends ServiceProvider
                 $application->make(CustomPlanUsernameNormalizer::class),
                 $application->make(ServiceUsernameAvailability::class),
                 $application->make(CustomPlanArithmetic::class),
+                $application->make(CustomPlanOperationalVerifier::class),
                 $application->make(Clock::class),
             ),
         );
