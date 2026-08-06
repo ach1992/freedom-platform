@@ -36,6 +36,7 @@ final class CustomPlanArithmetic
         if ($left < 0 || $right < 0 || ($left !== 0 && $right > intdiv(PHP_INT_MAX, $left))) {
             throw new DomainException('Custom-plan price calculation overflow.');
         }
+
         return $left * $right;
     }
 
@@ -44,6 +45,7 @@ final class CustomPlanArithmetic
         if ($left < 0 || $right < 0 || $right > PHP_INT_MAX - $left) {
             throw new DomainException('Custom-plan price calculation overflow.');
         }
+
         return $left + $right;
     }
 }
