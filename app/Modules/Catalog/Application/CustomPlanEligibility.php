@@ -107,8 +107,8 @@ final class CustomPlanEligibility
     }
 
     /**
-     * @param list<string> $tierCodes
-     * @param list<int> $tagIds
+     * @param  list<string>  $tierCodes
+     * @param  list<int>  $tagIds
      */
     private function assertRule(array $tierCodes, array $tagIds, string $tagMatchMode, CustomPlanActorSnapshot $actor, string $label): void
     {
