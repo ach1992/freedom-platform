@@ -320,13 +320,15 @@ final readonly class PlanOfferingRoutePolicyService
         ?int $routeCount = null,
         ?int $fallbackCount = null,
     ): array {
+        $routes = $definition === null ? [] : $definition->routes;
+
         return [
             'offering_id' => $offeringId,
             'version' => $version,
             'configuration_hash' => $configurationHash,
-            'route_count' => $routeCount ?? count($definition?->routes ?? []),
+            'route_count' => $routeCount ?? count($routes),
             'fallback_count' => $fallbackCount ?? count(array_filter(
-                $definition?->routes ?? [],
+                $routes,
                 static fn (PlanOfferingRouteDefinition $route): bool => $route->type === PlanOfferingRouteType::Fallback,
             )),
             'request_payload_hash' => $payloadHash,
