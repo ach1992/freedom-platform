@@ -13,7 +13,7 @@ use Database\Seeders\PanelsAccessFoundationSeeder;
 use DateTimeImmutable;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\QueryException;
-use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Foundation\Testing\DatabaseMigrations;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
@@ -25,7 +25,7 @@ use Tests\TestCase;
 /** @requirement CAT-008 ACL-002 SEC-002 DAT-003 QUA-001 */
 final class TargetCapacityFoundationTest extends TestCase
 {
-    use RefreshDatabase;
+    use DatabaseMigrations;
 
     protected function setUp(): void
     {
@@ -209,6 +209,7 @@ final class TargetCapacityFoundationTest extends TestCase
     private function enabledCapacity(int $targetId, int $limit): int
     {
         $now = now('UTC');
+
         return (int) DB::table('panel_target_capacities')->insertGetId([
             'panel_service_target_id' => $targetId, 'hard_limit' => $limit, 'held_units' => 0,
             'committed_units' => 0, 'state' => 'enabled', 'version' => 1, 'created_at' => $now, 'updated_at' => $now,
@@ -219,6 +220,7 @@ final class TargetCapacityFoundationTest extends TestCase
     private function reservationRow(int $capacityId, string $key): array
     {
         $now = now('UTC');
+
         return [
             'panel_target_capacity_id' => $capacityId, 'reservation_key' => $key, 'purpose_code' => 'test',
             'units' => 1, 'state' => 'held', 'expires_at' => $now->copy()->addMinutes(5), 'version' => 1,
@@ -231,6 +233,7 @@ final class TargetCapacityFoundationTest extends TestCase
     private function administrator(bool $owner): int
     {
         $now = now('UTC');
+
         return (int) DB::table('administrators')->insertGetId([
             'user_id' => DB::table('users')->insertGetId([
                 'public_id' => (string) Str::ulid(), 'account_type' => 'customer', 'account_status' => 'active',
