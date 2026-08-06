@@ -12,6 +12,8 @@ use App\Modules\Panels\Application\PanelMutationAudit;
 use App\Modules\Panels\Application\PanelMutationExecutor;
 use App\Modules\Panels\Application\PanelPayloadHasher;
 use App\Modules\Panels\Application\SensitivePanelApprovalGate;
+use App\Modules\Panels\Application\TargetCapacityAllocator;
+use App\Modules\Panels\Application\TargetCapacityService;
 use App\Shared\Application\Clock;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Encryption\StringEncrypter;
@@ -84,6 +86,25 @@ final class PanelsServiceProvider extends ServiceProvider
                 $application->make(PanelApprovalGate::class),
                 $application->make(PanelPayloadHasher::class),
                 $application->make(StringEncrypter::class),
+                $application->make(Clock::class),
+            ),
+        );
+
+        $this->app->singleton(
+            TargetCapacityService::class,
+            fn (Application $application): TargetCapacityService => new TargetCapacityService(
+                $application->make(PanelMutationExecutor::class),
+                $application->make(PanelMutationAudit::class),
+                $application->make(PanelPayloadHasher::class),
+                $application->make(Clock::class),
+            ),
+        );
+
+        $this->app->singleton(
+            TargetCapacityAllocator::class,
+            fn (Application $application): TargetCapacityAllocator => new TargetCapacityAllocator(
+                $application->make(DatabaseManager::class),
+                $application->make(PanelPayloadHasher::class),
                 $application->make(Clock::class),
             ),
         );
