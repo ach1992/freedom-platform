@@ -36,6 +36,8 @@ env:
   REDIS_PASSWORD: ci-only-redis-password
   CACHE_STORE: redis
   QUEUE_CONNECTION: redis
+  PHP_ROOT: /www/server/php/84
+  COMPOSER_BIN: /usr/local/bin/composer
 
 jobs:
   preflight:
@@ -126,15 +128,35 @@ jobs:
     runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Set up PHP
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
-        with:
-          php-version: "8.4"
-          extensions: bcmath, curl, dom, fileinfo, intl, mbstring, openssl, pcntl, pdo_mysql, redis, sodium, xml
-          coverage: none
-          tools: composer:2.10.2
-        env:
-          runner: self-hosted
+      - name: Use runner PHP toolchain
+        shell: bash
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          test -x "$PHP_ROOT/bin/php"
+          test -f "$COMPOSER_BIN"
+          tool_bin="$RUNNER_TEMP/freedom-ci-toolchain-$GITHUB_JOB"
+          rm -rf "$tool_bin"
+          mkdir -p "$tool_bin"
+          ln -s "$PHP_ROOT/bin/php" "$tool_bin/php"
+          printf '%s\n' '#!/usr/bin/env bash' 'exec /www/server/php/84/bin/php /usr/local/bin/composer "$@"' > "$tool_bin/composer"
+          chmod 0755 "$tool_bin/composer"
+          echo "$tool_bin" >> "$GITHUB_PATH"
+          "$tool_bin/php" -r '
+              if (PHP_MAJOR_VERSION !== 8 || PHP_MINOR_VERSION !== 4) {
+                  fwrite(STDERR, "PHP 8.4 is required.".PHP_EOL);
+                  exit(1);
+              }
+              $required = ["bcmath", "curl", "dom", "fileinfo", "intl", "mbstring", "openssl", "pcntl", "pdo_mysql", "redis", "sodium", "xml"];
+              $missing = array_values(array_filter($required, static fn (string $extension): bool => ! extension_loaded($extension)));
+              if ($missing !== []) {
+                  fwrite(STDERR, "Missing PHP extensions: ".implode(", ", $missing).PHP_EOL);
+                  exit(1);
+              }
+          '
+          composer_version="$("$tool_bin/php" "$COMPOSER_BIN" --version --no-ansi)"
+          printf '%s\n' "$composer_version"
+          grep -F 'Composer version 2.10.2 ' <<< "$composer_version" >/dev/null
       - name: Install locked dependencies
         run: composer install --no-interaction --prefer-dist --no-progress
       - name: Code style
@@ -168,15 +190,39 @@ jobs:
     runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Set up PHP
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
-        with:
-          php-version: "8.4"
-          extensions: bcmath, curl, dom, fileinfo, intl, mbstring, openssl, pcntl, pdo_mysql, redis, sodium, xml
-          coverage: pcov
-          tools: composer:2.10.2
-        env:
-          runner: self-hosted
+      - name: Use runner PHP toolchain
+        shell: bash
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          test -x "$PHP_ROOT/bin/php"
+          test -f "$COMPOSER_BIN"
+          tool_bin="$RUNNER_TEMP/freedom-ci-toolchain-$GITHUB_JOB"
+          rm -rf "$tool_bin"
+          mkdir -p "$tool_bin"
+          ln -s "$PHP_ROOT/bin/php" "$tool_bin/php"
+          printf '%s\n' '#!/usr/bin/env bash' 'exec /www/server/php/84/bin/php /usr/local/bin/composer "$@"' > "$tool_bin/composer"
+          chmod 0755 "$tool_bin/composer"
+          echo "$tool_bin" >> "$GITHUB_PATH"
+          "$tool_bin/php" -r '
+              if (PHP_MAJOR_VERSION !== 8 || PHP_MINOR_VERSION !== 4) {
+                  fwrite(STDERR, "PHP 8.4 is required.".PHP_EOL);
+                  exit(1);
+              }
+              $required = ["bcmath", "curl", "dom", "fileinfo", "intl", "mbstring", "openssl", "pcntl", "pdo_mysql", "redis", "sodium", "xml", "pcov"];
+              $missing = array_values(array_filter($required, static fn (string $extension): bool => ! extension_loaded($extension)));
+              if ($missing !== []) {
+                  fwrite(STDERR, "Missing PHP extensions: ".implode(", ", $missing).PHP_EOL);
+                  exit(1);
+              }
+              if (ini_get("pcov.enabled") !== "1") {
+                  fwrite(STDERR, "PCOV must be enabled for integration coverage.".PHP_EOL);
+                  exit(1);
+              }
+          '
+          composer_version="$("$tool_bin/php" "$COMPOSER_BIN" --version --no-ansi)"
+          printf '%s\n' "$composer_version"
+          grep -F 'Composer version 2.10.2 ' <<< "$composer_version" >/dev/null
       - name: Start disposable dependencies
         run: docker compose -f docker-compose.ci.yml up -d --wait
       - name: Install locked dependencies
@@ -224,15 +270,35 @@ jobs:
     runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Set up PHP
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
-        with:
-          php-version: "8.4"
-          extensions: bcmath, curl, dom, fileinfo, intl, mbstring, openssl, pcntl, pdo_mysql, redis, sodium, xml
-          coverage: none
-          tools: composer:2.10.2
-        env:
-          runner: self-hosted
+      - name: Use runner PHP toolchain
+        shell: bash
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          test -x "$PHP_ROOT/bin/php"
+          test -f "$COMPOSER_BIN"
+          tool_bin="$RUNNER_TEMP/freedom-ci-toolchain-$GITHUB_JOB"
+          rm -rf "$tool_bin"
+          mkdir -p "$tool_bin"
+          ln -s "$PHP_ROOT/bin/php" "$tool_bin/php"
+          printf '%s\n' '#!/usr/bin/env bash' 'exec /www/server/php/84/bin/php /usr/local/bin/composer "$@"' > "$tool_bin/composer"
+          chmod 0755 "$tool_bin/composer"
+          echo "$tool_bin" >> "$GITHUB_PATH"
+          "$tool_bin/php" -r '
+              if (PHP_MAJOR_VERSION !== 8 || PHP_MINOR_VERSION !== 4) {
+                  fwrite(STDERR, "PHP 8.4 is required.".PHP_EOL);
+                  exit(1);
+              }
+              $required = ["bcmath", "curl", "dom", "fileinfo", "intl", "mbstring", "openssl", "pcntl", "pdo_mysql", "redis", "sodium", "xml"];
+              $missing = array_values(array_filter($required, static fn (string $extension): bool => ! extension_loaded($extension)));
+              if ($missing !== []) {
+                  fwrite(STDERR, "Missing PHP extensions: ".implode(", ", $missing).PHP_EOL);
+                  exit(1);
+              }
+          '
+          composer_version="$("$tool_bin/php" "$COMPOSER_BIN" --version --no-ansi)"
+          printf '%s\n' "$composer_version"
+          grep -F 'Composer version 2.10.2 ' <<< "$composer_version" >/dev/null
       - name: Install locked dependencies
         run: composer install --no-interaction --prefer-dist --no-progress
       - name: Audit dependencies and licenses
