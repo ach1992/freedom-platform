@@ -9,8 +9,11 @@ use InvalidArgumentException;
 final readonly class CapacityOperationContext
 {
     public string $commandKey;
+
     public string $sourceCode;
+
     public string $purposeCode;
+
     public string $reasonCode;
 
     public function __construct(
