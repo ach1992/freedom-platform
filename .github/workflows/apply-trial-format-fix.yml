@@ -16,7 +16,7 @@ concurrency:
 jobs:
   apply:
     if: github.head_ref == 'work/trial-format-fix'
-    runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Check out format-fix branch
@@ -48,8 +48,8 @@ jobs:
           PY
           rm -f .github/trial-test.part-*
           rm -f .github/workflows/apply-trial-format-fix.yml
-          /www/server/php/84/bin/php -l database/migrations/2026_08_06_002200_create_trial_policy_foundation.php
-          /www/server/php/84/bin/php -l tests/Feature/TrialPolicyReservationTest.php
+          php -l database/migrations/2026_08_06_002200_create_trial_policy_foundation.php
+          php -l tests/Feature/TrialPolicyReservationTest.php
 
       - name: Commit clean format fix tree
         shell: bash
