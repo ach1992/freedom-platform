@@ -1,0 +1,62 @@
+name: 00 Apply Trial Format Fix
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: 00-apply-trial-format-fix
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    if: github.head_ref == 'work/trial-format-fix'
+    runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
+    timeout-minutes: 10
+    steps:
+      - name: Check out format-fix branch
+        uses: actions/checkout@v4
+        with:
+          ref: work/trial-format-fix
+          fetch-depth: 0
+
+      - name: Rebuild and verify trial test file
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .github/trial-test.part-* | base64 -d > tests/Feature/TrialPolicyReservationTest.php
+          echo "f71bc35e3d349954d284775771671f96ebd3006b5dc8c871dce8caa2995c8cc0  tests/Feature/TrialPolicyReservationTest.php" | sha256sum -c -
+
+      - name: Apply exact Pint migration fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('database/migrations/2026_08_06_002200_create_trial_policy_foundation.php')
+          text = path.read_text()
+          old = "        DB::statement(\"ALTER TABLE trial_policies ADD CONSTRAINT trial_policy_phone_chk CHECK (`phone_verification_policy` IN ('none', 'telegram_contact_only', 'sms_otp_only', 'either', 'both'))\");"
+          new = "        DB::statement('ALTER TABLE trial_policies ADD CONSTRAINT trial_policy_phone_chk CHECK (`phone_verification_policy` IN (\\'none\\', \\'telegram_contact_only\\', \\'sms_otp_only\\', \\'either\\', \\'both\\'))');"
+          if text.count(old) != 1:
+              raise SystemExit('expected migration statement not found exactly once')
+          path.write_text(text.replace(old, new))
+          PY
+          rm -f .github/trial-test.part-*
+          rm -f .github/workflows/00-apply-trial-format-fix.yml
+          rm -f .github/workflows/apply-trial-format-fix.yml
+          /www/server/php/84/bin/php -l database/migrations/2026_08_06_002200_create_trial_policy_foundation.php
+          /www/server/php/84/bin/php -l tests/Feature/TrialPolicyReservationTest.php
+
+      - name: Commit clean format fix tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "style(catalog): apply trial Pint fixes"
+          git push origin HEAD:work/trial-format-fix
