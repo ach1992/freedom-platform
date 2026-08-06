@@ -9,12 +9,19 @@ use InvalidArgumentException;
 final readonly class ProtocolProfileDefinition
 {
     public string $protocolFamily;
+
     public ?string $transport;
+
     public ?string $securityLayer;
+
     public ?string $host;
+
     public ?string $sni;
+
     public ?string $path;
+
     public ?int $port;
+
     public ?string $flow;
 
     public function __construct(

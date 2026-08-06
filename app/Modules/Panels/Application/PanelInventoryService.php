@@ -15,7 +15,9 @@ final readonly class PanelInventoryService
     use ServiceTargetOperations;
 
     private const PROTOCOL_PROFILE_TARGET = 'panel_protocol_profile';
+
     private const SERVICE_TARGET = 'panel_service_target';
+
     private const SALES_SERVER_TARGET = 'sales_server';
 
     public function __construct(

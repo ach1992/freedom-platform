@@ -9,12 +9,19 @@ use InvalidArgumentException;
 final readonly class ServiceTargetConfiguration
 {
     public string $remoteIdentifier;
+
     public ?string $host;
+
     public ?string $sni;
+
     public ?string $path;
+
     public ?int $port;
+
     public ?string $flow;
+
     public ?string $transport;
+
     public string $canonicalJson;
 
     public function __construct(
