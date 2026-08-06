@@ -1,0 +1,119 @@
+name: One-time Branch Consolidation
+
+on:
+  push:
+    branches:
+      - develop/v1.0.0-completion
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-time-branch-consolidation
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    if: github.event.head_commit.message == 'chore(repo): consolidate development branches'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TARGET_BRANCH: develop/v1.0.0-completion
+      WORKFLOW_PATH: .github/workflows/one-time-branch-consolidation.yml
+    steps:
+      - name: Delete obsolete branches
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          repository = os.environ['GITHUB_REPOSITORY']
+          token = os.environ['GH_TOKEN']
+          protected = {'main', os.environ['TARGET_BRANCH']}
+          branches = [
+              'automation/v1.0.0-assembly',
+              'codex/foundation-hardening',
+              'work/phase-0.4-adapter-contract',
+              'work/phase-0.4-trial-policy',
+              'work/recover-self-hosted-runner',
+              'work/trial-format-fix',
+              'work/verify-phase-0.4-adapter-575000d',
+              'work/verify-phase-0.4-hosted-ci',
+          ]
+
+          headers = {
+              'Accept': 'application/vnd.github+json',
+              'Authorization': f'Bearer {token}',
+              'X-GitHub-Api-Version': '2022-11-28',
+              'User-Agent': 'freedom-platform-branch-consolidation',
+          }
+
+          for branch in branches:
+              if branch in protected:
+                  raise SystemExit(f'refusing to delete protected branch: {branch}')
+              encoded = urllib.parse.quote(branch, safe='/')
+              url = f'https://api.github.com/repos/{repository}/git/refs/heads/{encoded}'
+              request = urllib.request.Request(url, method='DELETE', headers=headers)
+              try:
+                  with urllib.request.urlopen(request) as response:
+                      if response.status != 204:
+                          raise RuntimeError(f'unexpected deletion status for {branch}: {response.status}')
+                  print(json.dumps({'branch': branch, 'result': 'deleted'}))
+              except urllib.error.HTTPError as error:
+                  if error.code == 404:
+                      print(json.dumps({'branch': branch, 'result': 'already_absent'}))
+                      continue
+                  body = error.read().decode('utf-8', errors='replace')
+                  raise RuntimeError(f'failed to delete {branch}: HTTP {error.code}: {body}') from error
+          PY
+
+      - name: Remove one-time workflow
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.parse
+          import urllib.request
+
+          repository = os.environ['GITHUB_REPOSITORY']
+          token = os.environ['GH_TOKEN']
+          branch = os.environ['TARGET_BRANCH']
+          path = os.environ['WORKFLOW_PATH']
+          headers = {
+              'Accept': 'application/vnd.github+json',
+              'Authorization': f'Bearer {token}',
+              'X-GitHub-Api-Version': '2022-11-28',
+              'User-Agent': 'freedom-platform-branch-consolidation',
+          }
+          encoded_path = urllib.parse.quote(path, safe='/')
+          encoded_ref = urllib.parse.quote(branch, safe='')
+          get_url = f'https://api.github.com/repos/{repository}/contents/{encoded_path}?ref={encoded_ref}'
+          with urllib.request.urlopen(urllib.request.Request(get_url, headers=headers)) as response:
+              metadata = json.load(response)
+
+          payload = json.dumps({
+              'message': 'chore(repo): remove one-time branch cleanup',
+              'sha': metadata['sha'],
+              'branch': branch,
+          }).encode('utf-8')
+          delete_url = f'https://api.github.com/repos/{repository}/contents/{encoded_path}'
+          request = urllib.request.Request(
+              delete_url,
+              data=payload,
+              method='DELETE',
+              headers={**headers, 'Content-Type': 'application/json'},
+          )
+          with urllib.request.urlopen(request) as response:
+              if response.status != 200:
+                  raise RuntimeError(f'unexpected workflow deletion status: {response.status}')
+          print(json.dumps({'workflow': path, 'result': 'removed'}))
+          PY
