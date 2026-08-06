@@ -28,8 +28,10 @@ final class SensitiveDeliveryArtifactsTest extends TestCase
         ob_start();
         var_dump($artifacts);
         $debugOutput = ob_get_clean();
+        if (! is_string($debugOutput)) {
+            self::fail('Expected captured debug output.');
+        }
 
-        self::assertIsString($debugOutput);
         self::assertStringContainsString('redacted', $debugOutput);
         self::assertStringNotContainsString($secret, $debugOutput);
         self::assertStringNotContainsString('qr-source-must-not-appear', $debugOutput);
