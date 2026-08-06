@@ -107,7 +107,7 @@ final readonly class PlanOfferingDefinition
             'product_id' => $this->productId,
             'variant_id' => $this->variantId,
             'sales_server_id' => $this->salesServerId,
-            'service_target_id' => $this->serviceTargetId,
+            'panel_service_target_id' => $this->serviceTargetId,
             'service_mode_code' => $this->serviceMode->code,
             'service_mode_label_fa' => $this->serviceMode->labelFa,
             'service_mode_label_en' => $this->serviceMode->labelEn,
