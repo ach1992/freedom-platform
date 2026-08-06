@@ -4,6 +4,11 @@ on:
   push:
     branches:
       - develop/v1.0.0-completion
+  pull_request:
+    branches:
+      - develop/v1.0.0-completion
+    types:
+      - closed
 
 permissions:
   contents: write
@@ -14,7 +19,9 @@ concurrency:
 
 jobs:
   cleanup:
-    if: github.ref_name == 'develop/v1.0.0-completion'
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/branch-cleanup-trigger')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
@@ -46,6 +53,7 @@ jobs:
               'work/verify-phase-0.4-adapter-575000d',
               'work/verify-phase-0.4-hosted-ci',
               'work/branch-consolidation-finalizer',
+              'work/branch-cleanup-trigger',
           ]
 
           headers = {
