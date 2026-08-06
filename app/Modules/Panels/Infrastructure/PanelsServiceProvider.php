@@ -7,6 +7,7 @@ namespace App\Modules\Panels\Infrastructure;
 use App\Modules\AccessControl\Application\AdministratorPermissionAuthorizer;
 use App\Modules\Panels\Application\PanelApprovalGate;
 use App\Modules\Panels\Application\PanelConnectionService;
+use App\Modules\Panels\Application\PanelInventoryService;
 use App\Modules\Panels\Application\PanelMutationAudit;
 use App\Modules\Panels\Application\PanelMutationExecutor;
 use App\Modules\Panels\Application\PanelPayloadHasher;
@@ -66,6 +67,18 @@ final class PanelsServiceProvider extends ServiceProvider
         $this->app->singleton(
             PanelConnectionService::class,
             fn (Application $application): PanelConnectionService => new PanelConnectionService(
+                $application->make(PanelMutationExecutor::class),
+                $application->make(PanelMutationAudit::class),
+                $application->make(PanelApprovalGate::class),
+                $application->make(PanelPayloadHasher::class),
+                $application->make(StringEncrypter::class),
+                $application->make(Clock::class),
+            ),
+        );
+
+        $this->app->singleton(
+            PanelInventoryService::class,
+            fn (Application $application): PanelInventoryService => new PanelInventoryService(
                 $application->make(PanelMutationExecutor::class),
                 $application->make(PanelMutationAudit::class),
                 $application->make(PanelApprovalGate::class),
