@@ -31,13 +31,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          PHP_BIN=/www/server/php/84/bin/php
+          test -x "$PHP_BIN"
           cat .github/trial-payload.part* | base64 -d > /tmp/trial-payload.tar.gz
           echo "835121024ed531e5f542c4c2012731e6191b052b6adad49c2601c37b12af038c  /tmp/trial-payload.tar.gz" | sha256sum -c -
           tar -xzf /tmp/trial-payload.tar.gz -C .
           rm -f /tmp/trial-payload.tar.gz
           rm -f .github/trial-payload.b64 .github/trial-payload.part*
           rm -f .github/workflows/apply-trial-payload.yml
-          find app/Modules/Catalog database/migrations tests -name '*.php' -print0 | xargs -0 -n1 php -l >/dev/null
+          find app/Modules/Catalog database/migrations tests -name '*.php' -print0 | xargs -0 -n1 "$PHP_BIN" -l >/dev/null
 
       - name: Commit applied trial boundary
         shell: bash
