@@ -546,7 +546,7 @@ SQL);
             'trial_policies_update_guard',
             'trial_policies_insert_guard',
         ] as $trigger) {
-            DB::unprepared('DROP TRIGGER IF EXISTS '.$trigger);
+            DB::unprepared(sprintf('DROP TRIGGER IF EXISTS %s', $trigger));
         }
     }
 };
