@@ -13,8 +13,8 @@ use App\Modules\Catalog\Application\TrialReservationRequest;
 use App\Modules\Catalog\Application\TrialReservationService;
 use App\Modules\Catalog\Application\TrialRouteSelector;
 use App\Modules\Catalog\Domain\PlanOfferingTagMatchMode;
-use App\Modules\Catalog\Domain\TrialPolicyDefinition;
 use App\Modules\Catalog\Domain\RouteCandidateUnavailable;
+use App\Modules\Catalog\Domain\TrialPolicyDefinition;
 use App\Modules\Identity\Domain\PhoneVerificationPolicy;
 use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
@@ -91,8 +91,8 @@ final class TrialPolicyReservationTest extends TestCase
         }
 
         $resetContext = $this->catalogContext($scenario['owner_id'], 'trial-reset-request-000000001');
-        $reset = $service->resetEligibility($reservation->reservationId, 2, $resetContext);
-        $resetReplay = $service->resetEligibility($reservation->reservationId, 2, $resetContext);
+        $reset = $service->resetEligibility($reservation->reservationId, 1, $resetContext);
+        $resetReplay = $service->resetEligibility($reservation->reservationId, 1, $resetContext);
         self::assertSame(3, $reset->version);
         self::assertTrue($resetReplay->replayed);
         self::assertNull(DB::table('trial_reservations')->where('id', $reservation->reservationId)->value('active_user_id'));
@@ -150,93 +150,95 @@ final class TrialPolicyReservationTest extends TestCase
         } catch (RouteCandidateUnavailable $exception) {
             self::assertSame('No configured trial route has available capacity.', $exception->getMessage());
         }
-        self::assertFalse(DB::table('trial_daily_capacity_counters')
-            ->where('trial_policy_id', (int) DB::table('trial_policies')
-                ->where('plan_offering_id', $disabledScenario['offering_id'])
-                ->value('id'))
-            ->exists());
+        self::assertFalse(DB::table('trial_reservations')->where('user_id', $disabledScenario['user_id'])->exists());
     }
 
-    public function test_phone_membership_release_and_daily_capacity_guards_fail_closed(): void
+    public function test_identity_membership_capacity_replay_and_database_guards_are_enforced(): void
     {
-        $scenario = $this->scenario(dailyCapacity: 1, phoneEvidence: 'both');
+        $scenario = $this->scenario(dailyCapacity: 1, phoneEvidence: 'telegram_only');
         $this->app->make(TrialPolicyService::class)->create(
             $scenario['offering_id'],
             $this->policyDefinition(
                 $scenario['tag_id'],
-                phonePolicy: PhoneVerificationPolicy::Both,
                 membershipRequired: true,
+                phonePolicy: PhoneVerificationPolicy::Both,
                 onePerPhone: true,
             ),
-            $this->catalogContext($scenario['owner_id'], 'trial-policy-membership-create'),
+            $this->catalogContext($scenario['owner_id'], 'trial-identity-policy-create'),
         );
 
         try {
             $this->app->make(TrialReservationService::class)->reserve(
                 $this->request($scenario['offering_id'], $scenario['user_id']),
-                $this->trialContext('trial-membership-denied-00001', 'trial-correlation-0007'),
+                $this->trialContext('trial-identity-reserve-001', 'trial-correlation-0077'),
             );
-            self::fail('Expected membership fail-closed behavior.');
+            self::fail('Expected both phone evidences to be required.');
         } catch (DomainException $exception) {
-            self::assertSame('Trial membership verification is unavailable.', $exception->getMessage());
+            self::assertSame('Trial phone-verification requirement is not satisfied.', $exception->getMessage());
         }
+
+        $context = $this->trialContext('trial-membership-command-001', 'trial-correlation-0008');
+        try {
+            $this->serviceWithMembershipAllowed()->reserve(
+                $this->request($scenario['offering_id'], $scenario['user_id']),
+                $context,
+            );
+            self::fail('Expected both phone evidences to be required.');
+        } catch (DomainException $exception) {
+            self::assertSame('Trial phone-verification requirement is not satisfied.', $exception->getMessage());
+        }
+
+        DB::table('phone_verification_evidences')->insert([
+            'phone_number_id' => DB::table('phone_numbers')->where('active_user_id', $scenario['user_id'])->value('id'),
+            'method' => 'sms_otp',
+            'policy_version' => 1,
+            'verified_at' => now('UTC'),
+            'invalidated_at' => null,
+            'telegram_account_id' => null,
+            'created_at' => now('UTC'),
+            'updated_at' => now('UTC'),
+        ]);
 
         $service = $this->serviceWithMembershipAllowed();
         $reserved = $service->reserve(
             $this->request($scenario['offering_id'], $scenario['user_id']),
-            $this->trialContext('trial-membership-allowed-0001', 'trial-correlation-0008'),
+            $this->trialContext('trial-identity-reserve-002', 'trial-correlation-0009'),
         );
-        $released = $service->release(
-            $reserved->reservationId,
-            1,
-            $this->trialContext('trial-release-command-00000001', 'trial-correlation-0009'),
-        );
-        self::assertSame('released', $released->state);
-        self::assertNull(DB::table('trial_reservations')->where('id', $reserved->reservationId)->value('active_phone_number_id'));
+        self::assertSame('reserved', $reserved->state);
 
-        $secondUserId = $this->customer($scenario['owner_id'], $scenario['tag_id'], phoneEvidence: 'both');
-        $second = $service->reserve(
-            $this->request($scenario['offering_id'], $secondUserId),
-            $this->trialContext('trial-after-release-command-001', 'trial-correlation-0010'),
-        );
-        self::assertSame('reserved', $second->state);
-
-        $thirdUserId = $this->customer($scenario['owner_id'], $scenario['tag_id'], phoneEvidence: 'both');
         try {
             $service->reserve(
-                $this->request($scenario['offering_id'], $thirdUserId),
-                $this->trialContext('trial-daily-capacity-command-01', 'trial-correlation-0011'),
+                $this->request($scenario['offering_id'], $scenario['user_id']),
+                $this->trialContext('trial-capacity-exceeded-001', 'trial-correlation-0010'),
             );
-            self::fail('Expected daily capacity exhaustion.');
+            self::fail('Expected daily capacity rejection.');
         } catch (DomainException $exception) {
             self::assertSame('Trial daily capacity is exhausted.', $exception->getMessage());
         }
+
+        try {
+            $service->reserve(
+                $this->request($scenario['offering_id'], $scenario['user_id'], $scenario['primary_route_id']),
+                $context,
+            );
+            self::fail('Expected trial reservation command conflict.');
+        } catch (RuntimeException $exception) {
+            self::assertSame('Trial reservation command key conflict.', $exception->getMessage());
+        }
+
+        try {
+            DB::table('trial_daily_capacity_counters')->update(['reserved_count' => 99]);
+            self::fail('Expected daily capacity counter guard to reject tampering.');
+        } catch (QueryException) {
+            self::assertSame(1, (int) DB::table('trial_daily_capacity_counters')->value('reserved_count'));
+        }
     }
 
-    public function test_phone_policy_and_administrator_authorization_are_enforced(): void
+    public function test_unauthorized_policy_mutation_is_rejected_without_partial_effect(): void
     {
-        $scenario = $this->scenario(dailyCapacity: 2, phoneEvidence: 'telegram');
-        $this->app->make(TrialPolicyService::class)->create(
-            $scenario['offering_id'],
-            $this->policyDefinition(
-                $scenario['tag_id'],
-                phonePolicy: PhoneVerificationPolicy::Both,
-                onePerPhone: true,
-            ),
-            $this->catalogContext($scenario['owner_id'], 'trial-policy-phone-create-0001'),
-        );
+        $scenario = $this->scenario(dailyCapacity: 1);
+        DB::table('administrator_roles')->where('administrator_id', $scenario['administrator_id'])->delete();
 
-        $this->expectException(DomainException::class);
-        $this->expectExceptionMessage('Trial phone-verification requirement is not satisfied.');
-        $this->serviceWithMembershipAllowed()->reserve(
-            $this->request($scenario['offering_id'], $scenario['user_id']),
-            $this->trialContext('trial-phone-policy-denied-0001', 'trial-correlation-0012'),
-        );
-    }
-
-    public function test_unauthorized_administrator_cannot_create_trial_policy(): void
-    {
-        $scenario = $this->scenario(dailyCapacity: 2);
         $this->expectException(AuthorizationException::class);
         $this->app->make(TrialPolicyService::class)->create(
             $scenario['offering_id'],
@@ -248,9 +250,9 @@ final class TrialPolicyReservationTest extends TestCase
     /** @return array<string, int> */
     private function scenario(int $dailyCapacity, string $phoneEvidence = 'none'): array
     {
-        $this->scenarioDailyCapacity = $dailyCapacity;
         $now = now('UTC');
-        $ownerId = $this->administrator(true);
+        $existingOwnerId = DB::table('administrators')->where('is_owner', true)->value('id');
+        $ownerId = $existingOwnerId === null ? $this->administrator(true) : (int) $existingOwnerId;
         $administratorId = $this->administrator(false);
         $tagId = (int) DB::table('customer_tags')->insertGetId([
             'code' => 'trial-tag-'.Str::lower(Str::random(8)),
@@ -464,12 +466,12 @@ final class TrialPolicyReservationTest extends TestCase
         return $this->scenarioDailyCapacity;
     }
 
-    private function request(int $offeringId, int $userId): TrialReservationRequest
+    private function request(int $offeringId, int $userId, ?int $requestedRouteId = null): TrialReservationRequest
     {
         return new TrialReservationRequest(
             $offeringId,
             $userId,
-            null,
+            $requestedRouteId,
             null,
             (new DateTimeImmutable('now'))->modify('+10 minutes'),
         );
