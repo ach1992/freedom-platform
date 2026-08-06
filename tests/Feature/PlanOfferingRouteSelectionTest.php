@@ -183,7 +183,7 @@ final class PlanOfferingRouteSelectionTest extends TestCase
         );
 
         $this->expectException(RouteCandidateUnavailable::class);
-        (new DatabaseRouteOperationalVerifier())->assertOperational(
+        (new DatabaseRouteOperationalVerifier)->assertOperational(
             $this->app->make(DatabaseManager::class)->connection(),
             $scenario['offering_id'],
             $scenario['primary_server_id'],
