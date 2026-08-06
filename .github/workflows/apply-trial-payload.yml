@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - work/phase-0.4-trial-policy
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
@@ -14,6 +17,7 @@ concurrency:
 
 jobs:
   apply:
+    if: github.head_ref == 'work/phase-0.4-trial-policy' || github.ref_name == 'work/phase-0.4-trial-policy'
     runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
     timeout-minutes: 15
     steps:
