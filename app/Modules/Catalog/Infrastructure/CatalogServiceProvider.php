@@ -7,6 +7,11 @@ namespace App\Modules\Catalog\Infrastructure;
 use App\Modules\AccessControl\Application\AdministratorPermissionAuthorizer;
 use App\Modules\Catalog\Application\CatalogMutationAudit;
 use App\Modules\Catalog\Application\CatalogMutationExecutor;
+use App\Modules\Catalog\Application\CustomPlanArithmetic;
+use App\Modules\Catalog\Application\CustomPlanCalculator;
+use App\Modules\Catalog\Application\CustomPlanEligibility;
+use App\Modules\Catalog\Application\CustomPlanPolicyService;
+use App\Modules\Catalog\Application\CustomPlanUsernameNormalizer;
 use App\Modules\Catalog\Application\PlanOfferingRoutePolicyService;
 use App\Modules\Catalog\Application\PlanOfferingRouteSelector;
 use App\Modules\Catalog\Application\PlanOfferingService;
@@ -14,6 +19,7 @@ use App\Modules\Catalog\Application\ProductCategoryService;
 use App\Modules\Catalog\Application\ProductService;
 use App\Modules\Catalog\Application\ProductVariantService;
 use App\Modules\Catalog\Application\RouteOperationalVerifier;
+use App\Modules\Catalog\Application\ServiceUsernameAvailability;
 use App\Modules\Panels\Application\TargetCapacityAllocator;
 use App\Shared\Application\Clock;
 use Illuminate\Contracts\Foundation\Application;
@@ -25,6 +31,7 @@ final class CatalogServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->bind(RouteOperationalVerifier::class, DatabaseRouteOperationalVerifier::class);
+        $this->app->bind(ServiceUsernameAvailability::class, DatabaseServiceUsernameAvailability::class);
 
         $this->app->singleton(
             CatalogMutationAudit::class,
@@ -94,6 +101,27 @@ final class CatalogServiceProvider extends ServiceProvider
                 $application->make(DatabaseManager::class),
                 $application->make(RouteOperationalVerifier::class),
                 $application->make(TargetCapacityAllocator::class),
+                $application->make(Clock::class),
+            ),
+        );
+
+        $this->app->singleton(
+            CustomPlanPolicyService::class,
+            fn (Application $application): CustomPlanPolicyService => new CustomPlanPolicyService(
+                $application->make(CatalogMutationExecutor::class),
+                $application->make(CatalogMutationAudit::class),
+                $application->make(Clock::class),
+            ),
+        );
+
+        $this->app->singleton(
+            CustomPlanCalculator::class,
+            fn (Application $application): CustomPlanCalculator => new CustomPlanCalculator(
+                $application->make(DatabaseManager::class),
+                $application->make(CustomPlanEligibility::class),
+                $application->make(CustomPlanUsernameNormalizer::class),
+                $application->make(ServiceUsernameAvailability::class),
+                $application->make(CustomPlanArithmetic::class),
                 $application->make(Clock::class),
             ),
         );
