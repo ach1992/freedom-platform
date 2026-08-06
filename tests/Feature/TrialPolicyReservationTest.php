@@ -640,7 +640,7 @@ final class TrialPolicyReservationTest extends TestCase
 
     private function fillPrimaryCapacity(int $capacityId): void
     {
-        $key = 'trial-prefill-capacity-command-001';
+        $key = 'trial-prefill-capacity:'.$capacityId;
         $now = now('UTC');
         DB::table('panel_capacity_reservations')->insert([
             'panel_target_capacity_id' => $capacityId,
