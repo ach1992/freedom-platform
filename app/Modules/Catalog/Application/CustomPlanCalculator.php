@@ -23,6 +23,7 @@ final readonly class CustomPlanCalculator
         private CustomPlanUsernameNormalizer $usernameNormalizer,
         private ServiceUsernameAvailability $usernameAvailability,
         private CustomPlanArithmetic $arithmetic,
+        private CustomPlanOperationalVerifier $operationalVerifier,
         private Clock $clock,
     ) {}
 
@@ -251,13 +252,10 @@ final readonly class CustomPlanCalculator
             ->where('id', $offeringId)
             ->lockForUpdate()
             ->first(['id', 'state', 'visibility', 'custom_plan_allowed', 'audience', 'tag_match_mode']);
-        if ($row === null
-            || $row->state !== 'active'
-            || $row->visibility !== 'visible'
-            || ! (bool) $row->custom_plan_allowed
-        ) {
-            throw new DomainException('Custom-plan Offering is not operational.');
+        if ($row === null || ! (bool) $row->custom_plan_allowed) {
+            throw new DomainException('Custom-plan Offering is unavailable.');
         }
+        $this->operationalVerifier->assertOperational($connection, $offeringId);
 
         return (object) [
             'id' => (int) $row->id,
