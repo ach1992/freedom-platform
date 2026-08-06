@@ -1,6 +1,9 @@
 name: Apply Panel Adapter Increment
 
 on:
+  push:
+    branches:
+      - work/phase-0.4-adapter-contract
   pull_request:
     branches:
       - main
@@ -14,7 +17,7 @@ concurrency:
 
 jobs:
   apply:
-    if: github.head_ref == 'work/phase-0.4-adapter-contract'
+    if: github.ref_name == 'work/phase-0.4-adapter-contract' || github.head_ref == 'work/phase-0.4-adapter-contract'
     runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
     timeout-minutes: 15
     steps:
