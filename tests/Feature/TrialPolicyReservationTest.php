@@ -13,8 +13,8 @@ use App\Modules\Catalog\Application\TrialReservationRequest;
 use App\Modules\Catalog\Application\TrialReservationService;
 use App\Modules\Catalog\Application\TrialRouteSelector;
 use App\Modules\Catalog\Domain\PlanOfferingTagMatchMode;
-use App\Modules\Catalog\Domain\TrialPolicyDefinition;
 use App\Modules\Catalog\Domain\RouteCandidateUnavailable;
+use App\Modules\Catalog\Domain\TrialPolicyDefinition;
 use App\Modules\Identity\Domain\PhoneVerificationPolicy;
 use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
@@ -133,7 +133,7 @@ final class TrialPolicyReservationTest extends TestCase
         self::assertSame($scenario['fallback_target_id'], $reserved->serviceTargetId);
         self::assertSame('سرور جایگزین آزمایشی انتخاب شد.', $reserved->disclosureFa);
 
-        $disabledScenario = $this->scenario(dailyCapacity: 3);
+        $disabledScenario = $this->scenario(dailyCapacity: 3, ownerId: $scenario['owner_id']);
         $this->fillPrimaryCapacity($disabledScenario['primary_capacity_id']);
         $this->app->make(TrialPolicyService::class)->create(
             $disabledScenario['offering_id'],
@@ -246,11 +246,11 @@ final class TrialPolicyReservationTest extends TestCase
     }
 
     /** @return array<string, int> */
-    private function scenario(int $dailyCapacity, string $phoneEvidence = 'none'): array
+    private function scenario(int $dailyCapacity, string $phoneEvidence = 'none', ?int $ownerId = null): array
     {
         $this->scenarioDailyCapacity = $dailyCapacity;
         $now = now('UTC');
-        $ownerId = $this->administrator(true);
+        $ownerId ??= $this->administrator(true);
         $administratorId = $this->administrator(false);
         $tagId = (int) DB::table('customer_tags')->insertGetId([
             'code' => 'trial-tag-'.Str::lower(Str::random(8)),
