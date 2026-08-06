@@ -14,6 +14,7 @@ use App\Modules\Panels\Application\Contracts\PanelServiceStatus;
 use App\Modules\Panels\Application\Contracts\RemoteServiceSnapshot;
 use App\Modules\Panels\Application\Contracts\SensitiveDeliveryArtifacts;
 use App\Modules\Panels\Application\PanelServiceCanonicalizer;
+use Closure;
 use DateTimeImmutable;
 use RuntimeException;
 
@@ -27,6 +28,9 @@ final class FakePanelAdapter implements PanelAdapter
 
     /** @var array<string, list<string>> */
     private array $deliveryLinks = [];
+
+    /** @var array<string, array{fingerprint: string, result: PanelOperationResult}> */
+    private array $operationResults = [];
 
     private bool $nextCreateIsUncertain = false;
 
@@ -120,7 +124,14 @@ final class FakePanelAdapter implements PanelAdapter
 
     public function updateExpiry(string $idempotencyKey, string $remoteId, DateTimeImmutable $expiresAt): PanelOperationResult
     {
-        return $this->replace($remoteId, expiresAt: $expiresAt);
+        return $this->idempotentOperation(
+            $idempotencyKey,
+            $this->operationFingerprint('update_expiry', [
+                'remote_id' => $remoteId,
+                'expires_at_unix' => $expiresAt->getTimestamp(),
+            ]),
+            fn (): PanelOperationResult => $this->replace($remoteId, expiresAt: $expiresAt),
+        );
     }
 
     public function updateDataAllowance(
@@ -129,54 +140,92 @@ final class FakePanelAdapter implements PanelAdapter
         int $bytes,
         DataAllowanceMode $mode,
     ): PanelOperationResult {
-        $service = $this->services[$remoteId] ?? null;
-        if ($service === null) {
-            return $this->notFound();
-        }
-        $limit = $mode === DataAllowanceMode::Add
-            ? ($service->dataLimitBytes ?? 0) + $bytes
-            : $bytes;
+        return $this->idempotentOperation(
+            $idempotencyKey,
+            $this->operationFingerprint('update_data_allowance', [
+                'remote_id' => $remoteId,
+                'bytes' => $bytes,
+                'mode' => $mode->value,
+            ]),
+            function () use ($remoteId, $bytes, $mode): PanelOperationResult {
+                $service = $this->services[$remoteId] ?? null;
+                if ($service === null) {
+                    return $this->notFound();
+                }
+                $limit = $mode === DataAllowanceMode::Add
+                    ? ($service->dataLimitBytes ?? 0) + $bytes
+                    : $bytes;
 
-        return $this->replace($remoteId, dataLimitBytes: $limit);
+                return $this->replace($remoteId, dataLimitBytes: $limit);
+            },
+        );
     }
 
     public function resetUsage(string $idempotencyKey, string $remoteId): PanelOperationResult
     {
-        return $this->replace($remoteId, usedBytes: 0);
+        return $this->idempotentOperation(
+            $idempotencyKey,
+            $this->operationFingerprint('reset_usage', ['remote_id' => $remoteId]),
+            fn (): PanelOperationResult => $this->replace($remoteId, usedBytes: 0),
+        );
     }
 
     public function suspend(string $idempotencyKey, string $remoteId): PanelOperationResult
     {
-        return $this->replace($remoteId, status: PanelServiceStatus::Suspended);
+        return $this->idempotentOperation(
+            $idempotencyKey,
+            $this->operationFingerprint('suspend', ['remote_id' => $remoteId]),
+            fn (): PanelOperationResult => $this->replace($remoteId, status: PanelServiceStatus::Suspended),
+        );
     }
 
     public function activate(string $idempotencyKey, string $remoteId): PanelOperationResult
     {
-        return $this->replace($remoteId, status: PanelServiceStatus::Active);
+        return $this->idempotentOperation(
+            $idempotencyKey,
+            $this->operationFingerprint('activate', ['remote_id' => $remoteId]),
+            fn (): PanelOperationResult => $this->replace($remoteId, status: PanelServiceStatus::Active),
+        );
     }
 
     public function delete(string $idempotencyKey, string $remoteId): PanelOperationResult
     {
-        $service = $this->services[$remoteId] ?? null;
-        if ($service === null) {
-            return $this->notFound();
-        }
-        unset($this->services[$remoteId], $this->remoteIdsByUsername[$service->username], $this->deliveryLinks[$remoteId]);
+        return $this->idempotentOperation(
+            $idempotencyKey,
+            $this->operationFingerprint('delete', ['remote_id' => $remoteId]),
+            function () use ($remoteId): PanelOperationResult {
+                $service = $this->services[$remoteId] ?? null;
+                if ($service === null) {
+                    return $this->notFound();
+                }
+                unset(
+                    $this->services[$remoteId],
+                    $this->remoteIdsByUsername[$service->username],
+                    $this->deliveryLinks[$remoteId],
+                );
 
-        return $this->success($service, 'fake_service_deleted');
+                return $this->success($service, 'fake_service_deleted');
+            },
+        );
     }
 
     public function rotateSubscriptionLink(string $idempotencyKey, string $remoteId): PanelOperationResult
     {
-        $service = $this->services[$remoteId] ?? null;
-        if ($service === null) {
-            return $this->notFound();
-        }
-        $this->deliveryLinks[$remoteId] = [
-            'https://example.invalid/sub/'.rawurlencode($remoteId).'/'.substr(hash('sha256', $idempotencyKey), 0, 16),
-        ];
+        return $this->idempotentOperation(
+            $idempotencyKey,
+            $this->operationFingerprint('rotate_subscription_link', ['remote_id' => $remoteId]),
+            function () use ($idempotencyKey, $remoteId): PanelOperationResult {
+                $service = $this->services[$remoteId] ?? null;
+                if ($service === null) {
+                    return $this->notFound();
+                }
+                $this->deliveryLinks[$remoteId] = [
+                    'https://example.invalid/sub/'.rawurlencode($remoteId).'/'.substr(hash('sha256', $idempotencyKey), 0, 16),
+                ];
 
-        return $this->success($service, 'fake_subscription_rotated');
+                return $this->success($service, 'fake_subscription_rotated');
+            },
+        );
     }
 
     public function getDeliveryArtifacts(string $remoteId): SensitiveDeliveryArtifacts
@@ -222,6 +271,47 @@ final class FakePanelAdapter implements PanelAdapter
     {
         $this->services[$service->remoteId] = $service;
         $this->remoteIdsByUsername[$service->username] = $service->remoteId;
+    }
+
+    /**
+     * @param Closure(): PanelOperationResult $operation
+     */
+    private function idempotentOperation(
+        string $idempotencyKey,
+        string $fingerprint,
+        Closure $operation,
+    ): PanelOperationResult {
+        $existing = $this->operationResults[$idempotencyKey] ?? null;
+        if ($existing !== null) {
+            if (! hash_equals($existing['fingerprint'], $fingerprint)) {
+                return $this->failure(
+                    'fake_idempotency_conflict',
+                    'Fake panel idempotency key conflicts with a different remote operation.',
+                    $existing['result']->service,
+                );
+            }
+
+            return $existing['result'];
+        }
+
+        $result = $operation();
+        $this->operationResults[$idempotencyKey] = [
+            'fingerprint' => $fingerprint,
+            'result' => $result,
+        ];
+
+        return $result;
+    }
+
+    /** @param array<string, int|string> $payload */
+    private function operationFingerprint(string $operation, array $payload): string
+    {
+        ksort($payload);
+
+        return hash('sha256', json_encode([
+            'operation' => $operation,
+            'payload' => $payload,
+        ], JSON_THROW_ON_ERROR));
     }
 
     private function existingResult(string $remoteId): PanelOperationResult
