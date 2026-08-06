@@ -182,7 +182,7 @@ final readonly class PlanOfferingRoutePolicyService
     }
 
     /**
-     * @param object{id: int, sales_server_id: int, panel_service_target_id: int, server_selection_mode: string, state: string} $offering
+     * @param  object{id: int, sales_server_id: int, panel_service_target_id: int, server_selection_mode: string, state: string}  $offering
      */
     private function assertCompatible(
         Connection $connection,
@@ -209,14 +209,8 @@ final readonly class PlanOfferingRoutePolicyService
             throw new DomainException('Customer-capable offering requires a selectable route.');
         }
 
-        $serverIds = array_values(array_unique(array_map(
-            static fn (PlanOfferingRouteDefinition $route): int => $route->salesServerId,
-            $definition->routes,
-        )));
-        $targetIds = array_values(array_unique(array_map(
-            static fn (PlanOfferingRouteDefinition $route): int => $route->serviceTargetId,
-            $definition->routes,
-        )));
+        $serverIds = array_values(array_unique(array_map(static fn (PlanOfferingRouteDefinition $route): int => $route->salesServerId, $definition->routes)));
+        $targetIds = array_values(array_unique(array_map(static fn (PlanOfferingRouteDefinition $route): int => $route->serviceTargetId, $definition->routes)));
         if ($connection->table('sales_servers')->whereIn('id', $serverIds)->where('state', '<>', 'archived')->count() !== count($serverIds)) {
             throw new DomainException('One or more offering route servers are unavailable.');
         }
