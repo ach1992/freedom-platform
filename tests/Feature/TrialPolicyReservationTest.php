@@ -445,7 +445,7 @@ final class TrialPolicyReservationTest extends TestCase
             true,
             1_073_741_824,
             1,
-            $this->currentScenarioDailyCapacity(),
+            2,
             $phonePolicy,
             $membershipRequired,
             true,
@@ -457,13 +457,6 @@ final class TrialPolicyReservationTest extends TestCase
             ['normal'],
             [$tagId],
         );
-    }
-
-    private int $scenarioDailyCapacity = 2;
-
-    private function currentScenarioDailyCapacity(): int
-    {
-        return $this->scenarioDailyCapacity;
     }
 
     private function request(int $offeringId, int $userId, ?int $requestedRouteId = null): TrialReservationRequest
