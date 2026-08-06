@@ -4,8 +4,12 @@ declare(strict_types=1);
 
 namespace Tests\Unit\Modules\Panels;
 
+use App\Modules\Panels\Application\Contracts\DataAllowanceMode;
+use App\Modules\Panels\Application\Contracts\PanelAdapter;
+use App\Modules\Panels\Application\Contracts\PanelCapabilities;
 use App\Modules\Panels\Application\Contracts\PanelCreateServiceRequest;
 use App\Modules\Panels\Application\Contracts\PanelOperationOutcome;
+use App\Modules\Panels\Application\Contracts\PanelOperationResult;
 use App\Modules\Panels\Application\Contracts\PanelServiceStatus;
 use App\Modules\Panels\Application\Contracts\RemoteServiceSnapshot;
 use App\Modules\Panels\Application\PanelAdapterRegistry;
@@ -22,18 +26,98 @@ use App\Modules\Panels\Domain\TlsPolicy;
 use App\Modules\Panels\Infrastructure\FakePanelAdapter;
 use App\Modules\Panels\Infrastructure\FakePanelAdapterFactory;
 use DateTimeImmutable;
+use InvalidArgumentException;
 use PHPUnit\Framework\TestCase;
 
-/** @requirement PRV-001 SEC-001 SEC-002 QUA-001 */
+/** @requirement PRV-001 PRV-002 PRV-003 SEC-001 SEC-002 QUA-001 */
 final class PanelAdapterContractTest extends TestCase
 {
-    public function test_uncertain_create_is_adopted_without_duplicate_remote_service(): void
+    public function test_existing_matching_remote_service_is_adopted_without_create_call(): void
+    {
+        $canonicalizer = new PanelServiceCanonicalizer;
+        $request = $this->request();
+        $snapshot = $this->matchingSnapshot($canonicalizer, $request);
+        $adapter = $this->createMock(PanelAdapter::class);
+        $adapter->method('capabilities')->willReturn($this->authoritativeCapabilities());
+        $adapter->expects(self::once())
+            ->method('findByDeterministicUsername')
+            ->with($request->username)
+            ->willReturn($snapshot);
+        $adapter->expects(self::never())->method('createService');
+
+        $result = $this->coordinator($canonicalizer)->createOrAdopt($adapter, $request);
+
+        self::assertSame(PanelOperationOutcome::Success, $result->outcome);
+        self::assertSame('remote_service_adopted', $result->providerCode);
+        self::assertSame($snapshot, $result->service);
+    }
+
+    public function test_uncertain_create_is_discovered_and_adopted_after_exactly_one_create_call(): void
+    {
+        $canonicalizer = new PanelServiceCanonicalizer;
+        $request = $this->request();
+        $snapshot = $this->matchingSnapshot($canonicalizer, $request);
+        $adapter = $this->createMock(PanelAdapter::class);
+        $adapter->expects(self::exactly(2))
+            ->method('capabilities')
+            ->willReturn($this->authoritativeCapabilities());
+        $adapter->expects(self::exactly(2))
+            ->method('findByDeterministicUsername')
+            ->with($request->username)
+            ->willReturnOnConsecutiveCalls(null, $snapshot);
+        $adapter->expects(self::once())
+            ->method('createService')
+            ->with($request)
+            ->willReturn(new PanelOperationResult(
+                PanelOperationOutcome::UncertainResult,
+                null,
+                'provider_timeout_after_create',
+                'Remote create result is uncertain.',
+            ));
+
+        $result = $this->coordinator($canonicalizer)->createOrAdopt($adapter, $request);
+
+        self::assertSame(PanelOperationOutcome::Success, $result->outcome);
+        self::assertSame('remote_service_adopted', $result->providerCode);
+        self::assertSame($snapshot, $result->service);
+    }
+
+    public function test_uncertain_create_without_discovered_identity_requires_manual_review_and_no_second_create(): void
+    {
+        $canonicalizer = new PanelServiceCanonicalizer;
+        $request = $this->request();
+        $adapter = $this->createMock(PanelAdapter::class);
+        $adapter->expects(self::exactly(2))
+            ->method('capabilities')
+            ->willReturn($this->authoritativeCapabilities());
+        $adapter->expects(self::exactly(2))
+            ->method('findByDeterministicUsername')
+            ->with($request->username)
+            ->willReturn(null);
+        $adapter->expects(self::once())
+            ->method('createService')
+            ->with($request)
+            ->willReturn(new PanelOperationResult(
+                PanelOperationOutcome::UncertainResult,
+                null,
+                'provider_timeout_after_create',
+                'Remote create result is uncertain.',
+            ));
+
+        $result = $this->coordinator($canonicalizer)->createOrAdopt($adapter, $request);
+
+        self::assertSame(PanelOperationOutcome::UncertainResult, $result->outcome);
+        self::assertSame('remote_create_unresolved', $result->providerCode);
+        self::assertNull($result->service);
+    }
+
+    public function test_uncertain_fake_create_is_adopted_without_duplicate_remote_service(): void
     {
         $canonicalizer = new PanelServiceCanonicalizer;
         $adapter = new FakePanelAdapter($canonicalizer);
         $adapter->makeNextCreateUncertain();
-        $result = (new PanelCreateCoordinator(new RemoteIdentityResolver($canonicalizer)))
-            ->createOrAdopt($adapter, $this->request());
+
+        $result = $this->coordinator($canonicalizer)->createOrAdopt($adapter, $this->request());
 
         self::assertSame(PanelOperationOutcome::Success, $result->outcome);
         self::assertSame('remote_service_adopted', $result->providerCode);
@@ -53,8 +137,8 @@ final class PanelAdapterContractTest extends TestCase
             null,
             hash('sha256', 'different'),
         ));
-        $result = (new PanelCreateCoordinator(new RemoteIdentityResolver($canonicalizer)))
-            ->createOrAdopt($adapter, $this->request());
+
+        $result = $this->coordinator($canonicalizer)->createOrAdopt($adapter, $this->request());
 
         self::assertSame(PanelOperationOutcome::DefinitiveFailure, $result->outcome);
         self::assertSame('remote_attributes_mismatch', $result->providerCode);
@@ -66,12 +150,88 @@ final class PanelAdapterContractTest extends TestCase
         $canonicalizer = new PanelServiceCanonicalizer;
         $adapter = new FakePanelAdapter($canonicalizer);
         $adapter->makeAuthoritativeLookupUnavailable();
-        $result = (new PanelCreateCoordinator(new RemoteIdentityResolver($canonicalizer)))
-            ->createOrAdopt($adapter, $this->request());
+
+        $result = $this->coordinator($canonicalizer)->createOrAdopt($adapter, $this->request());
 
         self::assertSame(PanelOperationOutcome::UncertainResult, $result->outcome);
         self::assertSame('authoritative_username_lookup_unavailable', $result->providerCode);
         self::assertSame(0, $adapter->serviceCount());
+    }
+
+    public function test_fake_adapter_implements_the_declared_operation_contract(): void
+    {
+        $canonicalizer = new PanelServiceCanonicalizer;
+        $adapter = new FakePanelAdapter($canonicalizer);
+        $request = $this->request();
+        $connection = $adapter->testConnection();
+        self::assertSame(PanelOperationOutcome::Success, $connection->outcome);
+
+        $capabilities = $adapter->capabilities();
+        self::assertSame('fake', $capabilities->panelType);
+        self::assertSame('1.0.0', $capabilities->panelVersion);
+        foreach ([
+            'authoritative_username_lookup',
+            'create_service',
+            'fetch_status',
+            'update_expiry',
+            'set_data_allowance',
+            'add_data_allowance',
+            'reset_usage',
+            'suspend',
+            'activate',
+            'delete',
+            'rotate_subscription_link',
+            'delivery_artifacts',
+            'synchronize',
+            'list_compatible_targets',
+        ] as $operation) {
+            self::assertTrue($capabilities->supports($operation), $operation.' must be supported.');
+        }
+
+        $created = $this->coordinator($canonicalizer)->createOrAdopt($adapter, $request);
+        self::assertSame(PanelOperationOutcome::Success, $created->outcome);
+        self::assertNotNull($created->service);
+        $remoteId = $created->service->remoteId;
+
+        self::assertSame(PanelOperationOutcome::Success, $adapter->fetchStatus($remoteId)->outcome);
+
+        $expiresAt = new DateTimeImmutable('@1800003600');
+        $expiry = $adapter->updateExpiry('panel:update-expiry:0001', $remoteId, $expiresAt);
+        self::assertEquals($expiresAt, $expiry->service?->expiresAt);
+
+        $allowance = $adapter->updateDataAllowance(
+            'panel:add-data:0001',
+            $remoteId,
+            536_870_912,
+            DataAllowanceMode::Add,
+        );
+        self::assertSame(1_610_612_736, $allowance->service?->dataLimitBytes);
+        self::assertSame(0, $adapter->resetUsage('panel:reset-usage:0001', $remoteId)->service?->usedBytes);
+        self::assertSame(
+            PanelServiceStatus::Suspended,
+            $adapter->suspend('panel:suspend:0001', $remoteId)->service?->status,
+        );
+        self::assertSame(
+            PanelServiceStatus::Active,
+            $adapter->activate('panel:activate:0001', $remoteId)->service?->status,
+        );
+        self::assertSame(
+            PanelOperationOutcome::Success,
+            $adapter->rotateSubscriptionLink('panel:rotate:0001', $remoteId)->outcome,
+        );
+
+        $delivery = $adapter->getDeliveryArtifacts($remoteId);
+        self::assertSame('[SENSITIVE_DELIVERY_ARTIFACTS]', (string) $delivery);
+        self::assertCount(1, $delivery->revealForAuthorizedDelivery());
+        self::assertSame(PanelOperationOutcome::Success, $adapter->synchronize($remoteId)->outcome);
+        self::assertSame('fake-default', $adapter->listCompatibleTargets()[0]['id']);
+
+        self::assertSame(
+            PanelOperationOutcome::Success,
+            $adapter->delete('panel:delete:0001', $remoteId)->outcome,
+        );
+        self::assertSame(0, $adapter->serviceCount());
+        self::assertSame(PanelOperationOutcome::DefinitiveFailure, $adapter->fetchStatus($remoteId)->outcome);
     }
 
     public function test_registry_builds_connection_bound_adapter_with_system_ca(): void
@@ -88,6 +248,53 @@ final class PanelAdapterContractTest extends TestCase
         ));
 
         self::assertInstanceOf(FakePanelAdapter::class, $adapter);
+    }
+
+    public function test_registry_rejects_duplicate_provider_factory_registration(): void
+    {
+        $factory = new FakePanelAdapterFactory(new PanelServiceCanonicalizer);
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Duplicate panel adapter factory registration.');
+
+        new PanelAdapterRegistry([$factory, $factory], new PanelCredentialPolicy);
+    }
+
+    public function test_system_ca_policy_rejects_custom_ca_and_certificate_pin_material(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('System CA policy cannot include custom CA or certificate pin data.');
+
+        new TlsConfiguration(TlsPolicy::SystemCa, 'private', 'panel-ca.pem', null);
+    }
+
+    private function coordinator(PanelServiceCanonicalizer $canonicalizer): PanelCreateCoordinator
+    {
+        return new PanelCreateCoordinator(new RemoteIdentityResolver($canonicalizer));
+    }
+
+    private function authoritativeCapabilities(): PanelCapabilities
+    {
+        return new PanelCapabilities(
+            'test',
+            '1.0.0',
+            ['authoritative_username_lookup', 'create_service'],
+            ['vless-ws-tls'],
+        );
+    }
+
+    private function matchingSnapshot(
+        PanelServiceCanonicalizer $canonicalizer,
+        PanelCreateServiceRequest $request,
+    ): RemoteServiceSnapshot {
+        return new RemoteServiceSnapshot(
+            'remote-00000001',
+            $request->username,
+            PanelServiceStatus::Active,
+            $request->dataLimitBytes,
+            0,
+            $request->expiresAt,
+            $canonicalizer->hashCreateRequest($request),
+        );
     }
 
     private function request(): PanelCreateServiceRequest
