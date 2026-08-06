@@ -1,0 +1,83 @@
+name: Recover Self-hosted Runner
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    if: github.head_ref == 'work/recover-self-hosted-runner'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Prepare SSH client
+        env:
+          STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          STAGING_KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$STAGING_SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$STAGING_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+
+      - name: Restart GitHub Actions runner services
+        env:
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=20 \
+            -p 22 \
+            "root@$STAGING_HOST" \
+            'bash -s' <<'REMOTE'
+          set -euo pipefail
+          mapfile -t services < <(
+            systemctl list-unit-files --type=service --no-legend 'actions.runner.*.service' \
+              | awk '{print $1}' \
+              | sort -u
+          )
+          if (( ${#services[@]} == 0 )); then
+            echo 'No actions.runner systemd service was found.' >&2
+            exit 1
+          fi
+          printf 'runner_services=%s\n' "${#services[@]}"
+          for service in "${services[@]}"; do
+            systemctl reset-failed "$service" || true
+            systemctl restart "$service"
+            state=$(systemctl is-active "$service")
+            enabled=$(systemctl is-enabled "$service" 2>/dev/null || true)
+            printf 'service=%s state=%s enabled=%s\n' "$service" "$state" "$enabled"
+            test "$state" = active
+          done
+          REMOTE
+
+      - name: Verify runner processes
+        env:
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sleep 10
+          ssh \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=20 \
+            -p 22 \
+            "root@$STAGING_HOST" \
+            'set -euo pipefail; count=$(pgrep -af "Runner.Listener|runsvc.sh" | wc -l); printf "runner_processes=%s\n" "$count"; test "$count" -gt 0'
+
+      - name: Remove SSH material
+        if: always()
+        shell: bash
+        run: rm -rf "$HOME/.ssh"
