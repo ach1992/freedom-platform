@@ -39,7 +39,7 @@ final readonly class PlanOfferingRoutePolicyDefinition
             throw new InvalidArgumentException('Offering route policy requires exactly one primary route.');
         }
 
-        $this->routes = array_values($routes);
+        $this->routes = $routes;
     }
 
     /** @return array{routes: list<array<string, bool|int|string|null>>} */
