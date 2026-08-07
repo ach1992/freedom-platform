@@ -19,6 +19,7 @@ required_files=(
     docs/development/increment-lifecycle.md
     docs/development/repository-map.md
     docs/development/staging-workflow-inventory.md
+    docs/development/operational-document-status.md
     docs/31-project-control-plane-audit.md
     docs/32-current-traceability-overlay.md
     docs/33-current-risk-overlay.md
@@ -119,12 +120,12 @@ if grep -Eq 'secrets\.|sudo|apt-get|systemctl[[:space:]]+(enable|start|restart|s
     fail 'staging readiness workflow contains a secret, privilege, remote-shell, or mutation operation'
 fi
 
-for forbidden in \
+for required_rule in \
     'PR must remain Draft' \
     'Never trust a SHA copied from a handoff' \
-    'Never place credentials'; do
-    grep -F "$forbidden" AGENTS.md >/dev/null \
-        || fail "AGENTS.md is missing operating rule: $forbidden"
+    'Never request, retrieve, print, commit, log, attach, or quote secrets.'; do
+    grep -F "$required_rule" AGENTS.md >/dev/null \
+        || fail "AGENTS.md is missing operating rule: $required_rule"
 done
 
 printf '%s\n' 'Project control verification passed.'
