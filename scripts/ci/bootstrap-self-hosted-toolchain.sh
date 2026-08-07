@@ -20,6 +20,7 @@ esac
 php_root="${PHP_ROOT:-/www/server/php/84}"
 composer_bin="${COMPOSER_BIN:-/usr/local/bin/composer}"
 php_bin="$php_root/bin/php"
+php_ini="${PHP_CLI_INI:-$php_root/etc/php-cli.ini}"
 
 : "${RUNNER_TEMP:?RUNNER_TEMP is required}"
 : "${GITHUB_JOB:?GITHUB_JOB is required}"
@@ -27,6 +28,11 @@ php_bin="$php_root/bin/php"
 
 test -x "$php_bin" || {
     echo "Required PHP CLI binary is unavailable: $php_bin" >&2
+    exit 1
+}
+
+test -f "$php_ini" || {
+    echo "Required PHP CLI configuration is unavailable: $php_ini" >&2
     exit 1
 }
 
@@ -42,6 +48,7 @@ mkdir -p "$tool_bin"
 cat > "$tool_bin/php" <<EOF
 #!/usr/bin/env bash
 exec "$php_bin" \
+    -c "$php_ini" \
     -d opcache.jit=0 \
     -d opcache.jit_buffer_size=0 \
     -d pcov.enabled=$pcov_enabled \
@@ -122,8 +129,9 @@ if ! php_summary="$(
         }
 
         printf(
-            "php=%s\npcov_loaded=%s\npcov_enabled=%s\njit_buffer_size=%s\n",
+            "php=%s\nini=%s\npcov_loaded=%s\npcov_enabled=%s\njit_buffer_size=%s\n",
             PHP_VERSION,
+            php_ini_loaded_file() ?: "none",
             extension_loaded("pcov") ? "yes" : "no",
             extension_loaded("pcov") ? (string) (int) ini_get("pcov.enabled") : "not-loaded",
             (string) ini_get("opcache.jit_buffer_size"),
