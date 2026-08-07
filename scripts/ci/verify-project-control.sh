@@ -18,8 +18,12 @@ required_files=(
     docs/development/ci-runner-contract.md
     docs/development/increment-lifecycle.md
     docs/development/repository-map.md
+    docs/development/staging-workflow-inventory.md
     docs/31-project-control-plane-audit.md
+    docs/32-current-traceability-overlay.md
+    docs/33-current-risk-overlay.md
     docs/specification/master-execution-prompt.md
+    .github/workflows/staging-readiness.yml
 )
 
 for path in "${required_files[@]}"; do
@@ -63,6 +67,8 @@ status_requirements=(
     'develop/v1.0.0-completion'
     '0d34af0aa4f9f227fdf3cae74b4fd4717f199ddf'
     'docs/30-phase-0.4-trial-panel-handoff.md'
+    'docs/32-current-traceability-overlay.md'
+    'docs/33-current-risk-overlay.md'
 )
 
 for value in "${status_requirements[@]}"; do
@@ -84,10 +90,34 @@ done
 shopt -s nullglob
 repair_workflows=(.github/workflows/ci-repair*.yml .github/workflows/ci-repair*.yaml)
 repair_scripts=(scripts/ci/generate-ci-repair*.sh)
+legacy_staging_workflows=(.github/workflows/staging-*.yml .github/workflows/staging-*.yaml)
 shopt -u nullglob
 
 ((${#repair_workflows[@]} == 0)) || fail "temporary repair workflow remains: ${repair_workflows[*]}"
 ((${#repair_scripts[@]} == 0)) || fail "temporary repair script remains: ${repair_scripts[*]}"
+
+for workflow in "${legacy_staging_workflows[@]}"; do
+    [[ "$workflow" == '.github/workflows/staging-readiness.yml' ]] && continue
+
+    grep -F 'Historical - Disabled' "$workflow" >/dev/null \
+        || fail "legacy staging workflow is not visibly disabled: $workflow"
+    grep -F "disabled/historical-workflow" "$workflow" >/dev/null \
+        || fail "legacy staging workflow does not have an impossible job condition: $workflow"
+
+    if grep -Eq 'secrets\.|sudo|apt-get|systemctl[[:space:]]+(enable|start|restart|stop)|(^|[[:space:]])ssh([[:space:]\\]|$)|(^|[[:space:]])scp([[:space:]\\]|$)' "$workflow"; then
+        fail "disabled staging workflow still contains remote secret or mutation logic: $workflow"
+    fi
+done
+
+readiness=.github/workflows/staging-readiness.yml
+grep -F 'READ_ONLY_STAGING_CHECK' "$readiness" >/dev/null \
+    || fail 'staging readiness workflow lacks typed read-only confirmation'
+grep -F 'freedom-staging-runner' "$readiness" >/dev/null \
+    || fail 'staging readiness workflow lacks runner identity validation'
+
+if grep -Eq 'secrets\.|sudo|apt-get|systemctl[[:space:]]+(enable|start|restart|stop)|(^|[[:space:]])ssh([[:space:]\\]|$)|(^|[[:space:]])scp([[:space:]\\]|$)' "$readiness"; then
+    fail 'staging readiness workflow contains a secret, privilege, remote-shell, or mutation operation'
+fi
 
 for forbidden in \
     'PR must remain Draft' \
