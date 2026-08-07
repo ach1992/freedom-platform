@@ -1,126 +1,70 @@
 # Phase 0.4 Provider Reconciliation and Deferred Live-Acceptance Handoff
 
-**Status:** active non-live Phase `0.4.0` reconciliation.  
+**Status:** historical / superseded by `docs/42-phase-0.4-controlled-live-provider-handoff.md`.  
 **Authoritative Issue/PR:** Issue `#7`, Draft PR `#6`.  
 **Live head rule:** fetch PR `#6` before every write and use its exact `head_sha`.
 
-## Start with
+This handoff initiated the non-live Phase `0.4.0` provider reconciliation after the pinned mutation-contract mapping boundary. That reconciliation is now complete.
 
-1. `AGENTS.md`;
-2. `PROJECT_STATUS.md`;
-3. `docs/project-status.json`;
-4. `docs/development/continuation-runbook.md`;
-5. `evidence/0.4.0/pinned-panel-provider-read-contracts.md`;
-6. `docs/36-phase-0.4-panel-provider-read-contract-traceability.md`;
-7. `evidence/0.4.0/pinned-panel-provider-mutation-contracts.md`;
-8. `docs/38-phase-0.4-panel-provider-mutation-contract-traceability.md`;
-9. this handoff.
+## Reconciliation outcome
 
-## Last accepted boundary
+The audit completed the following without contacting a live provider:
 
-### Pinned Panel Provider Mutation Contract Mapping
+- reconciled `PRV-001`–`PRV-003` and supporting security/data/quality requirements;
+- verified real provider factories/capabilities remain read-only and mutation/delivery paths fail closed;
+- verified source-contract Target discovery cannot make a Service Target operational;
+- verified lookup-before-create, no-create-on-unavailable, discovery-before-retry and idempotency-conflict preservation;
+- identified and fixed one real non-live defect: the common resolver was using provider-observable `canonicalHash` as create equality instead of the already accepted provider-specific create-equivalence mapping;
+- separated read-state `canonicalHash` from provider-specific `createEquivalenceHash`;
+- completed exact implementation/evidence CI for that correction;
+- built the exact controlled live-provider acceptance matrix;
+- reconciled current traceability/risk/execution-status documentation.
+
+## Accepted reconciliation boundary
+
+### Provider Create-Equivalence Reconciliation
 
 Implementation:
 
-- SHA: `15b824e955d040a6bf43405f7015aa85110a73e4`;
-- CI: `31189964977` / run `#978` — success;
-- suite: 313 tests, 1650 assertions;
-- artifact: `test-evidence-31189964977`;
-- artifact ID: `8998394458`;
-- independently verified digest: `sha256:80cbd67bff1373b5aa97f73f252a001858ac6d73b799f8a26805c874f9ee6737`.
+- SHA: `ab1e0d16d23460df4bf1ad9be4fcef0d16c37a43`;
+- CI: `31223470871` / run `#995` — success;
+- suite: 315 tests, 1678 assertions;
+- artifact: `test-evidence-31223470871`;
+- artifact ID: `9011256284`;
+- independently verified digest: `sha256:f3fc78ab55ba0adbb2814bb6d0de464736e897df36625b8f72f54b3f7b8fe95d`.
 
 Evidence:
 
-- SHA: `eec613c1cb5241d8fff621047086361f2753fd24`;
-- CI: `31190453594` / run `#980` — success;
-- suite: 313 tests, 1650 assertions;
-- artifact: `test-evidence-31190453594`;
-- artifact ID: `8998628512`;
-- independently verified digest: `sha256:ac5caaaad4a83af04efd27f3c88cfeb857755e497bd07a46fa1037eadea4361a`;
-- evidence: `evidence/0.4.0/pinned-panel-provider-mutation-contracts.md`;
-- traceability: `docs/38-phase-0.4-panel-provider-mutation-contract-traceability.md`.
+- SHA: `a70b28cb984c23f1e219287e88d20014ee9f0310`;
+- CI: `31223749257` / run `#997` — success;
+- suite: 315 tests, 1678 assertions;
+- artifact: `test-evidence-31223749257`;
+- artifact ID: `9011359876`;
+- independently verified digest: `sha256:140e6a45fe2ef9523dee0147f6131a1e2d1bcaf63548b57eea7b83d3f0d9b827`;
+- evidence: `evidence/0.4.0/provider-create-equivalence-reconciliation.md`;
+- traceability: `docs/40-phase-0.4-provider-create-equivalence-traceability.md`.
 
-## Accepted provider state
+## Safety state preserved
 
-Pinned source contracts:
+- Marzban remains pinned to `v0.8.4` and PasarGuard to `v5.2.1`;
+- real provider mutation/delivery capabilities remain unadvertised and fail closed;
+- real Targets remain disabled/unverified;
+- authoritative lookup precedes create;
+- unavailable lookup or create-equivalence proof means no create;
+- adoption requires provider-specific preserved-field equality;
+- mismatch is conflict/manual review;
+- uncertain mutation requires authoritative discovery before retry;
+- conflicting idempotency-key reuse cannot overwrite the original primary effect;
+- TLS verification remains enabled;
+- credentials, tokens, subscription URLs, proxy/config secrets and raw sensitive provider bodies remain outside repository evidence and normal logs.
 
-- Marzban `v0.8.4`;
-- PasarGuard `v5.2.1`.
+## Superseding continuation
 
-Accepted runtime behavior remains read-only:
+The remaining Phase `0.4.0` provider work is deployment-specific and requires an owner-supplied controlled test environment.
 
-- exact-version connection/read checks;
-- authoritative username lookup;
-- status/synchronization;
-- compatible-target discovery.
+Use:
 
-Accepted offline-only behavior now additionally includes deterministic mutation request/result/delivery/create-equivalence mapping for create/update/reset/suspend/activate/delete/rotate.
+- live acceptance matrix: `docs/41-phase-0.4-provider-live-acceptance-matrix.md`;
+- active handoff: `docs/42-phase-0.4-controlled-live-provider-handoff.md`.
 
-The offline mutation mappers do **not** activate runtime mutations.
-
-## Non-negotiable safety state
-
-Continue to preserve:
-
-- real provider mutations fail closed;
-- real Targets remain disabled/unproved;
-- authoritative lookup before create;
-- lookup unavailable means no create;
-- create adoption requires provider-specific accepted equivalence;
-- mismatch means conflict/manual review;
-- uncertain mutation requires discovery/reconciliation before retry;
-- idempotency-key conflict must not overwrite the original primary effect;
-- TLS verification is never disabled;
-- credentials/subscription/proxy secrets never enter repository evidence or normal logs.
-
-Do not change `AbstractPinnedReadOnlyPanelGateway` to perform a real mutation during this reconciliation increment.
-
-## Next bounded work: Phase 0.4 reconciliation
-
-Perform a source-backed, repository-backed closure-preparation audit that can be completed without a live provider:
-
-1. Reconcile `PRV-001`–`PRV-003` against the accepted read and mutation-contract boundaries.
-2. Reconcile supporting `SEC-001`, `SEC-002`, `DAT-001`, `DAT-003`, `QUA-001` claims where Phase 0.4 provider behavior depends on them.
-3. Verify every runtime provider factory/capability path still advertises only accepted read capabilities.
-4. Verify no current Service Target becomes operational solely because source-contract mapping exists.
-5. Verify lookup-before-create/no-create-on-unavailable/discovery-before-retry/conflicting-idempotency preservation remain covered by executable tests.
-6. Build the exact deferred live-provider acceptance matrix, including:
-   - protected authentication;
-   - exact version/capability check;
-   - authoritative lookup and target discovery;
-   - create absence path;
-   - exact-match adoption;
-   - mismatch/conflict path;
-   - expiry/data/reset/suspend/activate/delete/rotate mutations;
-   - delivery;
-   - transport/5xx uncertainty and discovery before retry;
-   - disposable test-user cleanup/reconciliation.
-7. Separate source-contract proof from deployment-specific proof. Do not mark any live matrix row complete without a controlled test panel.
-8. Reconcile current traceability/risk overlays and identify any remaining non-live Phase 0.4 defect that can be fixed before the human gate.
-9. If a real non-live defect exists, implement it as a separate bounded increment with exact implementation CI/artifact/evidence-head CI.
-10. When only controlled live panels/credentials remain, record that as the genuine human blocker. Do not install temporary provider panels merely to manufacture live evidence.
-
-## Phase boundaries
-
-Do not pull future work forward:
-
-- Phase `0.5.0`: ledger/pricing/discount/referral/agent pricing/Quotes/payment providers;
-- Phase `0.6.0`: Orders, provisioning orchestration and Service lifecycle;
-- later Telegram/support/reporting/release work.
-
-Phase `0.4.0` closure may only assert the Catalog/Panels/Offerings scope actually proven here.
-
-## Live provider gate
-
-The owner intentionally deferred live provider testing until controlled test panels are supplied.
-
-A controlled live gate must use protected runtime/secret configuration. Never place credentials in repository files, Issues, PR comments, evidence or handoff text.
-
-Until that human dependency is supplied, prohibited claims remain:
-
-- real Marzban/PasarGuard connectivity;
-- deployment-specific compatibility;
-- real remote mutation success/idempotency;
-- production Target activation;
-- complete Provisioning/Service orchestration;
-- Phase `0.4.0` closure.
+Do not install temporary provider panels merely to manufacture live evidence. Do not claim live compatibility, real mutation acceptance, production Target activation, or Phase `0.4.0` closure until the controlled live matrix and final closure audit pass.
