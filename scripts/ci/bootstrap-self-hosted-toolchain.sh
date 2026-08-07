@@ -61,17 +61,26 @@ rm -f "$startup_stderr"
 
 required_extensions=(
     bcmath
+    ctype
     curl
     dom
     fileinfo
+    filter
+    hash
     intl
+    json
+    libxml
     mbstring
     openssl
     pcntl
+    pdo
     pdo_mysql
     redis
+    session
     sodium
+    tokenizer
     xml
+    xmlwriter
 )
 
 if [[ "$mode" == "coverage" ]]; then
@@ -80,48 +89,50 @@ fi
 
 required_csv="$(IFS=,; echo "${required_extensions[*]}")"
 
-php_summary="$("$tool_bin/php" -r '
-    $required = array_values(array_filter(explode(",", (string) getenv("FREEDOM_REQUIRED_EXTENSIONS"))));
-
-    if (PHP_MAJOR_VERSION !== 8 || PHP_MINOR_VERSION !== 4) {
-        fwrite(STDERR, "PHP 8.4 is required; found ".PHP_VERSION.PHP_EOL);
-        exit(1);
-    }
-
-    $missing = array_values(array_filter(
-        $required,
-        static fn (string $extension): bool => ! extension_loaded($extension),
-    ));
-
-    if ($missing !== []) {
-        fwrite(STDERR, "Missing PHP extensions: ".implode(", ", $missing).PHP_EOL);
-        exit(1);
-    }
-
-    if ((int) ini_get("opcache.jit_buffer_size") !== 0) {
-        fwrite(STDERR, "PHP JIT must be disabled for the CI wrapper.".PHP_EOL);
-        exit(1);
-    }
-
-    $expectedPcov = (string) getenv("FREEDOM_EXPECTED_PCOV");
-    if (extension_loaded("pcov") && (string) ini_get("pcov.enabled") !== $expectedPcov) {
-        fwrite(STDERR, "Unexpected pcov.enabled value.".PHP_EOL);
-        exit(1);
-    }
-
-    printf(
-        "php=%s\npcov_loaded=%s\npcov_enabled=%s\njit_buffer_size=%s\n",
-        PHP_VERSION,
-        extension_loaded("pcov") ? "yes" : "no",
-        extension_loaded("pcov") ? (string) ini_get("pcov.enabled") : "not-loaded",
-        (string) ini_get("opcache.jit_buffer_size"),
-    );
-' 2> "$startup_stderr" \
+if ! php_summary="$(
     FREEDOM_REQUIRED_EXTENSIONS="$required_csv" \
-    FREEDOM_EXPECTED_PCOV="$pcov_enabled")" || {
+    FREEDOM_EXPECTED_PCOV="$pcov_enabled" \
+    "$tool_bin/php" -r '
+        $required = array_values(array_filter(explode(",", (string) getenv("FREEDOM_REQUIRED_EXTENSIONS"))));
+
+        if (PHP_MAJOR_VERSION !== 8 || PHP_MINOR_VERSION !== 4) {
+            fwrite(STDERR, "PHP 8.4 is required; found ".PHP_VERSION.PHP_EOL);
+            exit(1);
+        }
+
+        $missing = array_values(array_filter(
+            $required,
+            static fn (string $extension): bool => ! extension_loaded($extension),
+        ));
+
+        if ($missing !== []) {
+            fwrite(STDERR, "Missing PHP extensions: ".implode(", ", $missing).PHP_EOL);
+            exit(1);
+        }
+
+        if ((int) ini_get("opcache.jit_buffer_size") !== 0) {
+            fwrite(STDERR, "PHP JIT must be disabled for the CI wrapper.".PHP_EOL);
+            exit(1);
+        }
+
+        $expectedPcov = (int) getenv("FREEDOM_EXPECTED_PCOV");
+        if (extension_loaded("pcov") && (int) ini_get("pcov.enabled") !== $expectedPcov) {
+            fwrite(STDERR, "Unexpected pcov.enabled value.".PHP_EOL);
+            exit(1);
+        }
+
+        printf(
+            "php=%s\npcov_loaded=%s\npcov_enabled=%s\njit_buffer_size=%s\n",
+            PHP_VERSION,
+            extension_loaded("pcov") ? "yes" : "no",
+            extension_loaded("pcov") ? (string) (int) ini_get("pcov.enabled") : "not-loaded",
+            (string) ini_get("opcache.jit_buffer_size"),
+        );
+    ' 2> "$startup_stderr"
+)"; then
     cat "$startup_stderr" >&2
     exit 1
-}
+fi
 
 if [[ -s "$startup_stderr" ]]; then
     echo "PHP emitted unexpected startup diagnostics:" >&2
