@@ -9,13 +9,14 @@ use DateTimeImmutable;
 use DateTimeZone;
 use FreedomPlatform\Scripts\Ci\PasarGuardLiveAcceptance;
 use PHPUnit\Framework\TestCase;
+use RuntimeException;
 
 final class PasarGuardLiveAcceptanceTest extends TestCase
 {
     protected function setUp(): void
     {
         parent::setUp();
-        require_once base_path('scripts/ci/PasarGuardLiveAcceptance.php');
+        require_once dirname(__DIR__, 3).'/scripts/ci/PasarGuardLiveAcceptance.php';
     }
 
     public function test_happy_path_uses_one_create_and_cleans_up_without_disclosing_secrets(): void
@@ -50,7 +51,7 @@ final class PasarGuardLiveAcceptanceTest extends TestCase
                     : new PanelHttpExchange(200, $state, false, false);
             }
             if ($method === 'POST' && $path === '/api/user') {
-                ++$createCount;
+                $createCount++;
                 self::assertNotNull($payload);
                 $state = [
                     'id' => 77,
@@ -95,7 +96,7 @@ final class PasarGuardLiveAcceptanceTest extends TestCase
                 return new PanelHttpExchange(200, $state, false, false);
             }
             if ($method === 'DELETE' && $path === '/api/user/by-id/77') {
-                ++$deleteCount;
+                $deleteCount++;
                 $state = null;
 
                 return new PanelHttpExchange(204, [], false, false);
@@ -137,7 +138,7 @@ final class PasarGuardLiveAcceptanceTest extends TestCase
         $mutationCount = 0;
         $transport = static function (string $method, string $url, array $headers, ?array $payload) use (&$mutationCount): PanelHttpExchange {
             if ($method !== 'GET') {
-                ++$mutationCount;
+                $mutationCount++;
             }
 
             return new PanelHttpExchange(200, ['version' => '5.2.2'], false, false);
@@ -154,7 +155,7 @@ final class PasarGuardLiveAcceptanceTest extends TestCase
                 'now' => new DateTimeImmutable('2026-08-08T00:00:00+00:00'),
             ]);
             self::fail('Expected version mismatch.');
-        } catch (\RuntimeException $exception) {
+        } catch (RuntimeException $exception) {
             self::assertSame('pasarguard_live_version_mismatch', $exception->getMessage());
         }
 
