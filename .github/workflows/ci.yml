@@ -151,7 +151,12 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p build/evidence/static
-          php vendor/bin/pint --test --format=json 2>&1 | tee build/evidence/static/pint.json
+          if php vendor/bin/pint --test --format=json 2>&1 | tee build/evidence/static/pint.json; then
+            exit 0
+          fi
+          php vendor/bin/pint
+          git diff -- . | tee build/evidence/static/pint.diff
+          exit 1
 
       - name: Static analysis and repository policy
         timeout-minutes: 15
