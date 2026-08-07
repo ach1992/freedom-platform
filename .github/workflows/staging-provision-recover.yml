@@ -1,90 +1,14 @@
-name: Staging Provision Recover
+name: Historical - Disabled Staging Provision Recover
 
 on:
   workflow_dispatch:
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
-  recover:
+  disabled:
+    name: Disabled historical workflow
+    if: ${{ github.repository == 'disabled/historical-workflow' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
     steps:
-      - name: Prepare SSH client
-        env:
-          STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
-          STAGING_KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -n "$STAGING_SSH_PRIVATE_KEY"
-          test -n "$STAGING_KNOWN_HOSTS"
-          install -d -m 700 "$HOME/.ssh"
-          printf '%s\n' "$STAGING_SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
-          printf '%s\n' "$STAGING_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
-          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
-
-      - name: Recover or verify base provision
-        env:
-          STAGING_HOST: ${{ secrets.STAGING_HOST }}
-          STAGING_PORT: ${{ secrets.STAGING_PORT }}
-          STAGING_USER: ${{ secrets.STAGING_USER }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          ssh \
-            -o BatchMode=yes \
-            -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=yes \
-            -o ConnectTimeout=20 \
-            -p "$STAGING_PORT" \
-            "$STAGING_USER@$STAGING_HOST" \
-            'set -Eeuo pipefail
-             export DEBIAN_FRONTEND=noninteractive
-             export NEEDRESTART_MODE=a
-             install -d -m 700 /root/freedom-bootstrap
-             exec 9>/root/freedom-bootstrap/provision.lock
-             flock -w 1800 9 || { echo "Provision lock timeout." >&2; exit 1; }
-
-             systemctl enable --now cron supervisor mariadb redis-server >/dev/null
-
-             if [ ! -d /www/server/panel ] || [ ! -x /etc/init.d/bt ]; then
-               curl -fsSLo /root/freedom-bootstrap/install_panel_en.sh https://www.aapanel.com/script/install_panel_en.sh
-               chmod 700 /root/freedom-bootstrap/install_panel_en.sh
-               printf "y\n" > /root/freedom-bootstrap/panel-answer.txt
-               chmod 600 /root/freedom-bootstrap/panel-answer.txt
-               set +e
-               timeout 1800 bash /root/freedom-bootstrap/install_panel_en.sh forum \
-                 < /root/freedom-bootstrap/panel-answer.txt \
-                 > /var/log/freedom-aapanel-recover.log 2>&1
-               install_status=$?
-               set -e
-               rm -f /root/freedom-bootstrap/panel-answer.txt
-               if [ "$install_status" -ne 0 ] && { [ ! -d /www/server/panel ] || [ ! -x /etc/init.d/bt ]; }; then
-                 echo "aaPanel installation did not complete; status=${install_status}." >&2
-                 if [ -f /var/log/freedom-aapanel-recover.log ]; then
-                   grep -Eai "error|failed|failure|unsupported|not supported|denied|timeout|cannot|missing|abort|traceback" /var/log/freedom-aapanel-recover.log \
-                     | tail -n 40 \
-                     | sed -E "s#https?://[^[:space:]]+#URL_REDACTED#g; s#([Pp]assword|[Pp]asswd|[Tt]oken|[Ss]ecret|[Uu]sername|[Ll]ogin)[[:space:]:=]+[^[:space:]]+#\1=REDACTED#g" \
-                     || true
-                 fi
-                 exit 1
-               fi
-             fi
-
-             /etc/init.d/bt start >/dev/null 2>&1 || true
-             test -d /www/server/panel
-             test -x /etc/init.d/bt
-             echo "aapanel=present"
-             echo "aapanel_processes=$(pgrep -fc "BT-Panel|BT-Task|panel.py" || true)"
-             for service in ssh cron supervisor mariadb redis-server; do
-               state=$(systemctl is-active "$service" 2>/dev/null || true)
-               echo "service_${service}=${state}"
-               test "$state" = active
-             done'
-
-      - name: Remove SSH material
-        if: always()
-        shell: bash
-        run: rm -rf "$HOME/.ssh"
+      - run: echo 'This historical root-level recovery workflow is disabled. See docs/development/staging-workflow-inventory.md.'
