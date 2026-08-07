@@ -80,7 +80,7 @@ return new class extends Migration
 
         DB::statement('ALTER TABLE ledger_transactions ADD CONSTRAINT ledger_transaction_amount_chk CHECK (`expected_total_irr` > 0 AND `posted_debit_irr` >= 0 AND `posted_credit_irr` >= 0)');
         DB::statement('ALTER TABLE ledger_transactions ADD CONSTRAINT ledger_transaction_hash_chk CHECK (CHAR_LENGTH(`payload_hash`) = 64)');
-        DB::statement("ALTER TABLE ledger_transactions ADD CONSTRAINT ledger_transaction_source_chk CHECK ((`source_type` IS NULL AND `source_id` IS NULL) OR (`source_type` IS NOT NULL AND `source_id` IS NOT NULL))");
+        DB::statement('ALTER TABLE ledger_transactions ADD CONSTRAINT ledger_transaction_source_chk CHECK ((`source_type` IS NULL AND `source_id` IS NULL) OR (`source_type` IS NOT NULL AND `source_id` IS NOT NULL))');
         DB::statement('ALTER TABLE ledger_transactions ADD CONSTRAINT ledger_transaction_entry_count_chk CHECK (`entry_count` <= 65535)');
 
         DB::statement("ALTER TABLE ledger_entries ADD CONSTRAINT ledger_entry_direction_chk CHECK (`direction` IN ('debit', 'credit'))");
