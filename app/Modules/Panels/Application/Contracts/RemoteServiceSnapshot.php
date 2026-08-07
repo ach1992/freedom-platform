@@ -19,6 +19,8 @@ final readonly class RemoteServiceSnapshot
 
     public string $canonicalHash;
 
+    public ?string $createEquivalenceHash;
+
     public function __construct(
         string $remoteId,
         string $username,
@@ -27,6 +29,7 @@ final readonly class RemoteServiceSnapshot
         ?int $usedBytes,
         public ?DateTimeImmutable $expiresAt,
         string $canonicalHash,
+        ?string $createEquivalenceHash = null,
     ) {
         $this->remoteId = self::requiredValue($remoteId, 512, 'Remote service identifier');
         $this->username = self::requiredValue($username, 191, 'Remote service username');
@@ -37,14 +40,12 @@ final readonly class RemoteServiceSnapshot
             throw new InvalidArgumentException('Remote used bytes cannot be negative.');
         }
 
-        $hash = strtolower(trim($canonicalHash));
-        if (preg_match('/\A[a-f0-9]{64}\z/', $hash) !== 1) {
-            throw new InvalidArgumentException('Remote canonical hash is invalid.');
-        }
-
         $this->dataLimitBytes = $dataLimitBytes;
         $this->usedBytes = $usedBytes;
-        $this->canonicalHash = $hash;
+        $this->canonicalHash = self::hash($canonicalHash, 'Remote canonical hash');
+        $this->createEquivalenceHash = $createEquivalenceHash === null
+            ? null
+            : self::hash($createEquivalenceHash, 'Remote create-equivalence hash');
     }
 
     private static function requiredValue(string $value, int $maximumLength, string $field): string
@@ -58,5 +59,15 @@ final readonly class RemoteServiceSnapshot
         }
 
         return $value;
+    }
+
+    private static function hash(string $value, string $field): string
+    {
+        $hash = strtolower(trim($value));
+        if (preg_match('/\A[a-f0-9]{64}\z/', $hash) !== 1) {
+            throw new InvalidArgumentException($field.' is invalid.');
+        }
+
+        return $hash;
     }
 }
