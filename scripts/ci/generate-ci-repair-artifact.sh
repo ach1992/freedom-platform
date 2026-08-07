@@ -57,7 +57,10 @@ formatted_files=(
 
 php vendor/bin/pint "${formatted_files[@]}"
 php vendor/bin/pint --test "${formatted_files[@]}"
-php vendor/bin/phpstan analyse --no-progress --error-format=table
+php -d memory_limit=1G vendor/bin/phpstan analyse \
+    --no-progress \
+    --error-format=table \
+    --memory-limit=1G
 composer validate --strict --no-check-publish
 bash scripts/ci/forbidden-patterns.sh
 bash scripts/ci/architecture.sh
