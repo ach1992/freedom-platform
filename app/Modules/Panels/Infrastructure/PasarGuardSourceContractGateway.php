@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Panels\Infrastructure;
 
 use App\Modules\Panels\Application\Contracts\PanelCapabilities;
+use App\Modules\Panels\Application\Contracts\PanelCreateServiceRequest;
 use App\Modules\Panels\Application\Contracts\PanelOperationOutcome;
 use App\Modules\Panels\Application\Contracts\PanelOperationResult;
 use App\Modules\Panels\Application\Contracts\PanelServiceStatus;
@@ -19,10 +20,14 @@ final class PasarGuardSourceContractGateway extends AbstractPinnedReadOnlyPanelG
 {
     private const VERSION = '5.2.1';
 
+    private readonly PasarGuardMutationContractMapper $mutationContracts;
+
     public function __construct(
         private readonly PanelHttpTransport $transport,
         private readonly PanelAdapterSession $session,
-    ) {}
+    ) {
+        $this->mutationContracts = new PasarGuardMutationContractMapper;
+    }
 
     public function testConnection(): PanelOperationResult
     {
@@ -63,6 +68,11 @@ final class PasarGuardSourceContractGateway extends AbstractPinnedReadOnlyPanelG
             ],
             ['shadowsocks', 'trojan', 'vless', 'vmess', 'wireguard'],
         );
+    }
+
+    public function createEquivalenceHash(PanelCreateServiceRequest $request): string
+    {
+        return $this->mutationContracts->requestCreateCanonicalHash($request);
     }
 
     public function findByRemoteId(string $remoteId): ?RemoteServiceSnapshot
@@ -318,6 +328,12 @@ final class PasarGuardSourceContractGateway extends AbstractPinnedReadOnlyPanelG
             'group_ids' => $payload['group_ids'] ?? [],
             'hwid_limit' => $payload['hwid_limit'] ?? null,
         ];
+        $createEquivalenceHash = null;
+        try {
+            $createEquivalenceHash = $this->mutationContracts->providerCreateCanonicalHash($payload);
+        } catch (Throwable) {
+            // Read state can still be authoritative when create-equivalence proof is incomplete.
+        }
 
         return new RemoteServiceSnapshot(
             (string) $remoteId,
@@ -327,6 +343,7 @@ final class PasarGuardSourceContractGateway extends AbstractPinnedReadOnlyPanelG
             $usedBytes,
             $expiresAt,
             hash('sha256', json_encode($this->canonicalize($canonical), JSON_THROW_ON_ERROR)),
+            $createEquivalenceHash,
         );
     }
 
