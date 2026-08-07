@@ -57,6 +57,10 @@ final readonly class PanelHttpTransport
             return new PanelHttpExchange(null, null, false, true);
         }
 
+        if (! $response->successful()) {
+            return new PanelHttpExchange($response->status(), null, false, false);
+        }
+
         $body = trim($response->body());
         if ($body === '') {
             return new PanelHttpExchange($response->status(), [], false, false);
