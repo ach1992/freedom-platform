@@ -1,0 +1,116 @@
+name: Staging Readiness
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type READ_ONLY_STAGING_CHECK
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-readiness
+  cancel-in-progress: false
+
+jobs:
+  readiness:
+    name: Read-only staging readiness
+    if: ${{ inputs.confirmation == 'READ_ONLY_STAGING_CHECK' }}
+    runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
+    timeout-minutes: 10
+    steps:
+      - name: Validate read-only contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          test '${{ inputs.confirmation }}' = 'READ_ONLY_STAGING_CHECK'
+          test "$RUNNER_NAME" = 'freedom-staging-runner'
+
+      - name: Collect sanitized host facts
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/staging-readiness"
+          rm -rf "$evidence"
+          mkdir -p "$evidence"
+
+          php_cli=/www/server/php/84/bin/php
+          php_cli_ini=/www/server/php/84/etc/php-cli.ini
+          lsphp=/usr/local/lsws/lsphp84/bin/lsphp
+          composer=/usr/local/bin/composer
+          project_root=/www/acdomains/hell.hellpservice.ir
+
+          {
+            echo '# staging readiness'
+            echo "utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "runner_name=$RUNNER_NAME"
+            echo "runner_os=$RUNNER_OS"
+            echo "runner_arch=$RUNNER_ARCH"
+            echo "hostname=$(hostname)"
+            if [[ -r /etc/os-release ]]; then
+              . /etc/os-release
+              echo "os=${PRETTY_NAME:-unknown}"
+            fi
+            echo "kernel=$(uname -sr)"
+            echo "disk_root_available_bytes=$(df -PB1 / | awk 'NR==2 {print $4}')"
+            echo "memory_total_kib=$(awk '/MemTotal/ {print $2}' /proc/meminfo)"
+
+            if [[ -x "$php_cli" ]]; then
+              echo "php_cli=$($php_cli -c "$php_cli_ini" -r 'echo PHP_VERSION;')"
+              echo "php_cli_ini=$($php_cli -c "$php_cli_ini" -r 'echo php_ini_loaded_file() ?: "none";')"
+              echo "php_cli_extensions=$($php_cli -c "$php_cli_ini" -r '$extensions = get_loaded_extensions(); sort($extensions); echo implode(",", $extensions);')"
+            else
+              echo 'php_cli=missing'
+            fi
+
+            if [[ -x "$lsphp" ]]; then
+              echo "lsphp=$($lsphp -r 'echo PHP_VERSION;' 2>/dev/null || echo unreadable)"
+              echo "lsphp_ini=$($lsphp -r 'echo php_ini_loaded_file() ?: "none";' 2>/dev/null || echo unreadable)"
+            else
+              echo 'lsphp=missing'
+            fi
+
+            if [[ -f "$composer" && -x "$php_cli" ]]; then
+              echo "composer=$($php_cli -c "$php_cli_ini" "$composer" --version --no-ansi | sed -E 's/[[:space:]]+/ /g')"
+            else
+              echo 'composer=missing'
+            fi
+
+            echo "docker=$(docker --version 2>/dev/null || echo missing)"
+            echo "docker_compose=$(docker compose version 2>/dev/null || echo missing)"
+
+            for service in cron supervisor mariadb mysql redis-server redis lsws lshttpd; do
+              state=$(systemctl is-active "$service" 2>/dev/null || true)
+              [[ -n "$state" ]] || state=not-found
+              echo "service_${service}=$state"
+            done
+
+            if [[ -L "$project_root/current" ]]; then
+              echo 'current_symlink=present'
+              target=$(readlink "$project_root/current" || true)
+              case "$target" in
+                releases/*|"$project_root"/releases/*) echo 'current_target_shape=release' ;;
+                *) echo 'current_target_shape=unexpected' ;;
+              esac
+            else
+              echo 'current_symlink=absent'
+            fi
+          } > "$evidence/readiness.txt"
+
+          grep -E '(^|_)(password|passwd|token|secret|api_key|private_key)=' "$evidence/readiness.txt" \
+            && { echo 'Sensitive-looking key was emitted.' >&2; exit 1; } \
+            || true
+
+          cat "$evidence/readiness.txt"
+
+      - name: Upload sanitized readiness evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: staging-readiness-${{ github.run_id }}
+          path: ${{ runner.temp }}/staging-readiness
+          if-no-files-found: error
+          retention-days: 7
