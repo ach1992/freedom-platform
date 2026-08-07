@@ -1,129 +1,90 @@
 # Phase 0.4 Pinned Panel Provider Read-Contract Traceability
 
-**Status:** implementation boundary green; evidence-head CI pending.  
+**Status:** evidence complete.  
 **Implementation SHA:** `954973e505901208b5cef9348551e0c71ac027b6`  
 **Implementation CI:** `31178042191` / run `#959` — success  
+**Evidence SHA:** `23a8da1ce1327407ecd826daa87b334452883d77`  
+**Evidence CI:** `31178477080` / run `#961` — success  
 **Suite:** 306 tests, 1522 assertions  
+**Evidence artifact:** `test-evidence-31178477080`, ID `8993821250`  
+**Independent digest:** `sha256:9a45179652a3a88456c835c4d715aceef4efaf770c06b8246f0ebd68ca1b6fe6`  
 **Evidence:** `evidence/0.4.0/pinned-panel-provider-read-contracts.md`
 
-This document maps the pinned **read-only/source-contract** provider increment to Phase `0.4.0` requirements. It deliberately excludes live compatibility, provider mutations, Target activation and complete Provisioning/Service orchestration.
+This document maps the accepted pinned read-only/source-contract provider increment to Phase `0.4.0` requirements. The acceptance-state wording was reconciled after CI #961; historical implementation facts are unchanged.
 
 ## Requirement map
 
-| Requirement | Bounded acceptance statement | Implementation | Automated proof | Remaining gap |
-|---|---|---|---|---|
-| `PRV-001` | Common Marzban/PasarGuard adapters have pinned source-version read gateways for connection/version check, authoritative lookup, status/sync and compatible-target discovery. Unsupported mutation/delivery capabilities are not advertised and fail closed. | `PanelHttpExchange`, `PanelHttpTransport`, `PanelGatewayRequestFailure`, `AbstractPinnedReadOnlyPanelGateway`, source-contract gateways/factories, provider bindings. | `PanelProviderSourceContractGatewayTest`, previous common adapter contract suite, full regression. | Live connection and every mutation contract remain unverified. |
-| `PRV-002` | Real-provider authoritative username lookup is source-mapped and lookup failure cannot be interpreted as remote absence. | provider `findByDeterministicUsername`; `AuthoritativePanelLookupUnavailable`; `RemoteIdentityResolver`. | Marzban/PasarGuard read fixtures; lookup exception → Manual Review test; previous coordinator regression. | Provider snapshot hash is observable-state hash, not create-request equality; real create/adopt mapping remains disabled. |
-| `PRV-003` | The existing uncertainty rule remains fail closed: when authoritative lookup is unavailable, no create may proceed. This increment introduces no mutation path that could bypass discovery. | read-only capability advertisement; mutation-disabled base gateway; resolver lookup-unavailable handling. | mutation attempts create no provider HTTP; lookup-unavailable test; previous Fake uncertainty/discovery tests. | Real uncertain-create semantics and discovery require mutation mapping plus later live verification. |
-| `SEC-001` | Provider transport verifies TLS, disables redirects, bounds timeouts, does not parse non-success bodies into application evidence, and preserves credential redaction. | `PanelHttpTransport`, existing endpoint/TLS/credential value objects and policy. | deterministic HTTP tests, secret scan, Pint/PHPStan/forbidden/architecture gates, artifact pattern inspection. | Live certificate/custom-CA/pin behavior remains environment evidence. |
-| `SEC-002` | Provider failure/version mismatch/auth errors fail closed; exact version is pinned before reads; API-key format is validated at the canonical input boundary; unsupported mutations remain disabled. | credential policy, gateway version assertions, safe failure classification, read-only capabilities. | version mismatch, invalid API key, sanitized failure, mutation-disabled and regression tests. | Real provider rate limits/error payloads and remote mutation idempotency remain unverified. |
-| `QUA-001` | The implementation candidate has exact-SHA mandatory CI, executable suite counts and independently checked retained artifact digest. | CI run/evidence lifecycle. | implementation run `31178042191` / #959; 306/1522; test artifact ID `8993620714`; independent SHA-256 match. | Evidence-head CI still required before Issue/PR acceptance. |
+| Requirement | Accepted boundary | Implementation/proof | Remaining live gap |
+|---|---|---|---|
+| `PRV-001` | Common Marzban/PasarGuard adapters have exact pinned read gateways for authentication/version check, authoritative lookup, status/sync and compatible-target discovery. Unsupported mutation/delivery capabilities are not advertised and fail closed. | `PanelHttpExchange`, `PanelHttpTransport`, `PanelGatewayRequestFailure`, `AbstractPinnedReadOnlyPanelGateway`, source-contract gateways/factories; `PanelProviderSourceContractGatewayTest`; exact-SHA CI. | Deployment-specific live auth/version/health/target acceptance. |
+| `PRV-002` | Real-provider authoritative username lookup is source-mapped and lookup failure cannot be interpreted as remote absence. | provider lookup methods, `AuthoritativePanelLookupUnavailable`, resolver regression. | At this boundary provider-observable snapshot hash was explicitly not create equality; later accepted mutation/equivalence reconciliation supplies that separate semantic. |
+| `PRV-003` | Lookup unavailable means no create and this read boundary introduces no mutation path that can bypass discovery. | read-only capabilities, mutation-disabled base gateway, lookup-unavailable tests. | Live uncertain-effect reconciliation remains controlled-panel evidence. |
+| `SEC-001` | Transport verifies TLS, disables redirects, bounds timeouts, preserves endpoint/base-path policy, and excludes non-success provider bodies/credentials from ordinary evidence. | `PanelHttpTransport`, endpoint/TLS/credential value objects; deterministic HTTP/redaction tests; mandatory static/secret gates. | Environment-specific TLS/private-CA/pin behavior only when configured live. |
+| `SEC-002` | Exact provider version/auth/response validation fails closed and unsupported mutations remain disabled. | credential policy, version assertions, typed safe failures, invalid-key/version tests. | Live provider permission/rate-limit/error behavior. |
+| `QUA-001` | Exact implementation and evidence-head mandatory CI, executable suite counts and retained artifact digest are accepted. | #959 and #961, 306/1522, independent artifact digest verification. | No remaining offline evidence gap for this historical increment. |
 
-## Pinned provider contract map
+## Pinned provider map
 
 ### Marzban `v0.8.4`
 
-| Capability | Pinned route/source shape | Local behavior |
+| Capability | Pinned route/source shape | Accepted behavior |
 |---|---|---|
-| Authentication | `POST /api/admin/token` | username/password form → Bearer token; token is never logged/evidenced |
-| Version/connection | `GET /api/system` | exact `0.8.4` required |
-| Authoritative username lookup | `GET /api/user/{username}` | 404 = absent; transport/provider failure = lookup unavailable/manual review |
-| Fetch/synchronize | same authoritative user route | normalized read snapshot |
-| Compatible targets | `GET /api/inbounds` | protocol/tag converted to opaque target reference |
-| Mutations | source reviewed but not accepted in this increment | capability absent; operation fails closed before provider request |
+| authentication | `POST /api/admin/token` | username/password form -> ephemeral Bearer token; secret excluded from evidence |
+| version/connection | `GET /api/system` | exact `0.8.4` required |
+| authoritative username lookup | `GET /api/user/{username}` | 404 = absent; transport/provider failure = unavailable/manual review |
+| fetch/synchronize | authoritative user route | normalized read snapshot |
+| compatible targets | `GET /api/inbounds` | protocol/tag -> opaque local target reference |
+| mutations/delivery | not accepted by read boundary | capability absent; fail closed before provider mutation HTTP |
 
 ### PasarGuard `v5.2.1`
 
-| Capability | Pinned route/source shape | Local behavior |
+| Capability | Pinned route/source shape | Accepted behavior |
 |---|---|---|
-| API-key authentication | `X-Api-Key` | preferred protected API-key path |
-| Password authentication | `POST /api/admin/token` | username/password fallback → Bearer token |
-| Version/connection | `GET /api/system` | exact `5.2.1` required |
-| Authoritative username lookup | `GET /api/user/by-username/{username}` | 404 = absent; provider failure = lookup unavailable/manual review |
-| Remote-ID lookup | `GET /api/user/by-id/{id}` | numeric ID is validated and normalized to string local remote ID |
-| Fetch/synchronize | authoritative ID route | normalized read snapshot |
-| Compatible targets | `GET /api/groups` | disabled groups excluded; group ID becomes opaque provider target reference |
-| Base path | endpoint may include path such as `/hpanel` | API path is appended without dropping the configured base path |
-| Mutations | source reviewed but not accepted in this increment | capability absent; operation fails closed before provider request |
+| preferred API-key authentication | `X-Api-Key` | canonical validated protected key |
+| password fallback | `POST /api/admin/token` | username/password -> ephemeral Bearer token |
+| version/connection | `GET /api/system` | exact `5.2.1` required |
+| authoritative username lookup | `GET /api/user/by-username/{username}` | 404 = absent; provider failure = unavailable/manual review |
+| remote-ID lookup | `GET /api/user/by-id/{id}` | numeric ID validated and normalized as explicit remote identity |
+| compatible targets | `GET /api/groups` | disabled groups excluded; enabled group ID -> opaque local reference |
+| endpoint base path | configured path such as `/hpanel` | preserved when API path is appended |
+| mutations/delivery | not accepted by read boundary | capability absent; fail closed before provider mutation HTTP |
 
-## Failure classification
+## Failure classification at this boundary
 
-| Condition | Result |
+| Condition | Accepted result |
 |---|---|
 | connect/transport failure | retryable read failure; authoritative lookup unavailable |
-| HTTP 429 / 5xx | retryable read failure |
-| ordinary non-404 4xx | definitive read/auth failure |
-| lookup 404 | authoritative absence only for the exact lookup route |
+| HTTP `429` / `5xx` | retryable read failure |
+| ordinary non-404 `4xx` | definitive read/auth failure |
+| exact lookup 404 | authoritative absence for that lookup only |
 | malformed successful JSON | uncertain read result |
-| exact provider version mismatch | definitive fail closed |
+| provider version mismatch | definitive fail closed |
 | malformed canonical PasarGuard API key | rejected before HTTP |
 | authoritative lookup exception | Manual Review; never `Absent` |
 | provider mutation attempt | definitive `*_source_contract_mutation_disabled`; no mutation HTTP |
 
 ## Snapshot semantics
 
-The read gateways produce `RemoteServiceSnapshot` values from provider-observable fields.
+The accepted read gateways normalize provider-observable state into `RemoteServiceSnapshot`.
 
-- Marzban remote ID is the pinned username identity in this read contract.
-- PasarGuard remote ID is the provider numeric user ID serialized as a string.
-- timestamps/traffic/limit/status are normalized into the common snapshot contract.
-- the snapshot `canonicalHash` is a deterministic normalized **provider-observable-state hash**.
+At this historical boundary, `canonicalHash` is explicitly a deterministic provider-observable-state hash. It is not proof that a remote service equals a local create request.
 
-That hash must not be compared as proof that a pre-existing remote user is exactly equivalent to a local create request until a separate mutation/equivalence mapper is accepted. Therefore this increment does not enable real-provider exact-match adoption or create.
+Later accepted work introduced `createEquivalenceHash` as a separate provider-specific semantic derived only from preserved create fields. That later correction preserves rather than changes this read-boundary definition.
 
-## Test traceability
+## Automated proof
 
-Primary source-contract test:
+Primary historical test:
 
 - `tests/Unit/Modules/Panels/PanelProviderSourceContractGatewayTest.php`.
 
-Scenarios:
-
-- DI bindings use pinned source-contract gateway factories;
-- Marzban authentication/version/user/inbound read mapping;
-- Marzban version mismatch;
-- PasarGuard API-key path and endpoint base-path preservation;
-- PasarGuard username and remote-ID lookup;
-- PasarGuard group discovery with disabled group exclusion;
-- PasarGuard password-token fallback;
-- canonical invalid PasarGuard API key rejected without HTTP;
-- lookup exception → Manual Review;
-- non-success body/credentials absent from safe message;
-- provider mutation remains disabled without HTTP;
-- previously verified unavailable provider shell compatibility remains green;
-- complete regression suite remains green on MariaDB/authenticated Redis.
-
-## Implementation evidence
-
-- implementation SHA: `954973e505901208b5cef9348551e0c71ac027b6`;
-- CI: `31178042191` / #959 — all mandatory jobs success;
-- 306 tests, 1522 assertions;
-- test artifact: `test-evidence-31178042191`;
-- artifact ID: `8993620714`;
-- independent digest: `sha256:ae51266d7730c22d7076c1603b36f073bc9d6f4f6007f680b942300451d110a2`;
-- detailed evidence: `evidence/0.4.0/pinned-panel-provider-read-contracts.md`.
+Accepted scenarios include provider DI bindings, Marzban auth/version/user/inbound reads, safe version mismatch, PasarGuard API-key/base-path/username/remote-ID/group mapping, disabled-group exclusion, password-token fallback, invalid key rejection before HTTP, lookup failure -> Manual Review, safe failure messages, provider mutation disabled without HTTP, and complete MariaDB/authenticated Redis regression.
 
 ## Explicit exclusions
 
-- no user-provided live panel or credential was used;
-- no real Marzban/PasarGuard connection is claimed;
-- no provider mutation or delivery operation is enabled;
-- no provider snapshot is accepted as local create-request equality;
+- no live provider credential/endpoint was used;
+- no deployment-specific Marzban/PasarGuard compatibility claim;
+- no live mutation/delivery effect;
 - no production Target activation;
-- no complete Provisioning/Service/Order/payment/Telegram workflow;
-- Phase `0.4.0` remains open.
+- no Phase `0.4.0` closure claim.
 
-## Next bounded increment
-
-After this evidence head is accepted, continue offline with **pinned mutation contract mapping** while keeping all real mutations disabled:
-
-1. define provider-specific create/update/reset/suspend/activate/delete/rotate/delivery request mappers from the common contract;
-2. define exact provider response/outcome mapping and safe error taxonomy;
-3. prove request fixtures against pinned `v0.8.4` / `v5.2.1` source shapes;
-4. introduce a provider create-equivalence mapper so adoption can compare the intended local request against authoritative remote observable state;
-5. preserve lookup-before-create, no-create on lookup failure, idempotency-key conflict protection and discovery-before-retry;
-6. do not advertise mutation capabilities or contact a live provider until that bounded mapping has its own exact-SHA evidence and a test panel is available.
-
-## Evidence-head gate
-
-The exact head containing this traceability and its evidence report must pass every mandatory CI job. Only after that run succeeds may Issue `#7`, Draft PR `#6` and current project status record this increment as evidence-complete.
+The live provider gate is defined separately in `docs/41-phase-0.4-provider-live-acceptance-matrix.md`.
