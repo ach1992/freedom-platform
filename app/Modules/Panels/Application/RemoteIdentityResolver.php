@@ -7,6 +7,7 @@ namespace App\Modules\Panels\Application;
 use App\Modules\Panels\Application\Contracts\PanelAdapter;
 use App\Modules\Panels\Application\Contracts\PanelCreateServiceRequest;
 use App\Modules\Panels\Application\Contracts\RemoteServiceSnapshot;
+use App\Modules\Panels\Application\Exceptions\AuthoritativePanelLookupUnavailable;
 use App\Modules\Panels\Domain\RemoteIdentityDisposition;
 
 final readonly class RemoteIdentityResolver
@@ -24,7 +25,16 @@ final readonly class RemoteIdentityResolver
             );
         }
 
-        $service = $adapter->findByDeterministicUsername($request->username);
+        try {
+            $service = $adapter->findByDeterministicUsername($request->username);
+        } catch (AuthoritativePanelLookupUnavailable) {
+            return new RemoteIdentityResolution(
+                RemoteIdentityDisposition::ManualReview,
+                null,
+                'authoritative_username_lookup_unavailable',
+            );
+        }
+
         if ($service === null) {
             return new RemoteIdentityResolution(RemoteIdentityDisposition::Absent, null, 'remote_service_absent');
         }
