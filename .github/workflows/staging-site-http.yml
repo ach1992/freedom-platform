@@ -1,120 +1,14 @@
-name: Staging Site HTTP
+name: Historical - Disabled Staging Site HTTP
 
 on:
   workflow_dispatch:
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
-  configure-http-site:
+  disabled:
+    name: Disabled historical workflow
+    if: ${{ github.repository == 'disabled/historical-workflow' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
     steps:
-      - name: Check out deployment controls
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          ref: develop/v1.0.0-completion
-          fetch-depth: 1
-          persist-credentials: false
-
-      - name: Validate staging inputs
-        env:
-          STAGING_HOST: ${{ secrets.STAGING_HOST }}
-          STAGING_PORT: ${{ secrets.STAGING_PORT }}
-          STAGING_USER: ${{ secrets.STAGING_USER }}
-          STAGING_DOMAIN: ${{ secrets.STAGING_DOMAIN }}
-          STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
-          STAGING_KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          for name in STAGING_HOST STAGING_PORT STAGING_USER STAGING_DOMAIN STAGING_SSH_PRIVATE_KEY STAGING_KNOWN_HOSTS; do
-            test -n "${!name:-}" || { echo "Missing required secret: ${name}" >&2; exit 1; }
-          done
-          [[ "$STAGING_DOMAIN" =~ ^[A-Za-z0-9.-]+$ ]] || { echo 'Invalid staging domain.' >&2; exit 1; }
-          test -f deploy/staging/configure-aapanel-site.sh
-
-      - name: Prepare SSH client and site script
-        env:
-          STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
-          STAGING_KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          install -d -m 700 "$HOME/.ssh" "$RUNNER_TEMP/freedom-staging"
-          printf '%s\n' "$STAGING_SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
-          printf '%s\n' "$STAGING_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
-          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
-          install -m 700 deploy/staging/configure-aapanel-site.sh \
-            "$RUNNER_TEMP/freedom-staging/configure-aapanel-site.sh"
-
-      - name: Upload and configure aaPanel OpenLiteSpeed site
-        env:
-          STAGING_HOST: ${{ secrets.STAGING_HOST }}
-          STAGING_PORT: ${{ secrets.STAGING_PORT }}
-          STAGING_USER: ${{ secrets.STAGING_USER }}
-          STAGING_DOMAIN: ${{ secrets.STAGING_DOMAIN }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p build/evidence/staging
-          scp -q -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -P "$STAGING_PORT" \
-            "$RUNNER_TEMP/freedom-staging/configure-aapanel-site.sh" \
-            "$STAGING_USER@$STAGING_HOST:/root/freedom-bootstrap/incoming/"
-          ssh \
-            -o BatchMode=yes \
-            -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=yes \
-            -o ConnectTimeout=20 \
-            -p "$STAGING_PORT" \
-            "$STAGING_USER@$STAGING_HOST" \
-            "chmod 700 /root/freedom-bootstrap/incoming/configure-aapanel-site.sh && /root/freedom-bootstrap/incoming/configure-aapanel-site.sh '$STAGING_DOMAIN'" \
-            | tee build/evidence/staging/site-http-server.txt
-
-      - name: Verify external HTTP liveness and readiness
-        env:
-          STAGING_DOMAIN: ${{ secrets.STAGING_DOMAIN }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          live=$(curl --silent --show-error --fail --max-time 20 \
-            --retry 5 --retry-delay 2 --retry-all-errors \
-            "http://$STAGING_DOMAIN/health/live")
-          ready=$(curl --silent --show-error --fail --max-time 20 \
-            --retry 5 --retry-delay 2 --retry-all-errors \
-            "http://$STAGING_DOMAIN/health/ready")
-          python3 - "$live" "$ready" <<'PY'
-          import json
-          import sys
-
-          live = json.loads(sys.argv[1])
-          ready = json.loads(sys.argv[2])
-          if live.get('status') != 'ok':
-              raise SystemExit('External liveness endpoint is not healthy.')
-          if ready.get('status') != 'ok':
-              raise SystemExit('External readiness endpoint is not healthy.')
-          print('external_live_status=ok')
-          print('external_ready_status=ok')
-          PY
-          {
-            echo '# external HTTP evidence'
-            echo "utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-            echo "domain=$STAGING_DOMAIN"
-            echo 'external_live_status=ok'
-            echo 'external_ready_status=ok'
-          } > build/evidence/staging/site-http-external.txt
-
-      - name: Remove local SSH material
-        if: always()
-        shell: bash
-        run: rm -rf "$HOME/.ssh" "$RUNNER_TEMP/freedom-staging"
-
-      - name: Upload sanitized HTTP site evidence
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: staging-site-http-${{ github.run_id }}
-          path: build/evidence/staging
-          if-no-files-found: warn
-          retention-days: 30
+      - run: echo 'This historical aaPanel/OpenLiteSpeed mutation workflow is disabled. See docs/development/staging-workflow-inventory.md.'
