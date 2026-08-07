@@ -90,139 +90,139 @@ return new class extends Migration
 
     private function createAccountGuards(): void
     {
-        DB::unprepared(<<<'SQL'
-CREATE TRIGGER ledger_accounts_update_guard
-BEFORE UPDATE ON ledger_accounts
-FOR EACH ROW
-BEGIN
-    IF NOT (OLD.code <=> NEW.code)
-       OR NOT (OLD.account_class <=> NEW.account_class)
-       OR NOT (OLD.owner_user_id <=> NEW.owner_user_id)
-       OR NOT (OLD.wallet_bucket <=> NEW.wallet_bucket)
-       OR NOT (OLD.currency <=> NEW.currency)
-       OR NOT (OLD.created_at <=> NEW.created_at) THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Ledger account identity is immutable.';
-    END IF;
-END
-SQL);
+        DB::unprepared(implode("\n", [
+            'CREATE TRIGGER ledger_accounts_update_guard',
+            'BEFORE UPDATE ON ledger_accounts',
+            'FOR EACH ROW',
+            'BEGIN',
+            '    IF NOT (OLD.code <=> NEW.code)',
+            '       OR NOT (OLD.account_class <=> NEW.account_class)',
+            '       OR NOT (OLD.owner_user_id <=> NEW.owner_user_id)',
+            '       OR NOT (OLD.wallet_bucket <=> NEW.wallet_bucket)',
+            '       OR NOT (OLD.currency <=> NEW.currency)',
+            '       OR NOT (OLD.created_at <=> NEW.created_at) THEN',
+            "        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Ledger account identity is immutable.';",
+            '    END IF;',
+            'END',
+        ]));
 
-        DB::unprepared(<<<'SQL'
-CREATE TRIGGER ledger_accounts_delete_guard
-BEFORE DELETE ON ledger_accounts
-FOR EACH ROW
-BEGIN
-    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Ledger accounts are non-deletable.';
-END
-SQL);
+        DB::unprepared(implode("\n", [
+            'CREATE TRIGGER ledger_accounts_delete_guard',
+            'BEFORE DELETE ON ledger_accounts',
+            'FOR EACH ROW',
+            'BEGIN',
+            "    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Ledger accounts are non-deletable.';",
+            'END',
+        ]));
     }
 
     private function createTransactionGuards(): void
     {
-        DB::unprepared(<<<'SQL'
-CREATE TRIGGER ledger_transactions_update_guard
-BEFORE UPDATE ON ledger_transactions
-FOR EACH ROW
-BEGIN
-    DECLARE calculated_debit BIGINT DEFAULT 0;
-    DECLARE calculated_credit BIGINT DEFAULT 0;
-    DECLARE calculated_count INT UNSIGNED DEFAULT 0;
+        DB::unprepared(implode("\n", [
+            'CREATE TRIGGER ledger_transactions_update_guard',
+            'BEFORE UPDATE ON ledger_transactions',
+            'FOR EACH ROW',
+            'BEGIN',
+            '    DECLARE calculated_debit BIGINT DEFAULT 0;',
+            '    DECLARE calculated_credit BIGINT DEFAULT 0;',
+            '    DECLARE calculated_count INT UNSIGNED DEFAULT 0;',
+            '',
+            '    IF OLD.finalized_at IS NOT NULL THEN',
+            "        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Finalized ledger transactions are immutable.';",
+            '    END IF;',
+            '',
+            '    IF NOT (OLD.command_key <=> NEW.command_key)',
+            '       OR NOT (OLD.payload_hash <=> NEW.payload_hash)',
+            '       OR NOT (OLD.transaction_type <=> NEW.transaction_type)',
+            '       OR NOT (OLD.expected_total_irr <=> NEW.expected_total_irr)',
+            '       OR NOT (OLD.source_type <=> NEW.source_type)',
+            '       OR NOT (OLD.source_id <=> NEW.source_id)',
+            '       OR NOT (OLD.correlation_id <=> NEW.correlation_id)',
+            '       OR NOT (OLD.created_at <=> NEW.created_at) THEN',
+            "        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Ledger transaction identity is immutable.';",
+            '    END IF;',
+            '',
+            '    IF NEW.finalized_at IS NOT NULL THEN',
+            '        SELECT',
+            "            COALESCE(SUM(CASE WHEN direction = 'debit' THEN amount_irr ELSE 0 END), 0),",
+            "            COALESCE(SUM(CASE WHEN direction = 'credit' THEN amount_irr ELSE 0 END), 0),",
+            '            COUNT(*)',
+            '        INTO calculated_debit, calculated_credit, calculated_count',
+            '        FROM ledger_entries',
+            '        WHERE ledger_transaction_id = OLD.id;',
+            '',
+            '        IF calculated_count < 2',
+            '           OR calculated_debit <> calculated_credit',
+            '           OR calculated_debit <> NEW.expected_total_irr',
+            '           OR calculated_debit <> NEW.posted_debit_irr',
+            '           OR calculated_credit <> NEW.posted_credit_irr',
+            '           OR calculated_count <> NEW.entry_count THEN',
+            "            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Ledger transaction is not balanced.';",
+            '        END IF;',
+            '    END IF;',
+            'END',
+        ]));
 
-    IF OLD.finalized_at IS NOT NULL THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Finalized ledger transactions are immutable.';
-    END IF;
-
-    IF NOT (OLD.command_key <=> NEW.command_key)
-       OR NOT (OLD.payload_hash <=> NEW.payload_hash)
-       OR NOT (OLD.transaction_type <=> NEW.transaction_type)
-       OR NOT (OLD.expected_total_irr <=> NEW.expected_total_irr)
-       OR NOT (OLD.source_type <=> NEW.source_type)
-       OR NOT (OLD.source_id <=> NEW.source_id)
-       OR NOT (OLD.correlation_id <=> NEW.correlation_id)
-       OR NOT (OLD.created_at <=> NEW.created_at) THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Ledger transaction identity is immutable.';
-    END IF;
-
-    IF NEW.finalized_at IS NOT NULL THEN
-        SELECT
-            COALESCE(SUM(CASE WHEN direction = 'debit' THEN amount_irr ELSE 0 END), 0),
-            COALESCE(SUM(CASE WHEN direction = 'credit' THEN amount_irr ELSE 0 END), 0),
-            COUNT(*)
-        INTO calculated_debit, calculated_credit, calculated_count
-        FROM ledger_entries
-        WHERE ledger_transaction_id = OLD.id;
-
-        IF calculated_count < 2
-           OR calculated_debit <> calculated_credit
-           OR calculated_debit <> NEW.expected_total_irr
-           OR calculated_debit <> NEW.posted_debit_irr
-           OR calculated_credit <> NEW.posted_credit_irr
-           OR calculated_count <> NEW.entry_count THEN
-            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Ledger transaction is not balanced.';
-        END IF;
-    END IF;
-END
-SQL);
-
-        DB::unprepared(<<<'SQL'
-CREATE TRIGGER ledger_transactions_delete_guard
-BEFORE DELETE ON ledger_transactions
-FOR EACH ROW
-BEGIN
-    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Ledger transactions are non-deletable.';
-END
-SQL);
+        DB::unprepared(implode("\n", [
+            'CREATE TRIGGER ledger_transactions_delete_guard',
+            'BEFORE DELETE ON ledger_transactions',
+            'FOR EACH ROW',
+            'BEGIN',
+            "    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Ledger transactions are non-deletable.';",
+            'END',
+        ]));
     }
 
     private function createEntryGuards(): void
     {
-        DB::unprepared(<<<'SQL'
-CREATE TRIGGER ledger_entries_insert_guard
-BEFORE INSERT ON ledger_entries
-FOR EACH ROW
-BEGIN
-    DECLARE transaction_finalized_at DATETIME(6);
+        DB::unprepared(implode("\n", [
+            'CREATE TRIGGER ledger_entries_insert_guard',
+            'BEFORE INSERT ON ledger_entries',
+            'FOR EACH ROW',
+            'BEGIN',
+            '    DECLARE transaction_finalized_at DATETIME(6);',
+            '',
+            '    SELECT finalized_at INTO transaction_finalized_at',
+            '    FROM ledger_transactions',
+            '    WHERE id = NEW.ledger_transaction_id',
+            '    FOR UPDATE;',
+            '',
+            '    IF transaction_finalized_at IS NOT NULL THEN',
+            "        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Cannot append to a finalized ledger transaction.';",
+            '    END IF;',
+            'END',
+        ]));
 
-    SELECT finalized_at INTO transaction_finalized_at
-    FROM ledger_transactions
-    WHERE id = NEW.ledger_transaction_id
-    FOR UPDATE;
+        DB::unprepared(implode("\n", [
+            'CREATE TRIGGER ledger_entries_after_insert',
+            'AFTER INSERT ON ledger_entries',
+            'FOR EACH ROW',
+            'BEGIN',
+            '    UPDATE ledger_transactions',
+            "    SET posted_debit_irr = posted_debit_irr + IF(NEW.direction = 'debit', NEW.amount_irr, 0),",
+            "        posted_credit_irr = posted_credit_irr + IF(NEW.direction = 'credit', NEW.amount_irr, 0),",
+            '        entry_count = entry_count + 1',
+            '    WHERE id = NEW.ledger_transaction_id;',
+            'END',
+        ]));
 
-    IF transaction_finalized_at IS NOT NULL THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Cannot append to a finalized ledger transaction.';
-    END IF;
-END
-SQL);
+        DB::unprepared(implode("\n", [
+            'CREATE TRIGGER ledger_entries_update_guard',
+            'BEFORE UPDATE ON ledger_entries',
+            'FOR EACH ROW',
+            'BEGIN',
+            "    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Ledger entries are append-only.';",
+            'END',
+        ]));
 
-        DB::unprepared(<<<'SQL'
-CREATE TRIGGER ledger_entries_after_insert
-AFTER INSERT ON ledger_entries
-FOR EACH ROW
-BEGIN
-    UPDATE ledger_transactions
-    SET posted_debit_irr = posted_debit_irr + IF(NEW.direction = 'debit', NEW.amount_irr, 0),
-        posted_credit_irr = posted_credit_irr + IF(NEW.direction = 'credit', NEW.amount_irr, 0),
-        entry_count = entry_count + 1
-    WHERE id = NEW.ledger_transaction_id;
-END
-SQL);
-
-        DB::unprepared(<<<'SQL'
-CREATE TRIGGER ledger_entries_update_guard
-BEFORE UPDATE ON ledger_entries
-FOR EACH ROW
-BEGIN
-    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Ledger entries are append-only.';
-END
-SQL);
-
-        DB::unprepared(<<<'SQL'
-CREATE TRIGGER ledger_entries_delete_guard
-BEFORE DELETE ON ledger_entries
-FOR EACH ROW
-BEGIN
-    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Ledger entries are append-only.';
-END
-SQL);
+        DB::unprepared(implode("\n", [
+            'CREATE TRIGGER ledger_entries_delete_guard',
+            'BEFORE DELETE ON ledger_entries',
+            'FOR EACH ROW',
+            'BEGIN',
+            "    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Ledger entries are append-only.';",
+            'END',
+        ]));
     }
 
     private function dropTriggers(): void
