@@ -1,6 +1,6 @@
 # Execution Ledger
 
-The authoritative product contract is `docs/specification/master-execution-prompt.md`. This ledger records accepted repository delivery boundaries; it does not redefine that contract.
+The authoritative product contract is `docs/specification/master-execution-prompt.md`. This ledger records accepted repository delivery boundaries; it does not replace or redefine that contract.
 
 For continuation, read `AGENTS.md`, `PROJECT_STATUS.md`, `docs/project-status.json`, and the active handoff. Always live-fetch Draft PR `#6` for the exact current head.
 
@@ -8,15 +8,17 @@ For continuation, read `AGENTS.md`, `PROJECT_STATUS.md`, `docs/project-status.js
 
 - branch: `develop/v1.0.0-completion`;
 - PR: Draft `#6`, base `main`;
-- authoritative active Issue: `#7`;
+- authoritative Phase 0.4 Issue: `#7`;
 - active phase: `0.4.0 — Catalog, Panels, and Offerings`;
 - last completed phase: `0.3.0`;
-- latest accepted Phase 0.4 boundary: Provider Create-Equivalence Reconciliation;
-- Phase 0.4 provider work status: all currently identified non-live defects/evidence complete; controlled live-provider acceptance is blocked on owner-supplied test panels;
+- latest accepted Phase 0.4 boundary: PasarGuard Guarded Live-Acceptance Harness;
+- accepted harness implementation/evidence: CI #1013 / #1015, 317 tests / 1730 assertions;
+- current PasarGuard state: guarded live harness evidence-complete; actual live run blocked on protected Actions Secrets and manual workflow dispatch;
+- current Marzban state: pinned source/offline proof accepted; live acceptance intentionally carried to final project/release acceptance by owner decision on 2026-08-08;
 - live acceptance matrix: `docs/41-phase-0.4-provider-live-acceptance-matrix.md`;
-- active handoff: `docs/42-phase-0.4-controlled-live-provider-handoff.md`.
+- current handoff: `docs/44-phase-0.4-pasarguard-live-execution-handoff.md`.
 
-`main` remains unchanged by this completion work. Phase `0.4.0` remains open until controlled live-provider acceptance and final closure audit pass.
+`main` remains unchanged by completion work. Phase `0.4.0` and Issue `#7` remain open. The Marzban scheduling decision changes timing only and does not remove its mandatory `1.0.0` requirement.
 
 ## Completed phases
 
@@ -145,8 +147,6 @@ Accepted offline mappings: create/update expiry/update data/reset/suspend/activa
 
 ### 9 — Provider Create-Equivalence Reconciliation
 
-Root cause reconciled: generic provider-observable `RemoteServiceSnapshot::canonicalHash` was still being used by the common resolver as create equality even though provider-specific equivalence mappers already existed.
-
 Accepted correction:
 
 - separate provider-observable `canonicalHash` from optional provider-specific `createEquivalenceHash`;
@@ -154,43 +154,99 @@ Accepted correction:
 - missing proof => Manual Review/no create;
 - mismatch => conflict/no overwrite;
 - successful-create snapshot must pass the same provider-specific equivalence validation;
-- source gateways derive equivalence through the pinned mutation-contract mappers without enabling live mutation.
+- source gateways derive equivalence through pinned mutation-contract mappers without enabling live mutation.
 
 Implementation:
 
 - SHA `ab1e0d16d23460df4bf1ad9be4fcef0d16c37a43`;
 - CI `31223470871` / #995 — success;
 - 315 tests / 1678 assertions;
-- artifact `test-evidence-31223470871`, ID `9011256284`;
-- independent digest `sha256:f3fc78ab55ba0adbb2814bb6d0de464736e897df36625b8f72f54b3f7b8fe95d`.
+- artifact ID `9011256284`;
+- digest `sha256:f3fc78ab55ba0adbb2814bb6d0de464736e897df36625b8f72f54b3f7b8fe95d`.
 
 Evidence:
 
 - SHA `a70b28cb984c23f1e219287e88d20014ee9f0310`;
 - CI `31223749257` / #997 — success;
 - 315 tests / 1678 assertions;
-- artifact `test-evidence-31223749257`, ID `9011359876`;
-- independent digest `sha256:140e6a45fe2ef9523dee0147f6131a1e2d1bcaf63548b57eea7b83d3f0d9b827`;
+- artifact ID `9011359876`;
+- digest `sha256:140e6a45fe2ef9523dee0147f6131a1e2d1bcaf63548b57eea7b83d3f0d9b827`;
 - `evidence/0.4.0/provider-create-equivalence-reconciliation.md`;
 - `docs/40-phase-0.4-provider-create-equivalence-traceability.md`.
 
-## Remaining Phase 0.4 gate
+### 10 — PasarGuard Guarded Live-Acceptance Harness
 
-No remaining non-live provider defect is currently identified by the reconciliation audit.
+Accepted implementation adds a manual, secret-backed, fail-closed PasarGuard `v5.2.1` live sequence without enabling normal runtime mutations or Targets.
 
-The remaining provider acceptance is deployment-specific and defined exactly in:
+Prepared guarded behavior:
 
-- `docs/41-phase-0.4-provider-live-acceptance-matrix.md`;
-- `docs/42-phase-0.4-controlled-live-provider-handoff.md`.
+- protected Actions Secret inputs only;
+- HTTPS-only cURL, peer/host verification, no redirects;
+- API-base detection and exact `5.2.1` gate before mutation;
+- inbound/enabled-group discovery;
+- deterministic disposable username and authoritative absence-before-create;
+- exactly one create and provider-specific post-read equivalence;
+- mismatch/no-overwrite;
+- expiry/data Set/data Add/reset/suspend/activate;
+- sensitive delivery/rotation proof without emitting raw subscription material;
+- delete/final absence and discovery-before-cleanup in `finally`;
+- sanitized artifact output.
 
-It requires owner-supplied controlled Marzban `v0.8.4` and PasarGuard `v5.2.1` test environments (or explicit re-review authorization for different exact builds), protected credentials, disposable test-user permission, live auth/version/target/create/adopt/mutation/delivery/fault/cleanup evidence, and a separate explicit Target activation decision.
+Implementation:
 
-Until that gate passes:
+- SHA `e18460357d306789cbbf85721f61a4e3a3bbb0e2`;
+- CI `31226863010` / #1013 — success;
+- 317 tests / 1730 assertions;
+- artifact `test-evidence-31226863010`, ID `9012421937`;
+- digest `sha256:72d10f54f0347ac743471c78ea4401a4b9268a763e6653cb2a3c17bf4e2608e6`.
+
+Evidence:
+
+- SHA `71ca4b39df41bc9fcf725c30e9caba3285ee5412`;
+- CI `31227084007` / #1015 — success;
+- 317 tests / 1730 assertions;
+- artifact `test-evidence-31227084007`, ID `9012490991`;
+- digest `sha256:0b8cdd9772a5a4f54d719a794bc4b8d44e284345eb208e6460c9bc380df30b8f`;
+- `evidence/0.4.0/pasarguard-live-acceptance-harness.md`;
+- `docs/43-phase-0.4-pasarguard-live-harness-traceability.md`.
+
+This boundary proves the harness and its safety controls only. It does not prove successful live PasarGuard authentication or any remote effect.
+
+## Current Phase 0.4 live gates
+
+### PasarGuard — active now
+
+Execution authority:
+
+- generic matrix `docs/41-phase-0.4-provider-live-acceptance-matrix.md`;
+- current handoff `docs/44-phase-0.4-pasarguard-live-execution-handoff.md`;
+- guarded workflow `.github/workflows/provider-live-acceptance.yml`.
+
+Actual execution requires protected Actions Secrets named `PASARGUARD_TEST_ORIGIN` and `PASARGUARD_TEST_API_KEY`, then manual dispatch on `develop/v1.0.0-completion` using the workflow's exact confirmation value. Secret values are never repository/workflow-input evidence.
+
+The current GitHub connector can inspect/retry Actions runs but cannot create/update Actions Secrets or initiate a fresh `workflow_dispatch`.
+
+After the guarded sequence, coordinator-level adoption/idempotency, controlled timeout/5xx/429 uncertainty and explicit Target activation remain separate live rows.
+
+### Marzban — carried final-release gate
+
+By owner decision on 2026-08-08, Marzban `v0.8.4` live acceptance is deferred until final project/release acceptance. The requirement remains mandatory for `1.0.0`; no live Marzban claim or Target activation is accepted now.
+
+Until all applicable provider gates and the final Phase 0.4 closure audit pass:
 
 - real provider mutation/delivery capabilities remain unadvertised/fail closed;
 - real Targets remain disabled/unverified;
-- no live compatibility claim;
+- no unexecuted live compatibility claim;
 - no Phase `0.4.0` closure.
+
+## Parallel continuation policy
+
+Later-phase implementation may continue under the owner-approved provider scheduling exception while Issue `#7` remains open, provided that:
+
+- Phase `0.4.0` is never marked complete prematurely;
+- no later work weakens lookup-before-create, provider-specific equivalence, idempotency, uncertainty discovery, TLS, redaction or Target activation controls;
+- release/production acceptance remains blocked on the carried provider gates;
+- future-phase evidence does not claim satisfaction of unexecuted Phase 0.4 live rows.
 
 ## Later phases
 
@@ -210,7 +266,7 @@ Until that gate passes:
 - no phase/increment closes from docs/schema/fake/interface presence alone;
 - accepted code increments require exact implementation CI/artifact plus exact evidence-head CI;
 - integer IRR at monetary boundaries;
-- secrets never enter repository/chat/Issues/PR/evidence;
+- secrets never enter repository/Issues/PR/evidence/artifacts;
 - privileged mutations re-authorize at execution time;
 - replay/idempotency conflicts fail closed and preserve original primary effect;
 - authoritative remote lookup precedes create;
