@@ -100,7 +100,7 @@ done
 
 status_requirements=(
     'PR `#6`'
-    'Issue `#7`'
+    '`#7`'
     'develop/v1.0.0-completion'
     "$implementation_sha"
     "$evidence_sha"
