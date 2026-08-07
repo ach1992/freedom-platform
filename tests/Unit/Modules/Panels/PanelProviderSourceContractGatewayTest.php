@@ -13,7 +13,6 @@ use App\Modules\Panels\Application\Contracts\PasarGuardGatewayFactory;
 use App\Modules\Panels\Application\Exceptions\AuthoritativePanelLookupUnavailable;
 use App\Modules\Panels\Application\PanelAdapterSession;
 use App\Modules\Panels\Application\PanelCredentialPolicy;
-use App\Modules\Panels\Application\PanelServiceCanonicalizer;
 use App\Modules\Panels\Application\RemoteIdentityResolver;
 use App\Modules\Panels\Domain\PanelCredentials;
 use App\Modules\Panels\Domain\PanelEndpoint;
@@ -54,6 +53,7 @@ final class PanelProviderSourceContractGatewayTest extends TestCase
                 'username' => 'fp_provider_001',
                 'status' => 'active',
                 'data_limit' => 1_073_741_824,
+                'data_limit_reset_strategy' => 'no_reset',
                 'used_traffic' => 268_435_456,
                 'expire' => 1_800_000_000,
                 'proxies' => ['vless' => ['id' => '00000000-0000-4000-8000-000000000001']],
@@ -83,6 +83,8 @@ final class PanelProviderSourceContractGatewayTest extends TestCase
         self::assertSame(1_073_741_824, $snapshot->dataLimitBytes);
         self::assertSame(268_435_456, $snapshot->usedBytes);
         self::assertSame(1_800_000_000, $snapshot->expiresAt?->getTimestamp());
+        self::assertNotNull($snapshot->createEquivalenceHash);
+        self::assertNotSame($snapshot->canonicalHash, $snapshot->createEquivalenceHash);
 
         $targets = $gateway->listCompatibleTargets();
         self::assertCount(1, $targets);
@@ -90,8 +92,15 @@ final class PanelProviderSourceContractGatewayTest extends TestCase
         self::assertSame('VLESS TCP REALITY', $targets[0]['name']);
         self::assertStringStartsWith('marzban-inbound-', $targets[0]['id']);
 
+        $resolution = (new RemoteIdentityResolver)->resolve(
+            $gateway,
+            $this->createRequest($targets[0]['id']),
+        );
+        self::assertSame(RemoteIdentityDisposition::Adopt, $resolution->disposition);
+        self::assertSame($snapshot->createEquivalenceHash, $resolution->service?->createEquivalenceHash);
+
         $beforeMutation = Http::recorded()->count();
-        $mutation = $gateway->createService($this->createRequest());
+        $mutation = $gateway->createService($this->createRequest($targets[0]['id']));
         self::assertSame(PanelOperationOutcome::DefinitiveFailure, $mutation->outcome);
         self::assertSame('marzban_source_contract_mutation_disabled', $mutation->providerCode);
         self::assertSame($beforeMutation, Http::recorded()->count());
@@ -158,6 +167,8 @@ final class PanelProviderSourceContractGatewayTest extends TestCase
         self::assertSame(1_073_741_824, $byUsername->dataLimitBytes);
         self::assertSame(134_217_728, $byUsername->usedBytes);
         self::assertSame(1_800_000_000, $byUsername->expiresAt?->getTimestamp());
+        self::assertNotNull($byUsername->createEquivalenceHash);
+        self::assertNotSame($byUsername->canonicalHash, $byUsername->createEquivalenceHash);
 
         $byId = $gateway->findByRemoteId('42');
         self::assertSame('fp_provider_001', $byId?->username);
@@ -167,8 +178,15 @@ final class PanelProviderSourceContractGatewayTest extends TestCase
         self::assertSame('pasarguard-group-4', $targets[0]['id']);
         self::assertSame('primary', $targets[0]['name']);
 
+        $resolution = (new RemoteIdentityResolver)->resolve(
+            $gateway,
+            $this->createRequest($targets[0]['id']),
+        );
+        self::assertSame(RemoteIdentityDisposition::Adopt, $resolution->disposition);
+        self::assertSame($byUsername->createEquivalenceHash, $resolution->service?->createEquivalenceHash);
+
         $beforeMutation = Http::recorded()->count();
-        $mutation = $gateway->createService($this->createRequest());
+        $mutation = $gateway->createService($this->createRequest($targets[0]['id']));
         self::assertSame(PanelOperationOutcome::DefinitiveFailure, $mutation->outcome);
         self::assertSame('pasarguard_source_contract_mutation_disabled', $mutation->providerCode);
         self::assertSame($beforeMutation, Http::recorded()->count());
@@ -218,12 +236,12 @@ final class PanelProviderSourceContractGatewayTest extends TestCase
             ['authoritative_username_lookup'],
             [],
         ));
+        $adapter->method('createEquivalenceHash')->willReturn(hash('sha256', 'fixture-create-equivalence'));
         $adapter->expects(self::once())
             ->method('findByDeterministicUsername')
             ->willThrowException(new AuthoritativePanelLookupUnavailable('fixture_lookup_failed'));
 
-        $resolution = (new RemoteIdentityResolver(new PanelServiceCanonicalizer))
-            ->resolve($adapter, $this->createRequest());
+        $resolution = (new RemoteIdentityResolver)->resolve($adapter, $this->createRequest());
 
         self::assertSame(RemoteIdentityDisposition::ManualReview, $resolution->disposition);
         self::assertSame('authoritative_username_lookup_unavailable', $resolution->reasonCode);
@@ -280,13 +298,13 @@ final class PanelProviderSourceContractGatewayTest extends TestCase
         );
     }
 
-    private function createRequest(): PanelCreateServiceRequest
+    private function createRequest(string $targetReference = 'fixture-target'): PanelCreateServiceRequest
     {
         return new PanelCreateServiceRequest(
             'provider-source-contract-operation-0001',
             'provider-source-contract-key-0001',
             'fp_provider_001',
-            'fixture-target',
+            $targetReference,
             1_073_741_824,
             new DateTimeImmutable('@1800000000'),
             ['service_mode' => 'volume'],
