@@ -23,6 +23,7 @@ final readonly class LedgerPostingService
 
     /**
      * @param  list<LedgerEntryDraft>  $entries
+     *
      * @requirement WAL-002 DAT-002 DAT-003 DAT-004 QUA-001
      */
     public function post(
