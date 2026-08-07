@@ -20,6 +20,7 @@ esac
 php_root="${PHP_ROOT:-/www/server/php/84}"
 composer_bin="${COMPOSER_BIN:-/usr/local/bin/composer}"
 php_bin="$php_root/bin/php"
+php_config="$php_root/bin/php-config"
 php_ini="${PHP_CLI_INI:-$php_root/etc/php-cli.ini}"
 
 : "${RUNNER_TEMP:?RUNNER_TEMP is required}"
@@ -41,24 +42,65 @@ test -f "$composer_bin" || {
     exit 1
 }
 
+base_php_args=(
+    "$php_bin"
+    -c "$php_ini"
+    -d opcache.jit=0
+    -d opcache.jit_buffer_size=0
+)
+
+pcov_source=not-loaded
+pcov_module=''
+
+if "${base_php_args[@]}" -r 'exit(extension_loaded("pcov") ? 0 : 1);'; then
+    pcov_source=ini
+elif [[ "$mode" == 'coverage' ]]; then
+    if [[ -x "$php_config" ]]; then
+        extension_dir="$($php_config --extension-dir)"
+    else
+        extension_dir="$("${base_php_args[@]}" -r 'echo ini_get("extension_dir");')"
+    fi
+
+    extension_dir="${extension_dir%/}"
+    test -n "$extension_dir" || {
+        echo 'Unable to resolve the PHP extension directory.' >&2
+        exit 1
+    }
+
+    pcov_module="$extension_dir/pcov.so"
+    test -r "$pcov_module" || {
+        echo "Required PCOV module is unavailable: $pcov_module" >&2
+        exit 1
+    }
+
+    pcov_source=explicit
+fi
+
 tool_bin="$RUNNER_TEMP/freedom-ci-toolchain-$GITHUB_JOB"
 rm -rf "$tool_bin"
 mkdir -p "$tool_bin"
 
-cat > "$tool_bin/php" <<EOF
-#!/usr/bin/env bash
-exec "$php_bin" \
-    -c "$php_ini" \
-    -d opcache.jit=0 \
-    -d opcache.jit_buffer_size=0 \
-    -d pcov.enabled=$pcov_enabled \
-    "\$@"
-EOF
+{
+    echo '#!/usr/bin/env bash'
+    echo 'set -euo pipefail'
+    echo 'php_args=('
+    printf '    %q\n' "$php_bin"
+    printf '    -c\n    %q\n' "$php_ini"
+    printf '    -d\n    %q\n' 'opcache.jit=0'
+    printf '    -d\n    %q\n' 'opcache.jit_buffer_size=0'
+    if [[ -n "$pcov_module" ]]; then
+        printf '    -d\n    %q\n' "extension=$pcov_module"
+    fi
+    printf '    -d\n    %q\n' "pcov.enabled=$pcov_enabled"
+    echo ')'
+    echo 'exec "${php_args[@]}" "$@"'
+} > "$tool_bin/php"
 
-cat > "$tool_bin/composer" <<EOF
-#!/usr/bin/env bash
-exec "$tool_bin/php" "$composer_bin" "\$@"
-EOF
+{
+    echo '#!/usr/bin/env bash'
+    echo 'set -euo pipefail'
+    printf 'exec %q %q "$@"\n' "$tool_bin/php" "$composer_bin"
+} > "$tool_bin/composer"
 
 chmod 0755 "$tool_bin/php" "$tool_bin/composer"
 echo "$tool_bin" >> "$GITHUB_PATH"
@@ -90,7 +132,7 @@ required_extensions=(
     xmlwriter
 )
 
-if [[ "$mode" == "coverage" ]]; then
+if [[ "$mode" == 'coverage' ]]; then
     required_extensions+=(pcov)
 fi
 
@@ -99,6 +141,8 @@ required_csv="$(IFS=,; echo "${required_extensions[*]}")"
 if ! php_summary="$(
     FREEDOM_REQUIRED_EXTENSIONS="$required_csv" \
     FREEDOM_EXPECTED_PCOV="$pcov_enabled" \
+    FREEDOM_PCOV_SOURCE="$pcov_source" \
+    FREEDOM_PCOV_MODULE="$pcov_module" \
     "$tool_bin/php" -r '
         $required = array_values(array_filter(explode(",", (string) getenv("FREEDOM_REQUIRED_EXTENSIONS"))));
 
@@ -128,12 +172,20 @@ if ! php_summary="$(
             exit(1);
         }
 
+        $source = (string) getenv("FREEDOM_PCOV_SOURCE");
+        if ($expectedPcov === 1 && ! in_array($source, ["ini", "explicit"], true)) {
+            fwrite(STDERR, "Coverage mode requires a known PCOV loading source.".PHP_EOL);
+            exit(1);
+        }
+
         printf(
-            "php=%s\nini=%s\npcov_loaded=%s\npcov_enabled=%s\njit_buffer_size=%s\n",
+            "php=%s\nini=%s\npcov_loaded=%s\npcov_enabled=%s\npcov_source=%s\npcov_module=%s\njit_buffer_size=%s\n",
             PHP_VERSION,
             php_ini_loaded_file() ?: "none",
             extension_loaded("pcov") ? "yes" : "no",
             extension_loaded("pcov") ? (string) (int) ini_get("pcov.enabled") : "not-loaded",
+            $source,
+            (string) getenv("FREEDOM_PCOV_MODULE") ?: "not-explicit",
             (string) ini_get("opcache.jit_buffer_size"),
         );
     ' 2> "$startup_stderr"
