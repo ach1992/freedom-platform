@@ -1,4 +1,8 @@
-# Current Implementation Audit
+# Historical Implementation Audit — Superseded
+
+> **Historical snapshot:** This audit reflects repository state on 2026-08-05 during Phase `0.3.0`. It is preserved as evidence of the reasoning and boundaries at that time. It is not the current project status and must not be used as a continuation entry point. Use `AGENTS.md`, `PROJECT_STATUS.md`, `docs/project-status.json`, and the active handoff instead.
+
+## Original audit
 
 Audit date: `2026-08-05`  
 Audited ref: `develop/v1.0.0-completion`  
