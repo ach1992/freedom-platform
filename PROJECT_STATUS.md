@@ -15,7 +15,8 @@ Current overlays:
 - traceability: `docs/32-current-traceability-overlay.md`;
 - risks: `docs/33-current-risk-overlay.md`;
 - stabilization audit: `docs/31-project-control-plane-audit.md`;
-- staging workflow status: `docs/development/staging-workflow-inventory.md`.
+- staging workflow status: `docs/development/staging-workflow-inventory.md`;
+- operational instruction status: `docs/development/operational-document-status.md`.
 
 ## Live-state rule
 
@@ -69,41 +70,47 @@ Explicitly unverified:
 - real Marzban or PasarGuard version/API compatibility;
 - live provider or production activation.
 
-## Immediate stabilization gate
+## Stabilization status
 
-Feature development is temporarily paused at this bounded increment until repository control is restored.
+Feature development remains paused until the current stabilization head passes mandatory exact-SHA CI.
 
-### Completed or implemented cleanup
+### Completed cleanup
 
-- mandatory repository operating contract and continuation entry points added;
-- current human/machine status and schema added;
+- repository operating contract, contributor guide, continuation runbook, repository map, increment lifecycle, and machine-readable status/schema added;
 - execution ledger reconciled through verified Phase `0.4.0` increment 5;
-- current traceability and risk overlays added;
+- current traceability/risk overlays and project control-plane audit added;
 - historical audits/candidate documents marked superseded;
-- self-hosted PHP/Composer runner contract made explicit;
+- architecture and test/CI documents now distinguish target, implemented, foundation, candidate, and accepted evidence;
+- self-hosted PHP/Composer runner contract made deterministic with explicit CLI INI, JIT disabled, and PCOV enabled only for coverage;
+- `league/commonmark` updated from vulnerable `2.8.3` to patched `2.9.0` through a bounded lockfile repair;
+- five active-increment files received the validated Pint-only repair;
+- temporary write-capable repair workflow and generator removed;
+- project-control verification integrated into mandatory preflight;
 - safe read-only `Staging Readiness` workflow added;
-- all legacy staging workflows replaced with inert historical stubs;
-- project-control verification script added.
+- all legacy staging mutation/diagnostic workflows replaced with inert historical stubs;
+- active Trial/Panel handoff reconciled with the new control plane.
 
-### Still required in mandatory order
+### Remaining stabilization gate
 
-1. clear the occupied/stuck self-hosted runner queue;
-2. apply the validated lockfile security update and five focused formatting repairs;
-3. remove the temporary repair workflow and generator;
-4. integrate project-control verification into mandatory preflight;
-5. reconcile PR `#6`, Issue `#7`, architecture/test/deployment documents, and active handoff;
-6. run mandatory CI on the exact stabilization head and fix every real failure;
-7. only then resume Trial/Panel implementation verification.
+1. Fetch PR `#6` and obtain the exact current head.
+2. Find a `CI` run on that exact head.
+3. When no exact-head run exists, manually run `Actions → CI → Run workflow → develop/v1.0.0-completion`.
+4. Inspect all mandatory jobs and executable logs.
+5. Fix every real failure with a focused commit and repeat until exact-head CI is green.
+6. Record stabilization results in this status/audit only after the accepted run exists.
+7. Resume Trial/Panel implementation verification from the active handoff.
 
-## Known current blockers and risks
+PR `#6` and Issue `#7` are intentionally not rewritten merely for stabilization. Their accepted feature-boundary updates remain gated by the implementation/evidence exact-SHA lifecycle.
 
-- An older self-hosted CI static job remained `in_progress` without executable steps and blocked newer queued jobs. Repeated commits/dispatches must not be used as a workaround; the runner service must be inspected once connector evidence confirms the queue is still blocked.
-- The runner toolchain must select `/www/server/php/84/etc/php-cli.ini`, disable JIT for CI, enable PCOV only for coverage, and validate PHP/Composer/extensions before expensive work.
-- The previously locked `league/commonmark` `2.8.3` is affected by `CVE-2026-3066`; a bounded repair to `2.9.0` has been generated and validated but is not accepted until committed and exact-head CI passes.
-- Five active-increment files have a validated Pint-only repair pending application.
-- Temporary write-capable repair automation must be removed immediately after the repair commit.
-- The global baseline traceability/risk catalogues still require later full regeneration; current overlays govern status meanwhile.
-- The long-running PR is intentionally retained, but its size requires strict status, handoff, and evidence discipline.
+## Known current risks
+
+- Connector-originated commits may not automatically start Actions; an exact-head manual dispatch may be the only remaining human action.
+- The single self-hosted runner serializes jobs; avoid commit/dispatch storms while a run is active.
+- The global baseline traceability/risk catalogues still require a later full regeneration; current overlays govern status meanwhile.
+- `TrialReservationService` is a reviewability hotspot. Decompose it only after a green behavior baseline, preserving transactions, lock order, replay, and tests.
+- Aggregate coverage exists, but Phase `0.4.0` closure still requires explicit critical-branch interpretation rather than relying on a raw percentage.
+- Real panel versions/contracts and production activation remain deliberately untested and fail closed.
+- The long-running PR is intentionally retained; its scale requires strict status, handoff, and evidence discipline.
 
 ## Non-negotiable remote-effect rules
 
@@ -116,7 +123,7 @@ Feature development is temporarily paused at this bounded increment until reposi
 - TLS verification is never disabled;
 - system CA is default; custom CA or pinning is limited to explicitly configured private/self-signed endpoints.
 
-## Next completion boundary
+## Next feature completion boundary
 
 The next acceptable feature boundary is not “code exists.” It is:
 
