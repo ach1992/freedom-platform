@@ -23,6 +23,7 @@ required_files=(
     docs/31-project-control-plane-audit.md
     docs/32-current-traceability-overlay.md
     docs/33-current-risk-overlay.md
+    docs/35-phase-0.4-panel-provider-source-contracts.md
     docs/specification/master-execution-prompt.md
     .github/workflows/staging-readiness.yml
 )
@@ -45,12 +46,19 @@ jq -e '
     and .live_head_source == "github_pr_head_sha"
     and .active_phase.version == "0.4.0"
     and .active_phase.status == "active"
-    and .last_verified_boundary.implementation_sha == "8e62867277acdd39cd1471ed3d454ef25520bef8"
-    and .last_verified_boundary.evidence_sha == "0d34af0aa4f9f227fdf3cae74b4fd4717f199ddf"
-    and .last_verified_boundary.artifact_sha256 == "5ec6b6dd94e1305c17312650abdc94a5253521834911c26eb48f8decbd105cb9"
-    and .active_increment.status == "unverified"
-    and (.active_increment.requirements | index("CAT-006") != null)
+    and .last_verified_boundary.implementation_sha == "b146c2c6aa902b4ed252d200121d63e422cd87f2"
+    and .last_verified_boundary.evidence_sha == "31a1854a2804bb0b2cf466c96887de7c5813b343"
+    and .last_verified_boundary.artifact_sha256 == "65b46242099caeef40e8bfeb7717b915ec306b449078570bd680420811bbde09"
+    and .last_verified_boundary.tests == 298
+    and .last_verified_boundary.assertions == 1471
+    and .active_increment.name == "Pinned Marzban and PasarGuard Source-Contract Adapters"
+    and .active_increment.status == "active"
+    and .active_increment.handoff_path == "docs/35-phase-0.4-panel-provider-source-contracts.md"
     and (.active_increment.requirements | index("PRV-001") != null)
+    and (.active_increment.requirements | index("PRV-002") != null)
+    and (.active_increment.requirements | index("PRV-003") != null)
+    and .stabilization.status == "complete"
+    and .stabilization.feature_development_paused == false
     and (.forbidden_actions | index("merge_pr") != null)
     and (.forbidden_actions | index("push_main") != null)
 ' docs/project-status.json >/dev/null || fail 'project status constants or current boundary are inconsistent'
@@ -66,8 +74,10 @@ status_requirements=(
     'PR `#6`'
     'Issue `#7`'
     'develop/v1.0.0-completion'
-    '0d34af0aa4f9f227fdf3cae74b4fd4717f199ddf'
-    'docs/30-phase-0.4-trial-panel-handoff.md'
+    '31a1854a2804bb0b2cf466c96887de7c5813b343'
+    'docs/35-phase-0.4-panel-provider-source-contracts.md'
+    'Marzban `v0.8.4`'
+    'PasarGuard `v5.2.1`'
     'docs/32-current-traceability-overlay.md'
     'docs/33-current-risk-overlay.md'
 )
