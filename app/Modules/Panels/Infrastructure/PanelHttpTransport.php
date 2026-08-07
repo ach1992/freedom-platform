@@ -21,8 +21,8 @@ final readonly class PanelHttpTransport
     ) {}
 
     /**
-     * @param array<string, string> $headers
-     * @param array<string, scalar|array<array-key, mixed>|null>|null $payload
+     * @param  array<string, string>  $headers
+     * @param  array<string, scalar|array<array-key, mixed>|null>|null  $payload
      */
     public function request(
         string $method,
