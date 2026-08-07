@@ -70,9 +70,14 @@ final class FakePanelAdapter implements PanelAdapter
         return $remoteId === null ? null : ($this->services[$remoteId] ?? null);
     }
 
+    public function createEquivalenceHash(PanelCreateServiceRequest $request): string
+    {
+        return $this->canonicalizer->hashCreateRequest($request);
+    }
+
     public function createService(PanelCreateServiceRequest $request): PanelOperationResult
     {
-        $expectedHash = $this->canonicalizer->hashCreateRequest($request);
+        $expectedHash = $this->createEquivalenceHash($request);
         $fingerprint = $this->operationFingerprint('create_service', [
             'canonical_hash' => $expectedHash,
         ]);
@@ -83,7 +88,8 @@ final class FakePanelAdapter implements PanelAdapter
 
         $existing = $this->findByDeterministicUsername($request->username);
         if ($existing !== null) {
-            $result = hash_equals($expectedHash, $existing->canonicalHash)
+            $result = $existing->createEquivalenceHash !== null
+                && hash_equals($expectedHash, $existing->createEquivalenceHash)
                 ? $this->success($existing, 'fake_service_adopted')
                 : $this->failure('fake_remote_conflict', 'Fake remote service conflicts with the request.', $existing);
 
@@ -111,6 +117,7 @@ final class FakePanelAdapter implements PanelAdapter
             $request->dataLimitBytes,
             0,
             $request->expiresAt,
+            $expectedHash,
             $expectedHash,
         );
         $this->services[$remoteId] = $service;
@@ -378,6 +385,7 @@ final class FakePanelAdapter implements PanelAdapter
             $usedBytes ?? $current->usedBytes,
             $expiresAt ?? $current->expiresAt,
             $current->canonicalHash,
+            $current->createEquivalenceHash,
         );
         $this->services[$remoteId] = $service;
 
