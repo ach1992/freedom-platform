@@ -1,0 +1,75 @@
+{
+  "$schema": "./development/project-status.schema.json",
+  "schema_version": 1,
+  "last_reviewed": "2026-08-07",
+  "target_release": "1.0.0",
+  "repository": "ach1992/freedom-platform",
+  "authoritative_pr": 6,
+  "authoritative_issue": 7,
+  "allowed_branch": "develop/v1.0.0-completion",
+  "base_branch": "main",
+  "required_pr_state": "draft",
+  "live_head_source": "github_pr_head_sha",
+  "active_phase": {
+    "version": "0.4.0",
+    "name": "Catalog, Panels and Offerings",
+    "status": "active"
+  },
+  "last_verified_boundary": {
+    "name": "Custom Plan Policy and Calculation Snapshot",
+    "implementation_sha": "8e62867277acdd39cd1471ed3d454ef25520bef8",
+    "implementation_ci_run_id": 31071843621,
+    "implementation_ci_run_number": 833,
+    "evidence_sha": "0d34af0aa4f9f227fdf3cae74b4fd4717f199ddf",
+    "evidence_ci_run_id": 31102652203,
+    "evidence_ci_run_number": 834,
+    "tests": 255,
+    "assertions": 1267,
+    "artifact_name": "test-evidence-31102652203",
+    "artifact_id": 8968201643,
+    "artifact_sha256": "5ec6b6dd94e1305c17312650abdc94a5253521834911c26eb48f8decbd105cb9",
+    "evidence_path": "evidence/0.4.0/custom-plan-policy-calculation.md",
+    "traceability_path": "docs/29-phase-0.4-custom-plan-traceability.md"
+  },
+  "active_increment": {
+    "name": "Trial Policy and Panel Adapter Foundation",
+    "status": "unverified",
+    "handoff_path": "docs/30-phase-0.4-trial-panel-handoff.md",
+    "requirements": [
+      "CAT-006",
+      "CAT-008",
+      "PRV-001",
+      "PRV-002",
+      "PRV-003",
+      "ACL-002",
+      "SEC-001",
+      "SEC-002",
+      "DAT-001",
+      "DAT-003",
+      "QUA-001"
+    ]
+  },
+  "stabilization": {
+    "status": "active",
+    "feature_development_paused": true,
+    "exit_conditions": [
+      "mandatory_ci_green_on_exact_stabilization_head",
+      "dependency_and_formatting_repair_applied",
+      "temporary_repair_automation_removed",
+      "project_control_documents_reconciled",
+      "obsolete_staging_workflows_archived_or_disabled",
+      "status_and_traceability_machine_checks_pass"
+    ]
+  },
+  "forbidden_actions": [
+    "merge_pr",
+    "mark_ready_for_review",
+    "enable_auto_merge",
+    "rewrite_history",
+    "force_push",
+    "push_main",
+    "create_temporary_branch",
+    "retrieve_or_print_secrets",
+    "claim_unverified_provider_compatibility"
+  ]
+}
