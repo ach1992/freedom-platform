@@ -1,108 +1,14 @@
-name: Staging Inventory
+name: Historical - Disabled Staging Inventory
 
 on:
   workflow_dispatch:
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
-  inventory:
+  disabled:
+    name: Disabled historical workflow
+    if: ${{ github.repository == 'disabled/historical-workflow' }}
     runs-on: ubuntu-24.04
     steps:
-      - name: Check out source
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-
-      - name: Validate required staging secrets
-        env:
-          STAGING_HOST: ${{ secrets.STAGING_HOST }}
-          STAGING_PORT: ${{ secrets.STAGING_PORT }}
-          STAGING_USER: ${{ secrets.STAGING_USER }}
-          STAGING_DOMAIN: ${{ secrets.STAGING_DOMAIN }}
-          STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
-          STAGING_KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          missing=0
-          for name in STAGING_HOST STAGING_PORT STAGING_USER STAGING_DOMAIN STAGING_SSH_PRIVATE_KEY STAGING_KNOWN_HOSTS; do
-            if [[ -z "${!name:-}" ]]; then
-              echo "Missing required secret: ${name}" >&2
-              missing=1
-            else
-              echo "Secret present: ${name}"
-            fi
-          done
-          exit "$missing"
-
-      - name: Prepare SSH client
-        env:
-          STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
-          STAGING_KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          install -d -m 700 "$HOME/.ssh"
-          printf '%s\n' "$STAGING_SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
-          printf '%s\n' "$STAGING_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
-          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
-
-      - name: Collect read-only server inventory
-        env:
-          STAGING_HOST: ${{ secrets.STAGING_HOST }}
-          STAGING_PORT: ${{ secrets.STAGING_PORT }}
-          STAGING_USER: ${{ secrets.STAGING_USER }}
-          STAGING_DOMAIN: ${{ secrets.STAGING_DOMAIN }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p build/evidence/staging
-          ssh \
-            -o BatchMode=yes \
-            -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=yes \
-            -o ConnectTimeout=20 \
-            -p "$STAGING_PORT" \
-            "$STAGING_USER@$STAGING_HOST" \
-            'set -eu
-             echo "# staging inventory"
-             echo "utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-             echo "kernel=$(uname -srmo)"
-             if [ -r /etc/os-release ]; then . /etc/os-release; echo "os=${PRETTY_NAME}"; fi
-             echo "user=$(id -un)"
-             echo "uid=$(id -u)"
-             echo "hostname=$(hostname)"
-             echo "disk_root=$(df -P / | awk "NR==2 {print \$4}")"
-             echo "memory_kib=$(awk "/MemTotal/ {print \$2}" /proc/meminfo)"
-             for service in ssh lsws lshttpd mariadb mysql redis-server redis supervisor; do
-               state=$(systemctl is-active "$service" 2>/dev/null || true)
-               [ -n "$state" ] || state=not-found
-               echo "service_${service}=${state}"
-             done
-             for command in php composer git redis-cli mysql mariadb supervisorctl curl; do
-               path=$(command -v "$command" 2>/dev/null || true)
-               [ -n "$path" ] || path=missing
-               echo "command_${command}=${path}"
-             done
-             php -r "echo \"php=\".PHP_VERSION.\"\\n\";" 2>/dev/null || true
-             test -x /www/server/php/84/bin/php && /www/server/php/84/bin/php -r "echo \"php84_cli=\".PHP_VERSION.\"\\n\";" || true
-             test -x /usr/local/lsws/lsphp84/bin/lsphp && /usr/local/lsws/lsphp84/bin/lsphp -r "echo \"lsphp84=\".PHP_VERSION.\"\\n\";" || true
-             test -d /www/server/panel && echo "aapanel=present" || echo "aapanel=absent"
-             ss -lnt 2>/dev/null | awk "NR==1 || /:(22|80|443|7800)[[:space:]]/"' \
-            | tee build/evidence/staging/inventory.txt
-          getent ahostsv4 "$STAGING_DOMAIN" | awk '{print "domain_ipv4=" $1}' | sort -u \
-            | tee build/evidence/staging/dns.txt
-
-      - name: Remove SSH material
-        if: always()
-        shell: bash
-        run: rm -rf "$HOME/.ssh"
-
-      - name: Upload sanitized inventory
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: staging-inventory-${{ github.run_id }}
-          path: build/evidence/staging
-          if-no-files-found: warn
-          retention-days: 7
+      - run: echo 'This historical workflow is disabled. Use Staging Readiness and docs/development/staging-workflow-inventory.md.'
