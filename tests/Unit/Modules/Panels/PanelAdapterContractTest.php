@@ -44,16 +44,46 @@ final class PanelAdapterContractTest extends TestCase
         $snapshot = $this->matchingSnapshot($canonicalizer, $request);
         $adapter = $this->createMock(PanelAdapter::class);
         $adapter->method('capabilities')->willReturn($this->authoritativeCapabilities());
+        $adapter->method('createEquivalenceHash')->with($request)->willReturn($canonicalizer->hashCreateRequest($request));
         $adapter->expects(self::once())
             ->method('findByDeterministicUsername')
             ->with($request->username)
             ->willReturn($snapshot);
         $adapter->expects(self::never())->method('createService');
 
-        $result = $this->coordinator($canonicalizer)->createOrAdopt($adapter, $request);
+        $result = $this->coordinator()->createOrAdopt($adapter, $request);
 
         self::assertSame(PanelOperationOutcome::Success, $result->outcome);
         self::assertSame('remote_service_adopted', $result->providerCode);
+        self::assertSame($snapshot, $result->service);
+    }
+
+    public function test_existing_remote_without_create_equivalence_proof_requires_manual_review_and_blocks_create(): void
+    {
+        $canonicalizer = new PanelServiceCanonicalizer;
+        $request = $this->request();
+        $snapshot = new RemoteServiceSnapshot(
+            'remote-without-equivalence',
+            $request->username,
+            PanelServiceStatus::Active,
+            $request->dataLimitBytes,
+            0,
+            $request->expiresAt,
+            hash('sha256', 'provider-observable-only'),
+        );
+        $adapter = $this->createMock(PanelAdapter::class);
+        $adapter->method('capabilities')->willReturn($this->authoritativeCapabilities());
+        $adapter->method('createEquivalenceHash')->with($request)->willReturn($canonicalizer->hashCreateRequest($request));
+        $adapter->expects(self::once())
+            ->method('findByDeterministicUsername')
+            ->with($request->username)
+            ->willReturn($snapshot);
+        $adapter->expects(self::never())->method('createService');
+
+        $result = $this->coordinator()->createOrAdopt($adapter, $request);
+
+        self::assertSame(PanelOperationOutcome::UncertainResult, $result->outcome);
+        self::assertSame('remote_create_equivalence_unavailable', $result->providerCode);
         self::assertSame($snapshot, $result->service);
     }
 
@@ -66,6 +96,7 @@ final class PanelAdapterContractTest extends TestCase
         $adapter->expects(self::exactly(2))
             ->method('capabilities')
             ->willReturn($this->authoritativeCapabilities());
+        $adapter->method('createEquivalenceHash')->with($request)->willReturn($canonicalizer->hashCreateRequest($request));
         $adapter->expects(self::exactly(2))
             ->method('findByDeterministicUsername')
             ->with($request->username)
@@ -80,7 +111,7 @@ final class PanelAdapterContractTest extends TestCase
                 'Remote create result is uncertain.',
             ));
 
-        $result = $this->coordinator($canonicalizer)->createOrAdopt($adapter, $request);
+        $result = $this->coordinator()->createOrAdopt($adapter, $request);
 
         self::assertSame(PanelOperationOutcome::Success, $result->outcome);
         self::assertSame('remote_service_adopted', $result->providerCode);
@@ -95,6 +126,7 @@ final class PanelAdapterContractTest extends TestCase
         $adapter->expects(self::exactly(2))
             ->method('capabilities')
             ->willReturn($this->authoritativeCapabilities());
+        $adapter->method('createEquivalenceHash')->with($request)->willReturn($canonicalizer->hashCreateRequest($request));
         $adapter->expects(self::exactly(2))
             ->method('findByDeterministicUsername')
             ->with($request->username)
@@ -109,7 +141,7 @@ final class PanelAdapterContractTest extends TestCase
                 'Remote create result is uncertain.',
             ));
 
-        $result = $this->coordinator($canonicalizer)->createOrAdopt($adapter, $request);
+        $result = $this->coordinator()->createOrAdopt($adapter, $request);
 
         self::assertSame(PanelOperationOutcome::UncertainResult, $result->outcome);
         self::assertSame('remote_create_unresolved', $result->providerCode);
@@ -122,6 +154,7 @@ final class PanelAdapterContractTest extends TestCase
         $request = $this->request();
         $adapter = $this->createMock(PanelAdapter::class);
         $adapter->method('capabilities')->willReturn($this->authoritativeCapabilities());
+        $adapter->method('createEquivalenceHash')->with($request)->willReturn($canonicalizer->hashCreateRequest($request));
         $adapter->expects(self::once())
             ->method('findByDeterministicUsername')
             ->with($request->username)
@@ -136,7 +169,7 @@ final class PanelAdapterContractTest extends TestCase
                 'Provider reported success without a service snapshot.',
             ));
 
-        $result = $this->coordinator($canonicalizer)->createOrAdopt($adapter, $request);
+        $result = $this->coordinator()->createOrAdopt($adapter, $request);
 
         self::assertSame(PanelOperationOutcome::UncertainResult, $result->outcome);
         self::assertSame('remote_create_missing_snapshot', $result->providerCode);
@@ -147,6 +180,7 @@ final class PanelAdapterContractTest extends TestCase
     {
         $canonicalizer = new PanelServiceCanonicalizer;
         $request = $this->request();
+        $differentHash = hash('sha256', 'different-create-attributes');
         $mismatch = new RemoteServiceSnapshot(
             'remote-mismatch-0001',
             $request->username,
@@ -154,10 +188,12 @@ final class PanelAdapterContractTest extends TestCase
             $request->dataLimitBytes,
             0,
             $request->expiresAt,
-            hash('sha256', 'different-create-attributes'),
+            hash('sha256', 'provider-observable-state'),
+            $differentHash,
         );
         $adapter = $this->createMock(PanelAdapter::class);
         $adapter->method('capabilities')->willReturn($this->authoritativeCapabilities());
+        $adapter->method('createEquivalenceHash')->with($request)->willReturn($canonicalizer->hashCreateRequest($request));
         $adapter->expects(self::once())
             ->method('findByDeterministicUsername')
             ->with($request->username)
@@ -172,7 +208,7 @@ final class PanelAdapterContractTest extends TestCase
                 'Provider reported a created service.',
             ));
 
-        $result = $this->coordinator($canonicalizer)->createOrAdopt($adapter, $request);
+        $result = $this->coordinator()->createOrAdopt($adapter, $request);
 
         self::assertSame(PanelOperationOutcome::DefinitiveFailure, $result->outcome);
         self::assertSame('remote_attributes_mismatch', $result->providerCode);
@@ -190,12 +226,14 @@ final class PanelAdapterContractTest extends TestCase
             1,
             0,
             null,
+            hash('sha256', 'provider-observable-state-2'),
             hash('sha256', 'different-discovered-attributes'),
         );
         $adapter = $this->createMock(PanelAdapter::class);
         $adapter->expects(self::exactly(2))
             ->method('capabilities')
             ->willReturn($this->authoritativeCapabilities());
+        $adapter->method('createEquivalenceHash')->with($request)->willReturn($canonicalizer->hashCreateRequest($request));
         $adapter->expects(self::exactly(2))
             ->method('findByDeterministicUsername')
             ->with($request->username)
@@ -210,7 +248,7 @@ final class PanelAdapterContractTest extends TestCase
                 'Remote create result is uncertain.',
             ));
 
-        $result = $this->coordinator($canonicalizer)->createOrAdopt($adapter, $request);
+        $result = $this->coordinator()->createOrAdopt($adapter, $request);
 
         self::assertSame(PanelOperationOutcome::DefinitiveFailure, $result->outcome);
         self::assertSame('remote_attributes_mismatch', $result->providerCode);
@@ -222,7 +260,7 @@ final class PanelAdapterContractTest extends TestCase
         $canonicalizer = new PanelServiceCanonicalizer;
         $adapter = new FakePanelAdapter($canonicalizer);
         $firstRequest = $this->request();
-        $first = $this->coordinator($canonicalizer)->createOrAdopt($adapter, $firstRequest);
+        $first = $this->coordinator()->createOrAdopt($adapter, $firstRequest);
         self::assertSame(PanelOperationOutcome::Success, $first->outcome);
 
         $conflictingRequest = new PanelCreateServiceRequest(
@@ -234,7 +272,7 @@ final class PanelAdapterContractTest extends TestCase
             $firstRequest->expiresAt,
             $firstRequest->validatedAttributes,
         );
-        $conflict = $this->coordinator($canonicalizer)->createOrAdopt($adapter, $conflictingRequest);
+        $conflict = $this->coordinator()->createOrAdopt($adapter, $conflictingRequest);
 
         self::assertSame(PanelOperationOutcome::DefinitiveFailure, $conflict->outcome);
         self::assertSame('fake_idempotency_conflict', $conflict->providerCode);
@@ -249,7 +287,7 @@ final class PanelAdapterContractTest extends TestCase
         $adapter = new FakePanelAdapter($canonicalizer);
         $adapter->makeNextCreateUncertain();
 
-        $result = $this->coordinator($canonicalizer)->createOrAdopt($adapter, $this->request());
+        $result = $this->coordinator()->createOrAdopt($adapter, $this->request());
 
         self::assertSame(PanelOperationOutcome::Success, $result->outcome);
         self::assertSame('remote_service_adopted', $result->providerCode);
@@ -260,6 +298,7 @@ final class PanelAdapterContractTest extends TestCase
     {
         $canonicalizer = new PanelServiceCanonicalizer;
         $adapter = new FakePanelAdapter($canonicalizer);
+        $differentHash = hash('sha256', 'different');
         $adapter->seed(new RemoteServiceSnapshot(
             'remote-1',
             'fp_user_001',
@@ -267,10 +306,11 @@ final class PanelAdapterContractTest extends TestCase
             1,
             0,
             null,
-            hash('sha256', 'different'),
+            hash('sha256', 'provider-observable-fake'),
+            $differentHash,
         ));
 
-        $result = $this->coordinator($canonicalizer)->createOrAdopt($adapter, $this->request());
+        $result = $this->coordinator()->createOrAdopt($adapter, $this->request());
 
         self::assertSame(PanelOperationOutcome::DefinitiveFailure, $result->outcome);
         self::assertSame('remote_attributes_mismatch', $result->providerCode);
@@ -283,7 +323,7 @@ final class PanelAdapterContractTest extends TestCase
         $adapter = new FakePanelAdapter($canonicalizer);
         $adapter->makeAuthoritativeLookupUnavailable();
 
-        $result = $this->coordinator($canonicalizer)->createOrAdopt($adapter, $this->request());
+        $result = $this->coordinator()->createOrAdopt($adapter, $this->request());
 
         self::assertSame(PanelOperationOutcome::UncertainResult, $result->outcome);
         self::assertSame('authoritative_username_lookup_unavailable', $result->providerCode);
@@ -320,7 +360,7 @@ final class PanelAdapterContractTest extends TestCase
             self::assertTrue($capabilities->supports($operation), $operation.' must be supported.');
         }
 
-        $created = $this->coordinator($canonicalizer)->createOrAdopt($adapter, $request);
+        $created = $this->coordinator()->createOrAdopt($adapter, $request);
         self::assertSame(PanelOperationOutcome::Success, $created->outcome);
         self::assertNotNull($created->service);
         $remoteId = $created->service->remoteId;
@@ -431,7 +471,6 @@ final class PanelAdapterContractTest extends TestCase
         PanelProviderType $provider,
         array $credentials,
     ): void {
-        $canonicalizer = new PanelServiceCanonicalizer;
         $adapter = $registry->make($provider, new PanelAdapterSession(
             PanelEndpoint::fromInput('https://panel.example.com'),
             PanelCredentials::fromInput($credentials),
@@ -442,7 +481,7 @@ final class PanelAdapterContractTest extends TestCase
         self::assertSame(PanelOperationOutcome::DefinitiveFailure, $connection->outcome);
         self::assertSame('panel_gateway_unconfigured', $connection->providerCode);
 
-        $result = $this->coordinator($canonicalizer)->createOrAdopt($adapter, $this->request());
+        $result = $this->coordinator()->createOrAdopt($adapter, $this->request());
         self::assertSame(PanelOperationOutcome::UncertainResult, $result->outcome);
         self::assertSame('authoritative_username_lookup_unavailable', $result->providerCode);
 
@@ -454,9 +493,9 @@ final class PanelAdapterContractTest extends TestCase
         }
     }
 
-    private function coordinator(PanelServiceCanonicalizer $canonicalizer): PanelCreateCoordinator
+    private function coordinator(): PanelCreateCoordinator
     {
-        return new PanelCreateCoordinator(new RemoteIdentityResolver($canonicalizer));
+        return new PanelCreateCoordinator(new RemoteIdentityResolver);
     }
 
     private function authoritativeCapabilities(): PanelCapabilities
@@ -473,6 +512,8 @@ final class PanelAdapterContractTest extends TestCase
         PanelServiceCanonicalizer $canonicalizer,
         PanelCreateServiceRequest $request,
     ): RemoteServiceSnapshot {
+        $equivalenceHash = $canonicalizer->hashCreateRequest($request);
+
         return new RemoteServiceSnapshot(
             'remote-00000001',
             $request->username,
@@ -480,7 +521,8 @@ final class PanelAdapterContractTest extends TestCase
             $request->dataLimitBytes,
             0,
             $request->expiresAt,
-            $canonicalizer->hashCreateRequest($request),
+            hash('sha256', 'provider-observable-matching-state'),
+            $equivalenceHash,
         );
     }
 
