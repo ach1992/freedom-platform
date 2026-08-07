@@ -1,6 +1,6 @@
 # Project Status
 
-This is the single human-readable current-state entry point. It is intentionally concise. Detailed history belongs in evidence, traceability, and handoff documents.
+This is the single human-readable current-state entry point. Detailed history belongs in evidence, traceability, risk, audit, and handoff documents.
 
 **Last status review:** 2026-08-07  
 **Target release:** `1.0.0`  
@@ -9,6 +9,13 @@ This is the single human-readable current-state entry point. It is intentionally
 **Authoritative integration PR:** `#6`  
 **Allowed branch:** `develop/v1.0.0-completion`  
 **PR base/state:** `main` / Draft
+
+Current overlays:
+
+- traceability: `docs/32-current-traceability-overlay.md`;
+- risks: `docs/33-current-risk-overlay.md`;
+- stabilization audit: `docs/31-project-control-plane-audit.md`;
+- staging workflow status: `docs/development/staging-workflow-inventory.md`.
 
 ## Live-state rule
 
@@ -20,19 +27,19 @@ Do not treat a SHA written in this document as current. Before work, fetch PR `#
 
 Implementation boundary:
 
-- SHA: `8e62867277acdd39cd1471ed3d454ef25520bef8`
-- CI: `31071843621` / run `#833` — success
-- suite: 255 tests, 1267 assertions
+- SHA: `8e62867277acdd39cd1471ed3d454ef25520bef8`;
+- CI: `31071843621` / run `#833` — success;
+- suite: 255 tests, 1267 assertions.
 
 Evidence boundary:
 
-- SHA: `0d34af0aa4f9f227fdf3cae74b4fd4717f199ddf`
-- CI: `31102652203` / run `#834` — success
-- artifact: `test-evidence-31102652203`
-- artifact ID: `8968201643`
-- digest: `sha256:5ec6b6dd94e1305c17312650abdc94a5253521834911c26eb48f8decbd105cb9`
-- evidence: `evidence/0.4.0/custom-plan-policy-calculation.md`
-- traceability: `docs/29-phase-0.4-custom-plan-traceability.md`
+- SHA: `0d34af0aa4f9f227fdf3cae74b4fd4717f199ddf`;
+- CI: `31102652203` / run `#834` — success;
+- artifact: `test-evidence-31102652203`;
+- artifact ID: `8968201643`;
+- digest: `sha256:5ec6b6dd94e1305c17312650abdc94a5253521834911c26eb48f8decbd105cb9`;
+- evidence: `evidence/0.4.0/custom-plan-policy-calculation.md`;
+- traceability: `docs/29-phase-0.4-custom-plan-traceability.md`.
 
 No later implementation is independently accepted yet.
 
@@ -40,7 +47,7 @@ No later implementation is independently accepted yet.
 
 ### Trial Policy and Panel Adapter Foundation
 
-Authoritative handoff: `docs/30-phase-0.4-trial-panel-handoff.md`
+Authoritative handoff: `docs/30-phase-0.4-trial-panel-handoff.md`.
 
 Current bounded scope:
 
@@ -66,26 +73,37 @@ Explicitly unverified:
 
 Feature development is temporarily paused at this bounded increment until repository control is restored.
 
-Required order:
+### Completed or implemented cleanup
 
-1. make the self-hosted CI runtime deterministic and green on the exact PR head;
-2. apply the currently identified lockfile security update and focused formatting repair without weakening checks;
-3. remove temporary repair automation;
-4. finish the project-control documentation and machine checks;
-5. reconcile stale README, ledger, traceability, risk, PR, and Issue status;
-6. archive or disable obsolete/destructive staging workflows and document the safe staging workflow set;
-7. run mandatory CI on the exact stabilization head;
-8. only then resume Trial/Panel implementation verification.
+- mandatory repository operating contract and continuation entry points added;
+- current human/machine status and schema added;
+- execution ledger reconciled through verified Phase `0.4.0` increment 5;
+- current traceability and risk overlays added;
+- historical audits/candidate documents marked superseded;
+- self-hosted PHP/Composer runner contract made explicit;
+- safe read-only `Staging Readiness` workflow added;
+- all legacy staging workflows replaced with inert historical stubs;
+- project-control verification script added.
+
+### Still required in mandatory order
+
+1. clear the occupied/stuck self-hosted runner queue;
+2. apply the validated lockfile security update and five focused formatting repairs;
+3. remove the temporary repair workflow and generator;
+4. integrate project-control verification into mandatory preflight;
+5. reconcile PR `#6`, Issue `#7`, architecture/test/deployment documents, and active handoff;
+6. run mandatory CI on the exact stabilization head and fix every real failure;
+7. only then resume Trial/Panel implementation verification.
 
 ## Known current blockers and risks
 
-- The self-hosted runner previously hung in `setup-php` because it required interactive `sudo`; CI now uses the preinstalled PHP toolchain instead.
+- An older self-hosted CI static job remained `in_progress` without executable steps and blocked newer queued jobs. Repeated commits/dispatches must not be used as a workaround; the runner service must be inspected once connector evidence confirms the queue is still blocked.
 - The runner toolchain must select `/www/server/php/84/etc/php-cli.ini`, disable JIT for CI, enable PCOV only for coverage, and validate PHP/Composer/extensions before expensive work.
-- The previously locked `league/commonmark` `2.8.3` is affected by `CVE-2026-3066`; the bounded repair targets `2.9.0` or later while preserving the lockfile.
-- Five active-increment files require Pint-only formatting repair.
-- Several core status documents and the PR body describe old phases or old active work.
-- Multiple one-time/destructive staging workflows remain visible and can be run manually; they need an explicit safe-status inventory and cleanup.
-- The long-running PR is intentionally retained, but its size makes machine-readable status and strict continuation rules mandatory.
+- The previously locked `league/commonmark` `2.8.3` is affected by `CVE-2026-3066`; a bounded repair to `2.9.0` has been generated and validated but is not accepted until committed and exact-head CI passes.
+- Five active-increment files have a validated Pint-only repair pending application.
+- Temporary write-capable repair automation must be removed immediately after the repair commit.
+- The global baseline traceability/risk catalogues still require later full regeneration; current overlays govern status meanwhile.
+- The long-running PR is intentionally retained, but its size requires strict status, handoff, and evidence discipline.
 
 ## Non-negotiable remote-effect rules
 
@@ -100,7 +118,7 @@ Required order:
 
 ## Next completion boundary
 
-The next acceptable boundary is not “code exists.” It is:
+The next acceptable feature boundary is not “code exists.” It is:
 
 - exact implementation SHA;
 - all mandatory jobs green on that SHA;
