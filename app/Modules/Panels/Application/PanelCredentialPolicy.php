@@ -40,12 +40,15 @@ final class PanelCredentialPolicy
     /** @param array<string, string> $values */
     private function requirePasarGuardCredentials(array $values): void
     {
-        $apiKey = $values['api_key'] ?? $values['api_token'] ?? null;
-        if ($apiKey !== null) {
-            if (preg_match(self::PASARGUARD_API_KEY_PATTERN, $apiKey) !== 1) {
+        if (isset($values['api_key'])) {
+            if (preg_match(self::PASARGUARD_API_KEY_PATTERN, $values['api_key']) !== 1) {
                 throw new InvalidArgumentException('PasarGuard API key is invalid.');
             }
 
+            return;
+        }
+
+        if (isset($values['api_token'])) {
             return;
         }
 
