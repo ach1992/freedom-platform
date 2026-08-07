@@ -11,6 +11,7 @@ use DomainException;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\QueryException;
+use Illuminate\Support\Collection;
 use RuntimeException;
 
 final readonly class LedgerPostingService
@@ -93,7 +94,7 @@ final readonly class LedgerPostingService
             $entries,
         )));
         sort($accountIds, SORT_NUMERIC);
-        /** @var \Illuminate\Support\Collection<int, object{id: int|string, currency: string, is_active: int|bool}> $accounts */
+        /** @var Collection<int, object{id: int|string, currency: string, is_active: int|bool}> $accounts */
         $accounts = $connection->table('ledger_accounts')
             ->whereIn('id', $accountIds)
             ->orderBy('id')
