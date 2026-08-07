@@ -38,6 +38,11 @@ final class UnavailablePanelGateway implements MarzbanGateway, PasarGuardGateway
         return null;
     }
 
+    public function createEquivalenceHash(PanelCreateServiceRequest $request): string
+    {
+        throw new RuntimeException('Panel create-equivalence mapping is not configured.');
+    }
+
     public function createService(PanelCreateServiceRequest $request): PanelOperationResult
     {
         return $this->unavailable();
