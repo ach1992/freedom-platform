@@ -7,6 +7,16 @@ fail() {
     exit 1
 }
 
+safe_repository_path() {
+    local path="$1"
+
+    case "$path" in
+        ''|null|/*|*'..'*) return 1 ;;
+    esac
+
+    return 0
+}
+
 required_files=(
     AGENTS.md
     PROJECT_STATUS.md
@@ -23,7 +33,6 @@ required_files=(
     docs/31-project-control-plane-audit.md
     docs/32-current-traceability-overlay.md
     docs/33-current-risk-overlay.md
-    docs/35-phase-0.4-panel-provider-source-contracts.md
     docs/specification/master-execution-prompt.md
     .github/workflows/staging-readiness.yml
 )
@@ -46,45 +55,66 @@ jq -e '
     and .live_head_source == "github_pr_head_sha"
     and .active_phase.version == "0.4.0"
     and .active_phase.status == "active"
-    and .last_verified_boundary.implementation_sha == "b146c2c6aa902b4ed252d200121d63e422cd87f2"
-    and .last_verified_boundary.evidence_sha == "31a1854a2804bb0b2cf466c96887de7c5813b343"
-    and .last_verified_boundary.artifact_sha256 == "65b46242099caeef40e8bfeb7717b915ec306b449078570bd680420811bbde09"
-    and .last_verified_boundary.tests == 298
-    and .last_verified_boundary.assertions == 1471
-    and .active_increment.name == "Pinned Marzban and PasarGuard Source-Contract Adapters"
-    and .active_increment.status == "active"
-    and .active_increment.handoff_path == "docs/35-phase-0.4-panel-provider-source-contracts.md"
-    and (.active_increment.requirements | index("PRV-001") != null)
-    and (.active_increment.requirements | index("PRV-002") != null)
-    and (.active_increment.requirements | index("PRV-003") != null)
+    and (.last_verified_boundary.name | type == "string" and length > 0)
+    and (.last_verified_boundary.implementation_sha | test("^[a-f0-9]{40}$"))
+    and (.last_verified_boundary.implementation_ci_run_id | type == "number" and . > 0)
+    and (.last_verified_boundary.implementation_ci_run_number | type == "number" and . > 0)
+    and (.last_verified_boundary.evidence_sha | test("^[a-f0-9]{40}$"))
+    and (.last_verified_boundary.evidence_ci_run_id | type == "number" and . > 0)
+    and (.last_verified_boundary.evidence_ci_run_number | type == "number" and . > 0)
+    and (.last_verified_boundary.tests | type == "number" and . > 0)
+    and (.last_verified_boundary.assertions | type == "number" and . > 0)
+    and (.last_verified_boundary.artifact_name | type == "string" and length > 0)
+    and (.last_verified_boundary.artifact_id | type == "number" and . > 0)
+    and (.last_verified_boundary.artifact_sha256 | test("^[a-f0-9]{64}$"))
+    and (.last_verified_boundary.evidence_path | type == "string" and length > 0)
+    and (.last_verified_boundary.traceability_path | type == "string" and length > 0)
+    and (.active_increment.name | type == "string" and length > 0)
+    and (.active_increment.status | IN("planned", "active", "unverified", "blocked", "verified"))
+    and (.active_increment.handoff_path | type == "string" and length > 0)
+    and (.active_increment.requirements | type == "array" and length > 0)
+    and ([.active_increment.requirements[] | test("^[A-Z]+-[0-9]{3}$")] | all)
     and .stabilization.status == "complete"
     and .stabilization.feature_development_paused == false
     and (.forbidden_actions | index("merge_pr") != null)
+    and (.forbidden_actions | index("mark_ready_for_review") != null)
+    and (.forbidden_actions | index("enable_auto_merge") != null)
+    and (.forbidden_actions | index("rewrite_history") != null)
     and (.forbidden_actions | index("push_main") != null)
-' docs/project-status.json >/dev/null || fail 'project status constants or current boundary are inconsistent'
+    and (.forbidden_actions | index("create_temporary_branch") != null)
+    and (.forbidden_actions | index("retrieve_or_print_secrets") != null)
+    and (.forbidden_actions | index("claim_unverified_provider_compatibility") != null)
+' docs/project-status.json >/dev/null || fail 'project status structure or fixed repository policy is inconsistent'
 
+implementation_sha="$(jq -r '.last_verified_boundary.implementation_sha' docs/project-status.json)"
+evidence_sha="$(jq -r '.last_verified_boundary.evidence_sha' docs/project-status.json)"
+evidence_path="$(jq -r '.last_verified_boundary.evidence_path' docs/project-status.json)"
+traceability_path="$(jq -r '.last_verified_boundary.traceability_path' docs/project-status.json)"
+active_increment="$(jq -r '.active_increment.name' docs/project-status.json)"
 handoff_path="$(jq -r '.active_increment.handoff_path' docs/project-status.json)"
-case "$handoff_path" in
-    ''|null|/*|*'..'*) fail 'active handoff path is unsafe or empty' ;;
-esac
 
-test -s "$handoff_path" || fail "active handoff is missing or empty: $handoff_path"
+for path in "$evidence_path" "$traceability_path" "$handoff_path"; do
+    safe_repository_path "$path" || fail "project status contains an unsafe repository path: $path"
+    test -s "$path" || fail "project status references a missing or empty file: $path"
+done
 
 status_requirements=(
     'PR `#6`'
     'Issue `#7`'
     'develop/v1.0.0-completion'
-    '31a1854a2804bb0b2cf466c96887de7c5813b343'
-    'docs/35-phase-0.4-panel-provider-source-contracts.md'
-    'Marzban `v0.8.4`'
-    'PasarGuard `v5.2.1`'
+    "$implementation_sha"
+    "$evidence_sha"
+    "$evidence_path"
+    "$traceability_path"
+    "$active_increment"
+    "$handoff_path"
     'docs/32-current-traceability-overlay.md'
     'docs/33-current-risk-overlay.md'
 )
 
 for value in "${status_requirements[@]}"; do
     grep -F "$value" PROJECT_STATUS.md >/dev/null \
-        || fail "PROJECT_STATUS.md is missing required value: $value"
+        || fail "PROJECT_STATUS.md is missing current project-status value: $value"
 done
 
 for entry in AGENTS.md PROJECT_STATUS.md CONTRIBUTING.md; do
