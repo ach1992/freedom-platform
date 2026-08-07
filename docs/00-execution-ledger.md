@@ -1,260 +1,219 @@
 # Execution Ledger
 
-The authoritative product contract is `docs/specification/master-execution-prompt.md`. This ledger records accepted repository delivery boundaries; it does not replace or redefine that contract.
+The authoritative product contract is `docs/specification/master-execution-prompt.md`. This ledger records accepted repository delivery boundaries; it does not redefine that contract.
 
-For live continuation, read `AGENTS.md`, `PROJECT_STATUS.md`, and `docs/project-status.json`. Always fetch PR `#6` for the exact current head.
+For continuation, read `AGENTS.md`, `PROJECT_STATUS.md`, `docs/project-status.json`, and the active handoff. Always live-fetch Draft PR `#6` for the exact current head.
 
 ## Current position
 
-- Active branch: `develop/v1.0.0-completion`.
-- Pull request: Draft PR `#6` targeting `main`.
-- Authoritative active Issue: `#7`.
-- `main` remains unchanged by completion work.
-- Active phase: `0.4.0 — Catalog, Panels, and Offerings`.
-- Last completed phase: `0.3.0 — Identity, Customers, Agents, and ACL`.
-- Last independently verified Phase 0.4 boundary: Custom Plan Policy and Calculation Snapshot.
-- Active unverified increment: Trial Policy and Panel Adapter Foundation.
-- Current stabilization mode: restore deterministic CI and project-control consistency before accepting or extending the active increment.
+- branch: `develop/v1.0.0-completion`;
+- PR: Draft `#6`, base `main`;
+- authoritative active Issue: `#7`;
+- active phase: `0.4.0 — Catalog, Panels, and Offerings`;
+- last completed phase: `0.3.0`;
+- latest accepted Phase 0.4 boundary: Provider Create-Equivalence Reconciliation;
+- Phase 0.4 provider work status: all currently identified non-live defects/evidence complete; controlled live-provider acceptance is blocked on owner-supplied test panels;
+- live acceptance matrix: `docs/41-phase-0.4-provider-live-acceptance-matrix.md`;
+- active handoff: `docs/42-phase-0.4-controlled-live-provider-handoff.md`.
+
+`main` remains unchanged by this completion work. Phase `0.4.0` remains open until controlled live-provider acceptance and final closure audit pass.
 
 ## Completed phases
 
 ### Phase 0.1.0 — Product specification and architecture
 
-Status: completed and verified.
+Status: completed/verified.
 
-Delivered:
+Accepted scope includes authoritative requirements, glossary/use cases/state machines/data model, permission/threat model, ADR/module boundaries, test strategy, risk register, deployment/release planning, and planning quality gates.
 
-- authoritative requirements ledger and bidirectional traceability foundation;
-- domain glossary, use cases, state machines, ERD/data model, permission catalogue and threat model;
-- module boundaries, ADRs, test strategy, risk register and deployment/release planning;
-- initial planning quality gate.
+### Phase 0.2.0 — Foundation, installer/runtime, operations, Telegram ingress
 
-### Phase 0.2.0 — Foundation, installer/runtime, operations, and Telegram ingress
-
-Status: completed and verified.
-
-Delivered and rehearsed:
-
-- Laravel/PHP 8.4 modular foundation and locked CI/static/security tooling;
-- secure installer preflight/finalization, immutable lock and resumable journal;
-- MariaDB/authenticated Redis runtime, Outbox/idempotency foundations and base migrations;
-- atomic release activation/rollback, OpenLiteSpeed target layout, Supervisor workers, one Scheduler Cron and heartbeat/stale-alert controls;
-- authenticated Telegram webhook ingress, encrypted update persistence, duplicate/collision handling, queue handoff and stranded-update recovery;
-- target-like aaPanel/OpenLiteSpeed and Telegram contract evidence.
+Status: completed/verified.
 
 Closure evidence: `evidence/0.2.0/PHASE-CLOSURE.md`.
 
-### Phase 0.3.0 — Identity, Customers, Agents, and ACL
+Accepted scope includes Laravel/PHP 8.4 foundation, secure installer/finalization, MariaDB/authenticated Redis runtime, Outbox/idempotency primitives, release activation/rollback, worker/scheduler health controls, and authenticated Telegram ingress/recovery.
 
-Status: completed and verified.
+### Phase 0.3.0 — Identity, Customers, Agents, ACL
 
-Closure boundary:
+Status: completed/verified.
 
-- closure SHA: `979b0c99d79dbcc8cff273ccdfad2ea612796a0c`;
-- mandatory CI: `31035712555` / run `#798` — success;
-- suite: 194 tests, 958 assertions;
-- artifact: `test-evidence-31035712555`;
-- evidence: `evidence/0.3.0/phase-closure-verification.md`.
+Closure:
 
-Delivered:
+- SHA `979b0c99d79dbcc8cff273ccdfad2ea612796a0c`;
+- CI `31035712555` / #798 — success;
+- 194 tests / 958 assertions;
+- evidence `evidence/0.3.0/phase-closure-verification.md`.
 
-- Telegram-contact and SMS-OTP phone ownership verification;
-- SMS provider adapters, rate limits, delivery evidence and fallback dispatch;
-- customer status, tier, tag and append-only history services;
-- agent application/review/profile lifecycle;
-- multi-role administrator access with direct allow/deny/inherit overrides and explicit-deny precedence;
-- short-lived sensitive-action approvals with independent approval and one-time consumption;
-- database-enforced singleton Owner and protected two-party ownership transfer;
-- encrypted national-ID, bank-card and full-name identity items with masked projections;
-- privacy-safe customer account summary;
-- administrator lifecycle with immediate authorization invalidation;
-- replay/conflict protection, row locking, execution-time authorization, sanitized audit evidence and mandatory reasons/correlation IDs.
+Accepted scope includes phone ownership/SMS OTP, customer lifecycle, agent lifecycle, multi-role ACL/direct overrides, short-lived independent sensitive approvals, Owner singleton/transfer, encrypted identity items, privacy-safe summaries, admin lifecycle and replay/conflict/locking/audit controls.
 
-## Active phase
+## Phase 0.4 accepted increments
 
-### Phase 0.4.0 — Catalog, Panels, and Offerings
+Phase boundary: Catalog identity, Offerings, panels/targets, capacity, Custom Plans, Trials, fallback and Panel Adapter concerns belong here. Pricing/Quotes/ledger/payments remain Phase `0.5.0`; Orders/provisioning/Service lifecycle remain Phase `0.6.0`.
 
-Status: active under Issue `#7`.
+### 1 — Category/Product/Variant lifecycle
 
-Phase boundary:
+- implementation `f907fc463ff809dd2f5f69d1433e9c326f8574b0`, CI #802;
+- evidence `570f0a7c873c5638d63488714c7c59500de8cbcc`, CI #803;
+- 205 tests / 1006 assertions;
+- `evidence/0.4.0/catalog-category-product-variant-lifecycle.md`;
+- `docs/23-phase-0.4-catalog-traceability.md`.
 
-- Catalog identity, offerings, panels/targets, capacity, custom plans, trials, disclosed fallback and panel adapters belong here.
-- Resolved customer/agent pricing, promotions, immutable Quote, ledger and payment providers remain Phase `0.5.0`.
-- Order, provisioning orchestration and service lifecycle remain Phase `0.6.0`.
+### 2a — Secure Panel Connection foundation
 
-### Verified increment 1 — Category/Product/Variant lifecycle
+- implementation `2174bc7844fde0282f75e6d258a7789dc588ecf8`, CI #806;
+- evidence `22f04ed66ca3f9aefe4ee68d329bae6ff5e69706`, CI #807;
+- 217 tests / 1072 assertions;
+- `evidence/0.4.0/panel-connection-foundation.md`;
+- `docs/24-phase-0.4-panel-connection-traceability.md`.
 
-Implementation:
+### 2b — Protocol Profile, Service Target, Sales Server
 
-- SHA: `f907fc463ff809dd2f5f69d1433e9c326f8574b0`;
-- CI: `31047128887` / run `#802` — success.
+- implementation `7c48399a2be8a79ddb078f79684d73dd9869b322`, CI #811;
+- evidence `e8e397cdfe44713f28b79b6cf98c89eff24d2b56`, CI #812;
+- 227 tests / 1121 assertions;
+- `evidence/0.4.0/panel-target-protocol-server-foundation.md`;
+- `docs/25-phase-0.4-panel-inventory-traceability.md`.
 
-Evidence:
+Real Targets remain disabled/declared until accepted live adapter/capability evidence exists.
 
-- SHA: `570f0a7c873c5638d63488714c7c59500de8cbcc`;
-- CI: `31047402302` / run `#803` — success;
-- suite: 205 tests, 1006 assertions;
-- evidence: `evidence/0.4.0/catalog-category-product-variant-lifecycle.md`;
-- traceability: `docs/23-phase-0.4-catalog-traceability.md`.
+### 3 — Plan Offering foundation
 
-### Verified increment 2a — Secure Panel Connection foundation
+- implementation `cf0971c068c46d8e71d4f7765fdda249d9a24471`, CI #816;
+- evidence `88e8e27d9ab61bb8ac2815c411b12e6395b48d0a`, CI #817;
+- 236 tests / 1171 assertions;
+- `evidence/0.4.0/plan-offering-foundation.md`;
+- `docs/26-phase-0.4-plan-offering-traceability.md`.
 
-Implementation:
+### 4a — Target Capacity Accounting
 
-- SHA: `2174bc7844fde0282f75e6d258a7789dc588ecf8`;
-- CI: `31053240018` / run `#806` — success.
+- implementation `72b19d556430b42d1065cb9ca9cdb5cd3125dfdc`, CI #822;
+- evidence `f07ffbb8645ed2556debf6746e465fa5cc5e3b5b`, CI #823;
+- 241 tests / 1204 assertions;
+- `evidence/0.4.0/target-capacity-accounting.md`;
+- `docs/27-phase-0.4-target-capacity-traceability.md`.
 
-Evidence:
+### 4b — Availability, Route Selection, Disclosed Fallback
 
-- SHA: `22f04ed66ca3f9aefe4ee68d329bae6ff5e69706`;
-- CI: `31053486538` / run `#807` — success;
-- suite: 217 tests, 1072 assertions;
-- evidence: `evidence/0.4.0/panel-connection-foundation.md`;
-- traceability: `docs/24-phase-0.4-panel-connection-traceability.md`.
+- implementation `ca88704d34f7df68799d8673e30c3ff479529206`, CI #826;
+- evidence `dd770add3bcc3f10e55d2636f83befc8c50cdd38`, CI #827;
+- 247 tests / 1228 assertions;
+- `evidence/0.4.0/route-selection-fallback.md`;
+- `docs/28-phase-0.4-route-selection-traceability.md`.
 
-### Verified increment 2b — Protocol Profile, Service Target, and Sales Server
+### 5 — Custom Plan Policy and Calculation Snapshot
 
-Implementation:
+- implementation `8e62867277acdd39cd1471ed3d454ef25520bef8`, CI #833;
+- evidence `0d34af0aa4f9f227fdf3cae74b4fd4717f199ddf`, CI #834;
+- 255 tests / 1267 assertions;
+- `evidence/0.4.0/custom-plan-policy-calculation.md`;
+- `docs/29-phase-0.4-custom-plan-traceability.md`.
 
-- SHA: `7c48399a2be8a79ddb078f79684d73dd9869b322`;
-- CI: `31059517586` / run `#811` — success.
+No Quote/Order/ledger/payment/provisioning/remote effect is claimed by this boundary.
 
-Evidence:
+### 6 — Trial Policy and Panel Adapter offline/Fake foundation
 
-- SHA: `e8e397cdfe44713f28b79b6cf98c89eff24d2b56`;
-- CI: `31059726267` / run `#812` — success;
-- suite: 227 tests, 1121 assertions;
-- artifact digest: `sha256:c3e21de27a21f9b1685ca5728187f66f0c9b3747082ad410573235891edb9f0e`;
-- evidence: `evidence/0.4.0/panel-target-protocol-server-foundation.md`;
-- traceability: `docs/25-phase-0.4-panel-inventory-traceability.md`.
+- implementation `b146c2c6aa902b4ed252d200121d63e422cd87f2`, CI #931;
+- evidence `31a1854a2804bb0b2cf466c96887de7c5813b343`, CI #934;
+- 298 tests / 1471 assertions;
+- `evidence/0.4.0/trial-policy-panel-adapter-foundation.md`;
+- `docs/34-phase-0.4-trial-panel-traceability.md`.
 
-Targets remained disabled with declared capabilities until adapter evidence exists.
+Accepted: Trial eligibility/reservation/capacity/abuse/fallback, common adapter contracts, deterministic Fake remote behavior, authoritative lookup/adoption/conflict, uncertainty discovery, mutation idempotency and fail-closed real-provider shells.
 
-### Verified increment 3 — Plan Offering foundation
+### 7 — Pinned Marzban/PasarGuard read contracts
 
-Implementation:
+- implementation `954973e505901208b5cef9348551e0c71ac027b6`, CI #959;
+- evidence `23a8da1ce1327407ecd826daa87b334452883d77`, CI #961;
+- 306 tests / 1522 assertions;
+- evidence artifact ID `8993821250`, digest `sha256:9a45179652a3a88456c835c4d715aceef4efaf770c06b8246f0ebd68ca1b6fe6`;
+- `evidence/0.4.0/pinned-panel-provider-read-contracts.md`;
+- `docs/36-phase-0.4-panel-provider-read-contract-traceability.md`.
 
-- SHA: `cf0971c068c46d8e71d4f7765fdda249d9a24471`;
-- CI: `31061752803` / run `#816` — success.
+Accepted provider pins: Marzban `v0.8.4`, PasarGuard `v5.2.1`. Runtime provider behavior remains read-only/fail-closed for mutations.
 
-Evidence:
+### 8 — Pinned provider mutation contract mapping
 
-- SHA: `88e8e27d9ab61bb8ac2815c411b12e6395b48d0a`;
-- CI: `31061978803` / run `#817` — success;
-- suite: 236 tests, 1171 assertions;
-- artifact digest: `sha256:cccaa861121ff15fa1b00a395bcd1bd2de4507a01f78afc6090936fec731037f`;
-- evidence: `evidence/0.4.0/plan-offering-foundation.md`;
-- traceability: `docs/26-phase-0.4-plan-offering-traceability.md`.
+- implementation `15b824e955d040a6bf43405f7015aa85110a73e4`, CI #978;
+- evidence `eec613c1cb5241d8fff621047086361f2753fd24`, CI #980;
+- 313 tests / 1650 assertions;
+- evidence artifact ID `8998628512`, digest `sha256:ac5caaaad4a83af04efd27f3c88cfeb857755e497bd07a46fa1037eadea4361a`;
+- `evidence/0.4.0/pinned-panel-provider-mutation-contracts.md`;
+- `docs/38-phase-0.4-panel-provider-mutation-contract-traceability.md`.
 
-### Verified increment 4a — Target Capacity Accounting
+Accepted offline mappings: create/update expiry/update data/reset/suspend/activate/delete/rotation/delivery, result taxonomy, additive-data safety and provider create-equivalence. Runtime mutations remain disabled.
 
-Implementation:
+### 9 — Provider Create-Equivalence Reconciliation
 
-- SHA: `72b19d556430b42d1065cb9ca9cdb5cd3125dfdc`;
-- CI: `31065079295` / run `#822` — success.
+Root cause reconciled: generic provider-observable `RemoteServiceSnapshot::canonicalHash` was still being used by the common resolver as create equality even though provider-specific equivalence mappers already existed.
 
-Evidence:
+Accepted correction:
 
-- SHA: `f07ffbb8645ed2556debf6746e465fa5cc5e3b5b`;
-- CI: `31065264371` / run `#823` — success;
-- suite: 241 tests, 1204 assertions;
-- digest: `sha256:61b18070bfce7c68542eb3597d8738f9344f26a4729c7c167feff09e9effa435`;
-- evidence: `evidence/0.4.0/target-capacity-accounting.md`;
-- traceability: `docs/27-phase-0.4-target-capacity-traceability.md`.
-
-### Verified increment 4b — Availability, Route Selection, and Disclosed Fallback
-
-Implementation:
-
-- SHA: `ca88704d34f7df68799d8673e30c3ff479529206`;
-- CI: `31067121678` / run `#826` — success.
-
-Evidence:
-
-- SHA: `dd770add3bcc3f10e55d2636f83befc8c50cdd38`;
-- CI: `31067304499` / run `#827` — success;
-- suite: 247 tests, 1228 assertions;
-- artifact: `test-evidence-31067304499`;
-- digest: `sha256:0bb4cf0a9d57b027ef9c3dd30ac7d1d2aeb160a752218c10420367984f3343ff`;
-- evidence: `evidence/0.4.0/route-selection-fallback.md`;
-- traceability: `docs/28-phase-0.4-route-selection-traceability.md`.
-
-Production selection remains fail-closed until real adapter evidence exists.
-
-### Verified increment 5 — Custom Plan Policy and Calculation Snapshot
+- separate provider-observable `canonicalHash` from optional provider-specific `createEquivalenceHash`;
+- require provider-specific preserved-field equivalence before automatic adoption;
+- missing proof => Manual Review/no create;
+- mismatch => conflict/no overwrite;
+- successful-create snapshot must pass the same provider-specific equivalence validation;
+- source gateways derive equivalence through the pinned mutation-contract mappers without enabling live mutation.
 
 Implementation:
 
-- SHA: `8e62867277acdd39cd1471ed3d454ef25520bef8`;
-- CI: `31071843621` / run `#833` — success;
-- suite: 255 tests, 1267 assertions.
+- SHA `ab1e0d16d23460df4bf1ad9be4fcef0d16c37a43`;
+- CI `31223470871` / #995 — success;
+- 315 tests / 1678 assertions;
+- artifact `test-evidence-31223470871`, ID `9011256284`;
+- independent digest `sha256:f3fc78ab55ba0adbb2814bb6d0de464736e897df36625b8f72f54b3f7b8fe95d`.
 
 Evidence:
 
-- SHA: `0d34af0aa4f9f227fdf3cae74b4fd4717f199ddf`;
-- CI: `31102652203` / run `#834` — success;
-- artifact: `test-evidence-31102652203`;
-- artifact ID: `8968201643`;
-- digest: `sha256:5ec6b6dd94e1305c17312650abdc94a5253521834911c26eb48f8decbd105cb9`;
-- evidence: `evidence/0.4.0/custom-plan-policy-calculation.md`;
-- traceability: `docs/29-phase-0.4-custom-plan-traceability.md`.
+- SHA `a70b28cb984c23f1e219287e88d20014ee9f0310`;
+- CI `31223749257` / #997 — success;
+- 315 tests / 1678 assertions;
+- artifact `test-evidence-31223749257`, ID `9011359876`;
+- independent digest `sha256:140e6a45fe2ef9523dee0147f6131a1e2d1bcaf63548b57eea7b83d3f0d9b827`;
+- `evidence/0.4.0/provider-create-equivalence-reconciliation.md`;
+- `docs/40-phase-0.4-provider-create-equivalence-traceability.md`.
 
-This boundary creates no Quote, Order, ledger, payment, provisioning, or remote panel effect.
+## Remaining Phase 0.4 gate
 
-## Active unverified increment
+No remaining non-live provider defect is currently identified by the reconciliation audit.
 
-### Increment 6 — Trial Policy and Panel Adapter Foundation
+The remaining provider acceptance is deployment-specific and defined exactly in:
 
-Status: unverified. Authoritative handoff: `docs/30-phase-0.4-trial-panel-handoff.md`.
+- `docs/41-phase-0.4-provider-live-acceptance-matrix.md`;
+- `docs/42-phase-0.4-controlled-live-provider-handoff.md`.
 
-Bounded implementation includes:
+It requires owner-supplied controlled Marzban `v0.8.4` and PasarGuard `v5.2.1` test environments (or explicit re-review authorization for different exact builds), protected credentials, disposable test-user permission, live auth/version/target/create/adopt/mutation/delivery/fault/cleanup evidence, and a separate explicit Target activation decision.
 
-- trial policy/reservation, eligibility, capacity, abuse controls, and fallback;
-- Panel Adapter common contract;
-- deterministic `FakePanelAdapter`;
-- remote identity lookup and exact-match adoption;
-- mismatch conflict/manual review;
-- uncertain-result discovery before retry;
-- mutation idempotency journal;
-- request/snapshot/capability/result validation;
-- credential and delivery-artifact redaction;
-- unavailable Marzban/PasarGuard shells that fail closed.
+Until that gate passes:
 
-No implementation or evidence SHA after the Custom Plan boundary is accepted until mandatory exact-head CI, artifact evidence, and an evidence-head CI pass.
-
-## Stabilization overlay
-
-Before active increment verification continues:
-
-1. restore deterministic self-hosted CI execution;
-2. apply bounded dependency/formatting repairs;
-3. remove temporary repair automation;
-4. reconcile project status, traceability, risk, README, PR, and Issue text;
-5. reduce unsafe staging workflow surface;
-6. pass mandatory CI on the exact stabilization head.
-
-See `docs/31-project-control-plane-audit.md`.
+- real provider mutation/delivery capabilities remain unadvertised/fail closed;
+- real Targets remain disabled/unverified;
+- no live compatibility claim;
+- no Phase `0.4.0` closure.
 
 ## Later phases
 
 | Phase | Goal | Status |
 |---|---|---|
-| `0.5.0` | Ledger, pricing, promotions, and payment providers | not started |
-| `0.6.0` | Orders, provisioning, and service lifecycle | not started |
-| `0.7.0` | Persian Telegram UX, support, content, membership, and broadcast | not started |
-| `0.8.0` | Reporting, Operations Center, backup, restore, updater, and rollback | not started |
-| `0.9.0` | Full regression, security hardening, performance, chaos, and release candidate | not started |
-| `1.0.0` | Production package, documentation, handover, and deployment acceptance | not started |
+| `0.5.0` | Ledger, pricing, promotions, payment providers | not started except shared foundations |
+| `0.6.0` | Orders, provisioning, Service lifecycle | not started except shared foundations |
+| `0.7.0` | Persian Telegram UX, support, content, membership, broadcast | not started except localized installer/identity strings |
+| `0.8.0` | Reporting, Operations Center, backup/restore/updater/rollback | not started except runtime/worker/release foundations |
+| `0.9.0` | hardening/performance/chaos/release candidate | not started |
+| `1.0.0` | production package/docs/handover/deployment acceptance | not started |
 
 ## Non-negotiable delivery controls
 
-- no merge, Ready for review, auto-merge, history rewrite, temporary branch, or direct write to `main`;
+- no merge, Ready, auto-merge, history rewrite, force-push, temporary branch, or direct `main` write;
 - live head always comes from PR `#6`;
-- no phase/increment is closed from documentation, schema, fake, or interface presence alone;
-- completion requires code, mandatory CI on exact implementation SHA, retained evidence, and mandatory CI on exact evidence head;
-- monetary values use integer IRR at authoritative boundaries;
-- secrets and sensitive values never enter logs, audit safe-data, screenshots, Issues, PR text, or evidence;
-- privileged mutations re-authorize at execution time and record actor/reason/correlation/replay evidence;
-- retries/replays have exact-once business effect and payload conflicts fail closed;
-- authoritative remote lookup precedes create; uncertain remote results are discovered before retry;
-- later work may not weaken any verified Phase `0.1.0`–`0.4.0` boundary.
+- no phase/increment closes from docs/schema/fake/interface presence alone;
+- accepted code increments require exact implementation CI/artifact plus exact evidence-head CI;
+- integer IRR at monetary boundaries;
+- secrets never enter repository/chat/Issues/PR/evidence;
+- privileged mutations re-authorize at execution time;
+- replay/idempotency conflicts fail closed and preserve original primary effect;
+- authoritative remote lookup precedes create;
+- missing equivalence proof blocks adoption/create;
+- uncertain remote results are discovered before retry;
+- later work may not weaken accepted earlier boundaries.
