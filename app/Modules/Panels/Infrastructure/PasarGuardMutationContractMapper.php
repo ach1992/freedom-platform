@@ -58,7 +58,8 @@ final class PasarGuardMutationContractMapper
         int $bytes,
         DataAllowanceMode $mode,
         ?RemoteServiceSnapshot $current = null,
-    ): PanelMappedMutationRequest {
+    ): PanelMappedMutationRequest
+    {
         return new PanelMappedMutationRequest(
             'PUT',
             '/api/user/by-id/'.$this->remoteId($remoteId),
@@ -99,7 +100,7 @@ final class PasarGuardMutationContractMapper
         return new PanelMappedMutationRequest('POST', '/api/user/by-id/'.$this->remoteId($remoteId).'/revoke_sub');
     }
 
-    /** @param array<array-key, mixed> $providerService */
+    /** @param  array<array-key, mixed>  $providerService */
     public function providerCreateCanonicalHash(array $providerService): string
     {
         return $this->canonicalHash($this->providerCreateCanonicalState($providerService));
@@ -117,7 +118,7 @@ final class PasarGuardMutationContractMapper
         ]);
     }
 
-    /** @param array<array-key, mixed> $providerService */
+    /** @param  array<array-key, mixed>  $providerService */
     public function createEquivalent(PanelCreateServiceRequest $request, array $providerService): bool
     {
         try {
@@ -130,7 +131,7 @@ final class PasarGuardMutationContractMapper
         }
     }
 
-    /** @param array<array-key, mixed> $providerService */
+    /** @param  array<array-key, mixed>  $providerService */
     public function deliveryArtifacts(array $providerService): SensitiveDeliveryArtifacts
     {
         return new SensitiveDeliveryArtifacts([
@@ -255,7 +256,8 @@ final class PasarGuardMutationContractMapper
         int $bytes,
         DataAllowanceMode $mode,
         ?RemoteServiceSnapshot $current,
-    ): int {
+    ): int
+    {
         $this->remoteId($remoteId);
         if ($bytes < 1) {
             throw new InvalidArgumentException('Provider data mutation must be a positive byte count.');
@@ -277,7 +279,7 @@ final class PasarGuardMutationContractMapper
     }
 
     /**
-     * @param array<array-key, mixed> $payload
+     * @param  array<array-key, mixed>  $payload
      * @return array{username: string, status: string, data_limit_bytes: ?int, expires_at_unix: ?int, data_limit_reset_strategy: string, group_ids: list<int>}
      */
     private function providerCreateCanonicalState(array $payload): array
@@ -350,7 +352,7 @@ final class PasarGuardMutationContractMapper
         }
     }
 
-    /** @param array<array-key, mixed> $payload */
+    /** @param  array<array-key, mixed>  $payload */
     private function requiredString(array $payload, string $key): string
     {
         $value = $payload[$key] ?? null;
@@ -366,7 +368,7 @@ final class PasarGuardMutationContractMapper
         return $value;
     }
 
-    /** @param array<string, mixed> $state */
+    /** @param  array<string, mixed>  $state */
     private function canonicalHash(array $state): string
     {
         return hash('sha256', json_encode($state, JSON_THROW_ON_ERROR));
@@ -395,7 +397,7 @@ final class PasarGuardMutationContractMapper
         }
     }
 
-    /** @param array<array-key, mixed>|null $json */
+    /** @param  array<array-key, mixed>|null  $json */
     private function validSuccessPayload(string $operation, ?array $json): bool
     {
         if ($operation === 'delete') {
