@@ -1,126 +1,155 @@
 # Current Traceability Overlay
 
-**Last reviewed:** 2026-08-07  
-**Purpose:** correct current implementation/evidence status while the large baseline matrix is incrementally reconciled.  
-**Authority:** this overlay does not replace requirement definitions in `docs/01-authoritative-requirements.md`; it replaces stale status cells in `docs/02-requirement-traceability-matrix.md` where the two disagree.
+**Last reviewed:** 2026-08-08  
+**Purpose:** authoritative current implementation/evidence status while the baseline matrix is incrementally reconciled.  
+**Authority:** requirement wording remains in `docs/01-authoritative-requirements.md`; this overlay supersedes stale status cells in `docs/02-requirement-traceability-matrix.md`.
 
-Read with `PROJECT_STATUS.md`, `docs/project-status.json`, and the active handoff. Live head still comes from PR `#6`.
+Read with `PROJECT_STATUS.md`, `docs/project-status.json`, and the active handoff. The live working head always comes from Draft PR `#6`.
 
 ## Status vocabulary
 
-- `verified`: implementation and evidence-head exact-SHA gates passed;
-- `active`: current bounded implementation/evidence work;
-- `foundation-only`: partial prerequisite exists; owning workflow remains incomplete;
-- `deferred-live`: offline/source-contract work may continue, but live provider/environment acceptance is intentionally postponed;
+- `verified`: exact implementation/evidence lifecycle accepted;
+- `verified-offline`: deterministic implementation/source-contract proof accepted, with environment-specific live acceptance still required;
+- `blocked-live`: all currently identified non-live work is complete and the next required evidence depends on an owner-supplied controlled environment;
+- `foundation-only`: prerequisite exists but the owning later workflow remains incomplete;
 - `not-started`: no accepted implementation claim.
 
-## Accepted phase status
+## Phase status
 
-| Phase | Status | Authoritative evidence |
+| Phase | Status | Current authority |
 |---|---|---|
-| `0.1.0` | verified | planning quality gate and baseline documents |
+| `0.1.0` | verified | planning/specification baseline |
 | `0.2.0` | verified | `evidence/0.2.0/PHASE-CLOSURE.md` |
 | `0.3.0` | verified | `evidence/0.3.0/phase-closure-verification.md` |
-| `0.4.0` | active | verified increments through Trial/Panel offline/Fake foundation; pinned provider source-contract adapter work is active |
-| `0.5.0`–`1.0.0` | not-started except explicit earlier foundations | Master Prompt phase plan |
+| `0.4.0` | blocked-live | non-live Catalog/Panels/Offerings increments accepted; controlled live-provider matrix remains |
+| `0.5.0`–`1.0.0` | not-started except explicitly documented foundations | authoritative phase plan |
 
-## Phase 0.4 verified requirements
+## Phase 0.4 accepted functional boundaries
 
-### Catalog lifecycle
-
-| Requirement | Status | Code/tests/evidence |
+| Area / requirement | Current status | Accepted evidence |
 |---|---|---|
-| `CAT-001` | verified | Catalog domain/application/migration; `CatalogLifecycleServicesTest`; `evidence/0.4.0/catalog-category-product-variant-lifecycle.md`; `docs/23-phase-0.4-catalog-traceability.md` |
-| `CAT-002` | verified foundation through offering/inventory increments | Product/Offering/Panel inventory services; migration/test/evidence in `docs/23-26-*` |
-| `CAT-003` | verified | typed service mode in Plan Offering; `docs/26-phase-0.4-plan-offering-traceability.md` |
-| `CAT-004` | verified foundation | typed protocol profiles/targets and assignments; `docs/25-26-*` |
+| `CAT-001` category/product/variant lifecycle | verified | `evidence/0.4.0/catalog-category-product-variant-lifecycle.md`; `docs/23-phase-0.4-catalog-traceability.md` |
+| `CAT-002` product/offering/panel inventory foundations | verified within Phase 0.4 scope | `docs/23-*` through `docs/26-*` and panel inventory evidence |
+| `CAT-003` typed service mode | verified | Plan Offering evidence/traceability |
+| `CAT-004` protocol profile/target assignment foundation | verified | `docs/25-phase-0.4-panel-inventory-traceability.md` |
+| `CAT-005` Custom Plan policy/calculation snapshot | verified | `evidence/0.4.0/custom-plan-policy-calculation.md`; `docs/29-phase-0.4-custom-plan-traceability.md` |
+| `CAT-006` Trial policy/eligibility/capacity/abuse/fallback | verified offline/database scope | `evidence/0.4.0/trial-policy-panel-adapter-foundation.md`; `docs/34-phase-0.4-trial-panel-traceability.md` |
+| `CAT-008` capacity/availability/selection/disclosed fallback | verified | `docs/27-*`, `docs/28-*`, Trial integration evidence |
+| `DAT-001`, `DAT-003` Phase 0.4 data constraints | verified within accepted boundaries | exact migrations/tests/evidence for UTC snapshots, FK/unique/check/trigger constraints |
+| `ACL-002` Phase 0.4 admin mutations | verified within accepted services | execution-time authorization tests/evidence |
+| `SEC-001`, `SEC-002` Phase 0.4 provider controls | verified-offline | TLS/redaction/fail-closed/credential/replay/uncertainty evidence; live environment gate remains |
+| `QUA-001` | verified per accepted increment | exact-SHA CI, retained artifacts and independent digests |
 
-### Capacity, selection, custom plans and Trial
+## Panel/provider requirement reconciliation
 
-| Requirement | Status | Code/tests/evidence |
+### `PRV-001`
+
+Status: **verified-offline / blocked-live**.
+
+Accepted repository proof:
+
+- encrypted/validated/versioned Panel Connection foundation;
+- explicit common adapter capabilities/results/snapshots;
+- deterministic Fake adapter;
+- pinned Marzban `v0.8.4` and PasarGuard `v5.2.1` authentication/version/read/lookup/target source contracts;
+- provider factories bound to pinned read gateways;
+- real mutation/delivery capabilities remain unadvertised;
+- newly created real Service Targets remain disabled/declared;
+- operational route verification requires active Target, verified capabilities, current successful compatible connection/version evidence and active protocol assignment.
+
+Remaining requirement evidence is deployment-specific: protected live authentication, exact running version/health/capability/target acceptance and explicit later Target activation proof.
+
+### `PRV-002`
+
+Status: **verified-offline / blocked-live**.
+
+Accepted repository proof:
+
+- authoritative username lookup before create;
+- deterministic create coordinator and adoption/conflict behavior;
+- provider-specific create-equivalence mappers using only provider-preserved fields;
+- `RemoteServiceSnapshot::canonicalHash` is read-state evidence only;
+- separate `createEquivalenceHash` is required for automatic adoption;
+- missing equivalence proof => Manual Review/no create;
+- mismatch => conflict/no overwrite;
+- successful-create snapshot is revalidated through the same provider-specific equivalence path;
+- conflicting idempotency-key reuse preserves the original primary effect.
+
+Remaining live evidence: disposable real create/adopt/mismatch/replay/cleanup behavior on controlled panels.
+
+### `PRV-003`
+
+Status: **verified-offline / blocked-live**.
+
+Accepted repository proof:
+
+- unavailable authoritative lookup => no create;
+- unavailable/invalid create-equivalence mapping => no create;
+- uncertain create/mutation => authoritative discovery before retry;
+- no immediate second create after uncertainty;
+- offline mutation result classification distinguishes definitive, retryable-before-effect, uncertain-after-possible-effect and conflict/manual-review states.
+
+Remaining live evidence: controlled timeout/5xx/rate-limit fault injection and authoritative reconciliation on the actual pinned provider deployments.
+
+## Provider evidence chain
+
+### Trial/Panel offline/Fake foundation
+
+- implementation `b146c2c6aa902b4ed252d200121d63e422cd87f2`, CI #931;
+- evidence `31a1854a2804bb0b2cf466c96887de7c5813b343`, CI #934;
+- 298 tests / 1471 assertions.
+
+### Pinned read contracts
+
+- implementation `954973e505901208b5cef9348551e0c71ac027b6`, CI #959;
+- evidence `23a8da1ce1327407ecd826daa87b334452883d77`, CI #961;
+- 306 tests / 1522 assertions;
+- evidence: `evidence/0.4.0/pinned-panel-provider-read-contracts.md`;
+- traceability: `docs/36-phase-0.4-panel-provider-read-contract-traceability.md`.
+
+### Pinned mutation contracts
+
+- implementation `15b824e955d040a6bf43405f7015aa85110a73e4`, CI #978;
+- evidence `eec613c1cb5241d8fff621047086361f2753fd24`, CI #980;
+- 313 tests / 1650 assertions;
+- evidence: `evidence/0.4.0/pinned-panel-provider-mutation-contracts.md`;
+- traceability: `docs/38-phase-0.4-panel-provider-mutation-contract-traceability.md`.
+
+### Provider create-equivalence reconciliation
+
+- implementation `ab1e0d16d23460df4bf1ad9be4fcef0d16c37a43`, CI `31223470871` / #995;
+- evidence `a70b28cb984c23f1e219287e88d20014ee9f0310`, CI `31223749257` / #997;
+- 315 tests / 1678 assertions;
+- implementation artifact ID `9011256284`, digest `sha256:f3fc78ab55ba0adbb2814bb6d0de464736e897df36625b8f72f54b3f7b8fe95d`;
+- evidence artifact ID `9011359876`, digest `sha256:140e6a45fe2ef9523dee0147f6131a1e2d1bcaf63548b57eea7b83d3f0d9b827`;
+- evidence: `evidence/0.4.0/provider-create-equivalence-reconciliation.md`;
+- traceability: `docs/40-phase-0.4-provider-create-equivalence-traceability.md`.
+
+## Deferred controlled live acceptance
+
+Exact remaining rows are defined in `docs/41-phase-0.4-provider-live-acceptance-matrix.md`.
+
+They cover protected authentication, exact version/health, target discovery, authoritative absence, create, provider-specific adoption/mismatch, idempotent replay/conflict, expiry/data/reset/suspend/activate/delete/rotation, delivery, timeout/5xx/rate-limit uncertainty, cleanup and final Target activation eligibility.
+
+Every row is currently `deferred` and requires an owner-supplied controlled test panel. Source/offline evidence does not satisfy a live row.
+
+## Later-phase foundations that remain incomplete
+
+| Requirement group | Existing foundation | Owning future work |
 |---|---|---|
-| `CAT-005` | verified | Custom Plan services/migrations/tests; `evidence/0.4.0/custom-plan-policy-calculation.md`; `docs/29-phase-0.4-custom-plan-traceability.md` |
-| `CAT-006` | verified offline/database foundation | Trial policy, eligibility, membership policy, capacity reservation, abuse controls, lifecycle/regrant/reset and disclosed fallback; `evidence/0.4.0/trial-policy-panel-adapter-foundation.md`; `docs/34-phase-0.4-trial-panel-traceability.md` |
-| `CAT-008` | verified through capacity/availability/selection/fallback plus Trial integration | `TargetCapacity*`, route selection and Trial reservation services/tests; `docs/27-28-*`, `docs/34-*` |
-| `DAT-001` | verified within accepted Phase 0.4 snapshots | UTC persistence and explicit time snapshots in bounded increments |
-| `DAT-003` | verified within accepted Phase 0.4 schema boundaries | foreign keys, uniqueness, checks/triggers and MariaDB migration tests |
-| `ACL-002` | verified within accepted Catalog/Panel/Trial administrative services | execution-time authorization tests/evidence in increment documents |
-| `SEC-001`, `SEC-002` | verified only for controls explicitly listed in accepted increment evidence | redaction, credential handling, TLS/network policy, replay/conflict and fail-closed behavior; final independent release security gate remains open |
-| `QUA-001` | verified per accepted increment, not for Phase 0.4 closure | exact-SHA implementation/evidence runs and retained artifacts |
-
-## Verified Trial/Panel foundation boundary
-
-Implementation:
-
-- SHA `b146c2c6aa902b4ed252d200121d63e422cd87f2`;
-- CI `31135758918` / run `#931` — success.
-
-Evidence:
-
-- SHA `31a1854a2804bb0b2cf466c96887de7c5813b343`;
-- CI `31136119421` / run `#934` — success;
-- 298 tests, 1471 assertions;
-- artifact `test-evidence-31136119421`, ID `8978007207`;
-- independent digest `sha256:65b46242099caeef40e8bfeb7717b915ec306b449078570bd680420811bbde09`.
-
-| Requirement | Accepted boundary | Remaining owning-phase/live gap |
-|---|---|---|
-| `PRV-001` | common adapter capability/result/snapshot contract, Fake adapter, validation/redaction and fail-closed provider shells | concrete pinned HTTP gateways and later live acceptance |
-| `PRV-002` | create coordinator, deterministic identity resolver, exact-match adoption and mismatch conflict | durable full Provisioning/Service ownership remains Phase `0.6.0`; live provider acceptance deferred |
-| `PRV-003` | uncertain create triggers authoritative discovery before any retry; no immediate second create | real timeout/error semantics are source-contract work now and live fault-harness evidence later |
-
-## Active provider source-contract increment
-
-Authoritative handoff/contract note:
-
-- `docs/35-phase-0.4-panel-provider-source-contracts.md`.
-
-Pinned sources:
-
-- Marzban `v0.8.4` / `Gozargah/Marzban`;
-- PasarGuard `v5.2.1` / `PasarGuard/panel`;
-- Mirza Bot `mahdiMGF2/mirzabot` is a secondary practical integration reference, not provider authority.
-
-| Requirement | Current work | Offline acceptance | Deferred live acceptance |
-|---|---|---|---|
-| `PRV-001` | implement source-pinned HTTP authentication, version/capability/target discovery and operation mapping | deterministic HTTP contract tests against exact tagged router/model behavior | dedicated test panels near final integration |
-| `PRV-002` | map create/update/delete/status/delivery behavior while preserving authoritative pre-create lookup | fake HTTP proves payloads, snapshots, adoption/conflict and no duplicate create | real create/adopt/cleanup on disposable provider users |
-| `PRV-003` | classify timeout/5xx/malformed mutation responses and rediscover before retry | fault fixtures prove one mutation attempt plus authoritative discovery | controlled live fault harness at final acceptance |
-| `SEC-001`, `SEC-002` | preserve HTTPS/TLS, SSRF/network policy, no redirects by default, credential/delivery redaction and least privilege | static/contract/redaction tests and CI | validate target TLS chain, permissions and deployment-specific reverse proxy later |
-| `QUA-001` | exact-SHA source-contract implementation/evidence lifecycle | mandatory CI, test counts, artifact/digest and evidence head | separate live acceptance artifact when panels are provided |
-
-Absence of live Marzban/PasarGuard installations is **not a current blocker**. Real targets remain disabled/fail-closed until the deferred live gate.
-
-## Earlier foundation rows that remain incomplete
-
-The presence of a foundation does not move the complete workflow to `verified`:
-
-| Requirement group | Foundation present | Still required |
-|---|---|---|
-| `PAY-002`, `PAY-003` | typed payment/order states and shared idempotency/outbox primitives | Phase `0.5.0` payment orchestration, authoritative capture, provider evidence, concurrency/reconciliation |
-| `C2C-003`, `GFT-003` | contracts may exist | Fake and Generic REST implementations, security mapping, capture/reconciliation evidence in Phase `0.5.0` |
-| `OPS-001`, `OPS-003` | logging redaction, outbox, worker heartbeat/release operations foundations | complete Operations Center, alert delivery, queue/task/dead-letter workflows and release evidence |
-| `INS-001`, `RUN-001`–`RUN-003` | installer/runtime/release foundations and Phase `0.2.0` target evidence | final production package/owner environment re-verification at release |
-| `CNT-001` | installer/identity translations | complete product localization/content override system in Phase `0.7.0` |
-
-## Current control-plane traceability
-
-| Control | Requirement/risk | Implementation/document | Current state |
-|---|---|---|---|
-| deterministic host PHP/Composer/PCOV | `ARCH-001`, `QUA-002`, `QUA-012`, `RSK-026` | `scripts/ci/bootstrap-self-hosted-toolchain.sh`; `docs/development/ci-runner-contract.md` | verified at run `#934` |
-| dependency advisory repair | `ARCH-001`, `QUA-012`, `RSK-024` | patched `league/commonmark` lockfile | verified at run `#934` |
-| project continuation contract | `QUA-001`, `QUA-013` | `AGENTS.md`, `PROJECT_STATUS.md`, status JSON/schema, continuation runbook | verified at run `#934`; machine boundary advanced to increment 6 |
-| staging workflow safety | `RUN-001`, `SEC-001`, `SEC-008`, `RSK-014` | staging workflow inventory/cleanup | legacy workflows inert; guarded read-only readiness remains |
-| architecture enforcement gap | `ARCH-002`, `QUA-002` | audit finding F-010 | open bounded hardening task; no broad rewrite |
-| provider source contract | `PRV-001`–`PRV-003`, `SEC-001`, `SEC-002` | `docs/35-phase-0.4-panel-provider-source-contracts.md` | active; live testing explicitly deferred |
+| `PAY-002`, `PAY-003` | shared typed states/idempotency/outbox primitives | Phase `0.5.0` pricing/payment orchestration and reconciliation |
+| `C2C-003`, `GFT-003` | interfaces/foundations where present | Phase `0.5.0` provider implementations/security evidence |
+| `OPS-001`, `OPS-003` | redaction/outbox/worker heartbeat/release foundations | Phase `0.8.0` complete Operations Center and dead-letter/alert workflows |
+| `INS-001`, `RUN-001`–`RUN-003` | Phase 0.2 installer/runtime/release evidence | final release environment re-verification |
+| `CNT-001` | installer/identity translations | Phase `0.7.0` product localization/content system |
 
 ## Matrix reconciliation rule
 
-Until `docs/02-requirement-traceability-matrix.md` is fully regenerated:
+Until the large baseline matrix is regenerated:
 
 1. requirement wording comes from `docs/01-authoritative-requirements.md`;
-2. accepted implementation/evidence comes from phase evidence/traceability documents;
+2. accepted historical proof comes from bounded evidence/traceability files;
 3. current status comes from this overlay and `docs/project-status.json`;
-4. live working head/CI comes from GitHub PR `#6`;
-5. a stale `not-started`/`in-progress` cell in the baseline matrix must not override exact-SHA accepted evidence;
-6. provider source-contract acceptance must not be described as live-provider acceptance until the deferred test-panel gate is executed.
+4. live head/CI comes only from GitHub PR `#6`;
+5. source/offline provider proof must never be described as live-provider acceptance;
+6. Phase `0.4.0` remains open until the controlled live matrix and final closure audit pass.
