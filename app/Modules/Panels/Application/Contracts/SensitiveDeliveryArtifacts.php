@@ -16,8 +16,8 @@ final readonly class SensitiveDeliveryArtifacts implements Stringable
     private array $qrSources;
 
     /**
-     * @param array<array-key, mixed> $subscriptionLinks
-     * @param array<array-key, mixed>|null $qrSources
+     * @param  array<array-key, mixed>  $subscriptionLinks
+     * @param  array<array-key, mixed>|null  $qrSources
      */
     public function __construct(array $subscriptionLinks, ?array $qrSources = null)
     {
@@ -59,7 +59,7 @@ final readonly class SensitiveDeliveryArtifacts implements Stringable
     }
 
     /**
-     * @param array<array-key, mixed> $values
+     * @param  array<array-key, mixed>  $values
      * @return list<string>
      */
     private static function normalizeList(array $values): array

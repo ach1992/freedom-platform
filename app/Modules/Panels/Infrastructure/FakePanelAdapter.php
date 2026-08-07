@@ -296,7 +296,7 @@ final class FakePanelAdapter implements PanelAdapter
     }
 
     /**
-     * @param Closure(): PanelOperationResult $operation
+     * @param  Closure(): PanelOperationResult  $operation
      */
     private function idempotentOperation(
         string $idempotencyKey,

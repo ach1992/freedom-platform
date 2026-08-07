@@ -19,8 +19,8 @@ final readonly class PanelCapabilities
     public array $protocolProfiles;
 
     /**
-     * @param array<array-key, mixed> $operations
-     * @param array<array-key, mixed> $protocolProfiles
+     * @param  array<array-key, mixed>  $operations
+     * @param  array<array-key, mixed>  $protocolProfiles
      */
     public function __construct(
         string $panelType,
@@ -51,7 +51,7 @@ final readonly class PanelCapabilities
     }
 
     /**
-     * @param array<array-key, mixed> $values
+     * @param  array<array-key, mixed>  $values
      * @return list<string>
      */
     private static function normalizeIdentifiers(array $values, int $maximumLength, string $label): array

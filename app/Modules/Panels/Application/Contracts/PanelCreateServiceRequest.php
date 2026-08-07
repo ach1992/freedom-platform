@@ -58,7 +58,7 @@ final readonly class PanelCreateServiceRequest
     }
 
     /**
-     * @param array<array-key, mixed> $attributes
+     * @param  array<array-key, mixed>  $attributes
      * @return array<string, scalar|null>
      */
     private static function normalizeAttributes(array $attributes): array
