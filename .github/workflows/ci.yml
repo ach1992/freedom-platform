@@ -153,7 +153,7 @@ jobs:
           set -euo pipefail
           mkdir -p build/evidence/static
           composer validate --strict --no-check-publish 2>&1 | tee build/evidence/static/composer-validate.log
-          php vendor/bin/phpstan analyse --no-progress --error-format=table 2>&1 | tee build/evidence/static/phpstan.log
+          php -d memory_limit=1G vendor/bin/phpstan analyse --no-progress --error-format=table --memory-limit=1G 2>&1 | tee build/evidence/static/phpstan.log
           bash scripts/ci/forbidden-patterns.sh 2>&1 | tee build/evidence/static/forbidden-patterns.log
           bash scripts/ci/architecture.sh 2>&1 | tee build/evidence/static/architecture.log
 
