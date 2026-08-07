@@ -22,7 +22,7 @@ Current overlays:
 
 Do not treat a SHA written in this document as current. Before work, fetch PR `#6` and use its exact `head_sha`. Then fetch workflow runs for that SHA. Follow `AGENTS.md` and `docs/development/continuation-runbook.md`.
 
-## Last independently verified boundary
+## Last evidence-complete boundary
 
 ### Phase 0.4 increment 5 — Custom Plan Policy and Calculation Snapshot
 
@@ -42,75 +42,78 @@ Evidence boundary:
 - evidence: `evidence/0.4.0/custom-plan-policy-calculation.md`;
 - traceability: `docs/29-phase-0.4-custom-plan-traceability.md`.
 
-No later implementation is independently accepted yet.
-
-## Active unverified bounded increment
+## Active bounded increment
 
 ### Trial Policy and Panel Adapter Foundation
 
-Authoritative handoff: `docs/30-phase-0.4-trial-panel-handoff.md`.
+Implementation boundary is green; evidence-head verification is pending.
 
-Current bounded scope:
+Implementation:
 
-- trial policy, eligibility, capacity reservation, abuse controls, regrant/reset authority, and disclosed fallback;
-- common Panel Adapter contract and capability/result/snapshot validation;
-- `FakePanelAdapter` deterministic remote behavior and mutation idempotency journal;
-- authoritative deterministic-username lookup;
-- exact-match adoption, mismatch conflict/manual review, and unavailable-lookup fail-closed behavior;
+- SHA: `b146c2c6aa902b4ed252d200121d63e422cd87f2`;
+- CI: `31135758918` / run `#931` — success;
+- suite: 298 tests, 1471 assertions;
+- test artifact: `test-evidence-31135758918`;
+- artifact ID: `8977870831`;
+- independently verified digest: `sha256:97212a1a18ee3d444dd8a6a342981a6bae8bbdd4d013c3a204f6d26eaca3e95d`;
+- evidence: `evidence/0.4.0/trial-policy-panel-adapter-foundation.md`;
+- traceability: `docs/34-phase-0.4-trial-panel-traceability.md`;
+- handoff: `docs/30-phase-0.4-trial-panel-handoff.md`.
+
+Verified at the implementation boundary:
+
+- Trial policy, eligibility, daily/target capacity reservation, abuse controls, lifecycle, regrant/reset and disclosed compatible fallback;
+- common Panel Adapter contract, capability/request/result/snapshot validation and redaction;
+- deterministic `FakePanelAdapter` create/mutation behavior and operation-key journal;
+- authoritative deterministic-username lookup, exact-match adoption, mismatch conflict and unavailable-lookup fail-closed behavior;
 - uncertain-create discovery before any subsequent create;
-- credential and delivery-artifact redaction;
-- unavailable Marzban/PasarGuard shells that fail closed.
+- unavailable Marzban/PasarGuard shells that fail closed;
+- deterministic self-hosted CI, dependency/license/security/static/database/test gates and retained artifact inspection.
 
-Explicitly unverified:
+Still unverified or intentionally excluded:
 
-- mandatory CI on the exact current implementation head;
-- final Trial/Panel Adapter test and assertion counts;
-- retained implementation artifact and digest;
-- bounded evidence and traceability head;
-- real Marzban or PasarGuard version/API compatibility;
-- live provider or production activation.
+- mandatory CI on the exact evidence-head SHA containing the evidence/traceability documents;
+- real Marzban or PasarGuard version, OpenAPI, authentication, rate-limit and error behavior;
+- real remote mutations or Panel target production activation;
+- complete Order, Provisioning Operation, Service Subscription and Telegram Trial/Admin workflow;
+- Phase `0.4.0` closure.
 
 ## Stabilization status
 
-Feature development remains paused until the current stabilization head passes mandatory exact-SHA CI.
+Repository/CI/control-plane stabilization is implementation-green on `b146c2c6aa902b4ed252d200121d63e422cd87f2`. Its controls are included in the current evidence-head candidate and must pass the same exact-head CI before stabilization is considered accepted.
 
-### Completed cleanup
+Completed cleanup:
 
-- repository operating contract, contributor guide, continuation runbook, repository map, increment lifecycle, and machine-readable status/schema added;
-- execution ledger reconciled through verified Phase `0.4.0` increment 5;
-- current traceability/risk overlays and project control-plane audit added;
-- historical audits/candidate documents marked superseded;
-- architecture and test/CI documents now distinguish target, implemented, foundation, candidate, and accepted evidence;
-- self-hosted PHP/Composer runner contract made deterministic with explicit CLI INI, JIT disabled, and PCOV enabled only for coverage;
-- `league/commonmark` updated from vulnerable `2.8.3` to patched `2.9.0` through a bounded lockfile repair;
-- five active-increment files received the validated Pint-only repair;
-- temporary write-capable repair workflow and generator removed;
-- project-control verification integrated into mandatory preflight;
-- safe read-only `Staging Readiness` workflow added;
-- all legacy staging mutation/diagnostic workflows replaced with inert historical stubs;
-- active Trial/Panel handoff reconciled with the new control plane.
+- repository operating contract, contributor guide, continuation runbook, repository map, increment lifecycle and machine-readable status/schema;
+- execution ledger, architecture, test/CI, current traceability/risk overlays and active handoff reconciliation;
+- historical audits/candidates marked superseded;
+- deterministic self-hosted PHP/Composer contract with explicit CLI INI, JIT disabled and PCOV only for coverage;
+- patched `league/commonmark` `2.9.0` lockfile and focused Pint repair;
+- temporary write-capable repair automation removed;
+- project-control verification integrated into preflight;
+- guarded read-only `Staging Readiness` workflow and inert historical staging stubs;
+- direct PHPUnit execution in the configured wrapper process so coverage retains PCOV/JIT settings.
 
-### Remaining stabilization gate
+## Immediate next sequence
 
-1. Fetch PR `#6` and obtain the exact current head.
-2. Find a `CI` run on that exact head.
-3. When no exact-head run exists, manually run `Actions → CI → Run workflow → develop/v1.0.0-completion`.
+1. Fetch PR `#6` and exact current evidence-head candidate.
+2. Find a `CI` run on that exact SHA.
+3. If no run exists, manually run `Actions → CI → Run workflow → develop/v1.0.0-completion`.
 4. Inspect all mandatory jobs and executable logs.
-5. Fix every real failure with a focused commit and repeat until exact-head CI is green.
-6. Record stabilization results in this status/audit only after the accepted run exists.
-7. Resume Trial/Panel implementation verification from the active handoff.
-
-PR `#6` and Issue `#7` are intentionally not rewritten merely for stabilization. Their accepted feature-boundary updates remain gated by the implementation/evidence exact-SHA lifecycle.
+5. Fix every real failure without weakening a gate; any executable change creates a new evidence-head candidate.
+6. On exact evidence-head success, inspect/download/hash its test artifact and confirm the 298/1471 regression boundary or document any legitimate count change.
+7. Only then update Issue `#7` and Draft PR `#6` with the final evidence-head SHA/run/artifact.
+8. Continue Phase `0.4.0` with exact installed Marzban/PasarGuard contract work only when protected provider inputs/environment are available; otherwise take the next offline closure/control task.
 
 ## Known current risks
 
 - Connector-originated commits may not automatically start Actions; an exact-head manual dispatch may be the only remaining human action.
 - The single self-hosted runner serializes jobs; avoid commit/dispatch storms while a run is active.
 - The global baseline traceability/risk catalogues still require a later full regeneration; current overlays govern status meanwhile.
-- `TrialReservationService` is a reviewability hotspot. Decompose it only after a green behavior baseline, preserving transactions, lock order, replay, and tests.
+- `TrialReservationService` is a reviewability hotspot. Decompose it only after this evidence boundary is accepted, preserving transactions, lock order, replay and tests.
 - Aggregate coverage exists, but Phase `0.4.0` closure still requires explicit critical-branch interpretation rather than relying on a raw percentage.
 - Real panel versions/contracts and production activation remain deliberately untested and fail closed.
-- The long-running PR is intentionally retained; its scale requires strict status, handoff, and evidence discipline.
+- The long-running PR is intentionally retained; its scale requires strict status, handoff and evidence discipline.
 
 ## Non-negotiable remote-effect rules
 
@@ -125,12 +128,9 @@ PR `#6` and Issue `#7` are intentionally not rewritten merely for stabilization.
 
 ## Next feature completion boundary
 
-The next acceptable feature boundary is not “code exists.” It is:
+The current increment becomes evidence-complete only when:
 
-- exact implementation SHA;
-- all mandatory jobs green on that SHA;
-- executable test/assertion counts;
-- retained artifact name/ID and independently calculated SHA-256;
-- bounded Trial/Panel evidence and traceability;
-- all mandatory jobs green on the exact evidence-head SHA;
-- only then updates to Issue `#7` and PR `#6`.
+- all mandatory jobs are green on the exact evidence-head SHA;
+- executable test/assertion counts are confirmed;
+- the evidence-head artifact name/ID and independently calculated SHA-256 are recorded;
+- Issue `#7` and Draft PR `#6` are updated without changing Draft/base/branch state.
