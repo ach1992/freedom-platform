@@ -24,7 +24,9 @@ final class PasarGuardLiveAcceptance
     public const CONFIRMATION = 'MUTATE_DISPOSABLE_PASARGUARD_V5_2_1';
 
     private const CREATE_LIMIT_BYTES = 1_048_576;
+
     private const SET_LIMIT_BYTES = 2_097_152;
+
     private const ADD_LIMIT_BYTES = 1_048_576;
 
     private readonly Closure $request;
@@ -35,7 +37,7 @@ final class PasarGuardLiveAcceptance
     }
 
     /**
-     * @param array{origin: string, api_key: string, run_id: string, confirm: string, group_id?: int|null, now?: DateTimeImmutable} $config
+     * @param  array{origin: string, api_key: string, run_id: string, confirm: string, group_id?: int|null, now?: DateTimeImmutable}  $config
      * @return array<string, mixed>
      */
     public function run(array $config): array
