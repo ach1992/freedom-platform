@@ -14,7 +14,7 @@ final readonly class PanelCreateCoordinator
 {
     public function __construct(private RemoteIdentityResolver $resolver) {}
 
-    /** @requirement PRV-001 SEC-002 QUA-001 */
+    /** @requirement PRV-001 PRV-002 PRV-003 SEC-002 QUA-001 */
     public function createOrAdopt(PanelAdapter $adapter, PanelCreateServiceRequest $request): PanelOperationResult
     {
         $before = $this->resolver->resolve($adapter, $request);
@@ -25,7 +25,7 @@ final readonly class PanelCreateCoordinator
 
         $created = $adapter->createService($request);
         if ($created->outcome === PanelOperationOutcome::Success) {
-            return $this->validateSuccessfulCreate($created, $request);
+            return $this->validateSuccessfulCreate($adapter, $created, $request);
         }
         if ($created->outcome !== PanelOperationOutcome::UncertainResult) {
             return $created;
@@ -46,6 +46,7 @@ final readonly class PanelCreateCoordinator
     }
 
     private function validateSuccessfulCreate(
+        PanelAdapter $adapter,
         PanelOperationResult $result,
         PanelCreateServiceRequest $request,
     ): PanelOperationResult {
@@ -58,7 +59,7 @@ final readonly class PanelCreateCoordinator
             );
         }
 
-        $resolved = $this->resolver->resolveSnapshot($request, $result->service);
+        $resolved = $this->resolver->resolveSnapshot($adapter, $request, $result->service);
 
         return match ($resolved->disposition) {
             RemoteIdentityDisposition::Adopt => $result,
@@ -71,7 +72,9 @@ final readonly class PanelCreateCoordinator
             RemoteIdentityDisposition::Absent, RemoteIdentityDisposition::ManualReview => new PanelOperationResult(
                 PanelOperationOutcome::UncertainResult,
                 $result->service,
-                'remote_create_snapshot_unverified',
+                $resolved->reasonCode === 'remote_create_equivalence_unavailable'
+                    ? $resolved->reasonCode
+                    : 'remote_create_snapshot_unverified',
                 'Created remote service could not be verified authoritatively.',
             ),
         };
@@ -90,7 +93,7 @@ final readonly class PanelCreateCoordinator
             ),
             RemoteIdentityDisposition::ManualReview => new PanelOperationResult(
                 PanelOperationOutcome::UncertainResult,
-                null,
+                $resolution->service,
                 $resolution->reasonCode,
                 'Remote identity could not be established authoritatively.',
             ),
