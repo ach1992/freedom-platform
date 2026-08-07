@@ -34,8 +34,8 @@ final class PanelsServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->bind(PanelApprovalGate::class, SensitivePanelApprovalGate::class);
-        $this->app->bind(MarzbanGatewayFactory::class, UnavailableMarzbanGatewayFactory::class);
-        $this->app->bind(PasarGuardGatewayFactory::class, UnavailablePasarGuardGatewayFactory::class);
+        $this->app->bind(MarzbanGatewayFactory::class, MarzbanSourceContractGatewayFactory::class);
+        $this->app->bind(PasarGuardGatewayFactory::class, PasarGuardSourceContractGatewayFactory::class);
 
         $this->app->singleton(PanelServiceCanonicalizer::class);
         $this->app->singleton(PanelCredentialPolicy::class);
