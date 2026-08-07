@@ -1,95 +1,14 @@
-name: Staging Stack Inventory
+name: Historical - Disabled Staging Stack Inventory
 
 on:
   workflow_dispatch:
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
-  inventory:
+  disabled:
+    name: Disabled historical workflow
+    if: ${{ github.repository == 'disabled/historical-workflow' }}
     runs-on: ubuntu-24.04
     steps:
-      - name: Prepare SSH client
-        env:
-          STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
-          STAGING_KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -n "$STAGING_SSH_PRIVATE_KEY"
-          test -n "$STAGING_KNOWN_HOSTS"
-          install -d -m 700 "$HOME/.ssh"
-          printf '%s\n' "$STAGING_SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
-          printf '%s\n' "$STAGING_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
-          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
-
-      - name: Inspect aaPanel stack installers
-        env:
-          STAGING_HOST: ${{ secrets.STAGING_HOST }}
-          STAGING_PORT: ${{ secrets.STAGING_PORT }}
-          STAGING_USER: ${{ secrets.STAGING_USER }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p build/evidence/staging
-          ssh \
-            -o BatchMode=yes \
-            -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=yes \
-            -o ConnectTimeout=20 \
-            -p "$STAGING_PORT" \
-            "$STAGING_USER@$STAGING_HOST" \
-            'set -eu
-             echo "# aaPanel stack inventory"
-             echo "utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-             echo "panel_directory=$([ -d /www/server/panel ] && echo present || echo absent)"
-             echo "panel_service_script=$([ -x /etc/init.d/bt ] && echo present || echo absent)"
-             echo "panel_processes=$(pgrep -fc "BT-Panel|BT-Task|panel.py" || true)"
-             echo "installer_directory=$([ -d /www/server/panel/install ] && echo present || echo absent)"
-             for path in \
-               /www/server/panel/install/openlitespeed.sh \
-               /www/server/panel/install/php.sh \
-               /www/server/panel/install/install_soft.sh \
-               /www/server/panel/data/softList.conf; do
-               if [ -e "$path" ]; then
-                 mode=$(stat -c %a "$path" 2>/dev/null || true)
-                 bytes=$(stat -c %s "$path" 2>/dev/null || true)
-                 echo "file_$(basename "$path")=present mode=${mode} bytes=${bytes}"
-               else
-                 echo "file_$(basename "$path")=absent"
-               fi
-             done
-             echo "matching_installers_begin"
-             find /www/server/panel/install -maxdepth 1 -type f -printf "%f\n" 2>/dev/null \
-               | grep -Ei "^(openlitespeed|php|install_soft|redis|mysql|mariadb).*" \
-               | sort \
-               || true
-             echo "matching_installers_end"
-             for binary in /www/server/php/84/bin/php /usr/local/lsws/bin/lshttpd /usr/local/lsws/lsphp84/bin/lsphp; do
-               if [ -x "$binary" ]; then
-                 echo "binary_$(basename "$binary")=present"
-               else
-                 echo "binary_$(basename "$binary")=absent"
-               fi
-             done
-             echo "active_services_begin"
-             for service in lsws lshttpd mariadb redis-server supervisor cron; do
-               echo "${service}=$(systemctl is-active "$service" 2>/dev/null || true)"
-             done
-             echo "active_services_end"' \
-            | tee build/evidence/staging/stack-inventory.txt
-
-      - name: Remove SSH material
-        if: always()
-        shell: bash
-        run: rm -rf "$HOME/.ssh"
-
-      - name: Upload sanitized stack inventory
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: staging-stack-inventory-${{ github.run_id }}
-          path: build/evidence/staging
-          if-no-files-found: error
-          retention-days: 7
+      - run: echo 'This historical workflow is disabled. Use Staging Readiness and docs/development/staging-workflow-inventory.md.'
