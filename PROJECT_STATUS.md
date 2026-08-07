@@ -16,7 +16,8 @@ Current overlays:
 - risks: `docs/33-current-risk-overlay.md`;
 - stabilization audit: `docs/31-project-control-plane-audit.md`;
 - staging workflow status: `docs/development/staging-workflow-inventory.md`;
-- operational instruction status: `docs/development/operational-document-status.md`.
+- operational instruction status: `docs/development/operational-document-status.md`;
+- pinned panel-provider source contracts: `docs/35-phase-0.4-panel-provider-source-contracts.md`.
 
 ## Live-state rule
 
@@ -24,95 +25,124 @@ Do not treat a SHA written in this document as current. Before work, fetch PR `#
 
 ## Last evidence-complete boundary
 
-### Phase 0.4 increment 5 — Custom Plan Policy and Calculation Snapshot
+### Phase 0.4 increment 6 — Trial Policy and Panel Adapter Offline/Fake Foundation
 
 Implementation boundary:
-
-- SHA: `8e62867277acdd39cd1471ed3d454ef25520bef8`;
-- CI: `31071843621` / run `#833` — success;
-- suite: 255 tests, 1267 assertions.
-
-Evidence boundary:
-
-- SHA: `0d34af0aa4f9f227fdf3cae74b4fd4717f199ddf`;
-- CI: `31102652203` / run `#834` — success;
-- artifact: `test-evidence-31102652203`;
-- artifact ID: `8968201643`;
-- digest: `sha256:5ec6b6dd94e1305c17312650abdc94a5253521834911c26eb48f8decbd105cb9`;
-- evidence: `evidence/0.4.0/custom-plan-policy-calculation.md`;
-- traceability: `docs/29-phase-0.4-custom-plan-traceability.md`.
-
-## Active bounded increment
-
-### Trial Policy and Panel Adapter Foundation
-
-Implementation boundary is green; evidence-head verification is pending.
-
-Implementation:
 
 - SHA: `b146c2c6aa902b4ed252d200121d63e422cd87f2`;
 - CI: `31135758918` / run `#931` — success;
 - suite: 298 tests, 1471 assertions;
-- test artifact: `test-evidence-31135758918`;
+- artifact: `test-evidence-31135758918`;
 - artifact ID: `8977870831`;
-- independently verified digest: `sha256:97212a1a18ee3d444dd8a6a342981a6bae8bbdd4d013c3a204f6d26eaca3e95d`;
-- evidence: `evidence/0.4.0/trial-policy-panel-adapter-foundation.md`;
-- traceability: `docs/34-phase-0.4-trial-panel-traceability.md`;
-- handoff: `docs/30-phase-0.4-trial-panel-handoff.md`.
+- independently verified digest: `sha256:97212a1a18ee3d444dd8a6a342981a6bae8bbdd4d013c3a204f6d26eaca3e95d`.
 
-Verified at the implementation boundary:
+Evidence boundary:
+
+- SHA: `31a1854a2804bb0b2cf466c96887de7c5813b343`;
+- CI: `31136119421` / run `#934` — success;
+- suite: 298 tests, 1471 assertions;
+- artifact: `test-evidence-31136119421`;
+- artifact ID: `8978007207`;
+- independently verified digest: `sha256:65b46242099caeef40e8bfeb7717b915ec306b449078570bd680420811bbde09`;
+- evidence: `evidence/0.4.0/trial-policy-panel-adapter-foundation.md`;
+- traceability: `docs/34-phase-0.4-trial-panel-traceability.md`.
+
+Accepted controls include:
 
 - Trial policy, eligibility, daily/target capacity reservation, abuse controls, lifecycle, regrant/reset and disclosed compatible fallback;
 - common Panel Adapter contract, capability/request/result/snapshot validation and redaction;
 - deterministic `FakePanelAdapter` create/mutation behavior and operation-key journal;
 - authoritative deterministic-username lookup, exact-match adoption, mismatch conflict and unavailable-lookup fail-closed behavior;
 - uncertain-create discovery before any subsequent create;
-- unavailable Marzban/PasarGuard shells that fail closed;
-- deterministic self-hosted CI, dependency/license/security/static/database/test gates and retained artifact inspection.
+- unavailable real-provider shells that fail closed;
+- deterministic self-hosted CI, patched dependency lockfile, project-control gate and retained evidence lifecycle.
 
-Still unverified or intentionally excluded:
+## Active bounded increment
 
-- mandatory CI on the exact evidence-head SHA containing the evidence/traceability documents;
-- real Marzban or PasarGuard version, OpenAPI, authentication, rate-limit and error behavior;
-- real remote mutations or Panel target production activation;
-- complete Order, Provisioning Operation, Service Subscription and Telegram Trial/Admin workflow;
-- Phase `0.4.0` closure.
+### Pinned Marzban and PasarGuard Source-Contract Adapters
+
+Status: active offline implementation/contract work. Live provider testing is intentionally deferred by owner until dedicated test panels are provided near final integration.
+
+Pinned contracts:
+
+- Marzban `v0.8.4` — `Gozargah/Marzban`;
+- PasarGuard `v5.2.1` — `PasarGuard/panel`;
+- Mirza Bot (`mahdiMGF2/mirzabot`) is a secondary practical integration reference only.
+
+Authoritative implementation/handoff document:
+
+- `docs/35-phase-0.4-panel-provider-source-contracts.md`.
+
+The next implementation may proceed without a live panel. It must use deterministic HTTP contract tests against the exact pinned source behavior and keep real targets disabled/fail-closed.
+
+Expected offline scope:
+
+- token/API-key authentication mapping without exposing credentials;
+- `/api/system` version compatibility checks;
+- inbound/group target discovery;
+- authoritative username lookup;
+- create/update/reset/suspend/activate/delete/revoke-subscription mapping;
+- legacy Marzban `proxies`/`inbounds` payload mapping;
+- PasarGuard `proxy_settings`/`group_ids` payload mapping;
+- HTTP/provider failure classification into definitive/retryable/uncertain outcomes;
+- timeout-after-mutation discovery/reconciliation without blind retry;
+- TLS, SSRF, redirect, redaction and secret-safety tests;
+- exact-SHA implementation/evidence lifecycle.
+
+## Deferred live-provider gate
+
+Marzban and PasarGuard are **not installed on the current server**. This is not a blocker for normal project development.
+
+The owner decision is:
+
+- do not install temporary panel instances merely to unblock Phase `0.4.0` development;
+- implement and verify adapters from the pinned upstream source/API contracts now;
+- continue later project phases after offline contract evidence is accepted;
+- near final integration/release acceptance, the owner will provide dedicated test panels and protected credentials;
+- only then perform live authentication, version/capability discovery, create/adopt/conflict, mutation, uncertainty, cleanup and target-activation tests.
+
+Until the final live gate:
+
+- real panel targets remain disabled;
+- no live-provider compatibility or production-activation claim is allowed;
+- absence of a test panel must not cause a new chat/engineer to stop unrelated development.
 
 ## Stabilization status
 
-Repository/CI/control-plane stabilization is implementation-green on `b146c2c6aa902b4ed252d200121d63e422cd87f2`. Its controls are included in the current evidence-head candidate and must pass the same exact-head CI before stabilization is considered accepted.
+Repository/CI/control-plane stabilization is complete and accepted through the increment-6 evidence boundary.
 
-Completed cleanup:
+Completed controls include:
 
 - repository operating contract, contributor guide, continuation runbook, repository map, increment lifecycle and machine-readable status/schema;
-- execution ledger, architecture, test/CI, current traceability/risk overlays and active handoff reconciliation;
+- reconciled execution ledger, architecture, test/CI, traceability/risk overlays and active handoff model;
 - historical audits/candidates marked superseded;
 - deterministic self-hosted PHP/Composer contract with explicit CLI INI, JIT disabled and PCOV only for coverage;
 - patched `league/commonmark` `2.9.0` lockfile and focused Pint repair;
 - temporary write-capable repair automation removed;
 - project-control verification integrated into preflight;
 - guarded read-only `Staging Readiness` workflow and inert historical staging stubs;
-- direct PHPUnit execution in the configured wrapper process so coverage retains PCOV/JIT settings.
+- direct PHPUnit execution inside the configured wrapper process so coverage preserves PCOV/JIT settings.
+
+Feature development is no longer paused for stabilization.
 
 ## Immediate next sequence
 
-1. Fetch PR `#6` and exact current evidence-head candidate.
-2. Find a `CI` run on that exact SHA.
-3. If no run exists, manually run `Actions → CI → Run workflow → develop/v1.0.0-completion`.
-4. Inspect all mandatory jobs and executable logs.
-5. Fix every real failure without weakening a gate; any executable change creates a new evidence-head candidate.
-6. On exact evidence-head success, inspect/download/hash its test artifact and confirm the 298/1471 regression boundary or document any legitimate count change.
-7. Only then update Issue `#7` and Draft PR `#6` with the final evidence-head SHA/run/artifact.
-8. Continue Phase `0.4.0` with exact installed Marzban/PasarGuard contract work only when protected provider inputs/environment are available; otherwise take the next offline closure/control task.
+1. Fetch PR `#6` and exact current head.
+2. Read `docs/35-phase-0.4-panel-provider-source-contracts.md`.
+3. Implement the smallest source-contract HTTP gateway increment against Marzban `v0.8.4` and PasarGuard `v5.2.1` without live credentials.
+4. Add deterministic HTTP contract tests for authentication, version detection, target discovery, lookup, mutation, error classification, uncertainty and redaction.
+5. Keep real gateway activation behind explicit fail-closed configuration until the final live gate.
+6. Run mandatory CI on the exact implementation SHA and complete the standard evidence-head lifecycle.
+7. Continue remaining Phase `0.4.0` closure/reconciliation work that does not require a live provider.
+8. Defer live panel acceptance until the owner supplies dedicated test panels near final integration.
 
 ## Known current risks
 
-- Connector-originated commits may not automatically start Actions; an exact-head manual dispatch may be the only remaining human action.
-- The single self-hosted runner serializes jobs; avoid commit/dispatch storms while a run is active.
-- The global baseline traceability/risk catalogues still require a later full regeneration; current overlays govern status meanwhile.
-- `TrialReservationService` is a reviewability hotspot. Decompose it only after this evidence boundary is accepted, preserving transactions, lock order, replay and tests.
+- The global baseline traceability/risk catalogues still require a later full regeneration; current overlays govern current status meanwhile.
+- `TrialReservationService` is a reviewability hotspot. Decompose it only in a bounded behavior-preserving increment, preserving transactions, lock order, replay and tests.
 - Aggregate coverage exists, but Phase `0.4.0` closure still requires explicit critical-branch interpretation rather than relying on a raw percentage.
-- Real panel versions/contracts and production activation remain deliberately untested and fail closed.
+- Source-contract tests can prove request/response mapping but cannot prove deployment-specific provider configuration, reverse proxy, permissions, TLS chain, plugins/forks or runtime defects; that proof is intentionally deferred to the final live gate.
+- Mirza Bot is useful as a practical integration reference but is not an authority for security, TLS, persistence, idempotency or provider-version semantics.
 - The long-running PR is intentionally retained; its scale requires strict status, handoff and evidence discipline.
 
 ## Non-negotiable remote-effect rules
@@ -128,9 +158,12 @@ Completed cleanup:
 
 ## Next feature completion boundary
 
-The current increment becomes evidence-complete only when:
+The source-contract adapter increment is complete only when:
 
+- production adapter/gateway code exists for the pinned contracts without enabling real targets by default;
+- all mandatory jobs are green on the exact implementation SHA;
+- deterministic HTTP contract tests cover the declared provider operations and failure classes;
+- executable test/assertion counts and retained artifact digest are recorded;
+- bounded evidence/traceability is committed;
 - all mandatory jobs are green on the exact evidence-head SHA;
-- executable test/assertion counts are confirmed;
-- the evidence-head artifact name/ID and independently calculated SHA-256 are recorded;
 - Issue `#7` and Draft PR `#6` are updated without changing Draft/base/branch state.
