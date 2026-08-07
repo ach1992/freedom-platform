@@ -10,6 +10,8 @@ use InvalidArgumentException;
 
 final class PanelCredentialPolicy
 {
+    private const PASARGUARD_API_KEY_PATTERN = '/\Apg_key_[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}\z/';
+
     public function assertSatisfied(PanelProviderType $provider, PanelCredentials $credentials): void
     {
         $values = $credentials->values;
@@ -24,7 +26,7 @@ final class PanelCredentialPolicy
             return;
         }
 
-        $this->requireTokenOrCredentials($values);
+        $this->requirePasarGuardCredentials($values);
     }
 
     /** @param array<string, string> $values */
@@ -36,9 +38,14 @@ final class PanelCredentialPolicy
     }
 
     /** @param array<string, string> $values */
-    private function requireTokenOrCredentials(array $values): void
+    private function requirePasarGuardCredentials(array $values): void
     {
-        if (isset($values['api_token'])) {
+        $apiKey = $values['api_key'] ?? $values['api_token'] ?? null;
+        if ($apiKey !== null) {
+            if (preg_match(self::PASARGUARD_API_KEY_PATTERN, $apiKey) !== 1) {
+                throw new InvalidArgumentException('PasarGuard API key is invalid.');
+            }
+
             return;
         }
 
