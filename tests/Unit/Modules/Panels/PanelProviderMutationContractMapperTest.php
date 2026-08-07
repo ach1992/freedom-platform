@@ -28,7 +28,9 @@ final class PanelProviderMutationContractMapperTest extends TestCase
         $remoteId = (string) $fixture['remote_id'];
         $current = $this->snapshot($remoteId, $request->username, 1_073_741_824);
 
-        $this->assertMappedRequest($fixture['requests']['create_service'], $mapper->createRequest($request));
+        $create = $mapper->createRequest($request);
+        $this->assertMappedRequest($fixture['requests']['create_service'], $create);
+        self::assertInstanceOf(\stdClass::class, $create->payload['proxies']['vless'] ?? null);
         $this->assertMappedRequest(
             $fixture['requests']['update_expiry'],
             $mapper->updateExpiryRequest($remoteId, new DateTimeImmutable('@1800003600')),
@@ -276,9 +278,11 @@ final class PanelProviderMutationContractMapperTest extends TestCase
             return;
         }
         self::assertNotNull($actual->payload);
-        self::assertJsonStringEqualsJsonString(
-            json_encode($expected['payload'], JSON_THROW_ON_ERROR),
+        $normalizedActual = json_decode(
             json_encode($actual->payload, JSON_THROW_ON_ERROR),
+            true,
+            flags: JSON_THROW_ON_ERROR,
         );
+        self::assertSame($expected['payload'], $normalizedActual);
     }
 }
