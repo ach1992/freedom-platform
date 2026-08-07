@@ -100,9 +100,10 @@ jobs:
             fi
           } > "$evidence/readiness.txt"
 
-          grep -E '(^|_)(password|passwd|token|secret|api_key|private_key)=' "$evidence/readiness.txt" \
-            && { echo 'Sensitive-looking key was emitted.' >&2; exit 1; } \
-            || true
+          if grep -Eq '(^|_)(password|passwd|token|secret|api_key|private_key)=' "$evidence/readiness.txt"; then
+            echo 'Sensitive-looking key was emitted.' >&2
+            exit 1
+          fi
 
           cat "$evidence/readiness.txt"
 
