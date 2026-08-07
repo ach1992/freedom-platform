@@ -204,7 +204,8 @@ jobs:
           docker compose -f docker-compose.ci.yml ps > build/evidence/services/compose-ps.txt
           test -f .env || cp .env.example .env
           php artisan config:clear --ansi
-          COLUMNS=240 php artisan test \
+          COLUMNS=240 php vendor/bin/phpunit \
+            --configuration phpunit.xml \
             --display-warnings \
             --fail-on-warning \
             --log-junit build/evidence/tests/junit.xml \
