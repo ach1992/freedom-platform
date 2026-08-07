@@ -64,8 +64,7 @@ final class MarzbanMutationContractMapper
         int $bytes,
         DataAllowanceMode $mode,
         ?RemoteServiceSnapshot $current = null,
-    ): PanelMappedMutationRequest
-    {
+    ): PanelMappedMutationRequest {
         return new PanelMappedMutationRequest(
             'PUT',
             '/api/user/'.rawurlencode($this->username($remoteId)),
@@ -277,8 +276,7 @@ final class MarzbanMutationContractMapper
         int $bytes,
         DataAllowanceMode $mode,
         ?RemoteServiceSnapshot $current,
-    ): int
-    {
+    ): int {
         $this->username($remoteId);
         if ($bytes < 1) {
             throw new InvalidArgumentException('Provider data mutation must be a positive byte count.');
