@@ -37,6 +37,11 @@ abstract class DelegatingPanelAdapter implements PanelAdapter
         return $this->gateway->findByDeterministicUsername($username);
     }
 
+    public function createEquivalenceHash(PanelCreateServiceRequest $request): string
+    {
+        return $this->gateway->createEquivalenceHash($request);
+    }
+
     public function createService(PanelCreateServiceRequest $request): PanelOperationResult
     {
         return $this->gateway->createService($request);
