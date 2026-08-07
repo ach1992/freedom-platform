@@ -1,91 +1,14 @@
-name: Staging Runtime Gate Once
+name: Historical - Disabled Staging Runtime Gate
 
 on:
   workflow_dispatch:
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
-  runtime-gate:
+  disabled:
+    name: Disabled historical workflow
+    if: ${{ github.repository == 'disabled/historical-workflow' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
     steps:
-      - name: Prepare SSH client
-        env:
-          STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
-          STAGING_KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -n "$STAGING_SSH_PRIVATE_KEY"
-          test -n "$STAGING_KNOWN_HOSTS"
-          install -d -m 700 "$HOME/.ssh"
-          printf '%s\n' "$STAGING_SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
-          printf '%s\n' "$STAGING_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
-          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
-
-      - name: Verify CLI and LSPHP runtimes
-        env:
-          STAGING_HOST: ${{ secrets.STAGING_HOST }}
-          STAGING_PORT: ${{ secrets.STAGING_PORT }}
-          STAGING_USER: ${{ secrets.STAGING_USER }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          ssh \
-            -o BatchMode=yes \
-            -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=yes \
-            -o ConnectTimeout=20 \
-            -p "$STAGING_PORT" \
-            "$STAGING_USER@$STAGING_HOST" \
-            'bash -s' <<'REMOTE'
-          set -Eeuo pipefail
-          CLI=/www/server/php/84/bin/php
-          LSPHP=/usr/local/lsws/lsphp84/bin/lsphp
-          PROBE=/root/freedom-bootstrap/runtime-probe.php
-          test -x "$CLI"
-          test -x "$LSPHP"
-          install -d -m 700 /root/freedom-bootstrap
-
-          cat > "$PROBE" <<'PHP'
-          <?php
-          declare(strict_types=1);
-          $extensions = array_slice($argv, 1);
-          echo 'version=' . PHP_VERSION . PHP_EOL;
-          echo 'sapi=' . PHP_SAPI . PHP_EOL;
-          echo 'ini=' . (php_ini_loaded_file() ?: 'none') . PHP_EOL;
-          $missing = array_values(array_filter(
-              $extensions,
-              static fn (string $extension): bool => ! extension_loaded($extension),
-          ));
-          echo 'missing=' . ($missing === [] ? 'none' : implode(',', $missing)) . PHP_EOL;
-          echo 'opcache=' . (extension_loaded('Zend OPcache') || extension_loaded('opcache') ? 'present' : 'absent') . PHP_EOL;
-          exit($missing === [] ? 0 : 2);
-          PHP
-          chmod 600 "$PROBE"
-
-          common=(bcmath curl dom fileinfo intl json mbstring openssl pdo pdo_mysql redis sodium tokenizer xml)
-          cli=("${common[@]}" pcntl)
-
-          echo '# cli runtime'
-          set +e
-          "$CLI" "$PROBE" "${cli[@]}"
-          cli_status=$?
-          echo '# lsphp runtime'
-          "$LSPHP" "$PROBE" "${common[@]}"
-          lsphp_status=$?
-          set -e
-          rm -f "$PROBE"
-
-          echo "cli_gate_status=$cli_status"
-          echo "lsphp_gate_status=$lsphp_status"
-          test "$cli_status" -eq 0
-          test "$lsphp_status" -eq 0
-          REMOTE
-
-      - name: Remove SSH material
-        if: always()
-        shell: bash
-        run: rm -rf "$HOME/.ssh"
+      - run: echo 'This one-time remote runtime gate is disabled. Use Staging Readiness for current read-only facts.'
