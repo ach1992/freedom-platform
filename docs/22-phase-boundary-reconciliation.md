@@ -1,8 +1,12 @@
-# Phase Boundary and Task Reconciliation
+# Historical Phase Boundary Reconciliation — Superseded Candidate Section
 
-Date: 2026-08-05
-Authoritative contract: `docs/specification/master-execution-prompt.md`
-Branch: `develop/v1.0.0-completion`
+> **Historical snapshot:** This document preserves the 2026-08-05 reconciliation that confirmed Phase `0.2.0`/`0.3.0` closure and authoritative Issue boundaries. Its “Current Candidate” section is superseded by `PROJECT_STATUS.md`, `docs/project-status.json`, and the active Phase `0.4.0` handoff. Do not use the old candidate SHA as a continuation point.
+
+## Original reconciliation
+
+Date: 2026-08-05  
+Authoritative contract: `docs/specification/master-execution-prompt.md`  
+Branch: `develop/v1.0.0-completion`  
 Draft PR: #6
 
 ## Purpose
@@ -51,6 +55,6 @@ Issue #9 owns Phase 0.6:
 
 Issues #10–#13 retain the authoritative Phase 0.7–1.0 boundaries.
 
-## Current Candidate
+## Historical candidate at the time
 
-The current pre-increment branch head `bc425ff9d378a06837a4f229cd48e1cb19a029bb` is Unverified. Its initial product catalog migration is being replaced with a Master-Prompt-aligned Category/Product/Variant lifecycle candidate. No Phase 0.4 Task will be checked or closed until code and exact-SHA CI/evidence pass.
+The then-current pre-increment branch head `bc425ff9d378a06837a4f229cd48e1cb19a029bb` was unverified. Its initial product catalog migration was being replaced with a Master-Prompt-aligned Category/Product/Variant lifecycle candidate. That candidate was later superseded by accepted Phase `0.4.0` increments recorded in `docs/23-phase-0.4-catalog-traceability.md` through `docs/29-phase-0.4-custom-plan-traceability.md`.
