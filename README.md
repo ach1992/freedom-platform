@@ -22,11 +22,13 @@ Do not begin from this README's prose alone. Fetch PR `#6` and treat its exact `
 - authoritative PR: `#6`;
 - allowed branch: `develop/v1.0.0-completion`;
 - PR base/state: `main` / Draft;
-- last independently verified boundary: Custom Plan Policy and Calculation Snapshot;
-- active unverified work: Trial Policy and Panel Adapter Foundation;
-- current mode: repository/CI/control-plane stabilization before Trial/Panel verification continues.
+- last evidence-complete boundary: Trial Policy and Panel Adapter Offline/Fake Foundation;
+- accepted boundary: 298 tests, 1471 assertions on implementation and evidence-head CI;
+- active work: source-pinned HTTP adapter contracts for Marzban `v0.8.4` and PasarGuard `v5.2.1`;
+- live provider testing: intentionally deferred until the owner supplies dedicated test panels near final integration;
+- stabilization: complete; ordinary feature development is not paused.
 
-The normative scope remains [`docs/specification/master-execution-prompt.md`](docs/specification/master-execution-prompt.md). Machine-readable status is in [`docs/project-status.json`](docs/project-status.json).
+The normative scope remains [`docs/specification/master-execution-prompt.md`](docs/specification/master-execution-prompt.md). Machine-readable status is in [`docs/project-status.json`](docs/project-status.json). The active provider contract/handoff is [`docs/35-phase-0.4-panel-provider-source-contracts.md`](docs/35-phase-0.4-panel-provider-source-contracts.md).
 
 ## Product and architecture baseline
 
@@ -41,6 +43,16 @@ The normative scope remains [`docs/specification/master-execution-prompt.md`](do
 - Persian visible default with English fallback and multilingual-ready content.
 
 Some target modules and operational flows are not implemented yet. Architecture documents must not be read as a capability claim without code, tests, and accepted evidence.
+
+## Panel-provider policy
+
+Provider work uses exact source contracts rather than a mutable `latest` assumption:
+
+- Marzban: `Gozargah/Marzban` tag `v0.8.4`;
+- PasarGuard: `PasarGuard/panel` tag `v5.2.1`;
+- Mirza Bot: secondary practical integration reference only.
+
+Source-contract HTTP tests may be completed without live panels. Real targets remain disabled/fail-closed until final live acceptance. Absence of a temporary panel installation must not block unrelated project phases.
 
 ## Non-negotiable invariants
 
@@ -71,7 +83,8 @@ See [`docs/development/increment-lifecycle.md`](docs/development/increment-lifec
 - planning/architecture/security/operations: [`docs/`](docs/);
 - accepted phase evidence: [`evidence/`](evidence/);
 - current audit: [`docs/31-project-control-plane-audit.md`](docs/31-project-control-plane-audit.md);
-- active handoff: [`docs/30-phase-0.4-trial-panel-handoff.md`](docs/30-phase-0.4-trial-panel-handoff.md);
+- active provider handoff: [`docs/35-phase-0.4-panel-provider-source-contracts.md`](docs/35-phase-0.4-panel-provider-source-contracts.md);
+- prior Trial/Panel handoff: [`docs/30-phase-0.4-trial-panel-handoff.md`](docs/30-phase-0.4-trial-panel-handoff.md);
 - transient CI output: `build/evidence/` and retained GitHub Actions artifacts.
 
 Historical reports are preserved for auditability but must be explicitly marked historical or superseded when they are no longer current.
