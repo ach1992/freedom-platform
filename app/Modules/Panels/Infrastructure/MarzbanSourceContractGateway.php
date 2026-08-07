@@ -6,6 +6,7 @@ namespace App\Modules\Panels\Infrastructure;
 
 use App\Modules\Panels\Application\Contracts\MarzbanGateway;
 use App\Modules\Panels\Application\Contracts\PanelCapabilities;
+use App\Modules\Panels\Application\Contracts\PanelCreateServiceRequest;
 use App\Modules\Panels\Application\Contracts\PanelOperationOutcome;
 use App\Modules\Panels\Application\Contracts\PanelOperationResult;
 use App\Modules\Panels\Application\Contracts\PanelServiceStatus;
@@ -19,10 +20,14 @@ final class MarzbanSourceContractGateway extends AbstractPinnedReadOnlyPanelGate
 {
     private const VERSION = '0.8.4';
 
+    private readonly MarzbanMutationContractMapper $mutationContracts;
+
     public function __construct(
         private readonly PanelHttpTransport $transport,
         private readonly PanelAdapterSession $session,
-    ) {}
+    ) {
+        $this->mutationContracts = new MarzbanMutationContractMapper;
+    }
 
     public function testConnection(): PanelOperationResult
     {
@@ -63,6 +68,11 @@ final class MarzbanSourceContractGateway extends AbstractPinnedReadOnlyPanelGate
             ],
             ['shadowsocks', 'trojan', 'vless', 'vmess'],
         );
+    }
+
+    public function createEquivalenceHash(PanelCreateServiceRequest $request): string
+    {
+        return $this->mutationContracts->requestCreateCanonicalHash($request);
     }
 
     public function findByRemoteId(string $remoteId): ?RemoteServiceSnapshot
@@ -281,6 +291,12 @@ final class MarzbanSourceContractGateway extends AbstractPinnedReadOnlyPanelGate
             'proxies' => $payload['proxies'] ?? [],
             'inbounds' => $payload['inbounds'] ?? [],
         ];
+        $createEquivalenceHash = null;
+        try {
+            $createEquivalenceHash = $this->mutationContracts->providerCreateCanonicalHash($payload);
+        } catch (Throwable) {
+            // Read state can still be authoritative when create-equivalence proof is incomplete.
+        }
 
         return new RemoteServiceSnapshot(
             $username,
@@ -290,6 +306,7 @@ final class MarzbanSourceContractGateway extends AbstractPinnedReadOnlyPanelGate
             $usedBytes,
             $expiresAt,
             hash('sha256', json_encode($this->canonicalize($canonical), JSON_THROW_ON_ERROR)),
+            $createEquivalenceHash,
         );
     }
 
