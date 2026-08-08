@@ -1,6 +1,6 @@
 # Project Status
 
-This is the single human-readable current-state entry point. Detailed history belongs in evidence, traceability, risk, audit, and handoff documents.
+This is the single human-readable current-state entry point. Detailed history belongs in evidence, traceability, risk, audit, and bounded handoff documents.
 
 **Last status review:** 2026-08-08  
 **Target release:** `1.0.0`  
@@ -15,25 +15,20 @@ Current control documents:
 - traceability: `docs/32-current-traceability-overlay.md`;
 - risks: `docs/33-current-risk-overlay.md`;
 - execution ledger: `docs/00-execution-ledger.md`;
-- accepted provider-read evidence: `evidence/0.4.0/pinned-panel-provider-read-contracts.md`;
-- accepted provider-read traceability: `docs/36-phase-0.4-panel-provider-read-contract-traceability.md`;
-- accepted provider-mutation evidence: `evidence/0.4.0/pinned-panel-provider-mutation-contracts.md`;
-- accepted provider-mutation traceability: `docs/38-phase-0.4-panel-provider-mutation-contract-traceability.md`;
-- accepted provider-equivalence evidence: `evidence/0.4.0/provider-create-equivalence-reconciliation.md`;
-- accepted provider-equivalence traceability: `docs/40-phase-0.4-provider-create-equivalence-traceability.md`;
+- current cross-phase continuation handoff: `docs/52-current-continuation-handoff.md`;
 - provider live matrix: `docs/41-phase-0.4-provider-live-acceptance-matrix.md`;
+- active Phase 0.4 continuation handoff: `docs/44-phase-0.4-pasarguard-live-execution-handoff.md`;
 - accepted PasarGuard harness evidence: `evidence/0.4.0/pasarguard-live-acceptance-harness.md`;
 - accepted PasarGuard harness traceability: `docs/43-phase-0.4-pasarguard-live-harness-traceability.md`;
-- active Phase 0.4 continuation handoff: `docs/44-phase-0.4-pasarguard-live-execution-handoff.md`;
-- accepted parallel Phase 0.5 ledger evidence: `evidence/0.5.0/financial-ledger-foundation.md`;
-- accepted parallel Phase 0.5 ledger traceability: `docs/45-phase-0.5-financial-ledger-traceability.md`;
-- accepted parallel Phase 0.5 wallet-hold evidence: `evidence/0.5.0/wallet-holds-capture-release.md`;
-- accepted parallel Phase 0.5 wallet-hold traceability: `docs/46-phase-0.5-wallet-holds-traceability.md`;
-- active parallel Phase 0.5 handoff: `docs/47-phase-0.5-wallet-reconciliation-handoff.md`.
+- accepted Phase 0.5 ledger evidence/traceability: `evidence/0.5.0/financial-ledger-foundation.md`, `docs/45-phase-0.5-financial-ledger-traceability.md`;
+- accepted wallet-hold evidence/traceability: `evidence/0.5.0/wallet-holds-capture-release.md`, `docs/46-phase-0.5-wallet-holds-traceability.md`;
+- accepted wallet-reconciliation evidence/traceability: `evidence/0.5.0/wallet-reconciliation-snapshots.md`, `docs/48-phase-0.5-wallet-reconciliation-traceability.md`;
+- accepted wallet-maintenance evidence/traceability: `evidence/0.5.0/wallet-maintenance-operations.md`, `docs/49-phase-0.5-wallet-maintenance-traceability.md`;
+- accepted wallet-transfer evidence/traceability: `evidence/0.5.0/wallet-transfer.md`, `docs/51-phase-0.5-wallet-transfer-traceability.md`.
 
 ## Live-state rule
 
-Do not treat a SHA written in this document as the current working head. Before work, fetch PR `#6` and use its exact `head_sha`, then inspect workflow runs for that exact SHA. Follow `AGENTS.md` and `docs/development/continuation-runbook.md`.
+Do not treat a SHA written in this document as the current working head. Before every repository write, fetch PR `#6` and use its exact `head_sha`, then inspect workflow runs for that SHA. Follow `AGENTS.md`, `docs/development/continuation-runbook.md`, and `docs/52-current-continuation-handoff.md`.
 
 ## Last evidence-complete active-phase boundary
 
@@ -43,40 +38,21 @@ Implementation boundary:
 
 - SHA: `e18460357d306789cbbf85721f61a4e3a3bbb0e2`;
 - CI: `31226863010` / run `#1013` — success;
-- suite: 317 tests, 1730 assertions;
-- artifact: `test-evidence-31226863010`;
-- artifact ID: `9012421937`;
-- independently verified digest: `sha256:72d10f54f0347ac743471c78ea4401a4b9268a763e6653cb2a3c17bf4e2608e6`.
+- suite: 317 tests / 1730 assertions;
+- artifact: `test-evidence-31226863010`, ID `9012421937`;
+- digest: `sha256:72d10f54f0347ac743471c78ea4401a4b9268a763e6653cb2a3c17bf4e2608e6`.
 
 Evidence boundary:
 
 - SHA: `71ca4b39df41bc9fcf725c30e9caba3285ee5412`;
 - CI: `31227084007` / run `#1015` — success;
-- suite: 317 tests, 1730 assertions;
-- artifact: `test-evidence-31227084007`;
-- artifact ID: `9012490991`;
-- independently verified digest: `sha256:0b8cdd9772a5a4f54d719a794bc4b8d44e284345eb208e6460c9bc380df30b8f`;
+- suite: 317 tests / 1730 assertions;
+- artifact: `test-evidence-31227084007`, ID `9012490991`;
+- digest: `sha256:0b8cdd9772a5a4f54d719a794bc4b8d44e284345eb208e6460c9bc380df30b8f`;
 - evidence: `evidence/0.4.0/pasarguard-live-acceptance-harness.md`;
 - traceability: `docs/43-phase-0.4-pasarguard-live-harness-traceability.md`.
 
-Accepted behavior:
-
-- PasarGuard `v5.2.1` has a guarded manual live-acceptance harness behind protected Actions Secrets;
-- exact version mismatch stops before mutation;
-- the prepared sequence proves lookup-before-create, one-create intent, provider-specific create equivalence, mismatch/no-overwrite, expiry/data/reset/suspend/activate, protected rotation/delivery, delete and cleanup when actually dispatched;
-- deterministic tests prove one create/one delete and sanitized output;
-- HTTPS-only transport, peer/host TLS verification and no redirects are enforced;
-- the live workflow does not accept credentials through ordinary workflow inputs;
-- real runtime PasarGuard mutation/delivery capabilities remain unadvertised/fail-closed;
-- real Service Targets remain disabled/unverified.
-
-This boundary proves the **harness**, not successful connectivity or remote mutation against the owner deployment.
-
-## Prior accepted provider boundaries
-
-- Provider Create-Equivalence Reconciliation: implementation `ab1e0d16d23460df4bf1ad9be4fcef0d16c37a43` / CI #995; evidence `a70b28cb984c23f1e219287e88d20014ee9f0310` / CI #997.
-- Pinned read contracts: Marzban `v0.8.4`, PasarGuard `v5.2.1`; implementation CI #959, evidence CI #961.
-- Pinned offline mutation contracts: implementation CI #978, evidence CI #980; real mutations remained disabled.
+The boundary proves the guarded PasarGuard `v5.2.1` live harness and its fail-closed/TLS/redaction/version/lookup/equivalence controls. It does **not** prove successful live connectivity or remote mutation against the owner deployment.
 
 ## Active Phase 0.4 increment
 
@@ -86,132 +62,119 @@ Status: **blocked on protected Actions secret configuration and manual workflow 
 Authoritative handoff: `docs/44-phase-0.4-pasarguard-live-execution-handoff.md`.  
 Execution matrix: `docs/41-phase-0.4-provider-live-acceptance-matrix.md`.
 
-The available GitHub integration can inspect Actions runs/artifacts and retry existing failed jobs, but cannot create/update repository Actions Secrets or initiate a new `workflow_dispatch`.
+The current GitHub integration can inspect Actions runs/artifacts and retry existing failed jobs, but cannot create/update repository Actions Secrets or initiate a fresh `workflow_dispatch`.
 
 Required protected configuration outside repository text:
 
 - `PASARGUARD_TEST_ORIGIN`;
 - `PASARGUARD_TEST_API_KEY`.
 
-After those Secrets are configured, manually dispatch `Provider Live Acceptance - PasarGuard` on `develop/v1.0.0-completion` using its exact confirmation value. Do not put secret values in workflow inputs, commits, Issues, PR comments, evidence or logs.
+After those Secrets are configured, manually dispatch `Provider Live Acceptance - PasarGuard` on `develop/v1.0.0-completion` with the workflow's exact confirmation value. Do not put secret values in workflow inputs, commits, Issues, PR comments, evidence, logs, or chat.
 
-## Provider scheduling decision
+Owner scheduling decision on 2026-08-08: Marzban `v0.8.4` live acceptance is deferred to final project/release acceptance. It remains a mandatory `1.0.0` requirement. Phase `0.4.0` / Issue `#7` therefore remains open.
 
-Owner decision on 2026-08-08:
+## Parallel Phase 0.5 accepted financial boundaries
 
-- PasarGuard `v5.2.1` is tested now when its protected workflow can be dispatched;
-- Marzban `v0.8.4` live acceptance is deferred to final project/release acceptance;
-- Marzban remains a mandatory `1.0.0` requirement and is not removed or considered live-accepted;
-- Phase `0.4.0` / Issue `#7` therefore remains open.
+Phase `0.5.0` / Issue `#8` is **not active or complete**. The following independent foundations are evidence-complete under the parallel-continuation policy while Phase `0.4.0` remains open.
 
-This is a schedule deferral, not a scope deletion.
+### 1 — Financial Ledger Foundation
 
-## Parallel Phase 0.5 accepted foundations
-
-Phase `0.5.0` is **not** marked active or complete. The following independent financial foundations are accepted only under the parallel-continuation policy while Phase `0.4.0` remains open.
-
-### Financial Ledger Foundation
-
-Implementation:
-
-- SHA `259e29e6f93c2b36cd36c2f40bf669789eaab62f`;
-- CI `31232006308` / `#1037` — success;
-- 326 tests / 1777 assertions;
-- artifact `test-evidence-31232006308`, ID `9014138405`;
-- independent digest `sha256:cfda302c54c7089dbb15eb0c83a546f63bd37a142c99e5919b8408dfa85b7610`.
-
-Evidence:
-
-- SHA `76c00a1c458c12ccc07dc658ee2f69e14389e65c`;
-- CI `31232151035` / `#1039` — success;
-- 326 tests / 1777 assertions;
-- artifact `test-evidence-31232151035`, ID `9014190245`;
-- independent digest `sha256:8354c7fc431a48390ea26211e30fafa69957e75690d91c1dc14e1df8de046510`;
+- implementation `259e29e6f93c2b36cd36c2f40bf669789eaab62f`, CI `31232006308` / `#1037`, 326 tests / 1777 assertions;
+- evidence `76c00a1c458c12ccc07dc658ee2f69e14389e65c`, CI `31232151035` / `#1039`;
 - evidence `evidence/0.5.0/financial-ledger-foundation.md`;
 - traceability `docs/45-phase-0.5-financial-ledger-traceability.md`.
 
-Accepted bounded behavior: integer-IRR money, balanced append-only ledger posting, system/user wallet account constraints, exact replay/conflict protection, row-lock/transaction foundation and database-enforced ledger immutability. Holds/capture/release were not claimed by this first boundary.
+Accepted: integer-IRR money, balanced append-only ledger posting, account constraints, exact replay/conflict, transaction/row locks and DB-enforced ledger immutability.
 
-### Wallet Holds, Available Balance, Capture and Release
+### 2 — Wallet Holds, Available Balance, Capture and Release
 
-Implementation:
-
-- SHA `89775a1b9c3d70839e2f6ece36dadd5e6e30fcdf`;
-- CI `31232610814` / `#1046` — success;
-- 331 tests / 1834 assertions;
-- artifact `test-evidence-31232610814`, ID `9014323613`;
-- independent digest `sha256:9a5154dd6cb0baeb52880c8fbc86e06fcdccd98b9bd62cc41eed42ca745f06f1`.
-
-Evidence:
-
-- SHA `781a2dd63d999b2e01d99cd6888f3c9cbfda9f26`;
-- CI `31232750290` / `#1048` — success;
-- 331 tests / 1834 assertions;
-- artifact `test-evidence-31232750290`, ID `9014371764`;
-- independent digest `sha256:9f925e3e22c50384dcce39034b861cadc5368a58e9e76ef03de8a8e45af90367`;
+- implementation `89775a1b9c3d70839e2f6ece36dadd5e6e30fcdf`, CI `31232610814` / `#1046`, 331 tests / 1834 assertions;
+- evidence `781a2dd63d999b2e01d99cd6888f3c9cbfda9f26`, CI `31232750290` / `#1048`;
 - evidence `evidence/0.5.0/wallet-holds-capture-release.md`;
 - traceability `docs/46-phase-0.5-wallet-holds-traceability.md`.
 
-Accepted bounded behavior: active holds reduce ledger-derived available balance, no hold may create negative available balance, placement replay/conflict is exact, capture produces exactly one balanced ledger effect, release produces no ledger rewrite, captured/released states are terminal, expired active holds remain reserved until explicit cleanup, and database guards make hold identity/history non-deletable/immutable.
+Accepted: active holds reduce authoritative ledger-derived available balance, exact placement replay/conflict, one capture ledger effect, release without ledger rewrite and terminal/non-deletable hold history.
 
-Remaining `WAL-002` work includes persisted non-authoritative balance snapshots, reconciliation, automated expired-hold cleanup and dedicated contention verification. `WAL-001`, `WAL-003`, `WAL-004`, `WAL-005`, pricing, payment providers and later Order/provisioning work remain unclaimed.
+### 3 — Wallet Reconciliation Snapshots and Expired-Hold Cleanup
 
-## Active parallel Phase 0.5 bounded increment
+- implementation `c73eab20e1a875db8db1c4e60d73d0e3edaff96a`, CI `31233135374` / `#1058`, 334 tests / 1886 assertions;
+- evidence `57719972291b0553e76da6f8db50a8190a807044`, CI `31233274800` / `#1060`;
+- evidence `evidence/0.5.0/wallet-reconciliation-snapshots.md`;
+- traceability `docs/48-phase-0.5-wallet-reconciliation-traceability.md`.
 
-### Wallet Snapshot, Reconciliation and Expired-Hold Cleanup
+Accepted: append-only non-authoritative snapshots, authoritative ledger+active-hold reconciliation, fail-closed inconsistent state and bounded cleanup/review. Transfer holds are excluded from generic cleanup.
 
-Status: active parallel bounded work.  
-Authoritative handoff: `docs/47-phase-0.5-wallet-reconciliation-handoff.md`.
+### 4 — Wallet Maintenance Operations
 
-The next work must preserve the immutable ledger as source of truth, treat persisted balance snapshots as derived/non-authoritative, surface mismatches instead of repairing financial history by mutation, and release only authoritatively expired active holds through the existing terminal release path.
+- implementation `87392cca0a1a00ee87a1b5074386dd691a4094c6`, CI `31233514751` / `#1066`, 338 tests / 1905 assertions;
+- evidence `fa0cc2056459f171c32e0260422a465891766629`, CI `31233817131` / `#1068`;
+- evidence `evidence/0.5.0/wallet-maintenance-operations.md`;
+- traceability `docs/49-phase-0.5-wallet-maintenance-traceability.md`.
+
+Accepted: bounded `wallet:maintenance`, aggregate-safe output and every-five-minutes Laravel Scheduler execution with `withoutOverlapping()` and `onOneServer()`; snapshots remain non-authoritative.
+
+### 5 — Stable Wallet Transfer (`WAL-003`)
+
+Implementation:
+
+- SHA `8360d1ac99485d1bea146bf21e22e8a336cd8e7a`;
+- CI `31235232052` / `#1084` — success;
+- 346 tests / 1995 assertions;
+- artifact `test-evidence-31235232052`, ID `9015155851`;
+- independent digest `sha256:c85e5106f95e6c37745dbcf920d3728108d7f82f26624c6cfccc0684f5bb265b`.
+
+Evidence:
+
+- SHA `68f06fbd4ae9bb1bdba004968e57c84a13871e15`;
+- CI `31235552266` / `#1092` — success;
+- 346 tests / 1995 assertions;
+- artifact `test-evidence-31235552266`, ID `9015258508`;
+- independent digest `sha256:f1bee9300338b0d326e9c0cf47ea978147a6e72688e598c0717f7ae180b29a78`;
+- evidence `evidence/0.5.0/wallet-transfer.md`;
+- traceability `docs/51-phase-0.5-wallet-transfer-traceability.md`.
+
+Accepted: default-disabled transfer policy, stable recipient identity, execution-time account revalidation, integer policy/fee snapshots, prepare reservation without transfer ledger effect, atomic sender/recipient/fee posting at confirmation, exact replay/conflict, terminal cancellation/expiry, transfer-hold cleanup isolation and DB terminal/immutability barriers.
+
+## Next recommended parallel bounded increment
+
+### Dedicated Wallet Contention Verification (`WAL-002` remaining proof)
+
+Authoritative continuation handoff: `docs/52-current-continuation-handoff.md`.
+
+The next safe independent task is real multi-process MariaDB contention evidence for same-wallet holds, capture/release, duplicate ledger keys, duplicate transfer prepare/confirm and reconciliation concurrent with mutation. Use deterministic subprocess/barrier coordination rather than timing sleeps. No lock/isolation weakening is allowed to make the test pass.
+
+After contention verification, recommended Phase 0.5 order is `WAL-004` refund/reversal, `WAL-005` correction/approval, Payment Intent + `WAL-001`, then pricing/Quote, promotions/referrals/agent pricing and payment providers.
+
+## Current open items
+
+- PasarGuard protected live execution and later coordinator/fault/Target-activation rows;
+- Marzban live acceptance at final release acceptance;
+- final Phase `0.4.0` closure audit;
+- dedicated multi-process wallet contention verification;
+- no automated scheduled cancellation sweep is claimed for untouched expired pending wallet transfers;
+- `WAL-001`, `WAL-004`, `WAL-005`, pricing/Quote/promotions/payment providers and all later phase-owned work.
 
 ## Parallel continuation policy
 
-The repository may continue later-phase implementation while the protected PasarGuard dispatch and deferred Marzban final gate remain carried blockers, provided that:
+Later-phase work may continue while the provider human gates remain carried only if:
 
 - Phase `0.4.0` is not marked closed;
-- Issue `#7` remains open;
-- no later phase weakens lookup/create/idempotency/TLS/redaction/Target activation controls;
-- no release or production-readiness claim is made before the carried provider gates are resolved;
-- real provider Targets remain disabled until their explicit live acceptance passes.
-
-## Remaining PasarGuard live work
-
-Prepared harness rows require live execution and artifact review. Separate rows still require coordinator/fault/activation work:
-
-- exact-match adoption through the application integration path;
-- idempotency conflict/replay against the real provider integration path;
-- controlled timeout/5xx/429 uncertainty and discovery-before-retry;
-- explicit Service Target activation acceptance.
-
-A failed or uncertain effectful row stops later effectful rows until authoritative reconciliation completes.
-
-## Known risks
-
-- source-contract/harness tests cannot prove reverse-proxy, TLS-chain, plugin/fork, permission or runtime behavior of the deployed panel;
-- provider-side idempotency is not assumed;
-- no offline test can prove post-effect discovery on a real panel;
-- live credentials supplied outside the protected Actions secret store are not evidence and are intentionally not retained in repository artifacts;
-- Marzban live compatibility remains a final-release blocker;
-- financial snapshots/reconciliation and dedicated contention stress are not yet accepted;
-- Phase `0.4.0` remains open.
+- Issue `#7` stays open;
+- no later work weakens lookup-before-create, provider-specific create equivalence, idempotency, uncertainty discovery, TLS, redaction or Target activation controls;
+- no release/production-readiness claim is made before carried provider gates pass;
+- real provider Targets stay disabled until explicit live acceptance.
 
 ## Non-negotiable remote-effect and financial rules
 
-- authoritative remote lookup before every create;
-- unavailable lookup means no create;
-- automatic adoption requires provider-specific accepted create-equivalence proof;
-- missing equivalence proof means Manual Review/no create;
-- mismatch means conflict/manual review;
-- uncertain mutation means discovery first, never blind immediate retry;
+- authoritative remote lookup before every create; unavailable lookup means no create;
+- automatic adoption requires provider-specific accepted `createEquivalenceHash`; missing proof means Manual Review/no create;
+- mismatch means conflict/no overwrite; uncertainty means authoritative discovery before retry;
 - conflicting idempotency-key reuse never overwrites the original primary effect;
-- TLS verification is never disabled;
-- no credential, token, API key, password, subscription material or raw sensitive provider response enters repository evidence/logs;
-- no real provider mutation capability or Target activation until the applicable live gate is explicitly accepted;
+- TLS verification is never disabled and protected material never enters repository evidence/logs;
 - monetary IRR values remain integers at financial boundaries;
-- immutable balanced ledger history is authoritative; derived snapshots/caches never authorize a financial effect without a fresh transaction/lock-based authoritative read;
-- no financial replay or conflict may create/overwrite a second accepted primary effect.
+- immutable balanced ledger history plus active holds is authoritative; persisted snapshots/caches never authorize financial effects;
+- no replay/conflict may create or overwrite a second accepted financial effect.
 
 ## Phase completion state
 
-Phase `0.4.0` is **not closed**. PasarGuard's guarded harness is evidence-complete, actual PasarGuard live execution awaits protected secret configuration/manual dispatch, and Marzban live acceptance is intentionally carried to the final project/release gate by owner decision. Parallel Phase `0.5.0` foundations may continue under the policy above but cannot be used to claim Phase `0.4.0` or release completion.
+Phase `0.4.0` is **not closed**. PasarGuard live execution awaits protected secret configuration/manual dispatch and Marzban live acceptance is carried to final project/release acceptance. Phase `0.5.0` is also **not closed**; its accepted financial boundaries above are reusable foundations only.
