@@ -138,7 +138,7 @@ namespace Tests\Feature {
             self::assertCount(1, $successes);
             self::assertCount(1, $failures);
             self::assertSame(700_000, $successes[0]['result']['amount_irr']);
-            self::assertSame('Refund would exceed the source refundable amount.', $failures[0]['message']);
+            self::assertSame('Refund source entry would be over-refunded.', $failures[0]['message']);
             self::assertSame(1, DB::table('refunds')->count());
             self::assertSame(700_000, (int) DB::table('refunds')->sum('amount_irr'));
             self::assertSame(2, DB::table('ledger_transactions')->count());
