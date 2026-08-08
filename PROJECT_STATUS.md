@@ -1,17 +1,18 @@
 # Project Status
 
-This is the single human-readable current-state entry point. Detailed history belongs in evidence, traceability, risk, audit, and bounded handoff documents.
+This is the single human-readable current-state entry point. Detailed history belongs in evidence, traceability, risk, audit, bounded handoff documents, and GitHub Task Contracts.
 
 **Last status review:** 2026-08-09  
 **Target release:** `1.0.0`  
 **Active phase:** `0.4.0 — Catalog, Panels and Offerings`  
 **Authoritative Phase 0.4 Issue:** `#7`  
 **Authoritative integration PR:** Draft `#6`  
-**Allowed branch:** `develop/v1.0.0-completion`  
+**Integration branch:** `develop/v1.0.0-completion`  
 **PR base:** `main`
 
 Current control documents:
 
+- multi-agent contract: `docs/development/multi-agent-orchestration.md`;
 - current cross-phase handoff: `docs/52-current-continuation-handoff.md`;
 - active Phase 0.4 live-execution handoff: `docs/44-phase-0.4-pasarguard-live-execution-handoff.md`;
 - traceability overlay: `docs/32-current-traceability-overlay.md`;
@@ -22,7 +23,22 @@ Current control documents:
 
 ## Live-state rule
 
-Do not treat any SHA written here as the current working head. Before **every repository write**, fetch PR `#6`, require it to remain open/Draft on `develop/v1.0.0-completion` with base `main`, and use its exact `head_sha`. Inspect exact-head CI before deciding the next action. All Actions jobs remain on the owner-controlled self-hosted runner.
+Do not treat any SHA written here as the current working head. Before **every MASTER repository write**, fetch PR `#6`, require it to remain open/Draft on `develop/v1.0.0-completion` with base `main`, and use its exact `head_sha`. Inspect exact-head CI before dispatch/integration decisions. All Actions jobs remain on the owner-controlled self-hosted runner.
+
+## Multi-agent operating model
+
+The legacy single-writable-branch restriction has been migrated to an isolated Worker model without changing the integration/release topology:
+
+- `develop/v1.0.0-completion` remains the Version 1 integration branch and Draft PR `#6` remains its cumulative PR to `main`;
+- implementation Workers use contracted `agent/<issue-number>-<short-slug>` branches created from a recorded live integration `BASE_SHA`;
+- each Worker has one Task Contract, one isolated writable worktree/environment and one PR targeting `develop/v1.0.0-completion`;
+- Workers never push directly to `develop/v1.0.0-completion` or `main`, never merge their own PRs, and never share writable worktrees;
+- uncontracted temporary branches remain forbidden; existing bootstrap/safety/recovery branches keep their documented exception/cleanup conditions;
+- generic CI accepts same-repository Worker PRs targeting `develop/v1.0.0-completion`, remains non-mutating and does not receive protected provider/staging secrets;
+- secret-consuming live/provider/staging workflows remain separately manual/guarded;
+- dynamic Worker state is recorded in GitHub Issues/PRs/comments/CI; Chat is not project state.
+
+Stable rules are in `docs/development/multi-agent-orchestration.md`. Active Worker IDs, branches, Task Contract revisions, dependencies, blockers and review state must be recovered from GitHub. At this checkpoint no implementation Worker has yet been accepted as an active project baseline; dispatch occurs only after the governance head passes mandatory CI.
 
 ## Active Phase 0.4 boundary and blocker
 
@@ -38,7 +54,7 @@ The latest evidence-complete active-phase boundary remains **PasarGuard Guarded 
 
 The active increment remains **PasarGuard Controlled Live Execution**. The immediate repository-side blocker is the default-branch workflow bootstrap:
 
-- Draft PR `#24`: `ops/provider-live-dispatch-bootstrap` → `main`;
+- Draft PR `#24`: `ops/provider-live-dispatch-bootstrap` -> `main`;
 - bootstrap head last inspected: `f2d2b6d538b16fe08787f6248ec425dbd19c8321`;
 - CI `31240183151` / `#1129`: preflight, secret scan, static quality, and MariaDB/Redis tests passed; `Dependency and license policy` failed because `composer audit --locked --abandoned=fail` exited non-zero;
 - `main` is still unchanged from bootstrap base `1227cce28aedd2d799f2cd510891309deaacd0fb`;
@@ -112,9 +128,10 @@ After that foundation: most-specific agent pricing (`AGT-005`), then `PAY-001` p
 ## Non-negotiable controls
 
 - PR `#6` stays Draft; do not merge, mark Ready, auto-merge, rewrite history, force-push, or push `main`;
-- no temporary branch should be created; the existing bootstrap/safety branches are explicit retained exceptions with cleanup conditions above;
+- contracted Worker branches are allowed only under `docs/development/multi-agent-orchestration.md`; uncontracted temporary branches are forbidden;
+- existing bootstrap/safety branches are retained exceptions with the cleanup conditions above;
 - no phase/increment closes from docs/schema/fake/interface presence alone;
-- exact implementation CI/artifact and exact evidence-head CI/artifact are mandatory;
+- exact implementation CI/artifact and exact evidence-head CI/artifact are mandatory, plus MASTER review and post-merge integration CI for Worker increments;
 - authoritative remote lookup precedes provider create; uncertainty requires discovery before retry; TLS is never disabled;
 - monetary IRR remains integer; finalized balanced ledger history plus active holds is authority; persisted wallet snapshots/caches never authorize a financial effect;
 - replay/conflict cannot create or overwrite a second accepted financial or remote effect;
