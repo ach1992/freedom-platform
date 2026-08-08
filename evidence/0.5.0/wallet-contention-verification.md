@@ -1,10 +1,12 @@
 # Phase 0.5 Dedicated Wallet Contention Verification Evidence
 
-**Status:** implementation-evidence complete; evidence-head CI pending.  
+**Status:** evidence-complete bounded concurrency verification for the accepted `WAL-002` foundations, with `WAL-003` duplicate-execution regression proof.  
 **Phase:** parallel `0.5.0 — Ledger, Pricing, Promotions and Payment Providers` work while Phase `0.4.0` provider live gates remain open.  
 **Authoritative Phase 0.5 Issue:** `#8`.  
 **Implementation verification head:** `903f326040c9acd0b31645fe8fae3a75f8a9fd27`.  
 **Implementation CI:** `31240159777` / `#1128` — success.  
+**Evidence head:** `e7a0ae17d470beb40f4933e66c7b599e0837e120`.  
+**Evidence-head CI:** `31241459956` / `#1131` — success.  
 **Traceability:** `docs/53-phase-0.5-wallet-contention-traceability.md`.
 
 ## Purpose and bounded scope
@@ -22,7 +24,7 @@ The dedicated harness in `tests/Feature/WalletContentionVerificationTest.php` st
 - `DAT-002`: every contention amount remains integer IRR.
 - `DAT-003`: database transactions, uniqueness, foreign keys and row-lock ordering remain the final concurrency barrier.
 - `DAT-004`: finalized ledger history and terminal financial records remain non-rewritten under contention.
-- `QUA-001`: exact-head mandatory CI, retained artifact, executable counts and independent artifact inspection are recorded for the implementation boundary.
+- `QUA-001`: exact implementation and evidence-head mandatory CI, retained artifacts, executable counts and independent artifact inspection are complete for this bounded verification.
 
 ## Executable scenarios
 
@@ -69,7 +71,20 @@ Exact PR head `903f326040c9acd0b31645fe8fae3a75f8a9fd27`, CI run `31240159777` /
 - artifact `test-evidence-31240159777`, ID `9016771279`;
 - uploader digest and independently recalculated SHA-256: `4f32e7a5c7e4cc23b985b13aa2b6f291772b75c1f9a26cedcd620b9589b973b2`.
 
-Independent artifact inspection observed exactly five expected files:
+## Exact evidence-head verification
+
+Exact combined evidence head `e7a0ae17d470beb40f4933e66c7b599e0837e120`, CI run `31241459956` / `#1131`:
+
+- Repository preflight / project-control — **success**;
+- Secret scan — **success**;
+- PHP static quality — **success**;
+- Dependency and license policy — **success**;
+- MariaDB and authenticated Redis suite — **352 tests / 2030 assertions, success**;
+- dedicated contention class — **6 tests / 35 assertions, 0 failures / 0 errors / 0 skipped**;
+- artifact `test-evidence-31241459956`, ID `9017163993`;
+- uploader digest and independently recalculated SHA-256: `58544b56477c708b4e798b2ea83e673995e22b0ab53c19213914d1c2609af294`.
+
+Independent inspection of each test artifact observed exactly five expected files:
 
 - `tests/junit.xml`;
 - `tests/test.log`;
@@ -105,8 +120,4 @@ This evidence does **not** claim:
 - PasarGuard or Marzban deployment acceptance;
 - Phase `0.4.0` or `0.5.0` closure.
 
-The next bounded financial increment after evidence-head acceptance is `WAL-004` refund/reversal using immutable compensating entries, exact replay/conflict, refundable-cap enforcement and concurrency proof.
-
-## Evidence-head requirement
-
-This repository evidence and its traceability companion are not evidence-complete until mandatory CI succeeds on their exact combined evidence head. After that run is retained and independently inspected, current overlays/status and Issue `#8` may record this contention boundary as accepted.
+The next bounded financial increment is `WAL-004` refund/reversal using immutable compensating entries, exact replay/conflict, refundable-cap enforcement, method/destination policy and dedicated concurrency proof.
