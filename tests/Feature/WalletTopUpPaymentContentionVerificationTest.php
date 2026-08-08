@@ -54,8 +54,8 @@ namespace {
                     $transactionId,
                     $eventId,
                     Money::irr($amountIrr),
-                    new \DateTimeImmutable('2026-08-08T10:00:00+00:00'),
-                    new \DateTimeImmutable('2026-08-08T10:00:01+00:00'),
+                    new DateTimeImmutable('2026-08-08T10:00:00+00:00'),
+                    new DateTimeImmutable('2026-08-08T10:00:01+00:00'),
                     hash('sha256', 'evidence:'.$eventId.':'.$transactionId.':'.$amountIrr),
                     ['bank_reference' => 'SAFE-CONTENTION-REFERENCE'],
                 ),
@@ -287,6 +287,7 @@ namespace Tests\Feature {
                 foreach ($read as $stream) {
                     if ($stream === $worker['pipes'][2]) {
                         $stderr .= stream_get_contents($stream);
+
                         continue;
                     }
                     $line = fgets($stream);
