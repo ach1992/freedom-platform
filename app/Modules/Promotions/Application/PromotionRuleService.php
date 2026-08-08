@@ -437,7 +437,7 @@ final readonly class PromotionRuleService
     }
 
     /**
-     * @param object{product_id:int|string,sales_server_id:int|string,discount_eligible:int|bool|string} $offering
+     * @param  object{product_id:int|string,sales_server_id:int|string,discount_eligible:int|bool|string}  $offering
      * @return RuleVersionRow|null
      */
     private function selectRule(Connection $connection, PromotionResolutionRequest $request, string $accountType, object $offering): ?object
