@@ -14,6 +14,7 @@ final class DatabaseSeeder extends Seeder
             IdentityAccessFoundationSeeder::class,
             CatalogAccessFoundationSeeder::class,
             PanelsAccessFoundationSeeder::class,
+            WalletAccessFoundationSeeder::class,
         ]);
     }
 }
