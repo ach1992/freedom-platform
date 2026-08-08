@@ -35,35 +35,38 @@ Overlay-local IDs remain temporary until the next full `docs/03-risk-register.md
 
 | Overlay ID | Risk | Current control/evidence | Remaining exit condition | Status |
 |---|---|---|---|---|
-| `FIN-01` | concurrent wallet/payment operations can over-reserve/double-effect | transactions, sorted row locks, unique command/hold/transfer/refund/correction keys, immutable ledger and accepted independent-process contention boundaries | repeat feature-specific proof for Payment Intent/capture/provider work | Controlled for accepted wallet/refund/correction foundations |
-| `FIN-02` | persisted wallet snapshot is treated as financial authority | snapshots append-only/non-authoritative; wallet/refund/correction use finalized ledger + active holds and locked reads | preserve through Payment Intent/payment/order work | Controlled with regression requirement |
+| `FIN-01` | concurrent wallet/payment operations can over-reserve/double-effect | transactions, sorted row locks, unique command/hold/transfer/refund/correction keys, immutable ledger; current WAL-001 candidate adds intent/event/transaction/settlement uniqueness and bounded real-MariaDB capture workers | exact WAL-001 evidence-head gate, then repeat feature-specific proof for pricing/provider/order work | Controlled for accepted wallet/refund/correction; implementation-verified for WAL-001 |
+| `FIN-02` | persisted wallet snapshot is treated as financial authority | snapshots append-only/non-authoritative; wallet/refund/correction/top-up use finalized ledger + active holds/locked reads where relevant | preserve through pricing/payment/order work | Controlled with regression requirement |
 | `FIN-03` | transfer hold and transfer state diverge on expiry/cleanup | generic cleanup excludes `wallet_transfer`; confirm-expiry and explicit cancellation coordinate state | optional future scheduled transfer-expiry lifecycle must use transfer service | Controlled; operational follow-up open |
 | `FIN-04` | duplicate transfer/retry creates a second primary effect | unique transfer key, canonical payload hash, one hold/ledger link, replay plus concurrent duplicate proof | preserve through transfer extensions | Controlled |
 | `FIN-05` | refund/correction mutates historical ledger instead of compensating it | finalized-ledger guards + accepted `WAL-004` refund history + accepted `WAL-005` immutable correction preview/record and compensating effect | future provider/payment/order financial paths must preserve immutable compensation | Controlled for `WAL-004` + `WAL-005` |
 | `FIN-06` | fee/limit/bucket policy changes reinterpret accepted transfer | immutable transfer policy snapshots and stable account references | future config changes must not rewrite history | Controlled |
 | `FIN-07` | untouched expired pending transfer reserves funds indefinitely | expiry enforced on confirm; explicit cancel exists; generic cleanup excludes transfer holds | later coordinated transfer-expiry scheduler only if required | Known operational gap / Medium |
-| `FIN-08` | Payment Intent/provider flow provisions before authoritative capture or duplicates capture/top-up/refund | ledger/hold/refund/correction idempotency primitives exist; browser/provider authority rules are specified | next `PAY-002`/`PAY-003`/`WAL-001` Payment Intent capture/top-up implementation + Phase 0.6 no-provision-before-capture evidence | Next Critical gate |
+| `FIN-08` | Payment Intent/provider flow provisions before authoritative capture or duplicates capture/top-up/refund | WAL-001 candidate requires authoritative settled evidence, one settlement and one top-up ledger effect; no Order/provisioning side effect exists in this boundary | exact evidence-head acceptance; later Phase 0.6 no-provision-before-capture evidence and provider-native flows | Implementation-verified for top-up; later Critical gate remains |
 | `FIN-09` | concurrent partial refunds exceed captured/refundable value | immutable capture-time cap, locked source, cumulative/per-entry cap, unique refund key and two-process contention proof | provider-native refund paths need authoritative provider source/callback proof | Controlled for provider-independent `WAL-004` |
 | `FIN-10` | refund destination/evidence mismatch causes double reimbursement/untraceable external payout | explicit wallet/manual-external destination, exact original allocations, evidence requirement, no wallet duplication, privileged override, safe audit | provider-native refunds need equivalent evidence/uncertainty controls | Controlled for provider-independent `WAL-004` |
 | `FIN-11` | administrator correction bypasses authorization/confirmation or silently changes historical balance | accepted `WAL-005`: immutable preview/confirmation, execution-time authorization, current policy revalidation, compensating ledger, immutable DB guards, safe audit | future correction UI/API must preserve service boundary; payment/order controls remain separate | Controlled for `WAL-005` |
 | `FIN-12` | large correction is self-approved/replayed or concurrent debits create negative availability | accepted `WAL-005`: policy-driven independent approval, distinct approver, atomic consumption, exact committed-approval replay binding, fresh available-balance lock, multi-process debit/duplicate/approval proof | future high-risk payment/provider actions need their own dual-control/idempotency evidence | Controlled for `WAL-005`; future payment gate remains |
-| `FIN-13` | browser return/customer claim is mistaken for authoritative payment capture | master contract explicitly forbids browser-return authority; existing provider DTOs distinguish evidence/authority | implement enforced state transition and tests in next Payment Intent boundary | Next Critical gate |
-| `FIN-14` | duplicate provider events/transactions credit cash wallet twice | existing ledger idempotency available but Payment Intent/provider consumption not implemented | next `PAY-003`/`WAL-001`: unique event/transaction/settlement keys + locked capture + duplicate contention proof | Next Critical gate |
-| `FIN-15` | external top-up credits promotional/wrong wallet or credits before capture | stable wallet account model exists; `WAL-001` requires cash bucket and capture-first balanced posting | next Payment Intent/top-up boundary must bind exact active owned cash account and post only after authoritative capture | Next Critical gate |
+| `FIN-13` | browser return/customer claim is mistaken for authoritative payment capture | WAL-001 candidate enforces `Success + Authoritative + Settled`, exact amount/provider/currency match; non-authoritative browser-like evidence cannot persist/capture | exact evidence-head acceptance; real provider transport adapters must preserve this authority split | Implementation-verified / evidence gate pending |
+| `FIN-14` | duplicate provider events/transactions credit cash wallet twice | WAL-001 candidate: provider event/transaction uniqueness, immutable replay validation, one settlement, deterministic ledger command, independent duplicate/cross-intent contention proof | exact evidence-head acceptance; provider-specific callbacks/reconciliation need equivalent proof | Implementation-verified / evidence gate pending |
+| `FIN-15` | external top-up credits promotional/wrong wallet or credits before capture | WAL-001 candidate binds active owned IRR cash account, rejects promotional target, posts clearing-to-cash only after authoritative capture, DB settlement guard verifies linkage | exact evidence-head acceptance; payment-method eligibility/provider transport remain later | Implementation-verified / evidence gate pending |
+| `FIN-16` | provider safe evidence stores unbounded/raw sensitive payload or credentials | WAL-001 candidate filters forbidden sensitive keys and raw body/payload fields; DB requires JSON object <=32 fields and <=8192 bytes; artifact safe scan found no provider secret values | exact evidence-head acceptance and provider-adapter regression | Implementation-verified / evidence gate pending |
+| `FIN-17` | accepted Quote is reinterpreted by later pricing/config changes or monetary rounding | existing offering/custom-plan arithmetic is integer IRR but no accepted Phase 0.5 immutable Quote boundary exists | next `BUY-002` Pricing/Quote snapshot implementation with immutable inputs/version/validity and replay/conflict proof | Next pricing gate |
 
-## Latest accepted financial evidence — `WAL-005`
+## Current implementation evidence — `PAY-002` / `PAY-003` / `WAL-001`
 
-Wallet Correction / Approval Foundation:
+Payment Intent / External Cash-Wallet Top-up candidate:
 
-- implementation `fd3d579d9f38004310d7ea638e351813d2f46ef5`, CI `31260299072` / `#1186` — 371 tests / 2197 assertions;
-- implementation artifact `test-evidence-31260299072`, ID `9022602206`, digest `sha256:476e86bdf2bb30732460a4ca1ef9dd0640a1e06b52dbc0f4a15e06f70fa07b62`;
-- evidence `ef5504081a42687eb712e9cd47306cd9dcc9a864`, CI `31260549403` / `#1188` — 371 / 2197;
-- evidence artifact `test-evidence-31260549403`, ID `9022665227`, uploader and independently verified digest `sha256:ce6073f08fc56df8f4b37cba3dcf6d8bbc5a9fd6b0240becd1e1ffc9d3ecd971`;
-- dedicated correction verification `11 tests / 98 assertions`, zero failures/errors/skips;
-- evidence `evidence/0.5.0/wallet-correction-approval-foundation.md`;
-- traceability `docs/55-phase-0.5-wallet-correction-traceability.md`.
+- implementation `6db9dde7032114ab81c95fdf371530997e65f21c`, CI `31265449681` / `#1214` — **384 tests / 2292 assertions**;
+- dedicated top-up verification **13 tests / 95 assertions**, zero failures/errors/skips;
+- artifact `test-evidence-31265449681`, ID `9024026199`;
+- uploader and independent digest `sha256:3cf3c1c52b3aac72e4cf7f10aa4567ee516a9edeb7c3528c6beb064c20f6b80b`;
+- evidence candidate `evidence/0.5.0/payment-intent-wallet-top-up-settlement.md`;
+- traceability candidate `docs/56-phase-0.5-payment-intent-wallet-top-up-traceability.md`.
 
-The accepted financial chain through ledger, holds, reconciliation, maintenance, `WAL-003`, wallet contention, `WAL-004` and `WAL-005` is reusable but does not close Phase `0.5.0`.
+This is **not accepted yet** because exact evidence-head CI/artifact/digest remains mandatory.
+
+The retained implementation artifact contains exactly JUnit, full test log, Clover coverage and two dependency-service evidence files. Independent scanning found no known CI credential value, bearer/basic authorization value, private-key header or raw provider secret material.
 
 ## Financial safety decisions
 
@@ -80,8 +83,10 @@ The accepted financial chain through ledger, holds, reconciliation, maintenance,
 11. Administrator correction cannot bypass refund/payment/order state machines.
 12. Large correction dual approval binds the exact preview/requester and requires a distinct approver; approved replay binds the exact accepted approval ID.
 13. Browser return/redirect/customer submission is not capture authority.
-14. `WAL-001` external top-up targets only the intended active owned cash wallet and may post only after authoritative captured provider evidence.
-15. Duplicate provider/internal payment events must return the accepted settlement without a second wallet credit or later provisioning effect.
+14. `WAL-001` external top-up targets only the intended active owned cash wallet and may post only after matching authoritative settled provider evidence.
+15. Duplicate provider/internal payment events cannot produce a second settlement/top-up ledger effect; accepted replay returns the immutable accepted IDs.
+16. Safe provider evidence is normalized, secret/raw-field filtered, append-only and bounded before it can become retained settlement evidence.
+17. Pricing/Quote must remain deterministic integer IRR and immutable across later configuration changes; no quote may become payment authority by itself.
 
 ## Current human gates
 
@@ -97,6 +102,6 @@ Until applicable provider gates pass: no live-provider compatibility claim, no p
 
 ## Next risk-reduction work
 
-While the protected PasarGuard gate remains unavailable, the highest-value independent task is Payment Intent + `WAL-001` External Cash-Wallet Top-up Settlement in `docs/52-current-continuation-handoff.md`, specifically closing the first bounded portions of `FIN-08`, `FIN-13`, `FIN-14` and `FIN-15` without weakening provider authority, ledger idempotency, wallet identity or Phase `0.6.0` ownership.
+First complete the exact evidence-head gate for the implementation-verified `PAY-002` / `PAY-003` / `WAL-001` top-up boundary. Once accepted, the highest-value independent task is deterministic Pricing / immutable Quote snapshot (`BUY-002`), specifically reducing `FIN-17` without pulling promotions, provider execution, Order or provisioning ownership forward.
 
 At the next full risk-register regeneration, fold relevant overlay decisions into `docs/03-risk-register.md` without erasing historical definitions or falsely closing live/provider-dependent risks.
