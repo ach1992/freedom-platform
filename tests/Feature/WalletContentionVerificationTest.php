@@ -137,7 +137,7 @@ namespace {
 
                     return [
                         'transfer_id' => $receipt->transferId,
-                        'hold_id' => $receipt->holdId,
+                        'hold_id' => $receipt->walletHoldId,
                         'status' => $receipt->status->value,
                         'replayed' => $receipt->replayed,
                     ];
