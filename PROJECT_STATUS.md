@@ -2,33 +2,31 @@
 
 This is the single human-readable current-state entry point. Detailed history belongs in evidence, traceability, risk, audit, and bounded handoff documents.
 
-**Last status review:** 2026-08-08  
+**Last status review:** 2026-08-09  
 **Target release:** `1.0.0`  
 **Active phase:** `0.4.0 — Catalog, Panels and Offerings`  
-**Authoritative phase Issue:** `#7`  
-**Authoritative integration PR:** `#6`  
+**Authoritative Phase 0.4 Issue:** `#7`  
+**Authoritative integration PR:** Draft `#6`  
 **Allowed branch:** `develop/v1.0.0-completion`  
-**PR base/state:** `main` / Draft
+**PR base:** `main`
 
 Current control documents:
 
-- traceability: `docs/32-current-traceability-overlay.md`;
-- risks: `docs/33-current-risk-overlay.md`;
+- current cross-phase handoff: `docs/52-current-continuation-handoff.md`;
+- active Phase 0.4 live-execution handoff: `docs/44-phase-0.4-pasarguard-live-execution-handoff.md`;
+- traceability overlay: `docs/32-current-traceability-overlay.md`;
+- risk overlay: `docs/33-current-risk-overlay.md`;
 - execution ledger: `docs/00-execution-ledger.md`;
-- current cross-phase continuation handoff: `docs/52-current-continuation-handoff.md`;
-- active Phase 0.4 continuation handoff: `docs/44-phase-0.4-pasarguard-live-execution-handoff.md`;
-- latest accepted Phase 0.5 evidence: `evidence/0.5.0/payment-intent-wallet-top-up-settlement.md`;
-- latest accepted Phase 0.5 traceability: `docs/56-phase-0.5-payment-intent-wallet-top-up-traceability.md`;
-- current Phase 0.5 evidence candidate: `evidence/0.5.0/quote-pricing-snapshot.md`;
-- current Phase 0.5 traceability candidate: `docs/57-phase-0.5-quote-pricing-traceability.md`.
+- latest accepted Phase 0.5 evidence: `evidence/0.5.0/quote-pricing-snapshot.md`;
+- latest accepted Phase 0.5 traceability: `docs/57-phase-0.5-quote-pricing-traceability.md`.
 
 ## Live-state rule
 
-Do not treat any SHA written here as the current working head. Before every repository write, fetch PR `#6`, require it to remain Draft/open on `develop/v1.0.0-completion`, use its exact `head_sha`, and inspect exact-head CI. All GitHub Actions jobs must remain on the owner-controlled self-hosted runner.
+Do not treat any SHA written here as the current working head. Before **every repository write**, fetch PR `#6`, require it to remain open/Draft on `develop/v1.0.0-completion` with base `main`, and use its exact `head_sha`. Inspect exact-head CI before deciding the next action. All Actions jobs remain on the owner-controlled self-hosted runner.
 
 ## Active Phase 0.4 boundary and blocker
 
-Last evidence-complete active-phase boundary remains **PasarGuard Guarded Live-Acceptance Harness**:
+The latest evidence-complete active-phase boundary remains **PasarGuard Guarded Live-Acceptance Harness**:
 
 - implementation `e18460357d306789cbbf85721f61a4e3a3bbb0e2`, CI `31226863010` / `#1013`;
 - evidence `71ca4b39df41bc9fcf725c30e9caba3285ee5412`, CI `31227084007` / `#1015`;
@@ -38,13 +36,24 @@ Last evidence-complete active-phase boundary remains **PasarGuard Guarded Live-A
 - evidence `evidence/0.4.0/pasarguard-live-acceptance-harness.md`;
 - traceability `docs/43-phase-0.4-pasarguard-live-harness-traceability.md`.
 
-The active increment remains **PasarGuard Controlled Live Execution**, status **blocked** on protected Actions secret configuration plus manual workflow dispatch. Authoritative handoff: `docs/44-phase-0.4-pasarguard-live-execution-handoff.md`.
+The active increment remains **PasarGuard Controlled Live Execution**. The immediate repository-side blocker is the default-branch workflow bootstrap:
 
-After the guarded run, coordinator-level adoption/idempotency, controlled timeout/5xx/429 uncertainty and explicit Target activation remain separate live rows. Marzban `v0.8.4` deployment acceptance remains mandatory at final release acceptance. Phase `0.4.0` / Issue `#7` is therefore still open.
+- Draft PR `#24`: `ops/provider-live-dispatch-bootstrap` → `main`;
+- bootstrap head last inspected: `f2d2b6d538b16fe08787f6248ec425dbd19c8321`;
+- CI `31240183151` / `#1129`: preflight, secret scan, static quality, and MariaDB/Redis tests passed; `Dependency and license policy` failed because `composer audit --locked --abandoned=fail` exited non-zero;
+- `main` is still unchanged from bootstrap base `1227cce28aedd2d799f2cd510891309deaacd0fb`;
+- safety snapshot `safety/main-2026-08-08-pre-provider-bootstrap` is still retained;
+- bootstrap branch `ops/provider-live-dispatch-bootstrap` is still required while PR `#24` is open/unresolved.
 
-## Parallel Phase 0.5 financial chain
+Do **not** delete either bootstrap/safety branch yet. Cleanup condition: only after PR `#24` is deliberately merged or explicitly abandoned/replaced, default-branch dispatch availability/rollback is resolved, and the safety snapshot is no longer needed.
 
-Phase `0.5.0` / Issue `#8` is not active/closed. Nine bounded financial foundations are evidence-complete and reusable:
+After bootstrap acceptance, the owner must manually dispatch `Provider Live Acceptance - PasarGuard` on `develop/v1.0.0-completion` with the exact guarded confirmation. Protected secret values remain outside repository/chat. After that guarded run, coordinator adoption/idempotency, controlled timeout/5xx/429 uncertainty, and explicit Target activation remain separate live rows. Marzban `v0.8.4` deployment acceptance remains mandatory at final release acceptance.
+
+Phase `0.4.0` / Issue `#7` is therefore still open.
+
+## Parallel Phase 0.5 accepted chain
+
+Phase `0.5.0` / Issue `#8` is not active/closed. Ten bounded foundations are evidence-complete and reusable:
 
 1. Financial Ledger Foundation — `docs/45-phase-0.5-financial-ledger-traceability.md`;
 2. Wallet Holds / Available Balance / Capture / Release — `docs/46-phase-0.5-wallet-holds-traceability.md`;
@@ -54,77 +63,63 @@ Phase `0.5.0` / Issue `#8` is not active/closed. Nine bounded financial foundati
 6. Dedicated Wallet Contention Verification — `docs/53-phase-0.5-wallet-contention-traceability.md`;
 7. Wallet Refund / Reversal Foundation (`WAL-004`) — `docs/54-phase-0.5-wallet-refund-traceability.md`;
 8. Wallet Correction / Approval Foundation (`WAL-005`) — `docs/55-phase-0.5-wallet-correction-traceability.md`;
-9. Payment Intent + External Cash-Wallet Top-up (`PAY-002`, `PAY-003`, `WAL-001`) — `docs/56-phase-0.5-payment-intent-wallet-top-up-traceability.md`.
+9. Payment Intent + External Cash-Wallet Top-up (`PAY-002`, `PAY-003`, `WAL-001`) — `docs/56-phase-0.5-payment-intent-wallet-top-up-traceability.md`;
+10. Deterministic Pricing / Immutable Quote (`BUY-002`) — `docs/57-phase-0.5-quote-pricing-traceability.md`.
 
-### Latest accepted parallel boundary — `PAY-002` / `PAY-003` / `WAL-001`
+### Latest accepted parallel boundary — `BUY-002`
 
 Implementation:
-
-- SHA `6db9dde7032114ab81c95fdf371530997e65f21c`;
-- CI `31265449681` / `#1214` — success;
-- full suite **384 tests / 2292 assertions**;
-- dedicated top-up verification **13 tests / 95 assertions**;
-- artifact `test-evidence-31265449681`, ID `9024026199`;
-- digest `sha256:3cf3c1c52b3aac72e4cf7f10aa4567ee516a9edeb7c3528c6beb064c20f6b80b`.
-
-Evidence:
-
-- SHA `76ea847d4d1f626893b925bbfe5263e1dc1398e4`;
-- CI `31265901691` / `#1220` — success;
-- full suite **384 / 2292**;
-- artifact `test-evidence-31265901691`, ID `9024152227`;
-- independent digest `sha256:dff70424074d138f59a8c9bfb03e5196f3827142fe964b043c09ef53e15392e7`;
-- evidence `evidence/0.5.0/payment-intent-wallet-top-up-settlement.md`;
-- traceability `docs/56-phase-0.5-payment-intent-wallet-top-up-traceability.md`.
-
-Accepted behavior: immutable top-up intent identity and exact replay/conflict; active owned cash-wallet-only target; browser/non-authoritative evidence cannot capture; normalized authoritative settled evidence is required; provider event/transaction uniqueness and DB authority guards; exactly one captured settlement and one balanced clearing-to-cash ledger effect; accepted replay remains stable after later wallet deactivation; safe evidence is forbidden-field filtered and DB-bounded to 32 fields / 8192 bytes; real-MariaDB independent-process duplicate/cross-intent contention proves one primary top-up effect.
-
-This accepted boundary does not claim `PAY-001` payment-method eligibility, a real gateway/provider, provider-native refund, pricing/Quote, promotions/referrals/agent pricing, Order/provisioning ownership, payment UX, Phase `0.4.0` closure or Phase `0.5.0` closure.
-
-## Current implementation-verified candidate — `BUY-002` deterministic Pricing / immutable Quote
-
-Implementation verification:
 
 - SHA `16ebe0f9579f8ecb913ffd860bf6a9ba25567263`;
 - CI `31267071664` / `#1233` — all mandatory jobs success;
 - full suite **392 tests / 2355 assertions**;
-- dedicated Quote suite **8 tests / 63 assertions**, zero failures/errors/skips;
+- dedicated Quote suite **8 tests / 63 assertions**;
 - artifact `test-evidence-31267071664`, ID `9024501375`;
-- uploader and independently recalculated digest `sha256:899a26d7553f4fd37c2102da986fc876f0a8e8151b683ff36e2f300acb9ad754`;
-- evidence candidate `evidence/0.5.0/quote-pricing-snapshot.md`;
-- traceability candidate `docs/57-phase-0.5-quote-pricing-traceability.md`.
+- independent digest `sha256:899a26d7553f4fd37c2102da986fc876f0a8e8151b683ff36e2f300acb9ad754`.
 
-Implementation-verified behavior: immutable Quote key/request replay/conflict; integer-IRR base/override/discount/final components; override-before-discount arithmetic; Offering ID/code/version/configuration-hash snapshot; current tier/agent reference validation for resolved override inputs; bounded configuration snapshot/hash; expiration; historical stability across later Offering changes; database update/delete/forged-snapshot rejection; no wallet/payment/provider/paid-Order/provisioning effect.
+Evidence:
 
-This candidate deliberately separates pricing snapshot from purchasability. Draft/hidden Offering state may be snapshotted, while later `BUY-001` Order execution must perform fresh authoritative Offering/route/customer eligibility. Promotion/referral qualification, `AGT-005` most-specific agent pricing resolution, `PAY-001` payment-method adjustment and provider execution remain unclaimed.
+- SHA `07840d417e64eb30bf31f17bb9e26c1fe549eef3`;
+- CI `31267346707` / `#1236` — all mandatory jobs success;
+- full suite **392 / 2355**;
+- dedicated Quote suite **8 / 63**;
+- artifact `test-evidence-31267346707`, ID `9024577868`, size `116261` bytes;
+- independent digest `sha256:ba2710a544ccd07c72a56c616f7215406175ca8fdc93bc770c47ad474b275e83`;
+- evidence `evidence/0.5.0/quote-pricing-snapshot.md`;
+- traceability `docs/57-phase-0.5-quote-pricing-traceability.md`.
 
-The candidate is **not accepted yet** until the final evidence/status head passes mandatory CI/artifact verification and an independent artifact digest/safe-content inspection.
+Accepted behavior: immutable Quote key/request replay/conflict; integer-IRR base/override/discount/final components; override-before-discount arithmetic; Offering ID/code/version/configuration-hash snapshot; current tier/agent reference validation for resolved override inputs; bounded configuration snapshot/hash; explicit expiry; historical stability across later Offering changes; database update/delete/forged-snapshot rejection; no wallet/payment/provider/paid-Order/provisioning effect.
+
+This boundary deliberately separates price snapshot from purchasability. `BUY-001`, complete `PRO-001`, `REF-001`, `AGT-005`, `PAY-001`, provider execution, and Phase `0.6.0` ownership remain unclaimed.
 
 ## Next recommended parallel bounded increment
 
-After exact `BUY-002` evidence-head acceptance, continue with stored **promotion/referral/pricing-rule resolution**, then most-specific agent pricing and payment-method/provider work. Do not pull Phase `0.6.0` paid Order/provisioning/service ownership forward.
+Start a **stored promotion/referral/pricing-rule resolution foundation** without pulling later effects forward. Initial scope should be bounded around `PRO-001` / `REF-001` rule definition, deterministic qualification/resolution, immutable rule/config identity for future Quote integration, replay/conflict, authorization, and DB integrity. Do not claim full promotion redemption/release, referral payout/reversal, most-specific `AGT-005`, payment-method `PAY-001`, provider execution, or `BUY-001` Order flow until separately implemented and verified.
+
+After that foundation: most-specific agent pricing (`AGT-005`), then `PAY-001` payment-method eligibility/provider implementations and provider-native refund integration.
 
 ## Current open items
 
-- PasarGuard protected live execution and later coordinator/fault/Target-activation rows;
-- Marzban live acceptance at final release acceptance;
+- PR `#24` dependency-policy failure and default-branch PasarGuard workflow bootstrap decision;
+- PasarGuard protected live run plus coordinator/fault/Target-activation rows;
+- Marzban final-release live acceptance;
 - Phase `0.4.0` closure audit;
 - no automated scheduled sweep is claimed for untouched expired pending transfers;
-- exact evidence-head acceptance for current `BUY-002` candidate;
-- promotions/referrals/agent pricing and `PAY-001` payment-method eligibility/providers;
+- promotion/referral/pricing-rule resolution, `AGT-005`, `PAY-001`, and payment providers;
 - provider-native refund/payment behavior beyond accepted provider-independent wallet foundations;
 - all Phase `0.6.0+` owned behavior.
 
 ## Non-negotiable controls
 
-- PR `#6` stays Draft; do not merge, mark Ready, auto-merge, rewrite history, force-push, create a temporary branch or push `main`;
+- PR `#6` stays Draft; do not merge, mark Ready, auto-merge, rewrite history, force-push, or push `main`;
+- no temporary branch should be created; the existing bootstrap/safety branches are explicit retained exceptions with cleanup conditions above;
 - no phase/increment closes from docs/schema/fake/interface presence alone;
 - exact implementation CI/artifact and exact evidence-head CI/artifact are mandatory;
 - authoritative remote lookup precedes provider create; uncertainty requires discovery before retry; TLS is never disabled;
 - monetary IRR remains integer; finalized balanced ledger history plus active holds is authority; persisted wallet snapshots/caches never authorize a financial effect;
 - replay/conflict cannot create or overwrite a second accepted financial or remote effect;
-- refund/correction must compensate immutable history rather than alter it;
+- refund/correction compensates immutable history rather than altering it;
 - browser return never proves payment and no paid provisioning occurs before authoritative capture;
 - protected secrets and sensitive provider material never enter repository evidence/logs/chat.
 
-Phase `0.4.0` is **not closed**. Phase `0.5.0` is **not closed**. Accepted parallel foundations and the implementation-verified `BUY-002` candidate may continue only without weakening or falsely closing active provider gates.
+Phase `0.4.0` is **not closed**. Phase `0.5.0` is **not closed**. Continue from `docs/52-current-continuation-handoff.md` after live-fetching PR `#6`.
