@@ -1,6 +1,6 @@
 # Current Continuation Handoff
 
-**Status:** authoritative continuation checkpoint with implementation-verified `PAY-002` / `PAY-003` / `WAL-001` Payment Intent / External Cash-Wallet Top-up candidate in exact evidence-head gating.  
+**Status:** authoritative continuation checkpoint after accepted `PAY-002` / `PAY-003` / `WAL-001` Payment Intent / External Cash-Wallet Top-up; next independent increment is `BUY-002` deterministic Pricing / immutable Quote snapshot.  
 **Date:** 2026-08-08.  
 **Integration PR:** Draft PR `#6`, base `main`, head branch `develop/v1.0.0-completion`.  
 **Live-head rule:** before every repository write, fetch PR `#6` and use its exact `head_sha`; never continue from a copied SHA.
@@ -14,8 +14,7 @@
 5. this file;
 6. active Phase 0.4 gate: `docs/44-phase-0.4-pasarguard-live-execution-handoff.md` and `docs/41-phase-0.4-provider-live-acceptance-matrix.md`;
 7. current overlays: `docs/32-current-traceability-overlay.md` and `docs/33-current-risk-overlay.md`;
-8. current Phase 0.5 candidate: `evidence/0.5.0/payment-intent-wallet-top-up-settlement.md` and `docs/56-phase-0.5-payment-intent-wallet-top-up-traceability.md`;
-9. latest accepted Phase 0.5 boundary: `evidence/0.5.0/wallet-correction-approval-foundation.md` and `docs/55-phase-0.5-wallet-correction-traceability.md`.
+8. latest accepted Phase 0.5 evidence: `evidence/0.5.0/payment-intent-wallet-top-up-settlement.md` and `docs/56-phase-0.5-payment-intent-wallet-top-up-traceability.md`.
 
 ## Repository invariants
 
@@ -28,7 +27,7 @@
 - monetary IRR is integer; finalized balanced immutable ledger history plus active holds is wallet authority; persisted balance snapshots are derived evidence/cache only;
 - refund/correction never edits prior ledger history; accepted changes are compensating transactions with immutable business records;
 - browser returns, redirects or customer-submitted claims never prove payment capture;
-- no paid provisioning occurs before authoritative capture, and Orders/provisioning remain Phase `0.6.0` ownership.
+- no paid provisioning occurs before authoritative capture, and Order/provisioning state transitions remain Phase `0.6.0` ownership.
 
 ## Active Phase 0.4 human-controlled gate
 
@@ -48,7 +47,7 @@ Deployment-specific live acceptance is owner-scheduled for final project/release
 
 ## Accepted parallel Phase 0.5 chain
 
-Phase `0.5.0` / Issue `#8` is not closed. Eight bounded financial foundations are accepted:
+Phase `0.5.0` / Issue `#8` is not closed. Nine bounded financial foundations are accepted:
 
 1. **Financial Ledger Foundation** — `docs/45-phase-0.5-financial-ledger-traceability.md`;
 2. **Wallet Holds / Available Balance / Capture / Release** — `docs/46-phase-0.5-wallet-holds-traceability.md`;
@@ -57,28 +56,31 @@ Phase `0.5.0` / Issue `#8` is not closed. Eight bounded financial foundations ar
 5. **Stable Wallet Transfer (`WAL-003`)** — `docs/51-phase-0.5-wallet-transfer-traceability.md`;
 6. **Dedicated Wallet Contention Verification** — `docs/53-phase-0.5-wallet-contention-traceability.md`;
 7. **Wallet Refund / Reversal Foundation (`WAL-004`)** — `docs/54-phase-0.5-wallet-refund-traceability.md`;
-8. **Wallet Correction / Approval Foundation (`WAL-005`)** — `docs/55-phase-0.5-wallet-correction-traceability.md` and `evidence/0.5.0/wallet-correction-approval-foundation.md`.
+8. **Wallet Correction / Approval Foundation (`WAL-005`)** — `docs/55-phase-0.5-wallet-correction-traceability.md`;
+9. **Payment Intent / External Cash-Wallet Top-up (`PAY-002`, `PAY-003`, `WAL-001`)** — `docs/56-phase-0.5-payment-intent-wallet-top-up-traceability.md`.
 
-Latest accepted boundary remains `WAL-005` at implementation `fd3d579d9f38004310d7ea638e351813d2f46ef5` / CI `#1186` and evidence `ef5504081a42687eb712e9cd47306cd9dcc9a864` / CI `#1188`.
+## Latest accepted boundary — `PAY-002` / `PAY-003` / `WAL-001`
 
-## Current candidate — Payment Intent + `WAL-001` External Cash-Wallet Top-up
+Implementation:
 
-The provider-independent top-up implementation is exact-head verified and now requires only its exact evidence-head lifecycle before it can join the accepted parallel chain.
-
-### Implementation verification
-
-- implementation SHA `6db9dde7032114ab81c95fdf371530997e65f21c`;
+- SHA `6db9dde7032114ab81c95fdf371530997e65f21c`;
 - CI `31265449681` / `#1214` — all mandatory jobs success;
 - full suite **384 tests / 2292 assertions**;
-- dedicated top-up suites **13 tests / 95 assertions**, zero failures/errors/skips;
+- dedicated top-up suites **13 tests / 95 assertions**;
 - artifact `test-evidence-31265449681`, ID `9024026199`;
-- uploader and independently recalculated SHA-256 `3cf3c1c52b3aac72e4cf7f10aa4567ee516a9edeb7c3528c6beb064c20f6b80b`;
-- evidence candidate `evidence/0.5.0/payment-intent-wallet-top-up-settlement.md`;
-- traceability candidate `docs/56-phase-0.5-payment-intent-wallet-top-up-traceability.md`.
+- independent SHA-256 `3cf3c1c52b3aac72e4cf7f10aa4567ee516a9edeb7c3528c6beb064c20f6b80b`.
 
-Independent artifact inspection found exactly JUnit, full test log, Clover coverage and two dependency-service evidence files. The artifact contains no known CI credential value, bearer/basic authorization value, private-key header or retained raw provider secret material.
+Evidence:
 
-### Implementation-verified behavior
+- SHA `76ea847d4d1f626893b925bbfe5263e1dc1398e4`;
+- CI `31265901691` / `#1220` — all mandatory jobs success;
+- full suite **384 / 2292**;
+- artifact `test-evidence-31265901691`, ID `9024152227`;
+- independent SHA-256 `dff70424074d138f59a8c9bfb03e5196f3827142fe964b043c09ef53e15392e7`.
+
+Independent evidence-head inspection found exactly JUnit, full test log, Clover coverage and two dependency-service evidence files. JUnit reports 384 tests / 2292 assertions with zero failures/errors/skips. The dedicated top-up suites remain 13 / 95 with zero failures/errors/skips. Safe scanning found no known CI credential value, bearer/basic authorization value, private-key header or raw provider secret material.
+
+Accepted behavior:
 
 1. top-up creation uses an immutable caller key and canonical payload binding user, cash-wallet ID, provider code, positive integer-IRR amount and currency;
 2. exact creation-key/payload reuse returns the same intent; changed reuse conflicts;
@@ -94,52 +96,30 @@ Independent artifact inspection found exactly JUnit, full test log, Clover cover
 12. independent-process MariaDB duplicate capture resolves to one primary effect plus replay; concurrent cross-intent provider-event/transaction reuse accepts only one top-up effect;
 13. bounded worker/InnoDB timeouts surface unresolved contention as failures instead of hanging CI.
 
-### Exact evidence-head gate
+No real gateway/provider, `PAY-001`, provider-native refund, pricing/Quote, promotions/referrals/agent pricing, Order/provisioning, payment UX or phase/release closure is claimed by this boundary.
 
-Do not mark this increment accepted until the final documentation/evidence head passes:
+## Current bounded increment — `BUY-002` deterministic Pricing / immutable Quote
 
-- Repository preflight / project-control verification;
-- Secret scan;
-- PHP static quality and repository policy;
-- dependency/license policy;
-- full MariaDB/authenticated Redis suite;
-- retained `test-evidence-<run>` artifact with actual test/assertion counts;
-- independent artifact SHA-256 recomputation and safe-content inspection.
+Build a provider-independent immutable Quote snapshot before promotions/providers. The authoritative requirement is that Quotes contain immutable **base, override, discount, final amount, currency, validity, and configuration snapshots**. Quote state belongs to the Orders aggregate, but this first boundary must not create or transition a paid Order.
 
-After the gate passes, update evidence/status from candidate to accepted, comment Issue `#8`, and immediately continue to `BUY-002` Pricing / Quote.
+Reuse accepted Offering/custom-plan semantics rather than inventing a second incompatible pricing formula. Existing Offering definitions expose integer-IRR base price and immutable commercial configuration. Existing custom-plan calculation already demonstrates version/configuration-hash snapshots and overflow-safe integer arithmetic. The first Quote boundary should compose these proven patterns.
 
-### Explicit non-claims
-
-The candidate does not claim:
-
-- `PAY-001` payment-method eligibility or gateway rule engine;
-- real gateway/provider implementation, health or live compatibility;
-- provider-native refund/reversal;
-- pricing/Quote, promotions/referrals or agent pricing;
-- Order/provisioning/service lifecycle;
-- customer/admin payment UX;
-- Phase `0.4.0`, Phase `0.5.0` or release closure.
-
-## Next bounded increment after WAL-001 acceptance — `BUY-002` deterministic Pricing / Quote
-
-Build a provider-independent immutable Quote snapshot before promotions/providers. Reuse accepted Offering/custom-plan arithmetic where appropriate rather than duplicating Phase 0.4 calculation semantics.
-
-Required first-boundary behavior:
+Required behavior:
 
 1. all monetary values are bounded integer IRR; no monetary float or implicit rounding;
 2. immutable quote/idempotency key plus canonical request/config payload hash; exact replay returns prior Quote, changed reuse conflicts;
-3. snapshot base offering price and relevant Offering/config identity/version;
-4. represent account/agent price override input explicitly and deterministically; do not infer hidden mutable state later;
-5. represent discount input/result explicitly, including zero discount; final price is deterministic and non-negative;
-6. persist `base_price`, override, discount, final price, `IRR`, validity start/end and immutable configuration snapshot/hash;
+3. snapshot current Offering identity/configuration and base price;
+4. account/agent override input is explicit, deterministic and snapshotted; no hidden later lookup may reinterpret an accepted Quote;
+5. discount input/result is explicit, including zero discount; final amount is deterministic and non-negative;
+6. persist base, override, discount, final amount, `IRR`, validity start/end and immutable configuration snapshot/hash;
 7. accepted Quote is update/delete guarded and remains interpretable after later Offering/pricing changes;
 8. expiration is explicit; an expired Quote cannot silently become current pricing authority;
-9. Quote generation has no wallet debit/capture, Payment Intent capture, Order paid state, provisioning or service activation effect;
+9. Quote creation has no wallet debit/capture, Payment Intent capture, paid Order transition, provisioning or service activation effect;
 10. first pricing boundary does not implement promotions/referrals/provider routing; those remain later increments;
-11. feature tests cover base/override/discount precedence, boundary/overflow/negative rejection, validity, exact replay/conflict and DB immutability;
+11. feature tests cover base/override/discount precedence, boundary/overflow/negative rejection, validity, exact replay/conflict, later Offering mutation stability and DB immutability;
 12. exact implementation-head and evidence-head CI/artifact/digest lifecycle is mandatory.
 
-Before implementation, inspect the authoritative `BUY-002` wording, `PlanOfferingDefinition`, existing custom-plan calculation snapshot/arithmetic and any accepted agent-pricing structures. Do not invent a second incompatible pricing formula.
+Before schema/service write, inspect current `plan_offerings` columns/configuration hash/version behavior, custom-plan snapshot/guards and accepted agent-pricing structures. Prefer a dedicated `quotes` table under the Orders module with explicit immutable columns and a bounded JSON configuration snapshot only where relational queryability is not required.
 
 ## After `BUY-002`
 
@@ -150,7 +130,7 @@ Recommended independent order:
 3. provider-native refund integrations;
 4. Phase `0.5.0` reconciliation/closure only when all owned requirements have evidence.
 
-Do not pull Order/provisioning ownership from Phase `0.6.0` forward.
+Do not pull paid Order/provisioning/service ownership from Phase `0.6.0` forward.
 
 ## Current open items
 
@@ -158,9 +138,9 @@ Do not pull Order/provisioning ownership from Phase `0.6.0` forward.
 - Marzban final-release live acceptance;
 - Phase `0.4.0` closure audit;
 - no automated scheduled sweep is claimed for untouched expired pending wallet transfers;
-- current `WAL-001` exact evidence-head gate;
-- `BUY-002` pricing/Quote, promotions/referrals/agent pricing, `PAY-001` and payment providers;
+- current `BUY-002` pricing/Quote increment;
+- promotions/referrals/agent pricing, `PAY-001` and payment providers;
 - provider-native refund/payment behavior beyond accepted provider-independent wallet foundations;
 - all Phase `0.6.0+` owned behavior.
 
-If the protected PasarGuard gate becomes available, follow `docs/44-phase-0.4-pasarguard-live-execution-handoff.md` without exposing secrets. Otherwise complete the current `WAL-001` evidence gate and continue autonomously with the `BUY-002` sequence above.
+If the protected PasarGuard gate becomes available, follow `docs/44-phase-0.4-pasarguard-live-execution-handoff.md` without exposing secrets. Otherwise continue autonomously with the `BUY-002` sequence above.
