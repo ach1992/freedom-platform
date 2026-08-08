@@ -48,15 +48,6 @@ use RuntimeException;
  *     cancelled_at: string|null,
  *     cancel_reason: string|null
  * }
- * @phpstan-type TransferPolicy array{
- *     minimum: int,
- *     maximum: int,
- *     daily_limit: int,
- *     fixed_fee: int,
- *     fee_basis_points: int,
- *     confirmation_ttl_seconds: int,
- *     fee_account_code: string|null
- * }
  */
 final readonly class WalletTransferService
 {
@@ -138,7 +129,7 @@ final readonly class WalletTransferService
                         ->sum('amount_irr'),
                     'Wallet transfer daily usage',
                 );
-                if ($amount->amount > $policy['daily_limit'] - $usedToday) {
+                if ($usedToday > $policy->dailyLimit || $amount->amount > $policy->dailyLimit - $usedToday) {
                     throw new DomainException('Wallet transfer daily limit would be exceeded.');
                 }
 
@@ -146,14 +137,14 @@ final readonly class WalletTransferService
                 $totalDebit = $amount->add($fee);
                 $feeAccountCode = null;
                 if (! $fee->isZero()) {
-                    $feeAccountCode = $policy['fee_account_code'];
+                    $feeAccountCode = $policy->feeAccountCode;
                     if ($feeAccountCode === null) {
                         throw new RuntimeException('Wallet transfer fee account is not configured.');
                     }
                     $this->resolveFeeAccountId($connection, $feeAccountCode, true);
                 }
 
-                $confirmationExpiresAt = $this->clock->now()->modify(sprintf('+%d seconds', $policy['confirmation_ttl_seconds']));
+                $confirmationExpiresAt = $this->clock->now()->modify(sprintf('+%d seconds', $policy->confirmationTtlSeconds));
                 $hold = $this->holds->place(
                     $this->holdKey($transferKey),
                     $senderUserId,
@@ -176,11 +167,11 @@ final readonly class WalletTransferService
                     'amount_irr' => $amount->amount,
                     'fee_irr' => $fee->amount,
                     'total_debit_irr' => $totalDebit->amount,
-                    'policy_minimum_irr' => $policy['minimum'],
-                    'policy_maximum_irr' => $policy['maximum'],
-                    'policy_daily_limit_irr' => $policy['daily_limit'],
-                    'policy_fixed_fee_irr' => $policy['fixed_fee'],
-                    'policy_fee_basis_points' => $policy['fee_basis_points'],
+                    'policy_minimum_irr' => $policy->minimum,
+                    'policy_maximum_irr' => $policy->maximum,
+                    'policy_daily_limit_irr' => $policy->dailyLimit,
+                    'policy_fixed_fee_irr' => $policy->fixedFee,
+                    'policy_fee_basis_points' => $policy->feeBasisPoints,
                     'fee_account_code' => $feeAccountCode,
                     'policy_business_date' => $businessDate,
                     'wallet_hold_id' => $hold->holdId,
@@ -247,7 +238,7 @@ final readonly class WalletTransferService
 
             $now = $this->clock->now();
             if ($this->databaseDateTime($transfer->confirmation_expires_at, 'Wallet transfer confirmation expiry') <= $now) {
-                return $this->cancelLocked($connection, $transfer, self::EXPIRED_REASON, true);
+                return $this->cancelLocked($connection, $transfer, self::EXPIRED_REASON);
             }
 
             $this->assertCurrentPolicyAllows($connection, $transfer);
@@ -267,7 +258,7 @@ final readonly class WalletTransferService
 
             $hold = $this->lockedTransferHold($connection, $transfer);
             if ($this->databaseDateTime($hold->expires_at, 'Wallet transfer hold expiry') <= $now) {
-                return $this->cancelLocked($connection, $transfer, self::EXPIRED_REASON, true);
+                return $this->cancelLocked($connection, $transfer, self::EXPIRED_REASON);
             }
 
             $senderWalletId = $this->positiveDatabaseInt($transfer->sender_wallet_account_id, 'Wallet transfer sender wallet account ID');
@@ -361,12 +352,12 @@ final readonly class WalletTransferService
                 return $this->receiptFromExisting($transfer, null, true);
             }
 
-            return $this->cancelLocked($connection, $transfer, $reason, false);
+            return $this->cancelLocked($connection, $transfer, $reason);
         });
     }
 
     /** @param WalletTransferRow $transfer */
-    private function cancelLocked(Connection $connection, object $transfer, string $reason, bool $systemExpiry): WalletTransferReceipt
+    private function cancelLocked(Connection $connection, object $transfer, string $reason): WalletTransferReceipt
     {
         $hold = $this->lockedTransferHold($connection, $transfer);
         $holdStatus = $this->holdStatus($hold->status);
@@ -379,7 +370,9 @@ final readonly class WalletTransferService
                 throw new RuntimeException('Wallet transfer cancellation released a different hold.');
             }
         } elseif ($holdStatus === WalletHoldStatus::Released) {
-            if ($hold->release_reason === null || ! hash_equals($hold->release_reason, $reason)) {
+            $holdData = (array) $hold;
+            $releaseReason = $holdData['release_reason'] ?? null;
+            if (! is_string($releaseReason) || ! hash_equals($releaseReason, $reason)) {
                 throw new RuntimeException('Wallet transfer hold release conflicts with transfer cancellation.');
             }
         } else {
@@ -410,7 +403,7 @@ final readonly class WalletTransferService
             IrrMoney::positive($this->positiveDatabaseInt($transfer->total_debit_irr, 'Wallet transfer total debit')),
             $this->positiveDatabaseInt($transfer->wallet_hold_id, 'Wallet transfer hold ID'),
             null,
-            $systemExpiry,
+            false,
         );
     }
 
@@ -430,7 +423,7 @@ final readonly class WalletTransferService
                 ->sum('amount_irr'),
             'Wallet transfer current daily usage',
         );
-        if ($currentDailyUsage > $policy['daily_limit']) {
+        if ($currentDailyUsage > $policy->dailyLimit) {
             throw new DomainException('Wallet transfer current daily limit is exceeded.');
         }
     }
@@ -616,12 +609,8 @@ final readonly class WalletTransferService
             throw new RuntimeException('Wallet transfer ledger integrity check failed.');
         }
 
-        /** @var list<object{ledger_account_id: int|string, direction: string, amount_irr: int|string}> $entries */
-        $entries = $connection->table('ledger_entries')
-            ->where('ledger_transaction_id', $transactionId)
-            ->get(['ledger_account_id', 'direction', 'amount_irr'])
-            ->all();
-        if (count($entries) !== $expectedCount) {
+        $actual = $this->ledgerEntrySet($connection, $transactionId);
+        if (count($actual) !== $expectedCount) {
             throw new RuntimeException('Wallet transfer ledger entry integrity check failed.');
         }
 
@@ -648,11 +637,6 @@ final readonly class WalletTransferService
             ];
         }
 
-        $actual = array_map(fn (object $entry): array => [
-            $this->positiveDatabaseInt($entry->ledger_account_id, 'Wallet transfer ledger entry account ID'),
-            $entry->direction,
-            $this->positiveDatabaseInt($entry->amount_irr, 'Wallet transfer ledger entry amount'),
-        ], $entries);
         sort($expected);
         sort($actual);
         if ($expected !== $actual) {
@@ -660,8 +644,33 @@ final readonly class WalletTransferService
         }
     }
 
-    /** @return TransferPolicy */
-    private function transferPolicy(string $walletBucket, IrrMoney $amount): array
+    /** @return list<array{0: int, 1: string, 2: int}> */
+    private function ledgerEntrySet(Connection $connection, int $transactionId): array
+    {
+        /** @var list<object> $rows */
+        $rows = $connection->table('ledger_entries')
+            ->where('ledger_transaction_id', $transactionId)
+            ->get(['ledger_account_id', 'direction', 'amount_irr'])
+            ->all();
+
+        $entries = [];
+        foreach ($rows as $row) {
+            $data = (array) $row;
+            $direction = $data['direction'] ?? null;
+            if (! is_string($direction) || ! in_array($direction, [LedgerDirection::Debit->value, LedgerDirection::Credit->value], true)) {
+                throw new RuntimeException('Wallet transfer ledger entry direction is malformed.');
+            }
+            $entries[] = [
+                $this->positiveDatabaseInt($data['ledger_account_id'] ?? null, 'Wallet transfer ledger entry account ID'),
+                $direction,
+                $this->positiveDatabaseInt($data['amount_irr'] ?? null, 'Wallet transfer ledger entry amount'),
+            ];
+        }
+
+        return $entries;
+    }
+
+    private function transferPolicy(string $walletBucket, IrrMoney $amount): WalletTransferPolicySnapshot
     {
         if (config('wallet.transfers.enabled', false) !== true) {
             throw new DomainException('Wallet transfers are disabled.');
@@ -703,21 +712,20 @@ final readonly class WalletTransferService
             $this->assertToken($feeAccountCode, 'Wallet transfer fee account code', 3, 128);
         }
 
-        return [
-            'minimum' => $minimum,
-            'maximum' => $maximum,
-            'daily_limit' => $dailyLimit,
-            'fixed_fee' => $fixedFee,
-            'fee_basis_points' => $feeBasisPoints,
-            'confirmation_ttl_seconds' => $ttl,
-            'fee_account_code' => $feeAccountCode,
-        ];
+        return new WalletTransferPolicySnapshot(
+            $minimum,
+            $maximum,
+            $dailyLimit,
+            $fixedFee,
+            $feeBasisPoints,
+            $ttl,
+            $feeAccountCode,
+        );
     }
 
-    /** @param TransferPolicy $policy */
-    private function feeAmount(int $amount, array $policy): int
+    private function feeAmount(int $amount, WalletTransferPolicySnapshot $policy): int
     {
-        $basisPoints = $policy['fee_basis_points'];
+        $basisPoints = $policy->feeBasisPoints;
         $whole = intdiv($amount, 10000);
         if ($basisPoints > 0 && $whole > intdiv(PHP_INT_MAX, $basisPoints)) {
             throw new DomainException('Wallet transfer fee exceeds the supported integer range.');
@@ -728,7 +736,7 @@ final readonly class WalletTransferService
             $percentage = $this->safeAdd($percentage, intdiv($remainderProduct + 9999, 10000));
         }
 
-        return $this->safeAdd($policy['fixed_fee'], $percentage);
+        return $this->safeAdd($policy->fixedFee, $percentage);
     }
 
     private function safeAdd(int $left, int $right): int
