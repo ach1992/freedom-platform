@@ -1,38 +1,38 @@
 # Phase 0.5 Stable Wallet Transfer Evidence
 
-**Status:** implementation verified; evidence-head verification pending.  
-**Phase:** parallel `0.5.0 — Ledger, Pricing, Promotions and Payment Providers` foundation while Phase `0.4.0` provider live gates remain open.  
+**Status:** evidence-complete bounded `WAL-003` foundation.  
+**Phase:** parallel `0.5.0 — Ledger, Pricing, Promotions and Payment Providers` work while Phase `0.4.0` provider live gates remain open.  
 **Authoritative Phase 0.5 Issue:** `#8`.  
-**Implementation head:** `8360d1ac99485d1bea146bf21e22e8a336cd8e7a`.
+**Implementation head:** `8360d1ac99485d1bea146bf21e22e8a336cd8e7a`.  
+**Evidence head:** `68f06fbd4ae9bb1bdba004968e57c84a13871e15`.
 
 ## Accepted bounded scope
 
-This increment implements `WAL-003` as a fail-closed, two-step wallet transfer on top of the accepted immutable ledger and wallet-hold foundations:
+This increment implements `WAL-003` as a fail-closed two-step wallet transfer on the accepted immutable-ledger and hold foundations:
 
-- transfers are disabled by default and require explicit configured wallet buckets, integer-IRR minimum/maximum/daily limits, fee policy, confirmation TTL and fee account;
-- the caller identifies the recipient by stable `users.public_id`; preparation resolves and persists the invariant internal recipient `users.id` plus the public reference;
-- sender and recipient must be different active customer accounts and both must own an active IRR liability wallet account in the same explicitly selected bucket;
-- preparation snapshots amount, fee, total debit and policy values, applies the sender business-day limit, and reserves `amount + fee` through one wallet hold;
-- preparation creates no transfer ledger transaction;
-- confirmation revalidates current sender/recipient/account eligibility, transfer policy, hold integrity and expiry before any financial effect;
-- a successful confirmation posts one balanced immutable transaction: sender debit `amount + fee`, recipient credit `amount`, and fee-account credit `fee` when non-zero;
-- the transfer hold is captured and the transfer is completed in the same database transaction as the ledger post;
-- exact prepare replay returns the accepted transfer without a second hold; changed payload conflicts;
-- exact completed-confirmation replay verifies the recorded ledger transaction and entries before returning success; a changed confirmation conflicts and cannot create a second effect;
-- explicit cancellation releases the reservation once and creates no transfer ledger effect; cancellation is terminal;
-- expired confirmation cancels the transfer through its own lifecycle, releases the transfer hold, records a stable expiry reason and creates no transfer ledger effect;
-- generic expired-hold maintenance deliberately excludes `source_type = wallet_transfer`, preventing a transfer hold from being released without a matching transfer-state transition;
-- database constraints/triggers make transfer identity and policy snapshots immutable, restrict transitions to pending -> completed/cancelled, reject deletion and reject confirmation material on cancelled rows.
+- transfer policy is disabled by default and must explicitly configure allowed bucket, integer-IRR min/max/daily limits, fee, TTL and fee account;
+- recipient is supplied by stable `users.public_id`, resolved once to invariant internal `users.id`, and both are persisted;
+- sender/recipient must differ, remain active customers at execution, and have active IRR liability wallet accounts in the same selected bucket;
+- preparation snapshots amount, fee, total debit and policy values, applies the sender business-day limit and reserves `amount + fee` through one hold;
+- preparation creates no transfer ledger effect;
+- confirmation revalidates current users/accounts/policy/hold/expiry before any financial effect;
+- successful confirmation posts one balanced immutable transaction: sender debit `amount + fee`, recipient credit `amount`, fee-account credit `fee` when non-zero;
+- hold capture and transfer completion are committed in the same database transaction as the ledger post;
+- exact prepare/confirm replay returns the accepted effect while materially changed replay conflicts;
+- cancellation releases the reservation once, creates no transfer ledger effect and is terminal;
+- expired confirmation follows coordinated transfer cancellation, releases the hold and creates no transfer ledger effect;
+- generic expired-hold maintenance excludes `source_type = wallet_transfer`, so a transfer hold cannot be freed without a matching transfer-state transition;
+- database constraints/triggers make identity/policy snapshots immutable, restrict terminal transitions, prevent deletion and reject confirmation material on cancelled rows.
 
 ## Requirement mapping
 
-- `WAL-003` — stable recipient, policy/limits/bucket/fee snapshot, explicit confirmation, atomic sender/recipient/fee posting, final state, replay/conflict and cancellation are executable.
-- `DAT-002` — transfer, fee, debit and policy monetary values are integer IRR; no monetary float is accepted at this boundary.
-- `DAT-003` — transfer/user/account/hold/ledger foreign keys, uniqueness, checks, transaction locks and terminal-state constraints are executable.
-- `DAT-004` — accepted transfer identity/policy/final state is database-guarded against mutation/deletion; completed ledger history remains append-only.
-- `QUA-001` — production implementation, deterministic tests, exact-head CI and retained artifact exist for this bounded increment; full Phase 0.5 closure remains open.
+- `WAL-003`: stable recipient, limits/bucket/fee snapshot, explicit confirmation, atomic sender/recipient/fee posting, terminal state, replay/conflict and cancellation are verified.
+- `DAT-002`: all transfer monetary values are integer IRR.
+- `DAT-003`: FKs, uniqueness, checks, transaction locks and terminal-state constraints are executable.
+- `DAT-004`: accepted transfer identity/policy/final state is DB-guarded; completed ledger history remains append-only.
+- `QUA-001`: exact implementation/evidence CI, retained artifacts and independent digest checks exist for this bounded increment.
 
-## Implementation surfaces
+## Key implementation surfaces
 
 - `config/wallet.php`
 - `database/migrations/2026_08_08_002600_create_wallet_transfers.php`
@@ -48,76 +48,55 @@ This increment implements `WAL-003` as a fail-closed, two-step wallet transfer o
 
 ## Executable verification
 
-The transfer feature tests prove, among other cases:
+Tests cover default-disabled policy, allowed bucket/min/max/daily limits, deterministic fee, stable recipient identity, execution-time recipient suspension, no ledger effect during prepare, exact replay/conflict, balanced confirmation effect, completed replay verification, cancellation, insufficient balance, expiry cancellation/restored available balance, and direct DB bypass rejection for identity/policy/terminal-state/deletion/cancelled-confirmation tampering.
 
-1. default-disabled policy creates no transfer or hold;
-2. configured bucket/minimum/maximum/daily limits fail closed;
-3. deterministic integer fee is included in the sender reservation;
-4. stable recipient identity is persisted and mutable identity drift fails confirmation;
-5. current recipient account suspension after preparation fails confirmation with no ledger effect;
-6. preparation creates one pending transfer and one hold but no transfer ledger transaction;
-7. exact preparation replay creates no second hold and changed payload conflicts;
-8. successful confirmation creates exactly one balanced sender/recipient/fee effect and captures the hold;
-9. exact confirmation replay returns the accepted effect and a changed confirmation conflicts;
-10. cancellation releases the hold once, is exact-replay protected and creates no transfer ledger transaction;
-11. insufficient available balance leaves no partial transfer/hold effect;
-12. expiry at confirmation cancels the transfer, releases the hold, restores available balance and creates no transfer ledger transaction;
-13. database bypass attempts cannot mutate transfer identity/policy, mutate terminal state, delete a transfer or retain confirmation material on a cancelled row.
+### Implementation CI
 
-## Exact implementation CI
+Exact head `8360d1ac99485d1bea146bf21e22e8a336cd8e7a`, run `31235232052` / `#1084`:
 
-GitHub Actions run `31235232052` / run `#1084` on exact implementation head `8360d1ac99485d1bea146bf21e22e8a336cd8e7a`:
+- all mandatory jobs — **success**;
+- MariaDB/authenticated Redis suite — **346 tests / 1995 assertions**;
+- artifact `test-evidence-31235232052`, ID `9015155851`;
+- uploader and independent SHA-256 `c85e5106f95e6c37745dbcf920d3728108d7f82f26624c6cfccc0684f5bb265b`.
 
-- Repository preflight / planning / project-control verification — **success**;
+### Evidence-head CI
+
+Exact evidence head `68f06fbd4ae9bb1bdba004968e57c84a13871e15`, run `31235552266` / `#1092`:
+
+- Repository preflight / project-control — **success**;
 - Secret scan — **success**;
-- PHP static quality: Pint, PHPStan/Larastan and repository policy — **success**;
+- Pint / PHPStan-Larastan / repository policy — **success**;
 - Dependency and license policy — **success**;
-- MariaDB and authenticated Redis suite — **346 tests, 1995 assertions, success**.
+- MariaDB/authenticated Redis suite — **346 tests / 1995 assertions, success**;
+- artifact `test-evidence-31235552266`, ID `9015258508`;
+- uploader and independently calculated SHA-256 `f1bee9300338b0d326e9c0cf47ea978147a6e72688e598c0717f7ae180b29a78`.
 
-Retained test artifact:
-
-- name: `test-evidence-31235232052`;
-- artifact ID: `9015155851`;
-- uploader SHA-256: `c85e5106f95e6c37745dbcf920d3728108d7f82f26624c6cfccc0684f5bb265b`;
-- independently calculated SHA-256: `c85e5106f95e6c37745dbcf920d3728108d7f82f26624c6cfccc0684f5bb265b`.
-
-Independent artifact inspection observed exactly five expected files:
-
-- `tests/junit.xml`;
-- `tests/test.log`;
-- `coverage/clover.xml`;
-- `services/compose-ps.txt`;
-- `services/compose.log`.
-
-The bounded sensitive-marker scan found no protected PasarGuard secret-variable marker, Bearer authorization material or private-key marker.
+Independent inspection of both test artifacts observed exactly five expected test/coverage/service-log files. The bounded sensitive-marker scan was clean.
 
 ## Safety properties
 
-- immutable finalized ledger entries remain authoritative for balances;
-- active holds reserve value before confirmation; no transfer debit is authorized from a persisted balance snapshot;
-- prepare/confirm/cancel are explicit state transitions, not implicit side effects;
+- immutable finalized ledger entries plus active holds remain authoritative;
+- persisted balance snapshots never authorize a transfer effect;
 - current identity/account eligibility is revalidated at confirmation;
-- a timeout/retry at the caller cannot turn exact replay into a second accepted transfer effect;
-- cancellation/expiry never rewrites accepted ledger history;
-- transfer holds are not released by generic maintenance outside transfer-state coordination;
-- transfer policy remains disabled until explicit product/business configuration enables it.
+- exact retry cannot create a second accepted transfer effect;
+- cancellation/expiry never rewrite accepted ledger history;
+- transfer holds are released only through coordinated transfer state or explicit transfer cancellation;
+- transfer policy remains disabled until explicitly configured.
 
-## Explicit non-claims and remaining work
+## Explicit non-claims and next work
 
 This boundary does **not** claim:
 
 - dedicated multi-process contention/stress proof for simultaneous holds/transfers/reconciliation;
-- automatic scheduled expiry cancellation for pending transfers; expiry is enforced when confirmation is attempted and explicit cancellation remains available;
+- automatic scheduled cancellation of untouched expired pending transfers;
 - `WAL-001` external Payment Intent wallet top-up;
 - `WAL-004` refund/reversal;
 - `WAL-005` balance correction/approval;
 - pricing/Quote, promotions or payment-provider completion;
 - Order/provisioning behavior;
 - PasarGuard or Marzban live acceptance;
-- Phase `0.4.0` or Phase `0.5.0` closure.
+- Phase `0.4.0` or `0.5.0` closure.
 
-The next safest bounded financial work is dedicated multi-process wallet contention verification to close the remaining explicit `WAL-002` verification gap before moving to `WAL-004` refund and `WAL-005` correction as separate increments.
+The next safest bounded financial work is dedicated multi-process wallet contention verification to close the remaining explicit `WAL-002` verification gap, followed by `WAL-004` refund and `WAL-005` correction as separate evidence lifecycles.
 
-## Evidence-head gate
-
-This evidence and its traceability companion require mandatory CI on their exact combined evidence head before this increment is evidence-complete. Current/live working head must always be fetched from Draft PR `#6`, never inferred from this document.
+Current/live working head must always be fetched from Draft PR `#6`; the SHAs above identify historical accepted boundaries only.
