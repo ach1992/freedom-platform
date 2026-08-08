@@ -1,6 +1,6 @@
 # Contributing
 
-Read `AGENTS.md` and `PROJECT_STATUS.md` before using this guide.
+Read `AGENTS.md`, `PROJECT_STATUS.md`, and `docs/development/github-actions-runner-policy.md` before using this guide.
 
 ## Supported contribution model
 
@@ -25,6 +25,16 @@ For local development, provide:
 - MariaDB and Redis only when not using `docker-compose.ci.yml`.
 
 Do not copy production or staging secrets into a local `.env`. Use safe development-only values and fake providers.
+
+## GitHub Actions execution
+
+All repository workflows must run on the owner-controlled `freedom-staging-runner` using:
+
+```yaml
+runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
+```
+
+Do not use GitHub-hosted `ubuntu-*`, `windows-*`, or `macos-*` runners as a fallback. If the self-hosted runner is offline, busy, or label-mismatched, fix or wait for that runner instead. The detailed policy is `docs/development/github-actions-runner-policy.md`; the host/runtime contract is `docs/development/ci-runner-contract.md`.
 
 ## Initial checkout
 
@@ -109,7 +119,7 @@ COLUMNS=240 php artisan test \
   --coverage-clover build/evidence/coverage/clover.xml
 ```
 
-Coverage requires PCOV or another reviewed PHPUnit-compatible driver. Mandatory acceptance remains the self-hosted GitHub Actions run described in `docs/development/ci-runner-contract.md`.
+Coverage requires PCOV or another reviewed PHPUnit-compatible driver. Mandatory acceptance remains the self-hosted GitHub Actions run described in `docs/development/ci-runner-contract.md` and must comply with `docs/development/github-actions-runner-policy.md`.
 
 ## Coding rules
 
