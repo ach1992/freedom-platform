@@ -10,7 +10,7 @@ use RuntimeException;
 
 final class WalletAccessFoundationSeeder extends Seeder
 {
-    /** @requirement WAL-004 ACL-001 ACL-002 SEC-002 */
+    /** @requirement WAL-004 WAL-005 ACL-001 ACL-002 SEC-002 */
     public function run(): void
     {
         $now = now('UTC');
@@ -32,9 +32,27 @@ final class WalletAccessFoundationSeeder extends Seeder
                 'created_at' => $now,
                 'updated_at' => $now,
             ],
+            [
+                'code' => 'wallet.corrections.create',
+                'module' => 'wallet',
+                'risk_level' => 'high',
+                'requires_approval' => false,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
+            [
+                'code' => 'wallet.corrections.large',
+                'module' => 'wallet',
+                'risk_level' => 'critical',
+                'requires_approval' => true,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
         ], ['code'], ['module', 'risk_level', 'requires_approval', 'updated_at']);
 
         $this->grant('finance', 'refunds.approve', $now);
+        $this->grant('finance', 'wallet.corrections.create', $now);
+        $this->grant('finance', 'wallet.corrections.large', $now);
     }
 
     private function grant(string $roleCode, string $permissionCode, mixed $now): void
