@@ -1,11 +1,13 @@
 # Phase 0.5 Wallet Refund / Reversal Foundation Evidence
 
-**Status:** implementation verified; combined evidence-head CI pending.  
+**Status:** evidence-complete bounded provider-independent `WAL-004` refund/reversal foundation.  
 **Phase:** parallel `0.5.0 — Ledger, Pricing, Promotions and Payment Providers` work while Phase `0.4.0` provider live gates remain open.  
 **Authoritative Phase 0.5 Issue:** `#8`.  
 **Requirement:** `WAL-004` with supporting `DAT-002`, `DAT-003`, `DAT-004`, `ACL-001`, `ACL-002`, `SEC-002`, `QUA-001`.  
 **Implementation head:** `0237f94cae67ff2ca31047af55420fed0ffe578a`.  
 **Implementation CI:** `31242702422` / `#1155` — success.  
+**Evidence head:** `716ddb4f26b5672ed3d60aabd3f80bd7e7f50acc`.  
+**Evidence-head CI:** `31242888656` / `#1156` — success.  
 **Traceability:** `docs/54-phase-0.5-wallet-refund-traceability.md`.
 
 ## Bounded scope
@@ -87,7 +89,22 @@ Exact head `0237f94cae67ff2ca31047af55420fed0ffe578a`, run `31242702422` / `#115
 - GitHub uploader digest `sha256:be509996d098ee7f1354a9dc1fe949a224b2ead42c15ae145c2e12ad59890cdc`;
 - independently recalculated SHA-256: `be509996d098ee7f1354a9dc1fe949a224b2ead42c15ae145c2e12ad59890cdc`.
 
-Independent artifact inspection observed exactly five expected files:
+## Exact evidence-head CI
+
+Exact combined evidence head `716ddb4f26b5672ed3d60aabd3f80bd7e7f50acc`, run `31242888656` / `#1156`:
+
+- Repository preflight / project control — **success**;
+- Secret scan — **success**;
+- PHP static quality — **success**;
+- Dependency and license policy — **success**;
+- MariaDB and authenticated Redis suite — **360 tests / 2099 assertions, success**;
+- runner — `freedom-staging-runner`;
+- PHP `8.4.23`, PCOV `1.0.12` for coverage;
+- artifact `test-evidence-31242888656`, ID `9017593626`;
+- GitHub uploader digest `sha256:a1fb5c20a95e54bc63f14d40e02fbf19fc2f19c3b60d1b1e17a066a73f408052`;
+- independently recalculated SHA-256: `a1fb5c20a95e54bc63f14d40e02fbf19fc2f19c3b60d1b1e17a066a73f408052`.
+
+Independent inspection of both implementation and evidence-head artifacts observed exactly five expected files:
 
 - `tests/junit.xml`;
 - `tests/test.log`;
@@ -95,7 +112,7 @@ Independent artifact inspection observed exactly five expected files:
 - `services/compose-ps.txt`;
 - `services/compose.log`.
 
-JUnit independently confirms the dedicated refund suites above as `6 / 52` and `2 / 17`, zero failures/errors/skips, while `test.log` records the complete `360 / 2099` suite.
+JUnit independently confirms the dedicated refund suites on both accepted boundaries as `6 tests / 52 assertions` and `2 tests / 17 assertions`, zero failures/errors/skips, while `test.log` records the complete `360 / 2099` suite.
 
 ## Safety conclusions
 
@@ -124,6 +141,4 @@ This increment does **not** claim:
 
 PasarGuard protected live execution remains the active Phase 0.4 human gate. Marzban deployment acceptance remains a final-release gate.
 
-## Evidence-head requirement
-
-This file and `docs/54-phase-0.5-wallet-refund-traceability.md` are not accepted evidence until mandatory CI succeeds on their exact combined head, its artifact is retained, and the artifact digest is independently verified. After that lifecycle, current overlays/status and Issue `#8` may mark this bounded `WAL-004` foundation parallel-verified.
+The next recommended independent financial increment is `WAL-005` administrator balance correction/approval using immutable compensating ledger entries, execution-time permission/approval controls, reason/audit, exact replay/conflict and dedicated concurrency verification.
