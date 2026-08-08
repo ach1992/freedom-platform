@@ -1,181 +1,117 @@
 # Current Continuation Handoff
 
-**Status:** authoritative continuation checkpoint after accepted `BUY-002` deterministic Pricing / immutable Quote snapshot.  
+**Status:** authoritative continuation checkpoint after accepted `BUY-002` and during the isolated multi-agent governance migration.  
 **Date:** 2026-08-09.  
 **Integration PR:** Draft PR `#6`, base `main`, head branch `develop/v1.0.0-completion`.  
-**Live-head rule:** before every repository write, fetch PR `#6` and use its exact `head_sha`; never continue from a copied SHA.
+**Live-head rule:** before every MASTER repository write or Worker dispatch, fetch PR `#6` and use its exact live `head_sha`; never continue from a copied SHA.
 
-## Read first in a new session
-
-Read in this order before changing anything:
+## Read first in a new MASTER session
 
 1. `AGENTS.md`;
 2. `PROJECT_STATUS.md`;
 3. `docs/project-status.json`;
-4. `docs/development/continuation-runbook.md`;
-5. `docs/development/github-actions-runner-policy.md`;
-6. this file;
-7. active Phase 0.4 gate: `docs/44-phase-0.4-pasarguard-live-execution-handoff.md` and `docs/41-phase-0.4-provider-live-acceptance-matrix.md`;
-8. current overlays: `docs/32-current-traceability-overlay.md` and `docs/33-current-risk-overlay.md`;
-9. latest accepted Phase 0.5 boundary: `evidence/0.5.0/quote-pricing-snapshot.md` and `docs/57-phase-0.5-quote-pricing-traceability.md`;
-10. Issue `#8` recent comments when continuing the parallel Phase 0.5 chain.
+4. `docs/development/multi-agent-orchestration.md`;
+5. `docs/development/continuation-runbook.md`;
+6. `docs/development/github-actions-runner-policy.md` and `docs/development/ci-runner-contract.md`;
+7. this file;
+8. active Phase 0.4 gate: `docs/44-phase-0.4-pasarguard-live-execution-handoff.md` and `docs/41-phase-0.4-provider-live-acceptance-matrix.md`;
+9. current overlays: `docs/32-current-traceability-overlay.md` and `docs/33-current-risk-overlay.md`;
+10. latest accepted Phase 0.5 boundary: `evidence/0.5.0/quote-pricing-snapshot.md` and `docs/57-phase-0.5-quote-pricing-traceability.md`;
+11. Issues `#7` and `#8`, open PRs including `#24`, active `agent/*` branches, and any Task Contract Issues/Worker PRs.
 
-Then fetch exact-head workflow runs and inspect every mandatory job before deciding whether the next action is code, documentation, infrastructure, or a human-only blocker.
+Then inspect exact-head CI before deciding whether the next action is governance, Worker dispatch, review, integration, evidence or a human-only blocker.
 
-## Repository invariants
+## Integration and Worker invariants
 
-- PR `#6` stays open and Draft; base `main`, head `develop/v1.0.0-completion`;
-- do not merge PR `#6`, mark Ready, enable auto-merge, rewrite history, force-push, or push directly to `main`;
-- do not create new temporary branches;
-- the existing `ops/provider-live-dispatch-bootstrap` and `safety/main-2026-08-08-pre-provider-bootstrap` branches are explicit retained bootstrap/safety exceptions, not permission to create more branches;
-- every Actions job uses `runs-on: [self-hosted, Linux, X64, freedom-staging, php84]` and expected runner `freedom-staging-runner`;
-- every accepted bounded increment requires exact implementation CI/artifact plus exact evidence-head CI/artifact and an independently recalculated digest;
-- secrets, credentials, API keys, passwords, provider payloads, subscription material, and private files never enter repository text, Issues, PR comments, evidence, logs, or chat;
+- PR `#6` remains open and Draft; base `main`, head `develop/v1.0.0-completion`;
+- never merge PR `#6`, mark it Ready, enable auto-merge, rewrite history, force-push or push directly to `main`;
+- substantial implementation uses contracted `agent/<issue-number>-<short-slug>` branches created from a recorded live integration `BASE_SHA`;
+- every implementation Worker has one Task Contract, isolated writable worktree/equivalent environment and one PR targeting `develop/v1.0.0-completion`;
+- Workers never push directly to integration/main, never self-merge and never share writable worktrees;
+- uncontracted temporary branches are forbidden;
+- existing `ops/provider-live-dispatch-bootstrap` and `safety/main-2026-08-08-pre-provider-bootstrap` remain explicit retained exceptions until PR `#24` cleanup conditions are satisfied;
+- every Actions job uses `runs-on: [self-hosted, Linux, X64, freedom-staging, php84]`;
+- generic Worker PR CI is same-repository, secret-free and non-mutating;
+- provider/staging/live secret workflows remain separate, manual and guarded;
+- exact implementation/evidence CI, retained artifacts/digests, MASTER review, history-preserving Worker merge, and post-merge integration CI remain mandatory;
+- secrets/credentials/private provider material never enter repository text, Issues, PR descriptions/comments, evidence, logs or Chat;
 - no later work may weaken provider lookup/equivalence/idempotency/uncertainty/TLS/redaction/Target controls;
-- IRR is integer; immutable finalized balanced ledger history plus active holds is wallet authority; persisted wallet snapshots remain derived evidence/cache only;
-- refund/correction uses compensating immutable history rather than editing prior ledger entries;
-- browser return/customer submission never proves payment capture;
-- no paid provisioning occurs before authoritative capture;
-- Order/provisioning/Service execution remains Phase `0.6.0` ownership unless a separately bounded shared foundation explicitly says otherwise.
+- IRR remains integer; financial history is immutable; browser/customer return never proves capture; no paid provisioning precedes authoritative capture.
 
 ## Active Phase 0.4 human-controlled gate
 
-Phase `0.4.0` / Issue `#7` remains the authoritative active phase and is **not closed**.
+Phase `0.4.0` / Issue `#7` remains active and is **not closed**.
 
-### PasarGuard `v5.2.1`
+PasarGuard `v5.2.1` guarded harness is accepted at implementation `e18460357d306789cbbf85721f61a4e3a3bbb0e2` / CI `31226863010` (`#1013`) and evidence `71ca4b39df41bc9fcf725c30e9caba3285ee5412` / CI `31227084007` (`#1015`), with 317 tests / 1730 assertions.
 
-The guarded live-acceptance harness is evidence-complete. Actual deployment execution still needs the default-branch workflow bootstrap and then a manual guarded dispatch.
+Actual deployment execution remains blocked by the default-branch bootstrap:
 
-Current bootstrap state last inspected:
+- Draft PR `#24`: `ops/provider-live-dispatch-bootstrap` -> `main`;
+- last documented head `f2d2b6d538b16fe08787f6248ec425dbd19c8321`;
+- CI `31240183151` / `#1129`: preflight, secret scan, static and MariaDB/Redis success; Dependency and license policy failed at `composer audit --locked --abandoned=fail`;
+- `main` remained at bootstrap base `1227cce28aedd2d799f2cd510891309deaacd0fb`;
+- the safety branch is retained.
 
-- Draft PR `#24`: `ops/provider-live-dispatch-bootstrap` → `main`;
-- head `f2d2b6d538b16fe08787f6248ec425dbd19c8321`;
-- three-file scope: provider workflow, self-hosted `main` CI adaptation, and self-hosted toolchain bootstrap script;
-- CI `31240183151` / `#1129`:
-  - Repository preflight — success;
-  - Secret scan — success;
-  - PHP static quality — success;
-  - MariaDB and Redis tests — success;
-  - Dependency and license policy — **failure** because `composer audit --locked --abandoned=fail` exited non-zero;
-- `main` remains unchanged at bootstrap base `1227cce28aedd2d799f2cd510891309deaacd0fb`;
-- the connector has not merged PR `#24` and no direct `main` write is authorized.
-
-Do not broaden PR `#24` casually just to make it green. Diagnose the dependency audit against the old `main` lock state and choose a deliberate bootstrap resolution before merge.
-
-Once the bootstrap is accepted on `main`, the owner must manually dispatch `Provider Live Acceptance - PasarGuard` on branch `develop/v1.0.0-completion` with exact confirmation:
-
-`MUTATE_DISPOSABLE_PASARGUARD_V5_2_1`
-
-Protected secret values must remain external to repository/chat. After the guarded run, coordinator adoption/idempotency, controlled timeout/5xx/429 uncertainty, and explicit Target activation remain separate live rows.
-
-### Marzban `v0.8.4`
-
-Deployment-specific live acceptance is intentionally carried to final release acceptance and remains mandatory for `1.0.0`.
-
-## Bootstrap/safety branch retention and cleanup
-
-Both existing branches are still needed **now**:
-
-- `ops/provider-live-dispatch-bootstrap` is the head of open Draft PR `#24` and contains the unresolved default-branch dispatch bootstrap;
-- `safety/main-2026-08-08-pre-provider-bootstrap` preserves the exact pre-bootstrap `main` state while PR `#24` remains unresolved.
-
-Do not delete either branch until one of these conditions is explicitly reached:
-
-1. PR `#24` is deliberately merged, default-branch workflow availability is verified, and the safety snapshot is no longer required; or
-2. PR `#24` is deliberately abandoned/replaced by another accepted bootstrap path, with rollback state preserved elsewhere.
-
-The currently available GitHub connector does not expose branch-ref deletion. When cleanup is actually safe, deletion will require GitHub UI or an authenticated local command such as `git push origin --delete <branch>` after re-verifying the condition above.
+Do not broaden or delete this bootstrap/safety path from stale assumptions. Re-fetch PR `#24` before any decision. Once bootstrap is deliberately accepted, PasarGuard live execution remains a protected manual workflow action using existing secret references; do not request their values. Coordinator adoption/idempotency, timeout/5xx/429 uncertainty and Target activation remain separate acceptance rows. Marzban `v0.8.4` deployment acceptance remains a final-release gate.
 
 ## Accepted parallel Phase 0.5 chain
 
-Phase `0.5.0` / Issue `#8` is not closed. Ten bounded foundations are accepted:
+Phase `0.5.0` / Issue `#8` is not closed. Accepted bounded foundations are:
 
-1. Financial Ledger Foundation — `docs/45-phase-0.5-financial-ledger-traceability.md`;
-2. Wallet Holds / Available Balance / Capture / Release — `docs/46-phase-0.5-wallet-holds-traceability.md`;
-3. Wallet Reconciliation Snapshots / Expired-Hold Cleanup — `docs/48-phase-0.5-wallet-reconciliation-traceability.md`;
-4. Wallet Maintenance Operations — `docs/49-phase-0.5-wallet-maintenance-traceability.md`;
-5. Stable Wallet Transfer (`WAL-003`) — `docs/51-phase-0.5-wallet-transfer-traceability.md`;
-6. Dedicated Wallet Contention Verification — `docs/53-phase-0.5-wallet-contention-traceability.md`;
-7. Wallet Refund / Reversal Foundation (`WAL-004`) — `docs/54-phase-0.5-wallet-refund-traceability.md`;
-8. Wallet Correction / Approval Foundation (`WAL-005`) — `docs/55-phase-0.5-wallet-correction-traceability.md`;
-9. Payment Intent / External Cash-Wallet Top-up (`PAY-002`, `PAY-003`, `WAL-001`) — `docs/56-phase-0.5-payment-intent-wallet-top-up-traceability.md`;
-10. Deterministic Pricing / Immutable Quote (`BUY-002`) — `docs/57-phase-0.5-quote-pricing-traceability.md`.
+1. `docs/45-phase-0.5-financial-ledger-traceability.md`;
+2. `docs/46-phase-0.5-wallet-holds-traceability.md`;
+3. `docs/48-phase-0.5-wallet-reconciliation-traceability.md`;
+4. `docs/49-phase-0.5-wallet-maintenance-traceability.md`;
+5. `docs/51-phase-0.5-wallet-transfer-traceability.md` (`WAL-003`);
+6. `docs/53-phase-0.5-wallet-contention-traceability.md`;
+7. `docs/54-phase-0.5-wallet-refund-traceability.md` (`WAL-004`);
+8. `docs/55-phase-0.5-wallet-correction-traceability.md` (`WAL-005`);
+9. `docs/56-phase-0.5-payment-intent-wallet-top-up-traceability.md` (`PAY-002`, `PAY-003`, `WAL-001`);
+10. `docs/57-phase-0.5-quote-pricing-traceability.md` (`BUY-002`).
 
-## Latest accepted boundary — `BUY-002`
+Latest accepted `BUY-002` boundary:
 
-Implementation:
+- implementation `16ebe0f9579f8ecb913ffd860bf6a9ba25567263`, CI `31267071664` / `#1233`, **392 tests / 2355 assertions**, Quote suite **8 / 63**, artifact `test-evidence-31267071664`, ID `9024501375`, digest `899a26d7553f4fd37c2102da986fc876f0a8e8151b683ff36e2f300acb9ad754`;
+- evidence `07840d417e64eb30bf31f17bb9e26c1fe549eef3`, CI `31267346707` / `#1236`, **392 / 2355**, artifact `test-evidence-31267346707`, ID `9024577868`, digest `ba2710a544ccd07c72a56c616f7215406175ca8fdc93bc770c47ad474b275e83`.
 
-- SHA `16ebe0f9579f8ecb913ffd860bf6a9ba25567263`;
-- CI `31267071664` / `#1233` — all mandatory jobs success;
-- full suite **392 tests / 2355 assertions**;
-- dedicated Quote suite **8 tests / 63 assertions**;
-- artifact `test-evidence-31267071664`, ID `9024501375`;
-- independent SHA-256 `899a26d7553f4fd37c2102da986fc876f0a8e8151b683ff36e2f300acb9ad754`.
+Accepted only: immutable Quote identity/request replay/conflict; integer-IRR base/override/discount/final arithmetic; Offering/configuration snapshot; explicit expiry; stable historical snapshot; DB immutability/forgery guards; no payment/provider/Order/provisioning effect.
 
-Evidence:
+No complete `PRO-001`, `REF-001`, `AGT-005`, `PAY-001`, `BUY-001`, provider execution or Phase `0.6.0` behavior is claimed.
 
-- SHA `07840d417e64eb30bf31f17bb9e26c1fe549eef3`;
-- CI `31267346707` / `#1236` — all mandatory jobs success;
-- full suite **392 / 2355**;
-- dedicated Quote suite **8 / 63**;
-- artifact `test-evidence-31267346707`, ID `9024577868`, size `116261` bytes;
-- independent SHA-256 `ba2710a544ccd07c72a56c616f7215406175ca8fdc93bc770c47ad474b275e83`.
+## Next dependency-safe implementation boundary
 
-Independent evidence-head inspection found exactly JUnit, full test log, Clover coverage, compose state, and compose log. JUnit confirms zero failures/errors/skips globally and for the Quote suite. A bounded safe scan found no known CI credential values, known CI application-key payload, bearer/basic authorization values, PasarGuard protected-secret values, or private-key headers.
+The next recommended Worker increment remains **stored promotion/referral/pricing-rule resolution foundation** under parent Issue `#8`.
 
-Accepted `BUY-002` behavior:
+Scope:
 
-- immutable caller Quote key and canonical request binding;
-- exact replay returns the prior Quote, materially changed reuse conflicts;
-- integer-IRR base/override/discount/final arithmetic with override before discount;
-- Offering ID/code/version/configuration-hash and bounded configuration snapshot;
-- current tier/agent reference validation for explicitly resolved override inputs;
-- explicit validity/expiry;
-- later Offering mutation cannot reinterpret an accepted Quote;
-- database update/delete/forged-snapshot rejection;
-- Quote creation causes no wallet, Payment Intent, provider, paid-Order, provisioning, or Service effect.
+1. inspect existing discount/referral/agent-pricing models, migrations, policies and tests before introducing schema;
+2. define typed stored discount/promotion rule identity, version/config identity, state, scope, audience, fixed/percentage amount, cap, minimum, time and limit inputs using integer IRR;
+3. define deterministic qualification/resolution and explicit fail-closed invalid configuration;
+4. make no-match/zero-discount an explicit result;
+5. preserve immutable resolved rule/config identity for future Quote integration so later mutable policy cannot reinterpret an accepted Quote;
+6. provide replay/conflict, uniqueness, authorization, immutable-history and MariaDB correctness controls appropriate to the bounded rule-definition/resolution scope;
+7. test precedence, scope, audience, time/amount bounds, configuration mutation stability, replay/conflict, invalid state, authorization and DB guards;
+8. explicitly exclude full discount reserve/redeem/release, referral payout/reversal, most-specific `AGT-005`, `PAY-001`, provider execution, Order and provisioning from this first boundary;
+9. use the exact implementation/evidence CI/artifact/digest lifecycle.
 
-No `BUY-001`, complete `PRO-001`, `REF-001`, `AGT-005`, `PAY-001`, provider execution, or Phase `0.6.0` behavior is claimed.
+Because promotion/referral/pricing resolution shares a central pricing-policy/schema surface, do not split it into concurrent Workers merely to use capacity. After it merges and integration CI passes, recompute readiness for `AGT-005`, then `PAY-001`/provider work.
 
-## Current bounded increment — promotion/referral/pricing-rule resolution foundation
+## Governance migration checkpoint
 
-The next independent Phase `0.5.0` increment should establish deterministic stored rule resolution before integrating those rules into future Quote or payment execution.
+The repository is migrating from the legacy single-branch agent rule to the isolated Worker model. Stable policy is now defined in `docs/development/multi-agent-orchestration.md`, `AGENTS.md`, `CONTRIBUTING.md`, `PROJECT_STATUS.md`, and CI/project-control checks. Generic CI is being adapted to validate same-repository PRs targeting `develop/v1.0.0-completion` without protected secrets.
 
-Start with a deliberately bounded subset around `PRO-001` and `REF-001`:
-
-1. inspect existing discount/referral/agent-pricing models, migrations, policies, and tests before introducing new schema;
-2. define typed stored promotion/discount rule identity, version/configuration identity, state, scope, audience, amount/percentage/cap/minimum/time/limit inputs using integer IRR only;
-3. define deterministic qualification/resolution with explicit precedence and fail-closed invalid configuration;
-4. preserve zero-discount/no-match as an explicit result rather than an implicit mutable fallback;
-5. snapshot the resolved rule/config identity so a later Quote can consume it without reinterpreting historical pricing;
-6. define replay/conflict, uniqueness, authorization, immutable history, and MariaDB transaction/locking constraints where mutable counters/reservations are introduced;
-7. add focused tests for precedence, scope, audience, time/amount bounds, configuration mutation stability, replay/conflict, invalid rule state, authorization, and DB guards;
-8. keep full redemption/reserve/release, referral reward payout/reversal, most-specific `AGT-005`, `PAY-001`, provider execution, Order, and provisioning outside this first rule-resolution boundary unless separately scoped and evidenced;
-9. use the exact implementation/evidence CI/artifact/digest lifecycle before calling the boundary accepted.
-
-After this foundation, continue to most-specific `AGT-005` agent pricing, then `PAY-001` payment-method eligibility/provider implementations and provider-native refund integration.
-
-## Current open items
-
-- PR `#24` dependency-policy failure and bootstrap decision;
-- PasarGuard protected live run plus coordinator/fault/Target-activation rows;
-- Marzban final-release live acceptance;
-- Phase `0.4.0` closure audit;
-- no automated scheduled sweep is claimed for untouched expired pending wallet transfers;
-- current promotion/referral/pricing-rule resolution foundation;
-- `AGT-005`, `PAY-001`, payment providers, and provider-native refund behavior;
-- all Phase `0.6.0+` owned behavior.
+No implementation Worker may be considered READY for dispatch until the final governance migration head has mandatory green CI and project-control verification. Intermediate governance commits are not product acceptance evidence.
 
 ## Mandatory continuation order
 
-In a fresh chat/session:
+1. live-fetch PR `#6` and inspect its current exact head/CI;
+2. finish/reconcile any governance migration drift before Worker dispatch;
+3. ensure generic Worker PR CI target support and same-repository/secret-free guards remain intact;
+4. inspect Issue `#8` for duplicate bounded work; create a smaller Task Contract Issue only if no equivalent exists;
+5. record Task Contract Revision, Worker ID, dependencies, allowed/protected scope and live `BASE_SHA` in GitHub;
+6. create the Worker branch from exactly that `BASE_SHA` and provide isolated worktree setup through the human relay;
+7. on `READY_FOR_REVIEW`, independently inspect the actual Worker PR; never trust the Worker summary;
+8. after a safe Worker merge, re-fetch integration head, require PR `#6` integration CI and recompute dependencies/conflicts;
+9. persist all dynamic assignment/review state in GitHub before ending the MASTER cycle.
 
-1. live-fetch PR `#6` and verify open/Draft/base/head;
-2. read the files listed at the top of this handoff;
-3. inspect exact-head CI and reconcile any project-control drift first;
-4. inspect PR `#24` only if working the active provider bootstrap; do not merge it from stale assumptions;
-5. if the PasarGuard human gate is not immediately executable, continue the bounded Phase 0.5 promotion/referral/pricing-rule resolution increment above;
-6. before every write, re-fetch PR `#6` and use its exact new head;
-7. before stopping, update `PROJECT_STATUS.md`, this handoff, overlays, ledger, evidence/traceability, and the relevant Issue comment.
-
-No new session should rely on prior chat memory or any SHA copied from this file as the current head.
+A future MASTER must be able to reconstruct the program without Chat history.
