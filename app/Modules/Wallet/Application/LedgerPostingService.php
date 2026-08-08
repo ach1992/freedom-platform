@@ -6,6 +6,7 @@ namespace App\Modules\Wallet\Application;
 
 use App\Modules\Wallet\Domain\IrrMoney;
 use App\Modules\Wallet\Domain\LedgerDirection;
+use App\Modules\Wallet\Domain\RefundDestination;
 use App\Shared\Application\Clock;
 use DomainException;
 use Illuminate\Database\Connection;
@@ -24,7 +25,7 @@ final readonly class LedgerPostingService
     /**
      * @param  list<LedgerEntryDraft>  $entries
      *
-     * @requirement WAL-002 DAT-002 DAT-003 DAT-004 QUA-001
+     * @requirement WAL-002 WAL-004 DAT-002 DAT-003 DAT-004 QUA-001
      */
     public function post(
         string $commandKey,
@@ -33,13 +34,17 @@ final readonly class LedgerPostingService
         array $entries,
         ?string $sourceType = null,
         ?string $sourceId = null,
+        ?LedgerRefundabilitySnapshot $refundability = null,
     ): LedgerPostingReceipt {
         $this->assertToken($commandKey, 'Ledger command key', 8, 128);
         $this->assertToken($transactionType, 'Ledger transaction type', 3, 64);
         $this->assertToken($correlationId, 'Ledger correlation ID', 8, 64);
         $this->assertSource($sourceType, $sourceId);
         [$debit, $credit] = $this->balancedTotals($entries);
-        $payloadHash = $this->payloadHash($transactionType, $sourceType, $sourceId, $entries);
+        if ($refundability !== null && $refundability->refundableTotal->amount > $debit->amount) {
+            throw new DomainException('Refundable ledger amount cannot exceed the captured total.');
+        }
+        $payloadHash = $this->payloadHash($transactionType, $sourceType, $sourceId, $entries, $refundability);
 
         try {
             return $this->database->connection()->transaction(
@@ -54,10 +59,11 @@ final readonly class LedgerPostingService
                     $entries,
                     $debit,
                     $credit,
+                    $refundability,
                 ),
             );
         } catch (QueryException $exception) {
-            $replay = $this->replayAfterUniqueRace($commandKey, $payloadHash);
+            $replay = $this->replayAfterUniqueRace($commandKey, $payloadHash, $refundability);
             if ($replay !== null) {
                 return $replay;
             }
@@ -80,6 +86,7 @@ final readonly class LedgerPostingService
         array $entries,
         IrrMoney $debit,
         IrrMoney $credit,
+        ?LedgerRefundabilitySnapshot $refundability,
     ): LedgerPostingReceipt {
         /** @var object{id: int|string, payload_hash: string, expected_total_irr: int|string, posted_debit_irr: int|string, posted_credit_irr: int|string, entry_count: int|string, finalized_at: string|null}|null $existing */
         $existing = $connection->table('ledger_transactions')
@@ -87,7 +94,10 @@ final readonly class LedgerPostingService
             ->lockForUpdate()
             ->first(['id', 'payload_hash', 'expected_total_irr', 'posted_debit_irr', 'posted_credit_irr', 'entry_count', 'finalized_at']);
         if ($existing !== null) {
-            return $this->receiptFromExisting($existing, $payloadHash);
+            $receipt = $this->receiptFromExisting($existing, $payloadHash);
+            $this->assertStoredRefundability($connection, $receipt->transactionId, $refundability);
+
+            return $receipt;
         }
 
         $accountIds = array_values(array_unique(array_map(
@@ -95,12 +105,12 @@ final readonly class LedgerPostingService
             $entries,
         )));
         sort($accountIds, SORT_NUMERIC);
-        /** @var Collection<int, object{id: int|string, currency: string, is_active: int|bool}> $accounts */
+        /** @var Collection<int, object{id: int|string, currency: string, is_active: int|bool, owner_user_id: int|string|null, wallet_bucket: string|null}> $accounts */
         $accounts = $connection->table('ledger_accounts')
             ->whereIn('id', $accountIds)
             ->orderBy('id')
             ->lockForUpdate()
-            ->get(['id', 'currency', 'is_active']);
+            ->get(['id', 'currency', 'is_active', 'owner_user_id', 'wallet_bucket']);
         if ($accounts->count() !== count($accountIds)) {
             throw new DomainException('Ledger account does not exist.');
         }
@@ -111,6 +121,9 @@ final readonly class LedgerPostingService
             if (! (bool) $account->is_active) {
                 throw new DomainException('Ledger account is inactive.');
             }
+        }
+        if ($refundability !== null) {
+            $this->assertRefundabilityCompatibility($refundability, $entries, $accounts);
         }
 
         $createdAt = $this->timestamp();
@@ -152,6 +165,15 @@ final readonly class LedgerPostingService
             throw new RuntimeException('Ledger balance changed during posting.');
         }
 
+        if ($refundability !== null) {
+            $connection->table('ledger_refundability')->insert([
+                'ledger_transaction_id' => $transactionId,
+                'refundable_total_irr' => $refundability->refundableTotal->amount,
+                'default_destination' => $refundability->defaultDestination->value,
+                'created_at' => $this->timestamp(),
+            ]);
+        }
+
         return new LedgerPostingReceipt($transactionId, $debit, count($entries), false);
     }
 
@@ -185,8 +207,13 @@ final readonly class LedgerPostingService
     /**
      * @param  list<LedgerEntryDraft>  $entries
      */
-    private function payloadHash(string $transactionType, ?string $sourceType, ?string $sourceId, array $entries): string
-    {
+    private function payloadHash(
+        string $transactionType,
+        ?string $sourceType,
+        ?string $sourceId,
+        array $entries,
+        ?LedgerRefundabilitySnapshot $refundability,
+    ): string {
         $canonicalEntries = array_map(
             static fn (LedgerEntryDraft $entry): array => [
                 'account_id' => $entry->accountId,
@@ -200,16 +227,28 @@ final readonly class LedgerPostingService
                 <=> [$right['account_id'], $right['direction'], $right['amount_irr']];
         });
 
-        return hash('sha256', json_encode([
+        $canonical = [
             'transaction_type' => $transactionType,
             'source_type' => $sourceType,
             'source_id' => $sourceId,
             'entries' => $canonicalEntries,
-        ], JSON_THROW_ON_ERROR));
+        ];
+
+        if ($refundability !== null) {
+            $canonical['refundability'] = [
+                'refundable_total_irr' => $refundability->refundableTotal->amount,
+                'default_destination' => $refundability->defaultDestination->value,
+            ];
+        }
+
+        return hash('sha256', json_encode($canonical, JSON_THROW_ON_ERROR));
     }
 
-    private function replayAfterUniqueRace(string $commandKey, string $payloadHash): ?LedgerPostingReceipt
-    {
+    private function replayAfterUniqueRace(
+        string $commandKey,
+        string $payloadHash,
+        ?LedgerRefundabilitySnapshot $refundability,
+    ): ?LedgerPostingReceipt {
         /** @var object{id: int|string, payload_hash: string, expected_total_irr: int|string, posted_debit_irr: int|string, posted_credit_irr: int|string, entry_count: int|string, finalized_at: string|null}|null $existing */
         $existing = $this->database->connection()->table('ledger_transactions')
             ->where('command_key', $commandKey)
@@ -218,7 +257,10 @@ final readonly class LedgerPostingService
             return null;
         }
 
-        return $this->receiptFromExisting($existing, $payloadHash);
+        $receipt = $this->receiptFromExisting($existing, $payloadHash);
+        $this->assertStoredRefundability($this->database->connection(), $receipt->transactionId, $refundability);
+
+        return $receipt;
     }
 
     /**
@@ -242,6 +284,71 @@ final readonly class LedgerPostingService
         }
 
         return new LedgerPostingReceipt((int) $existing->id, IrrMoney::positive($expected), $entryCount, true);
+    }
+
+    /**
+     * @param  list<LedgerEntryDraft>  $entries
+     * @param  Collection<int, object{id: int|string, currency: string, is_active: int|bool, owner_user_id: int|string|null, wallet_bucket: string|null}>  $accounts
+     */
+    private function assertRefundabilityCompatibility(
+        LedgerRefundabilitySnapshot $refundability,
+        array $entries,
+        Collection $accounts,
+    ): void {
+        /** @var array<int, object{id: int|string, currency: string, is_active: int|bool, owner_user_id: int|string|null, wallet_bucket: string|null}> $accountById */
+        $accountById = [];
+        foreach ($accounts as $account) {
+            $accountById[(int) $account->id] = $account;
+        }
+
+        $walletDebitSeen = false;
+        $externalDebitSeen = false;
+        foreach ($entries as $entry) {
+            if ($entry->direction !== LedgerDirection::Debit) {
+                continue;
+            }
+            $account = $accountById[$entry->accountId] ?? null;
+            if ($account === null) {
+                throw new RuntimeException('Refundability account mapping is incomplete.');
+            }
+            if ($account->owner_user_id !== null && $account->wallet_bucket !== null) {
+                $walletDebitSeen = true;
+            } else {
+                $externalDebitSeen = true;
+            }
+        }
+
+        if ($refundability->defaultDestination === RefundDestination::Wallet && ! $walletDebitSeen) {
+            throw new DomainException('Wallet-default refundability requires an original wallet debit.');
+        }
+        if ($refundability->defaultDestination === RefundDestination::ManualExternal && ! $externalDebitSeen) {
+            throw new DomainException('Manual-external refundability requires an original non-wallet debit.');
+        }
+    }
+
+    private function assertStoredRefundability(
+        Connection $connection,
+        int $transactionId,
+        ?LedgerRefundabilitySnapshot $refundability,
+    ): void {
+        /** @var object{refundable_total_irr: int|string, default_destination: string}|null $stored */
+        $stored = $connection->table('ledger_refundability')
+            ->where('ledger_transaction_id', $transactionId)
+            ->first(['refundable_total_irr', 'default_destination']);
+
+        if ($refundability === null) {
+            if ($stored !== null) {
+                throw new RuntimeException('Ledger refundability replay conflicts with the accepted transaction.');
+            }
+
+            return;
+        }
+
+        if ($stored === null
+            || (int) $stored->refundable_total_irr !== $refundability->refundableTotal->amount
+            || ! hash_equals($stored->default_destination, $refundability->defaultDestination->value)) {
+            throw new RuntimeException('Ledger refundability replay conflicts with the accepted transaction.');
+        }
     }
 
     private function assertSource(?string $sourceType, ?string $sourceId): void
