@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Modules\Wallet\Application;
 
-use App\Modules\Wallet\Domain\LedgerDirection;
 use App\Modules\Wallet\Domain\WalletHoldStatus;
 use App\Modules\Wallet\Domain\WalletReconciliationStatus;
 use App\Shared\Application\Clock;
