@@ -103,8 +103,8 @@ final readonly class QuoteService
                     ->where('id', $planOfferingId)
                     ->lockForUpdate()
                     ->first(['id', 'code', 'version', 'base_price_irr', 'discount_eligible', 'state', 'visibility']);
-                if ($offering === null || $offering->state !== 'active' || $offering->visibility !== 'visible') {
-                    throw new DomainException('Quote requires an active visible plan offering.');
+                if ($offering === null) {
+                    throw new DomainException('Quote plan offering does not exist.');
                 }
 
                 $offeringVersion = $this->positiveDatabaseInt($offering->version, 'Quote offering version');
@@ -145,7 +145,9 @@ final readonly class QuoteService
                     'offering_configuration_hash' => $offeringConfigurationHash,
                     'offering_discount_eligible' => $offeringDiscountEligible,
                     'offering_id' => $planOfferingId,
+                    'offering_state' => $offering->state,
                     'offering_version' => $offeringVersion,
+                    'offering_visibility' => $offering->visibility,
                     'override_price_irr' => $pricing->overridePriceIrr,
                     'override_reference_code' => $pricing->overrideReferenceCode,
                     'override_source' => $pricing->overrideSource->value,
