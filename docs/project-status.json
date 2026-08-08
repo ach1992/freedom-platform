@@ -65,6 +65,7 @@
     "rewrite_history",
     "force_push",
     "push_main",
+    "use_github_hosted_runner",
     "create_temporary_branch",
     "retrieve_or_print_secrets",
     "claim_unverified_provider_compatibility"
