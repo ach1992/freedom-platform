@@ -4,7 +4,11 @@ name: CI
 
 on:
   push:
+    branches:
+      - main
   pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -12,7 +16,7 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref_name }}
   cancel-in-progress: true
 
 env:
@@ -32,16 +36,19 @@ env:
   REDIS_PASSWORD: ci-only-redis-password
   CACHE_STORE: redis
   QUEUE_CONNECTION: redis
+  PHP_ROOT: /www/server/php/84
+  COMPOSER_BIN: /usr/local/bin/composer
 
 jobs:
   preflight:
     name: Repository preflight
-    runs-on: ubuntu-24.04
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
     outputs:
       application: ${{ steps.mode.outputs.application }}
     steps:
       - name: Check out source
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Determine phase mode
         id: mode
@@ -96,16 +103,17 @@ jobs:
             echo
             echo "- Git SHA: $GITHUB_SHA"
             echo "- Run ID: $GITHUB_RUN_ID"
-            echo "- Runner: $RUNNER_OS/$RUNNER_ARCH"
+            echo "- Runner: $RUNNER_NAME/$RUNNER_OS/$RUNNER_ARCH"
             echo "- UTC: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
           } >> build/evidence/preflight/summary.md
+          test "$RUNNER_NAME" = 'freedom-staging-runner'
 
       - name: Verify planning traceability
         run: bash scripts/ci/verify-planning.sh
 
       - name: Upload preflight evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: preflight-evidence-${{ github.run_id }}
           path: |
@@ -117,37 +125,47 @@ jobs:
   static:
     name: PHP static quality
     needs: preflight
-    if: needs.preflight.outputs.application == 'true'
-    runs-on: ubuntu-24.04
+    if: ${{ needs.preflight.outputs.application == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - name: Set up PHP
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
-        with:
-          php-version: "8.4"
-          extensions: bcmath, curl, dom, fileinfo, intl, mbstring, openssl, pcntl, pdo_mysql, redis, sodium, xml
-          coverage: none
-          tools: composer:2.10.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Use runner PHP toolchain
+        timeout-minutes: 2
+        run: bash scripts/ci/bootstrap-self-hosted-toolchain.sh no-coverage
+
       - name: Install locked dependencies
-        run: composer install --no-interaction --prefer-dist --no-progress
+        timeout-minutes: 10
+        run: |
+          composer install --no-interaction --prefer-dist --no-progress --no-scripts
+          php artisan package:discover --ansi
+
       - name: Code style
         shell: bash
         run: |
           set -o pipefail
           mkdir -p build/evidence/static
-          vendor/bin/pint --test --format=json 2>&1 | tee build/evidence/static/pint.json
+          if php vendor/bin/pint --test --format=json 2>&1 | tee build/evidence/static/pint.json; then
+            exit 0
+          fi
+          php vendor/bin/pint
+          git diff -- . | tee build/evidence/static/pint.diff
+          exit 1
+
       - name: Static analysis and repository policy
+        timeout-minutes: 15
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p build/evidence/static
           composer validate --strict --no-check-publish 2>&1 | tee build/evidence/static/composer-validate.log
-          vendor/bin/phpstan analyse --no-progress --error-format=table 2>&1 | tee build/evidence/static/phpstan.log
-          composer ci:forbidden-patterns 2>&1 | tee build/evidence/static/forbidden-patterns.log
-          composer ci:architecture 2>&1 | tee build/evidence/static/architecture.log
+          php -d memory_limit=1G vendor/bin/phpstan analyse --no-progress --error-format=table --memory-limit=1G 2>&1 | tee build/evidence/static/phpstan.log
+          bash scripts/ci/forbidden-patterns.sh 2>&1 | tee build/evidence/static/forbidden-patterns.log
+          bash scripts/ci/architecture.sh 2>&1 | tee build/evidence/static/architecture.log
+
       - name: Upload static evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: static-evidence-${{ github.run_id }}
           path: build/evidence/static
@@ -157,22 +175,27 @@ jobs:
   integration:
     name: MariaDB and Redis tests
     needs: preflight
-    if: needs.preflight.outputs.application == 'true'
-    runs-on: ubuntu-24.04
+    if: ${{ needs.preflight.outputs.application == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - name: Set up PHP
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
-        with:
-          php-version: "8.4"
-          extensions: bcmath, curl, dom, fileinfo, intl, mbstring, openssl, pcntl, pdo_mysql, redis, sodium, xml
-          coverage: pcov
-          tools: composer:2.10.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Use runner PHP toolchain
+        timeout-minutes: 2
+        run: bash scripts/ci/bootstrap-self-hosted-toolchain.sh coverage
+
       - name: Start disposable dependencies
+        timeout-minutes: 5
         run: docker compose -f docker-compose.ci.yml up -d --wait
+
       - name: Install locked dependencies
-        run: composer install --no-interaction --prefer-dist --no-progress
+        timeout-minutes: 10
+        run: |
+          composer install --no-interaction --prefer-dist --no-progress --no-scripts
+          php artisan package:discover --ansi
+
       - name: Run complete automated suite
+        timeout-minutes: 30
         shell: bash
         run: |
           set -euo pipefail
@@ -180,7 +203,8 @@ jobs:
           docker compose -f docker-compose.ci.yml ps > build/evidence/services/compose-ps.txt
           test -f .env || cp .env.example .env
           php artisan config:clear --ansi
-          COLUMNS=240 php artisan test \
+          COLUMNS=240 php vendor/bin/phpunit \
+            --configuration phpunit.xml \
             --display-warnings \
             --fail-on-warning \
             --log-junit build/evidence/tests/junit.xml \
@@ -188,17 +212,20 @@ jobs:
             2>&1 | tee build/evidence/tests/test.log
           test -s build/evidence/tests/junit.xml
           test -s build/evidence/coverage/clover.xml
+
       - name: Capture dependency service logs
         if: always()
         run: |
           mkdir -p build/evidence/services
           docker compose -f docker-compose.ci.yml logs --no-color > build/evidence/services/compose.log 2>&1 || true
+
       - name: Stop disposable dependencies
         if: always()
         run: docker compose -f docker-compose.ci.yml down --volumes
+
       - name: Upload test evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: test-evidence-${{ github.run_id }}
           path: |
@@ -211,29 +238,34 @@ jobs:
   dependencies:
     name: Dependency and license policy
     needs: preflight
-    if: needs.preflight.outputs.application == 'true'
-    runs-on: ubuntu-24.04
+    if: ${{ needs.preflight.outputs.application == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - name: Set up PHP
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
-        with:
-          php-version: "8.4"
-          coverage: none
-          tools: composer:2.10.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Use runner PHP toolchain
+        timeout-minutes: 2
+        run: bash scripts/ci/bootstrap-self-hosted-toolchain.sh no-coverage
+
       - name: Install locked dependencies
-        run: composer install --no-interaction --prefer-dist --no-progress
+        timeout-minutes: 10
+        run: |
+          composer install --no-interaction --prefer-dist --no-progress --no-scripts
+          php artisan package:discover --ansi
+
       - name: Audit dependencies and licenses
+        timeout-minutes: 10
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p build/evidence/dependencies
           composer audit --locked --abandoned=fail --format=json > build/evidence/dependencies/audit.json
-          composer ci:licenses
+          bash scripts/ci/licenses.sh
           test -s build/evidence/dependencies/licenses.json
+
       - name: Upload dependency evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dependency-evidence-${{ github.run_id }}
           path: build/evidence/dependencies
@@ -242,12 +274,14 @@ jobs:
 
   secrets:
     name: Secret scan
-    runs-on: ubuntu-24.04
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+
       - name: Scan Git history
-        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:
           GITHUB_TOKEN: ${{ github.token }}
