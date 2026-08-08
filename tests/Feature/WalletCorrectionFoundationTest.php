@@ -274,7 +274,9 @@ final class WalletCorrectionFoundationTest extends TestCase
         );
         self::assertSame($approval->approvalId, $receipt->approvalId);
         self::assertSame(1_100_000, $receipt->ledgerBalanceAfter->amount);
-        self::assertSame('consumed', DB::table('sensitive_action_approvals')->where('id', $approval->approvalId)->value('state'));
+        self::assertSame('approved', DB::table('sensitive_action_approvals')->where('id', $approval->approvalId)->value('state'));
+        self::assertNotNull(DB::table('sensitive_action_approvals')->where('id', $approval->approvalId)->value('consumed_at'));
+        self::assertSame($financeId, (int) DB::table('sensitive_action_approvals')->where('id', $approval->approvalId)->value('consumed_by_administrator_id'));
         self::assertSame(1, DB::table('wallet_corrections')->count());
     }
 
