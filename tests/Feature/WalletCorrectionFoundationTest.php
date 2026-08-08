@@ -466,8 +466,8 @@ final class WalletCorrectionFoundationTest extends TestCase
     private function context(int $actorAdministratorId, string $suffix): AccessChangeContext
     {
         return new AccessChangeContext(
-            'wallet-correction-request-'.$suffix,
-            'wallet-correction-correlation-'.$suffix,
+            hash('sha256', 'wallet-correction-request:'.$suffix),
+            substr(hash('sha256', 'wallet-correction-correlation:'.$suffix), 0, 64),
             'wallet_correction_test',
             'Wallet correction test reason.',
             $actorAdministratorId,
