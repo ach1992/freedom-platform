@@ -236,8 +236,8 @@ namespace Tests\Feature {
                 'actor_administrator_id' => $actorAdministratorId,
                 'preview_id' => $previewId,
                 'confirmation_token' => $confirmationToken,
-                'request_fingerprint' => 'wallet-correction-contention-request-'.$suffix,
-                'correlation_id' => 'wallet-correction-contention-correlation-'.$suffix,
+                'request_fingerprint' => hash('sha256', 'wallet-correction-contention-request:'.$suffix),
+                'correlation_id' => substr(hash('sha256', 'wallet-correction-contention-correlation:'.$suffix), 0, 64),
             ];
             if ($approvalId !== null) {
                 $payload['approval_id'] = $approvalId;
@@ -399,8 +399,8 @@ namespace Tests\Feature {
         private function context(int $actorAdministratorId, string $suffix): AccessChangeContext
         {
             return new AccessChangeContext(
-                'wallet-correction-contention-parent-request-'.$suffix,
-                'wal-corr-parent-'.substr(hash('sha256', $suffix), 0, 32),
+                hash('sha256', 'wallet-correction-contention-parent-request:'.$suffix),
+                substr(hash('sha256', 'wallet-correction-contention-parent-correlation:'.$suffix), 0, 64),
                 'wallet_correction_contention_test',
                 'Wallet correction contention test reason.',
                 $actorAdministratorId,
