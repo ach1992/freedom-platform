@@ -17,8 +17,8 @@ Current control documents:
 - execution ledger: `docs/00-execution-ledger.md`;
 - current cross-phase continuation handoff: `docs/52-current-continuation-handoff.md`;
 - active Phase 0.4 continuation handoff: `docs/44-phase-0.4-pasarguard-live-execution-handoff.md`;
-- current accepted Phase 0.5 concurrency evidence: `evidence/0.5.0/wallet-contention-verification.md`;
-- current Phase 0.5 concurrency traceability: `docs/53-phase-0.5-wallet-contention-traceability.md`.
+- latest accepted Phase 0.5 evidence: `evidence/0.5.0/wallet-refund-reversal-foundation.md`;
+- latest Phase 0.5 traceability: `docs/54-phase-0.5-wallet-refund-traceability.md`.
 
 ## Live-state rule
 
@@ -44,49 +44,52 @@ Phase `0.4.0` / Issue `#7` therefore remains open.
 
 ## Parallel Phase 0.5 accepted financial chain
 
-Phase `0.5.0` / Issue `#8` is not active/closed, but six bounded foundations are evidence-complete and reusable:
+Phase `0.5.0` / Issue `#8` is not active/closed, but seven bounded foundations are evidence-complete and reusable:
 
 1. Financial Ledger Foundation — `docs/45-phase-0.5-financial-ledger-traceability.md`;
 2. Wallet Holds / Available Balance / Capture / Release — `docs/46-phase-0.5-wallet-holds-traceability.md`;
 3. Wallet Reconciliation Snapshots / Expired-Hold Cleanup — `docs/48-phase-0.5-wallet-reconciliation-traceability.md`;
 4. Wallet Maintenance Operations — `docs/49-phase-0.5-wallet-maintenance-traceability.md`;
 5. Stable Wallet Transfer (`WAL-003`) — `docs/51-phase-0.5-wallet-transfer-traceability.md`;
-6. Dedicated Wallet Contention Verification — `docs/53-phase-0.5-wallet-contention-traceability.md`.
+6. Dedicated Wallet Contention Verification — `docs/53-phase-0.5-wallet-contention-traceability.md`;
+7. Wallet Refund / Reversal Foundation (`WAL-004`) — `docs/54-phase-0.5-wallet-refund-traceability.md`.
 
-### Latest accepted parallel boundary — Dedicated Wallet Contention Verification
+### Latest accepted parallel boundary — `WAL-004` Refund / Reversal
 
 Implementation verification:
 
-- SHA `903f326040c9acd0b31645fe8fae3a75f8a9fd27`;
-- CI `31240159777` / `#1128` — success;
-- full suite 352 tests / 2030 assertions;
-- dedicated contention class 6 tests / 35 assertions, zero failures/errors/skips;
-- artifact `test-evidence-31240159777`, ID `9016771279`;
-- independent digest `sha256:4f32e7a5c7e4cc23b985b13aa2b6f291772b75c1f9a26cedcd620b9589b973b2`.
+- SHA `0237f94cae67ff2ca31047af55420fed0ffe578a`;
+- CI `31242702422` / `#1155` — success;
+- full suite 360 tests / 2099 assertions;
+- dedicated refund suites `6 / 52` and `2 / 17`, zero failures/errors/skips;
+- artifact `test-evidence-31242702422`, ID `9017545543`;
+- independent digest `sha256:be509996d098ee7f1354a9dc1fe949a224b2ead42c15ae145c2e12ad59890cdc`.
 
 Evidence head:
 
-- SHA `e7a0ae17d470beb40f4933e66c7b599e0837e120`;
-- CI `31241459956` / `#1131` — success;
-- full suite 352 tests / 2030 assertions;
-- artifact `test-evidence-31241459956`, ID `9017163993`;
-- independent digest `sha256:58544b56477c708b4e798b2ea83e673995e22b0ab53c19213914d1c2609af294`;
-- evidence `evidence/0.5.0/wallet-contention-verification.md`;
-- traceability `docs/53-phase-0.5-wallet-contention-traceability.md`.
+- SHA `716ddb4f26b5672ed3d60aabd3f80bd7e7f50acc`;
+- CI `31242888656` / `#1156` — success;
+- full suite 360 tests / 2099 assertions;
+- artifact `test-evidence-31242888656`, ID `9017593626`;
+- independent digest `sha256:a1fb5c20a95e54bc63f14d40e02fbf19fc2f19c3b60d1b1e17a066a73f408052`;
+- evidence `evidence/0.5.0/wallet-refund-reversal-foundation.md`;
+- traceability `docs/54-phase-0.5-wallet-refund-traceability.md`.
 
-Accepted concurrency proof covers same-wallet over-reservation, capture/release terminal races, duplicate ledger command keys, duplicate transfer prepare/confirm and reconciliation concurrent with mutation. Persisted snapshots remain non-authoritative and MariaDB locking/isolation was not weakened.
+Accepted behavior: immutable capture-time refundability, integer partial/cumulative refund caps, original wallet-bucket compensation, manual-external evidence without duplicate wallet credit, privileged destination override, exact replay/conflict, DB immutability and deterministic concurrent over-refund/duplicate-key proof on MariaDB.
+
+The foundation can represent a refundable total smaller than capture, but it does not calculate exact card adjustment or claim provider-native refunds before the owning Quote/Payment Intent/provider boundaries exist.
 
 ## Next recommended parallel bounded increment
 
-### `WAL-004` Refund / Reversal Foundation
+### `WAL-005` Balance Correction / Approval Foundation
 
 Authoritative continuation handoff: `docs/52-current-continuation-handoff.md`.
 
-Implement the provider-independent refund/compensating-ledger foundation first: immutable refund identity, integer partial amounts, cumulative refundable-cap locking, explicit destination, wallet compensation to the original eligible bucket, manual-external reference/evidence, exact replay/conflict, destination-override control/audit and dedicated concurrent refund proof.
+Implement administrator corrections as immutable compensating ledger effects: explicit target bucket, positive integer amount, debit/credit direction, reason/note/related reference, deterministic preview plus confirmation, execution-time permission, policy-driven Owner/dual approval for large changes, exact replay/conflict, negative-available-balance prevention for debits, safe audit and independent-process concurrency proof.
 
-Do not claim or implement provider-native refund APIs, Payment Intent settlement, Order refund-state ownership or exact-card-adjustment behavior before their owning metadata/integration boundaries exist.
+Reuse the existing authorization and `SensitiveActionApprovalService`; do not create a correction shortcut around refund/payment/order state machines or pull customer UI/Order ownership forward.
 
-After `WAL-004`: `WAL-005` correction/approval, Payment Intent + `WAL-001`, pricing/Quote, promotions/referrals/agent pricing, then payment providers.
+After `WAL-005`: Payment Intent + `WAL-001`, pricing/Quote, promotions/referrals/agent pricing, then payment providers.
 
 ## Current open items
 
@@ -94,7 +97,8 @@ After `WAL-004`: `WAL-005` correction/approval, Payment Intent + `WAL-001`, pric
 - Marzban live acceptance at final release acceptance;
 - Phase `0.4.0` closure audit;
 - no automated scheduled sweep is claimed for untouched expired pending transfers;
-- `WAL-001`, `WAL-004`, `WAL-005`, pricing/Quote/promotions/payment providers;
+- `WAL-001`, `WAL-005`, pricing/Quote/promotions/payment providers;
+- provider-native refund behavior beyond the accepted `WAL-004` foundation;
 - all Phase `0.6.0+` owned behavior.
 
 ## Non-negotiable controls
@@ -105,6 +109,7 @@ After `WAL-004`: `WAL-005` correction/approval, Payment Intent + `WAL-001`, pric
 - authoritative remote lookup precedes provider create; uncertainty requires discovery before retry; TLS is never disabled;
 - monetary IRR remains integer; finalized balanced ledger history plus active holds is authority; persisted wallet snapshots/caches never authorize a financial effect;
 - replay/conflict cannot create or overwrite a second accepted financial or remote effect;
+- refund/correction must compensate immutable history rather than alter it;
 - protected secrets and sensitive provider material never enter repository evidence/logs/chat.
 
 Phase `0.4.0` is **not closed**. Phase `0.5.0` is **not closed**. The accepted parallel foundations may continue only without weakening or falsely closing the active provider gates.
