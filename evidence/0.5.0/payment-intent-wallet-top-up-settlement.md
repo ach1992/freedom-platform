@@ -1,11 +1,13 @@
 # Phase 0.5 Payment Intent / External Cash-Wallet Top-up Evidence
 
-**Status:** implementation-verified evidence candidate; exact evidence-head CI remains required before acceptance.  
+**Status:** accepted parallel Phase 0.5 bounded increment; Phase `0.5.0` remains open.  
 **Phase:** parallel `0.5.0 — Ledger, Pricing, Promotions and Payment Providers` work while Phase `0.4.0` protected provider live gates remain open.  
 **Authoritative Phase 0.5 Issue:** `#8`.  
 **Requirements:** `PAY-002`, `PAY-003`, `WAL-001` with supporting `DAT-002`, `DAT-003`, `DAT-004`, `SEC-002`, `QUA-001`.  
 **Implementation head:** `6db9dde7032114ab81c95fdf371530997e65f21c`.  
 **Implementation CI:** `31265449681` / `#1214` — success.  
+**Evidence head:** `76ea847d4d1f626893b925bbfe5263e1dc1398e4`.  
+**Evidence CI:** `31265901691` / `#1220` — success.  
 **Traceability:** `docs/56-phase-0.5-payment-intent-wallet-top-up-traceability.md`.
 
 ## Bounded scope
@@ -67,7 +69,7 @@ Application validation additionally rejects sensitive safe-evidence keys such as
 1. concurrent exact duplicate authoritative capture resolves to one primary settlement/ledger/audit effect plus one exact replay;
 2. the same provider event/transaction cannot capture two different intents concurrently; exactly one settlement/top-up ledger effect is accepted.
 
-Dedicated `PAY-002` / `PAY-003` / `WAL-001` verification totals **13 tests / 95 assertions**, zero failures/errors/skips on the exact implementation head.
+Dedicated `PAY-002` / `PAY-003` / `WAL-001` verification totals **13 tests / 95 assertions**, zero failures/errors/skips on both accepted verification heads.
 
 ## Exact implementation-head verification
 
@@ -84,13 +86,7 @@ Exact implementation head `6db9dde7032114ab81c95fdf371530997e65f21c`, run `31265
 - GitHub uploader digest: `sha256:3cf3c1c52b3aac72e4cf7f10aa4567ee516a9edeb7c3528c6beb064c20f6b80b`;
 - independently downloaded/recalculated SHA-256: `3cf3c1c52b3aac72e4cf7f10aa4567ee516a9edeb7c3528c6beb064c20f6b80b`.
 
-Independent artifact inspection found exactly five expected files:
-
-- `tests/junit.xml`;
-- `tests/test.log`;
-- `coverage/clover.xml`;
-- `services/compose-ps.txt`;
-- `services/compose.log`.
+Independent artifact inspection found exactly five expected files: `tests/junit.xml`, `tests/test.log`, `coverage/clover.xml`, `services/compose-ps.txt`, and `services/compose.log`.
 
 The independent JUnit read confirms the five dedicated suites as `2 / 19`, `2 / 8`, `2 / 11`, `6 / 51`, and `1 / 6`, with zero failures/errors/skips. The full suite is `384 / 2292`.
 
@@ -98,9 +94,26 @@ A safe artifact scan found no embedded known CI credential value, bearer/basic a
 
 Earlier runs `#1210`, `#1211`, and `#1213` are diagnostic development runs only and are not acceptance evidence. The bounded worker watchdog converted a prior unbounded subprocess hang into deterministic failures, which exposed and allowed correction of test cleanup, the one-cash-wallet-per-user invariant, and expected fail-closed conflict ordering before the exact green implementation run.
 
-## Safety conclusions candidate
+## Exact evidence-head verification
 
-The exact implementation proof supports these bounded conclusions, pending exact evidence-head CI:
+Exact evidence head `76ea847d4d1f626893b925bbfe5263e1dc1398e4`, run `31265901691` / `#1220`:
+
+- Repository preflight / project control — **success**;
+- Secret scan — **success**;
+- PHP static quality — **success**;
+- Dependency and license policy — **success**;
+- MariaDB and authenticated Redis suite — **384 tests / 2292 assertions, success**;
+- artifact `test-evidence-31265901691`, ID `9024152227`;
+- GitHub uploader digest `sha256:dff70424074d138f59a8c9bfb03e5196f3827142fe964b043c09ef53e15392e7`;
+- independently downloaded/recalculated SHA-256 `dff70424074d138f59a8c9bfb03e5196f3827142fe964b043c09ef53e15392e7`.
+
+Independent evidence-head artifact inspection again found exactly the five expected JUnit/test-log/Clover/service evidence files. JUnit reports **384 tests / 2292 assertions, zero failures/errors/skips**, and the five dedicated top-up suites remain **13 tests / 95 assertions** with zero failures/errors/skips.
+
+The independent evidence-head safe scan found zero known CI credential values, zero bearer/basic authorization values and zero private-key headers. No raw provider credential or protected provider payload is retained.
+
+## Accepted safety conclusions
+
+The exact implementation and evidence lifecycle establishes these bounded conclusions:
 
 - browser/user-return data cannot authorize a cash-wallet credit;
 - only normalized authoritative settled evidence matching immutable intent identity can capture;
@@ -114,7 +127,7 @@ The exact implementation proof supports these bounded conclusions, pending exact
 
 ## Explicit non-claims
 
-This candidate does **not** claim:
+This accepted bounded increment does **not** claim:
 
 - `PAY-001` Payment Method eligibility/rule-engine implementation;
 - any real gateway/provider implementation, health check or live provider acceptance;
@@ -127,4 +140,4 @@ This candidate does **not** claim:
 
 PasarGuard protected live execution remains the active Phase `0.4.0` human gate. Marzban deployment acceptance remains a final-release gate.
 
-After exact evidence-head acceptance, the next independent Phase `0.5.0` increment is deterministic Pricing / Quote snapshot (`BUY-002`) before promotions/referrals/agent pricing and provider-specific payment/refund work.
+The next independent Phase `0.5.0` increment is deterministic Pricing / immutable Quote snapshot (`BUY-002`) before promotions/referrals/agent pricing and provider-specific payment/refund work.
