@@ -35,31 +35,32 @@ Overlay-local IDs remain temporary until the next full `docs/03-risk-register.md
 
 | Overlay ID | Risk | Current control/evidence | Remaining exit condition | Status |
 |---|---|---|---|---|
-| `FIN-01` | concurrent wallet operations can over-reserve/double-effect | transactions, sorted row locks, unique command/hold/transfer keys, immutable ledger, hold-based available balance plus accepted six-test independent-process MariaDB contention boundary | repeat requirement-specific concurrency proof for each new refund/correction/payment feature | Controlled for accepted `WAL-002` foundation |
-| `FIN-02` | persisted wallet snapshot is accidentally treated as financial authority | snapshots are append-only/non-authoritative; hold/reconciliation/transfer paths calculate from finalized ledger + active holds; reconciliation-vs-mutation contention is accepted | preserve invariant through refund/correction/payment/order work | Controlled with regression requirement |
+| `FIN-01` | concurrent wallet operations can over-reserve/double-effect | transactions, sorted row locks, unique command/hold/transfer/refund keys, immutable ledger and accepted independent-process contention boundaries | repeat requirement-specific concurrency proof for each new correction/payment feature | Controlled for accepted wallet/refund foundations |
+| `FIN-02` | persisted wallet snapshot is accidentally treated as financial authority | snapshots append-only/non-authoritative; wallet/refund paths use finalized ledger + active holds and locked authoritative reads | preserve invariant through correction/payment/order work | Controlled with regression requirement |
 | `FIN-03` | transfer hold and transfer state diverge on expiry/cleanup | generic cleanup excludes `wallet_transfer`; confirm-expiry and explicit cancellation coordinate state | optional future scheduled transfer-expiry lifecycle must use transfer service | Controlled; operational follow-up open |
 | `FIN-04` | duplicate transfer/retry creates a second primary effect | unique transfer key, canonical payload hash, one hold/ledger link, confirmation replay plus accepted concurrent duplicate prepare/confirm proof | preserve through any future transfer extensions | Controlled |
-| `FIN-05` | refund/correction mutates historical ledger instead of compensating it | finalized ledger/database guards are immutable | `WAL-004` and `WAL-005` must use explicit compensating entries, authorization/reason and exact replay/conflict | Next/Future Critical gate |
+| `FIN-05` | refund/correction mutates historical ledger instead of compensating it | finalized ledger guards + accepted `WAL-004` immutable refund/refundability/allocation guards and compensating ledger reversal | `WAL-005` must use equivalent immutable compensating correction records/effects | Controlled for refund; next correction gate |
 | `FIN-06` | fee/limit/bucket policy changes reinterpret an accepted transfer | immutable transfer policy snapshots and stable account references | future config changes must not rewrite historical transfers | Controlled |
 | `FIN-07` | untouched expired pending transfer reserves funds indefinitely | expiry enforced on confirm; explicit cancel exists; generic cleanup intentionally excludes transfer holds | later coordinated transfer-expiry scheduler only if required | Known operational gap / Medium |
-| `FIN-08` | later Payment Intent/provider work provisions before authoritative capture or duplicates capture/refund | ledger/hold/idempotency primitives exist but payment flows not implemented | Phase 0.5 payment boundaries + Phase 0.6 no-provision-before-capture evidence | Future Critical gate |
-| `FIN-09` | concurrent partial refunds exceed captured/refundable source value | no refund implementation yet | `WAL-004`: source lock, cumulative-cap query, unique refund key and deterministic multi-process refund proof | Next High gate |
-| `FIN-10` | refund destination/evidence mismatch causes double reimbursement or untraceable external payout | no refund implementation yet | `WAL-004`: explicit destination, wallet compensation vs manual-external evidence, override permission/reason/audit, exact replay/conflict | Next Critical gate |
+| `FIN-08` | later Payment Intent/provider work provisions before authoritative capture or duplicates capture/refund | ledger/hold/refund idempotency primitives exist but payment flows not implemented | Phase 0.5 payment boundaries + Phase 0.6 no-provision-before-capture evidence | Future Critical gate |
+| `FIN-09` | concurrent partial refunds exceed captured/refundable source value | immutable capture-time refundable cap, locked source, cumulative/per-entry cap, unique refund key and accepted two-process refund contention proof | provider-native/payment refund paths need their own authoritative source/callback evidence | Controlled for provider-independent `WAL-004` |
+| `FIN-10` | refund destination/evidence mismatch causes double reimbursement or untraceable external payout | explicit wallet/manual-external destination, exact original method/bucket allocations, required manual evidence, no wallet duplication, privileged override, safe audit, replay/conflict | provider-native refund integrations need equivalent provider evidence/uncertainty controls | Controlled for provider-independent `WAL-004` |
+| `FIN-11` | administrator correction bypasses authorization/confirmation or silently changes historical balance | no accepted correction implementation yet | `WAL-005`: execution-time permission, exact preview/confirmation binding, compensating entries, immutable correction record and safe audit | Next Critical gate |
+| `FIN-12` | large correction is self-approved/replayed or concurrent debits create negative availability | existing sensitive-action approval primitives and wallet locks are available but not wired to correction | `WAL-005`: policy-driven Owner/dual approval, distinct approver, approval consumption, available-balance lock, duplicate/concurrent proof | Next Critical gate |
 
 ## Latest accepted financial evidence
 
-Dedicated Wallet Contention Verification:
+Wallet Refund / Reversal Foundation (`WAL-004`):
 
-- implementation verification SHA `903f326040c9acd0b31645fe8fae3a75f8a9fd27`, CI `31240159777` / `#1128`;
-- evidence head `e7a0ae17d470beb40f4933e66c7b599e0837e120`, CI `31241459956` / `#1131`;
-- both suites 352 tests / 2030 assertions;
-- dedicated contention class 6 tests / 35 assertions with zero failures/errors/skips;
-- evidence-head artifact `test-evidence-31241459956`, ID `9017163993`;
-- independent digest `sha256:58544b56477c708b4e798b2ea83e673995e22b0ab53c19213914d1c2609af294`;
-- evidence `evidence/0.5.0/wallet-contention-verification.md`;
-- traceability `docs/53-phase-0.5-wallet-contention-traceability.md`.
+- implementation SHA `0237f94cae67ff2ca31047af55420fed0ffe578a`, CI `31242702422` / `#1155` — 360 tests / 2099 assertions;
+- implementation artifact `test-evidence-31242702422`, ID `9017545543`, digest `sha256:be509996d098ee7f1354a9dc1fe949a224b2ead42c15ae145c2e12ad59890cdc`;
+- evidence head `716ddb4f26b5672ed3d60aabd3f80bd7e7f50acc`, CI `31242888656` / `#1156` — 360 / 2099;
+- evidence artifact `test-evidence-31242888656`, ID `9017593626`, digest `sha256:a1fb5c20a95e54bc63f14d40e02fbf19fc2f19c3b60d1b1e17a066a73f408052`;
+- dedicated feature suite `6 tests / 52 assertions` and contention suite `2 / 17`, zero failures/errors/skips;
+- evidence `evidence/0.5.0/wallet-refund-reversal-foundation.md`;
+- traceability `docs/54-phase-0.5-wallet-refund-traceability.md`.
 
-The accepted financial chain through ledger, holds, reconciliation, maintenance, `WAL-003` transfer and dedicated contention is reusable but does not close Phase `0.5.0`.
+The accepted financial chain through ledger, holds, reconciliation, maintenance, `WAL-003`, dedicated wallet contention and `WAL-004` is reusable but does not close Phase `0.5.0`.
 
 ## Financial safety decisions
 
@@ -70,8 +71,11 @@ The accepted financial chain through ledger, holds, reconciliation, maintenance,
 5. Exact replay returns the accepted effect; materially changed replay conflicts and cannot overwrite it.
 6. Refund/correction work must compensate accepted history rather than mutate/delete it.
 7. Do not weaken MariaDB locking/isolation to make concurrency tests pass; deadlock/timeout must be surfaced/reconciled safely.
-8. Cumulative refund eligibility must be checked while the source is locked; no concurrent path may exceed refundable value.
-9. A manual external refund must not also create a wallet credit unless an explicit separately-authorized compensating workflow requires it.
+8. Cumulative refund eligibility is checked while the source is locked; no concurrent path may exceed refundable value.
+9. Manual external refund must not also create wallet credit; evidence/reference is mandatory and safe audit does not copy raw values.
+10. Source refundability is capture-time immutable metadata; it cannot be retrofitted after ledger finalization.
+11. Administrator corrections must not become a bypass for refund/payment/order state machines.
+12. Large corrections require policy-driven Owner/dual approval; dual approval must bind to the exact preview/payload and use a distinct approver.
 
 ## Current human gates
 
@@ -87,6 +91,6 @@ Until applicable provider gates pass: no live-provider compatibility claim, no p
 
 ## Next risk-reduction work
 
-While the protected PasarGuard gate remains unavailable, the highest-value independent task is the `WAL-004` Refund / Reversal Foundation in `docs/52-current-continuation-handoff.md`, specifically closing `FIN-09` and `FIN-10` without weakening immutable-ledger or authorization guarantees.
+While the protected PasarGuard gate remains unavailable, the highest-value independent task is the `WAL-005` Balance Correction / Approval Foundation in `docs/52-current-continuation-handoff.md`, specifically closing `FIN-11` and `FIN-12` without weakening immutable-ledger, available-balance, authorization or dual-control guarantees.
 
 At the next full risk-register regeneration, fold relevant overlay decisions into `docs/03-risk-register.md` without erasing historical definitions or falsely closing live/provider-dependent risks.
