@@ -228,16 +228,16 @@ return new class extends Migration
     private function dropTriggers(): void
     {
         foreach ([
-            'ledger_entries_delete_guard',
-            'ledger_entries_update_guard',
-            'ledger_entries_after_insert',
-            'ledger_entries_insert_guard',
-            'ledger_transactions_delete_guard',
-            'ledger_transactions_update_guard',
-            'ledger_accounts_delete_guard',
-            'ledger_accounts_update_guard',
-        ] as $trigger) {
-            DB::unprepared('DROP TRIGGER IF EXISTS '.$trigger);
+            'DROP TRIGGER IF EXISTS ledger_entries_delete_guard',
+            'DROP TRIGGER IF EXISTS ledger_entries_update_guard',
+            'DROP TRIGGER IF EXISTS ledger_entries_after_insert',
+            'DROP TRIGGER IF EXISTS ledger_entries_insert_guard',
+            'DROP TRIGGER IF EXISTS ledger_transactions_delete_guard',
+            'DROP TRIGGER IF EXISTS ledger_transactions_update_guard',
+            'DROP TRIGGER IF EXISTS ledger_accounts_delete_guard',
+            'DROP TRIGGER IF EXISTS ledger_accounts_update_guard',
+        ] as $statement) {
+            DB::unprepared($statement);
         }
     }
 };
