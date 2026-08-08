@@ -1,0 +1,146 @@
+<?php
+
+declare(strict_types=1);
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Support\Facades\DB;
+
+return new class extends Migration
+{
+    /** @requirement WAL-005 DAT-003 DAT-004 ACL-001 ACL-002 QUA-001 */
+    public function up(): void
+    {
+        DB::statement('ALTER TABLE wallet_corrections ADD CONSTRAINT wallet_corrections_approval_fk FOREIGN KEY (`approval_id`) REFERENCES `sensitive_action_approvals` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT');
+
+        DB::unprepared('DROP TRIGGER IF EXISTS wallet_corrections_insert_guard');
+        DB::unprepared(implode("\n", [
+            'CREATE TRIGGER wallet_corrections_insert_guard',
+            'BEFORE INSERT ON wallet_corrections',
+            'FOR EACH ROW',
+            'BEGIN',
+            '    DECLARE valid_preview_count INT DEFAULT 0;',
+            '    DECLARE valid_ledger_count INT DEFAULT 0;',
+            '    DECLARE valid_approval_count INT DEFAULT 0;',
+            '',
+            '    SELECT COUNT(*) INTO valid_preview_count',
+            '    FROM wallet_correction_previews',
+            '    WHERE id = NEW.preview_id',
+            '      AND correction_key = NEW.correction_key',
+            '      AND payload_hash = NEW.payload_hash',
+            '      AND requested_by_administrator_id = NEW.requested_by_administrator_id',
+            '      AND preview_ledger_balance_irr = NEW.executed_ledger_balance_before_irr',
+            '      AND preview_active_holds_irr = NEW.executed_active_holds_irr',
+            '      AND preview_available_balance_irr = NEW.executed_available_before_irr',
+            '      AND preview_resulting_ledger_balance_irr = NEW.executed_ledger_balance_after_irr',
+            '      AND preview_resulting_available_balance_irr = NEW.executed_available_after_irr',
+            '      AND ((approval_required = 1 AND NEW.approval_id IS NOT NULL) OR (approval_required = 0 AND NEW.approval_id IS NULL));',
+            '',
+            '    IF valid_preview_count <> 1 THEN',
+            "        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Wallet correction execution does not match its immutable preview or approval requirement.';",
+            '    END IF;',
+            '',
+            '    IF NEW.approval_id IS NOT NULL THEN',
+            '        SELECT COUNT(*) INTO valid_approval_count',
+            '        FROM sensitive_action_approvals a',
+            '        INNER JOIN permissions p ON p.id = a.permission_id',
+            '        WHERE a.id = NEW.approval_id',
+            "          AND p.code = 'wallet.corrections.large'",
+            "          AND a.action = 'wallet.correction.execute'",
+            "          AND a.target_type = 'wallet_correction_preview'",
+            '          AND a.target_id = CAST(NEW.preview_id AS CHAR)',
+            '          AND a.requester_administrator_id = NEW.requested_by_administrator_id',
+            "          AND a.state = 'consumed'",
+            '          AND a.consumed_at IS NOT NULL;',
+            '',
+            '        IF valid_approval_count <> 1 THEN',
+            "            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Wallet correction approval is not a consumed matching sensitive-action approval.';",
+            '        END IF;',
+            '    END IF;',
+            '',
+            '    SELECT COUNT(*) INTO valid_ledger_count',
+            '    FROM ledger_transactions t',
+            '    INNER JOIN wallet_correction_previews p ON p.id = NEW.preview_id',
+            '    WHERE t.id = NEW.ledger_transaction_id',
+            "      AND t.transaction_type = 'wallet_correction'",
+            "      AND t.source_type = 'wallet_correction'",
+            '      AND t.source_id = NEW.correction_key',
+            '      AND t.expected_total_irr = p.amount_irr',
+            '      AND t.posted_debit_irr = p.amount_irr',
+            '      AND t.posted_credit_irr = p.amount_irr',
+            '      AND t.entry_count = 2',
+            '      AND t.finalized_at IS NOT NULL',
+            '      AND EXISTS (',
+            '          SELECT 1',
+            '          FROM ledger_entries wallet_entry',
+            '          WHERE wallet_entry.ledger_transaction_id = t.id',
+            '            AND wallet_entry.ledger_account_id = p.ledger_account_id',
+            '            AND wallet_entry.amount_irr = p.amount_irr',
+            "            AND wallet_entry.direction = CASE WHEN p.direction = 'credit' THEN 'credit' ELSE 'debit' END",
+            '      )',
+            '      AND EXISTS (',
+            '          SELECT 1',
+            '          FROM ledger_entries offset_entry',
+            '          INNER JOIN ledger_accounts offset_account ON offset_account.id = offset_entry.ledger_account_id',
+            '          WHERE offset_entry.ledger_transaction_id = t.id',
+            "            AND offset_account.code = 'system.wallet.correction.offset'",
+            '            AND offset_entry.amount_irr = p.amount_irr',
+            "            AND offset_entry.direction = CASE WHEN p.direction = 'credit' THEN 'debit' ELSE 'credit' END",
+            '      );',
+            '',
+            '    IF valid_ledger_count <> 1 THEN',
+            "        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Wallet correction requires the exact finalized compensating ledger effect.';",
+            '    END IF;',
+            'END',
+        ]));
+    }
+
+    public function down(): void
+    {
+        DB::unprepared('DROP TRIGGER IF EXISTS wallet_corrections_insert_guard');
+        DB::statement('ALTER TABLE wallet_corrections DROP FOREIGN KEY wallet_corrections_approval_fk');
+
+        DB::unprepared(implode("\n", [
+            'CREATE TRIGGER wallet_corrections_insert_guard',
+            'BEFORE INSERT ON wallet_corrections',
+            'FOR EACH ROW',
+            'BEGIN',
+            '    DECLARE valid_preview_count INT DEFAULT 0;',
+            '    DECLARE valid_ledger_count INT DEFAULT 0;',
+            '',
+            '    SELECT COUNT(*) INTO valid_preview_count',
+            '    FROM wallet_correction_previews',
+            '    WHERE id = NEW.preview_id',
+            '      AND correction_key = NEW.correction_key',
+            '      AND payload_hash = NEW.payload_hash',
+            '      AND requested_by_administrator_id = NEW.requested_by_administrator_id',
+            '      AND preview_ledger_balance_irr = NEW.executed_ledger_balance_before_irr',
+            '      AND preview_active_holds_irr = NEW.executed_active_holds_irr',
+            '      AND preview_available_balance_irr = NEW.executed_available_before_irr',
+            '      AND preview_resulting_ledger_balance_irr = NEW.executed_ledger_balance_after_irr',
+            '      AND preview_resulting_available_balance_irr = NEW.executed_available_after_irr',
+            '      AND ((approval_required = 1 AND NEW.approval_id IS NOT NULL) OR (approval_required = 0 AND NEW.approval_id IS NULL));',
+            '',
+            '    IF valid_preview_count <> 1 THEN',
+            "        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Wallet correction execution does not match its immutable preview or approval requirement.';",
+            '    END IF;',
+            '',
+            '    SELECT COUNT(*) INTO valid_ledger_count',
+            '    FROM ledger_transactions t',
+            '    INNER JOIN wallet_correction_previews p ON p.id = NEW.preview_id',
+            '    WHERE t.id = NEW.ledger_transaction_id',
+            "      AND t.transaction_type = 'wallet_correction'",
+            "      AND t.source_type = 'wallet_correction'",
+            '      AND t.source_id = NEW.correction_key',
+            '      AND t.expected_total_irr = p.amount_irr',
+            '      AND t.posted_debit_irr = p.amount_irr',
+            '      AND t.posted_credit_irr = p.amount_irr',
+            '      AND t.entry_count = 2',
+            '      AND t.finalized_at IS NOT NULL;',
+            '',
+            '    IF valid_ledger_count <> 1 THEN',
+            "        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Wallet correction requires one finalized balanced compensating ledger transaction.';",
+            '    END IF;',
+            'END',
+        ]));
+    }
+};
