@@ -31,6 +31,7 @@ final readonly class ExpiredWalletHoldCleanupService
         /** @var list<object{id: int|string, hold_key: string}> $rows */
         $rows = $this->database->connection()->table('wallet_holds')
             ->where('status', WalletHoldStatus::Active->value)
+            ->where('source_type', '<>', 'wallet_transfer')
             ->where('expires_at', '<=', $this->clock->now()->format('Y-m-d H:i:s.u'))
             ->orderBy('id')
             ->limit($limit)
