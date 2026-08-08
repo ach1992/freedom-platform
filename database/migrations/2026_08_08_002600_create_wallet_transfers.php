@@ -30,6 +30,7 @@ return new class extends Migration
             $table->bigInteger('policy_daily_limit_irr');
             $table->bigInteger('policy_fixed_fee_irr');
             $table->unsignedSmallInteger('policy_fee_basis_points');
+            $table->string('fee_account_code', 128)->nullable();
             $table->date('policy_business_date');
             $table->foreignId('wallet_hold_id')->unique()->constrained('wallet_holds')->restrictOnDelete();
             $table->string('status', 32)->default('pending_confirmation');
@@ -50,6 +51,7 @@ return new class extends Migration
         DB::statement("ALTER TABLE wallet_transfers ADD CONSTRAINT wallet_transfer_bucket_chk CHECK (`wallet_bucket` IN ('cash', 'promotional'))");
         DB::statement('ALTER TABLE wallet_transfers ADD CONSTRAINT wallet_transfer_amounts_chk CHECK (`amount_irr` > 0 AND `fee_irr` >= 0 AND `total_debit_irr` > 0 AND `total_debit_irr` = `amount_irr` + `fee_irr`)');
         DB::statement('ALTER TABLE wallet_transfers ADD CONSTRAINT wallet_transfer_policy_chk CHECK (`policy_minimum_irr` > 0 AND `policy_maximum_irr` >= `policy_minimum_irr` AND `policy_daily_limit_irr` >= `policy_maximum_irr` AND `policy_fixed_fee_irr` >= 0 AND `policy_fee_basis_points` <= 10000)');
+        DB::statement("ALTER TABLE wallet_transfers ADD CONSTRAINT wallet_transfer_fee_account_chk CHECK ((`fee_irr` = 0 AND `fee_account_code` IS NULL) OR (`fee_irr` > 0 AND `fee_account_code` IS NOT NULL AND CHAR_LENGTH(TRIM(`fee_account_code`)) >= 3))");
         DB::statement('ALTER TABLE wallet_transfers ADD CONSTRAINT wallet_transfer_users_chk CHECK (`sender_user_id` <> `recipient_user_id`)');
         DB::statement('ALTER TABLE wallet_transfers ADD CONSTRAINT wallet_transfer_accounts_chk CHECK (`sender_wallet_account_id` <> `recipient_wallet_account_id`)');
         DB::statement('ALTER TABLE wallet_transfers ADD CONSTRAINT wallet_transfer_hash_chk CHECK (CHAR_LENGTH(`payload_hash`) = 64 AND CHAR_LENGTH(`recipient_public_id`) = 26)');
@@ -76,6 +78,7 @@ return new class extends Migration
             '       OR NOT (OLD.policy_daily_limit_irr <=> NEW.policy_daily_limit_irr)',
             '       OR NOT (OLD.policy_fixed_fee_irr <=> NEW.policy_fixed_fee_irr)',
             '       OR NOT (OLD.policy_fee_basis_points <=> NEW.policy_fee_basis_points)',
+            '       OR NOT (OLD.fee_account_code <=> NEW.fee_account_code)',
             '       OR NOT (OLD.policy_business_date <=> NEW.policy_business_date)',
             '       OR NOT (OLD.wallet_hold_id <=> NEW.wallet_hold_id)',
             '       OR NOT (OLD.confirmation_expires_at <=> NEW.confirmation_expires_at)',
