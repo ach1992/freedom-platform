@@ -220,7 +220,7 @@ return new class extends Migration
             "    IF NEW.state = 'captured' AND NEW.captured_at IS NULL THEN",
             "        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Captured payment intent requires captured_at.';",
             '    END IF;',
-            "    IF OLD.captured_at IS NOT NULL AND NOT (NEW.captured_at <=> OLD.captured_at) THEN",
+            '    IF OLD.captured_at IS NOT NULL AND NOT (NEW.captured_at <=> OLD.captured_at) THEN',
             "        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Payment intent capture timestamp is immutable.';",
             '    END IF;',
             'END',
