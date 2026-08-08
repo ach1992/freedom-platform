@@ -12,7 +12,6 @@ use DomainException;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\QueryException;
-use Illuminate\Support\Collection;
 use RuntimeException;
 
 final readonly class LedgerPostingService
@@ -105,7 +104,7 @@ final readonly class LedgerPostingService
             $entries,
         )));
         sort($accountIds, SORT_NUMERIC);
-        /** @var Collection<int, object{id: int|string, currency: string, is_active: int|bool, owner_user_id: int|string|null, wallet_bucket: string|null}> $accounts */
+        /** @var \Illuminate\Support\Collection<int, object{id: int|string, currency: string, is_active: int|bool, owner_user_id: int|string|null, wallet_bucket: string|null}> $accounts */
         $accounts = $connection->table('ledger_accounts')
             ->whereIn('id', $accountIds)
             ->orderBy('id')
@@ -123,7 +122,9 @@ final readonly class LedgerPostingService
             }
         }
         if ($refundability !== null) {
-            $this->assertRefundabilityCompatibility($refundability, $entries, $accounts);
+            /** @var list<object{id: int|string, currency: string, is_active: int|bool, owner_user_id: int|string|null, wallet_bucket: string|null}> $refundabilityAccounts */
+            $refundabilityAccounts = $accounts->values()->all();
+            $this->assertRefundabilityCompatibility($refundability, $entries, $refundabilityAccounts);
         }
 
         $createdAt = $this->timestamp();
@@ -288,12 +289,12 @@ final readonly class LedgerPostingService
 
     /**
      * @param  list<LedgerEntryDraft>  $entries
-     * @param  Collection<int, object{id: int|string, currency: string, is_active: int|bool, owner_user_id: int|string|null, wallet_bucket: string|null}>  $accounts
+     * @param  list<object{id: int|string, currency: string, is_active: int|bool, owner_user_id: int|string|null, wallet_bucket: string|null}>  $accounts
      */
     private function assertRefundabilityCompatibility(
         LedgerRefundabilitySnapshot $refundability,
         array $entries,
-        Collection $accounts,
+        array $accounts,
     ): void {
         /** @var array<int, object{id: int|string, currency: string, is_active: int|bool, owner_user_id: int|string|null, wallet_bucket: string|null}> $accountById */
         $accountById = [];
