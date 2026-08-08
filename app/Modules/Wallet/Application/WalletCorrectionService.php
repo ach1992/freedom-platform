@@ -11,8 +11,9 @@ use App\Modules\AccessControl\Application\SensitiveApprovalReceipt;
 use App\Modules\Wallet\Domain\IrrMoney;
 use App\Modules\Wallet\Domain\LedgerDirection;
 use App\Modules\Wallet\Domain\WalletCorrectionDirection;
+use App\Modules\Wallet\Domain\WalletHoldStatus;
+use App\Modules\Wallet\Domain\WalletSystemAccountCode;
 use App\Shared\Application\Clock;
-use Database\Seeders\WalletFinancialFoundationSeeder;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
@@ -600,7 +601,7 @@ final readonly class WalletCorrectionService
         $activeHolds = IrrMoney::fromInt($this->nonNegativeDatabaseInt(
             $connection->table('wallet_holds')
                 ->where('ledger_account_id', $ledgerAccountId)
-                ->where('state', 'active')
+                ->where('status', WalletHoldStatus::Active->value)
                 ->sum('amount_irr'),
             'Wallet active hold total',
         ));
@@ -615,7 +616,7 @@ final readonly class WalletCorrectionService
     {
         /** @var object{id:int|string,account_class:string,owner_user_id:int|string|null,wallet_bucket:string|null,currency:string,is_active:int|bool}|null $account */
         $account = $connection->table('ledger_accounts')
-            ->where('code', WalletFinancialFoundationSeeder::CORRECTION_OFFSET_ACCOUNT_CODE)
+            ->where('code', WalletSystemAccountCode::CORRECTION_OFFSET)
             ->lockForUpdate()
             ->first(['id', 'account_class', 'owner_user_id', 'wallet_bucket', 'currency', 'is_active']);
         if ($account === null
@@ -702,8 +703,8 @@ final readonly class WalletCorrectionService
     }
 
     /**
-     * @param PreviewRow $preview
-     * @param CorrectionRow $correction
+     * @param  PreviewRow  $preview
+     * @param  CorrectionRow  $correction
      */
     private function correctionReceipt(
         Connection $connection,
