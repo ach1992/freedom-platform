@@ -1,6 +1,6 @@
 # Current Continuation Handoff
 
-**Status:** authoritative continuation checkpoint after evidence-complete Wallet Refund / Reversal Foundation.  
+**Status:** authoritative continuation checkpoint after evidence-complete `WAL-005` Wallet Correction / Approval Foundation.  
 **Date:** 2026-08-08.  
 **Integration PR:** Draft PR `#6`, base `main`, head branch `develop/v1.0.0-completion`.  
 **Live-head rule:** before every repository write, fetch PR `#6` and use its exact `head_sha`; never continue from a copied SHA.
@@ -14,7 +14,7 @@
 5. this file;
 6. active Phase 0.4 gate: `docs/44-phase-0.4-pasarguard-live-execution-handoff.md` and `docs/41-phase-0.4-provider-live-acceptance-matrix.md`;
 7. current overlays: `docs/32-current-traceability-overlay.md` and `docs/33-current-risk-overlay.md`;
-8. Phase 0.5 evidence/traceability through `docs/54-phase-0.5-wallet-refund-traceability.md`.
+8. latest Phase 0.5 evidence/traceability: `evidence/0.5.0/wallet-correction-approval-foundation.md` and `docs/55-phase-0.5-wallet-correction-traceability.md`.
 
 ## Repository invariants
 
@@ -25,7 +25,9 @@
 - never place credentials, tokens, API keys, passwords, subscription material or raw sensitive provider bodies in repository text, Issues, PR comments, evidence, ordinary logs or chat;
 - no later phase may weaken accepted provider lookup/equivalence/idempotency/uncertainty/TLS/redaction/Target controls;
 - monetary IRR is integer; finalized balanced immutable ledger history plus active holds is wallet authority; persisted balance snapshots are derived evidence/cache only;
-- refund/correction never edits prior ledger history; accepted changes are compensating transactions with immutable business records.
+- refund/correction never edits prior ledger history; accepted changes are compensating transactions with immutable business records;
+- browser returns, redirects or customer-submitted claims never prove payment capture;
+- no paid provisioning occurs before authoritative capture, and Orders/provisioning remain Phase `0.6.0` ownership.
 
 ## Active Phase 0.4 human-controlled gate
 
@@ -41,11 +43,11 @@ After the guarded run, coordinator-level adoption/idempotency, controlled timeou
 
 ### Marzban `v0.8.4`
 
-Owner decision on 2026-08-08 carries deployment-specific live acceptance to final project/release acceptance. It remains mandatory for `1.0.0`.
+Deployment-specific live acceptance is owner-scheduled for final project/release acceptance and remains mandatory for `1.0.0`.
 
 ## Accepted parallel Phase 0.5 chain
 
-Phase `0.5.0` / Issue `#8` is not closed. Seven bounded financial foundations are accepted:
+Phase `0.5.0` / Issue `#8` is not closed. Eight bounded financial foundations are accepted:
 
 1. **Financial Ledger Foundation** — `docs/45-phase-0.5-financial-ledger-traceability.md`;
 2. **Wallet Holds / Available Balance / Capture / Release** — `docs/46-phase-0.5-wallet-holds-traceability.md`;
@@ -53,78 +55,83 @@ Phase `0.5.0` / Issue `#8` is not closed. Seven bounded financial foundations ar
 4. **Wallet Maintenance Operations** — `docs/49-phase-0.5-wallet-maintenance-traceability.md`;
 5. **Stable Wallet Transfer (`WAL-003`)** — `docs/51-phase-0.5-wallet-transfer-traceability.md`;
 6. **Dedicated Wallet Contention Verification** — `docs/53-phase-0.5-wallet-contention-traceability.md`;
-7. **Wallet Refund / Reversal Foundation (`WAL-004`)** — `docs/54-phase-0.5-wallet-refund-traceability.md` and `evidence/0.5.0/wallet-refund-reversal-foundation.md`.
+7. **Wallet Refund / Reversal Foundation (`WAL-004`)** — `docs/54-phase-0.5-wallet-refund-traceability.md`;
+8. **Wallet Correction / Approval Foundation (`WAL-005`)** — `docs/55-phase-0.5-wallet-correction-traceability.md` and `evidence/0.5.0/wallet-correction-approval-foundation.md`.
 
-### Latest accepted boundary — `WAL-004`
+### Latest accepted boundary — `WAL-005`
 
-Implementation verification:
+Implementation:
 
-- SHA `0237f94cae67ff2ca31047af55420fed0ffe578a`;
-- CI `31242702422` / `#1155` — success;
-- full suite `360 tests / 2099 assertions`;
-- `WalletRefundFoundationTest`: `6 tests / 52 assertions`;
-- `WalletRefundContentionVerificationTest`: `2 tests / 17 assertions`;
-- artifact `test-evidence-31242702422`, ID `9017545543`;
-- independent digest `sha256:be509996d098ee7f1354a9dc1fe949a224b2ead42c15ae145c2e12ad59890cdc`.
+- SHA `fd3d579d9f38004310d7ea638e351813d2f46ef5`;
+- CI `31260299072` / `#1186` — success;
+- full suite `371 tests / 2197 assertions`;
+- dedicated correction verification `11 tests / 98 assertions`;
+- artifact `test-evidence-31260299072`, ID `9022602206`;
+- independent digest `sha256:476e86bdf2bb30732460a4ca1ef9dd0640a1e06b52dbc0f4a15e06f70fa07b62`.
 
-Evidence head:
+Evidence:
 
-- SHA `716ddb4f26b5672ed3d60aabd3f80bd7e7f50acc`;
-- CI `31242888656` / `#1156` — success;
-- full suite `360 tests / 2099 assertions`;
-- artifact `test-evidence-31242888656`, ID `9017593626`;
-- independent digest `sha256:a1fb5c20a95e54bc63f14d40e02fbf19fc2f19c3b60d1b1e17a066a73f408052`.
+- SHA `ef5504081a42687eb712e9cd47306cd9dcc9a864`;
+- CI `31260549403` / `#1188` — success;
+- full suite `371 / 2197`;
+- artifact `test-evidence-31260549403`, ID `9022665227`;
+- independent digest `sha256:ce6073f08fc56df8f4b37cba3dcf6d8bbc5a9fd6b0240becd1e1ffc9d3ecd971`.
 
-Accepted `WAL-004` behavior includes immutable capture-time refundability, partial/cumulative caps, exact original-wallet-bucket reversal, manual-external evidence without wallet duplication, privileged destination override, exact replay/conflict, immutable compensating entries and independent-process MariaDB proof for over-refund and duplicate-key races.
+Accepted behavior includes immutable preview/confirmation, fresh ledger/hold authority, negative-availability prevention, execution-time authorization and policy revalidation, distinct sensitive approval for policy-selected large non-owner corrections, exact approval replay binding, compensating ledger entries, DB immutability and real-MariaDB concurrency proof.
 
-The source refundable total may be lower than the captured total, allowing a future owning Payment Intent/Quote boundary to mark exact non-round card adjustment non-refundable without this foundation inventing card/provider computation now.
+## Next bounded increment — Payment Intent + `WAL-001` External Cash-Wallet Top-up Settlement
 
-## Next bounded increment — `WAL-005` Balance Correction / Approval Foundation
+Authoritative requirements:
 
-Authoritative requirement: balance correction requires permission, bucket/amount/reason/preview/confirmation, optional policy-driven dual approval, and compensating entries. Master §14.6 additionally requires direction (`debit`/`credit`), explanatory note, related ticket/order/payment when applicable, and Owner/dual approval for large corrections. Prior ledger entries must never be edited/deleted.
+- `PAY-001`: gateway/payment-method eligibility uses current authoritative account/tier/tag/history, amount/action/offering, identity, time/limits, explicit overrides and health precedence;
+- `PAY-002`: Payment Intents may be controlled/duplicated as intents, but only one captured settlement may complete the financial effect; browser returns never prove payment;
+- `PAY-003`: duplicate external/internal events return prior result without second capture/provisioning;
+- `WAL-001`: external wallet top-up uses a Payment Intent and posts exactly one balanced **cash** wallet ledger transaction only after capture.
 
-### Initial safe boundary
+### Initial provider-independent scope
 
-Implement a provider-independent administrator correction application/domain foundation. Do not add Telegram/HTTP UI in the first increment; preserve preview/confirmation as explicit immutable application-stage data and use the existing authorization/approval primitives.
+Implement the smallest top-up-only Payment Intent application/domain boundary. Reuse the existing `App\Modules\Payments\Application\Contracts\PaymentProvider` and normalized provider DTOs; do not duplicate provider contracts and do not introduce Order/provisioning ownership.
 
 Required behavior:
 
-1. immutable caller-supplied correction key plus canonical payload hash for exact replay/conflict;
-2. target a stable owned wallet account/bucket and integer-IRR positive amount plus explicit `credit` or `debit` direction;
-3. require `wallet.corrections.create` (or repository-consistent permission), reason code, explanatory note and optional typed related reference (`ticket`, `order`, `payment`); reject arbitrary sensitive/raw reference payloads;
-4. generate a deterministic preview snapshot before financial execution containing target user/account/bucket, direction, amount, resulting ledger-derived/available balance and whether approval is required;
-5. require explicit confirmation bound to the exact preview/payload before execution; changed amount/bucket/direction/reason after preview must conflict or require a new correction key/preview;
-6. policy for large corrections must be immutable/configurable enough to decide whether Owner or dual approval is required; reuse `SensitiveActionApprovalService` rather than inventing a second approval system;
-7. approval must be execution-time authoritative, distinct from requester where dual control is required, unexpired/unconsumed, and bound to the exact correction fingerprint;
-8. credit posts a balanced compensating ledger transaction from a dedicated system correction account to the original wallet bucket; debit posts the inverse and must fail closed if it would make available balance negative;
-9. never mutate/delete prior ledger entries or accepted correction identity/preview/approval/effect links;
-10. exact replay returns the accepted correction; materially changed reuse conflicts and cannot create a second ledger effect;
-11. deterministic multi-process tests must cover duplicate correction execution, concurrent debits against one wallet, and approval consumption/replay where applicable;
-12. safe audit must record actor, direction, amount, bucket, related-reference type/ID if safe, approval requirement/result and compensating ledger transaction ID without secrets.
+1. explicit Payment Intent state using the existing `PaymentIntentState` vocabulary; top-up path begins `created`, may wait/verify, and only authoritative capture reaches `captured`;
+2. immutable caller creation/idempotency key and canonical payload hash; exact replay returns prior intent, materially changed reuse conflicts;
+3. intent purpose/action is wallet top-up, bound to one user, one active owned **cash** wallet account and one positive integer-IRR amount; promotional bucket is not an external top-up target;
+4. persist normalized provider/method identity and safe intent metadata without credentials or raw secret payloads;
+5. model Payment Attempt and Provider Transaction/Event identity sufficiently to enforce unique normalized provider evidence and duplicate-event replay;
+6. a browser return/redirect/customer claim may advance no financial authority by itself;
+7. capture accepts only normalized authoritative provider evidence that matches intent/provider/amount/currency and a captured/success terminal transaction state;
+8. capture transaction locks the intent and wallet authority rows, inserts/loads unique provider consumption/settlement identity and posts exactly one balanced ledger transaction crediting the cash wallet after capture;
+9. exact duplicate capture/event returns the accepted intent/settlement/ledger IDs; conflicting provider evidence fails closed;
+10. no Order row, provisioning operation, service activation or Phase `0.6.0` consequence is created by this top-up-only boundary;
+11. append-only state/evidence/audit history is safe and bounded; no raw provider secrets/bodies;
+12. MariaDB independent-process tests cover simultaneous duplicate capture/event and prove one top-up ledger effect;
+13. exact implementation-head CI/artifact/digest, then evidence/traceability and exact evidence-head CI/artifact/digest are mandatory before acceptance.
 
 ### Recommended implementation order
 
-- inspect existing `SensitiveActionApprovalService`, administrator permission/override rules, ledger account conventions and available-balance service;
-- define the smallest correction direction/state/preview value objects and migration with FKs/unique keys/checks/immutability triggers;
-- seed correction permissions without granting critical approval bypass broadly;
-- implement preview then confirm/execute service using transaction + wallet account lock + fresh authoritative ledger/hold calculation;
-- route all financial effects through `LedgerPostingService`;
-- add MariaDB feature tests for credit/debit, bucket identity, preview tamper/conflict, negative-availability denial, exact replay/conflict, related references, authorization and dual approval;
-- add independent-process contention tests;
-- run exact implementation CI/artifact/digest; then evidence/traceability and exact evidence-head CI/artifact/digest.
+- inspect existing payment state/DTO/provider contracts and ledger posting conventions;
+- define minimal migrations for payment methods/intents/attempts/provider transactions/events/top-up settlement with FKs, unique keys, state/check constraints and immutability guards;
+- implement intent creation/replay first;
+- implement safe provider evidence normalization boundary without live credentials;
+- implement authoritative capture/top-up settlement through `LedgerPostingService` under transaction/locks;
+- add feature/idempotency/tamper tests and independent-process duplicate-capture contention proof;
+- verify exact implementation head;
+- create evidence + traceability, verify exact evidence head;
+- reconcile status/overlays/Issue `#8`, then continue to pricing/Quote.
 
-### Explicit non-claims for this boundary
+### Explicit non-claims
 
-Do not claim customer-facing correction UX, arbitrary provider/payment corrections, Payment Intent settlement, Order ownership, or Phase `0.5.0` closure. Corrections are administrator financial controls only and must not become a shortcut around refund/payment/order state machines.
+Do not claim live provider compatibility, gateway health acceptance, provider-native refund, Order paid state, provisioning, service activation, pricing/Quote, promotions/referrals, or customer Telegram/HTTP UX from this first Payment Intent boundary.
 
-## After `WAL-005`
+## After `WAL-001`
 
-Recommended order:
+Recommended independent order:
 
-1. Payment Intent foundation + `WAL-001` top-up settlement;
-2. deterministic offering pricing / immutable Quote snapshots;
-3. promotions/referrals/agent pricing;
-4. payment methods/providers and provider-native refund integrations.
+1. deterministic offering pricing / immutable Quote snapshots;
+2. promotions/referrals/agent pricing;
+3. payment-method eligibility refinements and provider implementations;
+4. provider-native refund integrations.
 
 Do not pull Order/provisioning ownership from Phase `0.6.0` forward.
 
@@ -134,8 +141,8 @@ Do not pull Order/provisioning ownership from Phase `0.6.0` forward.
 - Marzban final-release live acceptance;
 - Phase `0.4.0` closure audit;
 - no automated scheduled sweep is claimed for untouched expired pending wallet transfers;
-- `WAL-001`, `WAL-005`, pricing/Quote/promotions/payment providers;
-- provider-native refund/payment behavior beyond the accepted `WAL-004` foundation;
+- `WAL-001`, pricing/Quote/promotions/payment providers;
+- provider-native refund/payment behavior beyond accepted wallet foundations;
 - all Phase `0.6.0+` owned behavior.
 
-If the protected PasarGuard gate becomes available, follow `docs/44-phase-0.4-pasarguard-live-execution-handoff.md` without exposing secrets. Otherwise continue with the bounded `WAL-005` sequence above.
+If the protected PasarGuard gate becomes available, follow `docs/44-phase-0.4-pasarguard-live-execution-handoff.md` without exposing secrets. Otherwise continue autonomously with the Payment Intent + `WAL-001` sequence above.
