@@ -14,6 +14,7 @@ Read with `PROJECT_STATUS.md`, `docs/project-status.json`, `docs/33-current-risk
 - `blocked-live`: next required proof depends on protected live execution/human-controlled action;
 - `carried-release-gate`: mandatory requirement intentionally scheduled for final release acceptance;
 - `parallel-verified`: evidence-complete later-phase bounded foundation accepted while its owning phase is not active/closed;
+- `implementation-verified`: exact implementation-head CI/artifact accepted but exact evidence-head gate still pending;
 - `not-started`: no accepted implementation claim.
 
 ## Phase status
@@ -24,7 +25,7 @@ Read with `PROJECT_STATUS.md`, `docs/project-status.json`, `docs/33-current-risk
 | `0.2.0` | verified | `evidence/0.2.0/PHASE-CLOSURE.md` |
 | `0.3.0` | verified | `evidence/0.3.0/phase-closure-verification.md` |
 | `0.4.0` | blocked-live / active | PasarGuard live harness accepted; protected deployment execution remains; Marzban is a carried final-release gate |
-| `0.5.0` | not active/not closed; parallel-verified financial foundations | Issue `#8`, financial traceability through `docs/55-phase-0.5-wallet-correction-traceability.md` |
+| `0.5.0` | not active/not closed; parallel financial chain with current implementation-verified candidate | Issue `#8`, accepted through `docs/55-phase-0.5-wallet-correction-traceability.md`; current candidate `docs/56-phase-0.5-payment-intent-wallet-top-up-traceability.md` |
 | `0.6.0`–`1.0.0` | not-started except explicitly documented shared foundations | authoritative phase plan |
 
 Phase `0.4.0` remains open. Parallel Phase 0.5 evidence cannot be used to claim Phase 0.4 or release completion.
@@ -46,19 +47,22 @@ Marzban `v0.8.4` source/offline proof is accepted; deployment-specific live acce
 
 ## Parallel Phase 0.5 financial traceability
 
-### `WAL-002` ledger / wallet authority
+### Accepted wallet authority chain
 
-Status: **parallel-verified for the implemented ledger/hold/snapshot/reconciliation foundation**.
+Status: **parallel-verified** for accepted boundaries through `WAL-005`.
 
-Accepted chain:
+Accepted traceability:
 
 1. `docs/45-phase-0.5-financial-ledger-traceability.md`;
 2. `docs/46-phase-0.5-wallet-holds-traceability.md`;
 3. `docs/48-phase-0.5-wallet-reconciliation-traceability.md`;
 4. `docs/49-phase-0.5-wallet-maintenance-traceability.md`;
-5. `docs/53-phase-0.5-wallet-contention-traceability.md`.
+5. `docs/51-phase-0.5-wallet-transfer-traceability.md` (`WAL-003`);
+6. `docs/53-phase-0.5-wallet-contention-traceability.md`;
+7. `docs/54-phase-0.5-wallet-refund-traceability.md` (`WAL-004`);
+8. `docs/55-phase-0.5-wallet-correction-traceability.md` (`WAL-005`).
 
-Accepted invariants include integer IRR, append-only balanced ledger authority, active-hold available-balance calculation, non-authoritative snapshots/reconciliation, single terminal hold effects and independent-process MariaDB contention proof.
+Accepted invariants include integer IRR, append-only balanced ledger authority, active-hold available-balance calculation, non-authoritative snapshots/reconciliation, single terminal hold effects, stable transfer/refund/correction identities, immutable compensating history and independent-process MariaDB contention proof.
 
 ### `WAL-003` stable wallet transfer
 
@@ -77,11 +81,8 @@ Status: **parallel-verified for the provider-independent refund/reversal foundat
 - implementation `0237f94cae67ff2ca31047af55420fed0ffe578a`, CI `31242702422` / `#1155` — 360 / 2099;
 - evidence head `716ddb4f26b5672ed3d60aabd3f80bd7e7f50acc`, CI `31242888656` / `#1156` — 360 / 2099;
 - evidence artifact `test-evidence-31242888656`, ID `9017593626`, digest `sha256:a1fb5c20a95e54bc63f14d40e02fbf19fc2f19c3b60d1b1e17a066a73f408052`;
-- dedicated refund verification `8 tests / 69 assertions`;
 - evidence `evidence/0.5.0/wallet-refund-reversal-foundation.md`;
 - traceability `docs/54-phase-0.5-wallet-refund-traceability.md`.
-
-Accepted: immutable capture-time refundability, original eligible wallet-bucket compensation, manual-external evidence without duplicate wallet credit, cumulative/per-entry caps, privileged override, replay/conflict, immutable compensating history and over-refund/duplicate concurrency proof.
 
 Provider-native refunds, Payment Intent state, exact-card-adjustment computation, Order/referral consequences and customer UX remain unclaimed.
 
@@ -89,62 +90,67 @@ Provider-native refunds, Payment Intent state, exact-card-adjustment computation
 
 Status: **parallel-verified**.
 
-Implementation:
-
-- SHA `fd3d579d9f38004310d7ea638e351813d2f46ef5`;
-- CI `31260299072` / `#1186` — 371 tests / 2197 assertions;
-- artifact `test-evidence-31260299072`, ID `9022602206`;
-- independent digest `sha256:476e86bdf2bb30732460a4ca1ef9dd0640a1e06b52dbc0f4a15e06f70fa07b62`.
-
-Evidence:
-
-- SHA `ef5504081a42687eb712e9cd47306cd9dcc9a864`;
-- CI `31260549403` / `#1188` — 371 / 2197;
-- artifact `test-evidence-31260549403`, ID `9022665227`;
-- uploader and independent digest `sha256:ce6073f08fc56df8f4b37cba3dcf6d8bbc5a9fd6b0240becd1e1ffc9d3ecd971`;
-- dedicated correction verification `11 tests / 98 assertions`, zero failures/errors/skips;
+- implementation `fd3d579d9f38004310d7ea638e351813d2f46ef5`, CI `31260299072` / `#1186` — 371 / 2197;
+- evidence `ef5504081a42687eb712e9cd47306cd9dcc9a864`, CI `31260549403` / `#1188` — 371 / 2197;
+- evidence artifact `test-evidence-31260549403`, ID `9022665227`, digest `sha256:ce6073f08fc56df8f4b37cba3dcf6d8bbc5a9fd6b0240becd1e1ffc9d3ecd971`;
 - evidence `evidence/0.5.0/wallet-correction-approval-foundation.md`;
 - traceability `docs/55-phase-0.5-wallet-correction-traceability.md`.
 
-Accepted invariants:
+### `PAY-002` / `PAY-003` / `WAL-001` Payment Intent / external cash-wallet top-up
 
-- immutable correction key/payload plus deterministic preview and explicit confirmation;
-- target is a stable active owned IRR wallet bucket and positive integer amount with explicit debit/credit direction;
-- fresh finalized-ledger + active-hold authority under wallet locking;
-- debit cannot create negative available balance;
-- execution-time permission and current dual-approval policy revalidation; policy drift fails closed;
-- large non-owner corrections use existing sensitive approval with distinct approver and atomic consumption;
-- approved replay is bound to the exact committed approval ID;
-- financial effect is a balanced compensating transaction against `system.wallet.correction.offset`, never ledger-history mutation;
-- DB guards make accepted preview/correction identity/effect links immutable;
-- real-MariaDB independent-process proof covers competing debits, duplicate execution and approved duplicate execution.
+Status: **implementation-verified; exact evidence-head gate pending**.
+
+Implementation:
+
+- SHA `6db9dde7032114ab81c95fdf371530997e65f21c`;
+- CI `31265449681` / `#1214` — mandatory jobs success;
+- full suite `384 tests / 2292 assertions`;
+- dedicated Payment Intent/top-up verification `13 tests / 95 assertions`, zero failures/errors/skips;
+- artifact `test-evidence-31265449681`, ID `9024026199`;
+- uploader and independent digest `sha256:3cf3c1c52b3aac72e4cf7f10aa4567ee516a9edeb7c3528c6beb064c20f6b80b`;
+- evidence candidate `evidence/0.5.0/payment-intent-wallet-top-up-settlement.md`;
+- traceability candidate `docs/56-phase-0.5-payment-intent-wallet-top-up-traceability.md`.
+
+Implementation-verified invariants:
+
+- immutable Payment Intent creation identity and exact replay/conflict;
+- existing `PaymentIntentState` reused; no parallel state vocabulary;
+- external top-up binds one active owned IRR cash wallet and positive integer-IRR amount;
+- browser/non-authoritative evidence cannot capture;
+- first capture requires matching normalized authoritative settled provider evidence;
+- provider event/transaction uniqueness and database authority guards block duplicate/cross-intent financial reuse;
+- one accepted settlement posts exactly one finalized two-entry clearing-to-cash `wallet_external_top_up` ledger transaction;
+- accepted settlement replay remains stable even after later wallet deactivation and cannot create a new effect;
+- safe provider evidence is sensitive-field filtered, append-only and DB-bounded to 32 fields / 8192 bytes;
+- independent-process real-MariaDB duplicate/cross-intent contention proves one primary top-up effect and bounded failure behavior.
+
+This is not yet `parallel-verified` because exact evidence-head CI/artifact remains mandatory.
 
 ### Remaining Phase 0.5 requirement state
 
 | Requirement / area | Current status | Next boundary |
 |---|---|---|
-| `WAL-001` external cash-wallet top-up / Payment Intent settlement | not-started | **next**: provider-independent Payment Intent + authoritative capture/top-up settlement |
-| `PAY-001` eligibility | not-started except reusable account/wallet/provider-control foundations | implement minimum top-up eligibility then expand with method/provider work |
-| `PAY-002` controlled intents / one captured settlement | not-started | next Payment Intent boundary |
-| `PAY-003` duplicate external/internal event idempotency | not-started | next Payment Intent/provider-transaction boundary |
-| deterministic pricing / immutable Quote snapshots | not-started | separate bounded pricing increment after top-up intent |
+| `PAY-002` / `PAY-003` / `WAL-001` top-up settlement | implementation-verified | exact evidence-head gate, then accept |
+| `PAY-001` payment-method eligibility | not-started except reusable account/wallet/provider-control foundations | after pricing or with provider-method work; do not conflate with top-up settlement |
+| deterministic pricing / immutable Quote snapshots (`BUY-002`) | not-started | **next independent implementation after WAL-001 evidence acceptance** |
 | promotions/referrals/agent pricing | not-started | after Quote/pricing foundation |
 | payment methods/providers | not-started beyond shared provider contracts/offline Phase 0.4 adapters | later Issue `#8` increments; includes provider-native refund integration |
 
-## Next boundary acceptance requirements
+## `WAL-001` evidence-head acceptance requirements
 
-Payment Intent + `WAL-001` must:
+The current candidate becomes accepted only when the final evidence/status head:
 
-1. reuse existing `PaymentIntentState` and `PaymentProvider` contracts;
-2. bind an immutable top-up intent to one active owned **cash** wallet and positive integer IRR amount;
-3. treat browser return/user claim as non-authoritative;
-4. accept only matching normalized authoritative provider evidence for capture;
-5. enforce one captured settlement/provider consumption per intent and unique provider event/transaction identity;
-6. post exactly one balanced cash-wallet ledger top-up after capture;
-7. return prior accepted result on exact duplicate event/capture and reject conflicts;
-8. avoid Order/provisioning/service effects in this top-up-only Phase 0.5 boundary;
-9. retain safe append-only payment/evidence/audit history;
-10. include independent-process MariaDB duplicate-capture proof and exact implementation/evidence CI/artifact/digest lifecycle.
+1. remains on Draft PR `#6` / `develop/v1.0.0-completion`;
+2. passes preflight/project control, secret scan, static quality, dependency/license and full MariaDB/authenticated-Redis suite;
+3. retains the test evidence artifact with actual counts;
+4. has an independently downloaded/recomputed SHA-256 digest;
+5. preserves evidence/traceability statements without introducing a live-provider, Order/provisioning, pricing or Phase closure claim.
+
+## Next independent boundary — `BUY-002` deterministic Pricing / Quote snapshot
+
+After `WAL-001` evidence acceptance, the first pricing increment must snapshot base price, account/agent override input, discount input/result, final price, integer-IRR currency, validity and immutable configuration identity. Exact replay/conflict and database immutability must prevent later Offering/pricing changes from reinterpreting an accepted Quote.
+
+Do not pull promotions/referrals/provider execution or Order/provisioning ownership into the first Quote boundary.
 
 ## Cross-phase carry-forward rules
 
