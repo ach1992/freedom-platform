@@ -292,7 +292,6 @@ final readonly class WalletCorrectionService
         }
         $this->assertToken($confirmationToken, 'Wallet correction confirmation token', 64, 64);
         $reason = $context->requireReason();
-        $this->authorizer->authorize($context->actorAdministratorId, self::CREATE_PERMISSION);
 
         return $this->database->connection()->transaction(function (Connection $connection) use (
             $previewId,
@@ -312,12 +311,15 @@ final readonly class WalletCorrectionService
             if ((int) $preview->requested_by_administrator_id !== $context->actorAdministratorId) {
                 throw new AuthorizationException('Wallet correction execution is bound to the preview requester.');
             }
+            $this->authorizer->authorize($context->actorAdministratorId, self::CREATE_PERMISSION);
             if (! hash_equals($preview->confirmation_token, $confirmationToken)) {
                 throw new RuntimeException('Wallet correction confirmation does not match the immutable preview.');
             }
 
             $existing = $this->correctionByPreview($connection, $previewId);
             if ($existing !== null) {
+                $this->assertReplayApproval($preview, $existing, $approvalId);
+
                 return $this->correctionReceipt($connection, $preview, $existing, true);
             }
 
@@ -331,6 +333,8 @@ final readonly class WalletCorrectionService
 
             $existing = $this->correctionByPreview($connection, $previewId);
             if ($existing !== null) {
+                $this->assertReplayApproval($preview, $existing, $approvalId);
+
                 return $this->correctionReceipt($connection, $preview, $existing, true);
             }
 
@@ -350,6 +354,15 @@ final readonly class WalletCorrectionService
             }
 
             $approvalRequired = (bool) $preview->approval_required;
+            $currentApprovalRequired = $this->approvalRequired(
+                $connection,
+                $context->actorAdministratorId,
+                $amount->amount,
+            );
+            if ($currentApprovalRequired !== $approvalRequired) {
+                throw new RuntimeException('Wallet correction approval policy changed; create a new correction preview.');
+            }
+
             $acceptedApprovalId = null;
             if ($approvalRequired) {
                 if ($approvalId === null) {
@@ -700,6 +713,33 @@ final readonly class WalletCorrectionService
             ]);
 
         return $row;
+    }
+
+    /**
+     * @param  PreviewRow  $preview
+     * @param  CorrectionRow  $correction
+     */
+    private function assertReplayApproval(object $preview, object $correction, ?string $approvalId): void
+    {
+        $storedApprovalId = $correction->approval_id;
+        if ((bool) $preview->approval_required) {
+            if ($approvalId === null) {
+                throw new DomainException('Wallet correction requires independent approval.');
+            }
+            $this->assertToken($approvalId, 'Wallet correction approval ID', 26, 26);
+            if ($storedApprovalId === null || ! hash_equals($storedApprovalId, $approvalId)) {
+                throw new RuntimeException('Wallet correction approval replay conflicts with the committed approval.');
+            }
+
+            return;
+        }
+
+        if ($approvalId !== null) {
+            throw new DomainException('Wallet correction preview does not accept an approval ID.');
+        }
+        if ($storedApprovalId !== null) {
+            throw new RuntimeException('Stored wallet correction approval state is invalid.');
+        }
     }
 
     /**
