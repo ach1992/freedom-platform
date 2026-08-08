@@ -16,6 +16,7 @@ final class DatabaseSeeder extends Seeder
             PanelsAccessFoundationSeeder::class,
             WalletAccessFoundationSeeder::class,
             WalletFinancialFoundationSeeder::class,
+            PromotionAccessFoundationSeeder::class,
         ]);
     }
 }
