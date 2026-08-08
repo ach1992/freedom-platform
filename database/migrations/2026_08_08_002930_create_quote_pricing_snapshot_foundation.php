@@ -99,12 +99,10 @@ BEGIN
       AND o.code = NEW.offering_code_snapshot
       AND o.version = NEW.offering_version
       AND o.base_price_irr = NEW.base_price_irr
-      AND o.discount_eligible = NEW.offering_discount_eligible
-      AND o.state = 'active'
-      AND o.visibility = 'visible';
+      AND o.discount_eligible = NEW.offering_discount_eligible;
 
     IF valid_offering_count <> 1 THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Quote offering snapshot is not current and operational.';
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Quote offering snapshot is not current.';
     END IF;
 
     IF NEW.discount_irr > 0 AND NEW.offering_discount_eligible <> 1 THEN
