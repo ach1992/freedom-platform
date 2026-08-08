@@ -9,6 +9,6 @@ jobs:
   disabled:
     name: Disabled historical workflow
     if: ${{ github.repository == 'disabled/historical-workflow' }}
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
     steps:
       - run: echo 'This historical root-level OpenLiteSpeed/PHP installation workflow is disabled. See docs/development/staging-workflow-inventory.md.'
