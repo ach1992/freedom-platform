@@ -33,3 +33,13 @@ Schedule::command('operations:check-worker-heartbeats', [
     ->everyMinute()
     ->withoutOverlapping()
     ->onOneServer();
+
+Schedule::command('wallet:maintenance', [
+    '--hold-limit' => 100,
+    '--wallet-limit' => 200,
+    '--json' => true,
+])
+    ->name('wallet.maintenance')
+    ->everyFiveMinutes()
+    ->withoutOverlapping()
+    ->onOneServer();
