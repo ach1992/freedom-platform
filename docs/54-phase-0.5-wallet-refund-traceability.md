@@ -1,15 +1,17 @@
 # Phase 0.5 Wallet Refund / Reversal Foundation Traceability
 
-**Status:** implementation verified; combined evidence-head CI pending.  
+**Status:** evidence-complete provider-independent `WAL-004` foundation.  
 **Authoritative Phase 0.5 tracker:** Issue `#8`.  
 **Requirement:** `WAL-004`.  
 **Implementation head:** `0237f94cae67ff2ca31047af55420fed0ffe578a`.  
 **Implementation CI:** `31242702422` / `#1155` — success, 360 tests / 2099 assertions.  
+**Evidence head:** `716ddb4f26b5672ed3d60aabd3f80bd7e7f50acc`.  
+**Evidence-head CI:** `31242888656` / `#1156` — success, 360 tests / 2099 assertions.  
 **Evidence:** `evidence/0.5.0/wallet-refund-reversal-foundation.md`.
 
 ## Requirement-to-proof map
 
-| Requirement / invariant | Implementation proof | Remaining scope |
+| Requirement / invariant | Accepted proof | Remaining scope |
 |---|---|---|
 | `WAL-004` partial refund | immutable `refunds` + source allocations; integer partial amount; compensating ledger posting | provider-native integrations and Order ownership remain later boundaries |
 | cumulative refunds cannot exceed refundable capture | source transaction/refundability lock + aggregate accepted refund cap + per-source-entry cap | each future payment/provider path must declare authoritative refundable metadata |
@@ -24,7 +26,7 @@
 | `DAT-004` | source and refund ledger histories are append-only; source links and terminal refund effect immutable | future correction/provider settlement must preserve this invariant |
 | `ACL-001` / `ACL-002` | execution-time `refunds.approve`; critical override permission; reason/audit actor context | UI/API policy surfaces remain separate |
 | `SEC-002` | manual evidence is validated; safe audit stores presence flags instead of raw references | external evidence storage/access policy belongs to owning operational/provider boundary |
-| `QUA-001` | exact implementation-head full CI, retained JUnit/Clover/service artifact and independent digest inspection | exact combined evidence-head CI still required before acceptance |
+| `QUA-001` | exact implementation/evidence-head full CI, retained JUnit/Clover/service artifacts and independent digest inspection | full Phase 0.5 closure remains open |
 
 ## Source refundability is capture-time metadata
 
@@ -61,14 +63,14 @@ Materially changed reuse of the same refund key fails closed.
 
 `tests/Feature/WalletRefundContentionVerificationTest.php` starts independent PHP workers against real CI MariaDB and uses a deterministic `READY` / `GO` parent barrier.
 
-Accepted implementation-head scenarios:
+Accepted scenarios:
 
 1. two distinct concurrent `700,000 IRR` refunds against one `1,000,000 IRR` source result in exactly one accepted refund and one explicit bounded rejection; accepted cumulative amount remains `700,000 IRR`;
 2. two identical concurrent `400,000 IRR` requests with the same refund key resolve to one primary effect and one exact replay; one refund, one compensating ledger transaction and one audit event remain.
 
 The source ledger transaction/refundability lock serializes cumulative authorization. Per-source-entry allocation sums additionally prevent an individual original payment/bucket entry from being refunded beyond its accepted amount.
 
-## Dedicated implementation tests
+## Dedicated tests
 
 `WalletRefundFoundationTest` — **6 tests / 52 assertions**:
 
@@ -84,20 +86,31 @@ The source ledger transaction/refundability lock serializes cumulative authoriza
 - concurrent cumulative cap;
 - concurrent duplicate idempotency.
 
-## Implementation verification record
+Both exact implementation and evidence-head artifacts independently confirm these counts with zero failures/errors/skips.
 
-Exact implementation head `0237f94cae67ff2ca31047af55420fed0ffe578a`:
+## Exact verification record
+
+Implementation head `0237f94cae67ff2ca31047af55420fed0ffe578a`:
 
 - CI `31242702422` / `#1155` — mandatory jobs all success;
 - full MariaDB/authenticated Redis suite `360 tests / 2099 assertions`;
 - runner `freedom-staging-runner`, PHP `8.4.23`, PCOV `1.0.12` for coverage;
 - artifact `test-evidence-31242702422`, ID `9017545543`;
-- uploader and independent SHA-256 `be509996d098ee7f1354a9dc1fe949a224b2ead42c15ae145c2e12ad59890cdc`;
-- artifact contains exactly JUnit, test log, Clover and two dependency-service evidence files.
+- uploader and independent SHA-256 `be509996d098ee7f1354a9dc1fe949a224b2ead42c15ae145c2e12ad59890cdc`.
 
-## Risk disposition at implementation boundary
+Evidence head `716ddb4f26b5672ed3d60aabd3f80bd7e7f50acc`:
 
-If the combined evidence-head lifecycle succeeds, this boundary controls the currently identified `FIN-09` concurrent over-refund risk and `FIN-10` destination/double-reimbursement risk for the provider-independent `WAL-004` foundation.
+- CI `31242888656` / `#1156` — mandatory jobs all success;
+- full MariaDB/authenticated Redis suite `360 tests / 2099 assertions`;
+- runner `freedom-staging-runner`, PHP `8.4.23`, PCOV `1.0.12` for coverage;
+- artifact `test-evidence-31242888656`, ID `9017593626`;
+- uploader and independent SHA-256 `a1fb5c20a95e54bc63f14d40e02fbf19fc2f19c3b60d1b1e17a066a73f408052`.
+
+Each artifact contains exactly the expected JUnit, test log, Clover and two dependency-service evidence files.
+
+## Risk disposition
+
+This accepted lifecycle controls the identified `FIN-09` concurrent over-refund risk and `FIN-10` destination/double-reimbursement risk for the provider-independent `WAL-004` foundation.
 
 It does not close payment-provider refund risk. Provider-native refunds, callback uncertainty, Payment Intent state, Order/referral consequences, and customer-facing flows each require their own exact implementation/evidence lifecycle.
 
@@ -114,6 +127,4 @@ No claim is made for:
 
 PasarGuard protected live execution remains the active Phase 0.4 human gate. Marzban deployment-specific acceptance remains mandatory at final release acceptance.
 
-## Evidence-head gate
-
-The exact combined head containing this file and `evidence/0.5.0/wallet-refund-reversal-foundation.md` must pass every mandatory self-hosted CI job. Its retained test artifact must then be independently inspected and hashed before current status/traceability/risk overlays or Issue `#8` describe this `WAL-004` foundation as accepted.
+The next recommended bounded financial increment is `WAL-005` administrator balance correction/approval with immutable compensating history, dual-control where required, execution-time authorization, reason/audit, exact replay/conflict and dedicated concurrency evidence.
