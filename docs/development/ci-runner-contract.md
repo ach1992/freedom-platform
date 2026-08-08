@@ -2,6 +2,18 @@
 
 This document defines the runtime contract for mandatory CI. It is not a production deployment guide.
 
+## 0. Repository-wide execution rule
+
+All GitHub Actions jobs in this repository must execute on the owner-controlled self-hosted runner. The canonical job selector is:
+
+```yaml
+runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
+```
+
+This applies to CI, provider/readiness/live workflows, staging diagnostics, bootstrap workflows targeting `main`, and disabled/historical workflows. GitHub-hosted `ubuntu-*`, `windows-*`, and `macos-*` runner labels are not an allowed fallback. If the self-hosted runner is unavailable, the workflow must remain queued/blocked until the runner/service/labels are corrected.
+
+The repository-wide policy and rationale are authoritative in `docs/development/github-actions-runner-policy.md`.
+
 ## 1. Runner identity
 
 Expected runner:
@@ -142,6 +154,7 @@ CI groups runs by workflow and PR head branch with `cancel-in-progress: true`.
 - Do not repeatedly commit or dispatch workflows while the single runner is occupied.
 - A superseded job that remains `in_progress` with no steps/logs can block all newer jobs; inspect the runner service rather than creating more runs.
 - Connector commits may not always trigger Actions immediately; use a manual workflow dispatch only when no exact-head run exists.
+- A queued job caused by an offline, busy, or label-mismatched self-hosted runner must not be moved to GitHub-hosted capacity.
 
 ## 10. Host changes
 
@@ -172,4 +185,4 @@ Accepted CI evidence records:
 - artifact content inspection result;
 - relevant environment facts without secrets.
 
-Runner labels, a green summary without logs, or an uploaded artifact created only by `if: always()` cleanup do not prove implementation behavior.
+Runner labels, a green summary without logs, a GitHub-hosted execution, or an uploaded artifact created only by `if: always()` cleanup do not prove implementation behavior.
