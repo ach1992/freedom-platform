@@ -168,9 +168,6 @@ final readonly class LedgerPostingService
         $debit = IrrMoney::zero();
         $credit = IrrMoney::zero();
         foreach ($entries as $entry) {
-            if (! $entry instanceof LedgerEntryDraft) {
-                throw new DomainException('Ledger entry draft is invalid.');
-            }
             if ($entry->direction === LedgerDirection::Debit) {
                 $debit = $debit->add($entry->amount);
             } else {
