@@ -153,6 +153,15 @@ final readonly class LedgerPostingService
             ]);
         }
 
+        if ($refundability !== null) {
+            $connection->table('ledger_refundability')->insert([
+                'ledger_transaction_id' => $transactionId,
+                'refundable_total_irr' => $refundability->refundableTotal->amount,
+                'default_destination' => $refundability->defaultDestination->value,
+                'created_at' => $this->timestamp(),
+            ]);
+        }
+
         $updated = $connection->table('ledger_transactions')
             ->where('id', $transactionId)
             ->whereNull('finalized_at')
@@ -163,15 +172,6 @@ final readonly class LedgerPostingService
 
         if (! $debit->equals($credit)) {
             throw new RuntimeException('Ledger balance changed during posting.');
-        }
-
-        if ($refundability !== null) {
-            $connection->table('ledger_refundability')->insert([
-                'ledger_transaction_id' => $transactionId,
-                'refundable_total_irr' => $refundability->refundableTotal->amount,
-                'default_destination' => $refundability->defaultDestination->value,
-                'created_at' => $this->timestamp(),
-            ]);
         }
 
         return new LedgerPostingReceipt($transactionId, $debit, count($entries), false);
