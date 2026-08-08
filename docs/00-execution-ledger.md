@@ -1,275 +1,169 @@
 # Execution Ledger
 
-The authoritative product contract is `docs/specification/master-execution-prompt.md`. This ledger records accepted repository delivery boundaries; it does not replace or redefine that contract.
+The authoritative product contract is `docs/specification/master-execution-prompt.md`. This ledger records accepted delivery boundaries and current continuation state; it does not replace the product contract.
 
-For continuation, read `AGENTS.md`, `PROJECT_STATUS.md`, `docs/project-status.json`, and the active handoff. Always live-fetch Draft PR `#6` for the exact current head.
+For continuation, read `AGENTS.md`, `PROJECT_STATUS.md`, `docs/project-status.json`, `docs/development/continuation-runbook.md`, and `docs/52-current-continuation-handoff.md`. Always live-fetch Draft PR `#6` for the exact current head before every repository write.
 
 ## Current position
 
 - branch: `develop/v1.0.0-completion`;
 - PR: Draft `#6`, base `main`;
+- active phase: `0.4.0 — Catalog, Panels and Offerings`;
 - authoritative Phase 0.4 Issue: `#7`;
-- active phase: `0.4.0 — Catalog, Panels, and Offerings`;
-- last completed phase: `0.3.0`;
-- latest accepted Phase 0.4 boundary: PasarGuard Guarded Live-Acceptance Harness;
-- accepted harness implementation/evidence: CI #1013 / #1015, 317 tests / 1730 assertions;
-- current PasarGuard state: guarded live harness evidence-complete; actual live run blocked on protected Actions Secrets and manual workflow dispatch;
-- current Marzban state: pinned source/offline proof accepted; live acceptance intentionally carried to final project/release acceptance by owner decision on 2026-08-08;
-- live acceptance matrix: `docs/41-phase-0.4-provider-live-acceptance-matrix.md`;
-- current handoff: `docs/44-phase-0.4-pasarguard-live-execution-handoff.md`.
+- latest evidence-complete Phase 0.4 boundary: PasarGuard Guarded Live-Acceptance Harness;
+- current Phase 0.4 increment: PasarGuard Controlled Live Execution — blocked on protected Actions Secrets plus manual workflow dispatch;
+- Marzban `v0.8.4` live acceptance: owner-deferred to final project/release acceptance, not removed;
+- Phase `0.5.0` remains open/not active, but five financial boundaries through `WAL-003` are evidence-complete under the parallel-continuation policy;
+- next recommended independent work: Dedicated Wallet Contention Verification for the remaining explicit `WAL-002` proof;
+- current cross-phase handoff: `docs/52-current-continuation-handoff.md`.
 
-`main` remains unchanged by completion work. Phase `0.4.0` and Issue `#7` remain open. The Marzban scheduling decision changes timing only and does not remove its mandatory `1.0.0` requirement.
+`main` remains unchanged by this completion stream. Phase `0.4.0` and Issue `#7` remain open; no provider Target is live-accepted or enabled from offline/harness evidence alone.
 
 ## Completed phases
 
 ### Phase 0.1.0 — Product specification and architecture
 
-Status: completed/verified.
+Completed/verified. The accepted planning baseline covers authoritative requirements, glossary/use cases/state machines/data model, permissions/threat model, ADR/module boundaries, test strategy, risk register and release/deployment planning.
 
-Accepted scope includes authoritative requirements, glossary/use cases/state machines/data model, permission/threat model, ADR/module boundaries, test strategy, risk register, deployment/release planning, and planning quality gates.
+### Phase 0.2.0 — Foundation, installer/runtime, operations and Telegram ingress
 
-### Phase 0.2.0 — Foundation, installer/runtime, operations, Telegram ingress
+Completed/verified. Closure evidence: `evidence/0.2.0/PHASE-CLOSURE.md`.
 
-Status: completed/verified.
+Accepted foundations include Laravel/PHP 8.4, installer/finalization, MariaDB/authenticated Redis, Outbox/idempotency, release activation/rollback, worker/Scheduler health and authenticated Telegram ingress/recovery.
 
-Closure evidence: `evidence/0.2.0/PHASE-CLOSURE.md`.
+### Phase 0.3.0 — Identity, Customers, Agents and ACL
 
-Accepted scope includes Laravel/PHP 8.4 foundation, secure installer/finalization, MariaDB/authenticated Redis runtime, Outbox/idempotency primitives, release activation/rollback, worker/scheduler health controls, and authenticated Telegram ingress/recovery.
+Completed/verified:
 
-### Phase 0.3.0 — Identity, Customers, Agents, ACL
-
-Status: completed/verified.
-
-Closure:
-
-- SHA `979b0c99d79dbcc8cff273ccdfad2ea612796a0c`;
-- CI `31035712555` / #798 — success;
+- closure `979b0c99d79dbcc8cff273ccdfad2ea612796a0c`;
+- CI `31035712555` / `#798` — success;
 - 194 tests / 958 assertions;
 - evidence `evidence/0.3.0/phase-closure-verification.md`.
 
-Accepted scope includes phone ownership/SMS OTP, customer lifecycle, agent lifecycle, multi-role ACL/direct overrides, short-lived independent sensitive approvals, Owner singleton/transfer, encrypted identity items, privacy-safe summaries, admin lifecycle and replay/conflict/locking/audit controls.
+## Phase 0.4 accepted chain
 
-## Phase 0.4 accepted increments
+Detailed proof is retained in the bounded evidence/traceability files. Accepted increments are:
 
-Phase boundary: Catalog identity, Offerings, panels/targets, capacity, Custom Plans, Trials, fallback and Panel Adapter concerns belong here. Pricing/Quotes/ledger/payments remain Phase `0.5.0`; Orders/provisioning/Service lifecycle remain Phase `0.6.0`.
+1. Category/Product/Variant lifecycle — CI `#802/#803`;
+2. secure Panel Connection and typed Protocol/Target/Sales Server foundations — through CI `#812`;
+3. Plan Offering foundation — CI `#816/#817`;
+4. capacity, availability, route selection and disclosed fallback — through CI `#827`;
+5. Custom Plan policy/calculation snapshot — CI `#833/#834`;
+6. Trial policy plus Panel Adapter offline/Fake foundation — CI `#931/#934`;
+7. pinned Marzban `v0.8.4` / PasarGuard `v5.2.1` read contracts — CI `#959/#961`;
+8. pinned provider mutation-contract mappings — CI `#978/#980`, runtime mutations still disabled;
+9. provider Create-Equivalence Reconciliation — implementation `ab1e0d16d23460df4bf1ad9be4fcef0d16c37a43` / CI `#995`, evidence `a70b28cb984c23f1e219287e88d20014ee9f0310` / CI `#997`;
+10. PasarGuard Guarded Live-Acceptance Harness — implementation `e18460357d306789cbbf85721f61a4e3a3bbb0e2` / CI `#1013`, evidence `71ca4b39df41bc9fcf725c30e9caba3285ee5412` / CI `#1015`.
 
-### 1 — Category/Product/Variant lifecycle
-
-- implementation `f907fc463ff809dd2f5f69d1433e9c326f8574b0`, CI #802;
-- evidence `570f0a7c873c5638d63488714c7c59500de8cbcc`, CI #803;
-- 205 tests / 1006 assertions;
-- `evidence/0.4.0/catalog-category-product-variant-lifecycle.md`;
-- `docs/23-phase-0.4-catalog-traceability.md`.
-
-### 2a — Secure Panel Connection foundation
-
-- implementation `2174bc7844fde0282f75e6d258a7789dc588ecf8`, CI #806;
-- evidence `22f04ed66ca3f9aefe4ee68d329bae6ff5e69706`, CI #807;
-- 217 tests / 1072 assertions;
-- `evidence/0.4.0/panel-connection-foundation.md`;
-- `docs/24-phase-0.4-panel-connection-traceability.md`.
-
-### 2b — Protocol Profile, Service Target, Sales Server
-
-- implementation `7c48399a2be8a79ddb078f79684d73dd9869b322`, CI #811;
-- evidence `e8e397cdfe44713f28b79b6cf98c89eff24d2b56`, CI #812;
-- 227 tests / 1121 assertions;
-- `evidence/0.4.0/panel-target-protocol-server-foundation.md`;
-- `docs/25-phase-0.4-panel-inventory-traceability.md`.
-
-Real Targets remain disabled/declared until accepted live adapter/capability evidence exists.
-
-### 3 — Plan Offering foundation
-
-- implementation `cf0971c068c46d8e71d4f7765fdda249d9a24471`, CI #816;
-- evidence `88e8e27d9ab61bb8ac2815c411b12e6395b48d0a`, CI #817;
-- 236 tests / 1171 assertions;
-- `evidence/0.4.0/plan-offering-foundation.md`;
-- `docs/26-phase-0.4-plan-offering-traceability.md`.
-
-### 4a — Target Capacity Accounting
-
-- implementation `72b19d556430b42d1065cb9ca9cdb5cd3125dfdc`, CI #822;
-- evidence `f07ffbb8645ed2556debf6746e465fa5cc5e3b5b`, CI #823;
-- 241 tests / 1204 assertions;
-- `evidence/0.4.0/target-capacity-accounting.md`;
-- `docs/27-phase-0.4-target-capacity-traceability.md`.
-
-### 4b — Availability, Route Selection, Disclosed Fallback
-
-- implementation `ca88704d34f7df68799d8673e30c3ff479529206`, CI #826;
-- evidence `dd770add3bcc3f10e55d2636f83befc8c50cdd38`, CI #827;
-- 247 tests / 1228 assertions;
-- `evidence/0.4.0/route-selection-fallback.md`;
-- `docs/28-phase-0.4-route-selection-traceability.md`.
-
-### 5 — Custom Plan Policy and Calculation Snapshot
-
-- implementation `8e62867277acdd39cd1471ed3d454ef25520bef8`, CI #833;
-- evidence `0d34af0aa4f9f227fdf3cae74b4fd4717f199ddf`, CI #834;
-- 255 tests / 1267 assertions;
-- `evidence/0.4.0/custom-plan-policy-calculation.md`;
-- `docs/29-phase-0.4-custom-plan-traceability.md`.
-
-No Quote/Order/ledger/payment/provisioning/remote effect is claimed by this boundary.
-
-### 6 — Trial Policy and Panel Adapter offline/Fake foundation
-
-- implementation `b146c2c6aa902b4ed252d200121d63e422cd87f2`, CI #931;
-- evidence `31a1854a2804bb0b2cf466c96887de7c5813b343`, CI #934;
-- 298 tests / 1471 assertions;
-- `evidence/0.4.0/trial-policy-panel-adapter-foundation.md`;
-- `docs/34-phase-0.4-trial-panel-traceability.md`.
-
-Accepted: Trial eligibility/reservation/capacity/abuse/fallback, common adapter contracts, deterministic Fake remote behavior, authoritative lookup/adoption/conflict, uncertainty discovery, mutation idempotency and fail-closed real-provider shells.
-
-### 7 — Pinned Marzban/PasarGuard read contracts
-
-- implementation `954973e505901208b5cef9348551e0c71ac027b6`, CI #959;
-- evidence `23a8da1ce1327407ecd826daa87b334452883d77`, CI #961;
-- 306 tests / 1522 assertions;
-- evidence artifact ID `8993821250`, digest `sha256:9a45179652a3a88456c835c4d715aceef4efaf770c06b8246f0ebd68ca1b6fe6`;
-- `evidence/0.4.0/pinned-panel-provider-read-contracts.md`;
-- `docs/36-phase-0.4-panel-provider-read-contract-traceability.md`.
-
-Accepted provider pins: Marzban `v0.8.4`, PasarGuard `v5.2.1`. Runtime provider behavior remains read-only/fail-closed for mutations.
-
-### 8 — Pinned provider mutation contract mapping
-
-- implementation `15b824e955d040a6bf43405f7015aa85110a73e4`, CI #978;
-- evidence `eec613c1cb5241d8fff621047086361f2753fd24`, CI #980;
-- 313 tests / 1650 assertions;
-- evidence artifact ID `8998628512`, digest `sha256:ac5caaaad4a83af04efd27f3c88cfeb857755e497bd07a46fa1037eadea4361a`;
-- `evidence/0.4.0/pinned-panel-provider-mutation-contracts.md`;
-- `docs/38-phase-0.4-panel-provider-mutation-contract-traceability.md`.
-
-Accepted offline mappings: create/update expiry/update data/reset/suspend/activate/delete/rotation/delivery, result taxonomy, additive-data safety and provider create-equivalence. Runtime mutations remain disabled.
-
-### 9 — Provider Create-Equivalence Reconciliation
-
-Accepted correction:
-
-- separate provider-observable `canonicalHash` from optional provider-specific `createEquivalenceHash`;
-- require provider-specific preserved-field equivalence before automatic adoption;
-- missing proof => Manual Review/no create;
-- mismatch => conflict/no overwrite;
-- successful-create snapshot must pass the same provider-specific equivalence validation;
-- source gateways derive equivalence through pinned mutation-contract mappers without enabling live mutation.
-
-Implementation:
-
-- SHA `ab1e0d16d23460df4bf1ad9be4fcef0d16c37a43`;
-- CI `31223470871` / #995 — success;
-- 315 tests / 1678 assertions;
-- artifact ID `9011256284`;
-- digest `sha256:f3fc78ab55ba0adbb2814bb6d0de464736e897df36625b8f72f54b3f7b8fe95d`.
-
-Evidence:
-
-- SHA `a70b28cb984c23f1e219287e88d20014ee9f0310`;
-- CI `31223749257` / #997 — success;
-- 315 tests / 1678 assertions;
-- artifact ID `9011359876`;
-- digest `sha256:140e6a45fe2ef9523dee0147f6131a1e2d1bcaf63548b57eea7b83d3f0d9b827`;
-- `evidence/0.4.0/provider-create-equivalence-reconciliation.md`;
-- `docs/40-phase-0.4-provider-create-equivalence-traceability.md`.
-
-### 10 — PasarGuard Guarded Live-Acceptance Harness
-
-Accepted implementation adds a manual, secret-backed, fail-closed PasarGuard `v5.2.1` live sequence without enabling normal runtime mutations or Targets.
-
-Prepared guarded behavior:
-
-- protected Actions Secret inputs only;
-- HTTPS-only cURL, peer/host verification, no redirects;
-- API-base detection and exact `5.2.1` gate before mutation;
-- inbound/enabled-group discovery;
-- deterministic disposable username and authoritative absence-before-create;
-- exactly one create and provider-specific post-read equivalence;
-- mismatch/no-overwrite;
-- expiry/data Set/data Add/reset/suspend/activate;
-- sensitive delivery/rotation proof without emitting raw subscription material;
-- delete/final absence and discovery-before-cleanup in `finally`;
-- sanitized artifact output.
-
-Implementation:
-
-- SHA `e18460357d306789cbbf85721f61a4e3a3bbb0e2`;
-- CI `31226863010` / #1013 — success;
-- 317 tests / 1730 assertions;
-- artifact `test-evidence-31226863010`, ID `9012421937`;
-- digest `sha256:72d10f54f0347ac743471c78ea4401a4b9268a763e6653cb2a3c17bf4e2608e6`.
-
-Evidence:
-
-- SHA `71ca4b39df41bc9fcf725c30e9caba3285ee5412`;
-- CI `31227084007` / #1015 — success;
-- 317 tests / 1730 assertions;
-- artifact `test-evidence-31227084007`, ID `9012490991`;
-- digest `sha256:0b8cdd9772a5a4f54d719a794bc4b8d44e284345eb208e6460c9bc380df30b8f`;
-- `evidence/0.4.0/pasarguard-live-acceptance-harness.md`;
-- `docs/43-phase-0.4-pasarguard-live-harness-traceability.md`.
-
-This boundary proves the harness and its safety controls only. It does not prove successful live PasarGuard authentication or any remote effect.
+The provider chain proves source/offline/harness safety only where stated. It does not prove the owner deployment until controlled live rows execute.
 
 ## Current Phase 0.4 live gates
 
-### PasarGuard — active now
+### PasarGuard `v5.2.1`
 
 Execution authority:
 
-- generic matrix `docs/41-phase-0.4-provider-live-acceptance-matrix.md`;
-- current handoff `docs/44-phase-0.4-pasarguard-live-execution-handoff.md`;
-- guarded workflow `.github/workflows/provider-live-acceptance.yml`.
+- `docs/41-phase-0.4-provider-live-acceptance-matrix.md`;
+- `docs/44-phase-0.4-pasarguard-live-execution-handoff.md`;
+- `.github/workflows/provider-live-acceptance.yml`.
 
-Actual execution requires protected Actions Secrets named `PASARGUARD_TEST_ORIGIN` and `PASARGUARD_TEST_API_KEY`, then manual dispatch on `develop/v1.0.0-completion` using the workflow's exact confirmation value. Secret values are never repository/workflow-input evidence.
+Actual execution requires protected repository Actions Secrets `PASARGUARD_TEST_ORIGIN` and `PASARGUARD_TEST_API_KEY`, then manual dispatch with the workflow's exact confirmation value. Current connector capabilities do not permit creating/updating those Secrets or initiating a fresh `workflow_dispatch`.
 
-The current GitHub connector can inspect/retry Actions runs but cannot create/update Actions Secrets or initiate a fresh `workflow_dispatch`.
+After the guarded provider sequence, coordinator-level adoption/idempotency, controlled timeout/5xx/429 uncertainty and explicit Target activation remain separately required live rows.
 
-After the guarded sequence, coordinator-level adoption/idempotency, controlled timeout/5xx/429 uncertainty and explicit Target activation remain separate live rows.
+### Marzban `v0.8.4`
 
-### Marzban — carried final-release gate
+Live acceptance is intentionally carried to final project/release acceptance by owner decision on 2026-08-08. The requirement remains mandatory for `1.0.0`.
 
-By owner decision on 2026-08-08, Marzban `v0.8.4` live acceptance is deferred until final project/release acceptance. The requirement remains mandatory for `1.0.0`; no live Marzban claim or Target activation is accepted now.
+## Parallel Phase 0.5 accepted financial boundaries
 
-Until all applicable provider gates and the final Phase 0.4 closure audit pass:
+Phase `0.5.0` / Issue `#8` is not closed. The following bounded foundations are evidence-complete and reusable.
 
-- real provider mutation/delivery capabilities remain unadvertised/fail closed;
-- real Targets remain disabled/unverified;
-- no unexecuted live compatibility claim;
-- no Phase `0.4.0` closure.
+### 1 — Financial Ledger Foundation
 
-## Parallel continuation policy
+- implementation `259e29e6f93c2b36cd36c2f40bf669789eaab62f`, CI `31232006308` / `#1037`, 326 / 1777;
+- evidence `76c00a1c458c12ccc07dc658ee2f69e14389e65c`, CI `31232151035` / `#1039`;
+- `evidence/0.5.0/financial-ledger-foundation.md`;
+- `docs/45-phase-0.5-financial-ledger-traceability.md`.
 
-Later-phase implementation may continue under the owner-approved provider scheduling exception while Issue `#7` remains open, provided that:
+Accepted: integer IRR, balanced append-only ledger, account constraints, exact replay/conflict and DB immutability.
 
-- Phase `0.4.0` is never marked complete prematurely;
-- no later work weakens lookup-before-create, provider-specific equivalence, idempotency, uncertainty discovery, TLS, redaction or Target activation controls;
-- release/production acceptance remains blocked on the carried provider gates;
-- future-phase evidence does not claim satisfaction of unexecuted Phase 0.4 live rows.
+### 2 — Wallet Holds / Available Balance / Capture / Release
 
-## Later phases
+- implementation `89775a1b9c3d70839e2f6ece36dadd5e6e30fcdf`, CI `31232610814` / `#1046`, 331 / 1834;
+- evidence `781a2dd63d999b2e01d99cd6888f3c9cbfda9f26`, CI `31232750290` / `#1048`;
+- `evidence/0.5.0/wallet-holds-capture-release.md`;
+- `docs/46-phase-0.5-wallet-holds-traceability.md`.
 
-| Phase | Goal | Status |
-|---|---|---|
-| `0.5.0` | Ledger, pricing, promotions, payment providers | not started except shared foundations |
-| `0.6.0` | Orders, provisioning, Service lifecycle | not started except shared foundations |
-| `0.7.0` | Persian Telegram UX, support, content, membership, broadcast | not started except localized installer/identity strings |
-| `0.8.0` | Reporting, Operations Center, backup/restore/updater/rollback | not started except runtime/worker/release foundations |
-| `0.9.0` | hardening/performance/chaos/release candidate | not started |
-| `1.0.0` | production package/docs/handover/deployment acceptance | not started |
+Accepted: authoritative available balance = immutable ledger state minus active holds, exact hold replay/conflict, one capture effect, release without ledger rewrite and terminal hold history.
+
+### 3 — Wallet Reconciliation Snapshots / Expired-Hold Cleanup
+
+- implementation `c73eab20e1a875db8db1c4e60d73d0e3edaff96a`, CI `31233135374` / `#1058`, 334 / 1886;
+- evidence `57719972291b0553e76da6f8db50a8190a807044`, CI `31233274800` / `#1060`;
+- `evidence/0.5.0/wallet-reconciliation-snapshots.md`;
+- `docs/48-phase-0.5-wallet-reconciliation-traceability.md`.
+
+Accepted: append-only non-authoritative snapshots, fresh ledger+active-hold reconciliation, fail-closed inconsistent state and bounded cleanup/review. Transfer holds are deliberately excluded from generic cleanup.
+
+### 4 — Wallet Maintenance Operations
+
+- implementation `87392cca0a1a00ee87a1b5074386dd691a4094c6`, CI `31233514751` / `#1066`, 338 / 1905;
+- evidence `fa0cc2056459f171c32e0260422a465891766629`, CI `31233817131` / `#1068`;
+- `evidence/0.5.0/wallet-maintenance-operations.md`;
+- `docs/49-phase-0.5-wallet-maintenance-traceability.md`.
+
+Accepted: bounded aggregate-safe maintenance command and single-Scheduler execution every five minutes with overlap/single-server guards.
+
+### 5 — Stable Wallet Transfer (`WAL-003`)
+
+Implementation:
+
+- SHA `8360d1ac99485d1bea146bf21e22e8a336cd8e7a`;
+- CI `31235232052` / `#1084` — success;
+- 346 tests / 1995 assertions;
+- artifact ID `9015155851`;
+- digest `sha256:c85e5106f95e6c37745dbcf920d3728108d7f82f26624c6cfccc0684f5bb265b`.
+
+Evidence:
+
+- SHA `68f06fbd4ae9bb1bdba004968e57c84a13871e15`;
+- CI `31235552266` / `#1092` — success;
+- 346 tests / 1995 assertions;
+- artifact ID `9015258508`;
+- digest `sha256:f1bee9300338b0d326e9c0cf47ea978147a6e72688e598c0717f7ae180b29a78`;
+- `evidence/0.5.0/wallet-transfer.md`;
+- `docs/51-phase-0.5-wallet-transfer-traceability.md`.
+
+Accepted: default-disabled policy, stable recipient identity, execution-time eligibility, integer policy/fee snapshots, hold-based prepare with no transfer posting, one atomic sender/recipient/fee effect at confirmation, exact replay/conflict, terminal cancellation/expiry and DB-enforced immutable/terminal state.
+
+## Next bounded work
+
+`docs/52-current-continuation-handoff.md` defines the next recommended independent increment: **Dedicated Wallet Contention Verification** for the remaining explicit `WAL-002` proof.
+
+Required concurrency evidence covers same-wallet over-reservation, capture/release races, duplicate ledger command keys, duplicate transfer prepare/confirm and reconciliation concurrent with mutation. Prefer deterministic subprocess/barrier coordination against real MariaDB; do not weaken locking/isolation to make tests pass.
+
+After contention verification, recommended sequence is `WAL-004` refund/reversal, `WAL-005` correction/approval, Payment Intent + `WAL-001`, pricing/Quote, promotions/referrals/agent pricing and then payment providers.
+
+## Explicit open items
+
+- protected PasarGuard live run and subsequent coordinator/fault/Target-activation rows;
+- Marzban final-release live acceptance;
+- Phase `0.4.0` closure audit;
+- dedicated multi-process wallet contention verification;
+- no automated scheduled sweep is claimed for untouched expired pending transfers;
+- `WAL-001`, `WAL-004`, `WAL-005`, pricing/Quote/promotions/payment providers;
+- all Phase `0.6.0+` owned behavior.
 
 ## Non-negotiable delivery controls
 
-- no merge, Ready, auto-merge, history rewrite, force-push, temporary branch, or direct `main` write;
+- PR `#6` stays Draft; no merge, Ready, auto-merge, history rewrite, force-push, temporary branch or direct `main` write;
 - live head always comes from PR `#6`;
 - no phase/increment closes from docs/schema/fake/interface presence alone;
-- accepted code increments require exact implementation CI/artifact plus exact evidence-head CI;
-- integer IRR at monetary boundaries;
-- secrets never enter repository/Issues/PR/evidence/artifacts;
-- privileged mutations re-authorize at execution time;
-- replay/idempotency conflicts fail closed and preserve original primary effect;
-- authoritative remote lookup precedes create;
-- missing equivalence proof blocks adoption/create;
-- uncertain remote results are discovered before retry;
-- later work may not weaken accepted earlier boundaries.
+- accepted bounded work requires exact implementation CI/artifact and exact evidence-head CI/artifact;
+- real provider lookup/create/equivalence/uncertainty/TLS/redaction/Target controls cannot be weakened by later phases;
+- monetary IRR remains integer; immutable balanced ledger plus active holds remains financial authority; persisted snapshots are derived only;
+- no retry/conflict can create or overwrite a second accepted primary financial or remote effect;
+- secrets/protected provider material never enter repository text, Issues, PR comments, evidence or ordinary logs.
+
+Phase `0.4.0` remains active/open and Phase `0.5.0` remains incomplete despite the accepted parallel foundations above.
