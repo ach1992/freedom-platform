@@ -28,6 +28,7 @@ required_files=(
     docs/development/github-actions-runner-policy.md
     docs/development/ci-runner-contract.md
     docs/development/increment-lifecycle.md
+    docs/development/multi-agent-orchestration.md
     docs/development/repository-map.md
     docs/development/staging-workflow-inventory.md
     docs/development/operational-document-status.md
@@ -35,6 +36,7 @@ required_files=(
     docs/32-current-traceability-overlay.md
     docs/33-current-risk-overlay.md
     docs/specification/master-execution-prompt.md
+    .github/workflows/ci.yml
     .github/workflows/staging-readiness.yml
 )
 
@@ -83,7 +85,8 @@ jq -e '
     and (.forbidden_actions | index("rewrite_history") != null)
     and (.forbidden_actions | index("push_main") != null)
     and (.forbidden_actions | index("use_github_hosted_runner") != null)
-    and (.forbidden_actions | index("create_temporary_branch") != null)
+    and (.forbidden_actions | index("create_uncontracted_branch") != null)
+    and (.forbidden_actions | index("create_temporary_branch") == null)
     and (.forbidden_actions | index("retrieve_or_print_secrets") != null)
     and (.forbidden_actions | index("claim_unverified_provider_compatibility") != null)
 ' docs/project-status.json >/dev/null || fail 'project status structure or fixed repository policy is inconsistent'
@@ -112,6 +115,7 @@ status_requirements=(
     "$handoff_path"
     'docs/32-current-traceability-overlay.md'
     'docs/33-current-risk-overlay.md'
+    'docs/development/multi-agent-orchestration.md'
 )
 
 for value in "${status_requirements[@]}"; do
@@ -154,6 +158,15 @@ for workflow in "${workflow_files[@]}"; do
     [[ "$found_runner" == true ]] || fail "workflow has no explicit self-hosted runs-on selector: $workflow"
 done
 
+ci=.github/workflows/ci.yml
+grep -A4 -F 'pull_request:' "$ci" | grep -F 'develop/v1.0.0-completion' >/dev/null \
+    || fail 'generic CI does not validate Worker PRs targeting develop/v1.0.0-completion'
+grep -F "github.event.pull_request.head.repo.full_name == github.repository" "$ci" >/dev/null \
+    || fail 'generic CI lacks same-repository PR protection for the self-hosted runner'
+if grep -Eq 'secrets\.(PASARGUARD|STAGING|TELEGRAM|NOWPAYMENTS|ZARINPAL|MELLI|KAVENEGAR)' "$ci"; then
+    fail 'generic CI references protected provider/staging/runtime secrets'
+fi
+
 for workflow in "${legacy_staging_workflows[@]}"; do
     [[ "$workflow" == '.github/workflows/staging-readiness.yml' ]] && continue
 
@@ -178,12 +191,22 @@ if grep -Eq 'secrets\.|sudo|apt-get|systemctl[[:space:]]+(enable|start|restart|s
 fi
 
 for required_rule in \
-    'PR must remain Draft' \
+    'PR `#6` must remain Draft' \
     'Never trust a SHA copied from a handoff' \
+    'Worker branches are explicitly allowed' \
     'Every GitHub Actions job must run on the owner-controlled self-hosted runner' \
     'Never request, retrieve, print, commit, log, attach, or quote secrets.'; do
     grep -F "$required_rule" AGENTS.md >/dev/null \
         || fail "AGENTS.md is missing operating rule: $required_rule"
+done
+
+for worker_rule in \
+    'agent/<issue-number>-<short-slug>' \
+    'Every Worker PR targets `develop/v1.0.0-completion`, never `main`.' \
+    'No Worker pushes directly to `develop/v1.0.0-completion` or `main`' \
+    'Dynamic Worker state belongs in GitHub Issues/PRs/comments/CI, not in Chat memory.'; do
+    grep -F "$worker_rule" docs/development/multi-agent-orchestration.md >/dev/null \
+        || fail "multi-agent orchestration contract is missing rule: $worker_rule"
 done
 
 printf '%s\n' 'Project control verification passed.'
