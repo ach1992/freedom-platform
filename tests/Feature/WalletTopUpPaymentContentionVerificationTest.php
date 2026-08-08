@@ -10,13 +10,14 @@ namespace {
     use App\Modules\Payments\Application\Contracts\VerifiedPaymentEvent;
     use App\Modules\Payments\Application\WalletTopUpPaymentService;
     use App\Shared\Domain\Money;
-    use DateTimeImmutable;
     use Illuminate\Contracts\Console\Kernel;
+    use Illuminate\Database\DatabaseManager;
 
     if (PHP_SAPI === 'cli' && ($argv[1] ?? null) === '--wallet-top-up-contention-worker') {
         require dirname(__DIR__, 2).'/vendor/autoload.php';
         $app = require dirname(__DIR__, 2).'/bootstrap/app.php';
         $app->make(Kernel::class)->bootstrap();
+        $app->make(DatabaseManager::class)->connection()->statement('SET SESSION innodb_lock_wait_timeout = 5');
 
         $decoded = base64_decode($argv[2] ?? '', true);
         if ($decoded === false) {
@@ -53,8 +54,8 @@ namespace {
                     $transactionId,
                     $eventId,
                     Money::irr($amountIrr),
-                    new DateTimeImmutable('2026-08-08T10:00:00+00:00'),
-                    new DateTimeImmutable('2026-08-08T10:00:01+00:00'),
+                    new \DateTimeImmutable('2026-08-08T10:00:00+00:00'),
+                    new \DateTimeImmutable('2026-08-08T10:00:01+00:00'),
                     hash('sha256', 'evidence:'.$eventId.':'.$transactionId.':'.$amountIrr),
                     ['bank_reference' => 'SAFE-CONTENTION-REFERENCE'],
                 ),
@@ -99,6 +100,8 @@ namespace Tests\Feature {
     final class WalletTopUpPaymentContentionVerificationTest extends TestCase
     {
         use DatabaseTruncation;
+
+        private const WORKER_TIMEOUT_SECONDS = 15;
 
         protected function setUp(): void
         {
@@ -211,52 +214,120 @@ namespace Tests\Feature {
          */
         private function runConcurrent(array $payloads): array
         {
+            /** @var list<array{process:resource,pipes:array{0:resource,1:resource,2:resource}}> $workers */
             $workers = [];
-            foreach ($payloads as $payload) {
-                $encoded = base64_encode(json_encode($payload, JSON_THROW_ON_ERROR));
-                $command = [PHP_BINARY, __FILE__, '--wallet-top-up-contention-worker', $encoded];
-                $pipes = [];
-                $process = proc_open($command, [
-                    0 => ['pipe', 'r'],
-                    1 => ['pipe', 'w'],
-                    2 => ['pipe', 'w'],
-                ], $pipes, dirname(__DIR__, 2));
-                if (! is_resource($process)) {
-                    throw new RuntimeException('Unable to start wallet top-up contention worker.');
+            try {
+                foreach ($payloads as $payload) {
+                    $encoded = base64_encode(json_encode($payload, JSON_THROW_ON_ERROR));
+                    $command = [PHP_BINARY, '-d', 'pcov.enabled=0', __FILE__, '--wallet-top-up-contention-worker', $encoded];
+                    $pipes = [];
+                    $process = proc_open($command, [
+                        0 => ['pipe', 'r'],
+                        1 => ['pipe', 'w'],
+                        2 => ['pipe', 'w'],
+                    ], $pipes, dirname(__DIR__, 2));
+                    if (! is_resource($process)) {
+                        throw new RuntimeException('Unable to start wallet top-up contention worker.');
+                    }
+                    /** @var array{0:resource,1:resource,2:resource} $pipes */
+                    stream_set_blocking($pipes[1], false);
+                    stream_set_blocking($pipes[2], false);
+                    $workers[] = ['process' => $process, 'pipes' => $pipes];
                 }
-                /** @var array{0:resource,1:resource,2:resource} $pipes */
-                $workers[] = ['process' => $process, 'pipes' => $pipes];
-            }
 
-            foreach ($workers as $worker) {
-                $ready = fgets($worker['pipes'][1]);
-                if ($ready !== "READY\n") {
+                foreach ($workers as $index => $worker) {
+                    $ready = $this->readWorkerLine($worker, 'readiness', $index);
+                    if ($ready !== "READY\n") {
+                        throw new RuntimeException('Wallet top-up contention worker returned an invalid readiness marker.');
+                    }
+                }
+                foreach ($workers as $worker) {
+                    fwrite($worker['pipes'][0], "GO\n");
+                    fflush($worker['pipes'][0]);
+                    fclose($worker['pipes'][0]);
+                }
+
+                $results = [];
+                foreach ($workers as $index => $worker) {
+                    $line = $this->readWorkerLine($worker, 'result', $index);
                     $stderr = stream_get_contents($worker['pipes'][2]);
-                    throw new RuntimeException('Wallet top-up contention worker failed readiness barrier: '.$stderr);
+                    fclose($worker['pipes'][1]);
+                    fclose($worker['pipes'][2]);
+                    $exitCode = proc_close($worker['process']);
+                    if ($exitCode !== 0) {
+                        throw new RuntimeException('Wallet top-up contention worker failed: '.$stderr);
+                    }
+                    /** @var array<string, mixed> $result */
+                    $result = json_decode($line, true, flags: JSON_THROW_ON_ERROR);
+                    $results[] = $result;
+                }
+
+                return $results;
+            } finally {
+                $this->terminateWorkers($workers);
+            }
+        }
+
+        /**
+         * @param  array{process:resource,pipes:array{0:resource,1:resource,2:resource}}  $worker
+         */
+        private function readWorkerLine(array $worker, string $phase, int $index): string
+        {
+            $deadline = microtime(true) + self::WORKER_TIMEOUT_SECONDS;
+            $stderr = '';
+            while (microtime(true) < $deadline) {
+                $read = [$worker['pipes'][1], $worker['pipes'][2]];
+                $write = null;
+                $except = null;
+                $selected = stream_select($read, $write, $except, 0, 200_000);
+                if ($selected === false) {
+                    throw new RuntimeException('Unable to wait for wallet top-up contention worker output.');
+                }
+                foreach ($read as $stream) {
+                    if ($stream === $worker['pipes'][2]) {
+                        $stderr .= stream_get_contents($stream);
+                        continue;
+                    }
+                    $line = fgets($stream);
+                    if ($line !== false) {
+                        return $line;
+                    }
+                }
+                $status = proc_get_status($worker['process']);
+                if (! $status['running'] && feof($worker['pipes'][1])) {
+                    $stderr .= stream_get_contents($worker['pipes'][2]);
+                    throw new RuntimeException('Wallet top-up contention worker exited before '.$phase.' output: '.$stderr);
                 }
             }
-            foreach ($workers as $worker) {
-                fwrite($worker['pipes'][0], "GO\n");
-                fflush($worker['pipes'][0]);
-                fclose($worker['pipes'][0]);
-            }
 
-            $results = [];
+            throw new RuntimeException(sprintf(
+                'Wallet top-up contention worker %d timed out during %s after %d seconds: %s',
+                $index,
+                $phase,
+                self::WORKER_TIMEOUT_SECONDS,
+                $stderr,
+            ));
+        }
+
+        /**
+         * @param  list<array{process:resource,pipes:array{0:resource,1:resource,2:resource}}>  $workers
+         */
+        private function terminateWorkers(array $workers): void
+        {
             foreach ($workers as $worker) {
-                $line = fgets($worker['pipes'][1]);
-                $stderr = stream_get_contents($worker['pipes'][2]);
-                fclose($worker['pipes'][1]);
-                fclose($worker['pipes'][2]);
-                $exitCode = proc_close($worker['process']);
-                if ($exitCode !== 0 || $line === false) {
-                    throw new RuntimeException('Wallet top-up contention worker failed: '.$stderr);
+                $status = proc_get_status($worker['process']);
+                if ($status['running']) {
+                    proc_terminate($worker['process']);
                 }
-                /** @var array<string, mixed> $result */
-                $result = json_decode($line, true, flags: JSON_THROW_ON_ERROR);
-                $results[] = $result;
+                foreach ($worker['pipes'] as $pipe) {
+                    if (is_resource($pipe)) {
+                        fclose($pipe);
+                    }
+                }
+                if (is_resource($worker['process'])) {
+                    proc_close($worker['process']);
+                }
             }
-
-            return $results;
         }
 
         private function wallet(int $userId, string $suffix): int
