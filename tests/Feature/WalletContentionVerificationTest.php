@@ -3,11 +3,20 @@
 declare(strict_types=1);
 
 namespace {
+    use App\Modules\Wallet\Application\LedgerEntryDraft;
+    use App\Modules\Wallet\Application\LedgerPostingService;
+    use App\Modules\Wallet\Application\WalletHoldService;
+    use App\Modules\Wallet\Application\WalletReconciliationService;
+    use App\Modules\Wallet\Application\WalletTransferService;
+    use App\Modules\Wallet\Domain\IrrMoney;
+    use App\Modules\Wallet\Domain\LedgerDirection;
+    use Illuminate\Contracts\Console\Kernel;
+
     if (PHP_SAPI === 'cli' && ($argv[1] ?? null) === '--wallet-contention-worker') {
         require dirname(__DIR__, 2).'/vendor/autoload.php';
 
         $app = require dirname(__DIR__, 2).'/bootstrap/app.php';
-        $app->make(\Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+        $app->make(Kernel::class)->bootstrap();
 
         $encoded = $argv[2] ?? '';
         $decoded = base64_decode($encoded, true);
@@ -19,7 +28,7 @@ namespace {
         try {
             /** @var array<string, mixed> $payload */
             $payload = json_decode($decoded, true, flags: JSON_THROW_ON_ERROR);
-        } catch (\JsonException $exception) {
+        } catch (JsonException $exception) {
             fwrite(STDERR, 'Invalid worker payload: '.$exception->getMessage()."\n");
             exit(2);
         }
@@ -34,19 +43,19 @@ namespace {
         try {
             $action = $payload['action'] ?? null;
             if (! is_string($action)) {
-                throw new \RuntimeException('Worker action is missing.');
+                throw new RuntimeException('Worker action is missing.');
             }
 
             $result = match ($action) {
                 'hold_place' => (static function () use ($app, $payload): array {
-                    $receipt = $app->make(\App\Modules\Wallet\Application\WalletHoldService::class)->place(
+                    $receipt = $app->make(WalletHoldService::class)->place(
                         (string) $payload['hold_key'],
                         (int) $payload['owner_user_id'],
                         (int) $payload['ledger_account_id'],
-                        \App\Modules\Wallet\Domain\IrrMoney::positive((int) $payload['amount_irr']),
+                        IrrMoney::positive((int) $payload['amount_irr']),
                         (string) $payload['source_type'],
                         (string) $payload['source_id'],
-                        new \DateTimeImmutable((string) $payload['expires_at']),
+                        new DateTimeImmutable((string) $payload['expires_at']),
                     );
 
                     return [
@@ -56,7 +65,7 @@ namespace {
                     ];
                 })(),
                 'hold_capture' => (static function () use ($app, $payload): array {
-                    $receipt = $app->make(\App\Modules\Wallet\Application\WalletHoldService::class)->capture(
+                    $receipt = $app->make(WalletHoldService::class)->capture(
                         (string) $payload['hold_key'],
                         (int) $payload['offset_account_id'],
                         (string) $payload['correlation_id'],
@@ -70,7 +79,7 @@ namespace {
                     ];
                 })(),
                 'hold_release' => (static function () use ($app, $payload): array {
-                    $receipt = $app->make(\App\Modules\Wallet\Application\WalletHoldService::class)->release(
+                    $receipt = $app->make(WalletHoldService::class)->release(
                         (string) $payload['hold_key'],
                         (string) $payload['reason'],
                     );
@@ -85,14 +94,14 @@ namespace {
                     /** @var list<array{account_id:int, direction:string, amount_irr:int}> $entryPayloads */
                     $entryPayloads = $payload['entries'];
                     $entries = array_map(
-                        static fn (array $entry): \App\Modules\Wallet\Application\LedgerEntryDraft => new \App\Modules\Wallet\Application\LedgerEntryDraft(
+                        static fn (array $entry): LedgerEntryDraft => new LedgerEntryDraft(
                             $entry['account_id'],
-                            \App\Modules\Wallet\Domain\LedgerDirection::from($entry['direction']),
-                            \App\Modules\Wallet\Domain\IrrMoney::positive($entry['amount_irr']),
+                            LedgerDirection::from($entry['direction']),
+                            IrrMoney::positive($entry['amount_irr']),
                         ),
                         $entryPayloads,
                     );
-                    $receipt = $app->make(\App\Modules\Wallet\Application\LedgerPostingService::class)->post(
+                    $receipt = $app->make(LedgerPostingService::class)->post(
                         (string) $payload['command_key'],
                         (string) $payload['transaction_type'],
                         (string) $payload['correlation_id'],
@@ -118,12 +127,12 @@ namespace {
                         'confirmation_ttl_seconds' => 900,
                         'fee_account_code' => null,
                     ]);
-                    $receipt = $app->make(\App\Modules\Wallet\Application\WalletTransferService::class)->prepare(
+                    $receipt = $app->make(WalletTransferService::class)->prepare(
                         (string) $payload['transfer_key'],
                         (int) $payload['sender_user_id'],
                         (string) $payload['recipient_public_id'],
                         'cash',
-                        \App\Modules\Wallet\Domain\IrrMoney::positive((int) $payload['amount_irr']),
+                        IrrMoney::positive((int) $payload['amount_irr']),
                     );
 
                     return [
@@ -145,7 +154,7 @@ namespace {
                         'confirmation_ttl_seconds' => 900,
                         'fee_account_code' => null,
                     ]);
-                    $receipt = $app->make(\App\Modules\Wallet\Application\WalletTransferService::class)->confirm(
+                    $receipt = $app->make(WalletTransferService::class)->confirm(
                         (string) $payload['transfer_key'],
                         (string) $payload['confirmation_key'],
                         (string) $payload['correlation_id'],
@@ -159,7 +168,7 @@ namespace {
                     ];
                 })(),
                 'reconcile' => (static function () use ($app, $payload): array {
-                    $result = $app->make(\App\Modules\Wallet\Application\WalletReconciliationService::class)->reconcile(
+                    $result = $app->make(WalletReconciliationService::class)->reconcile(
                         (int) $payload['owner_user_id'],
                         (int) $payload['ledger_account_id'],
                     );
@@ -171,12 +180,12 @@ namespace {
                         'available_balance_irr' => $result->balance->availableBalance->amount,
                     ];
                 })(),
-                default => throw new \RuntimeException('Unknown worker action.'),
+                default => throw new RuntimeException('Unknown worker action.'),
             };
 
             echo json_encode(['ok' => true, 'result' => $result], JSON_THROW_ON_ERROR)."\n";
             exit(0);
-        } catch (\Throwable $exception) {
+        } catch (Throwable $exception) {
             echo json_encode([
                 'ok' => false,
                 'exception' => $exception::class,
@@ -425,7 +434,7 @@ namespace Tests\Feature {
         }
 
         /**
-         * @param list<array<string, mixed>> $payloads
+         * @param  list<array<string, mixed>>  $payloads
          * @return list<array{ok:bool, result?:array<string,mixed>, exception?:string, message?:string}>
          */
         private function runConcurrent(array $payloads): array
@@ -499,7 +508,7 @@ namespace Tests\Feature {
         }
 
         /**
-         * @param list<array{ok:bool, result?:array<string,mixed>, exception?:string, message?:string}> $results
+         * @param  list<array{ok:bool, result?:array<string,mixed>, exception?:string, message?:string}>  $results
          * @return list<bool>
          */
         private function sortedReplayFlags(array $results): array
