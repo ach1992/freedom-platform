@@ -25,7 +25,7 @@ Read with `PROJECT_STATUS.md`, `docs/project-status.json`, `docs/33-current-risk
 | `0.2.0` | verified | `evidence/0.2.0/PHASE-CLOSURE.md` |
 | `0.3.0` | verified | `evidence/0.3.0/phase-closure-verification.md` |
 | `0.4.0` | blocked-live / active | PasarGuard harness accepted; default-branch dispatch bootstrap + protected live execution remain; Marzban is a carried final-release gate |
-| `0.5.0` | not active/not closed; parallel-verified chain through `BUY-002` | Issue `#8`; latest accepted traceability `docs/57-phase-0.5-quote-pricing-traceability.md` |
+| `0.5.0` | not active/not closed; parallel-verified chain through `BUY-002`; Worker `#25` candidate is implementation-verified pending evidence-head gate/MASTER review | Issue `#8`; latest accepted traceability `docs/57-phase-0.5-quote-pricing-traceability.md`; candidate `docs/58-phase-0.5-promotion-referral-pricing-rule-traceability.md` |
 | `0.6.0`–`1.0.0` | not-started except explicitly documented shared foundations | authoritative phase plan |
 
 Phase `0.4.0` remains open. Parallel Phase 0.5 evidence cannot be used to claim Phase 0.4, Phase 0.5, or release completion.
@@ -115,22 +115,41 @@ Accepted: immutable Quote identity, exact replay/conflict, integer-IRR base/over
 
 No `BUY-001`, complete `PRO-001`, `REF-001`, `AGT-005`, `PAY-001`, provider execution, or Phase `0.6.0` behavior is claimed.
 
+### Worker candidate `#25` — stored promotion/referral pricing-rule resolution
+
+Status: **implementation-verified; not yet parallel-verified/accepted**.
+
+- Worker `W-001`, Contract Revision `1`, PR `#26` → `develop/v1.0.0-completion`;
+- implementation SHA `2be331fd4fe51ef4f7ee58ca2a82a178128bba09`;
+- implementation CI `31284018788` / `#1256` — all mandatory jobs successful;
+- full suite **399 / 2415**;
+- dedicated promotion/referral pricing-rule suite **7 / 60**;
+- unchanged Quote regression **8 / 63**;
+- artifact `test-evidence-31284018788`, ID `9029282011`;
+- independent digest `sha256:ebf72d8ea7822895cea0d306c866358f4d049201503895a13dce87fcce000fae`;
+- evidence candidate `evidence/0.5.0/promotion-referral-pricing-rule-resolution.md`;
+- traceability candidate `docs/58-phase-0.5-promotion-referral-pricing-rule-traceability.md`.
+
+The candidate establishes immutable rule/version/resolution identity, deterministic qualification/precedence, explicit no-match, bounded referral pricing-source input, exact replay/conflict, execution-time authorization, and MariaDB integrity/immutability guards. It does **not** become accepted traceability until its exact evidence head passes mandatory CI and MASTER independently reviews/integrates it.
+
+Reservation/redemption/release/counters, referral payout/reversal/notifications, `AGT-005`, `PAY-001`, provider effects, Orders and provisioning are not proven by this candidate.
+
 ## Remaining Phase 0.5 requirement state
 
 | Requirement / area | Current status | Next boundary |
 |---|---|---|
-| `PRO-001` discount/promotion rules | not-started beyond reusable Quote/Offering foundations | **next bounded stored rule definition + deterministic qualification/resolution foundation** |
-| `REF-001` referral reward lifecycle | attribution foundations exist, financial reward lifecycle not accepted | include only bounded rule-resolution inputs in next increment; payout/reversal remains later proof |
-| `AGT-005` most-specific agent pricing | not-started beyond existing agent profile/reference foundations | after generic pricing-rule foundation |
+| `PRO-001` discount/promotion rules | Worker `#25` implementation-verified candidate for stored definition/qualification/resolution only; not yet accepted | exact evidence-head gate + MASTER review; reservation/redemption/release/contention remains separate |
+| `REF-001` referral reward lifecycle | Worker `#25` candidate adds bounded deterministic referral pricing-source identity only; reward lifecycle remains unaccepted | exact evidence-head gate + MASTER review; payout/pending/release/reversal later |
+| `AGT-005` most-specific agent pricing | not-started beyond existing agent profile/reference foundations | after generic pricing-rule foundation is accepted |
 | `PAY-001` payment-method eligibility | not-started except reusable account/wallet/provider-control foundations | after pricing rules / agent pricing |
 | payment methods/providers | not-started beyond shared provider contracts/offline Phase 0.4 adapters | later Issue `#8` increments; includes provider-native refund integration |
 | `BUY-001` purchase sequence | not-started as an accepted Order flow | Phase `0.6.0` ownership; do not pull forward |
 
-## Next independent boundary — stored promotion/referral/pricing-rule resolution
+## Current independent boundary — Worker `#25` evidence / MASTER review
 
-The next bounded increment should establish typed stored rule identity/configuration, deterministic qualification and precedence, explicit no-match/zero-discount behavior, immutable resolved rule/config identity for future Quote integration, and the required replay/conflict/authorization/DB controls.
+The stored promotion/referral/pricing-rule implementation is complete on the Worker branch and implementation-head CI is green. The immediate boundary is exact evidence-head CI/artifact verification and independent MASTER review of PR `#26`.
 
-Keep full promotion reserve/redeem/release, referral payout/reversal, most-specific `AGT-005`, `PAY-001`, provider execution, Order payment, and provisioning outside this first rule-resolution boundary unless separately scoped and independently evidenced.
+Even if PR `#26` is accepted, keep full promotion reserve/redeem/release, referral payout/reversal, most-specific `AGT-005`, `PAY-001`, provider execution, Order payment, and provisioning outside this first rule-resolution boundary unless separately scoped and independently evidenced.
 
 ## Cross-phase carry-forward rules
 
