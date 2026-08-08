@@ -17,6 +17,24 @@ use Illuminate\Database\QueryException;
 use RuntimeException;
 use Throwable;
 
+/**
+ * @phpstan-type WalletHoldRow object{
+ *     id: int|string,
+ *     hold_key: string,
+ *     payload_hash: string,
+ *     owner_user_id: int|string,
+ *     ledger_account_id: int|string,
+ *     amount_irr: int|string,
+ *     source_type: string,
+ *     source_id: string,
+ *     status: string,
+ *     expires_at: string,
+ *     captured_ledger_transaction_id: int|string|null,
+ *     captured_at: string|null,
+ *     released_at: string|null,
+ *     release_reason: string|null
+ * }
+ */
 final readonly class WalletHoldService
 {
     private const CAPTURE_TRANSACTION_TYPE = 'wallet_hold_capture';
@@ -217,7 +235,7 @@ final readonly class WalletHoldService
                 throw new RuntimeException('Captured wallet hold cannot be released.');
             }
             if ($status === WalletHoldStatus::Released) {
-                if (! is_string($hold->release_reason) || ! hash_equals($hold->release_reason, $reason)) {
+                if ($hold->release_reason === null || ! hash_equals($hold->release_reason, $reason)) {
                     throw new RuntimeException('Wallet hold release replay conflicts with the accepted reason.');
                 }
 
@@ -341,6 +359,7 @@ final readonly class WalletHoldService
         }
     }
 
+    /** @param WalletHoldRow $hold */
     private function assertCapturedTransaction(Connection $connection, object $hold, int $offsetAccountId): void
     {
         $transactionId = $this->positiveDatabaseInt($hold->captured_ledger_transaction_id, 'Wallet captured transaction ID');
@@ -391,38 +410,24 @@ final readonly class WalletHoldService
         }
     }
 
+    /** @return WalletHoldRow|null */
     private function lockedHoldByKey(Connection $connection, string $holdKey): ?object
     {
-        /** @var object{id: int|string, hold_key: string, payload_hash: string, owner_user_id: int|string, ledger_account_id: int|string, amount_irr: int|string, source_type: string, source_id: string, status: string, expires_at: string, captured_ledger_transaction_id: int|string|null, captured_at: string|null, released_at: string|null, release_reason: string|null}|null $hold */
+        /** @var WalletHoldRow|null $hold */
         $hold = $connection->table('wallet_holds')
             ->where('hold_key', $holdKey)
             ->lockForUpdate()
-            ->first([
-                'id',
-                'hold_key',
-                'payload_hash',
-                'owner_user_id',
-                'ledger_account_id',
-                'amount_irr',
-                'source_type',
-                'source_id',
-                'status',
-                'expires_at',
-                'captured_ledger_transaction_id',
-                'captured_at',
-                'released_at',
-                'release_reason',
-            ]);
+            ->first($this->holdColumns());
 
         return $hold;
     }
 
     private function replayAfterUniqueRace(string $holdKey, string $payloadHash): ?WalletHoldReceipt
     {
-        /** @var object{id: int|string, payload_hash: string, status: string, amount_irr: int|string, captured_ledger_transaction_id: int|string|null}|null $hold */
+        /** @var WalletHoldRow|null $hold */
         $hold = $this->database->connection()->table('wallet_holds')
             ->where('hold_key', $holdKey)
-            ->first(['id', 'payload_hash', 'status', 'amount_irr', 'captured_ledger_transaction_id']);
+            ->first($this->holdColumns());
         if ($hold === null) {
             return null;
         }
@@ -430,30 +435,50 @@ final readonly class WalletHoldService
         return $this->receiptFromExisting($hold, $payloadHash, true);
     }
 
+    /** @param WalletHoldRow $hold */
     private function receiptFromExisting(object $hold, ?string $payloadHash, bool $replayed): WalletHoldReceipt
     {
-        if ($payloadHash !== null) {
-            if (! isset($hold->payload_hash) || ! is_string($hold->payload_hash) || ! hash_equals($hold->payload_hash, $payloadHash)) {
-                throw new RuntimeException('Wallet hold key conflict.');
-            }
+        if ($payloadHash !== null && ! hash_equals($hold->payload_hash, $payloadHash)) {
+            throw new RuntimeException('Wallet hold key conflict.');
         }
 
-        $status = $this->holdStatus($hold->status ?? null);
+        $status = $this->holdStatus($hold->status);
         $capturedTransactionId = null;
         if ($status === WalletHoldStatus::Captured) {
             $capturedTransactionId = $this->positiveDatabaseInt(
-                $hold->captured_ledger_transaction_id ?? null,
+                $hold->captured_ledger_transaction_id,
                 'Wallet captured transaction ID',
             );
         }
 
         return new WalletHoldReceipt(
-            $this->positiveDatabaseInt($hold->id ?? null, 'Wallet hold ID'),
+            $this->positiveDatabaseInt($hold->id, 'Wallet hold ID'),
             $status,
-            IrrMoney::positive($this->positiveDatabaseInt($hold->amount_irr ?? null, 'Wallet hold amount')),
+            IrrMoney::positive($this->positiveDatabaseInt($hold->amount_irr, 'Wallet hold amount')),
             $capturedTransactionId,
             $replayed,
         );
+    }
+
+    /** @return list<string> */
+    private function holdColumns(): array
+    {
+        return [
+            'id',
+            'hold_key',
+            'payload_hash',
+            'owner_user_id',
+            'ledger_account_id',
+            'amount_irr',
+            'source_type',
+            'source_id',
+            'status',
+            'expires_at',
+            'captured_ledger_transaction_id',
+            'captured_at',
+            'released_at',
+            'release_reason',
+        ];
     }
 
     private function holdPayloadHash(
