@@ -217,7 +217,9 @@ namespace Tests\Feature {
             $replayed = [(bool) $results[0]['result']['replayed'], (bool) $results[1]['result']['replayed']];
             sort($replayed);
             self::assertSame([false, true], $replayed);
-            self::assertSame('consumed', DB::table('sensitive_action_approvals')->where('id', $approval->approvalId)->value('state'));
+            self::assertSame('approved', DB::table('sensitive_action_approvals')->where('id', $approval->approvalId)->value('state'));
+            self::assertNotNull(DB::table('sensitive_action_approvals')->where('id', $approval->approvalId)->value('consumed_at'));
+            self::assertSame($financeId, (int) DB::table('sensitive_action_approvals')->where('id', $approval->approvalId)->value('consumed_by_administrator_id'));
             self::assertSame(1, DB::table('wallet_corrections')->count());
             self::assertSame(1, DB::table('audit_logs')->where('action', 'wallet.correction.execute')->count());
         }
