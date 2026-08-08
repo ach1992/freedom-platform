@@ -216,9 +216,6 @@ final readonly class WalletTopUpPaymentService
 
                 $this->assertCaptureMatchesIntent($intent, $providerCode, $event->evidence);
                 $intentId = $this->positiveDatabaseInt($intent->id, 'Payment intent ID');
-                $userId = $this->positiveDatabaseInt($intent->user_id, 'Payment intent user ID');
-                $walletAccountId = $this->positiveDatabaseInt($intent->wallet_account_id, 'Payment intent wallet account ID');
-                $this->lockCashWallet($connection, $userId, $walletAccountId);
 
                 $providerEventRow = $this->recordProviderEvent(
                     $connection,
@@ -244,6 +241,10 @@ final readonly class WalletTopUpPaymentService
                         true,
                     );
                 }
+
+                $userId = $this->positiveDatabaseInt($intent->user_id, 'Payment intent user ID');
+                $walletAccountId = $this->positiveDatabaseInt($intent->wallet_account_id, 'Payment intent wallet account ID');
+                $this->lockCashWallet($connection, $userId, $walletAccountId);
 
                 $state = $this->intentState($intent->state);
                 if ($state === PaymentIntentState::Captured) {
@@ -566,7 +567,7 @@ final readonly class WalletTopUpPaymentService
     }
 
     /**
-     * @param ProviderEventRow $providerEventRow
+     * @param  ProviderEventRow  $providerEventRow
      * @return ProviderTransactionRow
      */
     private function recordProviderTransaction(
@@ -641,8 +642,8 @@ final readonly class WalletTopUpPaymentService
     }
 
     /**
-     * @param PaymentIntentRow $intent
-     * @param TopUpSettlementRow $settlement
+     * @param  PaymentIntentRow  $intent
+     * @param  TopUpSettlementRow  $settlement
      */
     private function assertCapturedReplayMatches(
         Connection $connection,
@@ -674,8 +675,8 @@ final readonly class WalletTopUpPaymentService
     }
 
     /**
-     * @param PaymentIntentRow $intent
-     * @param TopUpSettlementRow $settlement
+     * @param  PaymentIntentRow  $intent
+     * @param  TopUpSettlementRow  $settlement
      */
     private function settlementReceipt(
         Connection $connection,
@@ -904,7 +905,8 @@ final readonly class WalletTopUpPaymentService
         return $this->settlementReceipt($connection, $intent, $settlement, true);
     }
 
-    /** @param array<string, scalar|null> $safeEvidence
+    /**
+     * @param  array<string, scalar|null>  $safeEvidence
      * @return array<string, scalar|null>
      */
     private function normalizeSafeEvidence(array $safeEvidence): array
