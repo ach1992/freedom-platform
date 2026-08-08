@@ -1,0 +1,72 @@
+name: Provider Live Acceptance - PasarGuard
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Type MUTATE_DISPOSABLE_PASARGUARD_V5_2_1 to authorize the disposable live mutation sequence.
+        required: true
+        type: string
+      group_id:
+        description: Optional enabled PasarGuard group ID. Leave empty to select the lowest enabled group deterministically.
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: provider-live-pasarguard-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  pasarguard:
+    name: PasarGuard v5.2.1 guarded live acceptance
+    if: ${{ github.ref_name == 'develop/v1.0.0-completion' && inputs.confirm == 'MUTATE_DISPOSABLE_PASARGUARD_V5_2_1' }}
+    runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
+    timeout-minutes: 10
+    env:
+      PHP_ROOT: /www/server/php/84
+      COMPOSER_BIN: /usr/local/bin/composer
+      PASARGUARD_TEST_ORIGIN: ${{ secrets.PASARGUARD_TEST_ORIGIN }}
+      PASARGUARD_TEST_API_KEY: ${{ secrets.PASARGUARD_TEST_API_KEY }}
+      PASARGUARD_LIVE_RUN_ID: ${{ github.run_id }}
+      PASARGUARD_LIVE_CONFIRM: ${{ inputs.confirm }}
+      PASARGUARD_LIVE_GROUP_ID: ${{ inputs.group_id }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Validate protected live configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -x "$PHP_ROOT/bin/php"
+          test -x "$COMPOSER_BIN"
+          test -n "${PASARGUARD_TEST_ORIGIN:-}" || { echo 'PASARGUARD_TEST_ORIGIN is not configured.' >&2; exit 1; }
+          test -n "${PASARGUARD_TEST_API_KEY:-}" || { echo 'PASARGUARD_TEST_API_KEY is not configured.' >&2; exit 1; }
+          test "$PASARGUARD_LIVE_CONFIRM" = 'MUTATE_DISPOSABLE_PASARGUARD_V5_2_1'
+          "$PHP_ROOT/bin/php" -m | grep -Fx curl >/dev/null
+
+      - name: Install locked dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$COMPOSER_BIN" install --no-interaction --prefer-dist --no-progress --no-scripts
+
+      - name: Execute guarded PasarGuard live acceptance
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/evidence/provider-live
+          "$PHP_ROOT/bin/php" scripts/ci/pasarguard-live-acceptance.php \
+            2>&1 | tee build/evidence/provider-live/pasarguard.txt
+
+      - name: Upload sanitized live evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: provider-live-pasarguard-${{ github.run_id }}
+          path: build/evidence/provider-live
+          if-no-files-found: error
+          retention-days: 14
