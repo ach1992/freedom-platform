@@ -1,21 +1,23 @@
 # Phase 0.5 Dedicated Wallet Contention Verification Traceability
 
-**Status:** implementation verified; combined evidence-head CI pending.  
+**Status:** evidence-complete dedicated concurrency verification for the accepted `WAL-002` foundation.  
 **Authoritative Phase 0.5 tracker:** Issue `#8`.  
 **Implementation verification boundary:** `903f326040c9acd0b31645fe8fae3a75f8a9fd27`.  
 **Implementation CI:** `31240159777` / `#1128` — success, 352 tests / 2030 assertions.  
+**Evidence head:** `e7a0ae17d470beb40f4933e66c7b599e0837e120`.  
+**Evidence-head CI:** `31241459956` / `#1131` — success, 352 tests / 2030 assertions.  
 **Evidence:** `evidence/0.5.0/wallet-contention-verification.md`.
 
 ## Requirement-to-proof map
 
-| Requirement | Status at implementation boundary | Accepted executable proof | Remaining scope |
+| Requirement | Status | Accepted executable proof | Remaining scope |
 |---|---|---|---|
-| `WAL-002` | implementation proof complete; evidence-head pending | real-MariaDB multi-process same-wallet hold race, capture-vs-release terminal race, duplicate ledger command, reconciliation-vs-mutation; production row locks/unique keys remain enabled | future refund/correction/payment contention belongs to those requirements |
-| `WAL-003` | concurrency regression proof added to already accepted transfer boundary | duplicate concurrent prepare leaves one transfer/hold; duplicate concurrent confirm resolves primary + exact replay with one ledger effect | untouched-expired-transfer scheduling remains a separate operational gap |
+| `WAL-002` | verified for the currently implemented ledger/hold/snapshot/reconciliation foundation | real-MariaDB multi-process same-wallet hold race, capture-vs-release terminal race, duplicate ledger command, reconciliation-vs-mutation; production row locks/unique keys remain enabled | future refund/correction/payment contention belongs to those requirements |
+| `WAL-003` | parallel-verified with dedicated concurrency regression | duplicate concurrent prepare leaves one transfer/hold; duplicate concurrent confirm resolves primary + exact replay with one ledger effect | untouched-expired-transfer scheduling remains a separate operational gap |
 | `DAT-002` | satisfied for this boundary | all test amounts and production wallet/ledger values are integer IRR | project-wide crypto/future payment decimal rules remain separate |
 | `DAT-003` | satisfied for this boundary | MariaDB transactions, deterministic account lock ordering, unique command/hold/transfer keys and state constraints are exercised under independent processes | broader Phase 0.5 schemas remain separate |
 | `DAT-004` | satisfied for this boundary | contention never rewrites finalized ledger history; terminal hold/transfer effects remain singular | refund/correction require compensating-history proof |
-| `QUA-001` | implementation side satisfied; evidence-head pending | exact-head mandatory CI, retained JUnit/Clover/service artifact, independently recalculated digest and six-test contention suite | combined evidence-head CI must pass before acceptance is recorded in current overlays |
+| `QUA-001` | satisfied for this increment | exact implementation/evidence-head mandatory CI, retained JUnit/Clover/service artifacts, independent digest checks and six-test contention suite | full Phase 0.5 closure remains open |
 
 ## Deterministic process coordination
 
@@ -56,22 +58,31 @@ Preparation persists one transfer identity and one reservation. Confirmation rev
 
 Reconciliation derives authority from the immutable finalized ledger plus active holds while the wallet account is locked. Therefore a concurrent hold can be seen wholly before or wholly after its commit, but the snapshot cannot combine pre-mutation holds with post-mutation arithmetic.
 
-## Implementation verification record
+## Exact verification record
 
-Exact head `903f326040c9acd0b31645fe8fae3a75f8a9fd27`:
+Implementation head `903f326040c9acd0b31645fe8fae3a75f8a9fd27`:
 
 - CI `31240159777` / `#1128` — mandatory jobs all success;
 - full MariaDB/authenticated Redis suite: `352 tests / 2030 assertions`;
 - dedicated contention class: `6 tests / 35 assertions`, zero failures/errors/skips;
 - artifact `test-evidence-31240159777`, ID `9016771279`;
-- independently recalculated SHA-256 `4f32e7a5c7e4cc23b985b13aa2b6f291772b75c1f9a26cedcd620b9589b973b2`;
-- artifact contains the expected JUnit, test log, Clover and two service-evidence files.
+- independently recalculated SHA-256 `4f32e7a5c7e4cc23b985b13aa2b6f291772b75c1f9a26cedcd620b9589b973b2`.
+
+Evidence head `e7a0ae17d470beb40f4933e66c7b599e0837e120`:
+
+- CI `31241459956` / `#1131` — mandatory jobs all success;
+- full MariaDB/authenticated Redis suite: `352 tests / 2030 assertions`;
+- dedicated contention class: `6 tests / 35 assertions`, zero failures/errors/skips;
+- artifact `test-evidence-31241459956`, ID `9017163993`;
+- independently recalculated SHA-256 `58544b56477c708b4e798b2ea83e673995e22b0ab53c19213914d1c2609af294`.
+
+Both test artifacts contain exactly the expected JUnit, test log, Clover and two service-evidence files.
 
 ## Risk disposition
 
-The executable implementation evidence is sufficient to retire the previously identified **dedicated contention verification gap** for the currently accepted `WAL-002` ledger/hold/reconciliation foundations once the combined evidence head passes mandatory CI.
+The accepted implementation/evidence lifecycle retires the previously identified **dedicated contention verification gap** for the currently implemented `WAL-002` ledger/hold/snapshot/reconciliation foundation. `FIN-01` can therefore be treated as controlled for this foundation rather than an open verification blocker.
 
-It does not mean all future wallet/payment concurrency risk is closed. `WAL-004` refund, `WAL-005` correction, `WAL-001` top-up/Payment Intent and provider callbacks must each add their own race/idempotency proof. Persisted wallet snapshots remain non-authoritative.
+This does not mean all future wallet/payment concurrency risk is closed. `WAL-004` refund, `WAL-005` correction, `WAL-001` top-up/Payment Intent and provider callbacks must each add their own race/idempotency proof. Persisted wallet snapshots remain non-authoritative.
 
 ## Explicit non-claims
 
@@ -79,6 +90,4 @@ This boundary does not claim `WAL-001`, `WAL-004`, `WAL-005`, pricing/Quote, pro
 
 PasarGuard controlled live execution remains the active Phase 0.4 human gate. Marzban live acceptance remains a final-release gate.
 
-## Evidence-head gate
-
-The repository evidence and this traceability file form the evidence documentation boundary. Their latest combined head must pass all mandatory self-hosted jobs before `WAL-002` contention is marked accepted in the current execution/traceability/risk overlays or Issue `#8`.
+The next recommended bounded financial increment is `WAL-004` refund/reversal with compensating immutable entries, exact replay/conflict, refundable-cap enforcement, destination policy, audit/authorization and dedicated concurrency evidence.
