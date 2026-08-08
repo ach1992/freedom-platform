@@ -14,4 +14,10 @@ return [
         'confirmation_ttl_seconds' => 900,
         'fee_account_code' => null,
     ],
+    'corrections' => [
+        // Conservative default: every non-owner correction requires independent approval
+        // until the owner explicitly configures a positive large-correction threshold.
+        'dual_approval_threshold_irr' => (int) env('WALLET_CORRECTION_DUAL_APPROVAL_THRESHOLD_IRR', 0),
+        'approval_ttl_seconds' => (int) env('WALLET_CORRECTION_APPROVAL_TTL_SECONDS', 600),
+    ],
 ];
