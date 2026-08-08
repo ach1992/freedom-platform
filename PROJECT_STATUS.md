@@ -18,7 +18,9 @@ Current control documents:
 - current cross-phase continuation handoff: `docs/52-current-continuation-handoff.md`;
 - active Phase 0.4 continuation handoff: `docs/44-phase-0.4-pasarguard-live-execution-handoff.md`;
 - latest accepted Phase 0.5 evidence: `evidence/0.5.0/payment-intent-wallet-top-up-settlement.md`;
-- latest accepted Phase 0.5 traceability: `docs/56-phase-0.5-payment-intent-wallet-top-up-traceability.md`.
+- latest accepted Phase 0.5 traceability: `docs/56-phase-0.5-payment-intent-wallet-top-up-traceability.md`;
+- current Phase 0.5 evidence candidate: `evidence/0.5.0/quote-pricing-snapshot.md`;
+- current Phase 0.5 traceability candidate: `docs/57-phase-0.5-quote-pricing-traceability.md`.
 
 ## Live-state rule
 
@@ -79,27 +81,28 @@ Accepted behavior: immutable top-up intent identity and exact replay/conflict; a
 
 This accepted boundary does not claim `PAY-001` payment-method eligibility, a real gateway/provider, provider-native refund, pricing/Quote, promotions/referrals/agent pricing, Order/provisioning ownership, payment UX, Phase `0.4.0` closure or Phase `0.5.0` closure.
 
-## Current parallel bounded increment — `BUY-002` deterministic Pricing / immutable Quote
+## Current implementation-verified candidate — `BUY-002` deterministic Pricing / immutable Quote
 
-The next independent increment is now **deterministic Pricing / immutable Quote snapshot (`BUY-002`)**.
+Implementation verification:
 
-Required first-boundary properties:
+- SHA `16ebe0f9579f8ecb913ffd860bf6a9ba25567263`;
+- CI `31267071664` / `#1233` — all mandatory jobs success;
+- full suite **392 tests / 2355 assertions**;
+- dedicated Quote suite **8 tests / 63 assertions**, zero failures/errors/skips;
+- artifact `test-evidence-31267071664`, ID `9024501375`;
+- uploader and independently recalculated digest `sha256:899a26d7553f4fd37c2102da986fc876f0a8e8151b683ff36e2f300acb9ad754`;
+- evidence candidate `evidence/0.5.0/quote-pricing-snapshot.md`;
+- traceability candidate `docs/57-phase-0.5-quote-pricing-traceability.md`.
 
-- all monetary values are bounded integer IRR; no monetary float or implicit rounding;
-- immutable Quote/idempotency identity with canonical request/config payload hash; exact replay returns the prior Quote and changed reuse conflicts;
-- snapshot base Offering price and immutable Offering/configuration identity;
-- represent account/agent override input explicitly and deterministically rather than inferring mutable state later;
-- represent discount input/result explicitly, including zero discount; final price is deterministic and non-negative;
-- persist base, override, discount, final amount, `IRR`, validity and configuration snapshots as required by `BUY-002`;
-- accepted Quote cannot be reinterpreted by later Offering/pricing configuration changes;
-- Quote expiration is explicit and does not silently create current pricing/payment authority;
-- no wallet debit/capture, Payment Intent capture, Order paid state, provisioning or service activation occurs from Quote creation alone;
-- promotions/referrals/provider execution remain later increments;
-- exact implementation/evidence CI, retained artifact/digest and DB immutability/replay tests are mandatory.
+Implementation-verified behavior: immutable Quote key/request replay/conflict; integer-IRR base/override/discount/final components; override-before-discount arithmetic; Offering ID/code/version/configuration-hash snapshot; current tier/agent reference validation for resolved override inputs; bounded configuration snapshot/hash; expiration; historical stability across later Offering changes; database update/delete/forged-snapshot rejection; no wallet/payment/provider/paid-Order/provisioning effect.
 
-Reuse accepted `PlanOfferingDefinition`, custom-plan snapshot/arithmetic and existing agent-pricing foundations where applicable; do not invent a second incompatible pricing formula.
+This candidate deliberately separates pricing snapshot from purchasability. Draft/hidden Offering state may be snapshotted, while later `BUY-001` Order execution must perform fresh authoritative Offering/route/customer eligibility. Promotion/referral qualification, `AGT-005` most-specific agent pricing resolution, `PAY-001` payment-method adjustment and provider execution remain unclaimed.
 
-After Pricing/Quote: promotions/referrals/agent pricing, then payment-method eligibility/provider implementations and provider-native refund integrations.
+The candidate is **not accepted yet** until the final evidence/status head passes mandatory CI/artifact verification and an independent artifact digest/safe-content inspection.
+
+## Next recommended parallel bounded increment
+
+After exact `BUY-002` evidence-head acceptance, continue with stored **promotion/referral/pricing-rule resolution**, then most-specific agent pricing and payment-method/provider work. Do not pull Phase `0.6.0` paid Order/provisioning/service ownership forward.
 
 ## Current open items
 
@@ -107,7 +110,7 @@ After Pricing/Quote: promotions/referrals/agent pricing, then payment-method eli
 - Marzban live acceptance at final release acceptance;
 - Phase `0.4.0` closure audit;
 - no automated scheduled sweep is claimed for untouched expired pending transfers;
-- current `BUY-002` Pricing/Quote increment;
+- exact evidence-head acceptance for current `BUY-002` candidate;
 - promotions/referrals/agent pricing and `PAY-001` payment-method eligibility/providers;
 - provider-native refund/payment behavior beyond accepted provider-independent wallet foundations;
 - all Phase `0.6.0+` owned behavior.
@@ -124,4 +127,4 @@ After Pricing/Quote: promotions/referrals/agent pricing, then payment-method eli
 - browser return never proves payment and no paid provisioning occurs before authoritative capture;
 - protected secrets and sensitive provider material never enter repository evidence/logs/chat.
 
-Phase `0.4.0` is **not closed**. Phase `0.5.0` is **not closed**. Accepted parallel foundations may continue only without weakening or falsely closing active provider gates.
+Phase `0.4.0` is **not closed**. Phase `0.5.0` is **not closed**. Accepted parallel foundations and the implementation-verified `BUY-002` candidate may continue only without weakening or falsely closing active provider gates.
