@@ -26,6 +26,8 @@ Before changing code or documentation:
    - this file;
    - `PROJECT_STATUS.md`;
    - `docs/project-status.json`;
+   - `docs/development/continuation-runbook.md`;
+   - `docs/development/github-actions-runner-policy.md`;
    - `docs/specification/master-execution-prompt.md` for the affected scope;
    - the active handoff document;
    - the authoritative phase Issue linked from the status file;
@@ -44,6 +46,8 @@ A new chat or engineer must be able to begin from these steps without relying on
 - Do not merge, enable auto-merge, mark Ready for review, rewrite history, force-push, push to `main`, or create temporary branches.
 - Use small, focused commits on the allowed branch.
 - Re-fetch the PR immediately before every write that depends on the current head.
+- Every GitHub Actions job must run on the owner-controlled self-hosted runner using `runs-on: [self-hosted, Linux, X64, freedom-staging, php84]`.
+- Do not use GitHub-hosted `ubuntu-*`, `windows-*`, or `macos-*` runners as a fallback for CI, provider, staging, bootstrap, or historical workflows. Follow `docs/development/github-actions-runner-policy.md`.
 
 ## 4. Scope control
 
@@ -82,8 +86,8 @@ For each bounded change:
 2. Inspect current implementation, tests, migrations, evidence, and known risks.
 3. Choose the smallest reliable change that preserves verified behavior.
 4. Add or update automated tests for normal, replay, conflict, authorization, validation, concurrency, redaction, and failure behavior as applicable.
-5. Run the repository's mandatory checks using the documented self-hosted runner contract.
-6. Fix real failures; do not weaken checks, suppress diagnostics, or relabel failures as infrastructure without executable evidence.
+5. Run the repository's mandatory checks using the documented self-hosted runner contract and repository-wide runner policy.
+6. Fix real failures; do not weaken checks, suppress diagnostics, switch to GitHub-hosted capacity, or relabel failures as infrastructure without executable evidence.
 7. Commit implementation separately from evidence/documentation when an independently verified implementation boundary is required.
 8. Update status, traceability, risk, and handoff documents before leaving the increment.
 
