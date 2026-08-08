@@ -1,41 +1,39 @@
 # Continuation Runbook
 
-Use this runbook when starting in a new chat, joining the project, recovering after an interruption, or handing work to another engineer.
+Use this runbook when starting in a new chat, joining the project, recovering after an interruption, or handing work to another MASTER/Worker.
 
 ## 1. Establish live truth
 
 Do not begin from conversation memory or a copied SHA.
 
-1. Fetch PR `#6` in `ach1992/freedom-platform`.
-2. Verify:
-   - state is open;
-   - `draft=true`;
-   - base is `main`;
-   - head branch is `develop/v1.0.0-completion`;
-   - repository head and PR head belong to the same repository.
-3. Record the exact `head_sha` for the current inspection only.
-4. Fetch Issue `#7` and its recent comments.
-5. Read:
+1. Fetch Draft PR `#6` in `ach1992/freedom-platform` and verify it is open, Draft, base `main`, head `develop/v1.0.0-completion`.
+2. Record its exact live `head_sha` as the current integration head for this inspection only.
+3. Read, in order:
    - `AGENTS.md`;
    - `PROJECT_STATUS.md`;
    - `docs/project-status.json`;
+   - `docs/development/multi-agent-orchestration.md`;
    - `docs/development/github-actions-runner-policy.md`;
    - `docs/development/ci-runner-contract.md`;
-   - the active handoff linked by the status files;
-   - relevant requirement, architecture, risk, test, deployment, evidence, and phase traceability files.
-6. Reconcile any disagreement before feature work. A stale document is a defect in the project control plane.
+   - the current handoff linked from `PROJECT_STATUS.md`;
+   - the active phase Issue and any Task Contract Issue/PR relevant to the role;
+   - relevant specification, traceability, risk, test, deployment and evidence files.
+4. Inspect open PRs, active Worker branches and current GitHub Issues before creating a new task or abstraction.
+5. Reconcile disagreement before feature work. A stale project-control document is a defect.
 
-## 2. Inspect exact-SHA CI
+For a Worker, the Task Contract's branch and `BASE_SHA` must match the isolated environment before any implementation. A Worker does not silently rebase onto a newer integration head; the MASTER revises the contract when rebasing/re-dispatch is actually safe.
 
-Fetch workflow runs associated with the exact PR head SHA.
+## 2. Inspect exact-head CI
 
-Repository-wide runner rule before inspecting any result:
+For the live integration head, inspect workflow runs associated with Draft PR `#6`. For a Worker review, inspect the Worker PR's current exact head and current merge candidate.
 
-- every job in every workflow must use `runs-on: [self-hosted, Linux, X64, freedom-staging, php84]`;
-- expected runner name is `freedom-staging-runner`;
-- GitHub-hosted `ubuntu-*`, `windows-*`, or `macos-*` runners are not an allowed fallback;
-- if the self-hosted runner is offline, busy, or missing labels, treat that as an infrastructure blocker rather than changing `runs-on` to GitHub-hosted capacity;
-- action steps such as `actions/checkout`, `actions/upload-artifact`, and `gitleaks/gitleaks-action` still execute on the selected self-hosted job runner.
+Repository-wide runner rule:
+
+- every job uses `runs-on: [self-hosted, Linux, X64, freedom-staging, php84]`;
+- expected runner is `freedom-staging-runner`;
+- GitHub-hosted runners are not a fallback;
+- generic Worker PR CI runs only for same-repository PRs and contains no protected provider/staging secrets;
+- a fork PR skipped by the same-repository guard is not accepted merge evidence.
 
 Mandatory `CI` jobs:
 
@@ -45,28 +43,11 @@ Mandatory `CI` jobs:
 - PHP static quality;
 - MariaDB and Redis tests.
 
-For every job:
+Inspect status, conclusion and executable logs. A queued, cancelled, stale, skipped, GitHub-hosted or partially executable run is not evidence.
 
-1. inspect status and conclusion;
-2. inspect step summaries;
-3. read executable logs for failures, cancellations, warnings, unexpected skips, or suspiciously small artifacts;
-4. verify the checkout identifies the intended PR head, even when GitHub executes a synthetic PR merge ref;
-5. verify runner facts identify the expected self-hosted environment when the job emits them;
-6. distinguish a real code/policy failure from a runner or GitHub incident using logs, not assumptions.
+## 3. Diagnose without wasting runner capacity
 
-A workflow is acceptable only when every mandatory job completed successfully on the required self-hosted runner. A queued, cancelled, stale, billing-blocked, GitHub-hosted, or partially executable run is not evidence.
-
-### Missing workflow run
-
-Connector/content commits may not immediately produce an Actions run. When no run exists on the exact head, the only owner action to request is:
-
-`Actions → CI → Run workflow → develop/v1.0.0-completion`
-
-Before requesting a manual run, verify `freedom-staging-runner` is Online with labels `self-hosted`, `Linux`, `X64`, `freedom-staging`, `php84`. Do not request a manual run when a run already exists or while a newer exact-head run is queued/in progress.
-
-## 3. Diagnose without wasting time
-
-Use bounded thresholds and inspect the current step.
+The repository currently has one self-hosted runner. Jobs that look parallel may serialize.
 
 - Toolchain bootstrap: normally under 2 minutes.
 - Dependency installation with warm cache: normally under 10 minutes.
@@ -74,93 +55,81 @@ Use bounded thresholds and inspect the current step.
 - Disposable MariaDB/Redis startup: bounded to 5 minutes.
 - Full suite with coverage: bounded to 30 minutes.
 
-If a step remains unchanged beyond its bound:
+When a run stalls, inspect current job/runner state and branch-aware concurrency. Do not create repeated commits/dispatches, and never switch to GitHub-hosted capacity.
 
-1. read its log if available;
-2. check whether the self-hosted runner is online and actually executing another job;
-3. check branch-aware concurrency and superseded runs;
-4. do not create repeated commits or workflow dispatches to “unstick” an occupied runner;
-5. do not switch to GitHub-hosted capacity;
-6. request one exact runner-service check only when connector inspection cannot resolve it.
-
-Do not wait indefinitely on a job with no executable step/log. Treat it as an infrastructure blocker and preserve the evidence.
-
-## 4. Choose the next bounded action
+## 4. MASTER: choose and dispatch bounded work
 
 Apply this priority:
 
-1. release-blocking security, authorization, financial, remote-idempotency, or data-integrity defect;
+1. release-blocking security, authorization, financial, remote-idempotency or data-integrity defect;
 2. exact-head CI failure;
-3. project-control drift that can misdirect the next engineer;
-4. active-increment implementation gap;
-5. evidence and traceability completion;
-6. next planned increment.
+3. project-control drift that can misdirect Workers;
+4. active-increment blocker that is safely actionable;
+5. READY task whose dependencies are already merged into the integration base;
+6. evidence/traceability completion;
+7. next planned increment.
 
-Never enter a later phase merely because the current phase has a difficult integration or CI problem.
+Before creating a new implementation Issue, inspect existing phase Issues, completed evidence, current handoffs and recent Issue comments for equivalent work.
 
-## 5. Implement safely
+For every candidate Task Contract record requirement IDs, Contract Revision, dependencies, expected modification surface, conflict class, security/financial risk, acceptance criteria, tests, evidence and merge prerequisites. Do not parallelize two tasks that share a critical service, schema/migration sequence, central contract, lockfile or workflow unless a safe prerequisite/merge order makes the overlap explicit.
 
-Before a write:
+When READY:
 
-- re-fetch PR `#6` if the previous read may be stale;
-- search for existing implementation and terminology;
-- identify requirement IDs and affected invariants;
-- identify rollback and compatibility impact;
-- decide whether the change is implementation, infrastructure, evidence, or documentation.
+1. re-fetch PR `#6` and record its exact head as `BASE_SHA`;
+2. create/update the bounded Task Contract in GitHub;
+3. create `agent/<issue-number>-<short-slug>` from exactly `BASE_SHA`;
+4. record Worker ID/branch/base/dependencies/scope in the Issue;
+5. provide the human relay a complete standalone Worker prompt and isolated worktree command;
+6. mark the task `DISPATCHED` only after the durable GitHub state exists.
 
-For code changes:
+## 5. Worker: implement safely
 
-- preserve `strict_types`, typed boundaries, translations, validation, authorization, redaction, transactions, replay safety, and fail-closed behavior;
-- add tests before claiming behavior;
-- use the smallest safe commit;
-- do not edit core/vendor/third-party files;
-- do not suppress a failing gate to produce green CI.
+A Worker operates only inside one isolated writable worktree/equivalent environment and one Task Contract Revision.
 
-For infrastructure changes:
+- verify branch and `BASE_SHA` before work;
+- inspect existing implementation/evidence first;
+- preserve strict types, localization, authorization, redaction, transactions, replay safety and fail-closed behavior;
+- use the smallest complete change;
+- do not touch protected/high-conflict scope unless the contract explicitly allows it;
+- do not push `develop/v1.0.0-completion` or `main`;
+- do not self-merge, retarget to `main`, force-push or alter another Worker branch;
+- stop on dependency/scope/protected-surface mismatch and record a blocker for the MASTER.
 
-- follow `docs/development/github-actions-runner-policy.md` and keep every Actions job on the owner-controlled self-hosted runner;
-- record exact runner/runtime assumptions in `docs/development/ci-runner-contract.md`;
-- use timeouts and fail-fast verification;
-- keep production/staging mutation workflows explicit and guarded;
-- never expose secret values.
+## 6. Verify a Worker implementation boundary
 
-## 6. Verify an implementation boundary
+1. Worker commits implementation on its branch.
+2. Worker opens/updates its PR targeting `develop/v1.0.0-completion`.
+3. Mandatory same-repository CI succeeds for the exact implementation head/current merge candidate.
+4. Executable logs provide exact test/assertion counts and retained artifacts.
+5. Required evidence/traceability is committed separately when the increment lifecycle requires it.
+6. Mandatory CI succeeds for that exact evidence head/current merge candidate.
+7. Worker records durable status in Issue/PR and tells the human relay only that the Worker is `READY_FOR_REVIEW`.
+8. MASTER independently fetches Task Contract, PR metadata, exact HEAD, diff, changed files, tests, CI, evidence and dependency/conflict state.
+9. Corrections go back to the same Worker Chat with a complete correction prompt.
+10. If all gates pass, MASTER merges the Worker PR with history-preserving semantics into `develop/v1.0.0-completion`.
+11. MASTER fetches the new integration head and requires integration CI through Draft PR `#6` before accepting it as the new baseline.
+12. MASTER recomputes task dependencies/conflicts and records newly READY work.
 
-1. Commit the implementation only.
-2. Fetch the new exact PR head.
-3. obtain mandatory CI success on that exact SHA using the required self-hosted runner;
-4. read test logs and extract exact test/assertion counts;
-5. fetch the retained artifact and record name/ID;
-6. download the artifact and calculate SHA-256 independently;
-7. inspect artifact contents for completeness and secret safety;
-8. create bounded evidence and traceability documents without overstating provider or production compatibility;
-9. commit evidence/documents;
-10. obtain mandatory CI success on the exact evidence-head SHA using the required self-hosted runner;
-11. only then update Issue `#7` and PR `#6`.
+PR `#6` is never merged to `main` without explicit final release acceptance from the owner.
 
-If evidence changes implementation behavior, it is no longer an evidence-only head; create and verify a new implementation boundary.
+## 7. Provider/staging and secret workflows
 
-## 7. Leave a durable handoff
+Generic CI is tests/static only. It must never deploy, mutate staging/production, invoke live provider mutations, configure Telegram webhooks or receive unnecessary protected secrets.
 
-Update before stopping:
+Secret-consuming provider/staging workflows remain separately `workflow_dispatch`/confirmation/branch guarded. Never request or expose a secret value; reference existing GitHub Actions Secrets by name through the approved workflow only.
 
-- `PROJECT_STATUS.md`;
-- `docs/project-status.json`;
-- active phase handoff;
-- affected traceability rows;
-- affected risk entries;
-- tests/evidence references;
-- exact blockers and mandatory next steps.
+The existing `ops/provider-live-dispatch-bootstrap` and `safety/main-2026-08-08-pre-provider-bootstrap` branches remain retained until the documented PR `#24` cleanup condition is satisfied.
 
-The handoff must state:
+## 8. Leave a durable handoff
 
-- last independently verified boundary;
-- active unverified scope;
-- files and behavior added;
-- invariants that must remain true;
-- claims intentionally not made;
-- exact CI state and whether executable logs existed;
-- next actions in mandatory order;
-- any one human-only action, with safe verification and rollback.
+Before stopping a MASTER cycle, GitHub/repository alone must reveal:
 
-Never make a new engineer infer current status by reading hundreds of commits or old Issue comments.
+- integration branch and Draft PR;
+- live task graph and phase state;
+- active Worker IDs, Task Contract revisions, branches and `BASE_SHA`s;
+- dependencies/blockers/conflict classifications;
+- Worker PR review/CI/evidence state;
+- latest accepted implementation/evidence boundaries;
+- current project-control rules and next READY tasks.
+
+Stable rules live in repository documentation. Dynamic Worker state lives in GitHub Issues/PRs/comments/CI. Chat memory is never the project database.
