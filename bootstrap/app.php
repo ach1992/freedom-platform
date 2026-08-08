@@ -12,6 +12,7 @@ use App\Modules\Operations\Presentation\Console\RecordWorkerHeartbeatCommand;
 use App\Modules\Telegram\Presentation\Console\ConfigureTelegramWebhookCommand;
 use App\Modules\Telegram\Presentation\Console\RequeueTelegramUpdatesCommand;
 use App\Modules\Telegram\Presentation\Http\Middleware\VerifyTelegramWebhookRequest;
+use App\Modules\Wallet\Presentation\Console\WalletMaintenanceCommand;
 use App\Shared\Infrastructure\Http\CorrelationIdMiddleware;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
@@ -41,6 +42,7 @@ return Application::configure(basePath: dirname(__DIR__))
         HealthCheckCommand::class,
         IssueInstallerTokenCommand::class,
         RecordWorkerHeartbeatCommand::class,
+        WalletMaintenanceCommand::class,
     ])
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(
