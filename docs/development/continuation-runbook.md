@@ -19,6 +19,8 @@ Do not begin from conversation memory or a copied SHA.
    - `AGENTS.md`;
    - `PROJECT_STATUS.md`;
    - `docs/project-status.json`;
+   - `docs/development/github-actions-runner-policy.md`;
+   - `docs/development/ci-runner-contract.md`;
    - the active handoff linked by the status files;
    - relevant requirement, architecture, risk, test, deployment, evidence, and phase traceability files.
 6. Reconcile any disagreement before feature work. A stale document is a defect in the project control plane.
@@ -26,6 +28,14 @@ Do not begin from conversation memory or a copied SHA.
 ## 2. Inspect exact-SHA CI
 
 Fetch workflow runs associated with the exact PR head SHA.
+
+Repository-wide runner rule before inspecting any result:
+
+- every job in every workflow must use `runs-on: [self-hosted, Linux, X64, freedom-staging, php84]`;
+- expected runner name is `freedom-staging-runner`;
+- GitHub-hosted `ubuntu-*`, `windows-*`, or `macos-*` runners are not an allowed fallback;
+- if the self-hosted runner is offline, busy, or missing labels, treat that as an infrastructure blocker rather than changing `runs-on` to GitHub-hosted capacity;
+- action steps such as `actions/checkout`, `actions/upload-artifact`, and `gitleaks/gitleaks-action` still execute on the selected self-hosted job runner.
 
 Mandatory `CI` jobs:
 
@@ -41,9 +51,10 @@ For every job:
 2. inspect step summaries;
 3. read executable logs for failures, cancellations, warnings, unexpected skips, or suspiciously small artifacts;
 4. verify the checkout identifies the intended PR head, even when GitHub executes a synthetic PR merge ref;
-5. distinguish a real code/policy failure from a runner or GitHub incident using logs, not assumptions.
+5. verify runner facts identify the expected self-hosted environment when the job emits them;
+6. distinguish a real code/policy failure from a runner or GitHub incident using logs, not assumptions.
 
-A workflow is acceptable only when every mandatory job completed successfully. A queued, cancelled, stale, or partially executable run is not evidence.
+A workflow is acceptable only when every mandatory job completed successfully on the required self-hosted runner. A queued, cancelled, stale, billing-blocked, GitHub-hosted, or partially executable run is not evidence.
 
 ### Missing workflow run
 
@@ -51,7 +62,7 @@ Connector/content commits may not immediately produce an Actions run. When no ru
 
 `Actions → CI → Run workflow → develop/v1.0.0-completion`
 
-Do not request a manual run when a run already exists or while a newer exact-head run is queued/in progress.
+Before requesting a manual run, verify `freedom-staging-runner` is Online with labels `self-hosted`, `Linux`, `X64`, `freedom-staging`, `php84`. Do not request a manual run when a run already exists or while a newer exact-head run is queued/in progress.
 
 ## 3. Diagnose without wasting time
 
@@ -69,7 +80,8 @@ If a step remains unchanged beyond its bound:
 2. check whether the self-hosted runner is online and actually executing another job;
 3. check branch-aware concurrency and superseded runs;
 4. do not create repeated commits or workflow dispatches to “unstick” an occupied runner;
-5. request one exact runner-service check only when connector inspection cannot resolve it.
+5. do not switch to GitHub-hosted capacity;
+6. request one exact runner-service check only when connector inspection cannot resolve it.
 
 Do not wait indefinitely on a job with no executable step/log. Treat it as an infrastructure blocker and preserve the evidence.
 
@@ -106,6 +118,7 @@ For code changes:
 
 For infrastructure changes:
 
+- follow `docs/development/github-actions-runner-policy.md` and keep every Actions job on the owner-controlled self-hosted runner;
 - record exact runner/runtime assumptions in `docs/development/ci-runner-contract.md`;
 - use timeouts and fail-fast verification;
 - keep production/staging mutation workflows explicit and guarded;
@@ -115,14 +128,14 @@ For infrastructure changes:
 
 1. Commit the implementation only.
 2. Fetch the new exact PR head.
-3. obtain mandatory CI success on that exact SHA;
+3. obtain mandatory CI success on that exact SHA using the required self-hosted runner;
 4. read test logs and extract exact test/assertion counts;
 5. fetch the retained artifact and record name/ID;
 6. download the artifact and calculate SHA-256 independently;
 7. inspect artifact contents for completeness and secret safety;
 8. create bounded evidence and traceability documents without overstating provider or production compatibility;
 9. commit evidence/documents;
-10. obtain mandatory CI success on the exact evidence-head SHA;
+10. obtain mandatory CI success on the exact evidence-head SHA using the required self-hosted runner;
 11. only then update Issue `#7` and PR `#6`.
 
 If evidence changes implementation behavior, it is no longer an evidence-only head; create and verify a new implementation boundary.
