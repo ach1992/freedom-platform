@@ -390,7 +390,7 @@ final readonly class WalletRefundService
             $isWallet = $sourceEntry->owner_user_id !== null && $sourceEntry->wallet_bucket !== null;
 
             if ($direction === LedgerDirection::Debit) {
-                ++$destinationEntryCount;
+                $destinationEntryCount++;
                 $sourceDebits = $sourceDebits->add($amount);
 
                 if ($destination === RefundDestination::Wallet) {
