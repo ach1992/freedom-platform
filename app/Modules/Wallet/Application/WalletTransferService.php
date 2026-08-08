@@ -559,7 +559,7 @@ final readonly class WalletTransferService
     }
 
     /**
-     * @param WalletTransferRow $transfer
+     * @param  WalletTransferRow  $transfer
      * @return object{id: int|string, hold_key: string, ledger_account_id: int|string, amount_irr: int|string, source_type: string, source_id: string, status: string, expires_at: string, captured_ledger_transaction_id: int|string|null, release_reason: string|null}
      */
     private function lockedTransferHold(Connection $connection, object $transfer): object
