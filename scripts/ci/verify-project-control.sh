@@ -25,6 +25,7 @@ required_files=(
     docs/project-status.json
     docs/development/project-status.schema.json
     docs/development/continuation-runbook.md
+    docs/development/github-actions-runner-policy.md
     docs/development/ci-runner-contract.md
     docs/development/increment-lifecycle.md
     docs/development/repository-map.md
@@ -81,6 +82,7 @@ jq -e '
     and (.forbidden_actions | index("enable_auto_merge") != null)
     and (.forbidden_actions | index("rewrite_history") != null)
     and (.forbidden_actions | index("push_main") != null)
+    and (.forbidden_actions | index("use_github_hosted_runner") != null)
     and (.forbidden_actions | index("create_temporary_branch") != null)
     and (.forbidden_actions | index("retrieve_or_print_secrets") != null)
     and (.forbidden_actions | index("claim_unverified_provider_compatibility") != null)
@@ -132,10 +134,25 @@ shopt -s nullglob
 repair_workflows=(.github/workflows/ci-repair*.yml .github/workflows/ci-repair*.yaml)
 repair_scripts=(scripts/ci/generate-ci-repair*.sh)
 legacy_staging_workflows=(.github/workflows/staging-*.yml .github/workflows/staging-*.yaml)
+workflow_files=(.github/workflows/*.yml .github/workflows/*.yaml)
 shopt -u nullglob
 
 ((${#repair_workflows[@]} == 0)) || fail "temporary repair workflow remains: ${repair_workflows[*]}"
 ((${#repair_scripts[@]} == 0)) || fail "temporary repair script remains: ${repair_scripts[*]}"
+((${#workflow_files[@]} > 0)) || fail 'repository contains no GitHub Actions workflows'
+
+expected_runner_selector='runs-on: [self-hosted, Linux, X64, freedom-staging, php84]'
+for workflow in "${workflow_files[@]}"; do
+    found_runner=false
+    while IFS= read -r runner_line; do
+        trimmed="${runner_line#"${runner_line%%[![:space:]]*}"}"
+        [[ "$trimmed" == "$expected_runner_selector" ]] \
+            || fail "workflow must use the canonical self-hosted runner selector: $workflow: $trimmed"
+        found_runner=true
+    done < <(grep -E '^[[:space:]]*runs-on:' "$workflow" || true)
+
+    [[ "$found_runner" == true ]] || fail "workflow has no explicit self-hosted runs-on selector: $workflow"
+done
 
 for workflow in "${legacy_staging_workflows[@]}"; do
     [[ "$workflow" == '.github/workflows/staging-readiness.yml' ]] && continue
@@ -163,6 +180,7 @@ fi
 for required_rule in \
     'PR must remain Draft' \
     'Never trust a SHA copied from a handoff' \
+    'Every GitHub Actions job must run on the owner-controlled self-hosted runner' \
     'Never request, retrieve, print, commit, log, attach, or quote secrets.'; do
     grep -F "$required_rule" AGENTS.md >/dev/null \
         || fail "AGENTS.md is missing operating rule: $required_rule"
