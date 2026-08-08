@@ -215,7 +215,7 @@ final class WalletTopUpPaymentIntentTest extends TestCase
         self::assertSame(1, DB::table('payment_provider_transactions')->count());
 
         $this->assertRuntimeMessage(
-            'Payment provider event replay conflicts with the accepted event.',
+            'Authoritative provider evidence amount does not match the payment intent.',
             fn (): mixed => $service->capture(
                 $intent->intentPublicId,
                 'fake_gateway',
@@ -224,10 +224,11 @@ final class WalletTopUpPaymentIntentTest extends TestCase
             ),
         );
 
-        $secondWalletId = $this->wallet($userId, 'cash', 'duplicate-event-second');
+        $secondUserId = $this->user();
+        $secondWalletId = $this->wallet($secondUserId, 'cash', 'duplicate-event-second');
         $secondIntent = $service->create(
             'topup.intent.dup.000002',
-            $userId,
+            $secondUserId,
             $secondWalletId,
             'fake_gateway',
             Money::irr(210_000),
