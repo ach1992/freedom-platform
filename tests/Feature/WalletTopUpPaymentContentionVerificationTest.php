@@ -149,13 +149,14 @@ namespace Tests\Feature {
 
         public function test_same_provider_event_cannot_capture_two_different_payment_intents_concurrently(): void
         {
-            $userId = $this->user();
-            $firstWalletId = $this->wallet($userId, 'cross-intent-first');
-            $secondWalletId = $this->wallet($userId, 'cross-intent-second');
+            $firstUserId = $this->user();
+            $secondUserId = $this->user();
+            $firstWalletId = $this->wallet($firstUserId, 'cross-intent-first');
+            $secondWalletId = $this->wallet($secondUserId, 'cross-intent-second');
             $service = $this->app->make(WalletTopUpPaymentService::class);
             $firstIntent = $service->create(
                 'topup.contention.cross.000001',
-                $userId,
+                $firstUserId,
                 $firstWalletId,
                 'fake_gateway',
                 Money::irr(400_000),
@@ -163,7 +164,7 @@ namespace Tests\Feature {
             );
             $secondIntent = $service->create(
                 'topup.contention.cross.000002',
-                $userId,
+                $secondUserId,
                 $secondWalletId,
                 'fake_gateway',
                 Money::irr(400_000),
@@ -185,8 +186,8 @@ namespace Tests\Feature {
             self::assertSame(1, DB::table('payment_provider_events')->where('provider_event_id', $eventId)->count());
             self::assertSame(1, DB::table('payment_provider_transactions')->where('provider_transaction_id', $transactionId)->count());
             self::assertSame(1, DB::table('ledger_transactions')->where('transaction_type', 'wallet_external_top_up')->count());
-            $totalWalletBalance = $this->app->make(WalletHoldService::class)->balance($userId, $firstWalletId)->ledgerBalance->amount
-                + $this->app->make(WalletHoldService::class)->balance($userId, $secondWalletId)->ledgerBalance->amount;
+            $totalWalletBalance = $this->app->make(WalletHoldService::class)->balance($firstUserId, $firstWalletId)->ledgerBalance->amount
+                + $this->app->make(WalletHoldService::class)->balance($secondUserId, $secondWalletId)->ledgerBalance->amount;
             self::assertSame(400_000, $totalWalletBalance);
         }
 
@@ -315,6 +316,9 @@ namespace Tests\Feature {
         private function terminateWorkers(array $workers): void
         {
             foreach ($workers as $worker) {
+                if (! is_resource($worker['process'])) {
+                    continue;
+                }
                 $status = proc_get_status($worker['process']);
                 if ($status['running']) {
                     proc_terminate($worker['process']);
@@ -324,9 +328,7 @@ namespace Tests\Feature {
                         fclose($pipe);
                     }
                 }
-                if (is_resource($worker['process'])) {
-                    proc_close($worker['process']);
-                }
+                proc_close($worker['process']);
             }
         }
 
