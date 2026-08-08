@@ -1,92 +1,49 @@
 # Phase 0.5 Wallet Maintenance Operations Evidence
 
-**Status:** implementation verified; evidence-head verification pending.  
-**Phase:** parallel `0.5.0 — Ledger, Pricing, Promotions and Payment Providers` foundation while Phase `0.4.0` provider live gates remain open.  
+**Status:** evidence-complete bounded Phase `0.5.0` operational foundation.  
 **Authoritative Phase 0.5 Issue:** `#8`.  
-**Implementation head:** `87392cca0a1a00ee87a1b5074386dd691a4094c6`.
+**Implementation head:** `87392cca0a1a00ee87a1b5074386dd691a4094c6`.  
+**Evidence head:** `fa0cc2056459f171c32e0260422a465891766629`.
 
 ## Accepted bounded scope
 
-This increment exposes the already accepted wallet reconciliation and expired-hold cleanup services through the repository's single Scheduler path without changing financial authority:
+This increment exposes accepted wallet reconciliation and expired-hold cleanup through the repository's existing single Laravel Scheduler path without changing financial authority:
 
-- `WalletMaintenanceService` runs bounded expired-hold cleanup and bounded wallet reconciliation as one operational pass;
-- each operation remains delegated to the accepted `ExpiredWalletHoldCleanupService` and `WalletReconciliationService`, so immutable ledger entries plus active holds remain authoritative;
-- active wallet accounts are selected only from active IRR user-owned `cash` / `promotional` liability buckets;
-- wallet and hold batch limits are independently bounded to `1..500`;
-- one failing/review-required hold or wallet is counted and surfaced instead of being silently omitted;
-- `wallet:maintenance` exposes safe human/JSON output containing counts and health/review state only;
-- JSON output never includes hold keys, source identifiers, user identifiers, wallet account identifiers, monetary source metadata, credentials or provider artifacts;
-- invalid bounds fail closed with a stable safe error code;
-- the command is explicitly registered in `bootstrap/app.php`;
-- the existing single Laravel Scheduler runs `wallet:maintenance` every five minutes with fixed bounded options, JSON-only output, `withoutOverlapping()` and `onOneServer()`;
-- no per-task system Cron is introduced and no snapshot is used to authorize a financial effect.
+- `WalletMaintenanceService` coordinates bounded cleanup and reconciliation;
+- `wallet:maintenance` emits aggregate health/counts only and does not expose hold keys, source IDs, user IDs, wallet IDs, amounts or credentials;
+- wallet/hold limits are bounded to `1..500` and invalid limits fail closed;
+- the existing Scheduler runs the command every five minutes with fixed bounded options, `withoutOverlapping()` and `onOneServer()`;
+- no per-task OS Cron is introduced;
+- persisted snapshots remain non-authoritative and the command cannot post a debit/credit, place/capture a hold or mutate snapshot history directly;
+- review-required rows remain authoritative and visible for later investigation while ordinary command output remains aggregate-only.
 
-## Requirement mapping
+## Verification
 
-- `WAL-002` — provides bounded operational execution for accepted reconciliation and expired-hold cleanup; dedicated multi-process financial contention/stress remains open.
-- `RUN-003` — the task runs through the existing single Laravel Scheduler rather than a new Cron entry.
-- `RUN-004` — this bounded task has overlap prevention, single-server execution, idempotent/reconcilable underlying operations and explicit review-required output. General project-wide timeout/history/metrics/dead-letter requirements remain broader operations scope.
-- `QUA-001` — production code, command/schedule tests, exact-head CI and retained artifact exist for this increment.
+Implementation CI on `87392cca0a1a00ee87a1b5074386dd691a4094c6`:
 
-## Implementation surfaces
+- run `31233514751` / `#1066` — all mandatory jobs success;
+- full suite: **338 tests / 1905 assertions**;
+- artifact `test-evidence-31233514751`, ID `9014696797`;
+- uploader and independently verified SHA-256 `f90aac3ae57325d345b3e49b0a4c060d69cf49997b49dd8c0234bf086e6f5b22`.
 
-- `app/Modules/Wallet/Application/WalletMaintenanceResult.php`
-- `app/Modules/Wallet/Application/WalletMaintenanceService.php`
-- `app/Modules/Wallet/Presentation/Console/WalletMaintenanceCommand.php`
-- `bootstrap/app.php`
-- `routes/console.php`
-- `tests/Feature/WalletMaintenanceCommandTest.php`
+Evidence-head CI on `fa0cc2056459f171c32e0260422a465891766629`:
 
-## Executable verification
+- run `31233817131` / `#1068` — all mandatory jobs success;
+- full suite: **338 tests / 1905 assertions**;
+- artifact `test-evidence-31233817131`, ID `9014728109`;
+- uploader and independently verified SHA-256 `0a0a75865e81e1f764f913edd795ec203acc50fb181615f21560f7878b0e14ba`.
 
-`WalletMaintenanceCommandTest` proves:
+Both inspected artifacts contained the five expected test/coverage/service-log files and the bounded sensitive-marker scan was clean.
 
-1. healthy JSON maintenance releases an expired active hold, reconciles the wallet, appends a snapshot and emits only aggregate counts;
-2. a cleanup row requiring review returns command failure with `review_required` and a count, while the raw unsafe hold identifier is not emitted;
-3. wallet account batching is bounded independently from hold cleanup batching;
-4. invalid limits return a stable invalid-input result and non-success exit status;
-5. the command is registered in the Laravel schedule;
-6. the maintenance pass does not create a second financial transaction while releasing an expired reservation or reconciling state.
+## Requirement status
 
-The lower-level accepted wallet reconciliation and hold tests remain part of the full suite and continue to prove append-only snapshots, stale-snapshot non-authority, active-hold reservation, capture/release idempotency and database immutability.
-
-## Exact implementation CI
-
-GitHub Actions run `31233514751` / run `#1066` on exact implementation head `87392cca0a1a00ee87a1b5074386dd691a4094c6`:
-
-- Repository preflight / planning / project-control verification — **success**;
-- Secret scan — **success**;
-- PHP static quality: Pint, PHPStan/Larastan and repository policy — **success**;
-- Dependency and license policy — **success**;
-- MariaDB and authenticated Redis suite — **338 tests, 1905 assertions, success**.
-
-Retained test artifact:
-
-- name: `test-evidence-31233514751`;
-- artifact ID: `9014696797`;
-- uploader SHA-256: `f90aac3ae57325d345b3e49b0a4c060d69cf49997b49dd8c0234bf086e6f5b22`;
-- independently calculated SHA-256: `f90aac3ae57325d345b3e49b0a4c060d69cf49997b49dd8c0234bf086e6f5b22`.
-
-Independent artifact inspection observed exactly five expected files:
-
-- `tests/junit.xml`;
-- `tests/test.log`;
-- `coverage/clover.xml`;
-- `services/compose-ps.txt`;
-- `services/compose.log`.
-
-The bounded sensitive-marker scan found no PasarGuard API-key marker, protected PasarGuard secret-variable marker, Bearer authorization material or private-key marker.
+- `WAL-002`: production command/scheduling for accepted reconciliation/expired-hold cleanup is accepted; dedicated multi-process wallet contention/stress remains open.
+- `RUN-003`: satisfied for this task through the existing single Scheduler.
+- `RUN-004`: satisfied only for this bounded task's overlap/single-server/idempotent/review behavior; broader operations history/metrics/dead-letter/alerting remains later scope.
+- `QUA-001`: satisfied for this increment.
 
 ## Safety and non-claims
 
-- the scheduler never reads a persisted wallet snapshot as authority for a debit, hold or capture;
-- the command output is intentionally aggregate-only and cannot be used as a customer/account data export;
-- a review-required pass returns failure status rather than silently claiming maintenance health;
-- no Payment Intent, transfer, refund, correction, pricing, promotion or payment-provider behavior is claimed;
-- no provider mutation/Target capability is enabled;
-- PasarGuard actual live execution remains behind protected Actions secrets/manual dispatch and Marzban live acceptance remains owner-deferred to final release acceptance;
-- dedicated multi-process wallet contention/stress remains an explicit later verification item.
+The scheduler never treats a persisted snapshot as financial authority. Generic cleanup excludes transfer holds; transfer expiry/cancellation is coordinated by the transfer lifecycle. This boundary does not claim multi-process wallet contention, `WAL-001`, transfer, refund, correction, pricing/promotions/payment providers, Order/provisioning or live panel acceptance. Later accepted boundaries may satisfy some of those items independently; this historical boundary is not broadened retroactively.
 
-## Evidence-head gate
-
-This evidence and its traceability companion require mandatory CI on their exact combined evidence head before this increment is evidence-complete.
+Phase `0.4.0` remains open. Always live-fetch Draft PR `#6` for the current head.
