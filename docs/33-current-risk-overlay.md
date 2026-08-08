@@ -58,7 +58,7 @@ Overlay-local IDs remain temporary until the next full `docs/03-risk-register.md
 | `FIN-15` | external top-up credits promotional/wrong wallet or credits before capture | accepted top-up binds active owned IRR cash wallet, rejects promotional target, posts clearing-to-cash only after authoritative capture, DB guard verifies linkage | payment-method/provider transport remain later | Controlled for accepted top-up boundary |
 | `FIN-16` | provider safe evidence stores unbounded/raw sensitive payload or credentials | accepted top-up filters forbidden/raw fields; DB requires JSON object <=32 fields and <=8192 bytes; implementation/evidence artifact scans found no known secrets | provider-adapter regression remains mandatory | Controlled for accepted top-up boundary |
 | `FIN-17` | accepted Quote is reinterpreted by later pricing/config changes or monetary rounding | accepted `BUY-002` immutable Quote: integer IRR, exact replay/conflict, Offering version/hash snapshot, explicit validity, DB update/delete/hash guards | future promotion/referral/agent/payment-method rule layers must snapshot their own resolved identity and must not reinterpret accepted Quotes | Controlled for `BUY-002`; later pricing layers open |
-| `FIN-18` | mutable promotion/referral/pricing rules silently change eligibility/price or create duplicate reservation/reward effects | `BUY-002` provides immutable resolved-input snapshot boundary, but stored promotion/referral rule resolution is not yet accepted | next bounded `PRO-001`/`REF-001` rule-definition and deterministic-resolution evidence; later reserve/redeem/release/payout paths need separate concurrency proof | Next pricing-policy gate / High |
+| `FIN-18` | mutable promotion/referral/pricing rules silently change eligibility/price or create duplicate reservation/reward effects | Worker `#25` candidate at implementation `2be331fd4fe51ef4f7ee58ca2a82a178128bba09` / CI `#1256` adds immutable rule/version/resolution identity, exact replay/conflict, deterministic qualification/priority, fail-closed ambiguity, execution-time authorization and MariaDB guards; candidate evidence `docs/58-phase-0.5-promotion-referral-pricing-rule-traceability.md` | exact evidence-head gate + MASTER review/integration; reservation/redemption/release counters and referral reward/payout/reversal still need separate contention/effect proof | Implementation-verified candidate / High residual |
 
 ## Latest accepted financial evidence
 
@@ -80,6 +80,20 @@ Overlay-local IDs remain temporary until the next full `docs/03-risk-register.md
 - evidence `evidence/0.5.0/quote-pricing-snapshot.md`;
 - traceability `docs/57-phase-0.5-quote-pricing-traceability.md`.
 
+## Current Worker evidence candidate — stored promotion/referral pricing-rule resolution
+
+This candidate is intentionally **not** listed as accepted financial evidence until the evidence-head gate and MASTER integration decision complete.
+
+- Issue `#25`, Worker `W-001`, Contract Revision `1`, PR `#26`;
+- implementation `2be331fd4fe51ef4f7ee58ca2a82a178128bba09`, CI `31284018788` / `#1256` — **399 / 2415**;
+- dedicated pricing-rule suite **7 / 60**; unchanged Quote regression **8 / 63**;
+- implementation artifact `test-evidence-31284018788`, ID `9029282011`;
+- independent digest `sha256:ebf72d8ea7822895cea0d306c866358f4d049201503895a13dce87fcce000fae`;
+- evidence candidate `evidence/0.5.0/promotion-referral-pricing-rule-resolution.md`;
+- traceability candidate `docs/58-phase-0.5-promotion-referral-pricing-rule-traceability.md`.
+
+The candidate reduces `FIN-18` for mutable-rule reinterpretation, nondeterministic precedence, ambiguous configuration, and replay/conflict at the stored resolution boundary. It does not reduce future duplicate reservation/redemption/reward-effect risk because no authoritative counters or payout state transitions are implemented here.
+
 ## Financial safety decisions
 
 1. IRR is integer at financial/pricing boundaries; monetary float is forbidden.
@@ -95,6 +109,7 @@ Overlay-local IDs remain temporary until the next full `docs/03-risk-register.md
 11. Safe provider evidence is normalized, secret/raw-field filtered, append-only and bounded.
 12. Accepted Quotes are immutable integer-IRR historical snapshots and cannot become payment/purchase authority by themselves.
 13. Later promotion/referral/agent/payment-method rule resolution must persist the resolved rule/configuration identity consumed by pricing; mutable policy must not retroactively reinterpret accepted Quotes.
+14. A stored promotion/referral rule-resolution layer must not treat observed usage inputs as authoritative redemption counters; reservation/redemption/reward execution requires a separately scoped concurrency/effect boundary.
 
 ## Current human gates
 
@@ -110,6 +125,6 @@ Until applicable provider gates pass: no live-provider compatibility claim, no p
 
 ## Next risk-reduction work
 
-The highest-value independent task is the bounded stored promotion/referral/pricing-rule resolution foundation described in `docs/52-current-continuation-handoff.md`, reducing `FIN-18` without pulling full redemption/reward payout, `AGT-005`, provider execution, Order, or provisioning ownership forward.
+The immediate Worker boundary is exact evidence-head CI/artifact verification and independent MASTER review of PR `#26`. If accepted, the next `FIN-18` reduction must separately prove promotion reservation/redemption/release contention and referral reward-effect semantics without pulling `AGT-005`, `PAY-001`, provider execution, Order, or provisioning ownership forward.
 
 At the next full risk-register regeneration, fold relevant overlay decisions into `docs/03-risk-register.md` without erasing historical definitions or falsely closing live/provider-dependent risks.
