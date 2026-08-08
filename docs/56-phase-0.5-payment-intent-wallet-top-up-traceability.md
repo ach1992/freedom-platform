@@ -1,15 +1,17 @@
 # Phase 0.5 Payment Intent / External Cash-Wallet Top-up Traceability
 
-**Status:** implementation-verified evidence candidate; exact evidence-head CI remains required before acceptance.  
+**Status:** parallel-verified bounded increment; Phase `0.5.0` remains open.  
 **Authoritative Phase 0.5 tracker:** Issue `#8`.  
 **Requirements:** `PAY-002`, `PAY-003`, `WAL-001`.  
 **Implementation head:** `6db9dde7032114ab81c95fdf371530997e65f21c`.  
 **Implementation CI:** `31265449681` / `#1214` — success, 384 tests / 2292 assertions.  
+**Evidence head:** `76ea847d4d1f626893b925bbfe5263e1dc1398e4`.  
+**Evidence CI:** `31265901691` / `#1220` — success, 384 tests / 2292 assertions.  
 **Evidence:** `evidence/0.5.0/payment-intent-wallet-top-up-settlement.md`.
 
 ## Requirement-to-proof map
 
-| Requirement / invariant | Implementation proof | Remaining scope |
+| Requirement / invariant | Accepted proof | Remaining scope |
 |---|---|---|
 | `PAY-002` controlled Payment Intent | immutable creation key/payload, existing `PaymentIntentState`, append-only histories, exact create replay/conflict | payment-method eligibility/routing and external API/Telegram UX remain separate |
 | browser return never proves payment | `PaymentEvidence::authorizesCapture()` requires `Success + Authoritative + Settled`; non-authoritative settled-looking evidence is rejected before persistence | gateway/webhook/browser transport adapters are provider-specific later work |
@@ -25,8 +27,8 @@
 | `DAT-003` | MariaDB transactions, row locks, uniqueness, FKs, checks, triggers and independent-process contention proof | later pricing/provider schemas need equivalent controls |
 | `DAT-004` | intent histories, attempts, provider events/transactions, settlement and finalized ledger are append-only/guarded | future refunds compensate rather than rewrite accepted settlement |
 | safe provider evidence | normalized key/value validation plus forbidden-sensitive-field filter, DB JSON-object check, <=32 fields and <=8192 bytes | provider adapters must supply only normalized safe evidence |
-| `SEC-002` | no raw provider body/credential/token/cookie/signature/private material is accepted into safe evidence; artifact scan retained no provider secret values | protected provider credentials remain Actions/environment-only |
-| `QUA-001` | exact implementation-head full CI, retained JUnit/Clover/service artifact, independent digest, dedicated real-MariaDB subprocess contention tests | exact evidence-head CI/artifact remains mandatory before acceptance |
+| `SEC-002` | no raw provider body/credential/token/cookie/signature/private material is accepted into safe evidence; both accepted artifacts scan clean for protected values | protected provider credentials remain Actions/environment-only |
+| `QUA-001` | exact implementation-head and evidence-head full CI, retained JUnit/Clover/service artifacts, independent digests, dedicated real-MariaDB subprocess contention tests | later increments require their own lifecycle |
 
 ## Payment Intent identity and lifecycle
 
@@ -56,12 +58,12 @@ Provider safe evidence is deliberately smaller than a raw provider payload: vali
 
 `WalletTopUpPaymentContentionVerificationTest` uses independent PHP processes against CI MariaDB with a deterministic `READY` / `GO` barrier. Workers set a bounded InnoDB lock wait and the harness has a bounded output watchdog; no sleep timing is used as the correctness mechanism.
 
-Verified implementation scenarios:
+Accepted scenarios:
 
 1. two simultaneous exact duplicate authoritative captures resolve to one primary settlement, one finalized top-up ledger effect, one capture audit, and one exact replay returning the same settlement/ledger IDs;
 2. one provider event/transaction presented concurrently to two distinct intents can authorize only one intent; the other conflicts/fails and total accepted wallet credit remains one provider amount.
 
-The bounded watchdog also ensures an unresolved lock/process condition surfaces as a deterministic test failure rather than silently hanging CI.
+The bounded watchdog ensures an unresolved lock/process condition surfaces as a deterministic test failure rather than silently hanging CI.
 
 ## Dedicated tests
 
@@ -71,9 +73,9 @@ The bounded watchdog also ensures an unresolved lock/process condition surfaces 
 - `WalletTopUpPaymentReplayStabilityTest` — **1 / 6**;
 - `WalletTopUpPaymentContentionVerificationTest` — **2 / 19**.
 
-Dedicated total: **13 tests / 95 assertions**, zero failures/errors/skips on implementation CI `#1214`.
+Dedicated total: **13 tests / 95 assertions**, zero failures/errors/skips on implementation CI `#1214` and evidence CI `#1220`.
 
-## Exact implementation verification
+## Exact accepted verification lifecycle
 
 Implementation head `6db9dde7032114ab81c95fdf371530997e65f21c`:
 
@@ -81,13 +83,20 @@ Implementation head `6db9dde7032114ab81c95fdf371530997e65f21c`:
 - full MariaDB/authenticated Redis suite `384 tests / 2292 assertions`;
 - `Pint` clean, PHPStan no errors, forbidden-pattern and architecture checks clean;
 - artifact `test-evidence-31265449681`, ID `9024026199`;
-- GitHub uploader and independent SHA-256 `3cf3c1c52b3aac72e4cf7f10aa4567ee516a9edeb7c3528c6beb064c20f6b80b`;
-- artifact contains exactly JUnit, full test log, Clover coverage and two dependency-service evidence files;
-- independent safe scan found no known CI credential value, bearer/basic authorization value, private-key header or raw provider secret material.
+- GitHub uploader and independent SHA-256 `3cf3c1c52b3aac72e4cf7f10aa4567ee516a9edeb7c3528c6beb064c20f6b80b`.
 
-## Risk disposition candidate
+Evidence head `76ea847d4d1f626893b925bbfe5263e1dc1398e4`:
 
-This implementation candidate directly addresses these current financial/payment risks for the bounded top-up path:
+- CI `31265901691` / `#1220` — all mandatory jobs success;
+- full MariaDB/authenticated Redis suite `384 tests / 2292 assertions`;
+- artifact `test-evidence-31265901691`, ID `9024152227`;
+- GitHub uploader and independent SHA-256 `dff70424074d138f59a8c9bfb03e5196f3827142fe964b043c09ef53e15392e7`.
+
+Both independently inspected artifacts contain exactly JUnit, full test log, Clover coverage and two dependency-service evidence files. The evidence-head JUnit confirms 384 tests / 2292 assertions and the five dedicated suites remain 13 / 95 with zero failures/errors/skips. Independent safe scanning found no known CI credential values, bearer/basic authorization values, private-key headers or raw provider secret material.
+
+## Accepted risk disposition
+
+This bounded lifecycle directly controls these top-up risks:
 
 - duplicate provider callback/event/transaction cannot create duplicate wallet credit;
 - browser/user-return state cannot be mistaken for payment authority;
@@ -96,7 +105,7 @@ This implementation candidate directly addresses these current financial/payment
 - concurrent duplicate/cross-intent provider reuse is serialized/unique at the database boundary;
 - provider safe evidence is explicitly bounded and excludes secret/raw sensitive payload fields.
 
-These controls become accepted for `PAY-002` / `PAY-003` / `WAL-001` only after exact evidence-head CI/artifact passes. Provider-specific transport/availability/refund/order consequences remain future gates.
+Provider-specific transport/availability/refund/order consequences remain future gates and are not implied by this acceptance.
 
 ## Explicit non-claims
 
@@ -112,4 +121,4 @@ No claim is made for:
 
 PasarGuard protected live execution remains the active Phase `0.4.0` human gate. Marzban deployment-specific acceptance remains mandatory at final release acceptance.
 
-After evidence-head acceptance, the next independent Phase `0.5.0` boundary is deterministic Pricing / Quote snapshot (`BUY-002`).
+The next independent Phase `0.5.0` boundary is deterministic Pricing / immutable Quote snapshot (`BUY-002`).
