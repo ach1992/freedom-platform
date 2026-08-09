@@ -54,6 +54,8 @@ trait CreatesBenefitCodeFixtures
         BenefitCodeDefinition $definition,
         string $suffix,
     ): BenefitCodeCampaignVersionReceipt {
+        $this->ensureBenefitFundingAccountFixture();
+
         return $this->app->make(BenefitCodeService::class)->create(
             'benefit-campaign-'.substr(hash('sha256', $suffix), 0, 40),
             new BenefitCodeCampaignCode($code),
@@ -199,6 +201,25 @@ trait CreatesBenefitCodeFixtures
             'is_owner' => false,
             'permission_version' => 1,
             'last_authenticated_at' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+    }
+
+    private function ensureBenefitFundingAccountFixture(): void
+    {
+        if (DB::table('ledger_accounts')->where('code', 'system.benefit-code.promotional-funding')->exists()) {
+            return;
+        }
+
+        $now = now('UTC');
+        DB::table('ledger_accounts')->insert([
+            'code' => 'system.benefit-code.promotional-funding',
+            'account_class' => 'equity',
+            'owner_user_id' => null,
+            'wallet_bucket' => null,
+            'currency' => 'IRR',
+            'is_active' => true,
             'created_at' => $now,
             'updated_at' => $now,
         ]);
