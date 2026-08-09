@@ -129,6 +129,7 @@ trait QuoteServiceReadsQuotes
         );
     }
 
+    /** @param QuoteRow $row */
     private function agentPricingSnapshotFromRow(object $row): ?QuoteAgentPricingSnapshot
     {
         if ($row->agent_pricing_resolution_id === null) {
