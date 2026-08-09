@@ -5,15 +5,16 @@
 **Parent:** Issue `#8`.  
 **Requirements:** bounded `USDT-001`, partial `USDT-002`, `DAT-002`, `DAT-003`, `SEC-001`, `SEC-002`, `QUA-001`.  
 **BASE_SHA:** `a7876668492c115ce2eba1b7194c83ac169ce8a7`.  
-**Corrected implementation head:** `461952762bb3f4214fb7893ea56908275ea2d3bf`.  
-**Implementation CI:** `31313971141` / `#1362` — all five mandatory jobs successful.  
-**Full suite:** **435 tests / 2724 assertions**.  
-**W-007 focused suites:** **10 tests / 101 assertions**.  
+**Corrected implementation head:** `c8cafbcdb53b69d94080f6ee7d486cff2dc74fe5`.  
+**Implementation CI:** `31316814017` / `#1367` — all five mandatory jobs successful.  
+**Full suite:** **436 tests / 2735 assertions**.  
+**W-007 focused suites:** **11 tests / 112 assertions**.  
 **Provider-contract suite:** `UsdtRateProviderContractTest` **7 / 44**.  
 **Immutable quote/auth/DB suite:** `UsdtRateQuoteFoundationTest` **3 / 57**.  
+**Standard-seed authorization suite:** `UsdtStandardSeedAuthorizationTest` **1 / 11**.  
 **BUY-002 regression:** `QuotePricingSnapshotTest` **8 / 63**.  
-**Implementation artifact:** `test-evidence-31313971141`, ID `9038210512`, size `128937` bytes.  
-**Independent artifact SHA-256:** `eec1ebdcb31671dad6a3f526f4adb9e71bd4d23ab0315b3af4f80556f75853d0` — exact match to the GitHub Actions uploader digest.
+**Implementation artifact:** `test-evidence-31316814017`, ID `9039007750`, size `129026` bytes.  
+**Independent artifact SHA-256:** `b5d8b9ee82dae2e65cc0f6f3998980d45033d227a22d7d3319dbc890806a0b8f` — exact match to the GitHub Actions uploader digest.
 
 ## Bounded Revision 2 outcome
 
@@ -53,79 +54,51 @@ The exact Tetherland contract/auth/schema remains a later dedicated task. Issue 
 
 ## Rate selection and fixed-precision proof
 
-`UsdtRateProviderContractTest` **7 / 44** covers:
+`UsdtRateProviderContractTest` **7 / 44** covers manual/Nobitex normalization, Tetherland no-network unavailable behavior, explicit verified fallback, malformed/oversized/redirect/transport failures, freshness, bounds, divergence, emergency manual fallback, circuit breaker, and fixed-precision boundary arithmetic.
 
-- manual normalized rate and deterministic fixed-precision arithmetic;
-- official Nobitex `usdt-rls` normalization for buy/sell/last;
-- Tetherland no-network unavailable behavior and explicit verified fallback;
-- malformed, oversized, redirect and transport failure handling;
-- deterministic primary/fallback ordering;
-- stale-rate and sanity-bound rejection;
-- divergence fail-closed behavior plus explicit emergency manual fallback;
-- circuit-breaker open/cooldown behavior;
-- tiny and large integer-IRR conversion boundaries and six-decimal round-up.
+## Destination authorization and standard seed proof
+
+Destination configuration stores only the public BEP20 address and non-secret policy/version metadata. Administrator mutation uses execution-time `payments.usdt.manage` authorization and immutable version rows with exact mutation replay/conflict behavior.
+
+The standard install/seed path now invokes `UsdtAccessFoundationSeeder` from `DatabaseSeeder` immediately after `IdentityAccessFoundationSeeder`. This provisions the `payments.usdt.manage` high-risk permission and the intended grant to the active `finance` role in the normal repository seed chain rather than requiring a one-off USDT seed command.
+
+`UsdtStandardSeedAuthorizationTest` **1 / 11** runs the real `DatabaseSeeder` and proves:
+
+- `payments.usdt.manage` exists with the expected Payments/high-risk identity;
+- the active `finance` role receives that permission through `role_permissions`;
+- an active **non-owner** administrator assigned the finance role can call `UsdtDestinationWalletService::configure()` successfully;
+- an active non-owner administrator without the grant is denied and creates no destination row.
+
+The test does not use owner bypass for the successful management path, and no owner, permission-resolution, role-assignment or administrator-authorization semantics are weakened.
 
 ## Immutable destination and amount quote
 
-Destination configuration stores only the public BEP20 address and non-secret policy/version metadata. It does not store private keys or signing secrets. Administrator mutation uses execution-time `payments.usdt.manage` authorization and immutable version rows with exact mutation replay/conflict behavior.
-
-A new USDT amount quote consumes the accepted BUY-002 Quote through the existing read-only `QuoteService::current()` boundary. It requires the source Quote to be current/unexpired and positive integer IRR. It snapshots:
-
-- source Quote identity, user and final integer-IRR amount;
-- `BEP20` network;
-- destination wallet code/version/public address/configuration hash;
-- rate source, raw rate, margin basis points and final rate;
-- exact rounded-up USDT amount and precision;
-- rate fetch time, quote expiry, rate-age/quote-validity policy;
-- provider-response hash and configuration-snapshot hash.
+A new USDT amount quote consumes the accepted BUY-002 Quote through the existing read-only `QuoteService::current()` boundary. It requires the source Quote to be current/unexpired and positive integer IRR. It snapshots source Quote identity/user/final integer-IRR amount, `BEP20` network, destination wallet identity/version/public address/configuration hash, rate source/raw rate/margin/final rate, exact rounded-up USDT amount/precision, rate fetch/expiry policy, provider-response hash and configuration-snapshot hash.
 
 Exact creation replay returns the accepted historical USDT quote before re-reading current rate/destination/source validity. Materially changed same-key input conflicts. Later destination/rate changes do not reinterpret accepted history.
 
-`UsdtRateQuoteFoundationTest` **3 / 57** proves management authorization, version/replay/conflict, BEP20 destination snapshot, immutable amount quote, exact replay, historical stability after destination/rate change, expired source Quote rejection, no Payment Intent/Ledger mutation, and DB update/delete/forgery rejection.
-
-Existing `QuotePricingSnapshotTest` remains green at **8 / 63** on the same implementation run.
+`UsdtRateQuoteFoundationTest` **3 / 57** proves destination version/replay/conflict, BEP20 snapshot, immutable amount quote, exact replay, historical stability, expired source Quote rejection, no Payment Intent/Ledger mutation, and DB update/delete/forgery rejection. Existing `QuotePricingSnapshotTest` remains green at **8 / 63** on the same implementation run.
 
 ## Database integrity
 
-Forward migration `database/migrations/2026_08_09_003600_create_usdt_rate_quote_foundation.php` adds only:
-
-1. `usdt_destination_wallet_versions` — immutable versioned public BEP20 destination configuration;
-2. `usdt_amount_quotes` — immutable BUY-002-bound payment-amount quote history.
-
-Controls include FKs, bounded/explicit FK naming for MariaDB, unique identities, fixed network/address/source/rate/time/hash/snapshot checks, sequential destination-version guard, current-enabled destination join, source Quote/user/amount/validity join, deterministic exact-USDT DB recomputation, snapshot/hash verification, and update/delete denial triggers.
-
-No existing applied migration is edited.
+Forward migration `database/migrations/2026_08_09_003600_create_usdt_rate_quote_foundation.php` adds only `usdt_destination_wallet_versions` and `usdt_amount_quotes`. Controls include FKs, bounded/explicit FK naming for MariaDB, unique identities, network/address/source/rate/time/hash/snapshot checks, sequential destination-version guard, current-enabled destination join, source Quote/user/amount/validity join, deterministic exact-USDT DB recomputation, snapshot/hash verification, and update/delete denial triggers. No existing applied migration is edited.
 
 ## Exact implementation validation
 
-Implementation CI `31313971141` / `#1362` passed:
+Implementation CI `31316814017` / `#1367` passed:
 
 - Repository preflight;
 - Secret scan;
 - PHP static quality, including Pint, PHPStan, forbidden-pattern and architecture checks;
-- MariaDB and Redis tests: **435 / 2724**;
+- MariaDB and Redis tests: **436 / 2735**;
 - Dependency and license policy.
 
-The retained test artifact contains JUnit, full test log, Clover coverage and sanitized dependency-service evidence. Its independently downloaded ZIP SHA-256 is `eec1ebdcb31671dad6a3f526f4adb9e71bd4d23ab0315b3af4f80556f75853d0`, matching the uploader digest exactly.
+The retained test artifact contains JUnit, full test log, Clover coverage and sanitized dependency-service evidence. Its independently downloaded ZIP SHA-256 is `b5d8b9ee82dae2e65cc0f6f3998980d45033d227a22d7d3319dbc890806a0b8f`, matching the uploader digest exactly.
 
 ## Explicit deferred / unaccepted behavior
 
-This evidence does **not** claim acceptance of:
-
-- runnable Tetherland integration;
-- complete `USDT-002`;
-- `USDT-003` TXID submission, explorer/node lookup, confirmation verification or capture;
-- Payment Intent creation or capture;
-- Order creation or purchase authority;
-- Wallet/Ledger effect or refund behavior;
-- `PAY-001` eligibility/routing or W-005-owned surfaces;
-- Zarinpal, NOWPayments, card-to-card or gift-card providers;
-- provider-live credentials or protected workflows;
-- provisioning or Service behavior;
-- Telegram purchase UX;
-- `composer.lock` changes;
-- Phase `0.5.0` closure or production release acceptance.
+This evidence does **not** claim acceptance of runnable Tetherland integration, complete `USDT-002`, `USDT-003` TXID/chain verification/capture, Payment Intent or capture, Order/purchase authority, Wallet/Ledger effects, `PAY-001`/W-005 routing, Zarinpal/NOWPayments/C2C/Gift Card, provider-live credentials/workflows, provisioning/Service, Telegram purchase UX, `composer.lock` changes, Phase `0.5.0` closure or production release acceptance.
 
 ## Evidence-head lifecycle
 
-The implementation-to-evidence change set after `461952762bb3f4214fb7893ea56908275ea2d3bf` is documentation only. The exact final evidence/current head, its current merge-candidate five-job CI, retained artifact and independent digest are recorded on PR `#37` after the evidence-head run succeeds. This file intentionally does not self-reference a future evidence commit SHA.
+The implementation-to-evidence change set after `c8cafbcdb53b69d94080f6ee7d486cff2dc74fe5` is documentation only. The exact final evidence/current head, its current merge-candidate five-job CI, retained artifact and independent digest are recorded on PR `#37` after the evidence-head run succeeds. This file intentionally does not self-reference a future evidence commit SHA.
