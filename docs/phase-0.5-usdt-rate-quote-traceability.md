@@ -5,8 +5,8 @@
 **Parent:** Issue `#8`.  
 **Requirements:** bounded `USDT-001`, partial `USDT-002`, `DAT-002`, `DAT-003`, `SEC-001`, `SEC-002`, `QUA-001`.  
 **BASE_SHA:** `a7876668492c115ce2eba1b7194c83ac169ce8a7`.  
-**Corrected implementation head:** `64a5da5414057064f6da62b05d1c02fc6ad9635d`.  
-**Implementation CI:** `31313380720` / `#1358` — all five mandatory jobs successful, **435 tests / 2724 assertions**.  
+**Corrected implementation head:** `461952762bb3f4214fb7893ea56908275ea2d3bf`.  
+**Implementation CI:** `31313971141` / `#1362` — all five mandatory jobs successful, **435 tests / 2724 assertions**.  
 **Evidence:** `evidence/0.5.0/usdt-rate-quote-foundation.md`.
 
 ## Requirement-to-proof map
@@ -29,7 +29,7 @@
 | immutable replay | quote key + request payload hash; existing row returned before live config/rate lookup; changed source input conflicts | later payment intent must consume accepted quote without reinterpretation |
 | historical stability | accepted destination/rate/margin/exact amount/timestamps/hashes are immutable snapshots | no mutable refresh of accepted quote |
 | `DAT-003` | forward `003600` schema, FKs, unique/check constraints, insert joins, snapshot/hash checks, deterministic DB exact-USDT recomputation, immutable triggers | chain/provider transaction tables not introduced |
-| `SEC-001` external network | fixed HTTPS Nobitex URL, TLS verification enabled, redirect disabled, bounded connect/request/body parsing, no caller-controlled URL | Tetherland remains no-network until verified |
+| `SEC-001` external network | fixed current-host HTTPS Nobitex URL, TLS verification enabled, redirect disabled, bounded connect/request/body parsing, no caller-controlled URL | Tetherland remains no-network until verified |
 | `SEC-002` authorization/secrets | destination mutation re-authorizes `payments.usdt.manage`; only public address/non-secret policy stored; no provider secrets | provider-live credentials/workflows remain excluded |
 | `QUA-001` | implementation exact-head five-job CI, full/focused regression suites and independently hashed retained artifact | evidence head requires its own exact current merge-candidate CI |
 
@@ -41,9 +41,9 @@
 
 ### Nobitex
 
-Official Nobitex API documentation checked 2026-08-09 at `https://apidocs.nobitex.ir/` documents public `GET /market/stats`, accepts `srcCurrency=usdt` and `dstCurrency=rls`, and returns `status`, `stats.<market>.bestSell`, `bestBuy` and `latest`.
+Official current Nobitex API documentation checked 2026-08-09 at `https://apidocs.nobitex.ir/` documents public `GET /market/stats`, no token requirement, the current official example host `apiv2.nobitex.ir`, `srcCurrency=usdt`, `dstCurrency=rls`, and response fields `status`, `stats.<market>.bestSell`, `bestBuy` and `latest`.
 
-The adapter fixes the request to `https://api.nobitex.ir/market/stats?srcCurrency=usdt&dstCurrency=rls`. `buy` maps to `bestSell`, `sell` to `bestBuy`, `last` to `latest`. The destination `rls` is used directly as the integer/fixed-decimal IRR-per-USDT representation.
+The adapter fixes the request to `https://apiv2.nobitex.ir/market/stats?srcCurrency=usdt&dstCurrency=rls`. `buy` maps to `bestSell`, `sell` to `bestBuy`, `last` to `latest`. The destination `rls` is used directly as the integer/fixed-decimal IRR-per-USDT representation.
 
 ### Tetherland
 
@@ -60,7 +60,7 @@ No existing applied migration, shared Payments registration, PAY-001 surface, Qu
 
 ## Test traceability
 
-Implementation CI `31313380720` / `#1358`:
+Implementation CI `31313971141` / `#1362`:
 
 - full repository suite: **435 tests / 2724 assertions**;
 - `UsdtRateProviderContractTest`: **7 / 44**;
@@ -75,7 +75,7 @@ Quote suite covers administrator authorization, BEP20 destination version/replay
 
 ## Evidence identity
 
-Implementation artifact `test-evidence-31313380720`, ID `9038041663`, size `128922` bytes, retained 30 days. Independent downloaded ZIP SHA-256: `8c786a0226153c8c9edd2e6fa85721b51b4b9772e8e977bc4b79447a86427953`, exactly matching the uploader digest.
+Implementation artifact `test-evidence-31313971141`, ID `9038210512`, size `128937` bytes, retained 30 days. Independent downloaded ZIP SHA-256: `eec1ebdcb31671dad6a3f526f4adb9e71bd4d23ab0315b3af4f80556f75853d0`, exactly matching the uploader digest.
 
 ## Explicit non-claims
 
