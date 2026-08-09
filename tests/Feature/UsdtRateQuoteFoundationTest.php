@@ -193,7 +193,7 @@ final class UsdtRateQuoteFoundationTest extends TestCase
             $this->correlation('quote-wallet-v1'),
         );
         $primary = new PersistenceUsdtRateProvider('nobitex', '1000000', $clock->value);
-        $secondary = new PersistenceUsdtRateProvider('tetherland', '1005000', $clock->value);
+        $secondary = new PersistenceUsdtRateProvider('secondary', '1005000', $clock->value);
         $service = $this->amountService($clock, $destinations, $primary, $secondary, 100, 6, 900, 120);
         $paymentIntentCount = DB::table('payment_intents')->count();
         $ledgerCount = DB::table('ledger_transactions')->count();
@@ -292,7 +292,7 @@ final class UsdtRateQuoteFoundationTest extends TestCase
             $this->correlation('guard-wallet'),
         );
         $primary = new PersistenceUsdtRateProvider('nobitex', '1000000', $clock->value);
-        $secondary = new PersistenceUsdtRateProvider('tetherland', '1001000', $clock->value);
+        $secondary = new PersistenceUsdtRateProvider('secondary', '1001000', $clock->value);
         $created = $this->amountService($clock, $destinations, $primary, $secondary, 0, 6, 900, 120)
             ->create('usdt.amount.guard.0001', $source->quotePublicId);
 
@@ -327,7 +327,7 @@ final class UsdtRateQuoteFoundationTest extends TestCase
         int $rateMaxAgeSeconds,
     ): UsdtAmountQuoteService {
         $policy = new UsdtRatePolicy(
-            ['nobitex', 'tetherland'],
+            ['nobitex', 'secondary'],
             UsdtRateSide::Buy,
             $rateMaxAgeSeconds,
             '100000',
@@ -561,7 +561,7 @@ final class UsdtRateQuoteFoundationTest extends TestCase
     }
 
     /**
-     * @param array{product_id:int,server_id:int,target_id:int,tag_id:int,profile_ids:list<int>} $dependencies
+     * @param  array{product_id:int,server_id:int,target_id:int,tag_id:int,profile_ids:list<int>}  $dependencies
      */
     private function definition(
         array $dependencies,
