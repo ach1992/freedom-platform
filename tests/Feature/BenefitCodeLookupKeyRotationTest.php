@@ -186,6 +186,20 @@ final class BenefitCodeLookupKeyRotationTest extends TestCase
         config()->set('benefit_codes.lookup.previous.key', null);
     }
 
+    /** @param class-string<\Throwable> $expected */
+    private function assertException(callable $callback, string $expected): void
+    {
+        try {
+            $callback();
+        } catch (\Throwable $exception) {
+            self::assertInstanceOf($expected, $exception);
+
+            return;
+        }
+
+        self::fail('Expected exception '.$expected.' was not thrown.');
+    }
+
     private function v1Key(): string
     {
         return str_repeat('benefit-v1-test-only-', 2);
