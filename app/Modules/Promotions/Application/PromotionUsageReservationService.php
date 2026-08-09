@@ -340,7 +340,11 @@ final readonly class PromotionUsageReservationService
         return $this->positiveDatabaseInt($resolution->pricing_rule_version_id, 'Promotion rule version ID');
     }
 
-    /** @param ResolutionRow $resolution @param RuleRow $rule @param VersionRow $version */
+    /**
+     * @param ResolutionRow $resolution
+     * @param RuleRow $rule
+     * @param VersionRow $version
+     */
     private function assertResolutionIdentity(object $resolution, object $rule, object $version): void
     {
         $ruleId = $this->positiveDatabaseInt($resolution->pricing_rule_id, 'Promotion resolution rule ID');
@@ -362,7 +366,12 @@ final readonly class PromotionUsageReservationService
         }
     }
 
-    /** @param QuoteRow $quote @param ResolutionRow $resolution @param RuleRow $rule @param VersionRow $version */
+    /**
+     * @param QuoteRow $quote
+     * @param ResolutionRow $resolution
+     * @param RuleRow $rule
+     * @param VersionRow $version
+     */
     private function assertQuoteBinding(object $quote, object $resolution, object $rule, object $version): void
     {
         $now = $this->clock->now()->setTimezone(new DateTimeZone('UTC'));
@@ -484,19 +493,34 @@ final readonly class PromotionUsageReservationService
     /** @return ReservationRow|null */
     private function reservationByKey(Connection $connection, string $key, bool $lock = false): ?object
     {
-        return $this->reservationQuery($connection, $lock)->where('reservation.reservation_key', $key)->first($this->reservationColumns());
+        /** @var ReservationRow|null $row */
+        $row = $this->reservationQuery($connection, $lock)
+            ->where('reservation.reservation_key', $key)
+            ->first($this->reservationColumns());
+
+        return $row;
     }
 
     /** @return ReservationRow|null */
     private function reservationById(Connection $connection, int $id, bool $lock = false): ?object
     {
-        return $this->reservationQuery($connection, $lock)->where('reservation.id', $id)->first($this->reservationColumns());
+        /** @var ReservationRow|null $row */
+        $row = $this->reservationQuery($connection, $lock)
+            ->where('reservation.id', $id)
+            ->first($this->reservationColumns());
+
+        return $row;
     }
 
     /** @return ReservationRow|null */
     private function reservationByPublicId(Connection $connection, string $publicId, bool $lock = false): ?object
     {
-        return $this->reservationQuery($connection, $lock)->where('reservation.public_id', $publicId)->first($this->reservationColumns());
+        /** @var ReservationRow|null $row */
+        $row = $this->reservationQuery($connection, $lock)
+            ->where('reservation.public_id', $publicId)
+            ->first($this->reservationColumns());
+
+        return $row;
     }
 
     private function reservationQuery(Connection $connection, bool $lock): Builder
