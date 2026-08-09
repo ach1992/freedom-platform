@@ -82,7 +82,6 @@ return new class extends Migration
             $table->bigInteger('discount_irr')->default(0);
             $table->json('configuration_snapshot');
             $table->char('configuration_snapshot_hash', 64);
-            $table->foreignId('resolved_by_administrator_id')->constrained('administrators')->restrictOnDelete();
             $table->dateTime('created_at', 6);
             $table->index(['user_id', 'created_at'], 'pricing_rule_resolution_user_idx');
             $table->index(['pricing_rule_version_id', 'created_at'], 'pricing_rule_resolution_version_idx');
@@ -193,6 +192,15 @@ SQL);
 CREATE TRIGGER pricing_rule_resolutions_insert_guard
 BEFORE INSERT ON pricing_rule_resolutions FOR EACH ROW
 BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM users u
+        WHERE u.id = NEW.user_id
+          AND u.account_status = 'active'
+          AND u.account_type IN ('customer', 'agent')
+    ) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Pricing rule resolution subject is not an active customer or agent.';
+    END IF;
+
     IF LOWER(SHA2(CAST(NEW.configuration_snapshot AS CHAR), 256)) <> NEW.configuration_snapshot_hash THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Pricing rule resolution snapshot hash mismatch.';
     END IF;
