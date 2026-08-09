@@ -80,7 +80,8 @@ return new class extends Migration
             $table->foreignId('user_id')->constrained()->restrictOnDelete();
             $table->foreignId('agent_profile_id')->constrained('agent_profiles')->restrictOnDelete();
             $table->foreignId('agent_pricing_profile_id')->constrained('agent_pricing_profiles')->restrictOnDelete();
-            $table->foreignId('agent_pricing_profile_version_id')->constrained('agent_pricing_profile_versions')->restrictOnDelete();
+            $table->foreignId('agent_pricing_profile_version_id');
+            $table->foreign('agent_pricing_profile_version_id', 'agt_price_resolution_profile_version_fk')->references('id')->on('agent_pricing_profile_versions')->restrictOnDelete();
             $table->ulid('pricing_profile_public_id_snapshot');
             $table->string('pricing_profile_code_snapshot', 64);
             $table->unsignedBigInteger('pricing_profile_version');
@@ -142,5 +143,4 @@ return new class extends Migration
         DB::statement("ALTER TABLE agent_pricing_resolutions ADD CONSTRAINT agent_price_resolution_hashes_chk CHECK (`request_payload_hash` REGEXP '^[0-9a-f]{64}$' AND `pricing_profile_configuration_hash` REGEXP '^[0-9a-f]{64}$' AND `configuration_snapshot_hash` REGEXP '^[0-9a-f]{64}$')");
         DB::statement("ALTER TABLE agent_pricing_resolutions ADD CONSTRAINT agent_price_resolution_snapshot_chk CHECK (JSON_VALID(`configuration_snapshot`) AND JSON_TYPE(`configuration_snapshot`) = 'OBJECT' AND JSON_LENGTH(`configuration_snapshot`) <= 24 AND OCTET_LENGTH(`configuration_snapshot`) <= 8192)");
     }
-
 };
