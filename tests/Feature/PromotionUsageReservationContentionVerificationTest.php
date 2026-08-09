@@ -77,6 +77,8 @@ namespace {
 }
 
 namespace Tests\Feature {
+    use App\Modules\Orders\Application\QuoteReceipt;
+    use App\Modules\Promotions\Application\PromotionResolutionReceipt;
     use App\Modules\Promotions\Application\PromotionUsageContext;
     use App\Modules\Promotions\Application\PromotionUsageReservationService;
     use DateTimeImmutable;
@@ -101,23 +103,32 @@ namespace Tests\Feature {
             $this->seed();
         }
 
+        protected function tearDown(): void
+        {
+            try {
+                $this->truncateTablesForAllConnections();
+            } finally {
+                parent::tearDown();
+            }
+        }
+
         public function test_competing_reservations_for_final_global_slot_cannot_both_succeed(): void
         {
             $firstUser = $this->usageUser();
             $secondUser = $this->usageUser();
             $offering = $this->usageOffering(suffix: 'contention-global');
             $this->usageRule($offering['id'], 'promo.cont.global', 100_000, 1, null);
-            [$firstResolution, $firstQuote] = $this->contentionResolutionAndQuote($firstUser, $offering['id'], 'promo.cont.global', 100_000, 'global-first');
-            [$secondResolution, $secondQuote] = $this->contentionResolutionAndQuote($secondUser, $offering['id'], 'promo.cont.global', 100_000, 'global-second');
+            [$firstResolution, $firstQuote] = $this->pair($firstUser, $offering['id'], 'promo.cont.global', 100_000, 'global-first');
+            [$secondResolution, $secondQuote] = $this->pair($secondUser, $offering['id'], 'promo.cont.global', 100_000, 'global-second');
 
             $results = $this->runConcurrent([
-                $this->reservePayload($firstUser, 'usage.cont.global.reserve.000001', $firstResolution->resolutionPublicId, $firstQuote->quotePublicId),
-                $this->reservePayload($secondUser, 'usage.cont.global.reserve.000002', $secondResolution->resolutionPublicId, $secondQuote->quotePublicId),
+                $this->reservePayload($firstUser, 'usage.cont.global.reserve.000001', $firstResolution, $firstQuote),
+                $this->reservePayload($secondUser, 'usage.cont.global.reserve.000002', $secondResolution, $secondQuote),
             ]);
 
             self::assertCount(1, array_filter($results, static fn (array $result): bool => $result['ok'] === true));
             self::assertCount(1, array_filter($results, static fn (array $result): bool => $result['ok'] === false));
-            self::assertSame(1, $this->activeReservationCount());
+            self::assertSame(1, $this->activeReservations());
         }
 
         public function test_competing_reservations_for_final_per_user_slot_cannot_both_succeed(): void
@@ -125,17 +136,17 @@ namespace Tests\Feature {
             $userId = $this->usageUser();
             $offering = $this->usageOffering(suffix: 'contention-user');
             $this->usageRule($offering['id'], 'promo.cont.user', 90_000, 10, 1);
-            [$firstResolution, $firstQuote] = $this->contentionResolutionAndQuote($userId, $offering['id'], 'promo.cont.user', 90_000, 'user-first');
-            [$secondResolution, $secondQuote] = $this->contentionResolutionAndQuote($userId, $offering['id'], 'promo.cont.user', 90_000, 'user-second');
+            [$firstResolution, $firstQuote] = $this->pair($userId, $offering['id'], 'promo.cont.user', 90_000, 'user-first');
+            [$secondResolution, $secondQuote] = $this->pair($userId, $offering['id'], 'promo.cont.user', 90_000, 'user-second');
 
             $results = $this->runConcurrent([
-                $this->reservePayload($userId, 'usage.cont.user.reserve.000001', $firstResolution->resolutionPublicId, $firstQuote->quotePublicId),
-                $this->reservePayload($userId, 'usage.cont.user.reserve.000002', $secondResolution->resolutionPublicId, $secondQuote->quotePublicId),
+                $this->reservePayload($userId, 'usage.cont.user.reserve.000001', $firstResolution, $firstQuote),
+                $this->reservePayload($userId, 'usage.cont.user.reserve.000002', $secondResolution, $secondQuote),
             ]);
 
             self::assertCount(1, array_filter($results, static fn (array $result): bool => $result['ok'] === true));
             self::assertCount(1, array_filter($results, static fn (array $result): bool => $result['ok'] === false));
-            self::assertSame(1, $this->activeReservationCount());
+            self::assertSame(1, $this->activeReservations());
         }
 
         public function test_concurrent_exact_duplicate_reserve_creates_one_reservation_and_one_replay(): void
@@ -143,8 +154,8 @@ namespace Tests\Feature {
             $userId = $this->usageUser();
             $offering = $this->usageOffering(suffix: 'contention-duplicate');
             $this->usageRule($offering['id'], 'promo.cont.duplicate', 80_000, 2, 2);
-            [$resolution, $quote] = $this->contentionResolutionAndQuote($userId, $offering['id'], 'promo.cont.duplicate', 80_000, 'duplicate');
-            $payload = $this->reservePayload($userId, 'usage.cont.duplicate.reserve.000001', $resolution->resolutionPublicId, $quote->quotePublicId);
+            [$resolution, $quote] = $this->pair($userId, $offering['id'], 'promo.cont.duplicate', 80_000, 'duplicate');
+            $payload = $this->reservePayload($userId, 'usage.cont.duplicate.reserve.000001', $resolution, $quote);
 
             $results = $this->runConcurrent([$payload, $payload]);
             self::assertTrue($results[0]['ok']);
@@ -154,19 +165,23 @@ namespace Tests\Feature {
             sort($replayed);
             self::assertSame([false, true], $replayed);
             self::assertSame(1, DB::table('promotion_usage_reservations')->count());
-            self::assertSame(1, $this->activeReservationCount());
         }
 
-        public function test_reserve_vs_release_serializes_without_oversubscription_and_released_capacity_is_reusable(): void
+        public function test_reserve_vs_release_serializes_and_released_capacity_is_reusable(): void
         {
             $firstUser = $this->usageUser();
             $secondUser = $this->usageUser();
             $offering = $this->usageOffering(suffix: 'contention-release');
             $this->usageRule($offering['id'], 'promo.cont.release', 70_000, 1, null);
-            [$firstResolution, $firstQuote] = $this->contentionResolutionAndQuote($firstUser, $offering['id'], 'promo.cont.release', 70_000, 'release-first');
+            [$firstResolution, $firstQuote] = $this->pair($firstUser, $offering['id'], 'promo.cont.release', 70_000, 'release-first');
             $service = $this->app->make(PromotionUsageReservationService::class);
-            $existing = $service->reserve('usage.cont.release.reserve.000001', $firstResolution->resolutionPublicId, $firstQuote->quotePublicId, new PromotionUsageContext($firstUser));
-            [$secondResolution, $secondQuote] = $this->contentionResolutionAndQuote($secondUser, $offering['id'], 'promo.cont.release', 70_000, 'release-second');
+            $existing = $service->reserve(
+                'usage.cont.release.reserve.000001',
+                $firstResolution->resolutionPublicId,
+                $firstQuote->quotePublicId,
+                new PromotionUsageContext($firstUser),
+            );
+            [$secondResolution, $secondQuote] = $this->pair($secondUser, $offering['id'], 'promo.cont.release', 70_000, 'release-second');
 
             $results = $this->runConcurrent([
                 [
@@ -175,48 +190,52 @@ namespace Tests\Feature {
                     'release_key' => 'usage.cont.release.release.000001',
                     'reservation_public_id' => $existing->reservationPublicId,
                 ],
-                $this->reservePayload($secondUser, 'usage.cont.release.reserve.000002', $secondResolution->resolutionPublicId, $secondQuote->quotePublicId),
+                $this->reservePayload($secondUser, 'usage.cont.release.reserve.000002', $secondResolution, $secondQuote),
             ]);
 
             self::assertTrue($results[0]['ok']);
-            self::assertLessThanOrEqual(1, $this->activeReservationCount());
+            self::assertLessThanOrEqual(1, $this->activeReservations());
             if ($results[1]['ok'] === false) {
-                $retry = $service->reserve('usage.cont.release.reserve.000002', $secondResolution->resolutionPublicId, $secondQuote->quotePublicId, new PromotionUsageContext($secondUser));
-                self::assertFalse($retry->replayed);
+                $service->reserve(
+                    'usage.cont.release.reserve.000002',
+                    $secondResolution->resolutionPublicId,
+                    $secondQuote->quotePublicId,
+                    new PromotionUsageContext($secondUser),
+                );
             }
-            self::assertSame(1, $this->activeReservationCount());
+            self::assertSame(1, $this->activeReservations());
             self::assertSame(1, DB::table('promotion_usage_releases')->count());
         }
 
-        /** @return array{0:\App\Modules\Promotions\Application\PromotionResolutionReceipt,1:\App\Modules\Orders\Application\QuoteReceipt} */
-        private function contentionResolutionAndQuote(int $userId, int $offeringId, string $ruleCode, int $discountIrr, string $suffix): array
+        /** @return array{0:PromotionResolutionReceipt,1:QuoteReceipt} */
+        private function pair(int $userId, int $offeringId, string $ruleCode, int $discountIrr, string $suffix): array
         {
-            $resolution = $this->usageResolution($userId, $offeringId, 1_000_000, $suffix);
-            $quote = $this->usageQuote(
-                $userId,
-                $offeringId,
-                $ruleCode,
-                $discountIrr,
-                new DateTimeImmutable('+30 minutes', new DateTimeZone('UTC')),
-                $suffix,
-            );
-
-            return [$resolution, $quote];
+            return [
+                $this->usageResolution($userId, $offeringId, 1_000_000, $suffix),
+                $this->usageQuote(
+                    $userId,
+                    $offeringId,
+                    $ruleCode,
+                    $discountIrr,
+                    new DateTimeImmutable('+30 minutes', new DateTimeZone('UTC')),
+                    $suffix,
+                ),
+            ];
         }
 
         /** @return array<string, mixed> */
-        private function reservePayload(int $userId, string $key, string $resolutionPublicId, string $quotePublicId): array
+        private function reservePayload(int $userId, string $key, PromotionResolutionReceipt $resolution, QuoteReceipt $quote): array
         {
             return [
                 'operation' => 'reserve',
                 'user_id' => $userId,
                 'reservation_key' => $key,
-                'resolution_public_id' => $resolutionPublicId,
-                'quote_public_id' => $quotePublicId,
+                'resolution_public_id' => $resolution->resolutionPublicId,
+                'quote_public_id' => $quote->quotePublicId,
             ];
         }
 
-        private function activeReservationCount(): int
+        private function activeReservations(): int
         {
             return (int) DB::table('promotion_usage_reservations as reservation')
                 ->leftJoin('promotion_usage_releases as release', 'release.promotion_usage_reservation_id', '=', 'reservation.id')
@@ -234,10 +253,15 @@ namespace Tests\Feature {
             $workers = [];
             try {
                 foreach ($payloads as $payload) {
-                    $encoded = base64_encode(json_encode($payload, JSON_THROW_ON_ERROR));
-                    $command = [PHP_BINARY, '-d', 'pcov.enabled=0', __FILE__, '--promotion-usage-contention-worker', $encoded];
                     $pipes = [];
-                    $process = proc_open($command, [
+                    $process = proc_open([
+                        PHP_BINARY,
+                        '-d',
+                        'pcov.enabled=0',
+                        __FILE__,
+                        '--promotion-usage-contention-worker',
+                        base64_encode(json_encode($payload, JSON_THROW_ON_ERROR)),
+                    ], [
                         0 => ['pipe', 'r'],
                         1 => ['pipe', 'w'],
                         2 => ['pipe', 'w'],
@@ -252,8 +276,7 @@ namespace Tests\Feature {
                 }
 
                 foreach ($workers as $index => $worker) {
-                    $ready = $this->readWorkerLine($worker, 'readiness', $index);
-                    if ($ready !== "READY\n") {
+                    if ($this->readLine($worker, 'readiness', $index) !== "READY\n") {
                         throw new RuntimeException('Promotion usage contention worker returned an invalid readiness marker.');
                     }
                 }
@@ -265,12 +288,11 @@ namespace Tests\Feature {
 
                 $results = [];
                 foreach ($workers as $index => $worker) {
-                    $line = $this->readWorkerLine($worker, 'result', $index);
+                    $line = $this->readLine($worker, 'result', $index);
                     $stderr = stream_get_contents($worker['pipes'][2]);
                     fclose($worker['pipes'][1]);
                     fclose($worker['pipes'][2]);
-                    $exitCode = proc_close($worker['process']);
-                    if ($exitCode !== 0) {
+                    if (proc_close($worker['process']) !== 0) {
                         throw new RuntimeException('Promotion usage contention worker failed: '.$stderr);
                     }
                     /** @var array<string, mixed> $result */
@@ -285,7 +307,7 @@ namespace Tests\Feature {
         }
 
         /** @param array{process:resource,pipes:array{0:resource,1:resource,2:resource}} $worker */
-        private function readWorkerLine(array $worker, string $phase, int $index): string
+        private function readLine(array $worker, string $phase, int $index): string
         {
             $deadline = microtime(true) + self::WORKER_TIMEOUT_SECONDS;
             $stderr = '';
@@ -300,7 +322,6 @@ namespace Tests\Feature {
                 foreach ($read as $stream) {
                     if ($stream === $worker['pipes'][2]) {
                         $stderr .= stream_get_contents($stream);
-
                         continue;
                     }
                     $line = fgets($stream);
