@@ -6,7 +6,6 @@ namespace App\Modules\Agents\Application;
 
 use App\Modules\AccessControl\Application\AccessChangeContext;
 use App\Modules\AccessControl\Application\AdministratorPermissionAuthorizer;
-use App\Modules\Agents\Domain\AgentPricingAction;
 use App\Modules\Agents\Domain\AgentPricingProfileCode;
 use App\Modules\Agents\Domain\AgentPricingProfileDefinition;
 use App\Modules\Agents\Domain\AgentPricingRuleCode;
@@ -24,6 +23,7 @@ use RuntimeException;
 final readonly class AgentPricingService
 {
     private const MANAGE_PERMISSION = 'agents.pricing.manage';
+
     private const FORMULA_VERSION = 'agt-price-resolution-v1';
 
     public function __construct(
@@ -78,21 +78,33 @@ final readonly class AgentPricingService
                 }
                 /** @var object{account_type:string,account_status:string}|null $user */
                 $user = $db->table('users')->where('id', $request->userId)->lockForUpdate()->first(['account_type', 'account_status']);
-                if ($user === null || $user->account_type !== 'agent' || $user->account_status !== 'active') { throw new DomainException('Agent pricing resolution requires an active agent account.'); }
+                if ($user === null || $user->account_type !== 'agent' || $user->account_status !== 'active') {
+                    throw new DomainException('Agent pricing resolution requires an active agent account.');
+                }
                 /** @var object{id:int|string,status:string,pricing_profile_code:string|null}|null $agent */
                 $agent = $db->table('agent_profiles')->where('user_id', $request->userId)->lockForUpdate()->first(['id', 'status', 'pricing_profile_code']);
-                if ($agent === null || $agent->status !== 'active') { throw new DomainException('Agent pricing resolution requires an active agent profile.'); }
-                if ($agent->pricing_profile_code === null || ! hash_equals($request->pricingProfileCode, $agent->pricing_profile_code)) { throw new DomainException('Agent pricing profile code is stale or invalid.'); }
+                if ($agent === null || $agent->status !== 'active') {
+                    throw new DomainException('Agent pricing resolution requires an active agent profile.');
+                }
+                if ($agent->pricing_profile_code === null || ! hash_equals($request->pricingProfileCode, $agent->pricing_profile_code)) {
+                    throw new DomainException('Agent pricing profile code is stale or invalid.');
+                }
                 /** @var object{id:int|string,public_id:string,profile_code:string}|null $profile */
                 $profile = $db->table('agent_pricing_profiles')->where('profile_code', $request->pricingProfileCode)->lockForUpdate()->first(['id', 'public_id', 'profile_code']);
-                if ($profile === null) { throw new DomainException('Agent pricing profile configuration does not exist.'); }
+                if ($profile === null) {
+                    throw new DomainException('Agent pricing profile configuration does not exist.');
+                }
                 $profileId = $this->positive($profile->id, 'Agent pricing profile ID');
                 $profileVersion = $this->latestProfileVersion($db, $profileId);
-                if ($profileVersion === null || $profileVersion->state !== AgentPricingState::Active->value) { throw new DomainException('Agent pricing profile configuration is not active.'); }
+                if ($profileVersion === null || $profileVersion->state !== AgentPricingState::Active->value) {
+                    throw new DomainException('Agent pricing profile configuration is not active.');
+                }
                 $this->verifyProfileVersion($profileVersion, $profile->profile_code);
                 /** @var object{product_id:int|string,sales_server_id:int|string}|null $offering */
                 $offering = $db->table('plan_offerings')->where('id', $request->planOfferingId)->lockForUpdate()->first(['product_id', 'sales_server_id']);
-                if ($offering === null) { throw new DomainException('Agent pricing resolution offering does not exist.'); }
+                if ($offering === null) {
+                    throw new DomainException('Agent pricing resolution offering does not exist.');
+                }
                 $productId = $this->positive($offering->product_id, 'Agent pricing product ID');
                 $serverId = $this->positive($offering->sales_server_id, 'Agent pricing sales server ID');
                 $rule = $this->selectRule($db, $profileId, $request, $productId, $serverId);
@@ -129,12 +141,17 @@ final readonly class AgentPricingService
                     'configuration_snapshot_hash' => hash('sha256', $snapshotJson), 'created_at' => $this->timestamp(),
                 ]);
                 $created = $this->resolutionById($db, $id);
-                if ($created === null) { throw new RuntimeException('Agent pricing resolution persistence failed.'); }
+                if ($created === null) {
+                    throw new RuntimeException('Agent pricing resolution persistence failed.');
+                }
+
                 return $this->resolutionReceipt($created, $requestHash, false);
             });
         } catch (QueryException $exception) {
             $existing = $this->resolutionRow($this->database->connection(), $request->resolutionKey);
-            if ($existing !== null) { return $this->resolutionReceipt($existing, $requestHash, true); }
+            if ($existing !== null) {
+                return $this->resolutionReceipt($existing, $requestHash, true);
+            }
             throw $exception;
         }
     }
