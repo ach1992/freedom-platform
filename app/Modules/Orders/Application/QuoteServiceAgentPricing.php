@@ -10,10 +10,50 @@ use App\Modules\Agents\Application\AgentPricingResolutionRequest;
 use App\Modules\Agents\Domain\AgentPricingAction;
 use App\Modules\Orders\Domain\QuoteOverrideSource;
 use DomainException;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Connection;
+use RuntimeException;
 
 trait QuoteServiceAgentPricing
 {
+    private function assertAgentQuoteReplayAuthorized(
+        Connection $connection,
+        QuoteReceipt $quote,
+        ?QuoteAgentPricingContext $context,
+    ): void {
+        if ($quote->overrideSource !== QuoteOverrideSource::Agent) {
+            return;
+        }
+        if ($context === null || $context->actorUserId !== $quote->userId) {
+            throw new AuthorizationException('Quote agent pricing actor is not authorized for this subject.');
+        }
+        if ($quote->accountType !== 'agent' || $quote->agentPricing === null) {
+            throw new RuntimeException('Stored quote agent pricing binding is incomplete.');
+        }
+
+        /** @var object{account_type:string,account_status:string}|null $user */
+        $user = $connection->table('users')
+            ->where('id', $quote->userId)
+            ->lockForUpdate()
+            ->first(['account_type', 'account_status']);
+        if ($user === null || $user->account_type !== 'agent' || $user->account_status !== 'active') {
+            throw new DomainException('Agent pricing resolution requires an active agent account.');
+        }
+
+        /** @var object{status:string,pricing_profile_code:string|null}|null $agent */
+        $agent = $connection->table('agent_profiles')
+            ->where('user_id', $quote->userId)
+            ->lockForUpdate()
+            ->first(['status', 'pricing_profile_code']);
+        if ($agent === null || $agent->status !== 'active') {
+            throw new DomainException('Agent pricing resolution requires an active agent profile.');
+        }
+        if ($agent->pricing_profile_code === null
+            || ! hash_equals($quote->agentPricing->pricingProfileCode, $agent->pricing_profile_code)) {
+            throw new DomainException('Agent pricing profile code is stale or invalid.');
+        }
+    }
+
     private function resolveAgentPricing(
         Connection $connection,
         string $quoteKey,
