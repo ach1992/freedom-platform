@@ -123,14 +123,21 @@ trait BenefitCodeIssuanceSupport
             try {
                 return $this->insertCode($db, $issuanceId, $campaignId, $campaignVersionId, $normalized, $lookupHash);
             } catch (QueryException $exception) {
-                if ($db->table('benefit_codes')->where('lookup_hash', $lookupHash)->exists()) {
+                if ($this->isDuplicateKey($exception)) {
                     continue;
                 }
+
                 throw $exception;
             }
         }
 
         throw new RuntimeException('Unable to allocate a unique benefit code.');
+    }
+
+    private function isDuplicateKey(QueryException $exception): bool
+    {
+        return ($exception->errorInfo[0] ?? null) === '23000'
+            && (int) ($exception->errorInfo[1] ?? 0) === 1062;
     }
 
     /** @return array{0:string,1:string} */
