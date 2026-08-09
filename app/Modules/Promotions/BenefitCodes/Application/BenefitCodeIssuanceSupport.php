@@ -9,6 +9,7 @@ use App\Modules\Promotions\BenefitCodes\Domain\BenefitCodeState;
 use DomainException;
 use Illuminate\Database\Connection;
 use Illuminate\Database\QueryException;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 use RuntimeException;
 
@@ -21,23 +22,22 @@ trait BenefitCodeIssuanceSupport
 
         $ownerChosen = $request->ownerChosenCodes !== [];
         $normalizedOwnerCodes = [];
-        $ownerHashes = [];
+        $normalizedOwnerCodeSet = [];
         if ($ownerChosen) {
             foreach ($request->ownerChosenCodes as $code) {
                 $normalized = $this->codec->normalize($code);
                 $this->codec->assertOwnerChosenStrength($normalized);
-                $lookupHash = $this->hasher->hash($normalized);
-                if (isset($ownerHashes[$lookupHash])) {
+                if (isset($normalizedOwnerCodeSet[$normalized])) {
                     throw new DomainException('Owner-chosen benefit code batch contains a duplicate.');
                 }
-                $ownerHashes[$lookupHash] = true;
+                $normalizedOwnerCodeSet[$normalized] = true;
                 $normalizedOwnerCodes[] = $normalized;
             }
         }
         $payloadHash = $this->hash([
             'actor_administrator_id' => $context->actorAdministratorId,
             'campaign_code' => $request->campaignCode->value,
-            'owner_chosen_hashes' => array_keys($ownerHashes),
+            'owner_chosen' => $ownerChosen,
             'quantity' => $request->quantity,
         ]);
 
@@ -51,6 +51,8 @@ trait BenefitCodeIssuanceSupport
             ): BenefitCodeIssueReceipt {
                 $existing = $this->issuanceByKey($db, $request->issuanceKey, true);
                 if ($existing !== null) {
+                    $this->assertOwnerChosenIssuanceReplay($db, $existing, $normalizedOwnerCodes);
+
                     return $this->issuanceReceipt($db, $existing, $payloadHash, true);
                 }
                 $campaign = $this->latestCampaign($db, $request->campaignCode->value, true);
@@ -90,9 +92,12 @@ trait BenefitCodeIssuanceSupport
                 return $this->issuanceReceipt($db, $created, $payloadHash, false, $plaintextByPublicId);
             });
         } catch (QueryException $exception) {
-            $existing = $this->issuanceByKey($this->database->connection(), $request->issuanceKey);
+            $db = $this->database->connection();
+            $existing = $this->issuanceByKey($db, $request->issuanceKey);
             if ($existing !== null) {
-                return $this->issuanceReceipt($this->database->connection(), $existing, $payloadHash, true);
+                $this->assertOwnerChosenIssuanceReplay($db, $existing, $normalizedOwnerCodes);
+
+                return $this->issuanceReceipt($db, $existing, $payloadHash, true);
             }
 
             throw $exception;
@@ -102,12 +107,11 @@ trait BenefitCodeIssuanceSupport
     /** @return array{0:string,1:string} */
     private function insertOwnerCode(Connection $db, int $issuanceId, int $campaignId, int $campaignVersionId, string $normalized): array
     {
-        $lookupHash = $this->hasher->hash($normalized);
-        if ($db->table('benefit_codes')->where('lookup_hash', $lookupHash)->exists()) {
+        if ($this->codeExistsForSupportedLookup($db, $normalized)) {
             throw new DomainException('Owner-chosen benefit code is already in use.');
         }
 
-        return $this->insertCode($db, $issuanceId, $campaignId, $campaignVersionId, $normalized, $lookupHash);
+        return $this->insertCode($db, $issuanceId, $campaignId, $campaignVersionId, $normalized);
     }
 
     /** @return array{0:string,1:string} */
@@ -116,12 +120,11 @@ trait BenefitCodeIssuanceSupport
         for ($attempt = 0; $attempt < 8; $attempt++) {
             $displayCode = $this->codec->generate();
             $normalized = $this->codec->normalize($displayCode);
-            $lookupHash = $this->hasher->hash($normalized);
-            if ($db->table('benefit_codes')->where('lookup_hash', $lookupHash)->exists()) {
+            if ($this->codeExistsForSupportedLookup($db, $normalized)) {
                 continue;
             }
             try {
-                return $this->insertCode($db, $issuanceId, $campaignId, $campaignVersionId, $normalized, $lookupHash);
+                return $this->insertCode($db, $issuanceId, $campaignId, $campaignVersionId, $normalized);
             } catch (QueryException $exception) {
                 if ($this->isDuplicateKey($exception)) {
                     continue;
@@ -134,6 +137,50 @@ trait BenefitCodeIssuanceSupport
         throw new RuntimeException('Unable to allocate a unique benefit code.');
     }
 
+    private function codeExistsForSupportedLookup(Connection $db, string $normalized): bool
+    {
+        foreach ($this->hasher->supportedHashes($normalized) as $version => $lookupHash) {
+            if ($db->table('benefit_codes')
+                ->where('key_version', $version)
+                ->where('lookup_hash', $lookupHash)
+                ->exists()) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param  object{id:int|string}  $issuance
+     * @param  list<string>  $normalizedOwnerCodes
+     */
+    private function assertOwnerChosenIssuanceReplay(Connection $db, object $issuance, array $normalizedOwnerCodes): void
+    {
+        if ($normalizedOwnerCodes === []) {
+            return;
+        }
+        /** @var Collection<int, object{lookup_hash:string,key_version:int|string}> $rows */
+        $rows = $db->table('benefit_codes')
+            ->where('benefit_code_issuance_id', $this->positive($issuance->id, 'Benefit code issuance ID'))
+            ->orderBy('id')
+            ->get(['lookup_hash', 'key_version']);
+        if ($rows->count() !== count($normalizedOwnerCodes)) {
+            throw new RuntimeException('Benefit code issuance key conflict.');
+        }
+        foreach ($rows->values() as $index => $row) {
+            $normalized = $normalizedOwnerCodes[$index] ?? null;
+            if (! is_string($normalized)
+                || ! $this->hasher->matches(
+                    $normalized,
+                    $this->positive($row->key_version, 'Benefit code key version'),
+                    (string) $row->lookup_hash,
+                )) {
+                throw new RuntimeException('Benefit code issuance key conflict.');
+            }
+        }
+    }
+
     private function isDuplicateKey(QueryException $exception): bool
     {
         return ($exception->errorInfo[0] ?? null) === '23000'
@@ -141,16 +188,17 @@ trait BenefitCodeIssuanceSupport
     }
 
     /** @return array{0:string,1:string} */
-    private function insertCode(Connection $db, int $issuanceId, int $campaignId, int $campaignVersionId, string $normalized, string $lookupHash): array
+    private function insertCode(Connection $db, int $issuanceId, int $campaignId, int $campaignVersionId, string $normalized): array
     {
+        $lookup = $this->hasher->currentHash($normalized);
         $publicId = (string) Str::ulid();
         $db->table('benefit_codes')->insert([
             'public_id' => $publicId,
             'benefit_code_issuance_id' => $issuanceId,
             'benefit_code_campaign_id' => $campaignId,
             'benefit_code_campaign_version_id' => $campaignVersionId,
-            'lookup_hash' => $lookupHash,
-            'key_version' => $this->hasher->keyVersion(),
+            'lookup_hash' => $lookup['lookup_hash'],
+            'key_version' => $lookup['key_version'],
             'display_mask' => $this->codec->mask($normalized),
             'created_at' => $this->timestamp(),
         ]);
