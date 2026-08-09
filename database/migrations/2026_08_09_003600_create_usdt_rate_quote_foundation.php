@@ -23,7 +23,8 @@ return new class extends Migration
             $table->char('request_payload_hash', 64);
             $table->json('configuration_snapshot');
             $table->char('configuration_snapshot_hash', 64);
-            $table->foreignId('changed_by_administrator_id')->constrained('administrators')->restrictOnDelete();
+            $table->unsignedBigInteger('changed_by_administrator_id');
+            $table->foreign('changed_by_administrator_id', 'usdt_wallet_changed_by_fk')->references('id')->on('administrators')->restrictOnDelete();
             $table->string('change_reason', 255);
             $table->char('correlation_id', 64);
             $table->dateTime('created_at', 6);
