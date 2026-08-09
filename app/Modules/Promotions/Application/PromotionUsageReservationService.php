@@ -102,13 +102,14 @@ final readonly class PromotionUsageReservationService
                 $this->lockActivePricingSubject($connection, $userId);
 
                 $versionId = $this->matchedPromotionVersionId($resolution);
+                $ruleId = $this->positiveDatabaseInt($resolution->pricing_rule_id, 'Promotion resolution rule ID');
+                $rule = $this->ruleById($connection, $ruleId, true);
+                if ($rule === null) {
+                    throw new RuntimeException('Promotion resolution rule no longer exists.');
+                }
                 $version = $this->versionById($connection, $versionId, true);
                 if ($version === null) {
                     throw new RuntimeException('Promotion resolution rule version no longer exists.');
-                }
-                $rule = $this->ruleById($connection, $this->positiveDatabaseInt($version->pricing_rule_id, 'Promotion rule ID'));
-                if ($rule === null) {
-                    throw new RuntimeException('Promotion resolution rule no longer exists.');
                 }
                 $this->assertResolutionIdentity($resolution, $rule, $version);
 
@@ -138,7 +139,7 @@ final readonly class PromotionUsageReservationService
 
                 $activeReservations = $connection->table('promotion_usage_reservations as reservation')
                     ->leftJoin('promotion_usage_releases as release', 'release.promotion_usage_reservation_id', '=', 'reservation.id')
-                    ->where('reservation.pricing_rule_version_id', $versionId)
+                    ->where('reservation.pricing_rule_id', $ruleId)
                     ->whereNull('release.id')
                     ->get(['reservation.id', 'reservation.user_id']);
 
@@ -162,7 +163,6 @@ final readonly class PromotionUsageReservationService
 
                 $discountIrr = $this->positiveDatabaseInt($resolution->discount_irr, 'Promotion discount');
                 $planOfferingId = $this->positiveDatabaseInt($resolution->plan_offering_id, 'Promotion offering ID');
-                $ruleId = $this->positiveDatabaseInt($rule->id, 'Promotion rule ID');
                 $ruleVersion = $this->positiveDatabaseInt($version->version, 'Promotion rule version');
                 $snapshot = [
                     'discount_irr' => $discountIrr,
@@ -270,6 +270,10 @@ final readonly class PromotionUsageReservationService
                 $payloadHash,
                 $reservation,
             ): PromotionUsageReleaseReceipt {
+                $ruleId = $this->positiveDatabaseInt($reservation->pricing_rule_id, 'Promotion rule ID');
+                if ($this->ruleById($connection, $ruleId, true) === null) {
+                    throw new RuntimeException('Promotion reservation rule no longer exists.');
+                }
                 $versionId = $this->positiveDatabaseInt($reservation->pricing_rule_version_id, 'Promotion rule version ID');
                 if ($this->versionById($connection, $versionId, true) === null) {
                     throw new RuntimeException('Promotion reservation rule version no longer exists.');
@@ -469,10 +473,14 @@ final readonly class PromotionUsageReservationService
     }
 
     /** @return RuleRow|null */
-    private function ruleById(Connection $connection, int $id): ?object
+    private function ruleById(Connection $connection, int $id, bool $lock = false): ?object
     {
+        $query = $connection->table('pricing_rules')->where('id', $id);
+        if ($lock) {
+            $query->lockForUpdate();
+        }
         /** @var RuleRow|null $row */
-        $row = $connection->table('pricing_rules')->where('id', $id)->first(['id', 'rule_code', 'kind']);
+        $row = $query->first(['id', 'rule_code', 'kind']);
 
         return $row;
     }
