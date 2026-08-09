@@ -30,6 +30,7 @@ final readonly class QuoteReceipt
         public int $finalPriceIrr,
         public string $currency,
         public string $configurationSnapshotHash,
+        public ?QuoteAgentPricingSnapshot $agentPricing,
         public DateTimeImmutable $validFrom,
         public DateTimeImmutable $expiresAt,
         public bool $replayed,
