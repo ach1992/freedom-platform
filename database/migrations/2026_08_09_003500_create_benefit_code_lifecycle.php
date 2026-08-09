@@ -125,7 +125,8 @@ return new class extends Migration
         Schema::create('benefit_code_free_service_entitlements', function (Blueprint $table): void {
             $table->bigIncrements('id');
             $table->ulid('public_id')->unique();
-            $table->foreignId('benefit_code_redemption_id')->unique();
+            $table->foreignId('benefit_code_redemption_id');
+            $table->unique('benefit_code_redemption_id', 'benefit_entitlement_redemption_unique');
             $table->foreign('benefit_code_redemption_id', 'benefit_entitlement_redemption_fk')
                 ->references('id')->on('benefit_code_redemptions')->restrictOnDelete();
             $table->foreignId('user_id')->constrained('users')->restrictOnDelete();
@@ -199,13 +200,20 @@ return new class extends Migration
 
     private function createGuards(): void
     {
-        $this->immutableTrigger('benefit_code_campaigns', 'Benefit code campaign identity');
-        $this->immutableTrigger('benefit_code_issuances', 'Benefit code issuance');
-        $this->immutableTrigger('benefit_codes', 'Benefit code identity');
-        $this->immutableTrigger('benefit_code_disables', 'Benefit code disable history');
-        $this->immutableTrigger('benefit_code_redemptions', 'Benefit code redemption history');
-        $this->immutableTrigger('benefit_code_free_service_entitlements', 'Benefit code free-service entitlement');
-        $this->immutableTrigger('benefit_code_discount_grants', 'Benefit code discount grant');
+        DB::unprepared("CREATE TRIGGER benefit_code_campaigns_update_guard BEFORE UPDATE ON benefit_code_campaigns FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Benefit code campaign identity is immutable.'; END");
+        DB::unprepared("CREATE TRIGGER benefit_code_campaigns_delete_guard BEFORE DELETE ON benefit_code_campaigns FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Benefit code campaign identity cannot be deleted.'; END");
+        DB::unprepared("CREATE TRIGGER benefit_code_issuances_update_guard BEFORE UPDATE ON benefit_code_issuances FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Benefit code issuance is immutable.'; END");
+        DB::unprepared("CREATE TRIGGER benefit_code_issuances_delete_guard BEFORE DELETE ON benefit_code_issuances FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Benefit code issuance cannot be deleted.'; END");
+        DB::unprepared("CREATE TRIGGER benefit_codes_update_guard BEFORE UPDATE ON benefit_codes FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Benefit code identity is immutable.'; END");
+        DB::unprepared("CREATE TRIGGER benefit_codes_delete_guard BEFORE DELETE ON benefit_codes FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Benefit code identity cannot be deleted.'; END");
+        DB::unprepared("CREATE TRIGGER benefit_code_disables_update_guard BEFORE UPDATE ON benefit_code_disables FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Benefit code disable history is immutable.'; END");
+        DB::unprepared("CREATE TRIGGER benefit_code_disables_delete_guard BEFORE DELETE ON benefit_code_disables FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Benefit code disable history cannot be deleted.'; END");
+        DB::unprepared("CREATE TRIGGER benefit_code_redemptions_update_guard BEFORE UPDATE ON benefit_code_redemptions FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Benefit code redemption history is immutable.'; END");
+        DB::unprepared("CREATE TRIGGER benefit_code_redemptions_delete_guard BEFORE DELETE ON benefit_code_redemptions FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Benefit code redemption history cannot be deleted.'; END");
+        DB::unprepared("CREATE TRIGGER benefit_code_free_service_entitlements_update_guard BEFORE UPDATE ON benefit_code_free_service_entitlements FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Benefit code free-service entitlement is immutable.'; END");
+        DB::unprepared("CREATE TRIGGER benefit_code_free_service_entitlements_delete_guard BEFORE DELETE ON benefit_code_free_service_entitlements FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Benefit code free-service entitlement cannot be deleted.'; END");
+        DB::unprepared("CREATE TRIGGER benefit_code_discount_grants_update_guard BEFORE UPDATE ON benefit_code_discount_grants FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Benefit code discount grant is immutable.'; END");
+        DB::unprepared("CREATE TRIGGER benefit_code_discount_grants_delete_guard BEFORE DELETE ON benefit_code_discount_grants FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Benefit code discount grant cannot be deleted.'; END");
 
         DB::unprepared(<<<'SQL'
 CREATE TRIGGER benefit_code_campaign_versions_insert_guard
@@ -462,42 +470,30 @@ END
 SQL);
     }
 
-    /**
-     * @param  literal-string  $table
-     * @param  literal-string  $label
-     */
-    private function immutableTrigger(string $table, string $label): void
-    {
-        DB::unprepared("CREATE TRIGGER {$table}_update_guard BEFORE UPDATE ON {$table} FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = '{$label} is immutable.'; END");
-        DB::unprepared("CREATE TRIGGER {$table}_delete_guard BEFORE DELETE ON {$table} FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = '{$label} cannot be deleted.'; END");
-    }
-
     private function dropGuards(): void
     {
-        foreach ([
-            'benefit_code_discount_grants_insert_guard',
-            'benefit_code_free_service_entitlements_insert_guard',
-            'benefit_code_redemptions_insert_guard',
-            'benefit_codes_insert_guard',
-            'benefit_code_issuances_insert_guard',
-            'benefit_code_campaign_versions_insert_guard',
-            'benefit_code_campaign_versions_update_guard',
-            'benefit_code_campaign_versions_delete_guard',
-        ] as $trigger) {
-            DB::unprepared('DROP TRIGGER IF EXISTS '.$trigger);
-        }
-        foreach ([
-            'benefit_code_campaigns',
-            'benefit_code_issuances',
-            'benefit_codes',
-            'benefit_code_disables',
-            'benefit_code_redemptions',
-            'benefit_code_free_service_entitlements',
-            'benefit_code_discount_grants',
-        ] as $table) {
-            DB::unprepared('DROP TRIGGER IF EXISTS '.$table.'_update_guard');
-            DB::unprepared('DROP TRIGGER IF EXISTS '.$table.'_delete_guard');
-        }
+        DB::unprepared('DROP TRIGGER IF EXISTS benefit_code_discount_grants_insert_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS benefit_code_free_service_entitlements_insert_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS benefit_code_redemptions_insert_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS benefit_codes_insert_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS benefit_code_issuances_insert_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS benefit_code_campaign_versions_insert_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS benefit_code_campaign_versions_update_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS benefit_code_campaign_versions_delete_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS benefit_code_campaigns_update_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS benefit_code_campaigns_delete_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS benefit_code_issuances_update_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS benefit_code_issuances_delete_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS benefit_codes_update_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS benefit_codes_delete_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS benefit_code_disables_update_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS benefit_code_disables_delete_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS benefit_code_redemptions_update_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS benefit_code_redemptions_delete_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS benefit_code_free_service_entitlements_update_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS benefit_code_free_service_entitlements_delete_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS benefit_code_discount_grants_update_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS benefit_code_discount_grants_delete_guard');
     }
 
     private function ensurePromotionalFundingAccount(): void
