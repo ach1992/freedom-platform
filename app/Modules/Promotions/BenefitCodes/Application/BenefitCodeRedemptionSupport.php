@@ -15,6 +15,7 @@ use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Connection;
 use Illuminate\Database\QueryException;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 use RuntimeException;
 
@@ -26,31 +27,36 @@ trait BenefitCodeRedemptionSupport
             throw new AuthorizationException('Benefit code redemption actor does not own the subject.');
         }
         $normalized = $this->codec->normalize($request->code);
-        $lookupHash = $this->hasher->hash($normalized);
         $payloadHash = $this->hash([
-            'code_lookup_hash' => $lookupHash,
             'plan_offering_id' => $request->planOfferingId,
             'promotional_wallet_account_id' => $request->promotionalWalletAccountId,
             'user_id' => $request->userId,
         ]);
-        $existing = $this->redemptionByKey($this->database->connection(), $request->redemptionKey);
+        $db = $this->database->connection();
+        $existing = $this->redemptionByKey($db, $request->redemptionKey);
         if ($existing !== null) {
-            return $this->redemptionReceipt($this->database->connection(), $existing, $payloadHash, true);
+            $this->assertRedemptionReplayCode($db, $existing, $normalized);
+
+            return $this->redemptionReceipt($db, $existing, $payloadHash, true);
         }
 
         try {
-            return $this->database->connection()->transaction(function (Connection $db) use ($request, $lookupHash, $payloadHash): BenefitCodeRedemptionReceipt {
+            return $this->database->connection()->transaction(function (Connection $db) use ($request, $normalized, $payloadHash): BenefitCodeRedemptionReceipt {
                 $existing = $this->redemptionByKey($db, $request->redemptionKey, true);
                 if ($existing !== null) {
+                    $this->assertRedemptionReplayCode($db, $existing, $normalized);
+
                     return $this->redemptionReceipt($db, $existing, $payloadHash, true);
                 }
-                $code = $this->codeByHash($db, $lookupHash, true);
-                if ($code === null || $this->positive($code->key_version, 'Benefit code key version') !== $this->hasher->keyVersion()) {
+                $code = $this->codeByNormalized($db, $normalized, true);
+                if ($code === null) {
                     throw new DomainException('Benefit code is invalid.');
                 }
 
                 $existing = $this->redemptionByKey($db, $request->redemptionKey, true);
                 if ($existing !== null) {
+                    $this->assertRedemptionReplayCode($db, $existing, $normalized);
+
                     return $this->redemptionReceipt($db, $existing, $payloadHash, true);
                 }
 
@@ -140,12 +146,53 @@ trait BenefitCodeRedemptionSupport
                 return $this->redemptionReceipt($db, $created, $payloadHash, false);
             });
         } catch (QueryException $exception) {
-            $existing = $this->redemptionByKey($this->database->connection(), $request->redemptionKey);
+            $db = $this->database->connection();
+            $existing = $this->redemptionByKey($db, $request->redemptionKey);
             if ($existing !== null) {
-                return $this->redemptionReceipt($this->database->connection(), $existing, $payloadHash, true);
+                $this->assertRedemptionReplayCode($db, $existing, $normalized);
+
+                return $this->redemptionReceipt($db, $existing, $payloadHash, true);
             }
 
             throw $exception;
+        }
+    }
+
+    /** @return object{id:int|string,public_id:string,benefit_code_campaign_id:int|string,benefit_code_campaign_version_id:int|string,lookup_hash:string,key_version:int|string,display_mask:string,campaign_code:string,type:string,version:int|string,state:string,configuration_snapshot:string,configuration_hash:string}|null */
+    private function codeByNormalized(Connection $db, string $normalized, bool $lock): ?object
+    {
+        $matched = null;
+        foreach ($this->hasher->supportedHashes($normalized) as $version => $lookupHash) {
+            $candidate = $this->codeByHash($db, $lookupHash, $lock);
+            if ($candidate === null) {
+                continue;
+            }
+            $storedVersion = $this->positive($candidate->key_version, 'Benefit code key version');
+            if ($storedVersion !== $version || ! $this->hasher->matches($normalized, $storedVersion, (string) $candidate->lookup_hash)) {
+                throw new RuntimeException('Stored benefit code lookup identity is invalid.');
+            }
+            if ($matched !== null && $this->positive($matched->id, 'Benefit code ID') !== $this->positive($candidate->id, 'Benefit code ID')) {
+                throw new RuntimeException('Benefit code lookup identity is ambiguous.');
+            }
+            $matched = $candidate;
+        }
+
+        return $matched;
+    }
+
+    /** @param object{benefit_code_id:int|string} $redemption */
+    private function assertRedemptionReplayCode(Connection $db, object $redemption, string $normalized): void
+    {
+        /** @var object{lookup_hash:string,key_version:int|string}|null $code */
+        $code = $db->table('benefit_codes')
+            ->where('id', $this->positive($redemption->benefit_code_id, 'Benefit code ID'))
+            ->first(['lookup_hash', 'key_version']);
+        if ($code === null || ! $this->hasher->matches(
+            $normalized,
+            $this->positive($code->key_version, 'Benefit code key version'),
+            $code->lookup_hash,
+        )) {
+            throw new RuntimeException('Benefit code redemption key conflict.');
         }
     }
 
@@ -246,14 +293,36 @@ trait BenefitCodeRedemptionSupport
         if ($amount === null || $request->promotionalWalletAccountId === null) {
             throw new DomainException('Wallet-credit redemption requires a promotional wallet account and amount.');
         }
-        /** @var object{id:int|string,account_class:string,owner_user_id:int|string|null,wallet_bucket:string|null,currency:string,is_active:int|bool|string}|null $wallet */
-        $wallet = $db->table('ledger_accounts')->where('id', $request->promotionalWalletAccountId)->lockForUpdate()->first(['id', 'account_class', 'owner_user_id', 'wallet_bucket', 'currency', 'is_active']);
+
+        $fundingIdValue = $db->table('ledger_accounts')->where('code', self::PROMOTIONAL_FUNDING_ACCOUNT_CODE)->value('id');
+        $fundingId = $this->positive($fundingIdValue, 'Benefit code funding account ID');
+        $walletId = $request->promotionalWalletAccountId;
+        if ($fundingId === $walletId) {
+            throw new RuntimeException('Benefit code ledger account identities overlap.');
+        }
+        $accountIds = [$fundingId, $walletId];
+        sort($accountIds, SORT_NUMERIC);
+
+        /** @var Collection<int, object{id:int|string,code:string,account_class:string,owner_user_id:int|string|null,wallet_bucket:string|null,currency:string,is_active:int|bool|string}> $accounts */
+        $accounts = $db->table('ledger_accounts')
+            ->whereIn('id', $accountIds)
+            ->orderBy('id')
+            ->lockForUpdate()
+            ->get(['id', 'code', 'account_class', 'owner_user_id', 'wallet_bucket', 'currency', 'is_active']);
+        if ($accounts->count() !== 2) {
+            throw new RuntimeException('Benefit code ledger accounts are unavailable.');
+        }
+        /** @var array<int, object{id:int|string,code:string,account_class:string,owner_user_id:int|string|null,wallet_bucket:string|null,currency:string,is_active:int|bool|string}> $accountById */
+        $accountById = [];
+        foreach ($accounts as $account) {
+            $accountById[$this->positive($account->id, 'Benefit code ledger account ID')] = $account;
+        }
+        $wallet = $accountById[$walletId] ?? null;
         if ($wallet === null || $wallet->account_class !== 'liability' || (int) $wallet->owner_user_id !== $request->userId || $wallet->wallet_bucket !== 'promotional' || $wallet->currency !== 'IRR' || ! (bool) $wallet->is_active) {
             throw new AuthorizationException('Promotional wallet account is not eligible for benefit credit.');
         }
-        /** @var object{id:int|string,account_class:string,owner_user_id:int|string|null,wallet_bucket:string|null,currency:string,is_active:int|bool|string}|null $funding */
-        $funding = $db->table('ledger_accounts')->where('code', self::PROMOTIONAL_FUNDING_ACCOUNT_CODE)->lockForUpdate()->first(['id', 'account_class', 'owner_user_id', 'wallet_bucket', 'currency', 'is_active']);
-        if ($funding === null || $funding->account_class !== 'equity' || $funding->owner_user_id !== null || $funding->wallet_bucket !== null || $funding->currency !== 'IRR' || ! (bool) $funding->is_active) {
+        $funding = $accountById[$fundingId] ?? null;
+        if ($funding === null || $funding->code !== self::PROMOTIONAL_FUNDING_ACCOUNT_CODE || $funding->account_class !== 'equity' || $funding->owner_user_id !== null || $funding->wallet_bucket !== null || $funding->currency !== 'IRR' || ! (bool) $funding->is_active) {
             throw new RuntimeException('Benefit code promotional funding account is unavailable.');
         }
 
@@ -263,8 +332,8 @@ trait BenefitCodeRedemptionSupport
             self::LEDGER_TRANSACTION_TYPE,
             $request->correlationId,
             [
-                new LedgerEntryDraft($this->positive($funding->id, 'Benefit code funding account ID'), LedgerDirection::Debit, $money),
-                new LedgerEntryDraft($this->positive($wallet->id, 'Benefit code wallet account ID'), LedgerDirection::Credit, $money),
+                new LedgerEntryDraft($fundingId, LedgerDirection::Debit, $money),
+                new LedgerEntryDraft($walletId, LedgerDirection::Credit, $money),
             ],
             'benefit_code_redemption',
             $redemptionPublicId,
