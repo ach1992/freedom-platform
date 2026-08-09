@@ -141,6 +141,11 @@ trait AgentPricingQuoteIntegrationTestSupport
 
     private function ownerAdministrator(): int
     {
+        $existing = DB::table('administrators')->where('is_owner', true)->value('id');
+        if ($existing !== null) {
+            return (int) $existing;
+        }
+
         $now = now('UTC');
 
         return (int) DB::table('administrators')->insertGetId([
