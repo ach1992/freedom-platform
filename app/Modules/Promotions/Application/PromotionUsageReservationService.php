@@ -341,9 +341,9 @@ final readonly class PromotionUsageReservationService
     }
 
     /**
-     * @param ResolutionRow $resolution
-     * @param RuleRow $rule
-     * @param VersionRow $version
+     * @param  ResolutionRow  $resolution
+     * @param  RuleRow  $rule
+     * @param  VersionRow  $version
      */
     private function assertResolutionIdentity(object $resolution, object $rule, object $version): void
     {
@@ -367,10 +367,10 @@ final readonly class PromotionUsageReservationService
     }
 
     /**
-     * @param QuoteRow $quote
-     * @param ResolutionRow $resolution
-     * @param RuleRow $rule
-     * @param VersionRow $version
+     * @param  QuoteRow  $quote
+     * @param  ResolutionRow  $resolution
+     * @param  RuleRow  $rule
+     * @param  VersionRow  $version
      */
     private function assertQuoteBinding(object $quote, object $resolution, object $rule, object $version): void
     {
