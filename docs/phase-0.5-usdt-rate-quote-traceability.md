@@ -5,8 +5,8 @@
 **Parent:** Issue `#8`.  
 **Requirements:** bounded `USDT-001`, partial `USDT-002`, `DAT-002`, `DAT-003`, `SEC-001`, `SEC-002`, `QUA-001`.  
 **BASE_SHA:** `a7876668492c115ce2eba1b7194c83ac169ce8a7`.  
-**Corrected implementation head:** `461952762bb3f4214fb7893ea56908275ea2d3bf`.  
-**Implementation CI:** `31313971141` / `#1362` — all five mandatory jobs successful, **435 tests / 2724 assertions**.  
+**Corrected implementation head:** `c8cafbcdb53b69d94080f6ee7d486cff2dc74fe5`.  
+**Implementation CI:** `31316814017` / `#1367` — all five mandatory jobs successful, **436 tests / 2735 assertions**.  
 **Evidence:** `evidence/0.5.0/usdt-rate-quote-foundation.md`.
 
 ## Requirement-to-proof map
@@ -17,81 +17,64 @@
 | partial `USDT-002` provider contract | typed provider/result/policy; runnable manual; verified runnable Nobitex public `GET /market/stats`; deterministic controls | runnable Tetherland and complete `USDT-002` remain open |
 | Tetherland fail-closed | no-network adapter shell throws unavailable; default priority excludes Tetherland; focused test proves no request | exact official Tetherland endpoint/auth/schema later dedicated task |
 | deterministic source selection | explicit priority, no DB iteration order, source code uniqueness, fixed side mapping | future sources must enter through same typed contract and verification gate |
-| freshness | injected Clock plus `maxAgeSeconds`; stale and future-dated rate evidence rejected | provider-side server timestamp semantics are not invented where official contract does not provide one |
-| sanity bounds | fixed decimal min/max rate policy checked before use | policy values remain deployment configuration |
-| cross-source divergence | fixed-precision bcmath basis-point comparison; over-threshold sources fail closed | operational policy may later define additional approved source combinations |
+| freshness / bounds / divergence | Clock/max-age, fixed decimal min/max, bcmath divergence and explicit emergency fallback | operational policy remains deployment-owned |
 | circuit breaker | bounded failure threshold/cooldown in cache; open source skipped deterministically | shared provider-health control plane remains later integration |
-| emergency manual fallback | manual source is used only when explicitly enabled and present | no implicit/manual silent fallback |
-| `DAT-002` | Quote amount remains integer IRR; rate/USDT use fixed decimal strings and bcmath; integer basis points; no monetary float | none for this bounded calculation |
-| margin/rounding | final IRR/USDT rate derives deterministically; round-up precision is 0..6, default 6 | alternative rounding policy requires explicit future version |
-| destination identity/version | public address/network/configuration hash/version snapshotted; no caller URL or destination override | private keys/signing remain explicitly forbidden |
+| `DAT-002` | integer IRR plus fixed decimal strings/bcmath and integer basis points; no monetary float | none for this bounded calculation |
+| margin/rounding | deterministic rate adjustment and round-up precision 0..6 | alternative rounding policy requires explicit future version |
+| destination identity/version | public address/network/configuration hash/version snapshotted; no private key or caller destination override | signing remains outside this boundary |
+| standard deployment permission provisioning | `DatabaseSeeder` invokes `UsdtAccessFoundationSeeder` immediately after Identity/Access; standard seed produces `payments.usdt.manage` and finance grant | future role-policy changes require their own reviewed migration/seed semantics |
+| non-owner authorization | standard-seed regression assigns the active finance role to a non-owner admin and proves `configure()` succeeds; ungranted active non-owner is denied | owner bypass remains unchanged and is not used as proof of the finance grant |
 | BUY-002 read-only binding | existing `QuoteService::current()` validates authoritative current source Quote; no Quote persistence/service change | Order/purchase authority remains Phase 0.6 |
-| immutable replay | quote key + request payload hash; existing row returned before live config/rate lookup; changed source input conflicts | later payment intent must consume accepted quote without reinterpretation |
-| historical stability | accepted destination/rate/margin/exact amount/timestamps/hashes are immutable snapshots | no mutable refresh of accepted quote |
-| `DAT-003` | forward `003600` schema, FKs, unique/check constraints, insert joins, snapshot/hash checks, deterministic DB exact-USDT recomputation, immutable triggers | chain/provider transaction tables not introduced |
-| `SEC-001` external network | fixed current-host HTTPS Nobitex URL, TLS verification enabled, redirect disabled, bounded connect/request/body parsing, no caller-controlled URL | Tetherland remains no-network until verified |
-| `SEC-002` authorization/secrets | destination mutation re-authorizes `payments.usdt.manage`; only public address/non-secret policy stored; no provider secrets | provider-live credentials/workflows remain excluded |
-| `QUA-001` | implementation exact-head five-job CI, full/focused regression suites and independently hashed retained artifact | evidence head requires its own exact current merge-candidate CI |
+| immutable replay / history | quote key + request hash; accepted row returned before live re-resolution; changed input conflicts; snapshots remain immutable | downstream payment authority remains later |
+| `DAT-003` | forward `003600` schema, FKs, unique/check constraints, insert joins, snapshot/hash checks, DB exact-USDT recomputation and immutable triggers | chain/provider transaction tables not introduced |
+| `SEC-001` external network | fixed current-host HTTPS Nobitex URL, TLS verification, no redirects, bounded request/body parsing, no caller URL | Tetherland remains no-network until verified |
+| `SEC-002` authorization/secrets | execution-time `payments.usdt.manage`; standard finance grant proven; only public wallet data stored; no provider secrets | provider-live credentials/workflows remain excluded |
+| `QUA-001` | implementation exact-head five-job CI, full/focused suites and independently hashed retained artifact | evidence head requires its own exact current merge-candidate CI |
 
 ## Provider contract boundary
 
 ### Manual
 
-`ManualUsdtRateProvider` is runnable only when a fixed configured decimal rate is supplied. Its response hash derives from non-secret normalized source/rate/side/time inputs. It is not silently selected unless policy explicitly permits emergency manual fallback.
+`ManualUsdtRateProvider` is runnable only when a fixed configured decimal rate is supplied and is not silently selected unless explicit emergency-manual policy permits it.
 
 ### Nobitex
 
-Official current Nobitex API documentation checked 2026-08-09 at `https://apidocs.nobitex.ir/` documents public `GET /market/stats`, no token requirement, the current official example host `apiv2.nobitex.ir`, `srcCurrency=usdt`, `dstCurrency=rls`, and response fields `status`, `stats.<market>.bestSell`, `bestBuy` and `latest`.
-
-The adapter fixes the request to `https://apiv2.nobitex.ir/market/stats?srcCurrency=usdt&dstCurrency=rls`. `buy` maps to `bestSell`, `sell` to `bestBuy`, `last` to `latest`. The destination `rls` is used directly as the integer/fixed-decimal IRR-per-USDT representation.
+Official current Nobitex API documentation checked 2026-08-09 documents public `GET /market/stats`, no token requirement, current example host `apiv2.nobitex.ir`, `srcCurrency=usdt`, `dstCurrency=rls`, and `status` / `stats.<market>.bestSell|bestBuy|latest` response fields. The adapter fixes the request to `https://apiv2.nobitex.ir/market/stats?srcCurrency=usdt&dstCurrency=rls`; buy maps to `bestSell`, sell to `bestBuy`, last to `latest`.
 
 ### Tetherland
 
-No official exact endpoint/auth/schema was accepted for this Worker. `TetherlandUsdtRateProvider` has no HTTP client/URL and always fails closed. The removed tentative `/currencies` path is not part of the accepted contract. No Tetherland compatibility claim or credentials are present.
+No official exact endpoint/auth/schema was accepted. `TetherlandUsdtRateProvider` has no HTTP client/URL and always fails closed. No Tetherland compatibility claim or credentials are present.
 
-## Storage ownership
+## Standard seed and authorization path
 
-Revision 2 adds only USDT-owned tables through `database/migrations/2026_08_09_003600_create_usdt_rate_quote_foundation.php`:
+`UsdtAccessFoundationSeeder` defines `payments.usdt.manage` and grants it to the intended `finance` role. The corrected standard repository seed chain calls this seeder directly after `IdentityAccessFoundationSeeder`, ensuring the role and access-control foundation exists before the USDT permission/grant is provisioned.
 
-1. `usdt_destination_wallet_versions`;
-2. `usdt_amount_quotes`.
+`UsdtStandardSeedAuthorizationTest` executes `DatabaseSeeder`, not an explicit USDT seed. It verifies the permission row, active finance role, role-permission grant, successful destination configuration by an active **non-owner** finance-role administrator, and denial for an active non-owner without the grant. The production `AdministratorPermissionAuthorizer` is used unchanged. Owner bypass, role assignment and permission/override semantics are not weakened.
 
-No existing applied migration, shared Payments registration, PAY-001 surface, Quote persistence, Wallet/Ledger, Order, Provisioning or Service module is changed.
+## Storage and modification ownership
+
+Revision 2 adds USDT-owned tables through `database/migrations/2026_08_09_003600_create_usdt_rate_quote_foundation.php`: `usdt_destination_wallet_versions` and `usdt_amount_quotes`.
+
+The required correction additionally changes the standard `database/seeders/DatabaseSeeder.php` chain only to invoke the already bounded `UsdtAccessFoundationSeeder`. No existing applied migration, shared Payments registration, PAY-001 surface, Quote persistence, Wallet/Ledger, Order, Provisioning or Service module is changed.
 
 ## Test traceability
 
-Implementation CI `31313971141` / `#1362`:
+Implementation CI `31316814017` / `#1367`:
 
-- full repository suite: **435 tests / 2724 assertions**;
+- full repository suite: **436 tests / 2735 assertions**;
 - `UsdtRateProviderContractTest`: **7 / 44**;
 - `UsdtRateQuoteFoundationTest`: **3 / 57**;
-- combined W-007 focused: **10 / 101**;
+- `UsdtStandardSeedAuthorizationTest`: **1 / 11**;
+- combined W-007 focused: **11 / 112**;
 - existing `QuotePricingSnapshotTest`: **8 / 63**;
 - zero failures/errors/skips in these suites.
 
-Provider suite covers manual/Nobitex normalization, Tetherland unavailable no-network behavior, explicit verified fallback, malformed/oversized/redirect/transport failures, freshness, bounds, divergence, emergency manual fallback, circuit breaker and fixed-precision boundary arithmetic.
-
-Quote suite covers administrator authorization, BEP20 destination version/replay/conflict, immutable amount snapshot, exact replay, historical stability, source Quote expiry rejection, no Payment Intent/Ledger effect and MariaDB forged/update/delete rejection.
-
 ## Evidence identity
 
-Implementation artifact `test-evidence-31313971141`, ID `9038210512`, size `128937` bytes, retained 30 days. Independent downloaded ZIP SHA-256: `eec1ebdcb31671dad6a3f526f4adb9e71bd4d23ab0315b3af4f80556f75853d0`, exactly matching the uploader digest.
+Implementation artifact `test-evidence-31316814017`, ID `9039007750`, size `129026` bytes, retained 30 days. Independent downloaded ZIP SHA-256: `b5d8b9ee82dae2e65cc0f6f3998980d45033d227a22d7d3319dbc890806a0b8f`, exactly matching the uploader digest.
 
 ## Explicit non-claims
 
-Revision 2 does **not** claim:
-
-- runnable Tetherland integration;
-- complete `USDT-002`;
-- `USDT-003` TXID/explorer/confirmation/capture;
-- Payment Intent or capture;
-- Order or purchase authority;
-- Wallet/Ledger mutation/refund;
-- `PAY-001` or W-005-owned routing/eligibility;
-- Zarinpal/NOWPayments/C2C/Gift Card;
-- provider-live secrets/workflows;
-- provisioning/Service or Telegram UX;
-- `composer.lock` changes;
-- Phase `0.5.0` closure or release readiness.
+Revision 2 does **not** claim runnable Tetherland integration, complete `USDT-002`, `USDT-003`, Payment Intent/capture, Order/purchase authority, Wallet/Ledger mutation/refund, `PAY-001` or W-005 routing/eligibility, Zarinpal/NOWPayments/C2C/Gift Card, provider-live secrets/workflows, provisioning/Service, Telegram purchase UX, `composer.lock` changes, Phase `0.5.0` closure or release readiness.
 
 Issue `#34` remains open for the Tetherland/full-`USDT-002` gap and PR `#37` is deliberately non-closing.
