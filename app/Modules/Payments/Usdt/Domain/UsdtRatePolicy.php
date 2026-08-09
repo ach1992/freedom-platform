@@ -9,7 +9,7 @@ use InvalidArgumentException;
 final readonly class UsdtRatePolicy
 {
     /**
-     * @param list<string> $priority
+     * @param  list<string>  $priority
      */
     public function __construct(
         public array $priority,
