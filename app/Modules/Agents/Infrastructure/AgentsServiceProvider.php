@@ -7,6 +7,7 @@ namespace App\Modules\Agents\Infrastructure;
 use App\Modules\AccessControl\Application\AdministratorPermissionAuthorizer;
 use App\Modules\Agents\Application\AgentApplicationService;
 use App\Modules\Agents\Application\AgentMutationAudit;
+use App\Modules\Agents\Application\AgentPricingService;
 use App\Modules\Agents\Application\AgentProfileService;
 use App\Shared\Application\Clock;
 use Illuminate\Contracts\Config\Repository;
@@ -50,6 +51,15 @@ final class AgentsServiceProvider extends ServiceProvider
                 $application->make(AdministratorPermissionAuthorizer::class),
                 $application->make(AgentMutationAudit::class),
                 $application->make(Clock::class),
+            ),
+        );
+
+        $this->app->singleton(
+            AgentPricingService::class,
+            fn (Application $application): AgentPricingService => new AgentPricingService(
+                $application->make(DatabaseManager::class),
+                $application->make(Clock::class),
+                $application->make(AdministratorPermissionAuthorizer::class),
             ),
         );
     }
