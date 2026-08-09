@@ -17,18 +17,25 @@ trait AgentPricingPersistenceSupport
     /** @return object{id:int|string,version:int|string,state:string,discount_combination_allowed:int|bool|string,configuration_snapshot:string,configuration_hash:string}|null */
     private function latestProfileVersion(Connection $db, int $profileId): ?object
     {
-        return $db->table('agent_pricing_profile_versions')->where('agent_pricing_profile_id', $profileId)->orderByDesc('version')->first(['id', 'version', 'state', 'discount_combination_allowed', 'configuration_snapshot', 'configuration_hash']);
+        /** @var object{id:int|string,version:int|string,state:string,discount_combination_allowed:int|bool|string,configuration_snapshot:string,configuration_hash:string}|null $row */
+        $row = $db->table('agent_pricing_profile_versions')->where('agent_pricing_profile_id', $profileId)->orderByDesc('version')->first(['id', 'version', 'state', 'discount_combination_allowed', 'configuration_snapshot', 'configuration_hash']);
+
+        return $row;
     }
 
     /** @return object{id:int|string,version:int|string,state:string}|null */
     private function latestRuleVersion(Connection $db, int $ruleId): ?object
     {
-        return $db->table('agent_pricing_rule_versions')->where('agent_pricing_rule_id', $ruleId)->orderByDesc('version')->first(['id', 'version', 'state']);
+        /** @var object{id:int|string,version:int|string,state:string}|null $row */
+        $row = $db->table('agent_pricing_rule_versions')->where('agent_pricing_rule_id', $ruleId)->orderByDesc('version')->first(['id', 'version', 'state']);
+
+        return $row;
     }
 
     /** @return object{id:int|string,agent_pricing_rule_id:int|string,version:int|string,state:string,override_price_irr:int|string,action:string|null,plan_offering_id:int|string|null,sales_server_id:int|string|null,product_id:int|string|null,configuration_snapshot:string,configuration_hash:string,rule_public_id:string,rule_code:string}|null */
     private function selectRule(Connection $db, int $profileId, AgentPricingResolutionRequest $request, int $productId, int $serverId): ?object
     {
+        /** @var array<int,object{id:int|string,agent_pricing_rule_id:int|string,version:int|string,state:string,override_price_irr:int|string,action:string|null,plan_offering_id:int|string|null,sales_server_id:int|string|null,product_id:int|string|null,configuration_snapshot:string,configuration_hash:string,rule_public_id:string,rule_code:string}> $rows */
         $rows = $db->table('agent_pricing_rule_versions as v')->join('agent_pricing_rules as r', 'r.id', '=', 'v.agent_pricing_rule_id')
             ->where('r.agent_pricing_profile_id', $profileId)->get(['v.id', 'v.agent_pricing_rule_id', 'v.version', 'v.state', 'v.override_price_irr', 'v.action', 'v.plan_offering_id', 'v.sales_server_id', 'v.product_id', 'v.configuration_snapshot', 'v.configuration_hash', 'r.public_id as rule_public_id', 'r.rule_code'])->all();
         /** @var array<int,object{id:int|string,agent_pricing_rule_id:int|string,version:int|string,state:string,override_price_irr:int|string,action:string|null,plan_offering_id:int|string|null,sales_server_id:int|string|null,product_id:int|string|null,configuration_snapshot:string,configuration_hash:string,rule_public_id:string,rule_code:string}> $latest */
@@ -39,6 +46,7 @@ trait AgentPricingPersistenceSupport
                 $latest[$id] = $row;
             }
         }
+        /** @var array<int,array{0:int,1:object{id:int|string,agent_pricing_rule_id:int|string,version:int|string,state:string,override_price_irr:int|string,action:string|null,plan_offering_id:int|string|null,sales_server_id:int|string|null,product_id:int|string|null,configuration_snapshot:string,configuration_hash:string,rule_public_id:string,rule_code:string}}> $qualified */
         $qualified = [];
         foreach ($latest as $row) {
             if ($row->state !== AgentPricingState::Active->value) {
@@ -94,8 +102,10 @@ trait AgentPricingPersistenceSupport
         if ($lock) {
             $q->lockForUpdate();
         }
+        /** @var object{id:int|string,agent_pricing_profile_id:int|string,mutation_payload_hash:string,version:int|string,state:string,discount_combination_allowed:int|bool|string,configuration_hash:string,profile_public_id:string,profile_code:string}|null $row */
+        $row = $q->first(['v.id', 'v.agent_pricing_profile_id', 'v.mutation_payload_hash', 'v.version', 'v.state', 'v.discount_combination_allowed', 'v.configuration_hash', 'p.public_id as profile_public_id', 'p.profile_code']);
 
-        return $q->first(['v.id', 'v.agent_pricing_profile_id', 'v.mutation_payload_hash', 'v.version', 'v.state', 'v.discount_combination_allowed', 'v.configuration_hash', 'p.public_id as profile_public_id', 'p.profile_code']);
+        return $row;
     }
 
     /** @return object{id:int|string,agent_pricing_rule_id:int|string,mutation_payload_hash:string,version:int|string,state:string,override_price_irr:int|string,action:string|null,plan_offering_id:int|string|null,sales_server_id:int|string|null,product_id:int|string|null,configuration_hash:string,rule_public_id:string,rule_code:string,profile_code:string}|null */
@@ -105,25 +115,35 @@ trait AgentPricingPersistenceSupport
         if ($lock) {
             $q->lockForUpdate();
         }
+        /** @var object{id:int|string,agent_pricing_rule_id:int|string,mutation_payload_hash:string,version:int|string,state:string,override_price_irr:int|string,action:string|null,plan_offering_id:int|string|null,sales_server_id:int|string|null,product_id:int|string|null,configuration_hash:string,rule_public_id:string,rule_code:string,profile_code:string}|null $row */
+        $row = $q->first(['v.id', 'v.agent_pricing_rule_id', 'v.mutation_payload_hash', 'v.version', 'v.state', 'v.override_price_irr', 'v.action', 'v.plan_offering_id', 'v.sales_server_id', 'v.product_id', 'v.configuration_hash', 'r.public_id as rule_public_id', 'r.rule_code', 'p.profile_code']);
 
-        return $q->first(['v.id', 'v.agent_pricing_rule_id', 'v.mutation_payload_hash', 'v.version', 'v.state', 'v.override_price_irr', 'v.action', 'v.plan_offering_id', 'v.sales_server_id', 'v.product_id', 'v.configuration_hash', 'r.public_id as rule_public_id', 'r.rule_code', 'p.profile_code']);
+        return $row;
     }
 
+    /** @return object{id:int|string,public_id:string,resolution_key:string,request_payload_hash:string,user_id:int|string,agent_profile_id:int|string,agent_pricing_profile_id:int|string,pricing_profile_public_id_snapshot:string,pricing_profile_code_snapshot:string,pricing_profile_version:int|string,pricing_profile_configuration_hash:string,plan_offering_id:int|string,product_id_snapshot:int|string,sales_server_id_snapshot:int|string,action:string,agent_pricing_rule_id:int|string|null,rule_public_id_snapshot:string|null,rule_code_snapshot:string|null,rule_version:int|string|null,rule_configuration_hash:string|null,override_price_irr:int|string|null,discount_combination_allowed:int|bool|string,configuration_snapshot_hash:string}|null */
     private function resolutionRow(Connection $db, string $key, bool $lock = false): ?object
     {
         $q = $db->table('agent_pricing_resolutions')->where('resolution_key', $key);
         if ($lock) {
             $q->lockForUpdate();
         }
+        /** @var object{id:int|string,public_id:string,resolution_key:string,request_payload_hash:string,user_id:int|string,agent_profile_id:int|string,agent_pricing_profile_id:int|string,pricing_profile_public_id_snapshot:string,pricing_profile_code_snapshot:string,pricing_profile_version:int|string,pricing_profile_configuration_hash:string,plan_offering_id:int|string,product_id_snapshot:int|string,sales_server_id_snapshot:int|string,action:string,agent_pricing_rule_id:int|string|null,rule_public_id_snapshot:string|null,rule_code_snapshot:string|null,rule_version:int|string|null,rule_configuration_hash:string|null,override_price_irr:int|string|null,discount_combination_allowed:int|bool|string,configuration_snapshot_hash:string}|null $row */
+        $row = $q->first();
 
-        return $q->first();
+        return $row;
     }
 
+    /** @return object{id:int|string,public_id:string,resolution_key:string,request_payload_hash:string,user_id:int|string,agent_profile_id:int|string,agent_pricing_profile_id:int|string,pricing_profile_public_id_snapshot:string,pricing_profile_code_snapshot:string,pricing_profile_version:int|string,pricing_profile_configuration_hash:string,plan_offering_id:int|string,product_id_snapshot:int|string,sales_server_id_snapshot:int|string,action:string,agent_pricing_rule_id:int|string|null,rule_public_id_snapshot:string|null,rule_code_snapshot:string|null,rule_version:int|string|null,rule_configuration_hash:string|null,override_price_irr:int|string|null,discount_combination_allowed:int|bool|string,configuration_snapshot_hash:string}|null */
     private function resolutionById(Connection $db, int $id): ?object
     {
-        return $db->table('agent_pricing_resolutions')->where('id', $id)->first();
+        /** @var object{id:int|string,public_id:string,resolution_key:string,request_payload_hash:string,user_id:int|string,agent_profile_id:int|string,agent_pricing_profile_id:int|string,pricing_profile_public_id_snapshot:string,pricing_profile_code_snapshot:string,pricing_profile_version:int|string,pricing_profile_configuration_hash:string,plan_offering_id:int|string,product_id_snapshot:int|string,sales_server_id_snapshot:int|string,action:string,agent_pricing_rule_id:int|string|null,rule_public_id_snapshot:string|null,rule_code_snapshot:string|null,rule_version:int|string|null,rule_configuration_hash:string|null,override_price_irr:int|string|null,discount_combination_allowed:int|bool|string,configuration_snapshot_hash:string}|null $row */
+        $row = $db->table('agent_pricing_resolutions')->where('id', $id)->first();
+
+        return $row;
     }
 
+    /** @param object{id:int|string,agent_pricing_profile_id:int|string,mutation_payload_hash:string,version:int|string,state:string,discount_combination_allowed:int|bool|string,configuration_hash:string,profile_public_id:string,profile_code:string} $row */
     private function profileReceipt(object $row, string $hash, bool $replayed): AgentPricingProfileVersionReceipt
     {
         if (! hash_equals((string) $row->mutation_payload_hash, $hash)) {
@@ -134,6 +154,7 @@ trait AgentPricingPersistenceSupport
         return new AgentPricingProfileVersionReceipt($this->positive($row->agent_pricing_profile_id, 'Profile ID'), (string) $row->profile_public_id, (string) $row->profile_code, $this->positive($row->id, 'Profile version ID'), $this->positive($row->version, 'Profile version'), $state, (bool) $row->discount_combination_allowed, (string) $row->configuration_hash, $replayed);
     }
 
+    /** @param object{id:int|string,agent_pricing_rule_id:int|string,mutation_payload_hash:string,version:int|string,state:string,override_price_irr:int|string,action:string|null,plan_offering_id:int|string|null,sales_server_id:int|string|null,product_id:int|string|null,configuration_hash:string,rule_public_id:string,rule_code:string,profile_code:string} $row */
     private function ruleReceipt(object $row, string $hash, bool $replayed): AgentPricingRuleVersionReceipt
     {
         if (! hash_equals((string) $row->mutation_payload_hash, $hash)) {
@@ -144,6 +165,7 @@ trait AgentPricingPersistenceSupport
         return new AgentPricingRuleVersionReceipt($this->positive($row->agent_pricing_rule_id, 'Rule ID'), (string) $row->rule_public_id, (string) $row->profile_code, (string) $row->rule_code, $this->positive($row->id, 'Rule version ID'), $this->positive($row->version, 'Rule version'), $state, $this->nonNegative($row->override_price_irr, 'Override'), $this->specificity($row), (string) $row->configuration_hash, $replayed);
     }
 
+    /** @param object{id:int|string,public_id:string,resolution_key:string,request_payload_hash:string,user_id:int|string,agent_profile_id:int|string,agent_pricing_profile_id:int|string,pricing_profile_public_id_snapshot:string,pricing_profile_code_snapshot:string,pricing_profile_version:int|string,pricing_profile_configuration_hash:string,plan_offering_id:int|string,product_id_snapshot:int|string,sales_server_id_snapshot:int|string,action:string,agent_pricing_rule_id:int|string|null,rule_public_id_snapshot:string|null,rule_code_snapshot:string|null,rule_version:int|string|null,rule_configuration_hash:string|null,override_price_irr:int|string|null,discount_combination_allowed:int|bool|string,configuration_snapshot_hash:string} $row */
     private function resolutionReceipt(object $row, string $hash, bool $replayed): AgentPricingResolutionReceipt
     {
         if (! hash_equals((string) $row->request_payload_hash, $hash)) {
@@ -185,6 +207,7 @@ trait AgentPricingPersistenceSupport
         return $value;
     }
 
+    /** @param object{state:string,discount_combination_allowed:int|bool|string,configuration_snapshot:string,configuration_hash:string} $row */
     private function verifyProfileVersion(object $row, string $code): void
     {
         $state = AgentPricingState::tryFrom((string) $row->state) ?? throw new RuntimeException('Stored profile state is invalid.');
@@ -194,6 +217,7 @@ trait AgentPricingPersistenceSupport
         }
     }
 
+    /** @param object{state:string,override_price_irr:int|string,action:string|null,plan_offering_id:int|string|null,sales_server_id:int|string|null,product_id:int|string|null,configuration_snapshot:string,configuration_hash:string,rule_code:string} $row */
     private function verifyRuleVersion(object $row, string $profileCode): void
     {
         $state = AgentPricingState::tryFrom((string) $row->state) ?? throw new RuntimeException('Stored rule state is invalid.');
@@ -211,6 +235,7 @@ trait AgentPricingPersistenceSupport
         }
     }
 
+    /** @param object{action:string|null,plan_offering_id:int|string|null,sales_server_id:int|string|null,product_id:int|string|null} $row */
     private function specificity(object $row): int
     {
         return ($row->action === null ? 0 : 1) + ($row->plan_offering_id === null ? 0 : 1) + ($row->sales_server_id === null ? 0 : 1) + ($row->product_id === null ? 0 : 1);
