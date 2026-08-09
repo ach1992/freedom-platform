@@ -21,13 +21,13 @@ trait QuoteServiceAgentPricing
         QuoteReceipt $quote,
         ?QuoteAgentPricingContext $context,
     ): void {
-        if ($quote->overrideSource !== QuoteOverrideSource::Agent) {
+        if ($quote->agentPricing === null) {
             return;
         }
         if ($context === null || $context->actorUserId !== $quote->userId) {
             throw new AuthorizationException('Quote agent pricing actor is not authorized for this subject.');
         }
-        if ($quote->accountType !== 'agent' || $quote->agentPricing === null) {
+        if ($quote->accountType !== 'agent') {
             throw new RuntimeException('Stored quote agent pricing binding is incomplete.');
         }
 
