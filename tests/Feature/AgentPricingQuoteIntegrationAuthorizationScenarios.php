@@ -114,6 +114,129 @@ trait AgentPricingQuoteIntegrationAuthorizationScenarios
         self::assertSame(0, DB::table('agent_pricing_resolutions')->count());
     }
 
+    public function test_exact_agent_quote_replay_revalidates_active_user_and_agent_profile_without_new_effect(): void
+    {
+        $owner = $this->ownerAdministrator();
+        $offering = $this->quoteOffering();
+        $pricingService = $this->app->make(AgentPricingService::class);
+        $this->activePricingProfile($pricingService, $owner, 'quote-agent-replay-suspend', true);
+        $this->activePricingRule(
+            $pricingService,
+            $owner,
+            'quote-agent-replay-suspend',
+            'default',
+            new AgentPricingRuleDefinition(AgentPricingState::Active, 875_000),
+        );
+        $agent = $this->agentSubject('quote-agent-replay-suspend');
+        $quoteService = $this->app->make(QuoteService::class);
+        $context = new QuoteAgentPricingContext($agent, AgentPricingAction::Purchase);
+        $input = $this->pricing(null, 0);
+        $quote = $quoteService->create(
+            'agent.quote.replay.suspend.000001',
+            $agent,
+            $offering['id'],
+            $input,
+            $this->correlation('replay-suspend-create'),
+            $context,
+        );
+        $storedBefore = DB::table('quotes')->where('id', $quote->quoteId)->first();
+        self::assertNotNull($storedBefore);
+        self::assertSame(1, DB::table('quotes')->count());
+        self::assertSame(1, DB::table('agent_pricing_resolutions')->count());
+
+        DB::table('users')->where('id', $agent)->update([
+            'account_status' => 'suspended',
+            'updated_at' => now('UTC'),
+        ]);
+        $this->assertDomainMessage(
+            'Agent pricing resolution requires an active agent account.',
+            fn (): mixed => $quoteService->create(
+                'agent.quote.replay.suspend.000001',
+                $agent,
+                $offering['id'],
+                $input,
+                $this->correlation('replay-suspend-user'),
+                $context,
+            ),
+        );
+
+        DB::table('users')->where('id', $agent)->update([
+            'account_status' => 'active',
+            'updated_at' => now('UTC'),
+        ]);
+        DB::table('agent_profiles')->where('user_id', $agent)->update([
+            'status' => 'suspended',
+            'suspended_at' => now('UTC'),
+            'updated_at' => now('UTC'),
+        ]);
+        $this->assertDomainMessage(
+            'Agent pricing resolution requires an active agent profile.',
+            fn (): mixed => $quoteService->create(
+                'agent.quote.replay.suspend.000001',
+                $agent,
+                $offering['id'],
+                $input,
+                $this->correlation('replay-suspend-profile'),
+                $context,
+            ),
+        );
+
+        self::assertSame(1, DB::table('quotes')->count());
+        self::assertSame(1, DB::table('agent_pricing_resolutions')->count());
+        self::assertSame((array) $storedBefore, (array) DB::table('quotes')->where('id', $quote->quoteId)->first());
+    }
+
+    public function test_exact_agent_quote_replay_denies_current_pricing_profile_code_mismatch_and_preserves_history(): void
+    {
+        $owner = $this->ownerAdministrator();
+        $offering = $this->quoteOffering();
+        $pricingService = $this->app->make(AgentPricingService::class);
+        $this->activePricingProfile($pricingService, $owner, 'quote-agent-replay-original', true);
+        $this->activePricingProfile($pricingService, $owner, 'quote-agent-replay-other', true);
+        $this->activePricingRule(
+            $pricingService,
+            $owner,
+            'quote-agent-replay-original',
+            'default',
+            new AgentPricingRuleDefinition(AgentPricingState::Active, 825_000),
+        );
+        $agent = $this->agentSubject('quote-agent-replay-original');
+        $quoteService = $this->app->make(QuoteService::class);
+        $context = new QuoteAgentPricingContext($agent, AgentPricingAction::Purchase);
+        $input = $this->pricing(null, 0);
+        $quote = $quoteService->create(
+            'agent.quote.replay.profile.000001',
+            $agent,
+            $offering['id'],
+            $input,
+            $this->correlation('replay-profile-create'),
+            $context,
+        );
+        $storedBefore = DB::table('quotes')->where('id', $quote->quoteId)->first();
+        self::assertNotNull($storedBefore);
+        self::assertSame('quote-agent-replay-original', $quote->agentPricing?->pricingProfileCode);
+
+        DB::table('agent_profiles')->where('user_id', $agent)->update([
+            'pricing_profile_code' => 'quote-agent-replay-other',
+            'updated_at' => now('UTC'),
+        ]);
+        $this->assertDomainMessage(
+            'Agent pricing profile code is stale or invalid.',
+            fn (): mixed => $quoteService->create(
+                'agent.quote.replay.profile.000001',
+                $agent,
+                $offering['id'],
+                $input,
+                $this->correlation('replay-profile-mismatch'),
+                $context,
+            ),
+        );
+
+        self::assertSame(1, DB::table('quotes')->count());
+        self::assertSame(1, DB::table('agent_pricing_resolutions')->count());
+        self::assertSame((array) $storedBefore, (array) DB::table('quotes')->where('id', $quote->quoteId)->first());
+    }
+
     public function test_same_quote_key_conflicts_on_changed_action_or_discount_without_re_resolving(): void
     {
         $owner = $this->ownerAdministrator();
