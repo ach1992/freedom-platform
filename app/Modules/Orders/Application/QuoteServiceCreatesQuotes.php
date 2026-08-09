@@ -55,7 +55,10 @@ trait QuoteServiceCreatesQuotes
             ): QuoteReceipt {
                 $existing = $this->quoteByKey($connection, $quoteKey, true);
                 if ($existing !== null) {
-                    return $this->quoteReceipt($existing, $requestPayloadHash, true);
+                    $receipt = $this->quoteReceipt($existing, $requestPayloadHash, true);
+                    $this->assertAgentQuoteReplayAuthorized($connection, $receipt, $agentPricingContext);
+
+                    return $receipt;
                 }
 
                 $now = $this->clock->now()->setTimezone(new DateTimeZone('UTC'));
@@ -224,12 +227,22 @@ trait QuoteServiceCreatesQuotes
                 return $this->quoteReceipt($created, $requestPayloadHash, false);
             });
         } catch (QueryException $exception) {
-            $existing = $this->quoteByKey($this->database->connection(), $quoteKey);
-            if ($existing !== null) {
-                return $this->quoteReceipt($existing, $requestPayloadHash, true);
-            }
+            return $this->database->connection()->transaction(function (Connection $connection) use (
+                $quoteKey,
+                $requestPayloadHash,
+                $agentPricingContext,
+                $exception,
+            ): QuoteReceipt {
+                $existing = $this->quoteByKey($connection, $quoteKey, true);
+                if ($existing !== null) {
+                    $receipt = $this->quoteReceipt($existing, $requestPayloadHash, true);
+                    $this->assertAgentQuoteReplayAuthorized($connection, $receipt, $agentPricingContext);
 
-            throw $exception;
+                    return $receipt;
+                }
+
+                throw $exception;
+            });
         }
     }
 }
