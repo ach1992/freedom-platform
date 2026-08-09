@@ -23,20 +23,10 @@ final class PromotionAccessFoundationSeeder extends Seeder
                 'created_at' => $now,
                 'updated_at' => $now,
             ],
-            [
-                'code' => 'promotions.rules.resolve',
-                'module' => 'promotions',
-                'risk_level' => 'standard',
-                'requires_approval' => false,
-                'created_at' => $now,
-                'updated_at' => $now,
-            ],
         ], ['code'], ['module', 'risk_level', 'requires_approval', 'updated_at']);
 
         foreach ([
             ['sales_content', 'promotions.rules.manage'],
-            ['sales_content', 'promotions.rules.resolve'],
-            ['finance', 'promotions.rules.resolve'],
         ] as [$roleCode, $permissionCode]) {
             $roleId = DB::table('roles')->where('code', $roleCode)->value('id');
             $permissionId = DB::table('permissions')->where('code', $permissionCode)->value('id');
