@@ -33,8 +33,7 @@ trait QuoteServiceSupport
         QuotePricingInput $pricing,
         DateTimeImmutable $expiresAt,
         ?QuoteAgentPricingContext $agentPricingContext,
-    ): string
-    {
+    ): string {
         $payload = [
             'user_id' => $userId,
             'plan_offering_id' => $planOfferingId,
