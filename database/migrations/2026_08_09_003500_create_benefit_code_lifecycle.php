@@ -189,7 +189,7 @@ return new class extends Migration
         DB::statement('ALTER TABLE benefit_code_issuances ADD CONSTRAINT benefit_code_issuance_quantity_chk CHECK (`quantity` BETWEEN 1 AND 500)');
         DB::statement("ALTER TABLE benefit_code_issuances ADD CONSTRAINT benefit_code_issuance_hash_chk CHECK (`request_payload_hash` REGEXP '^[0-9a-f]{64}$')");
         DB::statement("ALTER TABLE benefit_codes ADD CONSTRAINT benefit_code_lookup_hash_chk CHECK (`lookup_hash` REGEXP '^[0-9a-f]{64}$' AND `key_version` >= 1)");
-        DB::statement("ALTER TABLE benefit_codes ADD CONSTRAINT benefit_code_mask_chk CHECK (`display_mask` REGEXP '^[A-HJ-NP-Z2-9]{4}-\\*{4}-[A-HJ-NP-Z2-9]{4}$')");
+        DB::statement("ALTER TABLE benefit_codes ADD CONSTRAINT benefit_code_mask_chk CHECK (`display_mask` REGEXP '^[A-HJ-NP-Z2-9]{4}-[*]{4}-[A-HJ-NP-Z2-9]{4}$')");
         DB::statement("ALTER TABLE benefit_code_disables ADD CONSTRAINT benefit_code_disable_hash_chk CHECK (`request_payload_hash` REGEXP '^[0-9a-f]{64}$')");
         DB::statement("ALTER TABLE benefit_code_redemptions ADD CONSTRAINT benefit_code_redemption_type_chk CHECK (`type_snapshot` IN ('wallet_credit', 'free_service', 'discount_grant'))");
         DB::statement("ALTER TABLE benefit_code_redemptions ADD CONSTRAINT benefit_code_redemption_hashes_chk CHECK (`request_payload_hash` REGEXP '^[0-9a-f]{64}$' AND `configuration_snapshot_hash` REGEXP '^[0-9a-f]{64}$')");
