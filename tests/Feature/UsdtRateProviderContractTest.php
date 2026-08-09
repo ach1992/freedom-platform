@@ -86,110 +86,118 @@ final class UsdtRateProviderContractTest extends TestCase
         self::assertSame('1.010200', UsdtDecimal::roundUpIrrToUsdt(1_000_001, '990000', 4));
     }
 
-    public function test_nobitex_v3_orderbook_normalizes_toman_to_irr_for_buy_sell_and_last(): void
+    public function test_nobitex_public_rls_market_stats_normalize_buy_sell_and_last(): void
     {
-        $millis = (new DateTimeImmutable('2026-08-09T12:00:00+00:00'))->getTimestamp() * 1000;
+        $clock = new MutableUsdtProviderClock(new DateTimeImmutable('2026-08-09T12:00:00+00:00'));
         Http::fake([
             NobitexUsdtRateProvider::ENDPOINT => Http::response([
                 'status' => 'ok',
-                'lastUpdate' => $millis,
-                'lastTradePrice' => '99500',
-                'asks' => [['100000', '5.0']],
-                'bids' => [['99000', '6.0']],
+                'stats' => [
+                    'usdt-rls' => [
+                        'bestSell' => '1000000',
+                        'bestBuy' => '990000',
+                        'latest' => '995000',
+                    ],
+                ],
             ]),
         ]);
-        $provider = new NobitexUsdtRateProvider($this->app->make(Factory::class));
+        $provider = new NobitexUsdtRateProvider($this->app->make(Factory::class), $clock);
 
         self::assertSame('1000000.00000000', $provider->fetch(UsdtRateSide::Buy)->rateIrr);
         self::assertSame('990000.00000000', $provider->fetch(UsdtRateSide::Sell)->rateIrr);
         self::assertSame('995000.00000000', $provider->fetch(UsdtRateSide::Last)->rateIrr);
-        Http::assertSentCount(3);
+        self::assertSame($clock->value, $provider->fetch(UsdtRateSide::Buy)->fetchedAt);
+        Http::assertSentCount(4);
         Http::assertSent(static fn ($request): bool => $request->url() === NobitexUsdtRateProvider::ENDPOINT);
         self::assertStringStartsWith('https://', NobitexUsdtRateProvider::ENDPOINT);
         self::assertFalse($this->constructorAcceptsUrl(NobitexUsdtRateProvider::class));
     }
 
-    public function test_tetherland_public_currency_payload_normalizes_usdt_and_fixed_endpoint(): void
+    public function test_tetherland_is_unavailable_without_network_and_only_explicit_verified_fallback_can_continue(): void
     {
-        $clock = new MutableUsdtProviderClock(new DateTimeImmutable('2026-08-09T12:00:01+00:00'));
-        Http::fake([
-            TetherlandUsdtRateProvider::ENDPOINT => Http::response([
-                'data' => [
-                    'currencies' => [
-                        [
-                            'symbol' => 'USDT',
-                            'buy' => '100000',
-                            'sell' => '99000',
-                            'price' => '99500',
-                            'updatedAt' => '2026-08-09T12:00:00+00:00',
-                        ],
-                    ],
-                ],
-            ]),
-        ]);
-        $provider = new TetherlandUsdtRateProvider($this->app->make(Factory::class), $clock, 10);
+        Http::fake();
+        $clock = new MutableUsdtProviderClock(new DateTimeImmutable('2026-08-09T12:00:00+00:00'));
+        $tetherland = new TetherlandUsdtRateProvider;
 
-        $buy = $provider->fetch(UsdtRateSide::Buy);
-        self::assertSame('tetherland', $buy->source);
-        self::assertSame('1000000.00000000', $buy->rateIrr);
-        self::assertSame('2026-08-09T12:00:00+00:00', $buy->fetchedAt->format(DATE_ATOM));
-        self::assertSame('990000.00000000', $provider->fetch(UsdtRateSide::Sell)->rateIrr);
-        self::assertSame('995000.00000000', $provider->fetch(UsdtRateSide::Last)->rateIrr);
-        Http::assertSent(static fn ($request): bool => $request->url() === TetherlandUsdtRateProvider::ENDPOINT);
-        self::assertStringStartsWith('https://', TetherlandUsdtRateProvider::ENDPOINT);
-        self::assertFalse($this->constructorAcceptsUrl(TetherlandUsdtRateProvider::class));
+        $this->assertRuntimeMessage(
+            'Tetherland rate provider is unavailable pending a verified official API contract.',
+            fn (): UsdtRate => $tetherland->fetch(UsdtRateSide::Buy),
+        );
+        Http::assertNothingSent();
+
+        $closed = $this->resolver([$tetherland], $clock, false, 500, 3, 60, ['tetherland']);
+        $this->assertRuntimeMessage(
+            'No acceptable external USDT rate is available.',
+            fn (): UsdtRate => $closed->resolve(),
+        );
+        Http::assertNothingSent();
+
+        $verifiedFallback = new StubUsdtRateProvider('nobitex', '1000000', $clock->value);
+        $allowed = $this->resolver(
+            [$tetherland, $verifiedFallback],
+            $clock,
+            false,
+            500,
+            3,
+            60,
+            ['tetherland', 'nobitex'],
+        );
+        self::assertSame('nobitex', $allowed->resolve()->source);
+        self::assertSame(1, $verifiedFallback->calls);
+        Http::assertNothingSent();
     }
 
-    public function test_http_adapters_fail_closed_for_malformed_oversized_redirect_and_transport_failures(): void
+    public function test_http_adapter_fails_closed_for_malformed_oversized_redirect_and_transport_failures(): void
     {
+        $clock = new MutableUsdtProviderClock(new DateTimeImmutable('2026-08-09T12:00:00+00:00'));
         $http = $this->app->make(Factory::class);
         Http::fake([NobitexUsdtRateProvider::ENDPOINT => Http::response('not-json')]);
-        $this->assertThrows(fn (): UsdtRate => (new NobitexUsdtRateProvider($http))->fetch(UsdtRateSide::Buy));
+        $this->assertProviderThrows(fn (): UsdtRate => (new NobitexUsdtRateProvider($http, $clock))->fetch(UsdtRateSide::Buy));
 
         Http::fake([NobitexUsdtRateProvider::ENDPOINT => Http::response(str_repeat('x', 65_537))]);
-        $this->assertThrows(fn (): UsdtRate => (new NobitexUsdtRateProvider($http))->fetch(UsdtRateSide::Buy));
+        $this->assertProviderThrows(fn (): UsdtRate => (new NobitexUsdtRateProvider($http, $clock))->fetch(UsdtRateSide::Buy));
 
         Http::fake([NobitexUsdtRateProvider::ENDPOINT => Http::response('', 302, ['Location' => 'https://example.invalid/redirect'])]);
-        $this->assertThrows(fn (): UsdtRate => (new NobitexUsdtRateProvider($http))->fetch(UsdtRateSide::Buy));
+        $this->assertProviderThrows(fn (): UsdtRate => (new NobitexUsdtRateProvider($http, $clock))->fetch(UsdtRateSide::Buy));
         Http::assertNotSent(static fn ($request): bool => $request->url() === 'https://example.invalid/redirect');
 
         Http::fake(static fn () => throw new RuntimeException('simulated network failure'));
-        $this->assertThrows(fn (): UsdtRate => (new NobitexUsdtRateProvider($http))->fetch(UsdtRateSide::Buy));
+        $this->assertProviderThrows(fn (): UsdtRate => (new NobitexUsdtRateProvider($http, $clock))->fetch(UsdtRateSide::Buy));
     }
 
     public function test_resolver_uses_deterministic_primary_then_fallback_and_rejects_stale_or_out_of_bounds_sources(): void
     {
         $clock = new MutableUsdtProviderClock(new DateTimeImmutable('2026-08-09T12:00:00+00:00'));
         $primary = new StubUsdtRateProvider('nobitex', '1000000', $clock->value);
-        $fallback = new StubUsdtRateProvider('tetherland', '1005000', $clock->value);
-        $resolver = $this->resolver([$primary, $fallback], $clock);
+        $fallback = new StubUsdtRateProvider('secondary', '1005000', $clock->value);
+        $resolver = $this->resolver([$primary, $fallback], $clock, priority: ['nobitex', 'secondary']);
         self::assertSame('nobitex', $resolver->resolve()->source);
         self::assertSame(1, $primary->calls);
         self::assertSame(1, $fallback->calls);
 
         $primary->fails = true;
-        self::assertSame('tetherland', $resolver->resolve()->source);
+        self::assertSame('secondary', $resolver->resolve()->source);
 
         $primary->fails = false;
         $primary->fetchedAt = $clock->value->modify('-121 seconds');
-        self::assertSame('tetherland', $resolver->resolve()->source);
+        self::assertSame('secondary', $resolver->resolve()->source);
 
         $primary->fetchedAt = $clock->value;
         $primary->rateIrr = '99999';
-        self::assertSame('tetherland', $resolver->resolve()->source);
+        self::assertSame('secondary', $resolver->resolve()->source);
     }
 
     public function test_divergence_fails_closed_unless_emergency_manual_policy_is_explicit(): void
     {
         $clock = new MutableUsdtProviderClock(new DateTimeImmutable('2026-08-09T12:00:00+00:00'));
         $primary = new StubUsdtRateProvider('nobitex', '1000000', $clock->value);
-        $fallback = new StubUsdtRateProvider('tetherland', '1200000', $clock->value);
+        $secondary = new StubUsdtRateProvider('secondary', '1200000', $clock->value);
         $manual = new ManualUsdtRateProvider('1050000', $clock);
 
-        $closed = $this->resolver([$primary, $fallback, $manual], $clock, false, 500);
+        $closed = $this->resolver([$primary, $secondary, $manual], $clock, false, 500, priority: ['nobitex', 'secondary']);
         $this->assertRuntimeMessage('USDT rate sources diverged beyond the configured threshold.', fn (): UsdtRate => $closed->resolve());
 
-        $allowed = $this->resolver([$primary, $fallback, $manual], $clock, true, 500);
+        $allowed = $this->resolver([$primary, $secondary, $manual], $clock, true, 500, priority: ['nobitex', 'secondary']);
         $selected = $allowed->resolve();
         self::assertSame('manual', $selected->source);
         self::assertSame('1050000.00000000', $selected->rateIrr);
@@ -199,12 +207,12 @@ final class UsdtRateProviderContractTest extends TestCase
     {
         $clock = new MutableUsdtProviderClock(new DateTimeImmutable('2026-08-09T12:00:00+00:00'));
         $primary = new StubUsdtRateProvider('nobitex', '1000000', $clock->value, true);
-        $fallback = new StubUsdtRateProvider('tetherland', '1000000', $clock->value);
-        $resolver = $this->resolver([$primary, $fallback], $clock, false, 500, 1, 60);
+        $fallback = new StubUsdtRateProvider('secondary', '1000000', $clock->value);
+        $resolver = $this->resolver([$primary, $fallback], $clock, false, 500, 1, 60, ['nobitex', 'secondary']);
 
-        self::assertSame('tetherland', $resolver->resolve()->source);
+        self::assertSame('secondary', $resolver->resolve()->source);
         self::assertSame(1, $primary->calls);
-        self::assertSame('tetherland', $resolver->resolve()->source);
+        self::assertSame('secondary', $resolver->resolve()->source);
         self::assertSame(1, $primary->calls);
 
         $clock->value = $clock->value->modify('+61 seconds');
@@ -215,7 +223,7 @@ final class UsdtRateProviderContractTest extends TestCase
         self::assertSame(2, $primary->calls);
     }
 
-    /** @param list<UsdtRateProvider> $providers */
+    /** @param  list<UsdtRateProvider>  $providers */
     private function resolver(
         array $providers,
         MutableUsdtProviderClock $clock,
@@ -223,9 +231,10 @@ final class UsdtRateProviderContractTest extends TestCase
         int $divergenceBps = 500,
         int $failureThreshold = 3,
         int $cooldownSeconds = 60,
+        array $priority = ['nobitex'],
     ): UsdtRateResolver {
         $policy = new UsdtRatePolicy(
-            ['nobitex', 'tetherland'],
+            $priority,
             UsdtRateSide::Buy,
             120,
             '100000',
@@ -253,7 +262,7 @@ final class UsdtRateProviderContractTest extends TestCase
         return false;
     }
 
-    private function assertThrows(callable $callback): void
+    private function assertProviderThrows(callable $callback): void
     {
         $thrown = null;
         try {
