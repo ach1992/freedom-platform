@@ -2,8 +2,8 @@
 
 **Status:** bounded Worker Contract Revision 2 risk disposition; evidence-head CI and MASTER re-review pending.  
 **Task Contract:** Issue `#34`, Worker `W-007`, Contract Revision `2`.  
-**Corrected implementation head:** `64a5da5414057064f6da62b05d1c02fc6ad9635d`.  
-**Implementation CI:** `31313380720` / `#1358` — all five mandatory jobs successful, **435 tests / 2724 assertions**.  
+**Corrected implementation head:** `461952762bb3f4214fb7893ea56908275ea2d3bf`.  
+**Implementation CI:** `31313971141` / `#1362` — all five mandatory jobs successful, **435 tests / 2724 assertions**.  
 **Evidence:** `evidence/0.5.0/usdt-rate-quote-foundation.md`.  
 **Traceability:** `docs/phase-0.5-usdt-rate-quote-traceability.md`.
 
@@ -14,7 +14,7 @@ This increment is High risk for financial/pricing integrity, external-network se
 | Risk | Control in Revision 2 | Residual / exit condition | Status |
 |---|---|---|---|
 | unverified Tetherland endpoint/auth/schema creates incorrect pricing or leaks credentials | Tetherland adapter has no HTTP client/URL and always fails closed; tentative `/currencies` path removed; default priority excludes Tetherland | later dedicated task must verify exact official endpoint, auth requirement and schema before enabling network access | Open / fail-closed |
-| provider contract drift changes Nobitex interpretation | fixed official `GET /market/stats?srcCurrency=usdt&dstCurrency=rls`; strict `status=ok`, `stats.usdt-rls`, `bestSell/bestBuy/latest` shape; malformed payload fails closed | re-verify official contract before future adapter changes and monitor operational health later | Controlled for current contract / operational drift remains |
+| provider contract drift changes Nobitex interpretation | current official `apiv2.nobitex.ir` host plus fixed `GET /market/stats?srcCurrency=usdt&dstCurrency=rls`; strict `status=ok`, `stats.usdt-rls`, `bestSell/bestBuy/latest` shape; malformed payload fails closed | re-verify official contract before future adapter changes and monitor operational health later | Controlled for current contract / operational drift remains |
 | provider URL becomes SSRF surface | endpoint is compile-time fixed HTTPS constant; constructor accepts no URL/endpoint | future providers must retain allowlisted fixed destination design | Controlled |
 | TLS or redirect weakens network trust | TLS verification is explicitly enabled; redirects disabled | preserve these options under future HTTP refactors | Controlled |
 | oversized/slow provider response exhausts resources | bounded connect/request timeout, content-length guard, body-length guard and JSON-depth/shape validation | deployment networking still requires general monitoring | Controlled at adapter boundary |
@@ -37,7 +37,7 @@ This increment is High risk for financial/pricing integrity, external-network se
 ## Financial and security observations
 
 1. Rate provenance is immutable source/rate/fetch/hash evidence, not raw provider payload storage.
-2. Nobitex is the only runnable external HTTP provider in Revision 2; its URL cannot be caller-controlled.
+2. Nobitex is the only runnable external HTTP provider in Revision 2; its current official `apiv2.nobitex.ir` URL cannot be caller-controlled.
 3. Tetherland performs zero network I/O until a separate verified contract exists.
 4. Manual emergency fallback is an explicit policy decision, never a silent recovery path.
 5. Integer IRR, bcmath rates and deterministic round-up avoid monetary float.
@@ -47,9 +47,9 @@ This increment is High risk for financial/pricing integrity, external-network se
 
 ## Evidence-backed risk proof
 
-Implementation CI `31313380720` / `#1358` passed all five mandatory jobs. Full suite: **435 / 2724**. `UsdtRateProviderContractTest`: **7 / 44**. `UsdtRateQuoteFoundationTest`: **3 / 57**. Combined W-007 focused: **10 / 101**. Existing BUY-002 `QuotePricingSnapshotTest`: **8 / 63**.
+Implementation CI `31313971141` / `#1362` passed all five mandatory jobs. Full suite: **435 / 2724**. `UsdtRateProviderContractTest`: **7 / 44**. `UsdtRateQuoteFoundationTest`: **3 / 57**. Combined W-007 focused: **10 / 101**. Existing BUY-002 `QuotePricingSnapshotTest`: **8 / 63**.
 
-Artifact `test-evidence-31313380720`, ID `9038041663`, size `128922` bytes. Independently downloaded SHA-256 `8c786a0226153c8c9edd2e6fa85721b51b4b9772e8e977bc4b79447a86427953`, exactly matching the uploader digest.
+Artifact `test-evidence-31313971141`, ID `9038210512`, size `128937` bytes. Independently downloaded SHA-256 `eec1ebdcb31671dad6a3f526f4adb9e71bd4d23ab0315b3af4f80556f75853d0`, exactly matching the uploader digest.
 
 ## Merge-risk note
 
