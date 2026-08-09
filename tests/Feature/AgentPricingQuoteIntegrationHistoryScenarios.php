@@ -13,6 +13,7 @@ use App\Modules\Agents\Domain\AgentPricingRuleDefinition;
 use App\Modules\Agents\Domain\AgentPricingState;
 use App\Modules\Orders\Application\QuoteAgentPricingContext;
 use App\Modules\Orders\Application\QuoteService;
+use App\Modules\Orders\Domain\QuoteOverrideSource;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
@@ -91,6 +92,103 @@ trait AgentPricingQuoteIntegrationHistoryScenarios
         self::assertSame(2, $second->agentPricing?->ruleVersion);
         self::assertNotSame($first->agentPricing?->resolutionId, $second->agentPricing?->resolutionId);
         self::assertSame(2, DB::table('agent_pricing_resolutions')->count());
+    }
+
+    public function test_no_match_historical_replay_is_stable_after_version_only_profile_and_rule_revision_without_repricing(): void
+    {
+        $owner = $this->ownerAdministrator();
+        $offering = $this->quoteOffering();
+        $pricingService = $this->app->make(AgentPricingService::class);
+        $this->activePricingProfile($pricingService, $owner, 'quote-agent-nomatch-history', true);
+        $this->activePricingRule(
+            $pricingService,
+            $owner,
+            'quote-agent-nomatch-history',
+            'renew-only',
+            new AgentPricingRuleDefinition(AgentPricingState::Active, 740_000, action: AgentPricingAction::Renew),
+        );
+        $agent = $this->agentSubject('quote-agent-nomatch-history');
+        $quoteService = $this->app->make(QuoteService::class);
+        $context = new QuoteAgentPricingContext($agent, AgentPricingAction::Purchase);
+        $input = $this->pricing(null, 0);
+
+        $first = $quoteService->create(
+            'agent.quote.nomatch.history.000001',
+            $agent,
+            $offering['id'],
+            $input,
+            $this->correlation('nomatch-history-first'),
+            $context,
+        );
+        self::assertSame(QuoteOverrideSource::None, $first->overrideSource);
+        self::assertSame(1_000_000, $first->basePriceIrr);
+        self::assertSame(1_000_000, $first->effectivePriceIrr);
+        self::assertSame(1_000_000, $first->finalPriceIrr);
+        $firstAgentPricing = $first->agentPricing;
+        self::assertNotNull($firstAgentPricing);
+        self::assertFalse($firstAgentPricing->matched());
+        self::assertSame('quote-agent-nomatch-history', $firstAgentPricing->pricingProfileCode);
+        self::assertSame(1, $firstAgentPricing->pricingProfileVersion);
+        self::assertNull($firstAgentPricing->ruleId);
+        self::assertNull($firstAgentPricing->ruleVersion);
+        self::assertNull($firstAgentPricing->ruleConfigurationHash);
+        $storedQuoteBefore = DB::table('quotes')->where('id', $first->quoteId)->first();
+        $storedResolutionBefore = DB::table('agent_pricing_resolutions')
+            ->where('id', $firstAgentPricing->resolutionId)
+            ->first();
+        self::assertNotNull($storedQuoteBefore);
+        self::assertNotNull($storedResolutionBefore);
+        self::assertSame(1, DB::table('agent_pricing_resolutions')->count());
+
+        $pricingService->reviseProfile(
+            'quote.profile.revise.quote-agent-nomatch-history.v2',
+            'quote-agent-nomatch-history',
+            new AgentPricingProfileDefinition(AgentPricingState::Active, true),
+            $this->pricingContext($owner, 'profile-revise-quote-agent-nomatch-history-v2'),
+        );
+        $this->revisePricingRule(
+            $pricingService,
+            $owner,
+            'quote-agent-nomatch-history',
+            'renew-only',
+            new AgentPricingRuleDefinition(AgentPricingState::Active, 690_000, action: AgentPricingAction::Renew),
+            'v2',
+        );
+
+        $replay = $quoteService->create(
+            'agent.quote.nomatch.history.000001',
+            $agent,
+            $offering['id'],
+            $input,
+            $this->correlation('nomatch-history-replay'),
+            $context,
+        );
+        self::assertTrue($replay->replayed);
+        self::assertSame($first->quoteId, $replay->quoteId);
+        self::assertSame(QuoteOverrideSource::None, $replay->overrideSource);
+        self::assertSame($first->basePriceIrr, $replay->basePriceIrr);
+        self::assertSame($first->effectivePriceIrr, $replay->effectivePriceIrr);
+        self::assertSame($first->finalPriceIrr, $replay->finalPriceIrr);
+        self::assertSame($first->configurationSnapshotHash, $replay->configurationSnapshotHash);
+        self::assertNotNull($replay->agentPricing);
+        self::assertSame($firstAgentPricing->resolutionId, $replay->agentPricing->resolutionId);
+        self::assertSame($firstAgentPricing->resolutionPublicId, $replay->agentPricing->resolutionPublicId);
+        self::assertSame($firstAgentPricing->resolutionConfigurationHash, $replay->agentPricing->resolutionConfigurationHash);
+        self::assertSame($firstAgentPricing->pricingProfilePublicId, $replay->agentPricing->pricingProfilePublicId);
+        self::assertSame($firstAgentPricing->pricingProfileCode, $replay->agentPricing->pricingProfileCode);
+        self::assertSame($firstAgentPricing->pricingProfileVersion, $replay->agentPricing->pricingProfileVersion);
+        self::assertSame($firstAgentPricing->pricingProfileConfigurationHash, $replay->agentPricing->pricingProfileConfigurationHash);
+        self::assertSame($firstAgentPricing->ruleId, $replay->agentPricing->ruleId);
+        self::assertSame($firstAgentPricing->rulePublicId, $replay->agentPricing->rulePublicId);
+        self::assertSame($firstAgentPricing->ruleCode, $replay->agentPricing->ruleCode);
+        self::assertSame($firstAgentPricing->ruleVersion, $replay->agentPricing->ruleVersion);
+        self::assertSame($firstAgentPricing->ruleConfigurationHash, $replay->agentPricing->ruleConfigurationHash);
+        self::assertSame(1, DB::table('agent_pricing_resolutions')->count());
+        self::assertSame((array) $storedQuoteBefore, (array) DB::table('quotes')->where('id', $first->quoteId)->first());
+        self::assertSame(
+            (array) $storedResolutionBefore,
+            (array) DB::table('agent_pricing_resolutions')->where('id', $firstAgentPricing->resolutionId)->first(),
+        );
     }
 
     public function test_mariadb_rejects_missing_or_forged_agent_binding_and_preserves_quote_immutability(): void
