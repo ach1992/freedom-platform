@@ -18,7 +18,7 @@ final readonly class UsdtRateResolver
     private array $providers;
 
     /**
-     * @param list<UsdtRateProvider> $providers
+     * @param  list<UsdtRateProvider>  $providers
      */
     public function __construct(
         array $providers,
