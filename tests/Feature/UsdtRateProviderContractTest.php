@@ -106,7 +106,7 @@ final class UsdtRateProviderContractTest extends TestCase
         self::assertSame('1000000.00000000', $provider->fetch(UsdtRateSide::Buy)->rateIrr);
         self::assertSame('990000.00000000', $provider->fetch(UsdtRateSide::Sell)->rateIrr);
         self::assertSame('995000.00000000', $provider->fetch(UsdtRateSide::Last)->rateIrr);
-        self::assertSame($clock->value, $provider->fetch(UsdtRateSide::Buy)->fetchedAt);
+        self::assertSame($clock->value->format(DATE_ATOM), $provider->fetch(UsdtRateSide::Buy)->fetchedAt->format(DATE_ATOM));
         Http::assertSentCount(4);
         Http::assertSent(static fn ($request): bool => $request->url() === NobitexUsdtRateProvider::ENDPOINT);
         self::assertStringStartsWith('https://', NobitexUsdtRateProvider::ENDPOINT);
