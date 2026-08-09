@@ -40,7 +40,9 @@ return new class extends Migration
             $table->foreignId('sales_server_id')->nullable()->constrained('sales_servers')->restrictOnDelete();
             $table->bigInteger('wallet_credit_irr')->nullable();
             $table->foreignId('discount_pricing_rule_id')->nullable()->constrained('pricing_rules')->restrictOnDelete();
-            $table->foreignId('discount_pricing_rule_version_id')->nullable()->constrained('pricing_rule_versions')->restrictOnDelete();
+            $table->foreignId('discount_pricing_rule_version_id')->nullable();
+            $table->foreign('discount_pricing_rule_version_id', 'benefit_campaign_discount_rule_version_fk')
+                ->references('id')->on('pricing_rule_versions')->restrictOnDelete();
             $table->json('configuration_snapshot');
             $table->char('configuration_hash', 64);
             $table->foreignId('actor_administrator_id')->constrained('administrators')->restrictOnDelete();
@@ -103,7 +105,9 @@ return new class extends Migration
             $table->foreignId('benefit_code_id')->constrained('benefit_codes')->restrictOnDelete();
             $table->foreignId('user_id')->constrained('users')->restrictOnDelete();
             $table->foreignId('benefit_code_campaign_id')->constrained('benefit_code_campaigns')->restrictOnDelete();
-            $table->foreignId('benefit_code_campaign_version_id')->constrained('benefit_code_campaign_versions')->restrictOnDelete();
+            $table->foreignId('benefit_code_campaign_version_id');
+            $table->foreign('benefit_code_campaign_version_id', 'benefit_redemption_campaign_version_fk')
+                ->references('id')->on('benefit_code_campaign_versions')->restrictOnDelete();
             $table->string('campaign_code_snapshot', 64);
             $table->unsignedBigInteger('campaign_version');
             $table->string('type_snapshot', 24);
@@ -121,7 +125,9 @@ return new class extends Migration
         Schema::create('benefit_code_free_service_entitlements', function (Blueprint $table): void {
             $table->bigIncrements('id');
             $table->ulid('public_id')->unique();
-            $table->foreignId('benefit_code_redemption_id')->unique()->constrained('benefit_code_redemptions')->restrictOnDelete();
+            $table->foreignId('benefit_code_redemption_id')->unique();
+            $table->foreign('benefit_code_redemption_id', 'benefit_entitlement_redemption_fk')
+                ->references('id')->on('benefit_code_redemptions')->restrictOnDelete();
             $table->foreignId('user_id')->constrained('users')->restrictOnDelete();
             $table->foreignId('plan_offering_id')->constrained('plan_offerings')->restrictOnDelete();
             $table->json('configuration_snapshot');
@@ -456,6 +462,10 @@ END
 SQL);
     }
 
+    /**
+     * @param  literal-string  $table
+     * @param  literal-string  $label
+     */
     private function immutableTrigger(string $table, string $label): void
     {
         DB::unprepared("CREATE TRIGGER {$table}_update_guard BEFORE UPDATE ON {$table} FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = '{$label} is immutable.'; END");
