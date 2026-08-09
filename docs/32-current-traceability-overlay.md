@@ -4,7 +4,7 @@
 **Purpose:** authoritative current implementation/evidence status while the baseline matrix is incrementally reconciled.  
 **Authority:** requirement wording remains in `docs/01-authoritative-requirements.md`; this overlay supersedes stale status cells in `docs/02-requirement-traceability-matrix.md`.
 
-Read with `PROJECT_STATUS.md`, `docs/project-status.json`, `docs/33-current-risk-overlay.md`, and `docs/52-current-continuation-handoff.md`. The live working head always comes from Draft PR `#6`; never treat a SHA in this document as the current head.
+Read with `PROJECT_STATUS.md`, `docs/project-status.json`, `docs/33-current-risk-overlay.md`, and `docs/52-current-continuation-handoff.md`. The live working head always comes from Draft PR `#6`; never treat a SHA in this document as the current dispatch base.
 
 ## Status vocabulary
 
@@ -14,7 +14,6 @@ Read with `PROJECT_STATUS.md`, `docs/project-status.json`, `docs/33-current-risk
 - `blocked-live`: next required proof depends on protected live execution/human-controlled action;
 - `carried-release-gate`: mandatory requirement intentionally scheduled for final release acceptance;
 - `parallel-verified`: evidence-complete later-phase bounded foundation accepted while its owning phase is not active/closed;
-- `implementation-verified`: exact implementation-head CI/artifact accepted but exact evidence-head gate remains pending;
 - `not-started`: no accepted implementation claim.
 
 ## Phase status
@@ -24,11 +23,11 @@ Read with `PROJECT_STATUS.md`, `docs/project-status.json`, `docs/33-current-risk
 | `0.1.0` | verified | planning/specification baseline |
 | `0.2.0` | verified | `evidence/0.2.0/PHASE-CLOSURE.md` |
 | `0.3.0` | verified | `evidence/0.3.0/phase-closure-verification.md` |
-| `0.4.0` | blocked-live / active | PasarGuard harness accepted; default-branch dispatch bootstrap + protected live execution remain; Marzban is a carried final-release gate |
-| `0.5.0` | not active/not closed; parallel-verified chain through `BUY-002`; Worker `#25` Revision 2 candidate is implementation-verified pending evidence-head gate/MASTER review | Issue `#8`; latest accepted traceability `docs/57-phase-0.5-quote-pricing-traceability.md`; candidate `docs/58-phase-0.5-promotion-referral-pricing-rule-traceability.md` |
+| `0.4.0` | blocked-live / active | Issue `#7`; PasarGuard harness accepted; PR `#24` bootstrap + protected live execution remain; Marzban is a carried final-release gate |
+| `0.5.0` | not closed; parallel-verified chain through bounded W-003 agent-pricing resolver | Issue `#8`; accepted traceability chain listed below |
 | `0.6.0`–`1.0.0` | not-started except explicitly documented shared foundations | authoritative phase plan |
 
-Phase `0.4.0` remains open. Parallel Phase 0.5 evidence cannot be used to claim Phase 0.4, Phase 0.5, or release completion.
+Phase `0.4.0` remains the active phase. Parallel Phase 0.5 evidence cannot be used to claim Phase 0.4, Phase 0.5, or release completion.
 
 ## Phase 0.4 accepted provider state
 
@@ -41,15 +40,13 @@ Phase `0.4.0` remains open. Parallel Phase 0.5 evidence cannot be used to claim 
 | `SEC-001`, `SEC-002` provider controls | verified offline/harness scope | protected live credential acceptance and post-test hygiene remain |
 | `QUA-001` | verified per accepted increment | exact-SHA CI, retained artifacts, independent digests |
 
-PasarGuard `v5.2.1` guarded harness is accepted at implementation `e18460357d306789cbbf85721f61a4e3a3bbb0e2` / CI `#1013`, evidence `71ca4b39df41bc9fcf725c30e9caba3285ee5412` / CI `#1015`, 317 tests / 1730 assertions.
+PasarGuard `v5.2.1` guarded harness is accepted at implementation `e18460357d306789cbbf85721f61a4e3a3bbb0e2` / CI `#1013`, evidence `71ca4b39df41bc9fcf725c30e9caba3285ee5412` / CI `#1015`, **317 tests / 1730 assertions**.
 
-The deployment path currently depends on Draft PR `#24` (`ops/provider-live-dispatch-bootstrap` → `main`). Its last inspected CI `31240183151` / `#1129` passed preflight, secret scan, static quality, and MariaDB/Redis tests but failed `Dependency and license policy` because `composer audit --locked --abandoned=fail` exited non-zero. No live dispatch or Target activation is accepted from that state. `main` remains unchanged by the bootstrap stream, and the safety snapshot branch remains retained until the bootstrap decision is resolved.
-
-Marzban `v0.8.4` source/offline proof is accepted; deployment-specific live acceptance remains a final-release gate.
+Draft PR `#24` (`ops/provider-live-dispatch-bootstrap` -> `main`) remains a separate protected/human gate. Re-fetch it before action. No live dispatch, provider credential acceptance or Target activation is implied by repository bootstrap state. Marzban `v0.8.4` deployment-specific live acceptance remains a final-release gate.
 
 ## Parallel Phase 0.5 accepted traceability
 
-Status: **parallel-verified** for ten bounded foundations:
+Status: **parallel-verified** for thirteen bounded foundations:
 
 1. `docs/45-phase-0.5-financial-ledger-traceability.md`;
 2. `docs/46-phase-0.5-wallet-holds-traceability.md`;
@@ -60,99 +57,48 @@ Status: **parallel-verified** for ten bounded foundations:
 7. `docs/54-phase-0.5-wallet-refund-traceability.md` (`WAL-004`);
 8. `docs/55-phase-0.5-wallet-correction-traceability.md` (`WAL-005`);
 9. `docs/56-phase-0.5-payment-intent-wallet-top-up-traceability.md` (`PAY-002`, `PAY-003`, `WAL-001`);
-10. `docs/57-phase-0.5-quote-pricing-traceability.md` (`BUY-002`).
+10. `docs/57-phase-0.5-quote-pricing-traceability.md` (`BUY-002`);
+11. `docs/58-phase-0.5-promotion-referral-pricing-rule-traceability.md` (W-001 stored promotion/referral pricing-rule resolution);
+12. `docs/60-phase-0.5-promotion-usage-reservation-traceability.md` (W-002 promotion usage reservation/capacity + explicit release);
+13. `docs/phase-0.5-agent-pricing-resolution-traceability.md` (W-003 stored most-specific agent-pricing resolver).
 
-Accepted shared invariants include integer IRR, append-only balanced ledger authority, active-hold available-balance calculation, immutable compensating history, exact replay/conflict, independent-process MariaDB contention proof, authoritative payment evidence before top-up capture, and immutable deterministic Quote snapshots.
+The product integration checkpoint immediately after W-003 merge is `fae391569e50a2f318e2ca06aa522605d385ce2a`; Draft PR `#6` CI `31295225638` / `#1313` passed all five mandatory jobs with **425 tests / 2623 assertions**. Artifact `test-evidence-31295225638`, ID `9032748596`, independently hashed to `1014ff3150301174f4637f99528652fabd5ab197d9ac9ce9fb3bc361764ab6d4`. Later MASTER-owned project-control commits may advance the live PR `#6` head and must receive their own final CI before Worker dispatch.
 
-### `PAY-002` / `PAY-003` / `WAL-001` Payment Intent / external cash-wallet top-up
+Accepted shared invariants include integer IRR, append-only balanced ledger authority, active-hold available-balance calculation, immutable compensating history, exact replay/conflict, independent-process MariaDB contention proof where required, authoritative payment evidence before accepted top-up capture, immutable Quote snapshots, immutable pricing-rule resolution identity, stable-rule promotion usage capacity and deterministic stored agent-pricing resolution.
 
-Status: **parallel-verified**.
+## Current Phase 0.5 requirement state
 
-Implementation:
-
-- SHA `6db9dde7032114ab81c95fdf371530997e65f21c`;
-- CI `31265449681` / `#1214` — all mandatory jobs success;
-- full suite **384 tests / 2292 assertions**;
-- dedicated top-up verification **13 / 95**;
-- artifact `test-evidence-31265449681`, ID `9024026199`;
-- independent digest `sha256:3cf3c1c52b3aac72e4cf7f10aa4567ee516a9edeb7c3528c6beb064c20f6b80b`.
-
-Evidence:
-
-- SHA `76ea847d4d1f626893b925bbfe5263e1dc1398e4`;
-- CI `31265901691` / `#1220` — all mandatory jobs success;
-- full suite **384 / 2292**;
-- artifact `test-evidence-31265901691`, ID `9024152227`;
-- independent digest `sha256:dff70424074d138f59a8c9bfb03e5196f3827142fe964b043c09ef53e15392e7`.
-
-Accepted: immutable intent identity/replay/conflict, active owned IRR cash-wallet target, browser/non-authoritative evidence cannot capture, normalized authoritative settled evidence is mandatory, provider event/transaction uniqueness, one captured settlement, one balanced clearing-to-cash ledger effect, stable replay after later wallet deactivation, bounded safe evidence, and real-MariaDB duplicate/cross-intent contention proof.
-
-No real gateway/provider, `PAY-001`, provider-native refund, Order/provisioning, or payment UX is claimed.
-
-### `BUY-002` deterministic Pricing / immutable Quote
-
-Status: **parallel-verified**.
-
-Implementation:
-
-- SHA `16ebe0f9579f8ecb913ffd860bf6a9ba25567263`;
-- CI `31267071664` / `#1233` — all mandatory jobs success;
-- full suite **392 tests / 2355 assertions**;
-- dedicated Quote suite **8 / 63**;
-- artifact `test-evidence-31267071664`, ID `9024501375`;
-- independent digest `sha256:899a26d7553f4fd37c2102da986fc876f0a8e8151b683ff36e2f300acb9ad754`.
-
-Evidence:
-
-- SHA `07840d417e64eb30bf31f17bb9e26c1fe549eef3`;
-- CI `31267346707` / `#1236` — all mandatory jobs success;
-- full suite **392 / 2355**;
-- dedicated Quote suite **8 / 63**;
-- artifact `test-evidence-31267346707`, ID `9024577868`, size `116261` bytes;
-- independent digest `sha256:ba2710a544ccd07c72a56c616f7215406175ca8fdc93bc770c47ad474b275e83`.
-
-Accepted: immutable Quote identity, exact replay/conflict, integer-IRR base/override/discount/final components, override-before-discount arithmetic, Offering ID/code/version/configuration-hash snapshot, bounded configuration snapshot/hash, explicit expiry, current tier/agent reference validation for resolved inputs, later Offering-change stability, DB immutability/forgery guards, and no wallet/payment/provider/paid-Order/provisioning side effect.
-
-No `BUY-001`, complete `PRO-001`, `REF-001`, `AGT-005`, `PAY-001`, provider execution, or Phase `0.6.0` behavior is claimed.
-
-### Worker candidate `#25` — stored promotion/referral pricing-rule resolution
-
-Status: **corrected implementation-verified; not yet parallel-verified/accepted**.
-
-- Worker `W-001`, Contract Revision `2`, PR `#26` → `develop/v1.0.0-completion`;
-- previous reviewed SHA `836adbfdf5380dae4854671f22de83cd3f0a3a69`;
-- corrected implementation SHA `6724d570a73bd470d70b8d17f9e0422bec0c5257`;
-- implementation CI `31285667745` / `#1266` — all mandatory jobs successful;
-- full suite **399 / 2429**;
-- dedicated promotion/referral pricing-rule suite **7 / 74**;
-- unchanged Quote regression **8 / 63**;
-- artifact `test-evidence-31285667745`, ID `9029733870`, size `119611` bytes;
-- independent digest `sha256:3657ac08fbc1ef75d413018e27c3950f4f58bfbe4e7c8bd13be9b1498fcc3f1c`;
-- evidence candidate `evidence/0.5.0/promotion-referral-pricing-rule-resolution.md`;
-- traceability candidate `docs/58-phase-0.5-promotion-referral-pricing-rule-traceability.md`.
-
-The Revision 2 candidate preserves administrator authorization/audit for rule create/revise while making pricing resolution customer/agent compatible through a typed subject-user actor context. The invoking user must equal the pricing subject before replay/persistence, authoritative current account state must be active `customer|agent`, and cross-user resolution fails closed. Pricing resolutions do not require or store an administrator identity; the obsolete administrator resolver permission is not seeded.
-
-The candidate also retains immutable rule/version/resolution identity, deterministic qualification/precedence, explicit no-match, bounded referral pricing-source input, exact replay/conflict, and MariaDB integrity/immutability guards. It does **not** become accepted traceability until its exact evidence head passes mandatory CI and MASTER independently reviews/integrates it.
-
-Reservation/redemption/release/counters, referral payout/reversal/notifications, `AGT-005`, `PAY-001`, provider effects, actual Quote orchestration, Orders and provisioning are not proven by this candidate.
-
-## Remaining Phase 0.5 requirement state
-
-| Requirement / area | Current status | Next boundary |
+| Requirement / area | Current accepted boundary | Still open |
 |---|---|---|
-| `PRO-001` discount/promotion rules | Worker `#25` Revision 2 implementation-verified candidate for stored definition/qualification/resolution only; not yet accepted | exact evidence-head gate + MASTER review; reservation/redemption/release/contention remains separate |
-| `REF-001` referral reward lifecycle | Worker `#25` Revision 2 candidate adds bounded deterministic referral pricing-source identity only; reward lifecycle remains unaccepted | exact evidence-head gate + MASTER review; payout/pending/release/reversal later |
-| `AGT-005` most-specific agent pricing | not-started beyond existing agent profile/reference foundations | after generic pricing-rule foundation is accepted |
-| `PAY-001` payment-method eligibility | not-started except reusable account/wallet/provider-control foundations | after pricing rules / agent pricing |
-| payment methods/providers | not-started beyond shared provider contracts/offline Phase 0.4 adapters | later Issue `#8` increments; includes provider-native refund integration |
-| `BUY-001` purchase sequence | not-started as an accepted Order flow | Phase `0.6.0` ownership; do not pull forward |
+| `PRO-001` | W-001 stored rule/version/resolution + W-002 authoritative stable-rule reservation/capacity and explicit release | successful-payment redeem/finalize, automatic Payment Intent-driven release, complete end-to-end promotion execution |
+| `REF-001` | W-001 stores bounded deterministic referral pricing-source identity as part of immutable pricing-rule resolution | reward pending/release/reversal, payout, limits, anti-abuse, notifications and financial effects |
+| `AGT-005` | W-003 stored/versioned most-specific action/offering/server/product resolver; fail-closed ambiguity; immutable result | accepted Quote does not yet consume resolver; full end-to-end agent pricing remains open |
+| `PAY-001` | no accepted gateway/payment-method eligibility engine | full eligibility rules and fallback policy |
+| `PAY-002`, `PAY-003` | accepted Payment Intent is bounded to authoritative external `wallet_top_up` settlement | genuine purchase/Order-bound payment authority and provider-specific purchase execution remain open |
+| `PRO-002` | no accepted gift/service/wallet code lifecycle | complete requirement |
+| payment methods/providers | shared provider contracts/offline Phase 0.4 adapters only | Phase 0.5 payment/provider packages, callbacks/reconciliation/refunds as separately scoped |
+| `BUY-002` | immutable deterministic Quote accepted | later integration may consume accepted agent/promotion resolution without reinterpreting history |
+| `BUY-001` / paid Order flow | not accepted | Phase `0.6.0` ownership; do not pull forward simply to fill Worker slots |
 
-## Current independent boundary — Worker `#25` evidence / MASTER review
+### W-001 — stored promotion/referral pricing-rule resolution
 
-The corrected stored promotion/referral/pricing-rule implementation is complete on the Worker branch and corrected implementation-head CI is green. The immediate boundary is exact evidence-head CI/artifact verification and independent MASTER review of PR `#26`.
+Accepted after independent review and history-preserving integration. It provides typed stored rule/version/config identity, deterministic qualification/precedence, explicit no-match, legitimate customer/agent pricing-subject authorization, administrator-authorized rule management, replay/conflict and MariaDB integrity/immutability. Caller-observed usage counts are not authoritative counters. Reservation/redemption and referral reward effects are outside that boundary.
 
-Even if PR `#26` is accepted, keep full promotion reserve/redeem/release, referral payout/reversal, most-specific `AGT-005`, `PAY-001`, provider execution, Order payment, and provisioning outside this first rule-resolution boundary unless separately scoped and independently evidenced.
+### W-002 — promotion usage reservation/capacity + explicit release
+
+Accepted Contract Revision 2 only. Capacity and serialization use stable `pricing_rule_id` across immutable rule versions; active reservations from earlier versions consume current stable-rule capacity, explicit release returns capacity, and independent-process MariaDB tests prove final-slot/cross-version behavior. It does **not** implement successful-payment redemption/finalization or automatic payment-intent release orchestration because the accepted Payment Intent is `wallet_top_up` only and cannot be treated as purchase authority.
+
+### W-003 — stored most-specific agent-pricing resolver
+
+Accepted Contract Revision 1 only. Stored/versioned agent pricing profiles/rules, integer-IRR override, deterministic most-specific action/offering/server/product selection, equal-specificity fail-closed behavior, explicit no-match, active-agent/current-profile authorization, discount-combination snapshot, exact replay/conflict and immutable historical resolution are verified. Accepted Quote semantics were intentionally unchanged; Quote consumption remains a later bounded capability.
+
+## MASTER transition boundary
+
+At this checkpoint W-001, W-002 and W-003 are closed as completed for their bounded contracts. No next-wave implementation Worker is intentionally pre-dispatched while the control-plane transition is being finalized.
+
+The replacement MASTER must live-fetch PR `#6`, verify its exact final transition head and five-job CI, inspect Issues `#7` and `#8`, PR `#24`, open PRs/branches and recent closed Worker Issues/PRs, then recompute dependency and pairwise-conflict graphs. Candidate workstreams are not commitments until that recovery cycle marks them READY.
+
+Throughput policy is now durable in `docs/development/multi-agent-orchestration.md`: target 4–5 genuinely independent Workers, use larger coherent capability slices instead of micro-task fragmentation, and review/integrate each ready Worker without waiting for an entire wave. Safety gates remain unchanged.
 
 ## Cross-phase carry-forward rules
 
@@ -160,9 +106,9 @@ Even if PR `#26` is accepted, keep full promotion reserve/redeem/release, referr
 2. Source/offline/harness provider proof is never described as executed deployment acceptance.
 3. Later financial work cannot weaken provider lookup/equivalence/idempotency/uncertainty/TLS/redaction/Target controls.
 4. Financial effects always use fresh transaction/lock-based authoritative state; persisted snapshots are never authority.
-5. Every accepted bounded increment requires exact implementation CI/artifact plus exact evidence-head CI/artifact and independent digest inspection.
+5. Every accepted bounded increment requires its defined exact-SHA CI/evidence lifecycle, independent MASTER review and post-merge integration proof.
 6. Refund/correction compensates immutable history rather than editing/deleting it.
 7. Browser return never proves capture; no paid provisioning precedes authoritative capture.
-8. Orders/provisioning/Service lifecycle remain Phase `0.6.0` and are not pulled forward into Phase `0.5.0`.
+8. Orders/provisioning/Service lifecycle remain Phase `0.6.0` and are not pulled forward into Phase `0.5.0` merely to increase parallelism.
 
 Until the baseline matrix is regenerated, requirement wording comes from `docs/01-authoritative-requirements.md`, historical proof from bounded evidence/traceability files, current status from this overlay plus `PROJECT_STATUS.md`, and live head/CI only from Draft PR `#6`.
