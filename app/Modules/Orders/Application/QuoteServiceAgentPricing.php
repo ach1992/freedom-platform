@@ -20,7 +20,8 @@ trait QuoteServiceAgentPricing
         int $userId,
         int $planOfferingId,
         QuoteAgentPricingContext $context,
-    ): AgentPricingResolutionReceipt {
+    ): AgentPricingResolutionReceipt
+    {
         /** @var object{pricing_profile_code:string|null}|null $agent */
         $agent = $connection->table('agent_profiles')
             ->where('user_id', $userId)
@@ -47,7 +48,8 @@ trait QuoteServiceAgentPricing
         int $userId,
         int $planOfferingId,
         AgentPricingAction $action,
-    ): string {
+    ): string
+    {
         return 'quote-agent:'.hash('sha256', json_encode([
             'quote_key' => $quoteKey,
             'user_id' => $userId,
@@ -113,7 +115,8 @@ trait QuoteServiceAgentPricing
         int $userId,
         string $accountType,
         QuotePricingInput $pricing,
-    ): void {
+    ): void
+    {
         if ($pricing->overrideSource === QuoteOverrideSource::Agent) {
             if ($accountType !== 'agent') {
                 throw new DomainException('Agent quote override requires an agent account.');
