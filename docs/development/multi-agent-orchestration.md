@@ -32,7 +32,28 @@ The MASTER is the integration authority and must:
 
 Project-control/CI governance fixes owned by the MASTER may be committed directly to the integration branch when needed to make Worker execution safe. Substantial product implementation belongs to Workers.
 
-## 3. Task Contract
+## 3. Throughput and task granularity
+
+The default delivery mode is safe high-throughput parallelism. The operational target is **4–5 concurrent implementation Workers** when the live dependency/conflict graph contains that many genuinely READY tasks with LOW/MEDIUM pairwise conflict. Five is a target ceiling for the normal wave, not a reason to manufacture work.
+
+One active Task Contract per Worker remains mandatory. That Task Contract should normally represent a **meaningful coherent capability slice**, not an intentionally tiny micro-task. When domain/application code, forward schema, authorization, tests, evidence and traceability are tightly coupled under one ownership boundary, keep them in the same Worker contract unless separating them creates real independent parallel value or is required to control risk.
+
+The MASTER must apply these throughput rules:
+
+1. do not split one coherent capability merely to increase Worker count or Issue/PR count;
+2. do not serialize independent READY capabilities merely because they belong to the same phase;
+3. prefer contracts that can take an accepted boundary to a materially useful next capability state, while still keeping protected/high-conflict surfaces explicit;
+4. if fewer than five safe tasks are READY, identify and stabilize the smallest shared prerequisite that unlocks meaningful parallel work instead of creating filler tasks;
+5. review a Worker as soon as it reaches `READY_FOR_REVIEW`; do not wait for every Worker in a wave to finish before reviewing or integrating the ready one;
+6. after a merge, revalidate only tasks materially affected by the new target; avoid unnecessary rebases, target-sync churn or history rewriting for disjoint work;
+7. preserve history-producing implementation/evidence commits and use the repository's history-preserving Worker merge convention;
+8. never trade away financial, authorization, concurrency, migration, provider, secret or release gates for throughput;
+9. if several orchestration cycles mostly produce scaffolding, contracts, documentation or evidence while little user-facing/domain capability advances, enlarge the next safe Task Contracts and reduce avoidable orchestration fragmentation;
+10. when multiple independent workstreams are safe, dispatch them in the same cycle from the same accepted live `BASE_SHA` where their dependencies permit.
+
+The single self-hosted runner may serialize CI even while implementation Workers run concurrently. Coding parallelism and CI parallelism are separate concerns; do not reduce Worker parallelism merely because CI is queued, but do avoid wasteful duplicate full-CI churn that provides no new compatibility evidence.
+
+## 4. Task Contract
 
 Each implementation Worker has exactly one bounded Task Contract with a monotonically increasing `Contract Revision`. The authoritative contract lives in a GitHub Issue or Issue comment and records at least:
 
@@ -55,7 +76,7 @@ Each implementation Worker has exactly one bounded Task Contract with a monotoni
 
 Task states are: `DRAFT`, `BLOCKED`, `READY`, `DISPATCHED`, `IN_PROGRESS`, `IN_REVIEW`, `CHANGES_REQUESTED`, `MERGE_READY`, `DONE`.
 
-## 4. Worker isolation
+## 5. Worker isolation
 
 Each Worker must use one isolated writable worktree or equivalent environment. Two Workers must never share a writable working tree.
 
@@ -82,7 +103,7 @@ git switch --track -c <worker-branch> origin/<worker-branch>
 
 If the local Git version reports that the branch is already checked out or the remote-tracking setup differs, do not improvise destructive commands; inspect `git worktree list` and use an equivalent isolated checkout without sharing another Worker's directory.
 
-## 5. Worker boundaries
+## 6. Worker boundaries
 
 A Worker must:
 
@@ -96,7 +117,7 @@ A Worker must:
 - never self-merge, retarget to `main`, force-push, or alter another Worker branch;
 - stop on scope expansion, dependency mismatch, protected-scope conflict, or a real credential/root/irreversible blocker and report it to the MASTER.
 
-## 6. CI and runner security
+## 7. CI and runner security
 
 Generic Worker PR CI is allowed only for same-repository PRs targeting `develop/v1.0.0-completion` and must remain secret-free and non-mutating.
 
@@ -110,7 +131,7 @@ Generic Worker PR CI is allowed only for same-repository PRs targeting `develop/
 
 The detailed runtime requirements remain in `docs/development/github-actions-runner-policy.md` and `docs/development/ci-runner-contract.md`.
 
-## 7. Exact-SHA evidence with Worker PRs
+## 8. Exact-SHA evidence with Worker PRs
 
 The existing exact-SHA lifecycle remains mandatory and is not weakened by Worker branches.
 
@@ -123,7 +144,7 @@ The existing exact-SHA lifecycle remains mandatory and is not weakened by Worker
 7. Worker PRs are merged with history-preserving merge semantics; do not squash/rebase away verified implementation/evidence commits.
 8. The resulting `develop/v1.0.0-completion` head must receive successful integration CI through Draft PR `#6` before it becomes the new accepted integration baseline.
 
-## 8. Conflict and merge policy
+## 9. Conflict and merge policy
 
 Classify Worker overlap before dispatch:
 
@@ -135,7 +156,9 @@ Financial, authorization, installer/updater/backup, live-provider, security-boun
 
 The MASTER merge gate requires: current Contract Revision satisfied, exact reviewed HEAD, mandatory CI green, dependencies merged, no unresolved review, no scope expansion, current target compatibility, required evidence complete, and no release-blocking security/financial invariant failure.
 
-## 9. Durable dispatch and recovery
+High/Critical merge risk requires explicit owner approval unless that exact risk has been explicitly pre-authorized. Final Draft PR `#6` to `main` always requires explicit owner release acceptance.
+
+## 10. Durable dispatch and recovery
 
 Dynamic Worker state belongs in GitHub Issues/PRs/comments/CI, not in Chat memory. Every dispatch record must include:
 
