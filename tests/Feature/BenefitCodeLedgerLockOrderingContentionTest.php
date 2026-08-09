@@ -153,7 +153,7 @@ namespace Tests\Feature {
         }
 
         /** @param array{process:resource,pipes:array{0:resource,1:resource,2:resource}} $worker
-         * @param array<string,mixed> $payload
+         * @param  array<string,mixed>  $payload
          */
         private function sendPayload(array $worker, array $payload): void
         {
@@ -197,7 +197,7 @@ namespace Tests\Feature {
         }
 
         /**
-         * @param array{process:resource,pipes:array{0:resource,1:resource,2:resource}} $worker
+         * @param  array{process:resource,pipes:array{0:resource,1:resource,2:resource}}  $worker
          * @return array<string,mixed>
          */
         private function readJsonResult(array $worker, string $phase): array
