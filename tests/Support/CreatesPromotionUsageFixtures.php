@@ -57,6 +57,14 @@ trait CreatesPromotionUsageFixtures
 
     protected function usageAdministrator(): int
     {
+        $existing = DB::table('administrators')
+            ->where('is_owner', true)
+            ->where('status', 'active')
+            ->value('id');
+        if ($existing !== null) {
+            return (int) $existing;
+        }
+
         $now = now('UTC');
 
         return (int) DB::table('administrators')->insertGetId([
