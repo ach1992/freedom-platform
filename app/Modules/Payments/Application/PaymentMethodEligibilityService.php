@@ -10,9 +10,13 @@ use Illuminate\Database\DatabaseManager;
 
 final readonly class PaymentMethodEligibilityService
 {
-    use PaymentMethodEligibilityManagement;
-    use PaymentMethodEligibilityPersistence;
-    use PaymentMethodEligibilityResolution;
+    use PaymentEligibilityDecisionResolution;
+    use PaymentEligibilityPersistence;
+    use PaymentEligibilityRuleManagement;
+    use PaymentEligibilityRuleSelection;
+    use PaymentEligibilitySnapshotVerification;
+    use PaymentEligibilityUtilities;
+    use PaymentMethodConfigurationManagement;
 
     private const MANAGE_PERMISSION = 'payments.eligibility.manage';
 
