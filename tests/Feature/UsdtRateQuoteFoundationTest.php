@@ -626,6 +626,13 @@ final class UsdtRateQuoteFoundationTest extends TestCase
 
     private function administrator(bool $owner): int
     {
+        if ($owner) {
+            $existing = DB::table('administrators')->where('is_owner', true)->value('id');
+            if (is_int($existing) || is_string($existing)) {
+                return (int) $existing;
+            }
+        }
+
         $now = now('UTC');
 
         return (int) DB::table('administrators')->insertGetId([
