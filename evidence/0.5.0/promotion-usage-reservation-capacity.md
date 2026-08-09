@@ -121,4 +121,6 @@ The architectural blocker from Revision 1 remains deliberately respected: accept
 
 ## Evidence-head lifecycle
 
-This document records the exact corrected implementation boundary. The evidence/traceability/risk documentation commit must itself receive all five mandatory CI jobs before Worker handoff. Evidence-head CI/artifact metadata is recorded durably on Issue `#27` and PR `#30` after that run succeeds; this document does not self-assert a future CI outcome.
+The evidence/current head is `e56164320dd56e930229e6f0eba10397348ef9fb`. CI `31292497571` / `#1302` passed all five mandatory jobs with the same **417 tests / 2509 assertions**. Final artifact `test-evidence-31292497571`, ID `9031874076`, size `122534` bytes, has independently calculated SHA-256 `a67c04162e99c310d75b5e80df5b83c65d762adbe8a42a172079e21b9d514d0b`, matching the uploader digest exactly.
+
+The implementation-to-evidence diff contains only this evidence file plus the dedicated traceability and risk documents; no executable, migration or protected-surface file changed after the implementation head.
