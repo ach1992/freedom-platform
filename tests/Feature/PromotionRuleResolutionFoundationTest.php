@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Modules\AccessControl\Application\AccessChangeContext;
+use App\Modules\Promotions\Application\PromotionResolutionContext;
 use App\Modules\Promotions\Application\PromotionResolutionRequest;
 use App\Modules\Promotions\Application\PromotionRuleService;
 use App\Modules\Promotions\Domain\PromotionAction;
@@ -21,6 +22,7 @@ use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
 use RuntimeException;
@@ -51,7 +53,7 @@ final class PromotionRuleResolutionFoundationTest extends TestCase
         $this->app->instance(Clock::class, $this->clock);
     }
 
-    public function test_fixed_rule_resolves_with_audience_and_owned_scope_and_mutation_replay_is_exact(): void
+    public function test_fixed_rule_resolves_for_authorized_customer_with_audience_and_owned_scope_and_mutation_replay_is_exact(): void
     {
         $owner = $this->administrator(true);
         $customer = $this->customer('customer');
@@ -94,13 +96,14 @@ final class PromotionRuleResolutionFoundationTest extends TestCase
 
         $resolution = $service->resolve(
             $this->request('promo.resolve.fixed.000001', $customer, $offering['id'], 1_000_000),
-            $this->context($owner, 'resolve-fixed'),
+            $this->resolutionContext($customer),
         );
         self::assertTrue($resolution->matched());
         self::assertSame(125_000, $resolution->discountIrr);
         self::assertSame('promo.fixed.scoped', $resolution->ruleCode);
         self::assertSame(1, $resolution->ruleVersion);
         self::assertSame($created->configurationHash, $resolution->ruleConfigurationHash);
+        self::assertSame($customer, $resolution->userId);
         self::assertSame(0, DB::table('ledger_transactions')->count());
         self::assertSame(0, DB::table('payment_intents')->count());
 
@@ -163,7 +166,7 @@ final class PromotionRuleResolutionFoundationTest extends TestCase
                 false,
                 'referral.partner-A',
             ),
-            $this->context($owner, 'resolve-referral'),
+            $this->resolutionContext($customer),
         );
         self::assertSame(100_000, $matched->discountIrr);
         self::assertSame(PromotionRuleKind::Referral, $matched->ruleKind);
@@ -177,7 +180,7 @@ final class PromotionRuleResolutionFoundationTest extends TestCase
         ] as [$key, $price, $total, $userUses, $prior, $source]) {
             $receipt = $service->resolve(
                 new PromotionResolutionRequest($key, $customer, $offering['id'], PromotionAction::Purchase, $price, $total, $userUses, $prior, $source),
-                $this->context($owner, $key),
+                $this->resolutionContext($customer),
             );
             self::assertFalse($receipt->matched());
             self::assertSame(0, $receipt->discountIrr);
@@ -186,7 +189,7 @@ final class PromotionRuleResolutionFoundationTest extends TestCase
         $this->clock->value = $this->clock->value->modify('+2 hours');
         $expired = $service->resolve(
             new PromotionResolutionRequest('promo.resolve.referral.expired', $customer, $offering['id'], PromotionAction::Purchase, 1_000_000, 0, 0, false, 'referral.partner-A'),
-            $this->context($owner, 'resolve-expired'),
+            $this->resolutionContext($customer),
         );
         self::assertFalse($expired->matched());
     }
@@ -200,14 +203,14 @@ final class PromotionRuleResolutionFoundationTest extends TestCase
 
         $service->create('promo.mutation.low.000001', 'promo.low', PromotionRuleKind::Promotion, $this->definition(50_000, 10), $this->context($owner, 'low'));
         $service->create('promo.mutation.high.000001', 'promo.high', PromotionRuleKind::Promotion, $this->definition(75_000, 20), $this->context($owner, 'high'));
-        $winner = $service->resolve($this->request('promo.resolve.priority.000001', $customer, $offering['id'], 1_000_000), $this->context($owner, 'priority'));
+        $winner = $service->resolve($this->request('promo.resolve.priority.000001', $customer, $offering['id'], 1_000_000), $this->resolutionContext($customer));
         self::assertSame('promo.high', $winner->ruleCode);
         self::assertSame(75_000, $winner->discountIrr);
 
         $service->create('promo.mutation.tie.000001', 'promo.tie', PromotionRuleKind::Promotion, $this->definition(60_000, 20), $this->context($owner, 'tie'));
         $this->assertRuntimeMessage(
             'Promotion rule resolution is ambiguous.',
-            fn (): mixed => $service->resolve($this->request('promo.resolve.tie.000001', $customer, $offering['id'], 1_000_000), $this->context($owner, 'resolve-tie')),
+            fn (): mixed => $service->resolve($this->request('promo.resolve.tie.000001', $customer, $offering['id'], 1_000_000), $this->resolutionContext($customer)),
         );
         self::assertFalse(DB::table('pricing_rule_resolutions')->where('resolution_key', 'promo.resolve.tie.000001')->exists());
     }
@@ -221,7 +224,7 @@ final class PromotionRuleResolutionFoundationTest extends TestCase
         $service->create('promo.mutation.stable.000001', 'promo.stable', PromotionRuleKind::Promotion, $this->definition(90_000), $this->context($owner, 'stable-create'));
 
         $request = $this->request('promo.resolve.stable.000001', $customer, $offering['id'], 1_000_000);
-        $accepted = $service->resolve($request, $this->context($owner, 'stable-resolve'));
+        $accepted = $service->resolve($request, $this->resolutionContext($customer));
         self::assertSame(90_000, $accepted->discountIrr);
         self::assertSame(1, $accepted->ruleVersion);
 
@@ -232,49 +235,72 @@ final class PromotionRuleResolutionFoundationTest extends TestCase
             $this->context($owner, 'stable-disable'),
         );
 
-        $replay = $service->resolve($request, $this->context($owner, 'stable-resolve'));
+        $replay = $service->resolve($request, $this->resolutionContext($customer));
         self::assertTrue($replay->replayed);
         self::assertSame($accepted->resolutionId, $replay->resolutionId);
         self::assertSame(90_000, $replay->discountIrr);
         self::assertSame(1, $replay->ruleVersion);
         self::assertSame($accepted->configurationSnapshotHash, $replay->configurationSnapshotHash);
 
-        $newResolution = $service->resolve($this->request('promo.resolve.stable.000002', $customer, $offering['id'], 1_000_000), $this->context($owner, 'stable-new'));
+        $newResolution = $service->resolve($this->request('promo.resolve.stable.000002', $customer, $offering['id'], 1_000_000), $this->resolutionContext($customer));
         self::assertFalse($newResolution->matched());
         self::assertSame(0, $newResolution->discountIrr);
 
         $this->assertRuntimeMessage(
             'Promotion resolution key conflict.',
-            fn (): mixed => $service->resolve($this->request('promo.resolve.stable.000001', $customer, $offering['id'], 999_999), $this->context($owner, 'stable-resolve')),
+            fn (): mixed => $service->resolve($this->request('promo.resolve.stable.000001', $customer, $offering['id'], 999_999), $this->resolutionContext($customer)),
         );
     }
 
-    public function test_execution_time_authorization_allows_seeded_roles_and_denies_unauthorized_administrators(): void
+    public function test_subject_resolution_authorization_allows_customer_and_agent_denies_cross_user_and_preserves_admin_management(): void
     {
         $sales = $this->administrator(false, 'sales_content');
         $support = $this->administrator(false, 'support');
-        $finance = $this->administrator(false, 'finance');
         $customer = $this->customer('customer');
+        $agent = $this->customer('agent');
         $offering = $this->offering(500_000, true);
         $service = $this->app->make(PromotionRuleService::class);
 
         $created = $service->create('promo.mutation.auth.000001', 'promo.auth', PromotionRuleKind::Promotion, $this->definition(25_000), $this->context($sales, 'auth-create'));
         self::assertSame(1, $created->version);
-
         $this->assertAuthorizationDenied(fn (): mixed => $service->create(
             'promo.mutation.auth.000002',
             'promo.auth.denied',
             PromotionRuleKind::Promotion,
             $this->definition(25_000),
-            $this->context($support, 'auth-denied'),
+            $this->context($support, 'auth-create-denied'),
         ));
 
-        $resolved = $service->resolve($this->request('promo.resolve.auth.000001', $customer, $offering['id'], 500_000), $this->context($finance, 'auth-resolve'));
-        self::assertSame(25_000, $resolved->discountIrr);
-        $this->assertAuthorizationDenied(fn (): mixed => $service->resolve(
-            $this->request('promo.resolve.auth.000002', $customer, $offering['id'], 500_000),
-            $this->context($support, 'auth-resolve-denied'),
+        $revised = $service->revise(
+            'promo.mutation.auth.000003',
+            'promo.auth',
+            $this->definition(30_000),
+            $this->context($sales, 'auth-revise'),
+        );
+        self::assertSame(2, $revised->version);
+        $this->assertAuthorizationDenied(fn (): mixed => $service->revise(
+            'promo.mutation.auth.000004',
+            'promo.auth',
+            $this->definition(35_000),
+            $this->context($support, 'auth-revise-denied'),
         ));
+
+        $customerRequest = $this->request('promo.resolve.auth.customer', $customer, $offering['id'], 500_000);
+        $customerResolution = $service->resolve($customerRequest, $this->resolutionContext($customer));
+        self::assertSame(30_000, $customerResolution->discountIrr);
+        self::assertSame($customer, $customerResolution->userId);
+
+        $agentResolution = $service->resolve(
+            $this->request('promo.resolve.auth.agent', $agent, $offering['id'], 500_000),
+            $this->resolutionContext($agent),
+        );
+        self::assertSame(30_000, $agentResolution->discountIrr);
+        self::assertSame($agent, $agentResolution->userId);
+
+        $this->assertAuthorizationDenied(fn (): mixed => $service->resolve($customerRequest, $this->resolutionContext($agent)));
+        self::assertSame(1, DB::table('permissions')->where('code', 'promotions.rules.manage')->count());
+        self::assertSame(0, DB::table('permissions')->where('code', 'promotions.rules.resolve')->count());
+        self::assertSame(2, DB::table('pricing_rule_resolutions')->count());
     }
 
     public function test_invalid_configuration_and_free_order_policy_fail_closed(): void
@@ -302,7 +328,7 @@ final class PromotionRuleResolutionFoundationTest extends TestCase
         $service->create('promo.mutation.free.000001', 'promo.free.denied', PromotionRuleKind::Promotion, $this->definition(100_000), $this->context($owner, 'free-create'));
         $this->assertDomainMessage(
             'Promotion rule would make the price fully free without explicit permission.',
-            fn (): mixed => $service->resolve($this->request('promo.resolve.free.000001', $customer, $offering['id'], 100_000), $this->context($owner, 'free-resolve')),
+            fn (): mixed => $service->resolve($this->request('promo.resolve.free.000001', $customer, $offering['id'], 100_000), $this->resolutionContext($customer)),
         );
         self::assertFalse(DB::table('pricing_rule_resolutions')->where('resolution_key', 'promo.resolve.free.000001')->exists());
     }
@@ -314,8 +340,9 @@ final class PromotionRuleResolutionFoundationTest extends TestCase
         $offering = $this->offering(1_000_000, true);
         $service = $this->app->make(PromotionRuleService::class);
         $version = $service->create('promo.mutation.db.000001', 'promo.db', PromotionRuleKind::Promotion, $this->definition(10_000), $this->context($owner, 'db-create'));
-        $resolution = $service->resolve($this->request('promo.resolve.db.000001', $customer, $offering['id'], 1_000_000), $this->context($owner, 'db-resolve'));
+        $resolution = $service->resolve($this->request('promo.resolve.db.000001', $customer, $offering['id'], 1_000_000), $this->resolutionContext($customer));
 
+        self::assertFalse(Schema::hasColumn('pricing_rule_resolutions', 'resolved_by_administrator_id'));
         $this->assertQueryRejected(static fn (): int => DB::table('pricing_rules')->where('id', $version->ruleId)->update(['rule_code' => 'forged']));
         $this->assertQueryRejected(static fn (): int => DB::table('pricing_rule_versions')->where('id', $version->versionId)->delete());
         $this->assertQueryRejected(static fn (): int => DB::table('pricing_rule_resolutions')->where('id', $resolution->resolutionId)->update(['discount_irr' => 1]));
@@ -347,6 +374,27 @@ final class PromotionRuleResolutionFoundationTest extends TestCase
         $invalid['pricing_rule_id'] = 999999999;
         $invalid['version'] = 1;
         $this->assertQueryRejected(static fn (): bool => DB::table('pricing_rule_versions')->insert($invalid));
+
+        $storedResolution = DB::table('pricing_rule_resolutions')->where('id', $resolution->resolutionId)->first();
+        self::assertNotNull($storedResolution);
+        /** @var array<string, mixed> $invalidResolution */
+        $invalidResolution = (array) $storedResolution;
+        unset($invalidResolution['id']);
+        $invalidResolution['public_id'] = (string) Str::ulid();
+        $this->assertQueryRejected(static fn (): bool => DB::table('pricing_rule_resolutions')->insert($invalidResolution));
+
+        $invalidResolution['public_id'] = (string) Str::ulid();
+        $invalidResolution['resolution_key'] = 'promo.resolve.db.invalid-user';
+        $invalidResolution['request_payload_hash'] = hash('sha256', 'invalid-user');
+        $invalidResolution['user_id'] = 999999999;
+        $this->assertQueryRejected(static fn (): bool => DB::table('pricing_rule_resolutions')->insert($invalidResolution));
+
+        $invalidResolution['public_id'] = (string) Str::ulid();
+        $invalidResolution['resolution_key'] = 'promo.resolve.db.invalid-hash';
+        $invalidResolution['request_payload_hash'] = hash('sha256', 'invalid-resolution-hash');
+        $invalidResolution['user_id'] = $customer;
+        $invalidResolution['configuration_snapshot_hash'] = str_repeat('0', 64);
+        $this->assertQueryRejected(static fn (): bool => DB::table('pricing_rule_resolutions')->insert($invalidResolution));
 
         self::assertSame(1, DB::table('pricing_rules')->count());
         self::assertSame(1, DB::table('pricing_rule_versions')->count());
@@ -537,6 +585,11 @@ final class PromotionRuleResolutionFoundationTest extends TestCase
             'Promotion rule resolution test reason.',
             $administratorId,
         );
+    }
+
+    private function resolutionContext(int $userId): PromotionResolutionContext
+    {
+        return new PromotionResolutionContext($userId);
     }
 
     private function assertRuntimeMessage(string $message, callable $callback): void
