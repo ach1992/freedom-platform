@@ -16,7 +16,7 @@ use RuntimeException;
 
 final readonly class NobitexUsdtRateProvider implements UsdtRateProvider
 {
-    public const ENDPOINT = 'https://api.nobitex.ir/market/stats?srcCurrency=usdt&dstCurrency=rls';
+    public const ENDPOINT = 'https://apiv2.nobitex.ir/market/stats?srcCurrency=usdt&dstCurrency=rls';
 
     public function __construct(
         private Factory $http,
