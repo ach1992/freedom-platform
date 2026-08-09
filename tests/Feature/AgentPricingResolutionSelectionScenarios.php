@@ -99,10 +99,12 @@ trait AgentPricingResolutionSelectionScenarios
         $this->assertAuthorizationDenied(fn (): mixed => $service->resolve($this->request('agt.resolve.auth.cross', $active, 'agt-auth', $offering['id']), new AgentPricingResolutionContext($other)));
         $customer = $this->user('customer');
         $this->assertDomainMessage('Agent pricing resolution requires an active agent account.', fn (): mixed => $service->resolve($this->request('agt.resolve.auth.customer', $customer, 'agt-auth', $offering['id']), new AgentPricingResolutionContext($customer)));
-        foreach (['suspended', 'invalid', 'limited'] as $status) {
+        foreach (['suspended', 'limited'] as $status) {
             $agent = $this->agent('agt-auth', $status);
             $this->assertDomainMessage('Agent pricing resolution requires an active agent profile.', fn (): mixed => $service->resolve($this->request('agt.resolve.auth.'.$status, $agent, 'agt-auth', $offering['id']), new AgentPricingResolutionContext($agent)));
         }
+        $missingProfile = $this->user('agent');
+        $this->assertDomainMessage('Agent pricing resolution requires an active agent profile.', fn (): mixed => $service->resolve($this->request('agt.resolve.auth.missing-profile', $missingProfile, 'agt-auth', $offering['id']), new AgentPricingResolutionContext($missingProfile)));
         $stale = $this->agent('agt-auth');
         $this->createProfile($service, $owner, 'agt-other-profile', true);
         $this->assertDomainMessage('Agent pricing profile code is stale or invalid.', fn (): mixed => $service->resolve($this->request('agt.resolve.auth.stale', $stale, 'agt-other-profile', $offering['id']), new AgentPricingResolutionContext($stale)));
