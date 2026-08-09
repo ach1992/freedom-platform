@@ -5,15 +5,15 @@
 **Parent:** Issue `#8`.  
 **Requirements:** bounded `USDT-001`, partial `USDT-002`, `DAT-002`, `DAT-003`, `SEC-001`, `SEC-002`, `QUA-001`.  
 **BASE_SHA:** `a7876668492c115ce2eba1b7194c83ac169ce8a7`.  
-**Corrected implementation head:** `64a5da5414057064f6da62b05d1c02fc6ad9635d`.  
-**Implementation CI:** `31313380720` / `#1358` — all five mandatory jobs successful.  
+**Corrected implementation head:** `461952762bb3f4214fb7893ea56908275ea2d3bf`.  
+**Implementation CI:** `31313971141` / `#1362` — all five mandatory jobs successful.  
 **Full suite:** **435 tests / 2724 assertions**.  
 **W-007 focused suites:** **10 tests / 101 assertions**.  
 **Provider-contract suite:** `UsdtRateProviderContractTest` **7 / 44**.  
 **Immutable quote/auth/DB suite:** `UsdtRateQuoteFoundationTest` **3 / 57**.  
 **BUY-002 regression:** `QuotePricingSnapshotTest` **8 / 63**.  
-**Implementation artifact:** `test-evidence-31313380720`, ID `9038041663`, size `128922` bytes.  
-**Independent artifact SHA-256:** `8c786a0226153c8c9edd2e6fa85721b51b4b9772e8e977bc4b79447a86427953` — exact match to the GitHub Actions uploader digest.
+**Implementation artifact:** `test-evidence-31313971141`, ID `9038210512`, size `128937` bytes.  
+**Independent artifact SHA-256:** `eec1ebdcb31671dad6a3f526f4adb9e71bd4d23ab0315b3af4f80556f75853d0` — exact match to the GitHub Actions uploader digest.
 
 ## Bounded Revision 2 outcome
 
@@ -27,13 +27,14 @@ All monetary conversion uses `bcmath` and fixed decimal strings. There is no mon
 
 The runnable external adapter is limited to the current official Nobitex public market-statistics contract checked on 2026-08-09 from `https://apidocs.nobitex.ir/`:
 
-- public `GET /market/stats`;
+- public `GET /market/stats`, no token required;
+- current official example host `apiv2.nobitex.ir`;
 - fixed request `srcCurrency=usdt&dstCurrency=rls`;
 - successful payload requires `status = ok` and `stats.usdt-rls`;
 - `buy` uses `bestSell`, `sell` uses `bestBuy`, and `last` uses `latest`;
 - `rls` is the explicit Rial destination used as the IRR-per-USDT rate representation.
 
-The implementation exposes one fixed allowlisted HTTPS URL only: `https://api.nobitex.ir/market/stats?srcCurrency=usdt&dstCurrency=rls`. Callers cannot supply a URL or endpoint. TLS verification remains enabled, redirects are disabled, connection/request timeouts are bounded, declared/content body size is bounded, JSON depth/shape is bounded, non-success/malformed responses fail closed, and only the response SHA-256 is persisted as provenance.
+The implementation exposes one fixed allowlisted HTTPS URL only: `https://apiv2.nobitex.ir/market/stats?srcCurrency=usdt&dstCurrency=rls`. Callers cannot supply a URL or endpoint. TLS verification remains enabled, redirects are disabled, connection/request timeouts are bounded, declared/content body size is bounded, JSON depth/shape is bounded, non-success/malformed responses fail closed, and only the response SHA-256 is persisted as provenance.
 
 ## Tetherland boundary
 
@@ -97,7 +98,7 @@ No existing applied migration is edited.
 
 ## Exact implementation validation
 
-Implementation CI `31313380720` / `#1358` passed:
+Implementation CI `31313971141` / `#1362` passed:
 
 - Repository preflight;
 - Secret scan;
@@ -105,7 +106,7 @@ Implementation CI `31313380720` / `#1358` passed:
 - MariaDB and Redis tests: **435 / 2724**;
 - Dependency and license policy.
 
-The retained test artifact contains JUnit, full test log, Clover coverage and sanitized dependency-service evidence. Its independently downloaded ZIP SHA-256 is `8c786a0226153c8c9edd2e6fa85721b51b4b9772e8e977bc4b79447a86427953`, matching the uploader digest exactly.
+The retained test artifact contains JUnit, full test log, Clover coverage and sanitized dependency-service evidence. Its independently downloaded ZIP SHA-256 is `eec1ebdcb31671dad6a3f526f4adb9e71bd4d23ab0315b3af4f80556f75853d0`, matching the uploader digest exactly.
 
 ## Explicit deferred / unaccepted behavior
 
@@ -127,4 +128,4 @@ This evidence does **not** claim acceptance of:
 
 ## Evidence-head lifecycle
 
-The implementation-to-evidence change set is documentation only. The exact final evidence/current head, its current merge-candidate five-job CI, retained artifact and independent digest are recorded on PR `#37` after the evidence-head run succeeds. This file intentionally does not self-reference a future evidence commit SHA.
+The implementation-to-evidence change set after `461952762bb3f4214fb7893ea56908275ea2d3bf` is documentation only. The exact final evidence/current head, its current merge-candidate five-job CI, retained artifact and independent digest are recorded on PR `#37` after the evidence-head run succeeds. This file intentionally does not self-reference a future evidence commit SHA.
