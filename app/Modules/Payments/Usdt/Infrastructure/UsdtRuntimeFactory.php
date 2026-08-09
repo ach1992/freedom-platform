@@ -45,18 +45,12 @@ final readonly class UsdtRuntimeFactory
         $providers = [
             new NobitexUsdtRateProvider(
                 $this->http,
-                $this->integer('usdt.rate.http_timeout_seconds'),
-                $this->integer('usdt.rate.http_connect_timeout_seconds'),
-                $this->integer('usdt.rate.http_max_response_bytes'),
-            ),
-            new TetherlandUsdtRateProvider(
-                $this->http,
                 $this->clock,
-                $this->integer('usdt.rate.tetherland_irr_multiplier'),
                 $this->integer('usdt.rate.http_timeout_seconds'),
                 $this->integer('usdt.rate.http_connect_timeout_seconds'),
                 $this->integer('usdt.rate.http_max_response_bytes'),
             ),
+            new TetherlandUsdtRateProvider,
         ];
         if (is_string($manual) && $manual !== '') {
             $providers[] = new ManualUsdtRateProvider($manual, $this->clock);
