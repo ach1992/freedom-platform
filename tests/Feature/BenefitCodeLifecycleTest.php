@@ -429,6 +429,7 @@ final class BenefitCodeLifecycleTest extends TestCase
         $this->assertException(fn () => DB::table('benefit_code_redemptions')->where('id', $redemptionId)->update(['configuration_snapshot_hash' => str_repeat('0', 64)]), QueryException::class);
         $this->assertException(fn () => DB::table('benefit_code_redemptions')->where('id', $redemptionId)->delete(), QueryException::class);
     }
+
     /** @param class-string<\Throwable> $exceptionClass */
     private function assertException(callable $callback, string $exceptionClass): void
     {
@@ -442,5 +443,4 @@ final class BenefitCodeLifecycleTest extends TestCase
 
         self::fail('Expected exception of type '.$exceptionClass.' was not thrown.');
     }
-
 }

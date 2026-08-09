@@ -183,7 +183,7 @@ trait BenefitCodeRedemptionSupport
     }
 
     /** @param array<string,mixed> $configuration
-     * @param array{id:int,product_id:int,sales_server_id:int}|null $offering
+     * @param  array{id:int,product_id:int,sales_server_id:int}|null  $offering
      */
     private function assertScope(array $configuration, ?array $offering): void
     {

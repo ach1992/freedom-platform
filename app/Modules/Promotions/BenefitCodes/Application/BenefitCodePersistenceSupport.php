@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace App\Modules\Promotions\BenefitCodes\Application;
 
 use App\Modules\Promotions\BenefitCodes\Domain\BenefitCodeAudience;
-use App\Modules\Promotions\BenefitCodes\Domain\BenefitCodeDefinition;
 use App\Modules\Promotions\BenefitCodes\Domain\BenefitCodeState;
 use App\Modules\Promotions\BenefitCodes\Domain\BenefitCodeType;
 use DateTimeImmutable;
@@ -141,6 +140,7 @@ trait BenefitCodePersistenceSupport
     private function stateFromConfiguration(array $configuration): BenefitCodeState
     {
         $state = $configuration['state'] ?? null;
+
         return is_string($state) && BenefitCodeState::tryFrom($state) !== null
             ? BenefitCodeState::from($state)
             : throw new RuntimeException('Stored benefit code state is invalid.');
@@ -150,6 +150,7 @@ trait BenefitCodePersistenceSupport
     private function audienceFromConfiguration(array $configuration): BenefitCodeAudience
     {
         $audience = $configuration['audience'] ?? null;
+
         return is_string($audience) && BenefitCodeAudience::tryFrom($audience) !== null
             ? BenefitCodeAudience::from($audience)
             : throw new RuntimeException('Stored benefit code audience is invalid.');
@@ -175,8 +176,8 @@ trait BenefitCodePersistenceSupport
     }
 
     /**
-     * @param object{id:int|string,public_id:string,issuance_key:string,request_payload_hash:string,benefit_code_campaign_id:int|string,benefit_code_campaign_version_id:int|string,quantity:int|string,campaign_code:string,campaign_version:int|string} $issuance
-     * @param array<string,string> $plaintextByPublicId
+     * @param  object{id:int|string,public_id:string,issuance_key:string,request_payload_hash:string,benefit_code_campaign_id:int|string,benefit_code_campaign_version_id:int|string,quantity:int|string,campaign_code:string,campaign_version:int|string}  $issuance
+     * @param  array<string,string>  $plaintextByPublicId
      */
     private function issuanceReceipt(Connection $db, object $issuance, string $payloadHash, bool $replayed, array $plaintextByPublicId = []): BenefitCodeIssueReceipt
     {

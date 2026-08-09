@@ -496,7 +496,7 @@ SQL);
         $existing = DB::table('ledger_accounts')->where('code', self::FUNDING_ACCOUNT_CODE)->first(['account_class', 'owner_user_id', 'wallet_bucket', 'currency']);
         if ($existing !== null) {
             if ($existing->account_class !== 'equity' || $existing->owner_user_id !== null || $existing->wallet_bucket !== null || $existing->currency !== 'IRR') {
-                throw new \RuntimeException('Existing benefit-code funding account has incompatible identity.');
+                throw new RuntimeException('Existing benefit-code funding account has incompatible identity.');
             }
             DB::table('ledger_accounts')->where('code', self::FUNDING_ACCOUNT_CODE)->update(['is_active' => true, 'updated_at' => now('UTC')]);
 
