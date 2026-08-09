@@ -1,12 +1,13 @@
 # Project Status
 
-This is the single human-readable current-state entry point. Detailed history belongs in evidence, traceability, risk, audit, bounded handoff documents, and GitHub Task Contracts.
+This is the single human-readable current-state entry point. Detailed history belongs in bounded evidence/traceability/risk documents and GitHub Task Contracts.
 
 **Last status review:** 2026-08-09  
 **Target release:** `1.0.0`  
 **Active phase:** `0.4.0 — Catalog, Panels and Offerings`  
 **Authoritative Phase 0.4 Issue:** `#7`  
-**Authoritative integration PR:** Draft `#6`  
+**Parallel Phase 0.5 Issue:** `#8`  
+**Authoritative integration PR:** Draft PR `#6`  
 **Integration branch:** `develop/v1.0.0-completion`  
 **PR base:** `main`
 
@@ -17,59 +18,50 @@ Current control documents:
 - active Phase 0.4 live-execution handoff: `docs/44-phase-0.4-pasarguard-live-execution-handoff.md`;
 - traceability overlay: `docs/32-current-traceability-overlay.md`;
 - risk overlay: `docs/33-current-risk-overlay.md`;
-- execution ledger: `docs/00-execution-ledger.md`;
-- latest accepted Phase 0.5 evidence: `evidence/0.5.0/quote-pricing-snapshot.md`;
-- latest accepted Phase 0.5 traceability: `docs/57-phase-0.5-quote-pricing-traceability.md`.
+- machine status: `docs/project-status.json`.
 
 ## Live-state rule
 
-Do not treat any SHA written here as the current working head. Before **every MASTER repository write**, fetch PR `#6`, require it to remain open/Draft on `develop/v1.0.0-completion` with base `main`, and use its exact `head_sha`. Inspect exact-head CI before dispatch/integration decisions. All Actions jobs remain on the owner-controlled self-hosted runner.
+Do not treat any SHA written here as the current working head. Before every MASTER repository write, Worker dispatch, review or integration decision, fetch PR `#6`, require it to remain open/Draft on `develop/v1.0.0-completion` with base `main`, and use its exact `head_sha`. Inspect exact-head CI. Chat history is not project state.
 
-## Multi-agent operating model
+## MASTER transition checkpoint
 
-The legacy single-writable-branch restriction has been migrated to an isolated Worker model without changing the integration/release topology:
+The W-002/W-003 ordered integration wave is accepted. The product integration checkpoint immediately after those merges is:
 
-- `develop/v1.0.0-completion` remains the Version 1 integration branch and Draft PR `#6` remains its cumulative PR to `main`;
-- implementation Workers use contracted `agent/<issue-number>-<short-slug>` branches created from a recorded live integration `BASE_SHA`;
-- each Worker has one Task Contract, one isolated writable worktree/environment and one PR targeting `develop/v1.0.0-completion`;
-- Workers never push directly to `develop/v1.0.0-completion` or `main`, never merge their own PRs, and never share writable worktrees;
-- uncontracted temporary branches remain forbidden; existing bootstrap/safety/recovery branches keep their documented exception/cleanup conditions;
-- generic CI accepts same-repository Worker PRs targeting `develop/v1.0.0-completion`, remains non-mutating and does not receive protected provider/staging secrets;
-- secret-consuming live/provider/staging workflows remain separately manual/guarded;
-- dynamic Worker state is recorded in GitHub Issues/PRs/comments/CI; Chat is not project state.
+- integration merge baseline `fae391569e50a2f318e2ca06aa522605d385ce2a`;
+- Draft PR `#6` post-merge CI `31295225638` / `#1313` — all five mandatory jobs successful;
+- full suite **425 tests / 2623 assertions**;
+- artifact `test-evidence-31295225638`, ID `9032748596`;
+- independent artifact digest `sha256:1014ff3150301174f4637f99528652fabd5ab197d9ac9ce9fb3bc361764ab6d4`.
 
-Stable rules are in `docs/development/multi-agent-orchestration.md`. Active Worker IDs, branches, Task Contract revisions, dependencies, blockers and review state must be recovered from GitHub. At this checkpoint no implementation Worker has yet been accepted as an active project baseline; dispatch occurs only after the governance head passes mandatory CI.
+Focused MASTER-owned project-control commits after that product checkpoint may advance the live PR `#6` head. Therefore a replacement MASTER must fetch PR `#6` and verify the final project-control CI rather than using `fae391...` as a dispatch base.
+
+No implementation Worker is intentionally dispatched during this transition checkpoint. Dynamic task state must be recovered from GitHub before creating the next wave.
+
+## Multi-agent throughput direction
+
+The repository keeps one active Task Contract, branch, isolated writable environment and PR per Worker, but future contracts should normally be **larger coherent capability slices**, not artificially small micro-tasks. The operational target is **4–5 concurrent implementation Workers** whenever the fresh dependency/conflict graph contains that many genuinely READY tasks with LOW/MEDIUM pairwise conflict.
+
+- bundle tightly coupled domain/application/schema/tests/evidence work when it shares one authority and one modification surface;
+- do not split a capability merely to occupy Worker slots;
+- do not serialize genuinely independent READY work;
+- review/integrate a Worker as soon as it becomes ready rather than waiting for the entire wave;
+- if fewer than five safe tasks are READY, stabilize the smallest shared prerequisite that unlocks meaningful parallel work rather than manufacturing filler tasks;
+- High/Critical financial/security/concurrency/schema gates remain unchanged.
+
+The stable policy is in `docs/development/multi-agent-orchestration.md`.
 
 ## Active Phase 0.4 boundary and blocker
 
-The latest evidence-complete active-phase boundary remains **PasarGuard Guarded Live-Acceptance Harness**:
+The latest evidence-complete active-phase boundary remains **PasarGuard Guarded Live-Acceptance Harness**. The active increment is **PasarGuard Controlled Live Execution** and remains blocked on the protected/default-branch path documented in `docs/44-phase-0.4-pasarguard-live-execution-handoff.md`.
 
-- implementation `e18460357d306789cbbf85721f61a4e3a3bbb0e2`, CI `31226863010` / `#1013`;
-- evidence `71ca4b39df41bc9fcf725c30e9caba3285ee5412`, CI `31227084007` / `#1015`;
-- 317 tests / 1730 assertions;
-- artifact `test-evidence-31227084007`, ID `9012490991`;
-- digest `sha256:0b8cdd9772a5a4f54d719a794bc4b8d44e284345eb208e6460c9bc380df30b8f`;
-- evidence `evidence/0.4.0/pasarguard-live-acceptance-harness.md`;
-- traceability `docs/43-phase-0.4-pasarguard-live-harness-traceability.md`.
+Draft PR `#24` (`ops/provider-live-dispatch-bootstrap` -> `main`) remains open/Draft and separate from normal Worker integration. Its last live inspection at this checkpoint showed head `f2d2b6d538b16fe08787f6248ec425dbd19c8321`, base `1227cce28aedd2d799f2cd510891309deaacd0fb`, and `mergeable=true`. Its older CI `#1129` had a dependency-policy failure while the other major jobs passed. Re-fetch PR `#24` before any decision. Keep the bootstrap/safety branches until their documented cleanup condition is satisfied. Protected provider secrets never enter Chat, Issues, PR text or evidence.
 
-The active increment remains **PasarGuard Controlled Live Execution**. The immediate repository-side blocker is the default-branch workflow bootstrap:
-
-- Draft PR `#24`: `ops/provider-live-dispatch-bootstrap` -> `main`;
-- bootstrap head last inspected: `f2d2b6d538b16fe08787f6248ec425dbd19c8321`;
-- CI `31240183151` / `#1129`: preflight, secret scan, static quality, and MariaDB/Redis tests passed; `Dependency and license policy` failed because `composer audit --locked --abandoned=fail` exited non-zero;
-- `main` is still unchanged from bootstrap base `1227cce28aedd2d799f2cd510891309deaacd0fb`;
-- safety snapshot `safety/main-2026-08-08-pre-provider-bootstrap` is still retained;
-- bootstrap branch `ops/provider-live-dispatch-bootstrap` is still required while PR `#24` is open/unresolved.
-
-Do **not** delete either bootstrap/safety branch yet. Cleanup condition: only after PR `#24` is deliberately merged or explicitly abandoned/replaced, default-branch dispatch availability/rollback is resolved, and the safety snapshot is no longer needed.
-
-After bootstrap acceptance, the owner must manually dispatch `Provider Live Acceptance - PasarGuard` on `develop/v1.0.0-completion` with the exact guarded confirmation. Protected secret values remain outside repository/chat. After that guarded run, coordinator adoption/idempotency, controlled timeout/5xx/429 uncertainty, and explicit Target activation remain separate live rows. Marzban `v0.8.4` deployment acceptance remains mandatory at final release acceptance.
-
-Phase `0.4.0` / Issue `#7` is therefore still open.
+Phase `0.4.0` / Issue `#7` is therefore still open. PasarGuard protected live execution and later Target activation remain human/protected gates; Marzban `v0.8.4` deployment acceptance remains a final-release gate.
 
 ## Parallel Phase 0.5 accepted chain
 
-Phase `0.5.0` / Issue `#8` is not active/closed. Ten bounded foundations are evidence-complete and reusable:
+Phase `0.5.0` / Issue `#8` remains open. Thirteen bounded foundations are accepted and reusable:
 
 1. Financial Ledger Foundation — `docs/45-phase-0.5-financial-ledger-traceability.md`;
 2. Wallet Holds / Available Balance / Capture / Release — `docs/46-phase-0.5-wallet-holds-traceability.md`;
@@ -79,64 +71,59 @@ Phase `0.5.0` / Issue `#8` is not active/closed. Ten bounded foundations are evi
 6. Dedicated Wallet Contention Verification — `docs/53-phase-0.5-wallet-contention-traceability.md`;
 7. Wallet Refund / Reversal Foundation (`WAL-004`) — `docs/54-phase-0.5-wallet-refund-traceability.md`;
 8. Wallet Correction / Approval Foundation (`WAL-005`) — `docs/55-phase-0.5-wallet-correction-traceability.md`;
-9. Payment Intent + External Cash-Wallet Top-up (`PAY-002`, `PAY-003`, `WAL-001`) — `docs/56-phase-0.5-payment-intent-wallet-top-up-traceability.md`;
-10. Deterministic Pricing / Immutable Quote (`BUY-002`) — `docs/57-phase-0.5-quote-pricing-traceability.md`.
+9. Payment Intent + external cash-wallet top-up (`PAY-002`, `PAY-003`, `WAL-001`) — `docs/56-phase-0.5-payment-intent-wallet-top-up-traceability.md`;
+10. Deterministic Pricing / Immutable Quote (`BUY-002`) — `docs/57-phase-0.5-quote-pricing-traceability.md`;
+11. Stored promotion/referral pricing-rule resolution (`W-001`) — `docs/58-phase-0.5-promotion-referral-pricing-rule-traceability.md`;
+12. Promotion usage reservation/capacity + explicit release (`W-002`, bounded `PRO-001`) — `docs/60-phase-0.5-promotion-usage-reservation-traceability.md`;
+13. Stored most-specific agent-pricing resolver (`W-003`, bounded `AGT-005`) — `docs/phase-0.5-agent-pricing-resolution-traceability.md`.
 
-### Latest accepted parallel boundary — `BUY-002`
+### Latest verified bounded evidence — Agent Pricing Resolution Foundation (AGT-005 resolver)
 
-Implementation:
+Machine status intentionally points to the exact W-003 implementation/evidence lifecycle:
 
-- SHA `16ebe0f9579f8ecb913ffd860bf6a9ba25567263`;
-- CI `31267071664` / `#1233` — all mandatory jobs success;
-- full suite **392 tests / 2355 assertions**;
-- dedicated Quote suite **8 tests / 63 assertions**;
-- artifact `test-evidence-31267071664`, ID `9024501375`;
-- independent digest `sha256:899a26d7553f4fd37c2102da986fc876f0a8e8151b683ff36e2f300acb9ad754`.
+- implementation `552fa7e30f3f575e1697f176d07fe66d0372e2ee`, CI `31289482939` / `#1293`;
+- evidence `cfeb56a837a6ae85c098605b7e37a532a7ddb65d`, CI `31289665318` / `#1296`;
+- evidence-head full suite **407 tests / 2543 assertions**;
+- artifact `test-evidence-31289665318`, ID `9030991362`;
+- digest `b4d4535d7fcce4d17e003f8d2b670dc29f6d74ec4d8c5daa6656ff6b51679dd7`;
+- evidence `evidence/0.5.0/agent-pricing-resolution-foundation.md`;
+- traceability `docs/phase-0.5-agent-pricing-resolution-traceability.md`.
 
-Evidence:
+The later target-sync and history-preserving integration were independently verified and culminated in the `fae391...` / CI `#1313` product checkpoint above.
 
-- SHA `07840d417e64eb30bf31f17bb9e26c1fe549eef3`;
-- CI `31267346707` / `#1236` — all mandatory jobs success;
-- full suite **392 / 2355**;
-- dedicated Quote suite **8 / 63**;
-- artifact `test-evidence-31267346707`, ID `9024577868`, size `116261` bytes;
-- independent digest `sha256:ba2710a544ccd07c72a56c616f7215406175ca8fdc93bc770c47ad474b275e83`;
-- evidence `evidence/0.5.0/quote-pricing-snapshot.md`;
-- traceability `docs/57-phase-0.5-quote-pricing-traceability.md`.
+Accepted W-003 behavior is bounded to stored/versioned agent-pricing profile/rule identity, deterministic most-specific action/offering/server/product resolution, fail-closed equal-specificity ambiguity, explicit no-match, active-agent/current-profile authorization, integer-IRR override, snapshotted discount-combination policy, immutable accepted resolution and replay/integrity guards. Quote does **not** yet consume this resolver; complete end-to-end `AGT-005` remains open.
 
-Accepted behavior: immutable Quote key/request replay/conflict; integer-IRR base/override/discount/final components; override-before-discount arithmetic; Offering ID/code/version/configuration-hash snapshot; current tier/agent reference validation for resolved override inputs; bounded configuration snapshot/hash; explicit expiry; historical stability across later Offering changes; database update/delete/forged-snapshot rejection; no wallet/payment/provider/paid-Order/provisioning effect.
+W-002 is also intentionally partial: stable-rule promotion capacity/reservation and explicit release are accepted, but payment-success redeem/finalize and automatic Payment Intent-driven release remain deferred until genuine purchase-bound payment authority exists.
 
-This boundary deliberately separates price snapshot from purchasability. `BUY-001`, complete `PRO-001`, `REF-001`, `AGT-005`, `PAY-001`, provider execution, and Phase `0.6.0` ownership remain unclaimed.
+## Remaining Phase 0.5 work
 
-## Next recommended parallel bounded increment
+A replacement MASTER must recompute the graph from the live post-transition baseline. Candidate areas include, without pre-dispatch commitment:
 
-Start a **stored promotion/referral/pricing-rule resolution foundation** without pulling later effects forward. Initial scope should be bounded around `PRO-001` / `REF-001` rule definition, deterministic qualification/resolution, immutable rule/config identity for future Quote integration, replay/conflict, authorization, and DB integrity. Do not claim full promotion redemption/release, referral payout/reversal, most-specific `AGT-005`, payment-method `PAY-001`, provider execution, or `BUY-001` Order flow until separately implemented and verified.
+- full `AGT-005` Quote consumption/integration;
+- `PAY-001` payment-method eligibility;
+- remaining `PRO-001` authoritative payment-success redemption/release orchestration only when the required purchase-payment authority exists;
+- `PRO-002` gift/service/wallet code lifecycle;
+- `REF-001` reward pending/release/reversal/limits/anti-abuse/notification lifecycle;
+- payment-method/provider packages and provider-native reconciliation/refund paths;
+- other Issue `#8` gates proven independent by the fresh dependency/conflict graph.
 
-After that foundation: most-specific agent pricing (`AGT-005`), then `PAY-001` payment-method eligibility/provider implementations and provider-native refund integration.
+`BUY-001` Order flow, provisioning and Service lifecycle remain Phase `0.6.0` ownership and must not be pulled forward merely to increase Worker count.
 
 ## Current open items
 
-- PR `#24` dependency-policy failure and default-branch PasarGuard workflow bootstrap decision;
-- PasarGuard protected live run plus coordinator/fault/Target-activation rows;
-- Marzban final-release live acceptance;
-- Phase `0.4.0` closure audit;
-- no automated scheduled sweep is claimed for untouched expired pending transfers;
-- promotion/referral/pricing-rule resolution, `AGT-005`, `PAY-001`, and payment providers;
-- provider-native refund/payment behavior beyond accepted provider-independent wallet foundations;
+- active Phase `0.4.0` protected provider gate and PR `#24` bootstrap decision;
+- PasarGuard protected live execution, uncertainty/idempotency rows and Target activation;
+- Marzban final-release deployment acceptance;
+- Phase `0.5.0` remaining pricing/promotion/referral/payment/provider capability work listed above;
 - all Phase `0.6.0+` owned behavior.
 
 ## Non-negotiable controls
 
-- PR `#6` stays Draft; do not merge, mark Ready, auto-merge, rewrite history, force-push, or push `main`;
-- contracted Worker branches are allowed only under `docs/development/multi-agent-orchestration.md`; uncontracted temporary branches are forbidden;
-- existing bootstrap/safety branches are retained exceptions with the cleanup conditions above;
-- no phase/increment closes from docs/schema/fake/interface presence alone;
-- exact implementation CI/artifact and exact evidence-head CI/artifact are mandatory, plus MASTER review and post-merge integration CI for Worker increments;
-- authoritative remote lookup precedes provider create; uncertainty requires discovery before retry; TLS is never disabled;
-- monetary IRR remains integer; finalized balanced ledger history plus active holds is authority; persisted wallet snapshots/caches never authorize a financial effect;
-- replay/conflict cannot create or overwrite a second accepted financial or remote effect;
-- refund/correction compensates immutable history rather than altering it;
+- PR `#6` stays Draft; do not merge, mark Ready, auto-merge, rewrite history, force-push or push `main`;
+- Worker branches follow `docs/development/multi-agent-orchestration.md`; uncontracted temporary branches are forbidden;
+- exact implementation/evidence CI/artifacts, independent review and post-merge integration CI remain mandatory for accepted Worker increments;
+- IRR remains integer; financial history is immutable and replay/conflict cannot create a second accepted effect;
 - browser return never proves payment and no paid provisioning occurs before authoritative capture;
-- protected secrets and sensitive provider material never enter repository evidence/logs/chat.
+- protected secrets and provider-sensitive material never enter repository evidence/logs/Chat.
 
-Phase `0.4.0` is **not closed**. Phase `0.5.0` is **not closed**. Continue from `docs/52-current-continuation-handoff.md` after live-fetching PR `#6`.
+The active increment remains `PasarGuard Controlled Live Execution` with handoff `docs/44-phase-0.4-pasarguard-live-execution-handoff.md`. Continue from `docs/52-current-continuation-handoff.md` after live-fetching PR `#6`.
