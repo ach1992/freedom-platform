@@ -63,6 +63,7 @@ trait AgentPricingManagementSupport
                 if ($created === null) {
                     throw new RuntimeException('Agent pricing profile version persistence failed.');
                 }
+
                 return $this->profileReceipt($created, $payloadHash, false);
             });
         } catch (QueryException $exception) {
@@ -133,6 +134,7 @@ trait AgentPricingManagementSupport
                 if ($created === null) {
                     throw new RuntimeException('Agent pricing rule version persistence failed.');
                 }
+
                 return $this->ruleReceipt($created, $payloadHash, false);
             });
         } catch (QueryException $exception) {
