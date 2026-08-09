@@ -16,6 +16,7 @@ use App\Shared\Application\Clock;
 use DateTimeImmutable;
 use DateTimeZone;
 use DomainException;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\QueryException;
@@ -44,8 +45,6 @@ use RuntimeException;
 final readonly class PromotionRuleService
 {
     private const MANAGE_PERMISSION = 'promotions.rules.manage';
-
-    private const RESOLVE_PERMISSION = 'promotions.rules.resolve';
 
     private const RESOLUTION_FORMULA_VERSION = 'pro-ref-resolution-v1';
 
@@ -208,16 +207,16 @@ final readonly class PromotionRuleService
     }
 
     /** @requirement PRO-001 REF-001 BUY-002 DAT-002 DAT-003 SEC-001 SEC-002 QUA-001 */
-    public function resolve(PromotionResolutionRequest $request, AccessChangeContext $context): PromotionResolutionReceipt
+    public function resolve(PromotionResolutionRequest $request, PromotionResolutionContext $context): PromotionResolutionReceipt
     {
-        $context->requireReason();
-        $this->authorizer->authorize($context->actorAdministratorId, self::RESOLVE_PERMISSION);
-        $requestPayloadHash = $this->resolutionRequestHash($request, $context->actorAdministratorId);
+        if ($context->actorUserId !== $request->userId) {
+            throw new AuthorizationException('Promotion resolution actor is not authorized for this subject.');
+        }
+        $requestPayloadHash = $this->resolutionRequestHash($request);
 
         try {
             return $this->database->connection()->transaction(function (Connection $connection) use (
                 $request,
-                $context,
                 $requestPayloadHash,
             ): PromotionResolutionReceipt {
                 $existing = $this->resolutionByKey($connection, $request->resolutionKey, true);
@@ -307,7 +306,6 @@ final readonly class PromotionRuleService
                     'discount_irr' => $discountIrr,
                     'configuration_snapshot' => $snapshotJson,
                     'configuration_snapshot_hash' => $snapshotHash,
-                    'resolved_by_administrator_id' => $context->actorAdministratorId,
                     'created_at' => $createdAt,
                 ]);
 
@@ -689,11 +687,10 @@ final readonly class PromotionRuleService
         ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES));
     }
 
-    private function resolutionRequestHash(PromotionResolutionRequest $request, int $administratorId): string
+    private function resolutionRequestHash(PromotionResolutionRequest $request): string
     {
         return hash('sha256', json_encode([
             'action' => $request->action->value,
-            'administrator_id' => $administratorId,
             'had_prior_successful_purchase' => $request->hasPriorSuccessfulPurchase,
             'input_price_irr' => $request->inputPriceIrr,
             'observed_total_uses' => $request->observedTotalUses,
