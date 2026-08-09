@@ -119,6 +119,7 @@ trait AgentPricingQuoteIntegrationCoreScenarios
             $this->correlation('no-match'),
             $context,
         );
+        self::assertSame(1_000_000, $quote->basePriceIrr);
         self::assertSame(QuoteOverrideSource::None, $quote->overrideSource);
         self::assertNull($quote->overrideReferenceCode);
         self::assertNull($quote->overridePriceIrr);
@@ -128,6 +129,19 @@ trait AgentPricingQuoteIntegrationCoreScenarios
         self::assertNotNull($agentPricing);
         self::assertFalse($agentPricing->matched());
         self::assertFalse($agentPricing->discountCombinationAllowed);
+        self::assertNull($agentPricing->ruleId);
+        self::assertNull($agentPricing->ruleVersion);
+        self::assertNull($agentPricing->ruleConfigurationHash);
+
+        $stored = DB::table('quotes')->where('id', $quote->quoteId)->first();
+        self::assertNotNull($stored);
+        self::assertSame('none', $stored->override_source);
+        self::assertSame($agentPricing->resolutionId, (int) $stored->agent_pricing_resolution_id);
+        self::assertSame($agentPricing->pricingProfileCode, $stored->agent_pricing_profile_code_snapshot);
+        self::assertNull($stored->agent_pricing_rule_id_snapshot);
+        self::assertSame(1_000_000, (int) $stored->base_price_irr);
+        self::assertSame(1_000_000, (int) $stored->effective_price_irr);
+        self::assertSame(1_000_000, (int) $stored->final_price_irr);
 
         $this->assertDomainMessage(
             'Agent pricing profile does not allow discount combination.',
