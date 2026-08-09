@@ -11,7 +11,6 @@ use App\Modules\Payments\Usdt\Application\UsdtCircuitBreaker;
 use App\Modules\Payments\Usdt\Application\UsdtDestinationWalletService;
 use App\Modules\Payments\Usdt\Application\UsdtRateResolver;
 use App\Modules\Payments\Usdt\Domain\UsdtRatePolicy;
-use App\Modules\Payments\Usdt\Domain\UsdtRateProvider;
 use App\Modules\Payments\Usdt\Domain\UsdtRateSide;
 use App\Shared\Application\Clock;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
@@ -74,7 +73,6 @@ final readonly class UsdtRuntimeFactory
             $policy->circuitCooldownSeconds,
         );
 
-        /** @var list<UsdtRateProvider> $providers */
         return new UsdtRateResolver($providers, $policy, $circuit, $this->clock);
     }
 
