@@ -23,8 +23,7 @@ trait QuoteServiceCreatesQuotes
         QuotePricingInput $pricing,
         string $correlationId,
         ?QuoteAgentPricingContext $agentPricingContext = null,
-    ): QuoteReceipt
-    {
+    ): QuoteReceipt {
         $this->assertToken($quoteKey, 'Quote key', 8, 128);
         $this->assertPositiveId($userId, 'Quote user ID');
         $this->assertPositiveId($planOfferingId, 'Quote plan offering ID');
