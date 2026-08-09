@@ -59,9 +59,12 @@ final readonly class NobitexUsdtRateProvider implements UsdtRateProvider
         }
 
         $payload = json_decode($body, true, 16, JSON_THROW_ON_ERROR);
-        $stats = is_array($payload) ? ($payload['stats'] ?? null) : null;
+        if (! is_array($payload) || ($payload['status'] ?? null) !== 'ok') {
+            throw new RuntimeException('Nobitex returned an invalid market payload.');
+        }
+        $stats = $payload['stats'] ?? null;
         $market = is_array($stats) ? ($stats['usdt-rls'] ?? null) : null;
-        if (($payload['status'] ?? null) !== 'ok' || ! is_array($market)) {
+        if (! is_array($market)) {
             throw new RuntimeException('Nobitex returned an invalid market payload.');
         }
 
