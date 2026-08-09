@@ -26,6 +26,7 @@ use RuntimeException;
 final readonly class UsdtDestinationWalletService
 {
     public const NETWORK = 'BEP20';
+
     public const MANAGE_PERMISSION = 'payments.usdt.manage';
 
     public function __construct(
