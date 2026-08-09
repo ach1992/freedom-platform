@@ -55,8 +55,7 @@ trait AgentPricingQuoteIntegrationTestSupport
         int $administratorId,
         string $profileCode,
         bool $discountCombinationAllowed,
-    ): void
-    {
+    ): void {
         $service->createProfile(
             'quote.profile.create.'.$profileCode,
             $profileCode,
@@ -71,8 +70,7 @@ trait AgentPricingQuoteIntegrationTestSupport
         string $profileCode,
         string $ruleCode,
         AgentPricingRuleDefinition $definition,
-    ): void
-    {
+    ): void {
         $service->createRule(
             'quote.rule.create.'.$profileCode.'.'.$ruleCode,
             $profileCode,
@@ -89,8 +87,7 @@ trait AgentPricingQuoteIntegrationTestSupport
         string $ruleCode,
         AgentPricingRuleDefinition $definition,
         string $suffix,
-    ): void
-    {
+    ): void {
         $service->reviseRule(
             'quote.rule.revise.'.$profileCode.'.'.$suffix,
             $profileCode,
