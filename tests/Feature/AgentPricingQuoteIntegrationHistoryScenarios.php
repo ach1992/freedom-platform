@@ -8,6 +8,7 @@ use App\Modules\Agents\Application\AgentPricingResolutionContext;
 use App\Modules\Agents\Application\AgentPricingResolutionRequest;
 use App\Modules\Agents\Application\AgentPricingService;
 use App\Modules\Agents\Domain\AgentPricingAction;
+use App\Modules\Agents\Domain\AgentPricingProfileDefinition;
 use App\Modules\Agents\Domain\AgentPricingRuleDefinition;
 use App\Modules\Agents\Domain\AgentPricingState;
 use App\Modules\Orders\Application\QuoteAgentPricingContext;
@@ -17,7 +18,7 @@ use Illuminate\Support\Str;
 
 trait AgentPricingQuoteIntegrationHistoryScenarios
 {
-    public function test_historical_quote_replay_is_stable_after_later_rule_revision_and_new_quote_uses_new_resolution(): void
+    public function test_historical_quote_replay_is_stable_after_later_profile_and_rule_revision_and_new_quote_uses_new_resolution(): void
     {
         $owner = $this->ownerAdministrator();
         $offering = $this->quoteOffering();
@@ -44,8 +45,15 @@ trait AgentPricingQuoteIntegrationHistoryScenarios
             $context,
         );
         self::assertSame(850_000, $first->finalPriceIrr);
+        self::assertSame(1, $first->agentPricing?->pricingProfileVersion);
         self::assertSame(1, $first->agentPricing?->ruleVersion);
 
+        $pricingService->reviseProfile(
+            'quote.profile.revise.quote-agent-history.v2',
+            'quote-agent-history',
+            new AgentPricingProfileDefinition(AgentPricingState::Active, true),
+            $this->pricingContext($owner, 'profile-revise-quote-agent-history-v2'),
+        );
         $this->revisePricingRule(
             $pricingService,
             $owner,
@@ -65,6 +73,7 @@ trait AgentPricingQuoteIntegrationHistoryScenarios
         );
         self::assertTrue($replay->replayed);
         self::assertSame(850_000, $replay->finalPriceIrr);
+        self::assertSame(1, $replay->agentPricing?->pricingProfileVersion);
         self::assertSame(1, $replay->agentPricing?->ruleVersion);
         self::assertSame($first->agentPricing?->resolutionId, $replay->agentPricing?->resolutionId);
         self::assertSame(1, DB::table('agent_pricing_resolutions')->count());
@@ -78,6 +87,7 @@ trait AgentPricingQuoteIntegrationHistoryScenarios
             $context,
         );
         self::assertSame(700_000, $second->finalPriceIrr);
+        self::assertSame(2, $second->agentPricing?->pricingProfileVersion);
         self::assertSame(2, $second->agentPricing?->ruleVersion);
         self::assertNotSame($first->agentPricing?->resolutionId, $second->agentPricing?->resolutionId);
         self::assertSame(2, DB::table('agent_pricing_resolutions')->count());
