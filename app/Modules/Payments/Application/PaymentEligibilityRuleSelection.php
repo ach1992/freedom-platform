@@ -159,8 +159,8 @@ trait PaymentEligibilityRuleSelection
     }
 
     /**
-     * @param array{int,int,int} $left
-     * @param array{int,int,int} $right
+     * @param  array{int,int,int}  $left
+     * @param  array{int,int,int}  $right
      */
     private function compareScore(array $left, array $right): int
     {
