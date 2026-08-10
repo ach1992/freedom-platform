@@ -9,12 +9,12 @@ use InvalidArgumentException;
 final readonly class PaymentEligibilityRuleDefinition
 {
     /**
-     * @param list<string> $accountTypes
-     * @param list<string> $tierCodes
-     * @param list<string> $tagCodes
-     * @param list<string> $offeringCodes
-     * @param list<int> $productIds
-     * @param list<int> $salesServerIds
+     * @param  list<string>  $accountTypes
+     * @param  list<string>  $tierCodes
+     * @param  list<string>  $tagCodes
+     * @param  list<string>  $offeringCodes
+     * @param  list<int>  $productIds
+     * @param  list<int>  $salesServerIds
      */
     public function __construct(
         public string $methodCode,
