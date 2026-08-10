@@ -31,7 +31,7 @@ Use this map after establishing live state from `AGENTS.md`, `PROJECT_STATUS.md`
 | `docs/development/increment-lifecycle.md` | exact implementation/evidence lifecycle |
 | `docs/development/operational-document-status.md` | executable vs target/historical operations status |
 
-Traceability, risk overlays, numbered handoffs, audits, and `evidence/` contain bounded historical detail. Use `docs/README.md` before treating any of them as current state.
+Detailed phase traceability and `evidence/` contain accepted bounded history. They are not current task-state sources.
 
 ## Application modules
 
