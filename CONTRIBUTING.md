@@ -10,8 +10,8 @@ This repository uses one long-running Draft integration PR plus isolated contrac
 - cumulative integration PR: Draft `#6`, `develop/v1.0.0-completion` -> `main`;
 - implementation Worker branches: `agent/<issue-number>-<short-slug>`;
 - Worker PR base: `develop/v1.0.0-completion`;
-- current active phase tracker: Issue `#7` while Phase `0.4.0` remains active;
-- bounded Phase `0.5.0` work is reconciled under Issue `#8` when explicitly dispatched.
+- current active phase tracker: Issue `#8` for Phase `0.5.0`;
+- bounded Phase `0.5.0` work is explicitly dispatched under Issue `#8`.
 
 Do not push directly to `main` or `develop/v1.0.0-completion`, rewrite history, force-push, merge your own Worker PR, enable auto-merge, or mark PR `#6` Ready for review. Do not create an uncontracted temporary branch. Existing bootstrap/safety/recovery branches are governed by their documented exception and cleanup conditions.
 

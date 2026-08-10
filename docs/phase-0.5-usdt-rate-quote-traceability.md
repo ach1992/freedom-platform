@@ -1,12 +1,15 @@
 # Phase 0.5 USDT BEP20 Rate / Immutable Amount Quote Traceability
 
-**Status:** Contract Revision 2 implementation-verified Worker evidence candidate; evidence-head CI and MASTER re-review pending.  
+**Status:** Accepted bounded USDT rate / immutable amount-quote foundation, integrated in Phase `0.5.0`.  
 **Task Contract:** Issue `#34`, Worker `W-007`, Contract Revision `2`.  
 **Parent:** Issue `#8`.  
 **Requirements:** bounded `USDT-001`, partial `USDT-002`, `DAT-002`, `DAT-003`, `SEC-001`, `SEC-002`, `QUA-001`.  
-**BASE_SHA:** `a7876668492c115ce2eba1b7194c83ac169ce8a7`.  
-**Corrected implementation head:** `c8cafbcdb53b69d94080f6ee7d486cff2dc74fe5`.  
-**Implementation CI:** `31316814017` / `#1367` — all five mandatory jobs successful, **436 tests / 2735 assertions**.  
+**Accepted PR:** `#37` (merged with history-preserving `merge`).  
+**Accepted integration SHA:** `2ce0462f6439d51f7d29c5f6dddf7d1ed4581584`.  
+**Post-merge integration CI:** `31320787076` / `#1382` — all five mandatory jobs successful, **447 tests / 2899 assertions**.  
+**Post-merge artifact:** `test-evidence-31320787076`, ID `9040138207`, SHA-256 `a53cbd584bf7ab58a5a25c77762eb4ae712da8e36ddd7f7d3102b0abe0f198cc`.  
+**Historical dispatch base:** `a7876668492c115ce2eba1b7194c83ac169ce8a7`.  
+**Historical corrected implementation head:** `c8cafbcdb53b69d94080f6ee7d486cff2dc74fe5`; CI `31316814017` / `#1367` — **436 tests / 2735 assertions**.  
 **Evidence:** `evidence/0.5.0/usdt-rate-quote-foundation.md`.
 
 ## Requirement-to-proof map
@@ -29,7 +32,7 @@
 | `DAT-003` | forward `003600` schema, FKs, unique/check constraints, insert joins, snapshot/hash checks, DB exact-USDT recomputation and immutable triggers | chain/provider transaction tables not introduced |
 | `SEC-001` external network | fixed current-host HTTPS Nobitex URL, TLS verification, no redirects, bounded request/body parsing, no caller URL | Tetherland remains no-network until verified |
 | `SEC-002` authorization/secrets | execution-time `payments.usdt.manage`; standard finance grant proven; only public wallet data stored; no provider secrets | provider-live credentials/workflows remain excluded |
-| `QUA-001` | implementation exact-head five-job CI, full/focused suites and independently hashed retained artifact | evidence head requires its own exact current merge-candidate CI |
+| `QUA-001` | PR `#37` exact implementation/current-target evidence and accepted post-merge integration CI `#1382`, with retained independently hashed artifacts | future changes require their own exact-head acceptance lifecycle |
 
 ## Provider contract boundary
 
@@ -59,7 +62,9 @@ The required correction additionally changes the standard `database/seeders/Data
 
 ## Test traceability
 
-Implementation CI `31316814017` / `#1367`:
+Accepted post-merge integration CI `31320787076` / `#1382` passed all five mandatory jobs with **447 tests / 2899 assertions**. The historical implementation-focused suite evidence below remains the proof for this bounded increment:
+
+Historical implementation CI `31316814017` / `#1367`:
 
 - full repository suite: **436 tests / 2735 assertions**;
 - `UsdtRateProviderContractTest`: **7 / 44**;
@@ -71,10 +76,12 @@ Implementation CI `31316814017` / `#1367`:
 
 ## Evidence identity
 
-Implementation artifact `test-evidence-31316814017`, ID `9039007750`, size `129026` bytes, retained 30 days. Independent downloaded ZIP SHA-256: `b5d8b9ee82dae2e65cc0f6f3998980d45033d227a22d7d3319dbc890806a0b8f`, exactly matching the uploader digest.
+Accepted post-merge artifact `test-evidence-31320787076`, ID `9040138207`, size `130763` bytes, contains the five expected evidence files. GitHub uploader digest and independent downloaded ZIP SHA-256 both equal `a53cbd584bf7ab58a5a25c77762eb4ae712da8e36ddd7f7d3102b0abe0f198cc`.
+
+Historical corrected-implementation artifact `test-evidence-31316814017`, ID `9039007750`, size `129026` bytes. Independent downloaded ZIP SHA-256: `b5d8b9ee82dae2e65cc0f6f3998980d45033d227a22d7d3319dbc890806a0b8f`, exactly matching the uploader digest.
 
 ## Explicit non-claims
 
 Revision 2 does **not** claim runnable Tetherland integration, complete `USDT-002`, `USDT-003`, Payment Intent/capture, Order/purchase authority, Wallet/Ledger mutation/refund, `PAY-001` or W-005 routing/eligibility, Zarinpal/NOWPayments/C2C/Gift Card, provider-live secrets/workflows, provisioning/Service, Telegram purchase UX, `composer.lock` changes, Phase `0.5.0` closure or release readiness.
 
-Issue `#34` remains open for the Tetherland/full-`USDT-002` gap and PR `#37` is deliberately non-closing.
+Issue `#34` remains open for the Tetherland/full-`USDT-002` gap. PR `#37` was intentionally non-closing and its accepted merge did not close that remaining work.
