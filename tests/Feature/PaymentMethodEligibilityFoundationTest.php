@@ -325,6 +325,7 @@ final class PaymentMethodEligibilityFoundationTest extends TestCase
     private function quoteFor(int $userId, string $expiry = '+30 minutes'): object
     {
         $offering = $this->quoteOffering();
+
         return $this->app->make(QuoteService::class)->create(
             'eligibility.quote.'.substr(hash('sha256', (string) $userId.$expiry), 0, 20),
             $userId,
@@ -337,6 +338,7 @@ final class PaymentMethodEligibilityFoundationTest extends TestCase
     private function administratorWithoutPaymentPermission(): int
     {
         $now = now('UTC');
+
         return (int) DB::table('administrators')->insertGetId([
             'user_id' => $this->quoteUser('customer'),
             'status' => 'active',
