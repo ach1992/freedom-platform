@@ -215,6 +215,15 @@ namespace Tests\Feature {
             $this->seed(IdentityAccessFoundationSeeder::class);
         }
 
+        protected function tearDown(): void
+        {
+            try {
+                $this->truncateDatabaseTables();
+            } finally {
+                parent::tearDown();
+            }
+        }
+
         public function test_committed_deny_blocks_identity_verification_after_preflight_authorization(): void
         {
             $ownerId = $this->administrator(true);
