@@ -362,8 +362,7 @@ final class OtpChallengeLifecycleTest extends TestCase
         ?IranianMobileNumber $number = null,
         PhoneVerificationPolicy $policy = PhoneVerificationPolicy::SmsOtpOnly,
         int $policyVersion = 1,
-    ): OtpIssueRequest
-    {
+    ): OtpIssueRequest {
         return new OtpIssueRequest(
             $userId,
             $telegramAccountId,
