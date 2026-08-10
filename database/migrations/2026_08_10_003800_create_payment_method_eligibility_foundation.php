@@ -222,18 +222,25 @@ BEGIN
        OR CAST(JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.version')) AS UNSIGNED) <> NEW.version
        OR JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.effect')) <> NEW.effect
        OR CAST(JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.priority')) AS UNSIGNED) <> NEW.priority
-       OR NOT (JSON_EXTRACT(NEW.configuration_snapshot, '$.subject_user_id') <=> CAST(NEW.subject_user_id AS CHAR))
-       OR NOT (JSON_EXTRACT(NEW.configuration_snapshot, '$.account_types') <=> NEW.account_types)
-       OR NOT (JSON_EXTRACT(NEW.configuration_snapshot, '$.tier_codes') <=> NEW.tier_codes)
-       OR NOT (JSON_EXTRACT(NEW.configuration_snapshot, '$.offering_codes') <=> NEW.offering_codes)
-       OR NOT (JSON_EXTRACT(NEW.configuration_snapshot, '$.product_ids') <=> NEW.product_ids)
-       OR NOT (JSON_EXTRACT(NEW.configuration_snapshot, '$.sales_server_ids') <=> NEW.sales_server_ids)
-       OR NOT (JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.minimum_amount_irr')) <=> CAST(NEW.minimum_amount_irr AS CHAR))
-       OR NOT (JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.maximum_amount_irr')) <=> CAST(NEW.maximum_amount_irr AS CHAR))
-       OR NOT (JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.required_identity_status')) <=> NEW.required_identity_status)
-       OR NOT (JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.required_agent_status')) <=> NEW.required_agent_status)
-       OR NOT (JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.starts_at_utc')) <=> NEW.starts_at_utc)
-       OR NOT (JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.ends_at_utc')) <=> NEW.ends_at_utc)
+       OR (NEW.subject_user_id IS NULL AND JSON_TYPE(JSON_EXTRACT(NEW.configuration_snapshot, '$.subject_user_id')) <> 'NULL')
+       OR (NEW.subject_user_id IS NOT NULL AND CAST(JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.subject_user_id')) AS UNSIGNED) <> NEW.subject_user_id)
+       OR JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.account_types')) <> NEW.account_types
+       OR JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.tier_codes')) <> NEW.tier_codes
+       OR JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.offering_codes')) <> NEW.offering_codes
+       OR JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.product_ids')) <> NEW.product_ids
+       OR JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.sales_server_ids')) <> NEW.sales_server_ids
+       OR (NEW.minimum_amount_irr IS NULL AND JSON_TYPE(JSON_EXTRACT(NEW.configuration_snapshot, '$.minimum_amount_irr')) <> 'NULL')
+       OR (NEW.minimum_amount_irr IS NOT NULL AND CAST(JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.minimum_amount_irr')) AS SIGNED) <> NEW.minimum_amount_irr)
+       OR (NEW.maximum_amount_irr IS NULL AND JSON_TYPE(JSON_EXTRACT(NEW.configuration_snapshot, '$.maximum_amount_irr')) <> 'NULL')
+       OR (NEW.maximum_amount_irr IS NOT NULL AND CAST(JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.maximum_amount_irr')) AS SIGNED) <> NEW.maximum_amount_irr)
+       OR (NEW.required_identity_status IS NULL AND JSON_TYPE(JSON_EXTRACT(NEW.configuration_snapshot, '$.required_identity_status')) <> 'NULL')
+       OR (NEW.required_identity_status IS NOT NULL AND JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.required_identity_status')) <> NEW.required_identity_status)
+       OR (NEW.required_agent_status IS NULL AND JSON_TYPE(JSON_EXTRACT(NEW.configuration_snapshot, '$.required_agent_status')) <> 'NULL')
+       OR (NEW.required_agent_status IS NOT NULL AND JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.required_agent_status')) <> NEW.required_agent_status)
+       OR (NEW.starts_at_utc IS NULL AND JSON_TYPE(JSON_EXTRACT(NEW.configuration_snapshot, '$.starts_at_utc')) <> 'NULL')
+       OR (NEW.starts_at_utc IS NOT NULL AND JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.starts_at_utc')) <> NEW.starts_at_utc)
+       OR (NEW.ends_at_utc IS NULL AND JSON_TYPE(JSON_EXTRACT(NEW.configuration_snapshot, '$.ends_at_utc')) <> 'NULL')
+       OR (NEW.ends_at_utc IS NOT NULL AND JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.ends_at_utc')) <> NEW.ends_at_utc)
        OR JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.requires_contact_otp_provenance')) <> IF(NEW.requires_contact_otp_provenance = 1, 'true', 'false')
        OR JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.requires_purchase_history')) <> IF(NEW.requires_purchase_history = 1, 'true', 'false')
        OR JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.requires_daily_payment_limit')) <> IF(NEW.requires_daily_payment_limit = 1, 'true', 'false') THEN
