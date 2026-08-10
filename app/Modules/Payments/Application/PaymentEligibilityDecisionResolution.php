@@ -230,5 +230,4 @@ trait PaymentEligibilityDecisionResolution
             throw $exception;
         }
     }
-
 }
