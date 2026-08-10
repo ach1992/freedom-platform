@@ -6,6 +6,7 @@ namespace Tests\Feature;
 
 use App\Modules\Identity\Application\Contracts\OtpAbuseLimiter;
 use App\Modules\Identity\Application\Exceptions\InvalidOtpCode;
+use App\Modules\Identity\Application\Exceptions\OtpChallengeExpired;
 use App\Modules\Identity\Application\Exceptions\OtpChallengeInactive;
 use App\Modules\Identity\Application\Exceptions\OtpResendCooldownActive;
 use App\Modules\Identity\Application\FallbackSmsDispatcher;
@@ -14,6 +15,7 @@ use App\Modules\Identity\Application\OtpChallengeVerifier;
 use App\Modules\Identity\Application\OtpIssueRequest;
 use App\Modules\Identity\Application\OtpRateLimitBucket;
 use App\Modules\Identity\Application\SmsDeliveryResult;
+use App\Modules\Identity\Application\TelegramContactVerifier;
 use App\Modules\Identity\Domain\IranianMobileNumber;
 use App\Modules\Identity\Domain\PhoneVerificationPolicy;
 use App\Modules\Identity\Infrastructure\DatabaseSmsDeliveryAttemptRecorder;
@@ -153,6 +155,175 @@ final class OtpChallengeLifecycleTest extends TestCase
         ]);
     }
 
+    public function test_contact_change_invalidates_old_otp_and_enforces_the_current_active_phone_binding(): void
+    {
+        $this->seed(IdentityAccessFoundationSeeder::class);
+        [$userId, $telegramAccountId] = $this->identity(921000004, 1001);
+        $clock = new MutableOtpClock(new DateTimeImmutable('2026-08-05T00:00:00+00:00'));
+        $phoneHasher = new HmacPhoneLookupHasher(str_repeat('p', 32), 1);
+        $contactVerifier = new TelegramContactVerifier(
+            $this->app->make(DatabaseManager::class),
+            $this->app->make(StringEncrypter::class),
+            $phoneHasher,
+            $clock,
+        );
+        [$issuer, $verifier] = $this->services($clock, new FakeSmsProvider('primary'));
+        $firstNumber = IranianMobileNumber::fromString('09123456789');
+        $secondNumber = IranianMobileNumber::fromString('09351234567');
+
+        $firstContact = $contactVerifier->verify(
+            $userId,
+            '1001',
+            921000004,
+            ['user_id' => 921000004, 'phone_number' => $firstNumber->e164()],
+            PhoneVerificationPolicy::Both,
+            1,
+            'otp-contact-bind-first-0001',
+        );
+        $oldChallenge = $issuer->issue($this->request(
+            $userId,
+            $telegramAccountId,
+            'otp-contact-bind-old-0001',
+            $firstNumber,
+            PhoneVerificationPolicy::Both,
+        ));
+
+        $secondContact = $contactVerifier->verify(
+            $userId,
+            '1001',
+            921000004,
+            ['user_id' => 921000004, 'phone_number' => $secondNumber->e164()],
+            PhoneVerificationPolicy::Both,
+            2,
+            'otp-contact-bind-second-0001',
+        );
+
+        $this->assertNotSame($firstContact->phoneNumberId, $secondContact->phoneNumberId);
+        $this->assertNotNull(DB::table('otp_challenges')->where('id', $oldChallenge->challengeId)->value('invalidated_at'));
+        $this->assertDatabaseHas('customer_profiles', [
+            'user_id' => $userId,
+            'phone_verification_status' => 'pending',
+        ]);
+
+        try {
+            $verifier->verify($userId, $oldChallenge->challengeId, '123456', 'otp-contact-bind-old-verify-0001');
+            $this->fail('An OTP for a released phone must not verify the current profile.');
+        } catch (OtpChallengeInactive) {
+            $this->assertDatabaseHas('phone_numbers', [
+                'id' => $firstContact->phoneNumberId,
+                'active_user_id' => null,
+                'status' => 'released',
+            ]);
+        }
+
+        /*
+         * Simulate a stale active challenge retained by a legacy or interrupted
+         * write. The verifier must still fail closed against the active binding.
+         */
+        DB::table('otp_challenges')->where('id', $oldChallenge->challengeId)->update([
+            'invalidated_at' => null,
+            'active_scope_hash' => str_repeat('s', 64),
+        ]);
+
+        try {
+            $verifier->verify($userId, $oldChallenge->challengeId, '123456', 'otp-contact-bind-stale-verify-0001');
+            $this->fail('A stale OTP must not verify after the active phone binding changes.');
+        } catch (OtpChallengeInactive) {
+            $this->assertNotNull(DB::table('otp_challenges')->where('id', $oldChallenge->challengeId)->value('invalidated_at'));
+        }
+
+        $currentChallenge = $issuer->issue($this->request(
+            $userId,
+            $telegramAccountId,
+            'otp-contact-bind-current-0001',
+            $secondNumber,
+            PhoneVerificationPolicy::Both,
+            2,
+        ));
+        $verified = $verifier->verify(
+            $userId,
+            $currentChallenge->challengeId,
+            '123456',
+            'otp-contact-bind-current-verify-0001',
+        );
+
+        $this->assertSame($secondContact->phoneNumberId, $verified->phoneNumberId);
+        $this->assertTrue($verified->policySatisfied);
+        $this->assertDatabaseHas('customer_profiles', [
+            'user_id' => $userId,
+            'phone_verification_status' => 'verified',
+        ]);
+    }
+
+    public function test_same_phone_recontact_preserves_a_valid_otp_and_expired_otp_is_invalidated(): void
+    {
+        $this->seed(IdentityAccessFoundationSeeder::class);
+        [$userId, $telegramAccountId] = $this->identity(921000005, 1001);
+        $clock = new MutableOtpClock(new DateTimeImmutable('2026-08-05T00:00:00+00:00'));
+        $phoneHasher = new HmacPhoneLookupHasher(str_repeat('p', 32), 1);
+        $contactVerifier = new TelegramContactVerifier(
+            $this->app->make(DatabaseManager::class),
+            $this->app->make(StringEncrypter::class),
+            $phoneHasher,
+            $clock,
+        );
+        [$issuer, $verifier] = $this->services($clock, new FakeSmsProvider('primary'));
+        $number = IranianMobileNumber::fromString('09123456789');
+
+        $firstContact = $contactVerifier->verify(
+            $userId,
+            '1001',
+            921000005,
+            ['user_id' => 921000005, 'phone_number' => $number->e164()],
+            PhoneVerificationPolicy::Both,
+            1,
+            'otp-same-contact-first-0001',
+        );
+        $challenge = $issuer->issue($this->request(
+            $userId,
+            $telegramAccountId,
+            'otp-same-contact-issue-0001',
+            $number,
+            PhoneVerificationPolicy::Both,
+        ));
+        $secondContact = $contactVerifier->verify(
+            $userId,
+            '1001',
+            921000005,
+            ['user_id' => 921000005, 'phone_number' => $number->e164()],
+            PhoneVerificationPolicy::Both,
+            1,
+            'otp-same-contact-second-0001',
+        );
+
+        $this->assertSame($firstContact->phoneNumberId, $secondContact->phoneNumberId);
+        $this->assertNull(DB::table('otp_challenges')->where('id', $challenge->challengeId)->value('invalidated_at'));
+
+        $verified = $verifier->verify($userId, $challenge->challengeId, '123456', 'otp-same-contact-verify-0001');
+
+        $this->assertTrue($verified->policySatisfied);
+        $this->assertDatabaseHas('customer_profiles', [
+            'user_id' => $userId,
+            'phone_verification_status' => 'verified',
+        ]);
+
+        $expired = $issuer->issue($this->request(
+            $userId,
+            $telegramAccountId,
+            'otp-same-contact-expired-0001',
+            $number,
+            PhoneVerificationPolicy::Both,
+        ));
+        $clock->advanceSeconds(121);
+
+        try {
+            $verifier->verify($userId, $expired->challengeId, '123456', 'otp-same-contact-expired-verify-0001');
+            $this->fail('An expired OTP must not verify a profile.');
+        } catch (OtpChallengeExpired) {
+            $this->assertNotNull(DB::table('otp_challenges')->where('id', $expired->challengeId)->value('invalidated_at'));
+        }
+    }
+
     /** @return array{OtpChallengeIssuer, OtpChallengeVerifier} */
     private function services(MutableOtpClock $clock, FakeSmsProvider $primary): array
     {
@@ -184,14 +355,20 @@ final class OtpChallengeLifecycleTest extends TestCase
         return [$issuer, new OtpChallengeVerifier($database, $otpHasher, $clock)];
     }
 
-    private function request(int $userId, int $telegramAccountId, string $idempotencyKey): OtpIssueRequest
-    {
+    private function request(
+        int $userId,
+        int $telegramAccountId,
+        string $idempotencyKey,
+        ?IranianMobileNumber $number = null,
+        PhoneVerificationPolicy $policy = PhoneVerificationPolicy::SmsOtpOnly,
+        int $policyVersion = 1,
+    ): OtpIssueRequest {
         return new OtpIssueRequest(
             $userId,
             $telegramAccountId,
-            IranianMobileNumber::fromString('09123456789'),
-            PhoneVerificationPolicy::SmsOtpOnly,
-            1,
+            $number ?? IranianMobileNumber::fromString('09123456789'),
+            $policy,
+            $policyVersion,
             'phone_verification',
             '203.0.113.10',
             $idempotencyKey,

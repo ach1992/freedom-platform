@@ -87,7 +87,27 @@ final readonly class OtpChallengeVerifier
         $now = $this->clock->now();
         $nowString = $now->format('Y-m-d H:i:s.u');
 
-        /** @var object{id: string, phone_number_id: int|string, code_hash: string, attempt_count: int|string, maximum_attempts: int|string, expires_at: string, consumed_at: ?string, invalidated_at: ?string, verification_policy: string, verification_policy_version: int|string, telegram_account_id: int|string}|null $challenge */
+        /** @var object{phone_number_id: int|string}|null $challengePhone */
+        $challengePhone = $connection->table('otp_challenges')
+            ->where('id', $challengeId)
+            ->where('user_id', $userId)
+            ->first(['phone_number_id']);
+
+        if ($challengePhone === null) {
+            throw new OtpChallengeNotFound;
+        }
+
+        $phoneNumberId = (int) $challengePhone->phone_number_id;
+
+        // Lock phone rows before OTP rows to match Telegram contact re-binding.
+        /** @var object{active_user_id: int|string|null, active_lookup_hash: ?string}|null $phone */
+        $phone = $connection->table('phone_numbers')
+            ->where('id', $phoneNumberId)
+            ->where('user_id', $userId)
+            ->lockForUpdate()
+            ->first(['active_user_id', 'active_lookup_hash']);
+
+        /** @var object{id: string, phone_number_id: int|string, destination_lookup_hash: string, code_hash: string, attempt_count: int|string, maximum_attempts: int|string, expires_at: string, consumed_at: ?string, invalidated_at: ?string, verification_policy: string, verification_policy_version: int|string, telegram_account_id: int|string}|null $challenge */
         $challenge = $connection->table('otp_challenges')
             ->where('id', $challengeId)
             ->where('user_id', $userId)
@@ -95,6 +115,7 @@ final readonly class OtpChallengeVerifier
             ->first([
                 'id',
                 'phone_number_id',
+                'destination_lookup_hash',
                 'code_hash',
                 'attempt_count',
                 'maximum_attempts',
@@ -112,6 +133,20 @@ final readonly class OtpChallengeVerifier
 
         if ($challenge->consumed_at !== null || $challenge->invalidated_at !== null) {
             throw new OtpChallengeInactive;
+        }
+
+        if (
+            $phone === null
+            || (int) $phone->active_user_id !== $userId
+            || $phone->active_lookup_hash !== $challenge->destination_lookup_hash
+        ) {
+            $connection->table('otp_challenges')->where('id', $challengeId)->update([
+                'invalidated_at' => $nowString,
+                'active_scope_hash' => null,
+                'updated_at' => $nowString,
+            ]);
+
+            return OtpVerificationOutcome::inactive();
         }
 
         $phoneNumberId = (int) $challenge->phone_number_id;
