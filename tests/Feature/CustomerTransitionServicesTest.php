@@ -12,6 +12,7 @@ use App\Modules\Customers\Application\CustomerTierService;
 use App\Modules\Customers\Domain\CustomerTierCode;
 use App\Modules\Identity\Domain\AccountStatus;
 use Database\Seeders\IdentityAccessFoundationSeeder;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -33,7 +34,7 @@ final class CustomerTransitionServicesTest extends TestCase
     public function test_status_transitions_are_transactional_audited_and_replay_safe(): void
     {
         $userId = $this->customer();
-        $administratorId = $this->administrator();
+        $administratorId = $this->administrator(permissions: ['identity.customers.manage_status']);
         $service = $this->app->make(CustomerAccountStateService::class);
         $suspend = $this->context('customer-status-0001', 'customer-status-correlation-0001', 'risk_review', $administratorId);
         $activate = $this->context('customer-status-0002', 'customer-status-correlation-0002', 'review_cleared', $administratorId);
@@ -72,10 +73,58 @@ final class CustomerTransitionServicesTest extends TestCase
         self::assertSame(0, DB::table('audit_logs')->where('action', 'customer.status.transition')->count());
     }
 
-    public function test_manual_tier_lock_blocks_recalculation_then_unlock_allows_promotion_without_automatic_downgrade(): void
+    public function test_active_administrator_without_permissions_cannot_mutate_customer_status_tier_or_tags(): void
     {
         $userId = $this->customer();
         $administratorId = $this->administrator();
+        $now = now('UTC');
+        DB::table('customer_tags')->insert([
+            'code' => 'risk_review',
+            'name_translation_key' => 'customer_tags.risk_review',
+            'is_active' => true,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        $this->assertAdministratorAuthorizationDenied(fn (): mixed => $this->app->make(CustomerAccountStateService::class)->transition(
+            $userId,
+            AccountStatus::Suspended,
+            $this->context('customer-status-denied-0001', 'customer-status-denied-correlation-0001', 'risk_review', $administratorId),
+        ));
+        $this->assertAdministratorAuthorizationDenied(fn (): mixed => $this->app->make(CustomerTierService::class)->assignManual(
+            $userId,
+            CustomerTierCode::Loyal,
+            true,
+            $this->context('customer-tier-denied-0001', 'customer-tier-denied-correlation-0001', 'manual_override', $administratorId),
+        ));
+        $this->assertAdministratorAuthorizationDenied(fn (): mixed => $this->app->make(CustomerTagService::class)->assign(
+            $userId,
+            'risk_review',
+            $this->context('customer-tag-assign-denied-0001', 'customer-tag-assign-denied-correlation-0001', 'manual_assignment', $administratorId),
+        ));
+        $this->assertAdministratorAuthorizationDenied(fn (): mixed => $this->app->make(CustomerTagService::class)->remove(
+            $userId,
+            'risk_review',
+            $this->context('customer-tag-remove-denied-0001', 'customer-tag-remove-denied-correlation-0001', 'manual_assignment', $administratorId),
+        ));
+
+        self::assertSame('active', DB::table('users')->where('id', $userId)->value('account_status'));
+        self::assertSame('new', $this->currentTierCode($userId));
+        self::assertSame(0, DB::table('customer_status_histories')->where('user_id', $userId)->count());
+        self::assertSame(0, DB::table('customer_tier_histories')->where('user_id', $userId)->count());
+        self::assertSame(0, DB::table('customer_tag_assignments')->where('user_id', $userId)->count());
+        self::assertSame(0, DB::table('audit_logs')->whereIn('action', [
+            'customer.status.transition',
+            'customer.tier.assign',
+            'customer.tag.assign',
+            'customer.tag.remove',
+        ])->count());
+    }
+
+    public function test_manual_tier_lock_blocks_recalculation_then_unlock_allows_promotion_without_automatic_downgrade(): void
+    {
+        $userId = $this->customer();
+        $administratorId = $this->administrator(permissions: ['identity.customers.manage_tier']);
         $service = $this->app->make(CustomerTierService::class);
 
         $service->assignManual(
@@ -128,7 +177,7 @@ final class CustomerTransitionServicesTest extends TestCase
     public function test_tag_assign_remove_and_reassign_keep_one_assignment_and_append_audit(): void
     {
         $userId = $this->customer();
-        $administratorId = $this->administrator();
+        $administratorId = $this->administrator(permissions: ['identity.customers.manage_tags']);
         $now = now('UTC');
         DB::table('customer_tags')->insert([
             'code' => 'risk_review',
@@ -216,7 +265,8 @@ final class CustomerTransitionServicesTest extends TestCase
         return $userId;
     }
 
-    private function administrator(string $status = 'active'): int
+    /** @param list<string> $permissions */
+    private function administrator(string $status = 'active', array $permissions = []): int
     {
         $now = now('UTC');
         $userId = (int) DB::table('users')->insertGetId([
@@ -230,7 +280,7 @@ final class CustomerTransitionServicesTest extends TestCase
             'updated_at' => $now,
         ]);
 
-        return (int) DB::table('administrators')->insertGetId([
+        $administratorId = (int) DB::table('administrators')->insertGetId([
             'user_id' => $userId,
             'status' => $status,
             'is_owner' => false,
@@ -239,6 +289,37 @@ final class CustomerTransitionServicesTest extends TestCase
             'created_at' => $now,
             'updated_at' => $now,
         ]);
+
+        foreach ($permissions as $permissionCode) {
+            $permissionId = DB::table('permissions')->where('code', $permissionCode)->value('id');
+
+            if (! is_int($permissionId) && ! is_string($permissionId)) {
+                throw new RuntimeException('Test permission does not exist.');
+            }
+
+            DB::table('administrator_permission_overrides')->insert([
+                'administrator_id' => $administratorId,
+                'permission_id' => (int) $permissionId,
+                'effect' => 'allow',
+                'changed_by_administrator_id' => $administratorId,
+                'reason_code' => 'test_permission_grant',
+                'reason' => null,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+        }
+
+        return $administratorId;
+    }
+
+    private function assertAdministratorAuthorizationDenied(callable $operation): void
+    {
+        try {
+            $operation();
+            self::fail('Expected administrator authorization rejection.');
+        } catch (AuthorizationException $exception) {
+            self::assertSame('Administrator authorization failed.', $exception->getMessage());
+        }
     }
 
     private function context(
