@@ -32,9 +32,7 @@ use Tests\TestCase;
 
 final class MutablePaymentEligibilityClock implements Clock
 {
-    public function __construct(public DateTimeImmutable $value)
-    {
-    }
+    public function __construct(public DateTimeImmutable $value) {}
 
     public function now(): DateTimeImmutable
     {
