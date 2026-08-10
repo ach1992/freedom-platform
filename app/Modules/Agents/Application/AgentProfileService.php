@@ -7,6 +7,7 @@ namespace App\Modules\Agents\Application;
 use App\Modules\AccessControl\Application\AdministratorPermissionAuthorizer;
 use App\Modules\Agents\Domain\AgentStatus;
 use App\Shared\Application\Clock;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\QueryException;
@@ -39,8 +40,10 @@ final readonly class AgentProfileService
         }
 
         try {
-            return $this->database->connection()->transaction(function () use ($userId, $targetStatus, $context, $administratorId, $action): AgentMutationReceipt {
-                $connection = $this->database->connection();
+            return $this->database->connection()->transaction(function (Connection $connection) use ($userId, $targetStatus, $context, $administratorId, $action): AgentMutationReceipt {
+                $this->assertActiveAdministrator($connection, $administratorId);
+                $this->authorizer->authorize($administratorId, self::MANAGE_PERMISSION);
+
                 $existing = $this->audit->existing($action, $userId, $context->requestFingerprint, true);
                 if ($existing !== null) {
                     return $existing;
@@ -88,6 +91,19 @@ final readonly class AgentProfileService
                 return $existing;
             }
             throw $exception;
+        }
+    }
+
+    private function assertActiveAdministrator(Connection $connection, int $administratorId): void
+    {
+        $active = $connection->table('administrators')
+            ->where('id', $administratorId)
+            ->where('status', 'active')
+            ->lockForUpdate()
+            ->exists();
+
+        if (! $active) {
+            throw new AuthorizationException('Administrator authorization failed.');
         }
     }
 
