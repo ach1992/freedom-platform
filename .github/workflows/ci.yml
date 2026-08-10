@@ -180,10 +180,22 @@ jobs:
           retention-days: 30
 
   integration:
-    name: MariaDB and Redis tests
+    name: MariaDB ${{ matrix.mariadb_version }} and Redis tests
     needs: preflight
     if: ${{ needs.preflight.outputs.application == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - mariadb_version: '10.11'
+            artifact_suffix: mariadb-10-11
+          - mariadb_version: '11.4'
+            artifact_suffix: mariadb-11-4
+    env:
+      MARIADB_VERSION: ${{ matrix.mariadb_version }}
+      COMPOSE_PROJECT_NAME: freedom-platform-ci-${{ github.run_id }}-${{ matrix.artifact_suffix }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -228,13 +240,13 @@ jobs:
 
       - name: Stop disposable dependencies
         if: always()
-        run: docker compose -f docker-compose.ci.yml down --volumes
+        run: docker compose -f docker-compose.ci.yml down --volumes --remove-orphans
 
       - name: Upload test evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: test-evidence-${{ github.run_id }}
+          name: test-evidence-${{ github.run_id }}-${{ matrix.artifact_suffix }}
           path: |
             build/evidence/tests
             build/evidence/coverage
