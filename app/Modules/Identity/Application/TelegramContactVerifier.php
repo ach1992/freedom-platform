@@ -249,6 +249,15 @@ final readonly class TelegramContactVerifier
                 ->where('phone_number_id', $phoneNumberId)
                 ->whereNull('invalidated_at')
                 ->update(['invalidated_at' => $now, 'updated_at' => $now]);
+            $this->database->connection()->table('otp_challenges')
+                ->where('phone_number_id', $phoneNumberId)
+                ->whereNull('consumed_at')
+                ->whereNull('invalidated_at')
+                ->update([
+                    'invalidated_at' => $now,
+                    'active_scope_hash' => null,
+                    'updated_at' => $now,
+                ]);
             $this->recordEvent(
                 $userId,
                 $phoneNumberId,
