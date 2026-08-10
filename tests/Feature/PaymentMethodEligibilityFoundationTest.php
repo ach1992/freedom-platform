@@ -5,7 +5,13 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Modules\AccessControl\Application\AccessChangeContext;
+use App\Modules\Agents\Application\AgentPricingService;
+use App\Modules\Agents\Domain\AgentPricingAction;
+use App\Modules\Orders\Application\QuoteAgentPricingContext;
+use App\Modules\Orders\Application\QuotePricingInput;
 use App\Modules\Orders\Application\QuoteReceipt;
+use App\Modules\Orders\Application\QuoteService;
+use App\Modules\Orders\Domain\QuoteOverrideSource;
 use App\Modules\Payments\Application\Contracts\ProviderHealth;
 use App\Modules\Payments\Application\PaymentEligibilityResolutionContext;
 use App\Modules\Payments\Application\PaymentEligibilityResolutionRequest;
@@ -43,6 +49,7 @@ final class MutablePaymentEligibilityClock implements Clock
 /** @requirement PAY-001 BUY-002 PAY-002 PAY-003 ACL-002 DAT-002 DAT-003 SEC-001 SEC-002 QUA-001 */
 final class PaymentMethodEligibilityFoundationTest extends TestCase
 {
+    use AgentPricingQuoteIntegrationTestSupport;
     use CreatesPromotionUsageFixtures;
     use RefreshDatabase;
 
@@ -167,10 +174,12 @@ final class PaymentMethodEligibilityFoundationTest extends TestCase
     {
         $owner = $this->usageAdministrator();
         $customer = $this->usageUser('customer');
-        $agent = $this->usageUser('agent');
+        $pricingService = $this->app->make(AgentPricingService::class);
+        $this->activePricingProfile($pricingService, $owner, 'pay-subject-agent', true);
+        $agent = $this->agentSubject('pay-subject-agent');
         $offering = $this->usageOffering(1_000_000, true, 'pay-subject');
         $customerQuote = $this->quote($customer, $offering['id'], 'pay-subject-customer');
-        $agentQuote = $this->quote($agent, $offering['id'], 'pay-subject-agent');
+        $agentQuote = $this->agentQuote($agent, $offering['id'], 'pay-subject-agent');
         $tagId = $this->profileAndTag($customer, 'normal', 'unverified');
         $service = $this->service();
         $service->createMethod('method-subject-a', 'subject_gateway', PaymentMethodKind::Gateway, null, new PaymentMethodDefinition(PaymentConfigurationState::Active, 40), $this->context($owner, 'subject-method'));
@@ -583,6 +592,25 @@ final class PaymentMethodEligibilityFoundationTest extends TestCase
             100_000,
             $this->clock->value->modify($validity),
             $suffix,
+        );
+    }
+
+    private function agentQuote(int $userId, int $offeringId, string $suffix): QuoteReceipt
+    {
+        return $this->app->make(QuoteService::class)->create(
+            'case-agent-'.$suffix,
+            $userId,
+            $offeringId,
+            new QuotePricingInput(
+                QuoteOverrideSource::None,
+                null,
+                null,
+                'pay-discount-'.$suffix,
+                100_000,
+                $this->clock->value->modify('+30 minutes'),
+            ),
+            substr(hash('sha256', 'pay-agent-quote:'.$suffix), 0, 64),
+            new QuoteAgentPricingContext($userId, AgentPricingAction::Purchase),
         );
     }
 
