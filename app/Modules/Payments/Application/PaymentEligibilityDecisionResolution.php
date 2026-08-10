@@ -126,7 +126,7 @@ trait PaymentEligibilityDecisionResolution
                     }
                     $evaluated[] = [
                         'method' => $method,
-                        'health' => $health?->value ?? 'missing',
+                        'health' => $health instanceof \App\Modules\Payments\Application\Contracts\ProviderHealth ? $health->value : 'missing',
                         'outcome' => $outcome->value,
                         'eligible' => $eligible,
                         'rule' => $winner,
