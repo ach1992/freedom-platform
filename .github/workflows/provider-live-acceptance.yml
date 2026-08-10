@@ -23,6 +23,8 @@ jobs:
   pasarguard:
     name: PasarGuard v5.2.1 guarded live acceptance
     if: ${{ github.ref_name == 'develop/v1.0.0-completion' && inputs.confirm == 'MUTATE_DISPOSABLE_PASARGUARD_V5_2_1' }}
+    environment:
+      name: provider-live-acceptance
     runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
     timeout-minutes: 10
     env:
