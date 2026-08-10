@@ -238,6 +238,7 @@ final class OtpChallengeLifecycleTest extends TestCase
             'otp-contact-bind-current-0001',
             $secondNumber,
             PhoneVerificationPolicy::Both,
+            2,
         ));
         $verified = $verifier->verify(
             $userId,
@@ -360,6 +361,7 @@ final class OtpChallengeLifecycleTest extends TestCase
         string $idempotencyKey,
         ?IranianMobileNumber $number = null,
         PhoneVerificationPolicy $policy = PhoneVerificationPolicy::SmsOtpOnly,
+        int $policyVersion = 1,
     ): OtpIssueRequest
     {
         return new OtpIssueRequest(
@@ -367,7 +369,7 @@ final class OtpChallengeLifecycleTest extends TestCase
             $telegramAccountId,
             $number ?? IranianMobileNumber::fromString('09123456789'),
             $policy,
-            1,
+            $policyVersion,
             'phone_verification',
             '203.0.113.10',
             $idempotencyKey,
