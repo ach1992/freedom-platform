@@ -160,7 +160,11 @@ ADD CONSTRAINT payment_rule_time_chk
 CHECK (
     (`starts_at_utc` IS NULL AND `ends_at_utc` IS NULL)
     OR (
-        `starts_at_utc` REGEXP '^([01][0-9]|2[0-3]):[0-5][0-9]
+        `starts_at_utc` REGEXP '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+        AND `ends_at_utc` REGEXP '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+    )
+)
+SQL);
         DB::statement('ALTER TABLE payment_method_rule_versions ADD CONSTRAINT payment_rule_hashes_chk CHECK (CHAR_LENGTH(`request_payload_hash`) = 64 AND CHAR_LENGTH(`configuration_snapshot_hash`) = 64 AND CHAR_LENGTH(`correlation_id`) = 64)');
         DB::statement("ALTER TABLE payment_method_rule_versions ADD CONSTRAINT payment_rule_json_chk CHECK (JSON_VALID(`account_types`) AND JSON_VALID(`tier_codes`) AND JSON_VALID(`offering_codes`) AND JSON_VALID(`product_ids`) AND JSON_VALID(`sales_server_ids`) AND JSON_VALID(`configuration_snapshot`) AND JSON_TYPE(`configuration_snapshot`) = 'OBJECT' AND OCTET_LENGTH(`configuration_snapshot`) <= 8192)");
 
