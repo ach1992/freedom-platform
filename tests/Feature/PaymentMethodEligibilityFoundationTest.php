@@ -284,14 +284,14 @@ final class PaymentMethodEligibilityFoundationTest extends TestCase
         $ruleSnapshot = json_decode((string) $rule['configuration_snapshot'], true, 512, JSON_THROW_ON_ERROR);
         $ruleSnapshot['rule_code'] = 'forged_window';
         $ruleSnapshot['version'] = 1;
-        $ruleSnapshot['starts_at_utc'] = '24:00';
-        $ruleSnapshot['ends_at_utc'] = '23:00';
+        $ruleSnapshot['starts_at_utc'] = '12:00';
+        $ruleSnapshot['ends_at_utc'] = '24:00';
         ksort($ruleSnapshot, SORT_STRING);
         unset($rule['id']);
         $rule['rule_code'] = 'forged_window';
         $rule['version'] = 1;
-        $rule['starts_at_utc'] = '24:00';
-        $rule['ends_at_utc'] = '23:00';
+        $rule['starts_at_utc'] = '12:00';
+        $rule['ends_at_utc'] = '24:00';
         $rule['mutation_key'] = 'eligibility.rule.forged.000001';
         $rule['request_payload_hash'] = hash('sha256', 'forged-rule');
         $rule['configuration_snapshot'] = json_encode($ruleSnapshot, JSON_THROW_ON_ERROR);
