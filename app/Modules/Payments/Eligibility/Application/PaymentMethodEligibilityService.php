@@ -337,13 +337,16 @@ final readonly class PaymentMethodEligibilityService
                         'currency' => $facts['currency'],
                         'final_price_irr' => $facts['amount_irr'],
                         'offering_code' => $facts['offering_code'],
+                        'product_id' => $facts['product_id'],
                         'public_id' => $facts['source_quote_public_id'],
+                        'sales_server_id' => $facts['sales_server_id'],
                     ],
                     'subject' => [
                         'account_status' => $facts['account_status'],
                         'account_type' => $facts['account_type'],
                         'agent_status' => $facts['agent_status'],
                         'identity_status' => $facts['identity_status'],
+                        'tag_codes' => $facts['tag_codes'],
                         'tier_code' => $facts['tier_code'],
                         'user_id' => $facts['user_id'],
                     ],
@@ -560,7 +563,7 @@ final readonly class PaymentMethodEligibilityService
         if ($tierCodes !== [] && ! in_array($facts['tier_code'], $tierCodes, true)) {
             return [false, 'tier_mismatch'];
         }
-        $tagCodes = $this->ruleTags((int) $rule->id);
+        $tagCodes = $this->ruleTags($connection, (int) $rule->id);
         foreach ($tagCodes as $tagCode) {
             if (! in_array($tagCode, $facts['tag_codes'], true)) {
                 return [false, 'tag_mismatch'];
@@ -706,10 +709,10 @@ final readonly class PaymentMethodEligibilityService
     }
 
     /** @return list<string> */
-    private function ruleTags(int $ruleVersionId): array
+    private function ruleTags(Connection $connection, int $ruleVersionId): array
     {
         /** @var list<string> $tags */
-        $tags = $this->database->connection()->table('payment_method_rule_version_tags')
+        $tags = $connection->table('payment_method_rule_version_tags')
             ->where('payment_method_rule_version_id', $ruleVersionId)
             ->orderBy('tag_code')
             ->pluck('tag_code')
