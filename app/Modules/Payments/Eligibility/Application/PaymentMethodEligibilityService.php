@@ -452,7 +452,7 @@ final readonly class PaymentMethodEligibilityService
         $unavailableRequiredFact = false;
         $normal = [];
         foreach ($rules as $rule) {
-            [$matched, $reason] = $this->ruleMatches($rule, $facts, $now);
+            [$matched, $reason] = $this->ruleMatches($connection, $rule, $facts, $now);
             $snapshot['rule_evaluations'][] = [
                 'configuration_snapshot_hash' => (string) $rule->configuration_snapshot_hash,
                 'effect' => (string) $rule->effect,
@@ -568,7 +568,7 @@ final readonly class PaymentMethodEligibilityService
     }
 
     /** @return array{0:bool,1:string} */
-    private function ruleMatches(object $rule, array $facts, DateTimeImmutable $now): array
+    private function ruleMatches(Connection $connection, object $rule, array $facts, DateTimeImmutable $now): array
     {
         if (! (bool) $rule->enabled) {
             return [false, 'rule_disabled'];
