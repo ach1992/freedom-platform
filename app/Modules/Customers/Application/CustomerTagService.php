@@ -96,7 +96,6 @@ final readonly class CustomerTagService
             return $existing;
         }
 
-
         $customerExists = $connection->table('users')->where('id', $userId)->lockForUpdate()->exists();
 
         if (! $customerExists) {
