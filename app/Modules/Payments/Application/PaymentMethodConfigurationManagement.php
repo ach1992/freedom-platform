@@ -195,5 +195,4 @@ trait PaymentMethodConfigurationManagement
             'created_at' => $createdAt,
         ]);
     }
-
 }
