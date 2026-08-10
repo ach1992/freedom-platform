@@ -26,6 +26,5 @@ final readonly class PaymentMethodEligibilityService
         private DatabaseManager $database,
         private Clock $clock,
         private AdministratorPermissionAuthorizer $authorizer,
-    ) {
-    }
+    ) {}
 }
