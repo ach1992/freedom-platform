@@ -363,7 +363,11 @@ BEGIN
                 WHERE h.id = CAST(JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.health.observation_id')) AS UNSIGNED)
                   AND h.method_code = NEW.method_code
                   AND h.configuration_snapshot_hash = JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.health.configuration_snapshot_hash'))
-                  AND h.healthy = CAST(JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.health.healthy')) AS UNSIGNED)
+                  AND h.healthy = CASE JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.health.healthy'))
+                      WHEN 'true' THEN 1
+                      WHEN 'false' THEN 0
+                      ELSE -1
+                  END
                   AND DATE_FORMAT(h.observed_at, '%Y-%m-%d %H:%i:%s.%f') = JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.health.observed_at'))
                   AND DATE_FORMAT(h.expires_at, '%Y-%m-%d %H:%i:%s.%f') = JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.health.expires_at'))
             )
