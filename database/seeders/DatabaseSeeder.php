@@ -13,6 +13,7 @@ final class DatabaseSeeder extends Seeder
         $this->call([
             IdentityAccessFoundationSeeder::class,
             UsdtAccessFoundationSeeder::class,
+            PaymentEligibilityAccessFoundationSeeder::class,
             CatalogAccessFoundationSeeder::class,
             PanelsAccessFoundationSeeder::class,
             WalletAccessFoundationSeeder::class,
