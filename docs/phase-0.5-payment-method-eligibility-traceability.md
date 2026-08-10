@@ -13,7 +13,7 @@ The evaluator accepts only an idempotency key, the authenticated Quote owner and
 - current offering code, product ID and sales-server ID;
 - current versioned payment-method/rule configuration and local persisted health observation.
 
-For normal customer Quotes, the action is fixed to `purchase`. No client action, amount, history, limit, health, provider, or override fact is accepted. Contact-vs-OTP provenance, purchase history/spend and daily-payment-limit facts are intentionally unavailable in this increment. A method with any enabled rule requiring one of those facts is excluded fail-closed and records its safe unavailable reason; it is never inferred from `wallet_top_up`.
+For normal customer Quotes, the action is fixed to `purchase`. No client action, amount, history, limit, health, provider, or override fact is accepted. Contact-vs-OTP provenance, purchase history/spend and daily-payment-limit facts are intentionally unavailable in this increment. A method is excluded fail-closed only when an otherwise-applicable enabled rule reaches one of those unavailable-fact predicates; it records the safe unavailable reason and never infers it from `wallet_top_up`.
 
 ## Deterministic policy semantics
 
