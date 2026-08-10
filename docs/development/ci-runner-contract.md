@@ -147,6 +147,12 @@ Integration tests use `docker-compose.ci.yml` and a serialized matrix of `MARIAD
 
 `phpunit.xml` contains safe local defaults for developer execution. Mandatory CI environment variables override those defaults. Isolation-sensitive database tests must run against MariaDB, not SQLite.
 
+## 9. Protected PasarGuard live acceptance
+
+The PasarGuard live-mutation workflow declares the `provider-live-acceptance` GitHub Environment. It retains the integration-branch and typed-confirmation restrictions; absent provider configuration stops validation before any provider mutation.
+
+**Human-only setup (once):** Create the `provider-live-acceptance` Environment in GitHub, restrict deployment branches to `develop/v1.0.0-completion`, require reviewer approval, and move the PasarGuard provider secrets into that Environment.
+
 ## 10. Concurrency and queue behavior
 
 CI groups runs by workflow and PR head branch with `cancel-in-progress: true`.
@@ -156,12 +162,6 @@ CI groups runs by workflow and PR head branch with `cancel-in-progress: true`.
 - A superseded job that remains `in_progress` with no steps/logs can block all newer jobs; inspect the runner service rather than creating more runs.
 - Connector commits may not always trigger Actions immediately; use a manual workflow dispatch only when no exact-head run exists.
 - A queued job caused by an offline, busy, or label-mismatched self-hosted runner must not be moved to GitHub-hosted capacity.
-
-## 9. Protected PasarGuard live acceptance
-
-The PasarGuard live-mutation workflow declares the `provider-live-acceptance` GitHub Environment. It retains the integration-branch and typed-confirmation restrictions; absent provider configuration stops validation before any provider mutation.
-
-**Human-only setup (once):** Create the `provider-live-acceptance` Environment in GitHub, restrict deployment branches to `develop/v1.0.0-completion`, require reviewer approval, and move the PasarGuard provider secrets into that Environment.
 
 ## 11. Host changes
 
