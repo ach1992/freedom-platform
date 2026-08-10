@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Payments\Application;
 
 use App\Modules\Payments\Domain\PaymentConfigurationState;
+use App\Modules\Payments\Domain\PaymentEligibilityAction;
 use App\Modules\Payments\Domain\PaymentEligibilityEffect;
 use App\Modules\Payments\Domain\PaymentMethodKind;
 use Illuminate\Database\Connection;
@@ -152,7 +153,7 @@ trait PaymentEligibilityPersistence
         if (! hash_equals(hash('sha256', $row->configuration_snapshot), $row->configuration_snapshot_hash)) {
             throw new RuntimeException('Stored payment eligibility decision snapshot hash is invalid.');
         }
-        $action = \App\Modules\Payments\Domain\PaymentEligibilityAction::tryFrom($row->action)
+        $action = PaymentEligibilityAction::tryFrom($row->action)
             ?? throw new RuntimeException('Stored payment eligibility action is invalid.');
         /** @var list<DecisionItemRow> $items */
         $items = $db->table('payment_eligibility_decision_items')
@@ -206,5 +207,4 @@ trait PaymentEligibilityPersistence
             $replayed,
         );
     }
-
 }
