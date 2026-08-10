@@ -76,7 +76,7 @@ trait PaymentEligibilitySnapshotVerification
     }
 
     /**
-     * @param array{method:MethodVersionRow,health:string,outcome:string,eligible:bool,rule:RuleVersionRow|null} $item
+     * @param  array{method:MethodVersionRow,health:string,outcome:string,eligible:bool,rule:RuleVersionRow|null}  $item
      * @return array<string, mixed>
      */
     private function decisionItemSnapshot(array $item): array
