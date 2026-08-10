@@ -264,7 +264,7 @@ BEGIN
         WHERE q.id = NEW.source_quote_id AND q.public_id = NEW.source_quote_public_id
           AND q.user_id = NEW.user_id AND q.currency = NEW.currency_snapshot
           AND q.final_price_irr = NEW.amount_irr_snapshot AND q.expires_at > NEW.created_at
-          AND u.account_status = 'active' AND u.account_type IN ('customer', 'agent')
+          AND u.account_type IN ('customer', 'agent')
     ) THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Payment eligibility source Quote is invalid.';
     END IF;
