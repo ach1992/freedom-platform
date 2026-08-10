@@ -7,7 +7,7 @@ namespace App\Modules\Payments\Eligibility\Application;
 final readonly class PaymentEligibilityDecisionReceipt
 {
     /**
-     * @param list<array{method_code:string, method_version:int, route_order:int, reason:string}> $methods
+     * @param  list<array{method_code:string, method_version:int, route_order:int, reason:string}>  $methods
      */
     public function __construct(
         public int $decisionId,
