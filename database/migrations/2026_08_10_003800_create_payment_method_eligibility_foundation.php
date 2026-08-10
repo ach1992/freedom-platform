@@ -293,7 +293,10 @@ BEGIN
     END IF;
     IF LOWER(SHA2(CAST(NEW.configuration_snapshot AS CHAR), 256)) <> LOWER(NEW.configuration_snapshot_hash)
        OR JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.formula_version')) <> 'pay-001-eligibility-v2'
-       OR JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.source_quote.public_id')) <> NEW.source_quote_public_id THEN
+       OR JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.action')) <> NEW.action_snapshot
+       OR JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.source_quote.public_id')) <> NEW.source_quote_public_id
+       OR JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.source_quote.currency')) <> NEW.currency_snapshot
+       OR CAST(JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.source_quote.final_price_irr')) AS SIGNED) <> NEW.amount_irr_snapshot THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Payment eligibility decision snapshot is invalid.';
     END IF;
 END
@@ -312,7 +315,8 @@ BEGIN
        OR JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.method_code')) <> NEW.method_code
        OR CAST(JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.method_version')) AS UNSIGNED) <> NEW.method_version
        OR JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.candidate_outcome')) <> NEW.reason_code
-       OR NOT (JSON_EXTRACT(NEW.configuration_snapshot, '$.route_order') <=> CAST(NEW.route_order AS CHAR))
+       OR (NEW.route_order IS NULL AND JSON_TYPE(JSON_EXTRACT(NEW.configuration_snapshot, '$.route_order')) <> 'NULL')
+       OR (NEW.route_order IS NOT NULL AND CAST(JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.route_order')) AS UNSIGNED) <> NEW.route_order)
        OR JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.configuration_snapshot_hash')) <> (
             SELECT m.configuration_snapshot_hash FROM payment_method_versions m WHERE m.id = NEW.payment_method_version_id
        ) THEN
