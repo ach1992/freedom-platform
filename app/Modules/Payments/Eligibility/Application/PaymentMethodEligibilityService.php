@@ -414,9 +414,13 @@ final readonly class PaymentMethodEligibilityService
                 return $this->decisionReceipt($connection, $stored, false);
             });
         } catch (QueryException $exception) {
-            return $connection->transaction(function (Connection $connection) use ($decisionKey, $requestHash, $exception): PaymentEligibilityDecisionReceipt {
+            return $connection->transaction(function (Connection $connection) use ($decisionKey, $actorUserId, $sourceQuotePublicId, $requestHash, $exception): PaymentEligibilityDecisionReceipt {
+                $now = $this->clock->now()->setTimezone(new DateTimeZone('UTC'));
+                $facts = $this->loadFacts($connection, $actorUserId, $sourceQuotePublicId, $now);
                 $existing = $this->decisionByKey($connection, $decisionKey, true);
                 if ($existing !== null) {
+                    $this->assertReplayAccess($facts);
+
                     return $this->replayDecision($connection, $existing, $requestHash);
                 }
 
