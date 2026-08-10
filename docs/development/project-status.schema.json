@@ -28,7 +28,7 @@
     "target_release": { "const": "1.0.0" },
     "repository": { "const": "ach1992/freedom-platform" },
     "authoritative_pr": { "const": 6 },
-    "authoritative_issue": { "const": 7 },
+    "authoritative_issue": { "const": 8 },
     "allowed_branch": { "const": "develop/v1.0.0-completion" },
     "base_branch": { "const": "main" },
     "required_pr_state": { "const": "draft" },
