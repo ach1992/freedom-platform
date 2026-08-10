@@ -24,7 +24,19 @@ The last accepted **product** integration baseline before this handoff-control d
 - artifact `test-evidence-31345041706`, ID `9047072891`;
 - independently verified SHA-256 `785c67bc39fba3565f861e35f6e2e599d6309420004ecf01329f840c2d86f6f2`.
 
+Machine-status evidence for that boundary is `evidence/0.5.0/benefit-code-lifecycle.md`; traceability is `docs/phase-0.5-benefit-code-lifecycle-traceability.md`.
+
 The documentation cleanup commit(s) after that product baseline may advance PR `#6`. A new MASTER must fetch PR `#6` and verify the latest control-plane head/CI before dispatching work.
+
+## Machine control synchronization
+
+The current machine status intentionally identifies **PasarGuard Controlled Live Execution** as the active increment, with handoff `docs/44-phase-0.4-pasarguard-live-execution-handoff.md`.
+
+Current project-control entry points include:
+
+- `docs/32-current-traceability-overlay.md`;
+- `docs/33-current-risk-overlay.md`;
+- `docs/development/multi-agent-orchestration.md`.
 
 ## Recently accepted Phase 0.5 Workers
 
@@ -36,7 +48,7 @@ The documentation cleanup commit(s) after that product baseline may advance PR `
 
 **W-005 / Issue #32 / PAY-001 is permanently cancelled in the current project plan.**
 
-- Issue #32 is closed `not_planned` and marked `CANCELLED / OBSOLETE / DO_NOT REDISPATCH`.
+- Issue #32 is closed `not_planned` and marked `CANCELLED / OBSOLETE / DO NOT REDISPATCH`.
 - PR #36 is closed/unmerged audit history.
 - PR #39 is an accidental closed/unmerged audit PR.
 - PR #40 is closed/unmerged and marked `CANCELLED / DO NOT MERGE`.
@@ -71,7 +83,7 @@ Read, in order:
 4. `docs/development/multi-agent-orchestration.md`;
 5. `docs/development/continuation-runbook.md`;
 6. `docs/52-current-continuation-handoff.md`;
-7. current traceability/risk overlays;
+7. `docs/32-current-traceability-overlay.md` and `docs/33-current-risk-overlay.md`;
 8. live GitHub PR `#6`, Issues `#7/#8`, PR `#24`, and all currently open Issues/PRs.
 
 Then recompute the task/dependency/conflict graph from live state. Do **not** recover or recreate W-005/PAY-001. Preserve High/Critical human merge approvals and keep PR #6 Draft.
