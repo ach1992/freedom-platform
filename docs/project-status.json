@@ -1,7 +1,7 @@
 {
   "$schema": "./development/project-status.schema.json",
   "schema_version": 1,
-  "last_reviewed": "2026-08-09",
+  "last_reviewed": "2026-08-10",
   "target_release": "1.0.0",
   "repository": "ach1992/freedom-platform",
   "authoritative_pr": 6,
@@ -16,20 +16,20 @@
     "status": "active"
   },
   "last_verified_boundary": {
-    "name": "Agent Pricing Resolution Foundation (AGT-005 resolver)",
-    "implementation_sha": "552fa7e30f3f575e1697f176d07fe66d0372e2ee",
-    "implementation_ci_run_id": 31289482939,
-    "implementation_ci_run_number": 1293,
-    "evidence_sha": "cfeb56a837a6ae85c098605b7e37a532a7ddb65d",
-    "evidence_ci_run_id": 31289665318,
-    "evidence_ci_run_number": 1296,
-    "tests": 407,
-    "assertions": 2543,
-    "artifact_name": "test-evidence-31289665318",
-    "artifact_id": 9030991362,
-    "artifact_sha256": "b4d4535d7fcce4d17e003f8d2b670dc29f6d74ec4d8c5daa6656ff6b51679dd7",
-    "evidence_path": "evidence/0.5.0/agent-pricing-resolution-foundation.md",
-    "traceability_path": "docs/phase-0.5-agent-pricing-resolution-traceability.md"
+    "name": "W-006 PRO-002 secure benefit-code lifecycle integration",
+    "implementation_sha": "76ed06bbb272dbed971697587ca76f1785313dd3",
+    "implementation_ci_run_id": 31345041706,
+    "implementation_ci_run_number": 1402,
+    "evidence_sha": "76ed06bbb272dbed971697587ca76f1785313dd3",
+    "evidence_ci_run_id": 31345041706,
+    "evidence_ci_run_number": 1402,
+    "tests": 463,
+    "assertions": 3057,
+    "artifact_name": "test-evidence-31345041706",
+    "artifact_id": 9047072891,
+    "artifact_sha256": "785c67bc39fba3565f861e35f6e2e599d6309420004ecf01329f840c2d86f6f2",
+    "evidence_path": "evidence/0.5.0/benefit-code-lifecycle.md",
+    "traceability_path": "docs/phase-0.5-benefit-code-lifecycle-traceability.md"
   },
   "active_increment": {
     "name": "PasarGuard Controlled Live Execution",
