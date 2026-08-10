@@ -72,7 +72,6 @@ final readonly class CustomerAccountStateService
             return $existing;
         }
 
-
         /** @var object{account_status: string}|null $user */
         $user = $connection->table('users')
             ->where('id', $userId)
