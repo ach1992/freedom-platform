@@ -24,6 +24,11 @@ final readonly class OtpVerificationOutcome
         return new self(null, 'expired', null);
     }
 
+    public static function inactive(): self
+    {
+        return new self(null, 'inactive', null);
+    }
+
     public static function invalidCode(int $remainingAttempts): self
     {
         if ($remainingAttempts < 0) {
