@@ -1,20 +1,25 @@
 # Phase 0.5 USDT BEP20 Rate / Immutable Amount Quote Evidence
 
-**Status:** Contract Revision 2 implementation-verified Worker evidence candidate; evidence-head CI and MASTER re-review pending.  
+**Status:** Accepted bounded USDT rate / immutable amount-quote foundation, integrated in Phase `0.5.0`.  
 **Task Contract:** Issue `#34`, Worker `W-007`, Contract Revision `2`.  
 **Parent:** Issue `#8`.  
 **Requirements:** bounded `USDT-001`, partial `USDT-002`, `DAT-002`, `DAT-003`, `SEC-001`, `SEC-002`, `QUA-001`.  
-**BASE_SHA:** `a7876668492c115ce2eba1b7194c83ac169ce8a7`.  
-**Corrected implementation head:** `c8cafbcdb53b69d94080f6ee7d486cff2dc74fe5`.  
-**Implementation CI:** `31316814017` / `#1367` — all five mandatory jobs successful.  
-**Full suite:** **436 tests / 2735 assertions**.  
+**Accepted PR:** `#37` (merged with history-preserving `merge`).  
+**Accepted integration SHA:** `2ce0462f6439d51f7d29c5f6dddf7d1ed4581584`.  
+**Post-merge integration CI:** `31320787076` / `#1382` — all five mandatory jobs successful.  
+**Post-merge full suite:** **447 tests / 2899 assertions**.  
+**Post-merge artifact:** `test-evidence-31320787076`, ID `9040138207`, size `130763` bytes.  
+**Post-merge artifact SHA-256:** `a53cbd584bf7ab58a5a25c77762eb4ae712da8e36ddd7f7d3102b0abe0f198cc` — exact match to the GitHub Actions uploader digest.  
+**Historical dispatch base:** `a7876668492c115ce2eba1b7194c83ac169ce8a7`.  
+**Historical corrected implementation head:** `c8cafbcdb53b69d94080f6ee7d486cff2dc74fe5`.  
+**Historical implementation CI:** `31316814017` / `#1367` — **436 tests / 2735 assertions**.  
 **W-007 focused suites:** **11 tests / 112 assertions**.  
 **Provider-contract suite:** `UsdtRateProviderContractTest` **7 / 44**.  
 **Immutable quote/auth/DB suite:** `UsdtRateQuoteFoundationTest` **3 / 57**.  
 **Standard-seed authorization suite:** `UsdtStandardSeedAuthorizationTest` **1 / 11**.  
 **BUY-002 regression:** `QuotePricingSnapshotTest` **8 / 63**.  
-**Implementation artifact:** `test-evidence-31316814017`, ID `9039007750`, size `129026` bytes.  
-**Independent artifact SHA-256:** `b5d8b9ee82dae2e65cc0f6f3998980d45033d227a22d7d3319dbc890806a0b8f` — exact match to the GitHub Actions uploader digest.
+**Historical implementation artifact:** `test-evidence-31316814017`, ID `9039007750`, size `129026` bytes.  
+**Historical implementation artifact SHA-256:** `b5d8b9ee82dae2e65cc0f6f3998980d45033d227a22d7d3319dbc890806a0b8f` — exact match to the GitHub Actions uploader digest.
 
 ## Bounded Revision 2 outcome
 
@@ -50,7 +55,7 @@ Focused proof verifies:
 3. fallback occurs only when policy explicitly includes another verified provider, demonstrated with a verified-provider test double;
 4. no silent manual fallback occurs unless the explicit emergency-manual policy is enabled.
 
-The exact Tetherland contract/auth/schema remains a later dedicated task. Issue `#34` therefore remains open and PR `#37` references rather than closes it.
+The exact Tetherland contract/auth/schema remains a later dedicated task. Issue `#34` therefore remains open; PR `#37` was intentionally non-closing and its accepted merge does not close that gap.
 
 ## Rate selection and fixed-precision proof
 
@@ -83,9 +88,9 @@ Exact creation replay returns the accepted historical USDT quote before re-readi
 
 Forward migration `database/migrations/2026_08_09_003600_create_usdt_rate_quote_foundation.php` adds only `usdt_destination_wallet_versions` and `usdt_amount_quotes`. Controls include FKs, bounded/explicit FK naming for MariaDB, unique identities, network/address/source/rate/time/hash/snapshot checks, sequential destination-version guard, current-enabled destination join, source Quote/user/amount/validity join, deterministic exact-USDT DB recomputation, snapshot/hash verification, and update/delete denial triggers. No existing applied migration is edited.
 
-## Exact implementation validation
+## Historical implementation validation
 
-Implementation CI `31316814017` / `#1367` passed:
+Historical implementation CI `31316814017` / `#1367` passed:
 
 - Repository preflight;
 - Secret scan;
@@ -93,12 +98,12 @@ Implementation CI `31316814017` / `#1367` passed:
 - MariaDB and Redis tests: **436 / 2735**;
 - Dependency and license policy.
 
-The retained test artifact contains JUnit, full test log, Clover coverage and sanitized dependency-service evidence. Its independently downloaded ZIP SHA-256 is `b5d8b9ee82dae2e65cc0f6f3998980d45033d227a22d7d3319dbc890806a0b8f`, matching the uploader digest exactly.
+The retained historical test artifact contains JUnit, full test log, Clover coverage and sanitized dependency-service evidence. Its independently downloaded ZIP SHA-256 is `b5d8b9ee82dae2e65cc0f6f3998980d45033d227a22d7d3319dbc890806a0b8f`, matching the uploader digest exactly.
 
 ## Explicit deferred / unaccepted behavior
 
 This evidence does **not** claim acceptance of runnable Tetherland integration, complete `USDT-002`, `USDT-003` TXID/chain verification/capture, Payment Intent or capture, Order/purchase authority, Wallet/Ledger effects, `PAY-001`/W-005 routing, Zarinpal/NOWPayments/C2C/Gift Card, provider-live credentials/workflows, provisioning/Service, Telegram purchase UX, `composer.lock` changes, Phase `0.5.0` closure or production release acceptance.
 
-## Evidence-head lifecycle
+## Acceptance lifecycle
 
-The implementation-to-evidence change set after `c8cafbcdb53b69d94080f6ee7d486cff2dc74fe5` is documentation only. The exact final evidence/current head, its current merge-candidate five-job CI, retained artifact and independent digest are recorded on PR `#37` after the evidence-head run succeeds. This file intentionally does not self-reference a future evidence commit SHA.
+The implementation-to-evidence change set after `c8cafbcdb53b69d94080f6ee7d486cff2dc74fe5` was documentation only. PR `#37` was revalidated on current target before its history-preserving merge, then accepted at integration SHA `2ce0462f6439d51f7d29c5f6dddf7d1ed4581584` after post-merge CI `31320787076` / `#1382` passed all five mandatory jobs. The retained post-merge artifact `test-evidence-31320787076` (ID `9040138207`) has independently verified SHA-256 `a53cbd584bf7ab58a5a25c77762eb4ae712da8e36ddd7f7d3102b0abe0f198cc`.
