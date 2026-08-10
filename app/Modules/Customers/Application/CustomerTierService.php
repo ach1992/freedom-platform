@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Customers\Application;
 
+use App\Modules\AccessControl\Application\AdministratorPermissionAuthorizer;
 use App\Modules\Customers\Domain\CustomerTierCode;
 use App\Shared\Application\Clock;
 use Illuminate\Database\Connection;
@@ -15,10 +16,13 @@ final readonly class CustomerTierService
 {
     private const MANUAL_ACTION = 'customer.tier.assign';
 
+    private const MANUAL_PERMISSION = 'identity.customers.manage_tier';
+
     private const AUTOMATIC_ACTION = 'customer.tier.recalculate';
 
     public function __construct(
         private DatabaseManager $database,
+        private AdministratorPermissionAuthorizer $authorizer,
         private CustomerMutationAudit $audit,
         private CustomerTierCalculator $calculator,
         private Clock $clock,
@@ -84,12 +88,6 @@ final readonly class CustomerTierService
         CustomerChangeContext $context,
         callable $operation,
     ): CustomerMutationReceipt {
-        $existing = $this->audit->existing($action, $userId, $context->requestFingerprint);
-
-        if ($existing !== null) {
-            return $existing;
-        }
-
         try {
             return $this->database->connection()->transaction(
                 fn (): CustomerMutationReceipt => $operation($this->database->connection()),
@@ -112,13 +110,16 @@ final readonly class CustomerTierService
         bool $lockTier,
         CustomerChangeContext $context,
     ): CustomerMutationReceipt {
+        $administratorId = $context->requireAdministrator();
+        $this->assertActiveAdministrator($connection, $administratorId);
+        $this->authorizer->authorize($administratorId, self::MANUAL_PERMISSION);
+
         $existing = $this->audit->existing(self::MANUAL_ACTION, $userId, $context->requestFingerprint, true);
 
         if ($existing !== null) {
             return $existing;
         }
 
-        $this->assertActiveAdministrator($connection, $context->requireAdministrator());
         $profile = $this->lockedProfile($connection, $userId);
         $target = $this->tierByCode($connection, $targetTier, true);
         $current = $this->tierById($connection, $profile->current_tier_id);
