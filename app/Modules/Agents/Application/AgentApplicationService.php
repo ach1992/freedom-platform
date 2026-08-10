@@ -137,6 +137,7 @@ final readonly class AgentApplicationService
         return $this->reviewTransition(
             'agent.application.release_review',
             $applicationId,
+            $administratorId,
             $context,
             AgentApplicationState::UnderReview,
             AgentApplicationState::Submitted,
@@ -169,6 +170,7 @@ final readonly class AgentApplicationService
         return $this->reviewTransition(
             'agent.application.approve',
             $applicationId,
+            $administratorId,
             $context,
             AgentApplicationState::UnderReview,
             AgentApplicationState::Approved,
@@ -213,6 +215,7 @@ final readonly class AgentApplicationService
         return $this->reviewTransition(
             'agent.application.reject',
             $applicationId,
+            $administratorId,
             $context,
             AgentApplicationState::UnderReview,
             AgentApplicationState::Rejected,
