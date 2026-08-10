@@ -1,89 +1,92 @@
 # Project Status
 
-This is the human-readable current-state entry point. GitHub is authoritative for dynamic task/PR state; Chat history is disposable.
+This is the single human-readable current-state entry point. GitHub is authoritative for live PR/Issue/branch/CI state; Chat history is disposable.
 
 **Last status review:** 2026-08-10  
 **Target release:** `1.0.0`  
-**Active Phase 0.4 Issue:** `#7`  
-**Parallel Phase 0.5 Issue:** `#8`  
+**Active phase:** `0.5.0 — Ledger, Pricing, Promotions and Payment Providers`  
+**Authoritative phase Issue:** `#8`  
 **Authoritative integration PR:** Draft PR `#6`  
 **Integration branch:** `develop/v1.0.0-completion`  
-**PR base:** `main`
+**Base branch:** `main`
 
 ## Live-state rule
 
-Before every MASTER write, dispatch, review or merge, fetch PR `#6` and use its exact live `head_sha`. Require PR `#6` to remain open/Draft and verify the exact-head mandatory CI. Never use a copied SHA from this file or Chat as live authority.
+Before any implementation, review, merge, or project-control write, fetch PR `#6` and use its current `head_sha`. PR `#6` must stay Draft until final Version 1 acceptance.
 
-## Clean continuation checkpoint
+Expected long-lived branch set is intentionally only:
 
-The last accepted **product** integration baseline before this handoff-control documentation refresh is:
+- `main`;
+- `develop/v1.0.0-completion`.
 
-- `76ed06bbb272dbed971697587ca76f1785313dd3`;
-- PR `#6` exact-head CI `31345041706` / `#1402`: all five mandatory jobs PASS;
-- full suite: **463 tests / 3057 assertions**, zero failures/errors;
+Any old `agent/*`, `ops/*`, or `safety/*` branch is obsolete after the August 10 cleanup and must not be used as a development base.
+
+## Last verified product boundary
+
+The last accepted product integration boundary is:
+
+- implementation/evidence SHA `76ed06bbb272dbed971697587ca76f1785313dd3`;
+- CI `31345041706` / `#1402` — all mandatory jobs passed;
+- full suite **463 tests / 3057 assertions**;
 - artifact `test-evidence-31345041706`, ID `9047072891`;
-- independently verified SHA-256 `785c67bc39fba3565f861e35f6e2e599d6309420004ecf01329f840c2d86f6f2`.
+- SHA-256 `785c67bc39fba3565f861e35f6e2e599d6309420004ecf01329f840c2d86f6f2`;
+- evidence `evidence/0.5.0/benefit-code-lifecycle.md`;
+- traceability `docs/phase-0.5-benefit-code-lifecycle-traceability.md`.
 
-Machine-status evidence for that boundary is `evidence/0.5.0/benefit-code-lifecycle.md`; traceability is `docs/phase-0.5-benefit-code-lifecycle-traceability.md`.
+Project-control/documentation cleanup commits may advance PR `#6` beyond this product SHA. Always inspect live CI before new product work.
 
-The documentation cleanup commit(s) after that product baseline may advance PR `#6`. A new MASTER must fetch PR `#6` and verify the latest control-plane head/CI before dispatching work.
+## Phase 0.4 cleanup decision
 
-## Machine control synchronization
+Issue `#7` is closed as the completed Phase 0.4 implementation boundary. The temporary default-branch PasarGuard bootstrap PR `#24` is abandoned/closed and its `ops/*` and `safety/*` branches are obsolete.
 
-The current machine status intentionally identifies **PasarGuard Controlled Live Execution** as the active increment, with handoff `docs/44-phase-0.4-pasarguard-live-execution-handoff.md`.
+Real deployed Marzban/PasarGuard acceptance was **not** claimed complete. Deployment-specific provider/version/capability/idempotency/uncertainty/Target-activation proof is deliberately carried to final release acceptance under Issue `#13`. Until then, source/offline/fake/harness evidence must not be described as production provider compatibility.
 
-Current project-control entry points include:
+## Phase 0.5 accepted foundations
 
-- `docs/32-current-traceability-overlay.md`;
-- `docs/33-current-risk-overlay.md`;
-- `docs/development/multi-agent-orchestration.md`.
+Accepted reusable work includes:
 
-## Recently accepted Phase 0.5 Workers
+- immutable balanced Wallet/Ledger foundations, holds, transfer, refund and correction controls;
+- Payment Intent / external cash-wallet top-up foundation;
+- deterministic immutable `BUY-002` Quotes;
+- promotion/referral pricing-rule resolution and promotion usage reservation/release foundations;
+- most-specific agent-pricing resolution and immutable Quote consumption (`AGT-005` bounded integration, Issue `#31`, PR `#35`);
+- secure `PRO-002` benefit-code lifecycle (Issue `#33`, PR `#38`);
+- USDT BEP20 manual/Nobitex rate and immutable amount-quote foundation (Issue `#34`, PR `#37`).
 
-- **W-004 / Issue #31 / PR #35** — agent pricing is consumed by immutable Quotes with replay-time authorization; merged.
-- **W-007 / Issue #34 / PR #37** — bounded USDT BEP20 rate/quote foundation plus standard authorization seeding; merged. Issue #34 may remain open for later bounded USDT work such as the not-yet-accepted Tetherland path.
-- **W-006 / Issue #33 / PR #38** — secure benefit-code lifecycle (`PRO-002`) with dedicated versioned lookup keys and canonical ledger lock ordering; merged and Issue #33 completed.
+The exact accepted boundary of each increment remains in its merged PR and repository evidence. Do not recreate accepted foundations merely because an old task document or branch exists.
 
-## Owner-cancelled work — do not redispatch
+## Remaining Phase 0.5 scope
 
-**W-005 / Issue #32 / PAY-001 is permanently cancelled in the current project plan.**
+Issue `#8` remains the authoritative phase backlog. Key unresolved areas include:
 
-- Issue #32 is closed `not_planned` and marked `CANCELLED / OBSOLETE / DO NOT REDISPATCH`.
-- PR #36 is closed/unmerged audit history.
-- PR #39 is an accidental closed/unmerged audit PR.
-- PR #40 is closed/unmerged and marked `CANCELLED / DO NOT MERGE`.
-- branches `agent/32-payment-method-eligibility` and `agent/32-payment-method-eligibility-r2` are obsolete audit refs, not active task bases.
-- no W-005 implementation was merged into the integration branch.
-- do not recreate/recover W-005 or dispatch a replacement PAY-001 implementation unless the Owner explicitly reverses this cancellation.
+- remaining `PRO-001` successful-payment redemption/finalization and correct payment-driven release orchestration;
+- `REF-001` reward lifecycle/effects;
+- `PAY-001` gateway eligibility/routing requirement;
+- remaining USDT work in Issue `#34`, including Tetherland contract completion and `USDT-003` transaction verification;
+- card-to-card, gift-card, Zarinpal and NOWPayments Version 1 capabilities;
+- genuine purchase-bound payment authority needed by later Order/provisioning work.
 
-Cancellation does **not** prove `PAY-001` implemented. The original Phase 0.5 specification still names `PAY-001`; treat this as an explicit owner-cancelled/unresolved requirement gap, never as completed evidence.
-
-## Current open PRs
-
-At this checkpoint the only open PRs are:
-
-1. **PR #6** — long-running Draft integration PR, `develop/v1.0.0-completion` -> `main`; never merge/mark Ready/enable auto-merge without explicit final release acceptance.
-2. **PR #24** — protected PasarGuard live-acceptance bootstrap, `ops/provider-live-dispatch-bootstrap` -> `main`; remains Draft/open and separate from normal Worker integration. Re-fetch before any decision.
-
-No implementation Worker is intentionally active at this handoff.
+The previous W-005/PAY-001 implementation attempt was cancelled and never merged. Its old branches/PRs are audit history only. **The failed task is obsolete; the Version 1 `PAY-001` requirement is not satisfied or silently removed.** Any future PAY-001 implementation must be designed as a fresh bounded task from the current integration head.
 
 ## Phase boundaries
 
-Phase `0.4.0` / Issue `#7` remains open around protected provider-live acceptance. Phase `0.5.0` / Issue `#8` remains open for remaining pricing/promotion/referral/payment/provider capability gaps. Phase `0.6.0` / Issue `#9` owns Orders, provisioning and Service lifecycle; do not pull those effects into Phase 0.5 just to increase parallelism.
+- Phase `0.5.0` / Issue `#8`: current finance/pricing/promotion/payment capability work.
+- Phase `0.6.0` / Issue `#9`: Order, provisioning and Service lifecycle; do not pull these effects into Phase 0.5 merely to unblock a payment task.
+- Phases `0.7.0`–`0.9.0`: Telegram UX, operations, hardening and release-candidate work.
+- Phase `1.0.0` / Issue `#13`: final deployment/provider acceptance, package and owner handover.
 
-The accepted Payment Intent remains bounded to `wallet_top_up`; it is not purchase authority. No paid provisioning may occur before authoritative capture.
+The accepted Payment Intent is still bounded to `wallet_top_up`; it is not purchase authority. Browser return never proves capture and no paid provisioning occurs before authoritative settlement.
 
-## New MASTER entry point
+## Continuation entry point
 
-Read, in order:
+Read only what is needed, in this order:
 
 1. `AGENTS.md`;
 2. this file;
 3. `docs/project-status.json`;
-4. `docs/development/multi-agent-orchestration.md`;
-5. `docs/development/continuation-runbook.md`;
-6. `docs/52-current-continuation-handoff.md`;
-7. `docs/32-current-traceability-overlay.md` and `docs/33-current-risk-overlay.md`;
-8. live GitHub PR `#6`, Issues `#7/#8`, PR `#24`, and all currently open Issues/PRs.
+4. `docs/README.md`;
+5. live PR `#6` and exact-head CI;
+6. Issue `#8` and the specific requirement/evidence files relevant to the next task;
+7. `docs/development/multi-agent-orchestration.md` only when parallel Workers are actually being used.
 
-Then recompute the task/dependency/conflict graph from live state. Do **not** recover or recreate W-005/PAY-001. Preserve High/Critical human merge approvals and keep PR #6 Draft.
+Do not search numbered handoff/overlay documents for current state. Current task state belongs in GitHub and this file.
