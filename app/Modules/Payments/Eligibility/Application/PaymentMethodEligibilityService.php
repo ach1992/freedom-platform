@@ -852,9 +852,6 @@ final readonly class PaymentMethodEligibilityService
         );
     }
 
-    /** @param mixed $startsAt
-     * @param mixed $endsAt
-     */
     private function withinTimeWindow(mixed $startsAt, mixed $endsAt, DateTimeImmutable $now): bool
     {
         if ($startsAt === null && $endsAt === null) {
