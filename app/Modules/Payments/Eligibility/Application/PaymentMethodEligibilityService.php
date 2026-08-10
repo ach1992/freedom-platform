@@ -424,6 +424,7 @@ final readonly class PaymentMethodEligibilityService
 
         $matchingUserAllow = false;
         $matchingUserDeny = false;
+        $unavailableRequiredFact = false;
         $normal = [];
         foreach ($rules as $rule) {
             [$matched, $reason] = $this->ruleMatches($rule, $facts, $now);
@@ -437,6 +438,14 @@ final readonly class PaymentMethodEligibilityService
                 'version' => (int) $rule->version,
             ];
             if (! $matched) {
+                if (in_array($reason, [
+                    'contact_otp_provenance_unavailable',
+                    'purchase_history_unavailable',
+                    'daily_payment_limit_unavailable',
+                ], true)) {
+                    $unavailableRequiredFact = true;
+                }
+
                 continue;
             }
 
@@ -452,6 +461,11 @@ final readonly class PaymentMethodEligibilityService
             $normal[] = $rule;
         }
 
+        if ($unavailableRequiredFact) {
+            $snapshot['outcome'] = 'required_fact_unavailable';
+
+            return ['ineligible', $snapshot];
+        }
         if ($matchingUserDeny) {
             $snapshot['outcome'] = 'user_denied';
 
