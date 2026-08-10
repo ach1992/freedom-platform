@@ -415,7 +415,8 @@ final readonly class PaymentMethodEligibilityService
             'method_version' => (int) $method->version,
             'rule_evaluations' => [],
         ];
-        $hardReason = $this->hardBlockReason($connection, $method, $facts, $now);
+        [$hardReason, $healthSnapshot] = $this->hardBlock($connection, $method, $facts, $now);
+        $snapshot['health'] = $healthSnapshot;
         if ($hardReason !== null) {
             $snapshot['outcome'] = $hardReason;
 
@@ -504,31 +505,42 @@ final readonly class PaymentMethodEligibilityService
         return ['eligible', $snapshot];
     }
 
-    private function hardBlockReason(Connection $connection, object $method, array $facts, DateTimeImmutable $now): ?string
+    /**
+     * @return array{0:?string,1:array{observation_id:?int,configuration_snapshot_hash:?string,healthy:?bool,observed_at:?string,expires_at:?string}}
+     */
+    private function hardBlock(Connection $connection, object $method, array $facts, DateTimeImmutable $now): array
     {
-        if (! (bool) $method->enabled || (bool) $method->maintenance) {
-            return 'method_unavailable';
-        }
-        if ($facts['account_status'] !== 'active' || ($facts['account_type'] === 'agent' && $facts['agent_status'] !== 'active')) {
-            return 'subject_blocked';
-        }
-        /** @var object{healthy:int|bool|string, expires_at:string}|null $health */
+        /** @var object{id:int|string, healthy:int|bool|string, observed_at:string, expires_at:string, configuration_snapshot_hash:string}|null $health */
         $health = $connection->table('payment_method_health_observations')
             ->where('method_code', $method->method_code)
             ->orderByDesc('observed_at')
             ->orderByDesc('id')
-            ->first(['healthy', 'expires_at']);
+            ->first(['id', 'healthy', 'observed_at', 'expires_at', 'configuration_snapshot_hash']);
+        $healthSnapshot = [
+            'observation_id' => $health === null ? null : (int) $health->id,
+            'configuration_snapshot_hash' => $health === null ? null : (string) $health->configuration_snapshot_hash,
+            'healthy' => $health === null ? null : (bool) $health->healthy,
+            'observed_at' => $health === null ? null : (string) $health->observed_at,
+            'expires_at' => $health === null ? null : (string) $health->expires_at,
+        ];
+
+        if (! (bool) $method->enabled || (bool) $method->maintenance) {
+            return ['method_unavailable', $healthSnapshot];
+        }
+        if ($facts['account_status'] !== 'active' || ($facts['account_type'] === 'agent' && $facts['agent_status'] !== 'active')) {
+            return ['subject_blocked', $healthSnapshot];
+        }
         if ($health === null) {
-            return 'health_unknown';
+            return ['health_unknown', $healthSnapshot];
         }
         if (! (bool) $health->healthy) {
-            return 'health_unhealthy';
+            return ['health_unhealthy', $healthSnapshot];
         }
         if ($this->databaseDateTimeFromString((string) $health->expires_at) <= $now) {
-            return 'health_expired';
+            return ['health_expired', $healthSnapshot];
         }
 
-        return null;
+        return [null, $healthSnapshot];
     }
 
     /** @return array{0:bool,1:string} */
