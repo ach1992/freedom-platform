@@ -207,6 +207,44 @@ final class PaymentMethodEligibilityFoundationTest extends TestCase
         ));
     }
 
+    public function test_policy_fact_classes_are_evaluated_from_server_owned_quote_and_identity_state(): void
+    {
+        $administratorId = $this->ownerAdministrator();
+        $quote = $this->quoteFor($this->quoteUser('customer'));
+        $service = $this->app->make(PaymentMethodEligibilityService::class);
+        $definitions = [
+            'account_gateway' => new PaymentEligibilityRuleDefinition('account_gateway', 'account_scope', true, PaymentEligibilityRuleEffect::Deny, 10, accountTypes: ['agent']),
+            'tier_gateway' => new PaymentEligibilityRuleDefinition('tier_gateway', 'tier_scope', true, PaymentEligibilityRuleEffect::Deny, 10, tierCodes: ['vip']),
+            'tag_gateway' => new PaymentEligibilityRuleDefinition('tag_gateway', 'tag_scope', true, PaymentEligibilityRuleEffect::Deny, 10, tagCodes: ['trusted']),
+            'identity_gateway' => new PaymentEligibilityRuleDefinition('identity_gateway', 'identity_scope', true, PaymentEligibilityRuleEffect::Deny, 10, requiredIdentityStatus: 'verified'),
+            'agent_gateway' => new PaymentEligibilityRuleDefinition('agent_gateway', 'agent_scope', true, PaymentEligibilityRuleEffect::Deny, 10, requiredAgentStatus: 'active'),
+            'time_gateway' => new PaymentEligibilityRuleDefinition('time_gateway', 'time_scope', true, PaymentEligibilityRuleEffect::Deny, 10, startsAtUtc: '13:00', endsAtUtc: '14:00'),
+            'amount_gateway' => new PaymentEligibilityRuleDefinition('amount_gateway', 'amount_scope', true, PaymentEligibilityRuleEffect::Deny, 10, minimumAmountIrr: 9_999_999_999),
+            'limit_gateway' => new PaymentEligibilityRuleDefinition('limit_gateway', 'limit_scope', true, PaymentEligibilityRuleEffect::Deny, 10, requiresDailyPaymentLimit: true),
+        ];
+        foreach ($definitions as $methodCode => $definition) {
+            $this->configureHealthyMethod($service, $administratorId, $methodCode, 10);
+            $service->configureRule(
+                'eligibility.rule.'.$methodCode.'.000001',
+                $administratorId,
+                $definition,
+                'Server-fact policy coverage.',
+                $this->correlation('policy-'.$methodCode),
+            );
+        }
+
+        $decision = $service->evaluate('eligibility.policy-facts.000001', $quote->userId, $quote->quotePublicId);
+        self::assertSame(['account_gateway', 'agent_gateway', 'amount_gateway', 'identity_gateway', 'tag_gateway', 'tier_gateway', 'time_gateway'], array_column($decision->methods, 'method_code'));
+        $snapshot = (string) DB::table('payment_method_eligibility_decisions')->where('id', $decision->decisionId)->value('configuration_snapshot');
+        foreach (['account_type_mismatch', 'tier_mismatch', 'tag_mismatch', 'identity_mismatch', 'agent_status_mismatch', 'time_window_mismatch', 'amount_mismatch', 'daily_payment_limit_unavailable'] as $reason) {
+            self::assertStringContainsString($reason, $snapshot);
+        }
+        self::assertSame('required_fact_unavailable', DB::table('payment_method_eligibility_decision_methods')
+            ->where('payment_method_eligibility_decision_id', $decision->decisionId)
+            ->where('method_code', 'limit_gateway')
+            ->value('reason_code'));
+    }
+
     public function test_database_guards_reject_forged_scalar_snapshots_and_invalid_clock_times(): void
     {
         $administratorId = $this->ownerAdministrator();
