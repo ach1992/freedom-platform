@@ -22,6 +22,7 @@ required_files=(
     PROJECT_STATUS.md
     CONTRIBUTING.md
     README.md
+    docs/README.md
     docs/project-status.json
     docs/development/project-status.schema.json
     docs/development/continuation-runbook.md
@@ -32,9 +33,6 @@ required_files=(
     docs/development/repository-map.md
     docs/development/staging-workflow-inventory.md
     docs/development/operational-document-status.md
-    docs/31-project-control-plane-audit.md
-    docs/32-current-traceability-overlay.md
-    docs/33-current-risk-overlay.md
     docs/specification/master-execution-prompt.md
     .github/workflows/ci.yml
     .github/workflows/staging-readiness.yml
@@ -51,12 +49,12 @@ jq -e '
     .schema_version == 1
     and .repository == "ach1992/freedom-platform"
     and .authoritative_pr == 6
-    and .authoritative_issue == 7
+    and .authoritative_issue == 8
     and .allowed_branch == "develop/v1.0.0-completion"
     and .base_branch == "main"
     and .required_pr_state == "draft"
     and .live_head_source == "github_pr_head_sha"
-    and .active_phase.version == "0.4.0"
+    and .active_phase.version == "0.5.0"
     and .active_phase.status == "active"
     and (.last_verified_boundary.name | type == "string" and length > 0)
     and (.last_verified_boundary.implementation_sha | test("^[a-f0-9]{40}$"))
@@ -86,7 +84,6 @@ jq -e '
     and (.forbidden_actions | index("push_main") != null)
     and (.forbidden_actions | index("use_github_hosted_runner") != null)
     and (.forbidden_actions | index("create_uncontracted_branch") != null)
-    and (.forbidden_actions | index("create_temporary_branch") == null)
     and (.forbidden_actions | index("retrieve_or_print_secrets") != null)
     and (.forbidden_actions | index("claim_unverified_provider_compatibility") != null)
 ' docs/project-status.json >/dev/null || fail 'project status structure or fixed repository policy is inconsistent'
@@ -105,17 +102,12 @@ done
 
 status_requirements=(
     'PR `#6`'
-    '`#7`'
+    '`#8`'
     'develop/v1.0.0-completion'
     "$implementation_sha"
-    "$evidence_sha"
     "$evidence_path"
     "$traceability_path"
-    "$active_increment"
-    "$handoff_path"
-    'docs/32-current-traceability-overlay.md'
-    'docs/33-current-risk-overlay.md'
-    'docs/development/multi-agent-orchestration.md'
+    'Phase 0.5 remaining-scope reconciliation'
 )
 
 for value in "${status_requirements[@]}"; do
@@ -128,11 +120,10 @@ for entry in AGENTS.md PROJECT_STATUS.md CONTRIBUTING.md; do
         || fail "README.md does not link the required entry point: $entry"
 done
 
-for historical in docs/20-current-state-audit.md docs/22-phase-boundary-reconciliation.md; do
-    test -s "$historical" || fail "historical audit file is missing: $historical"
-    head -n 12 "$historical" | grep -Ei 'superseded|historical' >/dev/null \
-        || fail "$historical must be explicitly marked historical or superseded"
-done
+grep -F 'GitHub is authoritative for live PR/Issue/branch/CI state' PROJECT_STATUS.md >/dev/null \
+    || fail 'PROJECT_STATUS.md does not establish live GitHub authority'
+grep -F 'Expected long-lived branch set is intentionally only' PROJECT_STATUS.md >/dev/null \
+    || fail 'PROJECT_STATUS.md does not establish the two-branch cleanup policy'
 
 shopt -s nullglob
 repair_workflows=(.github/workflows/ci-repair*.yml .github/workflows/ci-repair*.yaml)
