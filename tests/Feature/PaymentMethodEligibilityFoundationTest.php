@@ -66,6 +66,26 @@ final class PaymentMethodEligibilityFoundationTest extends TestCase
         self::assertSame([1, 2], array_column($decision->methods, 'route_order'));
         self::assertSame(1, DB::table('payment_method_eligibility_decisions')->count());
         self::assertSame(2, DB::table('payment_method_eligibility_decision_methods')->count());
+
+        /** @var string $candidateSnapshot */
+        $candidateSnapshot = DB::table('payment_method_eligibility_decision_methods')
+            ->where('payment_method_eligibility_decision_id', $decision->decisionId)
+            ->where('method_code', 'beta_gateway')
+            ->value('configuration_snapshot');
+        /** @var array{health:array{observation_id:int,configuration_snapshot_hash:string,observed_at:string,expires_at:string}} $candidate */
+        $candidate = json_decode($candidateSnapshot, true, 512, JSON_THROW_ON_ERROR);
+        /** @var object{id:int|string,configuration_snapshot_hash:string,observed_at:string,expires_at:string}|null $health */
+        $health = DB::table('payment_method_health_observations')
+            ->where('method_code', 'beta_gateway')
+            ->orderByDesc('observed_at')
+            ->orderByDesc('id')
+            ->first(['id', 'configuration_snapshot_hash', 'observed_at', 'expires_at']);
+        self::assertNotNull($health);
+        self::assertSame((int) $health->id, $candidate['health']['observation_id']);
+        self::assertSame((string) $health->configuration_snapshot_hash, $candidate['health']['configuration_snapshot_hash']);
+        self::assertSame((string) $health->observed_at, $candidate['health']['observed_at']);
+        self::assertSame((string) $health->expires_at, $candidate['health']['expires_at']);
+
         self::assertSame(0, DB::table('payment_intents')->count());
         self::assertSame(0, DB::table('ledger_transactions')->count());
 
