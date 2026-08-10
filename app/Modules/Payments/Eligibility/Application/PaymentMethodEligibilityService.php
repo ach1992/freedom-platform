@@ -18,6 +18,15 @@ use Illuminate\Support\Str;
 use InvalidArgumentException;
 use RuntimeException;
 
+/**
+ * @phpstan-type MethodRow object{id:int|string,method_code:string,version:int|string,enabled:bool|int|string,maintenance:bool|int|string,display_priority:int|string,configuration_snapshot_hash:string,request_payload_hash:string}
+ * @phpstan-type RuleRow object{id:int|string,method_code:string,rule_code:string,version:int|string,enabled:bool|int|string,effect:string,priority:int|string,subject_user_id:int|string|null,account_types:string,tier_codes:string,minimum_amount_irr:int|string|null,maximum_amount_irr:int|string|null,offering_codes:string,product_ids:string,sales_server_ids:string,required_identity_status:string|null,required_agent_status:string|null,starts_at_utc:string|null,ends_at_utc:string|null,requires_contact_otp_provenance:bool|int|string,requires_purchase_history:bool|int|string,requires_daily_payment_limit:bool|int|string,configuration_snapshot_hash:string,request_payload_hash:string}
+ * @phpstan-type HealthRow object{id:int|string,method_code:string,healthy:bool|int|string,observed_at:string,expires_at:string,configuration_snapshot_hash:string,request_payload_hash:string}
+ * @phpstan-type Facts array{account_status:string,account_type:string,agent_status:?string,amount_irr:int,currency:string,identity_status:string,offering_code:string,product_id:int,quote_configuration_snapshot_hash:string,quote_id:int,sales_server_id:int,source_quote_public_id:string,tag_codes:list<string>,tier_code:?string,user_id:int}
+ * @phpstan-type Candidate array{configuration_snapshot_hash:string,evaluation_snapshot:array{health:array{observation_id:?int,configuration_snapshot_hash:?string,healthy:?bool,observed_at:?string,expires_at:?string}}&array<string,mixed>,method_code:string,method_version_id:int,method_version:int,outcome:string,route_order:?int}
+ * @phpstan-type DecisionRow object{id:int|string,public_id:string,decision_key:string,source_quote_public_id:string,user_id:int|string,configuration_snapshot_hash:string,request_payload_hash:string}
+ * @phpstan-type DecisionMethodRow object{method_code:string,method_version:int|string,route_order:int|string,reason_code:string}
+ */
 final readonly class PaymentMethodEligibilityService
 {
     public const MANAGE_PERMISSION = 'payment_providers.manage';
@@ -295,13 +304,17 @@ final readonly class PaymentMethodEligibilityService
                 }
                 $methods = $this->currentMethods($connection);
                 $rules = $this->currentRules($connection);
+                /** @var array<string,list<RuleRow>> $rulesByMethod */
                 $rulesByMethod = [];
                 foreach ($rules as $rule) {
                     $rulesByMethod[$rule->method_code][] = $rule;
                 }
 
+                /** @var array<string,Candidate> $candidates */
                 $candidates = [];
+                /** @var list<array{display_priority:int,method_code:string}> $selected */
                 $selected = [];
+                /** @var list<array<string,mixed>> $methodSnapshots */
                 $methodSnapshots = [];
                 foreach ($methods as $method) {
                     [$outcome, $snapshot] = $this->evaluateMethod(
@@ -429,7 +442,12 @@ final readonly class PaymentMethodEligibilityService
         }
     }
 
-    /** @return array{0:string,1:array<string,mixed>} */
+    /**
+     * @param MethodRow $method
+     * @param list<RuleRow> $rules
+     * @param Facts $facts
+     * @return array{0:string,1:array{health:array{observation_id:?int,configuration_snapshot_hash:?string,healthy:?bool,observed_at:?string,expires_at:?string}}&array<string,mixed>}
+     */
     private function evaluateMethod(Connection $connection, object $method, array $rules, array $facts, DateTimeImmutable $now): array
     {
         $snapshot = [
@@ -530,6 +548,8 @@ final readonly class PaymentMethodEligibilityService
     }
 
     /**
+     * @param MethodRow $method
+     * @param Facts $facts
      * @return array{0:?string,1:array{observation_id:?int,configuration_snapshot_hash:?string,healthy:?bool,observed_at:?string,expires_at:?string}}
      */
     private function hardBlock(Connection $connection, object $method, array $facts, DateTimeImmutable $now): array
@@ -567,7 +587,11 @@ final readonly class PaymentMethodEligibilityService
         return [null, $healthSnapshot];
     }
 
-    /** @return array{0:bool,1:string} */
+    /**
+     * @param RuleRow $rule
+     * @param Facts $facts
+     * @return array{0:bool,1:string}
+     */
     private function ruleMatches(Connection $connection, object $rule, array $facts, DateTimeImmutable $now): array
     {
         if (! (bool) $rule->enabled) {
@@ -628,10 +652,12 @@ final readonly class PaymentMethodEligibilityService
         return [true, 'matched'];
     }
 
-    /** @return array<string,mixed> */
+    /**
+     * @return Facts
+     */
     private function loadFacts(Connection $connection, int $actorUserId, string $quotePublicId, DateTimeImmutable $now): array
     {
-        /** @var object|null $row */
+        /** @var object{quote_id:int|string,quote_public_id:string,user_id:int|string,currency:string,final_price_irr:int|string,expires_at:string,configuration_snapshot_hash:string,account_type:string,account_status:string,offering_code:string,product_id:int|string,sales_server_id:int|string,identity_verification_status:?string,tier_code:?string,agent_status:?string}|null $row */
         $row = $connection->table('quotes as quotes')
             ->join('users as users', 'users.id', '=', 'quotes.user_id')
             ->join('plan_offerings as offerings', 'offerings.id', '=', 'quotes.plan_offering_id')
@@ -687,10 +713,10 @@ final readonly class PaymentMethodEligibilityService
         ];
     }
 
-    /** @return list<object> */
+    /** @return list<MethodRow> */
     private function currentMethods(Connection $connection): array
     {
-        /** @var list<object> $methods */
+        /** @var list<MethodRow> $methods */
         $methods = $connection->table('payment_method_versions as methods')
             ->whereNotExists(function ($query): void {
                 $query->selectRaw('1')
@@ -707,10 +733,10 @@ final readonly class PaymentMethodEligibilityService
         return $methods;
     }
 
-    /** @return list<object> */
+    /** @return list<RuleRow> */
     private function currentRules(Connection $connection): array
     {
-        /** @var list<object> $rules */
+        /** @var list<RuleRow> $rules */
         $rules = $connection->table('payment_method_rule_versions as rules')
             ->whereNotExists(function ($query): void {
                 $query->selectRaw('1')
@@ -750,7 +776,7 @@ final readonly class PaymentMethodEligibilityService
         $this->authorizer->authorize($administratorId, self::MANAGE_PERMISSION);
     }
 
-    /** @param array<string,mixed> $facts */
+    /** @param Facts $facts */
     private function assertReplayAccess(array $facts): void
     {
         if ($facts['account_status'] !== 'active'
@@ -759,6 +785,7 @@ final readonly class PaymentMethodEligibilityService
         }
     }
 
+    /** @param DecisionRow $row */
     private function replayDecision(Connection $connection, object $row, string $requestHash): PaymentEligibilityDecisionReceipt
     {
         if (! hash_equals((string) $row->request_payload_hash, $requestHash)) {
@@ -768,6 +795,7 @@ final readonly class PaymentMethodEligibilityService
         return $this->decisionReceipt($connection, $row, true);
     }
 
+    /** @return DecisionRow|null */
     private function decisionByKey(Connection $connection, string $decisionKey, bool $lock): ?object
     {
         $query = $connection->table('payment_method_eligibility_decisions')->where('decision_key', $decisionKey);
@@ -778,11 +806,13 @@ final readonly class PaymentMethodEligibilityService
         return $query->first();
     }
 
+    /** @return DecisionRow|null */
     private function decisionById(Connection $connection, int $decisionId): ?object
     {
         return $connection->table('payment_method_eligibility_decisions')->where('id', $decisionId)->first();
     }
 
+    /** @param MethodRow $row */
     private function methodReceipt(object $row, bool $replayed): PaymentMethodVersionReceipt
     {
         return new PaymentMethodVersionReceipt(
@@ -797,6 +827,7 @@ final readonly class PaymentMethodEligibilityService
         );
     }
 
+    /** @param RuleRow $row */
     private function ruleReceipt(object $row, bool $replayed): PaymentEligibilityRuleVersionReceipt
     {
         return new PaymentEligibilityRuleVersionReceipt(
@@ -809,6 +840,7 @@ final readonly class PaymentMethodEligibilityService
         );
     }
 
+    /** @param HealthRow $row */
     private function healthReceipt(object $row, bool $replayed): PaymentMethodHealthReceipt
     {
         return new PaymentMethodHealthReceipt(
@@ -821,9 +853,10 @@ final readonly class PaymentMethodEligibilityService
         );
     }
 
+    /** @param DecisionRow $row */
     private function decisionReceipt(Connection $connection, object $row, bool $replayed): PaymentEligibilityDecisionReceipt
     {
-        /** @var list<object> $methods */
+        /** @var list<DecisionMethodRow> $methods */
         $methods = $connection->table('payment_method_eligibility_decision_methods')
             ->where('payment_method_eligibility_decision_id', $row->id)
             ->whereNotNull('route_order')
