@@ -443,9 +443,9 @@ final readonly class PaymentMethodEligibilityService
     }
 
     /**
-     * @param MethodRow $method
-     * @param list<RuleRow> $rules
-     * @param Facts $facts
+     * @param  MethodRow  $method
+     * @param  list<RuleRow>  $rules
+     * @param  Facts  $facts
      * @return array{0:string,1:array{health:array{observation_id:?int,configuration_snapshot_hash:?string,healthy:?bool,observed_at:?string,expires_at:?string}}&array<string,mixed>}
      */
     private function evaluateMethod(Connection $connection, object $method, array $rules, array $facts, DateTimeImmutable $now): array
@@ -548,8 +548,8 @@ final readonly class PaymentMethodEligibilityService
     }
 
     /**
-     * @param MethodRow $method
-     * @param Facts $facts
+     * @param  MethodRow  $method
+     * @param  Facts  $facts
      * @return array{0:?string,1:array{observation_id:?int,configuration_snapshot_hash:?string,healthy:?bool,observed_at:?string,expires_at:?string}}
      */
     private function hardBlock(Connection $connection, object $method, array $facts, DateTimeImmutable $now): array
@@ -588,8 +588,8 @@ final readonly class PaymentMethodEligibilityService
     }
 
     /**
-     * @param RuleRow $rule
-     * @param Facts $facts
+     * @param  RuleRow  $rule
+     * @param  Facts  $facts
      * @return array{0:bool,1:string}
      */
     private function ruleMatches(Connection $connection, object $rule, array $facts, DateTimeImmutable $now): array
