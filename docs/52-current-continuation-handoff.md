@@ -1,166 +1,116 @@
 # Current Continuation Handoff
 
-**Status:** MASTER transition checkpoint after accepted W-002 and W-003 integration.  
-**Date:** 2026-08-09.  
-**Integration PR:** Draft PR `#6`, base `main`, head branch `develop/v1.0.0-completion`.  
-**Live-head rule:** before every MASTER repository write, Worker dispatch, review or merge, fetch PR `#6` and use its exact live `head_sha`; never continue from a copied SHA in this file or Chat.
+**Status:** clean MASTER handoff for a brand-new ChatGPT conversation.  
+**Date:** 2026-08-10.  
+**Repository:** `ach1992/freedom-platform`.  
+**Integration PR:** Draft PR `#6`, head `develop/v1.0.0-completion`, base `main`.
 
-## Read first in a new MASTER session
+## First rule
 
-1. `AGENTS.md`;
-2. `PROJECT_STATUS.md`;
-3. `docs/project-status.json`;
-4. `docs/development/multi-agent-orchestration.md`;
-5. `docs/development/continuation-runbook.md`;
-6. `docs/development/github-actions-runner-policy.md` and `docs/development/ci-runner-contract.md`;
-7. this file;
-8. `docs/32-current-traceability-overlay.md` and `docs/33-current-risk-overlay.md`;
-9. active Phase 0.4 gate: `docs/44-phase-0.4-pasarguard-live-execution-handoff.md` and `docs/41-phase-0.4-provider-live-acceptance-matrix.md`;
-10. latest bounded Phase 0.5 evidence/traceability, especially `docs/58-phase-0.5-promotion-referral-pricing-rule-traceability.md`, `docs/60-phase-0.5-promotion-usage-reservation-traceability.md`, `docs/phase-0.5-agent-pricing-resolution-traceability.md` and their evidence files;
-11. live GitHub Issues `#7` and `#8`, Draft PR `#24`, open PRs/branches, and recent closed Worker Issues/PRs `#25/#26`, `#27/#30`, `#28/#29`.
+Chat history is not project state. A replacement MASTER must invoke the `multi-agent-project-orchestrator` skill, read repository governance, then fetch live GitHub state. Before any write/dispatch/review/merge, fetch PR `#6` and use its exact current `head_sha`; never trust the copied SHA below as live authority.
 
-Then inspect exact-head PR `#6` CI before deciding whether implementation dispatch is allowed.
+## Last accepted product baseline
 
-## Transition checkpoint facts
+Immediately before this handoff-control documentation refresh, the accepted integration product head was:
 
-The product integration checkpoint immediately after the W-003 merge is:
+- `76ed06bbb272dbed971697587ca76f1785313dd3`;
+- PR `#6` CI `31345041706` / `#1402` — all five mandatory jobs PASS;
+- full suite **463 tests / 3057 assertions**;
+- artifact `test-evidence-31345041706`, ID `9047072891`;
+- independent SHA-256 `785c67bc39fba3565f861e35f6e2e599d6309420004ecf01329f840c2d86f6f2`.
 
-- `develop/v1.0.0-completion` product baseline `fae391569e50a2f318e2ca06aa522605d385ce2a`;
-- Draft PR `#6` post-merge CI `31295225638` / `#1313` — all five mandatory jobs success;
-- full suite **425 tests / 2623 assertions**;
-- artifact `test-evidence-31295225638`, ID `9032748596`;
-- independent SHA-256 `1014ff3150301174f4637f99528652fabd5ab197d9ac9ce9fb3bc361764ab6d4`, matching uploader digest.
+This handoff refresh itself advances the integration branch. Therefore the replacement MASTER must fetch the new PR `#6` head and verify its latest exact-head CI before dispatching implementation work.
 
-After that product checkpoint the outgoing MASTER intentionally made project-control documentation/policy commits on the integration branch. Therefore **`fae391...` is not the next Worker `BASE_SHA`**. A replacement MASTER must fetch PR `#6`, discover the final transition-control head, require its latest five-job CI to be green, and use only that live accepted head for future dispatch.
+## Recent accepted Worker integrations
 
-No implementation Worker is intentionally active/dispatched at the transition checkpoint. Do not infer Worker state from old branches alone; reconcile GitHub Issues, PRs, comments, branches and CI.
+### W-004 — completed
 
-## Integration and Worker invariants
+- Issue `#31`, PR `#35`;
+- agent-pricing consumption in immutable Quotes;
+- replay authorization covers both matched-agent override and persisted agent-pricing no-match/base-fallback bindings;
+- merged into integration.
 
-- PR `#6` remains open and Draft; base `main`, head `develop/v1.0.0-completion`;
-- never merge PR `#6`, mark it Ready, enable auto-merge, rewrite history, force-push or push directly to `main`;
-- substantial implementation uses contracted `agent/<issue-number>-<short-slug>` branches created from a recorded live integration `BASE_SHA`;
-- each Worker has one active Task Contract, one isolated writable worktree/equivalent environment, one branch and one PR targeting `develop/v1.0.0-completion`;
-- Workers never self-merge or share writable worktrees;
-- uncontracted temporary branches are forbidden;
-- `ops/provider-live-dispatch-bootstrap` and `safety/main-2026-08-08-pre-provider-bootstrap` remain retained exceptions until PR `#24` cleanup conditions are satisfied;
-- generic Worker CI is same-repository, self-hosted, secret-free and non-mutating;
-- protected provider/live workflows remain separate, manual and guarded;
-- accepted Worker increments require exact reviewed HEAD, mandatory CI/evidence, MASTER review, history-preserving merge and post-merge integration CI;
-- High/Critical changes require explicit owner approval unless that exact risk was pre-authorized;
-- final PR `#6` -> `main` always requires explicit owner release acceptance;
-- secrets/credentials/private provider material never enter repository text, Issues, PR descriptions/comments, evidence, logs or Chat.
+### W-007 — completed bounded contract
 
-## Throughput mode for the replacement MASTER
+- Issue `#34`, PR `#37`;
+- manual + verified Nobitex USDT BEP20 rate/amount quote foundation and standard authorization seeding;
+- Tetherland runnable integration and complete `USDT-002` were **not** accepted by that PR;
+- merged into integration;
+- Issue `#34` may remain open for later bounded USDT work.
 
-The repository is now explicitly configured for safe higher throughput in `docs/development/multi-agent-orchestration.md`.
+### W-006 — completed
 
-Operational direction:
+- Issue `#33`, PR `#38`;
+- secure `PRO-002` benefit-code lifecycle;
+- dedicated/versioned BenefitCodes lookup-key rotation and replay semantics;
+- canonical numeric ledger-account lock ordering;
+- wallet promotional-credit exactly-once effect plus immutable free-service/discount-grant entitlements;
+- merged and post-merge CI green; Issue `#33` closed completed.
 
-- target **4–5 concurrent implementation Workers** when the fresh graph contains that many genuinely independent READY capabilities;
-- preserve one active Task Contract per Worker, but make each contract a **larger coherent capability slice** rather than a micro-task where safe;
-- bundle tightly coupled domain/application/schema/authorization/tests/evidence work under one Worker ownership boundary when separation creates no real parallel value;
-- do not split work simply to fill Worker slots, and do not serialize truly independent READY work;
-- review/integrate a Worker immediately when it becomes ready; do not wait for the rest of a wave;
-- after one merge, revalidate only Workers materially affected by the changed target; avoid unnecessary rebases/target-sync churn;
-- if fewer than five tasks are safely READY, stabilize the smallest shared prerequisite that unlocks the next meaningful parallel wave instead of manufacturing filler tasks;
-- do not weaken financial, security, authorization, concurrency, migration, provider or release gates for speed;
-- the single self-hosted runner can serialize CI while 4–5 Workers still implement concurrently.
+## W-005 / PAY-001 — owner-cancelled, never recover
 
-If repeated cycles mostly produce contracts/scaffolding/evidence with little capability progress, the MASTER should enlarge the next safe Task Contracts rather than continuing orchestration fragmentation.
+The Owner explicitly cancelled W-005 after repeated blocker cycles and requested that this task not be attempted again in the current project plan.
 
-## Active Phase 0.4 protected/human gate
+Authoritative state:
 
-Phase `0.4.0` / Issue `#7` remains active and **not closed**.
+- Issue `#32`: closed `not_planned`, title marked `CANCELLED / DO NOT REDISPATCH`;
+- PR `#36`: closed/unmerged, archived audit history;
+- PR `#39`: accidental closed/unmerged audit history;
+- PR `#40`: closed/unmerged, marked `CANCELLED / DO NOT MERGE`;
+- `agent/32-payment-method-eligibility` and `agent/32-payment-method-eligibility-r2`: obsolete audit refs only;
+- none of the W-005/PAY-001 implementation commits were merged into `develop/v1.0.0-completion`.
 
-PasarGuard `v5.2.1` guarded harness is accepted. Actual deployment execution remains behind the default-branch bootstrap:
+**Mandatory recovery rule:** do not reopen/recover Issue `#32`, PR `#36/#40`, W-005, or create a replacement PAY-001 Worker. Only an explicit future Owner decision reversing this cancellation may change that rule.
 
-- Draft PR `#24`: `ops/provider-live-dispatch-bootstrap` -> `main`;
-- checkpoint inspection: open/Draft/mergeable, head `f2d2b6d538b16fe08787f6248ec425dbd19c8321`, base `1227cce28aedd2d799f2cd510891309deaacd0fb`;
-- older CI `31240183151` / `#1129` passed preflight, secret scan, static and MariaDB/Redis but failed dependency/license policy;
-- safety branch remains retained.
+Do not claim `PAY-001` completed. The original Phase 0.5 specification still contains it, so it is an explicit owner-cancelled/unresolved requirement gap rather than accepted implementation evidence.
 
-Do not merge, abandon, rewrite or delete this path from stale assumptions. Re-fetch PR `#24` before any decision. Once bootstrap is deliberately accepted, PasarGuard live execution remains a protected manual workflow action using existing secret references; never request values. Coordinator adoption/idempotency, timeout/5xx/429 uncertainty and Target activation remain separate acceptance rows. Marzban `v0.8.4` deployment acceptance remains a final-release gate.
+## Open PRs at handoff
 
-## Accepted parallel Phase 0.5 chain
+The open-PR reconciliation at handoff found only:
 
-Phase `0.5.0` / Issue `#8` remains open. The accepted bounded chain is:
+1. PR `#6` — long-running Draft integration PR; never merge/mark Ready/auto-merge without final release acceptance.
+2. PR `#24` — Draft protected PasarGuard live-acceptance bootstrap to `main`; current inspected head before handoff was `f2d2b6d538b16fe08787f6248ec425dbd19c8321`, but re-fetch it before any decision.
 
-1. Financial Ledger Foundation — `docs/45-phase-0.5-financial-ledger-traceability.md`;
-2. Wallet Holds / Available Balance / Capture / Release — `docs/46-phase-0.5-wallet-holds-traceability.md`;
-3. Wallet Reconciliation Snapshots / Expired-Hold Cleanup — `docs/48-phase-0.5-wallet-reconciliation-traceability.md`;
-4. Wallet Maintenance Operations — `docs/49-phase-0.5-wallet-maintenance-traceability.md`;
-5. Stable Wallet Transfer (`WAL-003`) — `docs/51-phase-0.5-wallet-transfer-traceability.md`;
-6. Dedicated Wallet Contention Verification — `docs/53-phase-0.5-wallet-contention-traceability.md`;
-7. Wallet Refund / Reversal Foundation (`WAL-004`) — `docs/54-phase-0.5-wallet-refund-traceability.md`;
-8. Wallet Correction / Approval Foundation (`WAL-005`) — `docs/55-phase-0.5-wallet-correction-traceability.md`;
-9. Payment Intent + external cash-wallet top-up (`PAY-002`, `PAY-003`, `WAL-001`) — `docs/56-phase-0.5-payment-intent-wallet-top-up-traceability.md`;
-10. Deterministic Pricing / Immutable Quote (`BUY-002`) — `docs/57-phase-0.5-quote-pricing-traceability.md`;
-11. W-001 stored promotion/referral pricing-rule resolution — `docs/58-phase-0.5-promotion-referral-pricing-rule-traceability.md`;
-12. W-002 promotion usage reservation/capacity + explicit release — `docs/60-phase-0.5-promotion-usage-reservation-traceability.md`;
-13. W-003 stored most-specific agent-pricing resolver — `docs/phase-0.5-agent-pricing-resolution-traceability.md`.
+No normal implementation Worker is intentionally active at this handoff.
 
-### W-001 accepted boundary
+## Phase state
 
-Stored typed promotion/referral pricing-rule identity and immutable versions/resolutions, deterministic qualification/precedence, explicit no-match, administrator-authorized rule management, legitimate customer/agent subject authorization, exact replay/conflict and MariaDB integrity/immutability are accepted. Caller-observed usage values are not authoritative counters. Promotion usage lifecycle and referral reward effects were not accepted by W-001.
+- Phase `0.4.0` / Issue `#7`: open; protected PasarGuard/live provider acceptance remains separate and human-gated. Marzban deployment acceptance remains a final-release gate.
+- Phase `0.5.0` / Issue `#8`: open; accepted ledger/wallet/Quote/promotion/agent-pricing plus W-004/W-006/W-007 bounded foundations remain reusable. `PAY-001` is owner-cancelled/unresolved and must not be re-dispatched.
+- Phase `0.6.0` / Issue `#9`: owns Order/provisioning/Service lifecycle.
 
-### W-002 accepted boundary
+Current accepted Payment Intent remains `wallet_top_up` only and is not purchase authority. Browser return never proves capture; no paid provisioning before authoritative capture; financial/security/concurrency invariants remain release-blocking.
 
-Issue `#27` / PR `#30` Contract Revision 2 is completed. Stable `pricing_rule_id` is the authoritative promotion capacity/serialization domain across immutable versions. Reservation and explicit release, cross-user fail-closed behavior, Quote read-only binding and real-MariaDB final-slot/cross-version contention are accepted.
+## Required recovery sequence in the new chat
 
-Do **not** claim successful-payment promotion redemption/finalization or automatic Payment Intent-driven release. The current accepted Payment Intent is authoritative for `wallet_top_up` only and cannot be repurposed as purchase authority. Genuine purchase payment is Order-bound in the target architecture.
+1. Invoke `multi-agent-project-orchestrator` and operate as MASTER.
+2. Read `AGENTS.md`.
+3. Read `PROJECT_STATUS.md` and `docs/project-status.json`.
+4. Read `docs/development/multi-agent-orchestration.md` and `docs/development/continuation-runbook.md`.
+5. Read this handoff and current traceability/risk overlays.
+6. Fetch PR `#6`; confirm open/Draft, base `main`, head `develop/v1.0.0-completion`; record exact live `head_sha`.
+7. Inspect CI for that exact head/merge candidate and require all five mandatory jobs green before dispatch.
+8. Fetch Issues `#7` and `#8`, PR `#24`, and enumerate all currently open PRs/Issues/branches.
+9. Reconcile stale branches against Issues/PRs. Treat the two W-005 branches as obsolete audit-only refs, not active work.
+10. Recompute dependency/conflict graph from the live accepted head.
+11. Continue with genuinely READY coherent work, but **exclude PAY-001/W-005** unless the Owner explicitly reverses cancellation.
+12. Require independent review + explicit owner approval for High/Critical merges; after each merge verify PR `#6` post-merge CI.
+13. Keep PR `#6` Draft until explicit final release acceptance.
+14. Persist the next durable checkpoint before ending the new MASTER cycle.
 
-### W-003 accepted boundary
+## Human relay state
 
-Issue `#28` / PR `#29` Contract Revision 1 is completed. Stored/versioned agent-pricing profile/rule identity, deterministic most-specific action/offering/server/product override selection, integer IRR, equal-specificity fail-closed behavior, explicit no-match, active-agent/current-profile authorization, discount-combination snapshot and immutable accepted resolution are verified.
-
-The exact W-003 implementation/evidence lifecycle remains documented as implementation `552fa7e30f3f575e1697f176d07fe66d0372e2ee` / CI `#1293` and evidence `cfeb56a837a6ae85c098605b7e37a532a7ddb65d` / CI `#1296`, evidence-head **407 / 2543**, artifact `9030991362`, digest `b4d4535d7fcce4d17e003f8d2b670dc29f6d74ec4d8c5daa6656ff6b51679dd7`.
-
-Quote does **not** yet consume the W-003 resolver, so complete end-to-end `AGT-005` remains open.
-
-## Remaining Phase 0.5 capability areas
-
-Do not pre-assign these from this document. The new MASTER must recompute dependencies/conflicts from the live final transition head. Candidate capability areas include:
-
-- full `AGT-005` Quote consumption/integration;
-- `PAY-001` gateway/payment-method eligibility and fallback policy;
-- remaining `PRO-001` successful-payment redemption/release orchestration, but only after the correct purchase-payment authority exists;
-- `PRO-002` gift/service/wallet code lifecycle;
-- `REF-001` reward pending/release/reversal/payout/limits/anti-abuse/notification lifecycle;
-- provider/payment-method packages, callbacks, reconciliation and provider-native refund behavior;
-- other Issue `#8` work proven independent by the live graph.
-
-`BUY-001` Order creation/payment sequence, provisioning and Service lifecycle remain Phase `0.6.0` ownership. Do not pull them into Phase 0.5 solely to create Worker parallelism.
-
-## Mandatory recovery sequence for a brand-new MASTER chat
-
-1. invoke the `multi-agent-project-orchestrator` skill and operate as MASTER only;
-2. read `AGENTS.md`, `PROJECT_STATUS.md`, `docs/project-status.json`, `docs/development/multi-agent-orchestration.md`, `docs/development/continuation-runbook.md`, this handoff and the current overlays;
-3. fetch PR `#6`; verify it is open/Draft, base `main`, head `develop/v1.0.0-completion`, and record its exact live `head_sha`;
-4. inspect CI associated with that exact head/PR merge candidate and require all five mandatory jobs green before implementation dispatch;
-5. inspect Issues `#7` and `#8`, PR `#24`, all open Worker PRs/issues/branches, and recent completed W-001/W-002/W-003 records;
-6. reconcile any stale/inconsistent GitHub or repository state; do not trust this handoff's copied SHA as live truth;
-7. build the fresh dependency graph, pairwise conflict graph and risk classification for remaining Phase 0.5 work while preserving the Phase 0.4 protected gate and Phase 0.6 ownership boundary;
-8. select up to five genuinely READY **coherent capability slices**, preferring 4–5 parallel Workers if safe;
-9. create Task Contract Issues/comments and branches only when dispatching, all from the exact accepted live `BASE_SHA`; do not pre-create branches for blocked tasks;
-10. generate exact **NEW WORKER CHAT** prompts for the human relay;
-11. as Workers finish, review and integrate each ready Worker without waiting for the whole wave; after every merge, verify PR `#6` integration CI and recompute only affected readiness/conflict edges;
-12. persist a durable checkpoint so another MASTER can recover with zero Chat history.
-
-The replacement MASTER may proceed from recovery directly into dispatch of the safe next wave without another planning-only confirmation, but High/Critical merge approvals remain human gates and final PR `#6` is never merged without explicit final release acceptance.
+`NO WORKER ACTION REQUIRED` for the old W-004/W-005/W-006/W-007 chats. Start a new MASTER chat and recover from repository + GitHub.
 
 ## Recovery success test
 
-A new MASTER with no access to the previous Chat must be able to answer from repository + GitHub alone:
+A new MASTER with zero access to this conversation must be able to determine from repository + GitHub:
 
-- what is the exact current integration head and CI status?;
-- which phases remain open and why?;
-- what bounded Phase 0.5 foundations are accepted and what do they explicitly not prove?;
-- are any Workers actually active, blocked, in review or merge-ready?;
-- what is the current PR `#24` protected gate state?;
-- which remaining capability slices are independently READY and what files/contracts could conflict?;
-- what is the exact `BASE_SHA` for the next dispatch?;
-- why PR `#6` must remain Draft?;
-- how to target 4–5 Workers without creating micro-task fragmentation or weakening safety?
-
-If any of those cannot be reconstructed, reconcile durable state before dispatching implementation work.
+- live PR `#6` head and CI;
+- accepted W-004/W-006/W-007 integrations;
+- W-005 cancellation and the prohibition on re-dispatch;
+- open PR `#24` protected gate;
+- Issues `#7/#8` phase state;
+- no active implementation Worker at handoff;
+- the next READY work only after recomputing the live graph;
+- why PR `#6` stays Draft.
