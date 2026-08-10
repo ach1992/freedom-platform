@@ -2,7 +2,7 @@ name: freedom-platform-ci
 
 services:
   mariadb:
-    image: mariadb:11.4
+    image: mariadb:${MARIADB_VERSION:-11.4}
     environment:
       MARIADB_DATABASE: freedom_platform_ci
       MARIADB_USER: freedom_ci
