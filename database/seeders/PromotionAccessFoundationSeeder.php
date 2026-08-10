@@ -10,7 +10,7 @@ use RuntimeException;
 
 final class PromotionAccessFoundationSeeder extends Seeder
 {
-    /** @requirement PRO-001 REF-001 ACL-001 ACL-002 SEC-002 */
+    /** @requirement PRO-001 PRO-002 REF-001 ACL-001 ACL-002 SEC-002 */
     public function run(): void
     {
         $now = now('UTC');
@@ -23,10 +23,19 @@ final class PromotionAccessFoundationSeeder extends Seeder
                 'created_at' => $now,
                 'updated_at' => $now,
             ],
+            [
+                'code' => 'promotions.benefit_codes.manage',
+                'module' => 'promotions',
+                'risk_level' => 'high',
+                'requires_approval' => false,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
         ], ['code'], ['module', 'risk_level', 'requires_approval', 'updated_at']);
 
         foreach ([
             ['sales_content', 'promotions.rules.manage'],
+            ['sales_content', 'promotions.benefit_codes.manage'],
         ] as [$roleCode, $permissionCode]) {
             $roleId = DB::table('roles')->where('code', $roleCode)->value('id');
             $permissionId = DB::table('permissions')->where('code', $permissionCode)->value('id');
