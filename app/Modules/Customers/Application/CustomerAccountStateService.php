@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Customers\Application;
 
+use App\Modules\AccessControl\Application\AdministratorPermissionAuthorizer;
 use App\Modules\Identity\Domain\AccountStatus;
 use App\Shared\Application\Clock;
 use Illuminate\Database\Connection;
@@ -15,8 +16,11 @@ final readonly class CustomerAccountStateService
 {
     private const ACTION = 'customer.status.transition';
 
+    private const PERMISSION = 'identity.customers.manage_status';
+
     public function __construct(
         private DatabaseManager $database,
+        private AdministratorPermissionAuthorizer $authorizer,
         private CustomerMutationAudit $audit,
         private Clock $clock,
     ) {}
@@ -32,11 +36,6 @@ final readonly class CustomerAccountStateService
         }
 
         $context->requireAdministrator();
-        $existing = $this->audit->existing(self::ACTION, $userId, $context->requestFingerprint);
-
-        if ($existing !== null) {
-            return $existing;
-        }
 
         try {
             return $this->database->connection()->transaction(
@@ -63,13 +62,16 @@ final readonly class CustomerAccountStateService
         CustomerChangeContext $context,
     ): CustomerMutationReceipt {
         $connection = $this->database->connection();
+        $administratorId = $context->requireAdministrator();
+        $this->assertActiveAdministrator($connection, $administratorId);
+        $this->authorizer->authorize($administratorId, self::PERMISSION);
+
         $existing = $this->audit->existing(self::ACTION, $userId, $context->requestFingerprint, true);
 
         if ($existing !== null) {
             return $existing;
         }
 
-        $this->assertActiveAdministrator($connection, $context->requireAdministrator());
 
         /** @var object{account_status: string}|null $user */
         $user = $connection->table('users')
