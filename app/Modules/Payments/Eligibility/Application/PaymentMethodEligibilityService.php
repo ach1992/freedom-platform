@@ -23,7 +23,11 @@ use RuntimeException;
  * @phpstan-type RuleRow object{id:int|string,method_code:string,rule_code:string,version:int|string,enabled:bool|int|string,effect:string,priority:int|string,subject_user_id:int|string|null,account_types:string,tier_codes:string,minimum_amount_irr:int|string|null,maximum_amount_irr:int|string|null,offering_codes:string,product_ids:string,sales_server_ids:string,required_identity_status:string|null,required_agent_status:string|null,starts_at_utc:string|null,ends_at_utc:string|null,requires_contact_otp_provenance:bool|int|string,requires_purchase_history:bool|int|string,requires_daily_payment_limit:bool|int|string,configuration_snapshot_hash:string,request_payload_hash:string}
  * @phpstan-type HealthRow object{id:int|string,method_code:string,healthy:bool|int|string,observed_at:string,expires_at:string,configuration_snapshot_hash:string,request_payload_hash:string}
  * @phpstan-type Facts array{account_status:string,account_type:string,agent_status:?string,amount_irr:int,currency:string,identity_status:string,offering_code:string,product_id:int,quote_configuration_snapshot_hash:string,quote_id:int,sales_server_id:int,source_quote_public_id:string,tag_codes:list<string>,tier_code:?string,user_id:int}
- * @phpstan-type Candidate array{configuration_snapshot_hash:string,evaluation_snapshot:array{health:array{observation_id:?int,configuration_snapshot_hash:?string,healthy:?bool,observed_at:?string,expires_at:?string}}&array<string,mixed>,method_code:string,method_version_id:int,method_version:int,outcome:string,route_order:?int}
+ * @phpstan-type HealthSnapshot array{observation_id:?int,configuration_snapshot_hash:?string,healthy:?bool,observed_at:?string,expires_at:?string}
+ * @phpstan-type EvaluationSnapshot array{health:HealthSnapshot,outcome:string}&array<string,mixed>
+ * @phpstan-type Candidate array{configuration_snapshot_hash:string,evaluation_snapshot:EvaluationSnapshot,method_code:string,method_version_id:int,method_version:int,outcome:string,route_order:?int}
+ * @phpstan-type RuleReceiptRow object{id:int|string,method_code:string,rule_code:string,version:int|string,configuration_snapshot_hash:string,request_payload_hash:string}
+ * @phpstan-type HealthReceiptRow object{id:int|string,method_code:string,healthy:bool|int|string,observed_at:string,expires_at:string,request_payload_hash:string}
  * @phpstan-type DecisionRow object{id:int|string,public_id:string,decision_key:string,source_quote_public_id:string,user_id:int|string,configuration_snapshot_hash:string,request_payload_hash:string}
  * @phpstan-type DecisionMethodRow object{method_code:string,method_version:int|string,route_order:int|string,reason_code:string}
  */
@@ -64,8 +68,11 @@ final readonly class PaymentMethodEligibilityService
 
         return $this->database->connection()->transaction(function (Connection $connection) use ($mutationKey, $administratorId, $methodCode, $enabled, $maintenance, $displayPriority, $reason, $correlationId, $requestHash): PaymentMethodVersionReceipt {
             $this->assertActiveAuthorizedAdministrator($connection, $administratorId);
-            /** @var object{id:int|string, request_payload_hash:string}|null $existing */
-            $existing = $connection->table('payment_method_versions')->where('mutation_key', $mutationKey)->lockForUpdate()->first();
+            /** @var MethodRow|null $existing */
+            $existing = $connection->table('payment_method_versions')->where('mutation_key', $mutationKey)->lockForUpdate()->first([
+                'id', 'method_code', 'version', 'enabled', 'maintenance', 'display_priority',
+                'configuration_snapshot_hash', 'request_payload_hash',
+            ]);
             if ($existing !== null) {
                 if (! hash_equals((string) $existing->request_payload_hash, $requestHash)) {
                     throw new RuntimeException('Payment method mutation key conflict.');
@@ -107,7 +114,11 @@ final readonly class PaymentMethodEligibilityService
                 'correlation_id' => $correlationId,
                 'created_at' => $now,
             ]);
-            $created = $connection->table('payment_method_versions')->where('id', $id)->first();
+            /** @var MethodRow|null $created */
+            $created = $connection->table('payment_method_versions')->where('id', $id)->first([
+                'id', 'method_code', 'version', 'enabled', 'maintenance', 'display_priority',
+                'configuration_snapshot_hash', 'request_payload_hash',
+            ]);
             if ($created === null) {
                 throw new RuntimeException('Payment method configuration could not be loaded.');
             }
@@ -131,8 +142,10 @@ final readonly class PaymentMethodEligibilityService
 
         return $this->database->connection()->transaction(function (Connection $connection) use ($mutationKey, $administratorId, $definition, $reason, $correlationId, $configuration, $requestHash): PaymentEligibilityRuleVersionReceipt {
             $this->assertActiveAuthorizedAdministrator($connection, $administratorId);
-            /** @var object{id:int|string, request_payload_hash:string}|null $existing */
-            $existing = $connection->table('payment_method_rule_versions')->where('mutation_key', $mutationKey)->lockForUpdate()->first();
+            /** @var RuleReceiptRow|null $existing */
+            $existing = $connection->table('payment_method_rule_versions')->where('mutation_key', $mutationKey)->lockForUpdate()->first([
+                'id', 'method_code', 'rule_code', 'version', 'configuration_snapshot_hash', 'request_payload_hash',
+            ]);
             if ($existing !== null) {
                 if (! hash_equals((string) $existing->request_payload_hash, $requestHash)) {
                     throw new RuntimeException('Payment eligibility rule mutation key conflict.');
@@ -198,7 +211,10 @@ final readonly class PaymentMethodEligibilityService
                 ]);
             }
 
-            $created = $connection->table('payment_method_rule_versions')->where('id', $id)->first();
+            /** @var RuleReceiptRow|null $created */
+            $created = $connection->table('payment_method_rule_versions')->where('id', $id)->first([
+                'id', 'method_code', 'rule_code', 'version', 'configuration_snapshot_hash', 'request_payload_hash',
+            ]);
             if ($created === null) {
                 throw new RuntimeException('Payment eligibility rule configuration could not be loaded.');
             }
@@ -234,8 +250,10 @@ final readonly class PaymentMethodEligibilityService
 
         return $this->database->connection()->transaction(function (Connection $connection) use ($observationKey, $administratorId, $methodCode, $healthy, $expiresAt, $reason, $correlationId, $observedAt, $requestHash): PaymentMethodHealthReceipt {
             $this->assertActiveAuthorizedAdministrator($connection, $administratorId);
-            /** @var object{id:int|string, request_payload_hash:string}|null $existing */
-            $existing = $connection->table('payment_method_health_observations')->where('observation_key', $observationKey)->lockForUpdate()->first();
+            /** @var HealthReceiptRow|null $existing */
+            $existing = $connection->table('payment_method_health_observations')->where('observation_key', $observationKey)->lockForUpdate()->first([
+                'id', 'method_code', 'healthy', 'observed_at', 'expires_at', 'request_payload_hash',
+            ]);
             if ($existing !== null) {
                 if (! hash_equals((string) $existing->request_payload_hash, $requestHash)) {
                     throw new RuntimeException('Payment method health observation key conflict.');
@@ -270,7 +288,10 @@ final readonly class PaymentMethodEligibilityService
                 'correlation_id' => $correlationId,
                 'created_at' => $this->databaseDateTime($observedAt),
             ]);
-            $created = $connection->table('payment_method_health_observations')->where('id', $id)->first();
+            /** @var HealthReceiptRow|null $created */
+            $created = $connection->table('payment_method_health_observations')->where('id', $id)->first([
+                'id', 'method_code', 'healthy', 'observed_at', 'expires_at', 'request_payload_hash',
+            ]);
             if ($created === null) {
                 throw new RuntimeException('Payment method health observation could not be loaded.');
             }
@@ -325,15 +346,17 @@ final readonly class PaymentMethodEligibilityService
                         $now,
                     );
                     $methodSnapshots[] = $snapshot;
-                    $candidates[(string) $method->method_code] = [
+                    /** @var Candidate $candidate */
+                    $candidate = [
                         'configuration_snapshot_hash' => (string) $method->configuration_snapshot_hash,
                         'evaluation_snapshot' => $snapshot,
                         'method_code' => (string) $method->method_code,
                         'method_version_id' => (int) $method->id,
                         'method_version' => (int) $method->version,
-                        'outcome' => (string) $snapshot['outcome'],
+                        'outcome' => $snapshot['outcome'],
                         'route_order' => null,
                     ];
+                    $candidates[(string) $method->method_code] = $candidate;
                     if ($outcome === 'eligible') {
                         $selected[] = [
                             'display_priority' => (int) $method->display_priority,
@@ -343,10 +366,20 @@ final readonly class PaymentMethodEligibilityService
                 }
                 usort($selected, static fn (array $left, array $right): int => [$left['display_priority'], $left['method_code']] <=> [$right['display_priority'], $right['method_code']]);
                 foreach ($selected as $index => $method) {
-                    $candidates[$method['method_code']]['route_order'] = $index + 1;
+                    if (! array_key_exists($method['method_code'], $candidates)) {
+                        throw new RuntimeException('Payment eligibility candidate could not be loaded.');
+                    }
+                    /** @var Candidate $candidate */
+                    $candidate = $candidates[$method['method_code']];
+                    $candidate['route_order'] = $index + 1;
+                    $candidates[$method['method_code']] = $candidate;
                 }
                 $selectedMethods = [];
                 foreach ($selected as $method) {
+                    if (! array_key_exists($method['method_code'], $candidates)) {
+                        throw new RuntimeException('Payment eligibility candidate could not be loaded.');
+                    }
+                    /** @var Candidate $candidate */
                     $candidate = $candidates[$method['method_code']];
                     $selectedMethods[] = [
                         'method_code' => $candidate['method_code'],
@@ -397,6 +430,7 @@ final readonly class PaymentMethodEligibilityService
                     'created_at' => $createdAt,
                 ]);
                 foreach ($candidates as $candidate) {
+                    /** @var Candidate $candidate */
                     $methodSnapshot = $this->json([
                         'candidate_outcome' => $candidate['outcome'],
                         'configuration_snapshot_hash' => $candidate['configuration_snapshot_hash'],
@@ -446,7 +480,7 @@ final readonly class PaymentMethodEligibilityService
      * @param  MethodRow  $method
      * @param  list<RuleRow>  $rules
      * @param  Facts  $facts
-     * @return array{0:string,1:array{health:array{observation_id:?int,configuration_snapshot_hash:?string,healthy:?bool,observed_at:?string,expires_at:?string}}&array<string,mixed>}
+     * @return array{0:string,1:EvaluationSnapshot}
      */
     private function evaluateMethod(Connection $connection, object $method, array $rules, array $facts, DateTimeImmutable $now): array
     {
@@ -550,7 +584,7 @@ final readonly class PaymentMethodEligibilityService
     /**
      * @param  MethodRow  $method
      * @param  Facts  $facts
-     * @return array{0:?string,1:array{observation_id:?int,configuration_snapshot_hash:?string,healthy:?bool,observed_at:?string,expires_at:?string}}
+     * @return array{0:?string,1:HealthSnapshot}
      */
     private function hardBlock(Connection $connection, object $method, array $facts, DateTimeImmutable $now): array
     {
@@ -802,14 +836,25 @@ final readonly class PaymentMethodEligibilityService
         if ($lock) {
             $query->lockForUpdate();
         }
+        /** @var DecisionRow|null $row */
+        $row = $query->first([
+            'id', 'public_id', 'decision_key', 'source_quote_public_id', 'user_id',
+            'configuration_snapshot_hash', 'request_payload_hash',
+        ]);
 
-        return $query->first();
+        return $row;
     }
 
     /** @return DecisionRow|null */
     private function decisionById(Connection $connection, int $decisionId): ?object
     {
-        return $connection->table('payment_method_eligibility_decisions')->where('id', $decisionId)->first();
+        /** @var DecisionRow|null $row */
+        $row = $connection->table('payment_method_eligibility_decisions')->where('id', $decisionId)->first([
+            'id', 'public_id', 'decision_key', 'source_quote_public_id', 'user_id',
+            'configuration_snapshot_hash', 'request_payload_hash',
+        ]);
+
+        return $row;
     }
 
     /** @param MethodRow $row */
@@ -827,7 +872,7 @@ final readonly class PaymentMethodEligibilityService
         );
     }
 
-    /** @param RuleRow $row */
+    /** @param RuleReceiptRow $row */
     private function ruleReceipt(object $row, bool $replayed): PaymentEligibilityRuleVersionReceipt
     {
         return new PaymentEligibilityRuleVersionReceipt(
@@ -840,7 +885,7 @@ final readonly class PaymentMethodEligibilityService
         );
     }
 
-    /** @param HealthRow $row */
+    /** @param HealthReceiptRow $row */
     private function healthReceipt(object $row, bool $replayed): PaymentMethodHealthReceipt
     {
         return new PaymentMethodHealthReceipt(
