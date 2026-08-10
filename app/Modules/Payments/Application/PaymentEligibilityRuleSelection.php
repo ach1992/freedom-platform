@@ -46,7 +46,7 @@ trait PaymentEligibilityRuleSelection
     }
 
     /**
-     * @param list<int> $tagIds
+     * @param  list<int>  $tagIds
      * @return RuleVersionRow|null
      */
     private function selectRule(
