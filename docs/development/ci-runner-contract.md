@@ -130,23 +130,24 @@ The split is intentional:
 | Secret scan | no committed secret finding | 15 min |
 | Dependency and license policy | audit, abandoned-package, and license gates pass | 20 min |
 | PHP static quality | Pint, Composer validation, PHPStan, forbidden-pattern, and architecture gates pass | 30 min |
-| MariaDB and Redis tests | disposable services, full suite, JUnit and Clover artifacts pass | 45 min |
+| MariaDB 10.11/11.4 and Redis tests | disposable services, full suite, JUnit and Clover artifacts pass for each target line | 45 min per matrix entry |
 
 Individual expensive steps also have smaller workflow timeouts. Do not wait beyond the bound without inspecting current job/runner state.
 
 ## 8. MariaDB and Redis isolation
 
-Integration tests use `docker-compose.ci.yml` and fixed loopback ports. The job must:
+Integration tests use `docker-compose.ci.yml` and a serialized matrix of `MARIADB_VERSION=10.11` and `MARIADB_VERSION=11.4`. The Compose image resolves as `mariadb:${MARIADB_VERSION:-11.4}`; each matrix entry has its own per-run Compose project name, so the fixed loopback ports remain isolated on the single-capacity runner. The job must:
 
 1. run `docker compose ... up -d --wait`;
 2. confirm service state;
-3. execute the suite with process environment selecting MariaDB and Redis;
+3. execute the suite with process environment selecting the matrix MariaDB version and Redis;
 4. capture sanitized service logs on success or failure;
-5. always run `docker compose ... down --volumes`.
+5. always run `docker compose ... down --volumes --remove-orphans`;
+6. upload JUnit, Clover, and service evidence with an artifact name containing the MariaDB matrix identity.
 
 `phpunit.xml` contains safe local defaults for developer execution. Mandatory CI environment variables override those defaults. Isolation-sensitive database tests must run against MariaDB, not SQLite.
 
-## 9. Concurrency and queue behavior
+## 10. Concurrency and queue behavior
 
 CI groups runs by workflow and PR head branch with `cancel-in-progress: true`.
 
@@ -156,7 +157,13 @@ CI groups runs by workflow and PR head branch with `cancel-in-progress: true`.
 - Connector commits may not always trigger Actions immediately; use a manual workflow dispatch only when no exact-head run exists.
 - A queued job caused by an offline, busy, or label-mismatched self-hosted runner must not be moved to GitHub-hosted capacity.
 
-## 10. Host changes
+## 9. Protected PasarGuard live acceptance
+
+The PasarGuard live-mutation workflow declares the `provider-live-acceptance` GitHub Environment. It retains the integration-branch and typed-confirmation restrictions; absent provider configuration stops validation before any provider mutation.
+
+**Human-only setup (once):** Create the `provider-live-acceptance` Environment in GitHub, restrict deployment branches to `develop/v1.0.0-completion`, require reviewer approval, and move the PasarGuard provider secrets into that Environment.
+
+## 11. Host changes
 
 Installing or updating PHP, extensions, Docker, the Actions runner, permissions, or service configuration is a host operation, not an application commit.
 
@@ -172,7 +179,7 @@ For every host change:
 
 Current PCOV installation affects CLI configuration only. It must not be treated as proof of the separate LSPHP production runtime.
 
-## 11. Evidence rules
+## 12. Evidence rules
 
 Accepted CI evidence records:
 
