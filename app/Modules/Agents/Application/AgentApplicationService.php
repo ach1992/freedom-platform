@@ -113,6 +113,7 @@ final readonly class AgentApplicationService
         return $this->reviewTransition(
             'agent.application.claim',
             $applicationId,
+            $administratorId,
             $context,
             AgentApplicationState::Submitted,
             AgentApplicationState::UnderReview,
@@ -241,6 +242,9 @@ final readonly class AgentApplicationService
         $action = 'agent.application.release_reapplication';
 
         return $this->idempotentTransaction($action, $applicationId, $context, function (Connection $connection) use ($applicationId, $administratorId, $context, $action): AgentMutationReceipt {
+            $this->assertActiveAdministrator($connection, $administratorId);
+            $this->authorizer->authorize($administratorId, self::REVIEW_PERMISSION);
+
             $existing = $this->audit->existing($action, $applicationId, $context->requestFingerprint, true);
             if ($existing !== null) {
                 return $existing;
@@ -310,12 +314,16 @@ final readonly class AgentApplicationService
     private function reviewTransition(
         string $action,
         int $applicationId,
+        int $administratorId,
         AgentChangeContext $context,
         AgentApplicationState $from,
         AgentApplicationState $to,
         callable $mutation,
     ): AgentMutationReceipt {
-        return $this->idempotentTransaction($action, $applicationId, $context, function (Connection $connection) use ($action, $applicationId, $context, $from, $to, $mutation): AgentMutationReceipt {
+        return $this->idempotentTransaction($action, $applicationId, $context, function (Connection $connection) use ($action, $applicationId, $administratorId, $context, $from, $to, $mutation): AgentMutationReceipt {
+            $this->assertActiveAdministrator($connection, $administratorId);
+            $this->authorizer->authorize($administratorId, self::REVIEW_PERMISSION);
+
             $existing = $this->audit->existing($action, $applicationId, $context->requestFingerprint, true);
             if ($existing !== null) {
                 return $existing;
@@ -421,6 +429,19 @@ final readonly class AgentApplicationService
             'correlation_id' => $context->correlationId,
             'created_at' => $this->timestamp(),
         ]);
+    }
+
+    private function assertActiveAdministrator(Connection $connection, int $administratorId): void
+    {
+        $active = $connection->table('administrators')
+            ->where('id', $administratorId)
+            ->where('status', 'active')
+            ->lockForUpdate()
+            ->exists();
+
+        if (! $active) {
+            throw new AuthorizationException('Administrator authorization failed.');
+        }
     }
 
     private function timestamp(): string
