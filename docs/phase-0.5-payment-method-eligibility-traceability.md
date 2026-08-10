@@ -13,7 +13,7 @@ The evaluator accepts only an idempotency key, the authenticated Quote owner and
 - current offering code, product ID and sales-server ID;
 - current versioned payment-method/rule configuration and local persisted health observation.
 
-For normal customer Quotes, the action is fixed to `purchase`. No client action, amount, history, limit, health, provider, or override fact is accepted. Contact-vs-OTP provenance, purchase history/spend and daily-payment-limit facts are intentionally unavailable in this increment. Any rule requiring one of those facts does not match and records its safe unavailable reason; it is never inferred from `wallet_top_up`.
+For normal customer Quotes, the action is fixed to `purchase`. No client action, amount, history, limit, health, provider, or override fact is accepted. Contact-vs-OTP provenance, purchase history/spend and daily-payment-limit facts are intentionally unavailable in this increment. A method with any enabled rule requiring one of those facts is excluded fail-closed and records its safe unavailable reason; it is never inferred from `wallet_top_up`.
 
 ## Deterministic policy semantics
 
@@ -28,13 +28,13 @@ Rules support account type, tier, normalized tags, IRR range, offering/product/s
 
 ## Persistence and integrity
 
-Migration `2026_08_10_003800_create_payment_method_eligibility_foundation.php` introduces fresh append-only method/rule versions, normalized rule-tag rows, local health observations, immutable replay-safe decisions and immutable selected-method rows.
+Migration `2026_08_10_003800_create_payment_method_eligibility_foundation.php` introduces fresh append-only method/rule versions, normalized rule-tag rows, local health observations, immutable replay-safe decisions and immutable per-candidate rows (eligible and rejected).
 
 - Rule/method/health changes require `payment_providers.manage`, an active administrator lock and in-transaction reauthorization.
 - All change records include idempotency/request hashes, administrator, reason, correlation ID and canonical safe snapshot hashes.
-- Decision replay returns the original immutable decision; key reuse with a different Quote/actor fails.
+- Replay reauthorizes current Quote ownership/current usability before returning the original immutable decision; key reuse with a different Quote/actor fails.
 - Foreign keys, uniqueness, database checks, source-Quote guards, sequential version triggers and immutable update/delete triggers are final correctness barriers.
-- Health remains a local observation only. This increment performs no provider call.
+- Each candidate stores its method version, outcome, nullable route order and immutable health-observation reference/hash/timestamps. Health remains a local observation only; this increment performs no provider call.
 
 ## Requirement coverage
 
