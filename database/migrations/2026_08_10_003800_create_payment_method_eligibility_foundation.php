@@ -223,6 +223,21 @@ END
 SQL);
 
         DB::unprepared(<<<'SQL'
+CREATE TRIGGER payment_method_rule_version_tags_insert_guard
+BEFORE INSERT ON payment_method_rule_version_tags
+FOR EACH ROW
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM payment_method_rule_versions r
+        WHERE r.id = NEW.payment_method_rule_version_id
+          AND JSON_CONTAINS(JSON_EXTRACT(r.configuration_snapshot, '$.tag_codes'), JSON_QUOTE(NEW.tag_code))
+    ) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Payment rule tag is not part of the immutable rule snapshot.';
+    END IF;
+END
+SQL);
+
+        DB::unprepared(<<<'SQL'
 CREATE TRIGGER payment_method_health_observations_insert_guard
 BEFORE INSERT ON payment_method_health_observations
 FOR EACH ROW
