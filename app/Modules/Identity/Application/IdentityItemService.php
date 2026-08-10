@@ -199,6 +199,7 @@ final readonly class IdentityItemService
             $action,
             $userId,
             $type,
+            $administratorId,
             $context,
             function (Connection $connection, IdentityItemRecord $item) use (
                 $matched,
@@ -262,6 +263,7 @@ final readonly class IdentityItemService
             'identity.item.verify',
             $userId,
             $type,
+            $administratorId,
             $context,
             function (Connection $connection, IdentityItemRecord $item) use ($administratorId, $context): array {
                 if ($item->state !== VerificationStatus::Pending) {
@@ -323,6 +325,7 @@ final readonly class IdentityItemService
             'identity.item.reject',
             $userId,
             $type,
+            $administratorId,
             $context,
             function (Connection $connection, IdentityItemRecord $item) use ($administratorId, $context): array {
                 if ($item->state !== VerificationStatus::Pending) {
@@ -401,6 +404,7 @@ final readonly class IdentityItemService
         string $action,
         int $userId,
         IdentityItemType $type,
+        int $administratorId,
         IdentityChangeContext $context,
         callable $mutation,
     ): IdentityMutationReceipt {
@@ -417,10 +421,14 @@ final readonly class IdentityItemService
             $action,
             $userId,
             $type,
+            $administratorId,
             $context,
             $mutation,
             $targetId,
         ): IdentityMutationReceipt {
+            $this->assertActiveAdministrator($connection, $administratorId);
+            $this->authorizer->authorize($administratorId, self::REVIEW_PERMISSION);
+
             $existingAudit = $this->audit->existing($action, $targetId, $context->requestFingerprint, true);
             if ($existingAudit !== null) {
                 return $existingAudit;
@@ -435,6 +443,19 @@ final readonly class IdentityItemService
 
             return $this->audit->record($connection, $action, $targetId, $context, $before, $after);
         });
+    }
+
+    private function assertActiveAdministrator(Connection $connection, int $administratorId): void
+    {
+        $active = $connection->table('administrators')
+            ->where('id', $administratorId)
+            ->where('status', 'active')
+            ->lockForUpdate()
+            ->exists();
+
+        if (! $active) {
+            throw new AuthorizationException('Administrator authorization failed.');
+        }
     }
 
     private function assertLookupAvailable(
