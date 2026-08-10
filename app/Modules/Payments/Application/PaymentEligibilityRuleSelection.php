@@ -18,6 +18,7 @@ use RuntimeException;
  */
 trait PaymentEligibilityRuleSelection
 {
+    /** @return list<MethodVersionRow> */
     private function latestMethodVersions(Connection $db): array
     {
         /** @var list<MethodVersionRow> $rows */
@@ -157,7 +158,10 @@ trait PaymentEligibilityRuleSelection
         return $best[0]['row'];
     }
 
-    /** @param array{int,int,int} $left @param array{int,int,int} $right */
+    /**
+     * @param array{int,int,int} $left
+     * @param array{int,int,int} $right
+     */
     private function compareScore(array $left, array $right): int
     {
         for ($index = 0; $index < 3; $index++) {
