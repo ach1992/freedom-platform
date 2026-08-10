@@ -5,14 +5,14 @@
   "target_release": "1.0.0",
   "repository": "ach1992/freedom-platform",
   "authoritative_pr": 6,
-  "authoritative_issue": 7,
+  "authoritative_issue": 8,
   "allowed_branch": "develop/v1.0.0-completion",
   "base_branch": "main",
   "required_pr_state": "draft",
   "live_head_source": "github_pr_head_sha",
   "active_phase": {
-    "version": "0.4.0",
-    "name": "Catalog, Panels and Offerings",
+    "version": "0.5.0",
+    "name": "Ledger, Pricing, Promotions and Payment Providers",
     "status": "active"
   },
   "last_verified_boundary": {
@@ -32,18 +32,19 @@
     "traceability_path": "docs/phase-0.5-benefit-code-lifecycle-traceability.md"
   },
   "active_increment": {
-    "name": "PasarGuard Controlled Live Execution",
-    "status": "blocked",
-    "handoff_path": "docs/44-phase-0.4-pasarguard-live-execution-handoff.md",
+    "name": "Phase 0.5 remaining-scope reconciliation",
+    "status": "planned",
+    "handoff_path": "PROJECT_STATUS.md",
     "requirements": [
-      "PRV-001",
-      "PRV-002",
-      "PRV-003",
-      "SEC-001",
-      "SEC-002",
-      "DAT-001",
-      "DAT-003",
-      "QUA-001"
+      "PRO-001",
+      "REF-001",
+      "PAY-001",
+      "USDT-002",
+      "USDT-003",
+      "C2C-001",
+      "GFT-001",
+      "IPG-001",
+      "IPG-002"
     ]
   },
   "stabilization": {
