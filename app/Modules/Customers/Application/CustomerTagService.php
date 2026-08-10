@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Customers\Application;
 
+use App\Modules\AccessControl\Application\AdministratorPermissionAuthorizer;
 use App\Shared\Application\Clock;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
@@ -14,10 +15,13 @@ final readonly class CustomerTagService
 {
     private const ASSIGN_ACTION = 'customer.tag.assign';
 
+    private const PERMISSION = 'identity.customers.manage_tags';
+
     private const REMOVE_ACTION = 'customer.tag.remove';
 
     public function __construct(
         private DatabaseManager $database,
+        private AdministratorPermissionAuthorizer $authorizer,
         private CustomerMutationAudit $audit,
         private Clock $clock,
     ) {}
@@ -52,11 +56,6 @@ final readonly class CustomerTagService
         }
 
         $context->requireAdministrator();
-        $existing = $this->audit->existing($action, $userId, $context->requestFingerprint);
-
-        if ($existing !== null) {
-            return $existing;
-        }
 
         try {
             return $this->database->connection()->transaction(
@@ -87,14 +86,15 @@ final readonly class CustomerTagService
         CustomerChangeContext $context,
     ): CustomerMutationReceipt {
         $connection = $this->database->connection();
+        $administratorId = $context->requireAdministrator();
+        $this->assertActiveAdministrator($connection, $administratorId);
+        $this->authorizer->authorize($administratorId, self::PERMISSION);
+
         $existing = $this->audit->existing($action, $userId, $context->requestFingerprint, true);
 
         if ($existing !== null) {
             return $existing;
         }
-
-        $administratorId = $context->requireAdministrator();
-        $this->assertActiveAdministrator($connection, $administratorId);
 
         $customerExists = $connection->table('users')->where('id', $userId)->lockForUpdate()->exists();
 
