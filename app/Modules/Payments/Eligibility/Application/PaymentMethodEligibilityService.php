@@ -379,7 +379,6 @@ final readonly class PaymentMethodEligibilityService
                     if (! array_key_exists($method['method_code'], $candidates)) {
                         throw new RuntimeException('Payment eligibility candidate could not be loaded.');
                     }
-                    /** @var Candidate $candidate */
                     $candidate = $candidates[$method['method_code']];
                     $selectedMethods[] = [
                         'method_code' => $candidate['method_code'],
