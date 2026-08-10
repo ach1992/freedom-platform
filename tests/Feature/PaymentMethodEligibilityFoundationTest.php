@@ -129,7 +129,7 @@ final class PaymentMethodEligibilityFoundationTest extends TestCase
         self::assertSame([], $service->evaluate('eligibility.maintenance.000001', $userId, $quote->quotePublicId)->methods);
     }
 
-    public function test_unavailable_facts_reject_only_the_dependent_rule_and_decision_key_conflict_does_not_overwrite_history(): void
+    public function test_unavailable_required_facts_fail_closed_and_decision_key_conflict_does_not_overwrite_history(): void
     {
         $administratorId = $this->ownerAdministrator();
         $quote = $this->quoteFor($this->quoteUser('customer'));
@@ -151,7 +151,9 @@ final class PaymentMethodEligibilityFoundationTest extends TestCase
         );
 
         $decision = $service->evaluate('eligibility.unavailable.000001', $quote->userId, $quote->quotePublicId);
-        self::assertSame(['history_gateway'], array_column($decision->methods, 'method_code'));
+        self::assertSame([], $decision->methods);
+        self::assertSame('required_fact_unavailable', DB::table('payment_method_eligibility_decision_methods')->where('payment_method_eligibility_decision_id', $decision->decisionId)->value('reason_code'));
+        self::assertNull(DB::table('payment_method_eligibility_decision_methods')->where('payment_method_eligibility_decision_id', $decision->decisionId)->value('route_order'));
         /** @var string $snapshot */
         $snapshot = DB::table('payment_method_eligibility_decisions')->where('id', $decision->decisionId)->value('configuration_snapshot');
         self::assertStringContainsString('purchase_history_unavailable', $snapshot);
@@ -184,6 +186,11 @@ final class PaymentMethodEligibilityFoundationTest extends TestCase
 
         $this->clock->value = $this->clock->value->modify('+5 minutes');
         $this->assertRuntimeMessage('Payment eligibility requires a current purchase Quote.', fn (): mixed => $service->evaluate(
+            'eligibility.guard.000001',
+            $quote->userId,
+            $quote->quotePublicId,
+        ));
+        $this->assertRuntimeMessage('Payment eligibility requires a current purchase Quote.', fn (): mixed => $service->evaluate(
             'eligibility.expired.000001',
             $quote->userId,
             $quote->quotePublicId,
@@ -198,6 +205,60 @@ final class PaymentMethodEligibilityFoundationTest extends TestCase
             'Denied.',
             $this->correlation('denied'),
         ));
+    }
+
+    public function test_database_guards_reject_forged_scalar_snapshots_and_invalid_clock_times(): void
+    {
+        $administratorId = $this->ownerAdministrator();
+        $service = $this->app->make(PaymentMethodEligibilityService::class);
+        $this->configureHealthyMethod($service, $administratorId, 'forgery_gateway', 7);
+        $service->configureRule(
+            'eligibility.rule.forgery.000001',
+            $administratorId,
+            new PaymentEligibilityRuleDefinition('forgery_gateway', 'valid_window', true, PaymentEligibilityRuleEffect::Allow, 7, startsAtUtc: '12:00', endsAtUtc: '13:00'),
+            'Valid window.',
+            $this->correlation('forgery-rule'),
+        );
+
+        $method = (array) DB::table('payment_method_versions')->where('method_code', 'forgery_gateway')->first();
+        $methodSnapshot = json_decode((string) $method['configuration_snapshot'], true, 512, JSON_THROW_ON_ERROR);
+        $methodSnapshot['method_code'] = 'forged_gateway';
+        $methodSnapshot['version'] = 1;
+        ksort($methodSnapshot, SORT_STRING);
+        unset($method['id']);
+        $method['method_code'] = 'forged_gateway';
+        $method['version'] = 1;
+        $method['display_priority'] = 8;
+        $method['mutation_key'] = 'eligibility.method.forged.000001';
+        $method['request_payload_hash'] = hash('sha256', 'forged-method');
+        $method['configuration_snapshot'] = json_encode($methodSnapshot, JSON_THROW_ON_ERROR);
+        $method['configuration_snapshot_hash'] = hash('sha256', (string) $method['configuration_snapshot']);
+        self::assertQueryRejected(static fn (): bool => DB::table('payment_method_versions')->insert($method));
+
+        $health = (array) DB::table('payment_method_health_observations')->where('method_code', 'forgery_gateway')->first();
+        unset($health['id']);
+        $health['observation_key'] = 'eligibility.health.forged.000001';
+        $health['request_payload_hash'] = hash('sha256', 'forged-health');
+        $health['healthy'] = false;
+        self::assertQueryRejected(static fn (): bool => DB::table('payment_method_health_observations')->insert($health));
+
+        $rule = (array) DB::table('payment_method_rule_versions')->where('rule_code', 'valid_window')->first();
+        $ruleSnapshot = json_decode((string) $rule['configuration_snapshot'], true, 512, JSON_THROW_ON_ERROR);
+        $ruleSnapshot['rule_code'] = 'forged_window';
+        $ruleSnapshot['version'] = 1;
+        $ruleSnapshot['starts_at_utc'] = '24:00';
+        $ruleSnapshot['ends_at_utc'] = '23:00';
+        ksort($ruleSnapshot, SORT_STRING);
+        unset($rule['id']);
+        $rule['rule_code'] = 'forged_window';
+        $rule['version'] = 1;
+        $rule['starts_at_utc'] = '24:00';
+        $rule['ends_at_utc'] = '23:00';
+        $rule['mutation_key'] = 'eligibility.rule.forged.000001';
+        $rule['request_payload_hash'] = hash('sha256', 'forged-rule');
+        $rule['configuration_snapshot'] = json_encode($ruleSnapshot, JSON_THROW_ON_ERROR);
+        $rule['configuration_snapshot_hash'] = hash('sha256', (string) $rule['configuration_snapshot']);
+        self::assertQueryRejected(static fn (): bool => DB::table('payment_method_rule_versions')->insert($rule));
     }
 
     private function configureHealthyMethod(PaymentMethodEligibilityService $service, int $administratorId, string $methodCode, int $priority): void
