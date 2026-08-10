@@ -76,7 +76,7 @@ jq -e '
     and (.last_verified_boundary.traceability_path | type == "string" and length > 0)
     and (.active_increment.name | type == "string" and length > 0)
     and (.active_increment.status | IN("planned", "active", "unverified", "blocked", "verified"))
-    and (.active_increment.handoff_path | type == "string" and length > 0)
+    and (.active_increment.current_state_path | type == "string" and length > 0)
     and (.active_increment.requirements | type == "array" and length > 0)
     and ([.active_increment.requirements[] | test("^[A-Z0-9]+-[0-9]{3}$")] | all)
     and .stabilization.status == "complete"
@@ -108,16 +108,20 @@ for requirement in "${required_phase05_requirements[@]}"; do
 done
 
 implementation_sha="$(jq -r '.last_verified_boundary.implementation_sha' docs/project-status.json)"
-evidence_sha="$(jq -r '.last_verified_boundary.evidence_sha' docs/project-status.json)"
 evidence_path="$(jq -r '.last_verified_boundary.evidence_path' docs/project-status.json)"
 traceability_path="$(jq -r '.last_verified_boundary.traceability_path' docs/project-status.json)"
-active_increment="$(jq -r '.active_increment.name' docs/project-status.json)"
-handoff_path="$(jq -r '.active_increment.handoff_path' docs/project-status.json)"
+current_state_path="$(jq -r '.active_increment.current_state_path' docs/project-status.json)"
 
-for path in "$evidence_path" "$traceability_path" "$handoff_path"; do
+for path in "$evidence_path" "$traceability_path" "$current_state_path"; do
     safe_repository_path "$path" || fail "project status contains an unsafe repository path: $path"
     test -s "$path" || fail "project status references a missing or empty file: $path"
 done
+
+if grep -F '"handoff_path"' docs/project-status.json docs/development/project-status.schema.json >/dev/null; then
+    fail 'legacy handoff_path field remains in machine project-control state'
+fi
+grep -F '"current_state_path"' docs/development/project-status.schema.json >/dev/null \
+    || fail 'project status schema does not define current_state_path'
 
 status_requirements=(
     'PR `#6`'
