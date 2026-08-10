@@ -23,7 +23,8 @@ return new class extends Migration
             $table->char('request_payload_hash', 64);
             $table->json('configuration_snapshot');
             $table->char('configuration_snapshot_hash', 64);
-            $table->foreignId('changed_by_administrator_id')->constrained('administrators')->restrictOnDelete();
+            $table->unsignedBigInteger('changed_by_administrator_id');
+            $table->foreign('changed_by_administrator_id', 'payment_method_admin_fk')->references('id')->on('administrators')->restrictOnDelete();
             $table->string('change_reason', 255);
             $table->char('correlation_id', 64);
             $table->dateTime('created_at', 6);
@@ -40,7 +41,8 @@ return new class extends Migration
             $table->boolean('enabled');
             $table->string('effect', 8);
             $table->unsignedInteger('priority');
-            $table->foreignId('subject_user_id')->nullable()->constrained('users')->restrictOnDelete();
+            $table->unsignedBigInteger('subject_user_id')->nullable();
+            $table->foreign('subject_user_id', 'payment_rule_subject_fk')->references('id')->on('users')->restrictOnDelete();
             $table->json('account_types');
             $table->json('tier_codes');
             $table->bigInteger('minimum_amount_irr')->nullable();
@@ -71,7 +73,8 @@ return new class extends Migration
 
         Schema::create('payment_method_rule_version_tags', function (Blueprint $table): void {
             $table->bigIncrements('id');
-            $table->foreignId('payment_method_rule_version_id')->constrained('payment_method_rule_versions')->restrictOnDelete();
+            $table->unsignedBigInteger('payment_method_rule_version_id');
+            $table->foreign('payment_method_rule_version_id', 'payment_rule_tag_version_fk')->references('id')->on('payment_method_rule_versions')->restrictOnDelete();
             $table->string('tag_code', 64);
             $table->dateTime('created_at', 6);
             $table->unique(['payment_method_rule_version_id', 'tag_code'], 'payment_method_rule_tag_unique');
@@ -87,7 +90,8 @@ return new class extends Migration
             $table->dateTime('expires_at', 6);
             $table->json('configuration_snapshot');
             $table->char('configuration_snapshot_hash', 64);
-            $table->foreignId('recorded_by_administrator_id')->constrained('administrators')->restrictOnDelete();
+            $table->unsignedBigInteger('recorded_by_administrator_id');
+            $table->foreign('recorded_by_administrator_id', 'payment_health_admin_fk')->references('id')->on('administrators')->restrictOnDelete();
             $table->string('change_reason', 255);
             $table->char('correlation_id', 64);
             $table->dateTime('created_at', 6);
@@ -99,9 +103,11 @@ return new class extends Migration
             $table->ulid('public_id')->unique();
             $table->string('decision_key', 128)->unique();
             $table->char('request_payload_hash', 64);
-            $table->foreignId('source_quote_id')->constrained('quotes')->restrictOnDelete();
+            $table->unsignedBigInteger('source_quote_id');
+            $table->foreign('source_quote_id', 'payment_eligibility_quote_fk')->references('id')->on('quotes')->restrictOnDelete();
             $table->ulid('source_quote_public_id');
-            $table->foreignId('user_id')->constrained('users')->restrictOnDelete();
+            $table->unsignedBigInteger('user_id');
+            $table->foreign('user_id', 'payment_eligibility_user_fk')->references('id')->on('users')->restrictOnDelete();
             $table->string('action_snapshot', 32);
             $table->char('currency_snapshot', 3);
             $table->bigInteger('amount_irr_snapshot');
@@ -114,8 +120,10 @@ return new class extends Migration
 
         Schema::create('payment_method_eligibility_decision_methods', function (Blueprint $table): void {
             $table->bigIncrements('id');
-            $table->foreignId('payment_method_eligibility_decision_id')->constrained('payment_method_eligibility_decisions')->restrictOnDelete();
-            $table->foreignId('payment_method_version_id')->constrained('payment_method_versions')->restrictOnDelete();
+            $table->unsignedBigInteger('payment_method_eligibility_decision_id');
+            $table->foreign('payment_method_eligibility_decision_id', 'payment_eligibility_method_decision_fk')->references('id')->on('payment_method_eligibility_decisions')->restrictOnDelete();
+            $table->unsignedBigInteger('payment_method_version_id');
+            $table->foreign('payment_method_version_id', 'payment_eligibility_method_version_fk')->references('id')->on('payment_method_versions')->restrictOnDelete();
             $table->string('method_code', 64);
             $table->unsignedBigInteger('method_version');
             $table->unsignedInteger('route_order')->nullable();
