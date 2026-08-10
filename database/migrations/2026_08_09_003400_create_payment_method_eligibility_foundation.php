@@ -54,7 +54,7 @@ return new class extends Migration
 
         Schema::create('payment_eligibility_rule_versions', function (Blueprint $table): void {
             $table->bigIncrements('id');
-            $table->foreignId('payment_eligibility_rule_id')->constrained('payment_eligibility_rules')->restrictOnDelete();
+            $table->foreignId('payment_eligibility_rule_id')->constrained('payment_eligibility_rules', 'id', 'pay_elig_rule_ver_rule_fk')->restrictOnDelete();
             $table->foreignId('payment_method_id')->constrained('payment_methods')->restrictOnDelete();
             $table->string('mutation_key', 128)->unique();
             $table->char('mutation_payload_hash', 64);
@@ -117,7 +117,7 @@ return new class extends Migration
             $table->bigIncrements('id');
             $table->foreignId('decision_id')->constrained('payment_eligibility_decisions')->restrictOnDelete();
             $table->foreignId('payment_method_id')->constrained('payment_methods')->restrictOnDelete();
-            $table->foreignId('payment_method_version_id')->constrained('payment_method_versions')->restrictOnDelete();
+            $table->foreignId('payment_method_version_id')->constrained('payment_method_versions', 'id', 'pay_elig_item_method_ver_fk')->restrictOnDelete();
             $table->ulid('method_public_id_snapshot');
             $table->string('method_code_snapshot', 64);
             $table->string('kind_snapshot', 32);
@@ -128,8 +128,8 @@ return new class extends Migration
             $table->string('health_snapshot', 32);
             $table->string('outcome', 40);
             $table->boolean('eligible');
-            $table->foreignId('payment_eligibility_rule_id')->nullable()->constrained('payment_eligibility_rules')->restrictOnDelete();
-            $table->foreignId('payment_eligibility_rule_version_id')->nullable()->constrained('payment_eligibility_rule_versions')->restrictOnDelete();
+            $table->foreignId('payment_eligibility_rule_id')->nullable()->constrained('payment_eligibility_rules', 'id', 'pay_elig_item_rule_fk')->restrictOnDelete();
+            $table->foreignId('payment_eligibility_rule_version_id')->nullable()->constrained('payment_eligibility_rule_versions', 'id', 'pay_elig_item_rule_ver_fk')->restrictOnDelete();
             $table->ulid('rule_public_id_snapshot')->nullable();
             $table->string('rule_code_snapshot', 64)->nullable();
             $table->unsignedBigInteger('rule_version')->nullable();
