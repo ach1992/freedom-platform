@@ -285,13 +285,14 @@ final readonly class PaymentMethodEligibilityService
 
         try {
             return $connection->transaction(function (Connection $connection) use ($decisionKey, $actorUserId, $sourceQuotePublicId, $requestHash): PaymentEligibilityDecisionReceipt {
-                $existing = $this->decisionByKey($connection, $decisionKey, true);
-                if ($existing !== null) {
-                    return $this->replayDecision($connection, $existing, $requestHash);
-                }
-
                 $now = $this->clock->now()->setTimezone(new DateTimeZone('UTC'));
                 $facts = $this->loadFacts($connection, $actorUserId, $sourceQuotePublicId, $now);
+                $existing = $this->decisionByKey($connection, $decisionKey, true);
+                if ($existing !== null) {
+                    $this->assertReplayAccess($facts);
+
+                    return $this->replayDecision($connection, $existing, $requestHash);
+                }
                 $methods = $this->currentMethods($connection);
                 $rules = $this->currentRules($connection);
                 $rulesByMethod = [];
@@ -743,6 +744,15 @@ final readonly class PaymentMethodEligibilityService
             throw new AuthorizationException('Administrator authorization failed.');
         }
         $this->authorizer->authorize($administratorId, self::MANAGE_PERMISSION);
+    }
+
+    /** @param array<string,mixed> $facts */
+    private function assertReplayAccess(array $facts): void
+    {
+        if ($facts['account_status'] !== 'active'
+            || ($facts['account_type'] === 'agent' && $facts['agent_status'] !== 'active')) {
+            throw new AuthorizationException('Payment eligibility decision access denied.');
+        }
     }
 
     private function replayDecision(Connection $connection, object $row, string $requestHash): PaymentEligibilityDecisionReceipt
