@@ -17,6 +17,7 @@ use RuntimeException;
  */
 trait PaymentEligibilitySnapshotVerification
 {
+    /** @param MethodVersionRow $row */
     private function verifyMethodVersion(object $row): void
     {
         $kind = PaymentMethodKind::tryFrom($row->kind);
@@ -74,7 +75,10 @@ trait PaymentEligibilitySnapshotVerification
         }
     }
 
-    /** @param array{method:MethodVersionRow,health:string,outcome:string,eligible:bool,rule:RuleVersionRow|null} $item @return array<string,mixed> */
+    /**
+     * @param array{method:MethodVersionRow,health:string,outcome:string,eligible:bool,rule:RuleVersionRow|null} $item
+     * @return array<string, mixed>
+     */
     private function decisionItemSnapshot(array $item): array
     {
         $method = $item['method'];
@@ -98,6 +102,4 @@ trait PaymentEligibilitySnapshotVerification
             ],
         ];
     }
-
-    /** @return MethodVersionRow|null */
 }
