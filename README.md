@@ -1,99 +1,64 @@
 # Freedom Platform
 
-Production-grade Telegram commerce and lifecycle-management platform for VPN/proxy subscriptions.
+Production-grade, Telegram-first commerce and lifecycle-management platform for VPN/proxy subscriptions.
 
 ## Start here
 
-Every engineer or AI agent must read these files before changing the repository:
+Before changing the repository, read these sources in order:
 
-1. [`AGENTS.md`](AGENTS.md) — repository operating contract and authority order;
-2. [`PROJECT_STATUS.md`](PROJECT_STATUS.md) — current verified boundary, active increment, blockers, and next sequence;
-3. [`CONTRIBUTING.md`](CONTRIBUTING.md) — development, testing, and commit workflow;
-4. [`docs/development/continuation-runbook.md`](docs/development/continuation-runbook.md) — exact new-chat/recovery procedure;
-5. [`docs/development/repository-map.md`](docs/development/repository-map.md) — navigation by task and module.
+1. [`AGENTS.md`](AGENTS.md) — mandatory repository operating contract and authority order.
+2. [`PROJECT_STATUS.md`](PROJECT_STATUS.md) — current verified product boundary, active work, blockers, and next sequence.
+3. [`docs/project-status.json`](docs/project-status.json) — machine-readable current status.
+4. [`docs/README.md`](docs/README.md) — documentation map and freshness rules.
+5. [`CONTRIBUTING.md`](CONTRIBUTING.md) — local development, testing, and contribution workflow.
+6. [`docs/development/repository-map.md`](docs/development/repository-map.md) — source-code and module navigation.
 
-Do not begin from this README's prose alone. Fetch PR `#6` and treat its exact `head_sha` as live truth.
+For live development state, always fetch Draft PR `#6` and use its current `head_sha`. Dynamic state such as active tasks, exact SHAs, CI runs, worker branches, and provider gates belongs in GitHub and `PROJECT_STATUS.md`; it is intentionally not duplicated in this README.
 
-## Current status
+## Authoritative product scope
 
-- target release: `1.0.0`;
-- active phase: `0.4.0 — Catalog, Panels and Offerings`;
-- authoritative Issue: `#7`;
-- authoritative PR: `#6`;
-- allowed branch: `develop/v1.0.0-completion`;
-- PR base/state: `main` / Draft;
-- last evidence-complete boundary: Trial Policy and Panel Adapter Offline/Fake Foundation;
-- accepted boundary: 298 tests, 1471 assertions on implementation and evidence-head CI;
-- active work: source-pinned HTTP adapter contracts for Marzban `v0.8.4` and PasarGuard `v5.2.1`;
-- live provider testing: intentionally deferred until the owner supplies dedicated test panels near final integration;
-- stabilization: complete; ordinary feature development is not paused.
+The normative Version `1.0.0` specification is [`docs/specification/master-execution-prompt.md`](docs/specification/master-execution-prompt.md). Stable requirement IDs are maintained in [`docs/01-authoritative-requirements.md`](docs/01-authoritative-requirements.md).
 
-The normative scope remains [`docs/specification/master-execution-prompt.md`](docs/specification/master-execution-prompt.md). Machine-readable status is in [`docs/project-status.json`](docs/project-status.json). The active provider contract/handoff is [`docs/35-phase-0.4-panel-provider-source-contracts.md`](docs/35-phase-0.4-panel-provider-source-contracts.md).
+A lower-authority document, Issue, handoff, or implementation convenience must not silently remove or redefine a Version 1 requirement. Any deliberate scope change must be reconciled explicitly against the normative specification and requirement catalogue.
 
-## Product and architecture baseline
+## Technical baseline
 
-- Laravel 13.x on PHP 8.4;
-- MariaDB with `utf8mb4` as durable correctness boundary;
-- authenticated Redis for queues, cache, rate limiting, and coordination;
-- Telegram-first presentation with limited installer/update/restore/health/provider-callback web routes;
-- modular monolith with explicit Domain, Application, Infrastructure, and Presentation boundaries;
-- transactional outbox and database-enforced idempotency;
-- Marzban and PasarGuard behind a common capability contract;
-- aaPanel/OpenLiteSpeed atomic-release target deployment;
-- Persian visible default with English fallback and multilingual-ready content.
+- PHP 8.4 and Laravel 13.x;
+- MariaDB with `utf8mb4` as the durable correctness boundary;
+- authenticated Redis for queue, cache, rate limiting, and coordination;
+- modular-monolith structure with Domain, Application, Infrastructure, and Presentation boundaries;
+- Telegram-first product surface with restricted browser endpoints for operational flows;
+- integer IRR for fiat financial boundaries and fixed-precision decimal handling for crypto;
+- transactional/idempotent financial and remote effects;
+- Marzban and PasarGuard behind common panel-adapter contracts;
+- Persian-visible default with English fallback and multilingual-ready content;
+- aaPanel/OpenLiteSpeed atomic-release target deployment.
 
-Some target modules and operational flows are not implemented yet. Architecture documents must not be read as a capability claim without code, tests, and accepted evidence.
-
-## Panel-provider policy
-
-Provider work uses exact source contracts rather than a mutable `latest` assumption:
-
-- Marzban: `Gozargah/Marzban` tag `v0.8.4`;
-- PasarGuard: `PasarGuard/panel` tag `v5.2.1`;
-- Mirza Bot: secondary practical integration reference only.
-
-Source-contract HTTP tests may be completed without live panels. Real targets remain disabled/fail-closed until final live acceptance. Absence of a temporary panel installation must not block unrelated project phases.
+Implemented capability is intentionally narrower than the final architecture. Never infer a completed feature from a target-state document, class name, migration, fake adapter, or test fixture alone; accepted capability requires the repository's verification and evidence lifecycle.
 
 ## Non-negotiable invariants
 
-1. No paid service is provisioned before authoritative payment capture.
-2. One paid order item creates at most one active remote service identity.
-3. Duplicate updates, callbacks, webhooks, retries, and operator actions create no duplicate financial or remote effect.
-4. An uncertain remote create enters discovery/reconciliation before any second create.
-5. Database transactions, row locks, and uniqueness remain the final correctness barrier.
-6. Wallet/financial records are append-only and provably balanced when those phases are implemented.
-7. TLS verification is never disabled.
-8. Secrets and sensitive identifiers are never committed, printed, or logged.
+- no paid provisioning before authoritative payment capture;
+- no duplicate financial, provisioning, Telegram, or remote-provider effect;
+- uncertain external mutation results enter lookup/discovery/reconciliation before retry;
+- database transactions, locking, uniqueness, and immutable history remain final correctness barriers;
+- browser redirects or customer claims never prove capture;
+- TLS verification is never disabled;
+- secrets and sensitive values are never committed, printed, logged, attached to Issues/PRs, or stored in evidence.
 
-## Verification model
+## Verification
 
-No phase or increment is complete because source files, migrations, tests, or documentation exist. Acceptance requires:
+The current mandatory CI contract is documented in [`docs/19-ci-quality-gates.md`](docs/19-ci-quality-gates.md) and [`docs/development/ci-runner-contract.md`](docs/development/ci-runner-contract.md). Exact implementation/evidence acceptance rules are in [`docs/development/increment-lifecycle.md`](docs/development/increment-lifecycle.md).
 
-- mandatory CI success on the exact implementation SHA;
-- executable test and assertion counts;
-- retained artifact name/ID and independently calculated SHA-256;
-- bounded evidence and traceability;
-- mandatory CI success on the exact evidence-head SHA;
-- Issue/PR updates only after both exact-SHA boundaries pass.
-
-See [`docs/development/increment-lifecycle.md`](docs/development/increment-lifecycle.md).
+A phase or increment is not complete merely because code or documentation exists. Accepted boundaries require the applicable exact-head CI, tests, retained evidence, review, and integration verification defined by repository governance.
 
 ## Documentation and evidence
 
-- planning/architecture/security/operations: [`docs/`](docs/);
-- accepted phase evidence: [`evidence/`](evidence/);
-- current audit: [`docs/31-project-control-plane-audit.md`](docs/31-project-control-plane-audit.md);
-- active provider handoff: [`docs/35-phase-0.4-panel-provider-source-contracts.md`](docs/35-phase-0.4-panel-provider-source-contracts.md);
-- prior Trial/Panel handoff: [`docs/30-phase-0.4-trial-panel-handoff.md`](docs/30-phase-0.4-trial-panel-handoff.md);
-- transient CI output: `build/evidence/` and retained GitHub Actions artifacts.
+Use [`docs/README.md`](docs/README.md) to distinguish current sources, stable reference material, target-state documents, traceability, and historical records. Accepted historical proof lives under [`evidence/`](evidence/); it should be preserved for auditability but must not be treated as current runtime state.
 
-Historical reports are preserved for auditability but must be explicitly marked historical or superseded when they are no longer current.
+## Local development
 
-## Safe local setup
-
-For a disposable development checkout, follow [`CONTRIBUTING.md`](CONTRIBUTING.md). `composer setup:local` refuses to overwrite an existing `.env`.
-
-Never run local setup, staging provisioning, installer, deployment, update, restore, or root-level workflows merely because a command or workflow file exists. Confirm its current approved status and exact environment first.
+Follow [`CONTRIBUTING.md`](CONTRIBUTING.md). Do not run staging, deployment, installer, update, restore, provider-live, or root-level automation merely because a script or workflow exists; first verify its current approved status and exact execution boundary.
 
 ## License
 
