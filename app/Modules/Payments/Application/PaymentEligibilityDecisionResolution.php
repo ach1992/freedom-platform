@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Payments\Application;
 
+use App\Modules\Payments\Application\Contracts\ProviderHealth;
 use App\Modules\Payments\Domain\PaymentConfigurationState;
 use App\Modules\Payments\Domain\PaymentEligibilityEffect;
 use App\Modules\Payments\Domain\PaymentEligibilityOutcome;
@@ -126,7 +127,7 @@ trait PaymentEligibilityDecisionResolution
                     }
                     $evaluated[] = [
                         'method' => $method,
-                        'health' => $health instanceof \App\Modules\Payments\Application\Contracts\ProviderHealth ? $health->value : 'missing',
+                        'health' => $health instanceof ProviderHealth ? $health->value : 'missing',
                         'outcome' => $outcome->value,
                         'eligible' => $eligible,
                         'rule' => $winner,
