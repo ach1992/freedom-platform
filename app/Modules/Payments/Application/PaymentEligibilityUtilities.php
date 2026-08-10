@@ -44,7 +44,6 @@ trait PaymentEligibilityUtilities
         return hash('sha256', $this->json($value));
     }
 
-    /** @param mixed $value */
     private function json(mixed $value): string
     {
         return json_encode($this->canonicalize($value), JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
