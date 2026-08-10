@@ -19,6 +19,7 @@ use RuntimeException;
  */
 trait PaymentEligibilityPersistence
 {
+    /** @return MethodVersionRow|null */
     private function methodVersionByMutationKey(Connection $db, string $key, bool $lock = false): ?object
     {
         $query = $db->table('payment_method_versions as v')->join('payment_methods as m', 'm.id', '=', 'v.payment_method_id')->where('v.mutation_key', $key);
