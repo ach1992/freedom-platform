@@ -146,17 +146,18 @@ return new class extends Migration
 
     public function down(): void
     {
-        foreach ([
-            'payment_eligibility_decision_items',
-            'payment_eligibility_decisions',
-            'payment_eligibility_rule_versions',
-            'payment_eligibility_rules',
-            'payment_method_versions',
-            'payment_methods',
-        ] as $table) {
-            DB::unprepared("DROP TRIGGER IF EXISTS {$table}_delete_guard");
-            DB::unprepared("DROP TRIGGER IF EXISTS {$table}_update_guard");
-        }
+        DB::unprepared('DROP TRIGGER IF EXISTS payment_eligibility_decision_items_delete_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS payment_eligibility_decision_items_update_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS payment_eligibility_decisions_delete_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS payment_eligibility_decisions_update_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS payment_eligibility_rule_versions_delete_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS payment_eligibility_rule_versions_update_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS payment_eligibility_rules_delete_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS payment_eligibility_rules_update_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS payment_method_versions_delete_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS payment_method_versions_update_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS payment_methods_delete_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS payment_methods_update_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS payment_eligibility_decision_items_insert_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS payment_eligibility_decisions_insert_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS payment_eligibility_rule_versions_insert_guard');
@@ -360,16 +361,41 @@ SQL);
 
     private function createImmutableGuards(): void
     {
-        foreach ([
-            'payment_methods',
-            'payment_method_versions',
-            'payment_eligibility_rules',
-            'payment_eligibility_rule_versions',
-            'payment_eligibility_decisions',
-            'payment_eligibility_decision_items',
-        ] as $table) {
-            DB::unprepared("CREATE TRIGGER {$table}_update_guard BEFORE UPDATE ON {$table} FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'PAY-001 records are immutable.'; END");
-            DB::unprepared("CREATE TRIGGER {$table}_delete_guard BEFORE DELETE ON {$table} FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'PAY-001 records are non-deletable.'; END");
-        }
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER payment_methods_update_guard BEFORE UPDATE ON payment_methods FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'PAY-001 records are immutable.'; END
+SQL);
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER payment_methods_delete_guard BEFORE DELETE ON payment_methods FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'PAY-001 records are non-deletable.'; END
+SQL);
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER payment_method_versions_update_guard BEFORE UPDATE ON payment_method_versions FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'PAY-001 records are immutable.'; END
+SQL);
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER payment_method_versions_delete_guard BEFORE DELETE ON payment_method_versions FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'PAY-001 records are non-deletable.'; END
+SQL);
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER payment_eligibility_rules_update_guard BEFORE UPDATE ON payment_eligibility_rules FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'PAY-001 records are immutable.'; END
+SQL);
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER payment_eligibility_rules_delete_guard BEFORE DELETE ON payment_eligibility_rules FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'PAY-001 records are non-deletable.'; END
+SQL);
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER payment_eligibility_rule_versions_update_guard BEFORE UPDATE ON payment_eligibility_rule_versions FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'PAY-001 records are immutable.'; END
+SQL);
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER payment_eligibility_rule_versions_delete_guard BEFORE DELETE ON payment_eligibility_rule_versions FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'PAY-001 records are non-deletable.'; END
+SQL);
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER payment_eligibility_decisions_update_guard BEFORE UPDATE ON payment_eligibility_decisions FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'PAY-001 records are immutable.'; END
+SQL);
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER payment_eligibility_decisions_delete_guard BEFORE DELETE ON payment_eligibility_decisions FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'PAY-001 records are non-deletable.'; END
+SQL);
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER payment_eligibility_decision_items_update_guard BEFORE UPDATE ON payment_eligibility_decision_items FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'PAY-001 records are immutable.'; END
+SQL);
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER payment_eligibility_decision_items_delete_guard BEFORE DELETE ON payment_eligibility_decision_items FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'PAY-001 records are non-deletable.'; END
+SQL);
     }
 };
