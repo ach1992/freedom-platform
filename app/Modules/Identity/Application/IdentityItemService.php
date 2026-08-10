@@ -263,6 +263,7 @@ final readonly class IdentityItemService
             'identity.item.verify',
             $userId,
             $type,
+            $administratorId,
             $context,
             function (Connection $connection, IdentityItemRecord $item) use ($administratorId, $context): array {
                 if ($item->state !== VerificationStatus::Pending) {
@@ -324,6 +325,7 @@ final readonly class IdentityItemService
             'identity.item.reject',
             $userId,
             $type,
+            $administratorId,
             $context,
             function (Connection $connection, IdentityItemRecord $item) use ($administratorId, $context): array {
                 if ($item->state !== VerificationStatus::Pending) {
