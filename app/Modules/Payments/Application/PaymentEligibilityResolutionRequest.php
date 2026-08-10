@@ -11,7 +11,7 @@ use InvalidArgumentException;
 final readonly class PaymentEligibilityResolutionRequest
 {
     /**
-     * @param array<string, ProviderHealth> $healthByMethodCode
+     * @param  array<string, ProviderHealth>  $healthByMethodCode
      */
     public function __construct(
         public string $decisionKey,
