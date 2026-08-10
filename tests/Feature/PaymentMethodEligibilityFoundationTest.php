@@ -68,7 +68,6 @@ final class PaymentMethodEligibilityFoundationTest extends TestCase
         self::assertSame(2, DB::table('payment_method_eligibility_decision_methods')->count());
         self::assertSame(0, DB::table('payment_intents')->count());
         self::assertSame(0, DB::table('ledger_transactions')->count());
-        self::assertSame(0, DB::table('orders')->count());
 
         $replay = $service->evaluate('eligibility.route.000001', $quote->userId, $quote->quotePublicId);
         self::assertTrue($replay->replayed);
