@@ -34,7 +34,7 @@
   "active_increment": {
     "name": "Phase 0.5 remaining-scope reconciliation",
     "status": "planned",
-    "handoff_path": "PROJECT_STATUS.md",
+    "current_state_path": "PROJECT_STATUS.md",
     "requirements": [
       "PRO-001",
       "REF-001",
