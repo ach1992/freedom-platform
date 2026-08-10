@@ -8,7 +8,8 @@ This is the single human-readable current-state entry point. GitHub is authorita
 **Authoritative phase Issue:** `#8`  
 **Authoritative integration PR:** Draft PR `#6`  
 **Integration branch:** `develop/v1.0.0-completion`  
-**Base branch:** `main`
+**Base branch:** `main`  
+**Current planning increment:** Phase 0.5 remaining-scope reconciliation
 
 ## Live-state rule
 
