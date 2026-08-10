@@ -23,6 +23,10 @@ required_files=(
     CONTRIBUTING.md
     README.md
     docs/README.md
+    docs/00-execution-ledger.md
+    docs/01-authoritative-requirements.md
+    docs/02-requirement-traceability-matrix.md
+    docs/03-risk-register.md
     docs/project-status.json
     docs/development/project-status.schema.json
     docs/development/continuation-runbook.md
@@ -74,7 +78,7 @@ jq -e '
     and (.active_increment.status | IN("planned", "active", "unverified", "blocked", "verified"))
     and (.active_increment.handoff_path | type == "string" and length > 0)
     and (.active_increment.requirements | type == "array" and length > 0)
-    and ([.active_increment.requirements[] | test("^[A-Z]+-[0-9]{3}$")] | all)
+    and ([.active_increment.requirements[] | test("^[A-Z0-9]+-[0-9]{3}$")] | all)
     and .stabilization.status == "complete"
     and .stabilization.feature_development_paused == false
     and (.forbidden_actions | index("merge_pr") != null)
@@ -87,6 +91,21 @@ jq -e '
     and (.forbidden_actions | index("retrieve_or_print_secrets") != null)
     and (.forbidden_actions | index("claim_unverified_provider_compatibility") != null)
 ' docs/project-status.json >/dev/null || fail 'project status structure or fixed repository policy is inconsistent'
+
+required_phase05_requirements=(
+    PRO-001 REF-001
+    PAY-001 PAY-002 PAY-003
+    C2C-001 C2C-002 C2C-003 C2C-004 C2C-005
+    GFT-001 GFT-002 GFT-003 GFT-004
+    USDT-002 USDT-003
+    IPG-001 IPG-002
+)
+
+for requirement in "${required_phase05_requirements[@]}"; do
+    jq -e --arg requirement "$requirement" '.active_increment.requirements | index($requirement) != null' \
+        docs/project-status.json >/dev/null \
+        || fail "project status is missing unresolved Phase 0.5 requirement: $requirement"
+done
 
 implementation_sha="$(jq -r '.last_verified_boundary.implementation_sha' docs/project-status.json)"
 evidence_sha="$(jq -r '.last_verified_boundary.evidence_sha' docs/project-status.json)"
@@ -125,13 +144,46 @@ grep -F 'GitHub is authoritative for live PR/Issue/branch/CI state' PROJECT_STAT
 grep -F 'Expected long-lived branch set is intentionally only' PROJECT_STATUS.md >/dev/null \
     || fail 'PROJECT_STATUS.md does not establish the two-branch cleanup policy'
 
+# Documentation authority and anti-drift checks.
+grep -F 'Document role:** historical navigation only.' docs/00-execution-ledger.md >/dev/null \
+    || fail 'execution ledger is not explicitly historical-only'
+if grep -Eq 'Current position|current cross-phase handoff|default-branch dispatch bootstrap|ops/provider-live-dispatch-bootstrap|safety/main-2026-08-08-pre-provider-bootstrap|docs/52-current-continuation-handoff\.md|next recommended independent work' docs/00-execution-ledger.md; then
+    fail 'historical execution ledger contains live/stale coordination state'
+fi
+
+grep -F 'Implementation status is intentionally not stored in this document.' docs/02-requirement-traceability-matrix.md >/dev/null \
+    || fail 'traceability contract does not prohibit mutable implementation status'
+if grep -Eq '`(not-started|in-progress)`' docs/02-requirement-traceability-matrix.md; then
+    fail 'traceability contract contains mutable implementation-status cells'
+fi
+
+grep -F 'This is not a live task board.' docs/03-risk-register.md >/dev/null \
+    || fail 'risk register does not establish durable/non-task-board role'
+if grep -F 'Open decisions that do not block `0.1.0`' docs/03-risk-register.md >/dev/null; then
+    fail 'risk register still contains stale 0.1.0 decision framing'
+fi
+
+grep -F 'A persistent provider-live bootstrap is forbidden.' docs/development/operational-document-status.md >/dev/null \
+    || fail 'operational status does not preserve the provider-bootstrap cleanup decision'
+
+grep -F 'intentionally no mutable implementation-status cells' docs/README.md >/dev/null \
+    || fail 'documentation guide does not define status-free traceability'
+
 shopt -s nullglob
+forbidden_coordination_docs=(
+    docs/[0-9][0-9]-*current*.md
+    docs/[0-9][0-9]-*handoff*.md
+    docs/[0-9][0-9]-*overlay*.md
+    docs/[0-9][0-9]-*transition-checkpoint*.md
+)
 repair_workflows=(.github/workflows/ci-repair*.yml .github/workflows/ci-repair*.yaml)
 repair_scripts=(scripts/ci/generate-ci-repair*.sh)
 legacy_staging_workflows=(.github/workflows/staging-*.yml .github/workflows/staging-*.yaml)
 workflow_files=(.github/workflows/*.yml .github/workflows/*.yaml)
 shopt -u nullglob
 
+((${#forbidden_coordination_docs[@]} == 0)) \
+    || fail "obsolete coordination document pattern remains: ${forbidden_coordination_docs[*]}"
 ((${#repair_workflows[@]} == 0)) || fail "temporary repair workflow remains: ${repair_workflows[*]}"
 ((${#repair_scripts[@]} == 0)) || fail "temporary repair script remains: ${repair_scripts[*]}"
 ((${#workflow_files[@]} > 0)) || fail 'repository contains no GitHub Actions workflows'
