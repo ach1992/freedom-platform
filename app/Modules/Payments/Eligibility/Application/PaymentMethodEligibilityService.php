@@ -299,6 +299,7 @@ final readonly class PaymentMethodEligibilityService
                     $rulesByMethod[$rule->method_code][] = $rule;
                 }
 
+                $candidates = [];
                 $selected = [];
                 $methodSnapshots = [];
                 foreach ($methods as $method) {
@@ -310,23 +311,37 @@ final readonly class PaymentMethodEligibilityService
                         $now,
                     );
                     $methodSnapshots[] = $snapshot;
+                    $candidates[(string) $method->method_code] = [
+                        'configuration_snapshot_hash' => (string) $method->configuration_snapshot_hash,
+                        'evaluation_snapshot' => $snapshot,
+                        'method_code' => (string) $method->method_code,
+                        'method_version_id' => (int) $method->id,
+                        'method_version' => (int) $method->version,
+                        'outcome' => (string) $snapshot['outcome'],
+                        'route_order' => null,
+                    ];
                     if ($outcome === 'eligible') {
                         $selected[] = [
-                            'method_code' => (string) $method->method_code,
-                            'method_version_id' => (int) $method->id,
-                            'method_version' => (int) $method->version,
                             'display_priority' => (int) $method->display_priority,
-                            'configuration_snapshot_hash' => (string) $method->configuration_snapshot_hash,
-                            'reason' => 'eligible',
+                            'method_code' => (string) $method->method_code,
                         ];
                     }
                 }
                 usort($selected, static fn (array $left, array $right): int => [$left['display_priority'], $left['method_code']] <=> [$right['display_priority'], $right['method_code']]);
-                foreach ($selected as $index => &$method) {
-                    $method['route_order'] = $index + 1;
+                foreach ($selected as $index => $method) {
+                    $candidates[$method['method_code']]['route_order'] = $index + 1;
                 }
-                unset($method);
-
+                $selectedMethods = [];
+                foreach ($selected as $method) {
+                    $candidate = $candidates[$method['method_code']];
+                    $selectedMethods[] = [
+                        'method_code' => $candidate['method_code'],
+                        'method_version' => $candidate['method_version'],
+                        'reason' => 'eligible',
+                        'route_order' => $candidate['route_order'],
+                    ];
+                }
+                ksort($candidates, SORT_STRING);
                 $snapshot = [
                     'action' => 'purchase',
                     'formula_version' => 'pay-001-eligibility-v2',
@@ -367,22 +382,23 @@ final readonly class PaymentMethodEligibilityService
                     'configuration_snapshot_hash' => hash('sha256', $snapshotJson),
                     'created_at' => $createdAt,
                 ]);
-                foreach ($selected as $method) {
+                foreach ($candidates as $candidate) {
                     $methodSnapshot = $this->json([
-                        'configuration_snapshot_hash' => $method['configuration_snapshot_hash'],
+                        'candidate_outcome' => $candidate['outcome'],
+                        'configuration_snapshot_hash' => $candidate['configuration_snapshot_hash'],
                         'formula_version' => 'pay-001-decision-method-v2',
-                        'method_code' => $method['method_code'],
-                        'method_version' => $method['method_version'],
-                        'reason' => $method['reason'],
-                        'route_order' => $method['route_order'],
+                        'health' => $candidate['evaluation_snapshot']['health'],
+                        'method_code' => $candidate['method_code'],
+                        'method_version' => $candidate['method_version'],
+                        'route_order' => $candidate['route_order'],
                     ]);
                     $connection->table('payment_method_eligibility_decision_methods')->insert([
                         'payment_method_eligibility_decision_id' => $decisionId,
-                        'payment_method_version_id' => $method['method_version_id'],
-                        'method_code' => $method['method_code'],
-                        'method_version' => $method['method_version'],
-                        'route_order' => $method['route_order'],
-                        'reason_code' => $method['reason'],
+                        'payment_method_version_id' => $candidate['method_version_id'],
+                        'method_code' => $candidate['method_code'],
+                        'method_version' => $candidate['method_version'],
+                        'route_order' => $candidate['route_order'],
+                        'reason_code' => $candidate['outcome'],
                         'configuration_snapshot' => $methodSnapshot,
                         'configuration_snapshot_hash' => hash('sha256', $methodSnapshot),
                         'created_at' => $createdAt,
@@ -796,6 +812,7 @@ final readonly class PaymentMethodEligibilityService
         /** @var list<object> $methods */
         $methods = $connection->table('payment_method_eligibility_decision_methods')
             ->where('payment_method_eligibility_decision_id', $row->id)
+            ->whereNotNull('route_order')
             ->orderBy('route_order')
             ->get(['method_code', 'method_version', 'route_order', 'reason_code'])
             ->all();
