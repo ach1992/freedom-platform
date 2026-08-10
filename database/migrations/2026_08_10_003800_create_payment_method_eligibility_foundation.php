@@ -319,6 +319,28 @@ BEGIN
        OR (NEW.route_order IS NOT NULL AND CAST(JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.route_order')) AS UNSIGNED) <> NEW.route_order)
        OR JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.configuration_snapshot_hash')) <> (
             SELECT m.configuration_snapshot_hash FROM payment_method_versions m WHERE m.id = NEW.payment_method_version_id
+       )
+       OR (
+            JSON_TYPE(JSON_EXTRACT(NEW.configuration_snapshot, '$.health.observation_id')) = 'NULL'
+            AND (
+                JSON_TYPE(JSON_EXTRACT(NEW.configuration_snapshot, '$.health.configuration_snapshot_hash')) <> 'NULL'
+                OR JSON_TYPE(JSON_EXTRACT(NEW.configuration_snapshot, '$.health.healthy')) <> 'NULL'
+                OR JSON_TYPE(JSON_EXTRACT(NEW.configuration_snapshot, '$.health.observed_at')) <> 'NULL'
+                OR JSON_TYPE(JSON_EXTRACT(NEW.configuration_snapshot, '$.health.expires_at')) <> 'NULL'
+            )
+       )
+       OR (
+            JSON_TYPE(JSON_EXTRACT(NEW.configuration_snapshot, '$.health.observation_id')) <> 'NULL'
+            AND NOT EXISTS (
+                SELECT 1
+                FROM payment_method_health_observations h
+                WHERE h.id = CAST(JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.health.observation_id')) AS UNSIGNED)
+                  AND h.method_code = NEW.method_code
+                  AND h.configuration_snapshot_hash = JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.health.configuration_snapshot_hash'))
+                  AND h.healthy = CAST(JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.health.healthy')) AS UNSIGNED)
+                  AND CAST(h.observed_at AS CHAR) = JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.health.observed_at'))
+                  AND CAST(h.expires_at AS CHAR) = JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.health.expires_at'))
+            )
        ) THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Payment eligibility decision method snapshot is invalid.';
     END IF;
