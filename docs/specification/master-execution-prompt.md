@@ -7,53 +7,35 @@
 **Target release:** `1.0.0` production release  
 **Product UI language:** Persian by default, multilingual-ready  
 **Execution model:** ChatGPT Work, a coordinated multi-agent engineering team, or a human software team  
-**Authoritative rule:** This document is the complete product, engineering, security, testing, deployment, and acceptance specification. Implement exactly the capabilities, workflows, invariants, and delivery boundaries defined here. Do not invent additional business integrations or silently omit a defined requirement.
+**Authoritative rule:** This document is the normative Version 1 product, security, correctness, runtime, integration, testing, deployment, and final-acceptance specification. Implement its capabilities, invariants, and delivery boundaries; do not invent business integrations or silently omit a defined requirement. Repository execution mechanics and live delivery state are governed by `AGENTS.md`, `CONTRIBUTING.md`, the canonical engineering references, and live GitHub.
+**Repository governance reconciliation:** `2026-08-11` — process-only instructions that required duplicate status, traceability, handoff, or per-task evidence artifacts are superseded; Version 1 product/security/correctness scope is unchanged.
 
 ---
 
-# 0. Primary Command to the Lead Agent
+# 0. Product Delivery Command
 
-You are the Lead Agent, Program Manager, Principal Architect, and final delivery owner for this project. Build the entire application from zero and deliver a production-ready `1.0.0` release. You may create and coordinate specialist agents, but you remain responsible for scope control, architecture, integration, security, tests, release quality, documentation, deployment readiness, and final acceptance.
+Complete the production-ready `1.0.0` product defined by this specification from the repository's current accepted state. Do not restart the project, recreate retired planning artifacts, or treat historical process instructions as current project state.
 
-## 0.1 Mandatory operating behavior
+## 0.1 Repository execution model
 
-1. Read this entire document before writing application code.
-2. Treat every requirement in this document as authoritative.
-3. Create a requirement ledger and assign a stable requirement ID to every functional, security, operational, and testing requirement.
-4. Maintain a bidirectional traceability matrix: requirement -> design -> code -> tests -> evidence.
-5. Work in versioned phases. Do not close a phase until its Quality Gate passes.
-6. Do not ask the owner questions that can be resolved safely through documented defaults, local fakes, stubs, contract tests, or official documentation.
-7. Ask the owner only when a real secret, real account, root-level server action, legally relevant business policy, or irreversible production decision is required.
-8. Never place credentials in chat, commits, fixtures, screenshots, logs, test reports, artifacts, or issue descriptions.
-9. Every claim that something was tested must include the exact command, environment, result, and generated evidence path.
-10. Do not claim absolute zero defects. The production criterion is: no known Critical or High defect, all mandatory tests pass, all financial and authorization invariants are proven by automated tests, and remaining accepted risks are documented.
-11. Use a Laravel modular monolith with the minimum infrastructure required for reliable operation, deployment, recovery, and observability.
-12. Preserve modularity so a future web administration interface can use the same Application Services without duplicating business logic.
-13. Never build a paid service before authoritative payment success, and never create two services for one paid order.
-14. Never allow a duplicate callback, webhook, receipt approval, queue retry, or repeated Telegram update to create a second financial effect.
-15. Stop and raise a release blocker when a financial invariant, authorization boundary, restore test, or provisioning idempotency test fails.
+1. Read the owning requirements and relevant canonical references before changing product behavior.
+2. Use the existing stable requirement IDs in `docs/01-authoritative-requirements.md`; do not create a second requirement ledger or mutable traceability matrix. Link implementation work to requirement IDs through GitHub Issues, PRs, code/tests where useful, and review history.
+3. Use live GitHub as the delivery system: Program Issue `#3` -> active phase Issue -> bounded task Issue -> PR/checks. Dynamic priority, status, blockers, branches, SHAs, reviews, and CI results do not belong in repository status files.
+4. Work in outcome-based phases. A phase closes when its GitHub exit criteria and applicable product/security/financial/operational validation are satisfied, not when a ceremonial report is produced.
+5. Ask the Owner only for decisions that cannot safely be derived from the specification/current repository, or that require real credentials/accounts, privileged infrastructure action, business/legal policy, production rollout, irreversible action, or explicit High/Critical approval.
+6. Never place credentials or sensitive customer/provider/payment data in Chat, commits, fixtures, screenshots, logs, PR/Issue text, or retained evidence.
+7. Testing claims must be reviewable from focused commands/results and applicable CI/checks. Do not create a per-task evidence document or artifact merely to restate a successful workflow run.
+8. Update an existing canonical document only when a durable product, architecture, security, testing, compatibility, or operations rule changes. Keep implementation history in Git/GitHub.
+9. Production acceptance does not mean absolute zero defects. It requires no known unresolved Critical/High release defect, all mandatory acceptance checks, proven financial/authorization/idempotency/restore/release invariants where applicable, and explicit treatment of remaining accepted risks.
+10. Keep a Laravel modular monolith with the minimum infrastructure needed for reliable operation. Optimize boundaries for future features/adapters/UI surfaces; do not refactor solely because a file is large or split cohesive behavior merely to reduce line count.
+11. Never provision a paid service before authoritative payment settlement, never create two services for one paid item, and never allow duplicate callbacks/webhooks/retries/operator actions to create a second financial or irreversible remote effect.
+12. Stop acceptance when a financial invariant, authorization boundary, restore/release integrity check, or provisioning idempotency requirement fails.
 
-## 0.2 First artifacts to create
+## 0.2 State retention and handover
 
-Before feature implementation, create:
+A replacement manager/developer with no Chat history must be able to continue from `README.md`, `AGENTS.md`, `CONTRIBUTING.md`, Program Issue `#3`, Draft integration PR `#6`, the active task, and only the relevant canonical references.
 
-- `docs/00-execution-ledger.md`
-- `docs/01-authoritative-requirements.md`
-- `docs/02-requirement-traceability-matrix.md`
-- `docs/03-risk-register.md`
-- `docs/04-domain-glossary.md`
-- `docs/05-architecture-overview.md`
-- `docs/06-test-strategy.md`
-- `docs/07-security-threat-model.md`
-- `docs/08-data-classification.md`
-- `docs/09-deployment-runbook.md`
-- `docs/10-release-checklist.md`
-- `docs/adr/`
-- an initialized Git repository
-- initial tag `v0.1.0-planning-start`
-
-Every artifact must be updated during implementation, not created as empty ceremony.
-
+Do not create or restore `PROJECT_STATUS.md`, execution ledgers, mutable traceability matrices, per-task handoff files, per-task risk/evidence reports, or phase evidence directories merely for coordination. Git/GitHub/CI already preserve that history. Release-candidate/release records may be retained only when they have a real future operational or acceptance consumer.
 ---
 
 # 1. Project Mission
@@ -314,13 +296,12 @@ Responsibilities:
 
 ## 3.11 Team workflow rules
 
-- No author approves their own security-sensitive or financial change alone.
-- Every module requires at least one code review by a different specialist.
-- Financial, authorization, installer, updater, backup, and provider-integration changes require specialist review.
-- All merge requests reference requirement IDs and tests.
-- Use small, reviewable commits.
-- Every phase ends with a written Quality Gate report.
-
+- One bounded GitHub Issue owns each independently reviewable task; one PR should normally implement that task.
+- PRs link the owning Issue/requirements and the validation that proves the change. Do not require duplicate traceability/evidence documents.
+- No author alone approves High/Critical financial, authorization, security, provider, schema, deployment/release, secret, or irreversible work unless that exact action was explicitly pre-authorized by the Owner.
+- Use independent/specialist review when risk requires it. Do not add reviewers or checklists that provide no decision value.
+- Prefer small, cohesive, independently reviewable changes; do not split tightly coupled work or create tasks merely to increase task count.
+- A phase ends when its GitHub exit criteria and applicable quality/security/financial/operations gates pass. Create a durable phase/release report only when a release, audit, or operations consumer actually needs it.
 ---
 
 # 4. Architecture
