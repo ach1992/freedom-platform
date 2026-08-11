@@ -85,7 +85,8 @@ Use deterministic fixtures/fakes for unavailable external systems. Real provider
 | `docker-compose.ci.yml` | disposable MariaDB/Redis test dependencies |
 | `deploy/bin/` | guarded runtime/deployment primitives |
 | `deploy/supervisor/` | Supervisor templates |
-| `deploy/staging/` | staging-specific implementation history/tools; execution requires current authorization |
+
+Retired staging bootstrap/mutation automation is Git history, not an active repository path or implementation template.
 
 Never execute an operational file solely because it exists.
 
