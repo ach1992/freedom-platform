@@ -82,15 +82,27 @@ final class ArchitectureBoundaryChecker
             $line = $this->lineNumber($source, $match[0][1]);
 
             if ($sourceLayer === 'Domain') {
-                if ($targetModule !== $sourceModule || $targetLayer !== 'Domain') {
-                    $violations[] = sprintf(
-                        '%s:%d Domain may depend only on its own Domain and approved Shared Domain primitives; found %s\\%s.',
-                        $relativePath,
-                        $line,
-                        $targetModule,
-                        $targetLayer,
-                    );
+                if ($targetModule === $sourceModule && $targetLayer === 'Domain') {
+                    continue;
                 }
+
+                if ($targetModule !== $sourceModule) {
+                    $edges[] = $sourceModule.'>'.$targetModule;
+                }
+
+                $exceptionKey = $relativePath.'|'.$targetModule.'\\'.$targetLayer;
+                $exceptions = $this->config['domain_dependency_exceptions'] ?? [];
+                if (is_array($exceptions) && in_array($exceptionKey, $exceptions, true)) {
+                    continue;
+                }
+
+                $violations[] = sprintf(
+                    '%s:%d Domain may depend only on its own Domain and approved Shared Domain primitives; found %s\\%s.',
+                    $relativePath,
+                    $line,
+                    $targetModule,
+                    $targetLayer,
+                );
 
                 continue;
             }
@@ -178,7 +190,11 @@ final class ArchitectureBoundaryChecker
                 $sourceLayer = $pathParts[2];
             }
 
-            if (str_starts_with($relativePath, 'routes/') || $sourceLayer === 'Presentation') {
+            $exceptionKey = $relativePath.'|'.$table;
+            $exceptions = $this->config['persistence_exceptions'] ?? [];
+            $persistenceException = is_array($exceptions) && in_array($exceptionKey, $exceptions, true);
+
+            if ((str_starts_with($relativePath, 'routes/') || $sourceLayer === 'Presentation') && ! $persistenceException) {
                 $violations[] = sprintf(
                     '%s:%d direct persistence mutation of %s from %s is forbidden; call an Application boundary.',
                     $relativePath,
@@ -189,13 +205,7 @@ final class ArchitectureBoundaryChecker
             }
 
             $owner = $this->protectedTableOwner($table);
-            if ($owner === null || $sourceModule === null || $owner === $sourceModule) {
-                continue;
-            }
-
-            $exceptionKey = $relativePath.'|'.$table;
-            $exceptions = $this->config['persistence_exceptions'] ?? [];
-            if (is_array($exceptions) && in_array($exceptionKey, $exceptions, true)) {
+            if ($owner === null || $sourceModule === null || $owner === $sourceModule || $persistenceException) {
                 continue;
             }
 
