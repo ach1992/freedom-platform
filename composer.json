@@ -60,6 +60,11 @@
             "@php artisan config:clear --ansi @no_additional_args",
             "@php artisan test"
         ],
+        "test:quick": [
+            "@php artisan config:clear --ansi @no_additional_args",
+            "@php artisan test"
+        ],
+        "test:integration": "bash scripts/ci/test-integration.sh",
         "ci:static": [
             "@php vendor/bin/pint --test",
             "@php vendor/bin/phpstan analyse --no-progress --memory-limit=1G",
