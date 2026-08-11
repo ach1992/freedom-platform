@@ -28,6 +28,8 @@ A stale, skipped, queued, superseded, cleanup-only, or failed run is not accepta
 
 ## Local commands
 
+Install/bootstrap and static policy checks:
+
 ```bash
 composer install --no-interaction --prefer-dist --no-progress --no-scripts
 php artisan package:discover --ansi
@@ -41,14 +43,27 @@ composer audit --locked --abandoned=fail
 bash scripts/ci/licenses.sh
 ```
 
-Application integration:
+Fast developer feedback uses the PHPUnit configuration's in-memory SQLite defaults:
 
 ```bash
-docker compose -f docker-compose.ci.yml up -d --wait
-php artisan config:clear --ansi
-php artisan test --display-warnings --fail-on-warning
-docker compose -f docker-compose.ci.yml down --volumes --remove-orphans
+composer test:quick
 ```
+
+This quick path is useful for deterministic local feedback but is not database-engine acceptance evidence.
+
+For disposable MariaDB 11.4 plus authenticated Redis:
+
+```bash
+composer test:integration
+```
+
+For the other CI-supported MariaDB target:
+
+```bash
+MARIADB_VERSION=10.11 composer test:integration
+```
+
+The integration entrypoint exports the same database/Redis connection values used by `docker-compose.ci.yml`, starts disposable dependencies, runs PHPUnit, and tears them down even when the test command fails. GitHub Actions remains the mandatory exact-head acceptance gate and runs both MariaDB targets.
 
 ## Test design rules
 
