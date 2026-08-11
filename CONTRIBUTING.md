@@ -50,16 +50,25 @@ composer audit --locked --abandoned=fail
 bash scripts/ci/licenses.sh
 ```
 
-Application suite:
+Fast local application suite (SQLite, deterministic developer feedback only):
 
 ```bash
-docker compose -f docker-compose.ci.yml up -d --wait
-php artisan config:clear --ansi
-php artisan test --display-warnings --fail-on-warning
-docker compose -f docker-compose.ci.yml down --volumes --remove-orphans
+composer test:quick
 ```
 
-Isolation-sensitive schema, trigger, locking, and concurrency behavior must be verified on MariaDB, not SQLite. Mandatory acceptance is the repository GitHub Actions workflow on the exact PR head.
+Disposable MariaDB/Redis integration suite (MariaDB 11.4 by default):
+
+```bash
+composer test:integration
+```
+
+To reproduce the other CI database target locally:
+
+```bash
+MARIADB_VERSION=10.11 composer test:integration
+```
+
+`composer test:quick` is not acceptance evidence for migrations, constraints, triggers, locking, or concurrency. Those behaviors require MariaDB. Mandatory acceptance is the repository GitHub Actions workflow on the exact PR head, including both MariaDB targets.
 
 ## Coding rules
 
