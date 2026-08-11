@@ -45,10 +45,6 @@ final class SystemPanelDnsResolver implements PanelDnsResolver
             }
 
             foreach ($records as $record) {
-                if (! is_array($record)) {
-                    continue;
-                }
-
                 $type = $record['type'] ?? null;
                 if ($type === 'A') {
                     $address = $record['ip'] ?? null;
