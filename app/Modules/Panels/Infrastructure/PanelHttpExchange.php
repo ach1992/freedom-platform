@@ -12,6 +12,7 @@ final readonly class PanelHttpExchange
         public ?array $json,
         public bool $malformedJson,
         public bool $transportFailure,
+        public ?PanelHttpFailureType $failure = null,
     ) {}
 
     public function successful(): bool

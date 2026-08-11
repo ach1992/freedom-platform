@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Panels\Infrastructure;
 
+use App\Modules\Panels\Application\Contracts\PanelDnsResolver;
 use App\Modules\Panels\Application\Contracts\PasarGuardGateway;
 use App\Modules\Panels\Application\Contracts\PasarGuardGatewayFactory;
 use App\Modules\Panels\Application\PanelAdapterSession;
@@ -15,12 +16,13 @@ final readonly class PasarGuardSourceContractGatewayFactory implements PasarGuar
     public function __construct(
         private Factory $http,
         private FilesystemManager $filesystems,
+        private PanelDnsResolver $dnsResolver,
     ) {}
 
     public function make(PanelAdapterSession $session): PasarGuardGateway
     {
         return new PasarGuardSourceContractGateway(
-            new PanelHttpTransport($this->http, $this->filesystems, $session),
+            new PanelHttpTransport($this->http, $this->filesystems, $session, $this->dnsResolver),
             $session,
         );
     }

@@ -6,6 +6,7 @@ namespace App\Modules\Panels\Infrastructure;
 
 use App\Modules\AccessControl\Application\AdministratorPermissionAuthorizer;
 use App\Modules\Panels\Application\Contracts\MarzbanGatewayFactory;
+use App\Modules\Panels\Application\Contracts\PanelDnsResolver;
 use App\Modules\Panels\Application\Contracts\PasarGuardGatewayFactory;
 use App\Modules\Panels\Application\PanelAdapterRegistry;
 use App\Modules\Panels\Application\PanelApprovalGate;
@@ -34,6 +35,7 @@ final class PanelsServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->bind(PanelApprovalGate::class, SensitivePanelApprovalGate::class);
+        $this->app->bind(PanelDnsResolver::class, SystemPanelDnsResolver::class);
         $this->app->bind(MarzbanGatewayFactory::class, MarzbanSourceContractGatewayFactory::class);
         $this->app->bind(PasarGuardGatewayFactory::class, PasarGuardSourceContractGatewayFactory::class);
 

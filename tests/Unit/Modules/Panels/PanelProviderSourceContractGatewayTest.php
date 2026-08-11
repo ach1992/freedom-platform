@@ -8,6 +8,7 @@ use App\Modules\Panels\Application\Contracts\MarzbanGatewayFactory;
 use App\Modules\Panels\Application\Contracts\PanelAdapter;
 use App\Modules\Panels\Application\Contracts\PanelCapabilities;
 use App\Modules\Panels\Application\Contracts\PanelCreateServiceRequest;
+use App\Modules\Panels\Application\Contracts\PanelDnsResolver;
 use App\Modules\Panels\Application\Contracts\PanelOperationOutcome;
 use App\Modules\Panels\Application\Contracts\PasarGuardGatewayFactory;
 use App\Modules\Panels\Application\Exceptions\AuthoritativePanelLookupUnavailable;
@@ -31,6 +32,13 @@ use Tests\TestCase;
 /** @requirement PRV-001 PRV-002 PRV-003 SEC-001 SEC-002 QUA-001 */
 final class PanelProviderSourceContractGatewayTest extends TestCase
 {
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        $this->app->instance(PanelDnsResolver::class, new ProviderContractPanelDnsResolver);
+    }
+
     public function test_service_provider_binds_pinned_read_only_gateway_factories(): void
     {
         self::assertInstanceOf(
@@ -337,5 +345,13 @@ final class PanelProviderSourceContractGatewayTest extends TestCase
             'next_plan' => null,
             'admin' => null,
         ];
+    }
+}
+
+final class ProviderContractPanelDnsResolver implements PanelDnsResolver
+{
+    public function resolve(string $host): array
+    {
+        return ['93.184.216.34'];
     }
 }

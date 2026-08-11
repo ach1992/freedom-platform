@@ -6,6 +6,7 @@ namespace App\Modules\Panels\Application;
 
 use App\Modules\Panels\Domain\PanelCredentials;
 use App\Modules\Panels\Domain\PanelEndpoint;
+use App\Modules\Panels\Domain\PanelNetworkPolicy;
 use App\Modules\Panels\Domain\TlsConfiguration;
 use InvalidArgumentException;
 
@@ -17,6 +18,7 @@ final readonly class PanelAdapterSession
         public TlsConfiguration $tls,
         public int $timeoutSeconds = 15,
         public int $maximumAttempts = 3,
+        public PanelNetworkPolicy $networkPolicy = PanelNetworkPolicy::PublicOnly,
     ) {
         if ($timeoutSeconds < 1 || $timeoutSeconds > 120) {
             throw new InvalidArgumentException('Panel timeout must be between 1 and 120 seconds.');

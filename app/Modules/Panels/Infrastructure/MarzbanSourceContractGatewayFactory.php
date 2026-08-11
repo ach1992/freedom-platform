@@ -6,6 +6,7 @@ namespace App\Modules\Panels\Infrastructure;
 
 use App\Modules\Panels\Application\Contracts\MarzbanGateway;
 use App\Modules\Panels\Application\Contracts\MarzbanGatewayFactory;
+use App\Modules\Panels\Application\Contracts\PanelDnsResolver;
 use App\Modules\Panels\Application\PanelAdapterSession;
 use Illuminate\Filesystem\FilesystemManager;
 use Illuminate\Http\Client\Factory;
@@ -15,12 +16,13 @@ final readonly class MarzbanSourceContractGatewayFactory implements MarzbanGatew
     public function __construct(
         private Factory $http,
         private FilesystemManager $filesystems,
+        private PanelDnsResolver $dnsResolver,
     ) {}
 
     public function make(PanelAdapterSession $session): MarzbanGateway
     {
         return new MarzbanSourceContractGateway(
-            new PanelHttpTransport($this->http, $this->filesystems, $session),
+            new PanelHttpTransport($this->http, $this->filesystems, $session, $this->dnsResolver),
             $session,
         );
     }
