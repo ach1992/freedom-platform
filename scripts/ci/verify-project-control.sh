@@ -91,7 +91,7 @@ if grep -RIE --include='*.md' \
     fail 'canonical documentation references a retired status/planning/traceability/evidence file'
 fi
 
-# All workflows use the canonical owner-controlled self-hosted runner.
+# All workflows use the canonical owner-controlled self-hosted runner and must be active/current contracts.
 shopt -s nullglob
 workflow_files=(.github/workflows/*.yml .github/workflows/*.yaml)
 shopt -u nullglob
@@ -99,6 +99,10 @@ shopt -u nullglob
 
 expected_runner_selector='runs-on: [self-hosted, Linux, X64, freedom-staging, php84]'
 for workflow in "${workflow_files[@]}"; do
+    if grep -Eq 'Historical - Disabled|disabled/historical-workflow|docs/development/staging-workflow-inventory\.md' "$workflow"; then
+        fail "historical disabled workflow stub remains in active tree: $workflow"
+    fi
+
     found_runner=false
     while IFS= read -r runner_line; do
         trimmed="${runner_line#"${runner_line%%[![:space:]]*}"}"
