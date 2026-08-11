@@ -1,243 +1,115 @@
-# aaPanel/OpenLiteSpeed Deployment Runbook
+# Deployment, Backup, Update, and Rollback
 
-Target: Ubuntu 22.04 LTS, aaPanel, OpenLiteSpeed, PHP 8.4, MariaDB, authenticated Redis
+Target environment: Ubuntu/aaPanel/OpenLiteSpeed, PHP 8.4, MariaDB, authenticated Redis.
 
-Domain: `hell.hellpservice.ir`
+This document is a **safety contract**, not proof that every described command/capability currently exists. Execute an operational step only when the release/task explicitly authorizes it and the referenced implementation is present on the exact release commit.
 
-Root: `/www/acdomains/hell.hellpservice.ir`
+## Production layout
 
-Run as: `root` only for host configuration; application commands as `www`
-
-This runbook is executable only after the release manifest, checksums/signature, installer, health command, and release package exist. Replace `<RELEASE>` and `<PACKAGE>` with values from the signed release. Never paste a credential into a shell command or chat.
-
-## 1. Change controls and backup
-
-Before touching production:
-
-- approved release and maintenance window;
-- successful CI, staging install, restore, and update/rollback evidence for the same Git SHA;
-- no active financial capture/provisioning/reconciliation operation;
-- current queue state recorded;
-- a successful encrypted current-state backup copied to an independent destination;
-- tested previous release path and rollback compatibility recorded.
-
-Verify the last backup and current release as `root`:
-
-```bash
-readlink -f /www/acdomains/hell.hellpservice.ir/current
-sudo -u www /www/server/php/84/bin/php /www/acdomains/hell.hellpservice.ir/current/artisan backup:status --latest --redact
-sudo -u www /www/server/php/84/bin/php /www/acdomains/hell.hellpservice.ir/current/artisan operations:pending-financial --fail-if-active
+```text
+<root>/
+├── releases/<version>/       # immutable code
+├── shared/
+│   ├── .env                 # mode 0600
+│   ├── storage/
+│   ├── backups/
+│   └── update-packages/
+└── current -> releases/<version>
 ```
 
-Expected: an absolute release path, a verified encrypted backup, and no unsafe active operation. Stop if any command fails.
+Only `current/public` is web-exposed. Do not expose repository root, `.env`, shared storage, backups, or provider certificates.
 
-## 2. Host preflight
+## Preflight
 
-Run through SSH as `root`:
+Before first install or release activation verify:
 
-```bash
-/www/server/php/84/bin/php -v
-/usr/local/lsws/lsphp84/bin/lsphp -v
-/usr/local/bin/composer --version
-systemctl is-active cron
-command -v redis-cli
-supervisorctl version
-timedatectl show --property=Timezone --value
-```
+- CLI PHP and OpenLiteSpeed PHP are independently compatible PHP 8.4 runtimes;
+- required extensions and Composer are available;
+- MariaDB and authenticated Redis are reachable with least-privilege application credentials;
+- filesystem owner/group/permissions are correct; never use `0777`;
+- HTTPS is valid;
+- only one Scheduler Cron entry exists;
+- Supervisor workers use the reviewed queue/runtime configuration;
+- no secret is passed through command arguments, Chat, Git, or screenshots.
 
-Both PHP binaries must report PHP 8.4; Cron must be active; the Redis client and Supervisor controller must be available; the host operational timezone should be UTC. aaPanel may manage Redis outside the distro's `redis-server.service`, so authenticated Redis readiness is verified through the installer instead of assuming a systemd unit name. The installer must separately inspect extensions, `php.ini`, `disable_functions`, limits, OPcache, MariaDB, authenticated Redis, HTTPS, outbound connectivity, disk, and permissions.
+## Release acceptance before deployment
 
-Create the fixed layout once:
+Do not deploy unless the exact release candidate has:
 
-```bash
-install -d -o www -g www -m 0750 /www/acdomains/hell.hellpservice.ir/releases
-install -d -o www -g www -m 0750 /www/acdomains/hell.hellpservice.ir/shared/storage
-install -d -o www -g www -m 0700 /www/acdomains/hell.hellpservice.ir/shared/backups
-install -d -o www -g www -m 0700 /www/acdomains/hell.hellpservice.ir/shared/update-packages
-install -d -o www -g www -m 0700 /www/acdomains/hell.hellpservice.ir/shared/restore-work
-install -d -o www -g www -m 0700 /www/acdomains/hell.hellpservice.ir/shared/provider-certificates
-```
+- mandatory CI success;
+- reviewed migration/schema compatibility;
+- verified package manifest/checksum/signature policy;
+- target-like install/update/rollback testing applicable to the release;
+- current encrypted backup and restore confidence;
+- no unresolved Critical/High release blocker;
+- explicit owner release approval.
 
-Do not create `.env` manually with credentials on the command line. The browser installer or a hidden-input Artisan command writes it atomically with mode `0600`.
+## Package and activation
 
-## 3. Verify and stage a release
+A release package must contain source, lockfile, migrations, release metadata, compatibility metadata, and integrity material without secrets.
 
-Place the package, detached signature when used, and published checksum file in `/www/acdomains/hell.hellpservice.ir/shared/update-packages/`. Run as `root`:
+Verify package integrity against authenticated release metadata before extraction/activation. Reject path traversal, symlink escape, incompatible runtime/schema, and unverified content.
 
-```bash
-cd /www/acdomains/hell.hellpservice.ir/shared/update-packages
-sha256sum --check SHA256SUMS
-```
+Activation must use the repository's guarded atomic release-switch implementation when available. Do not replace a guarded release primitive with ad-hoc `ln -sfn`, manual file copying over the live tree, or direct edits to an existing release.
 
-Expected: every listed file reports `OK`. If release signing is enabled, verify with the public key and exact command stated in the release manifest. A checksum copied from the same untrusted package location is insufficient; compare it to the authenticated GitHub Release metadata.
+After activation run the implemented health/readiness, queue/worker, Scheduler, webhook, and reconciliation checks required by that release. Do not invent commands that are not present in source.
 
-Extract only with the version-controlled bootstrap tool supplied by the release; it must reject path traversal, symlink escape, wrong manifest, incompatible PHP/schema, existing release destination, and unsigned/unchecked content. Expected interface:
+## Scheduler and workers
 
-```bash
-cd /www/acdomains/hell.hellpservice.ir
-sudo -u www ./shared/update-packages/bootstrap-release --package "shared/update-packages/<PACKAGE>" --release "<RELEASE>"
-```
+- exactly one Cron invokes Laravel Scheduler;
+- Supervisor manages workers;
+- payment/provisioning-critical queues remain isolated from bulk/report/broadcast work as configured;
+- worker timeouts remain below Redis queue retry-after bounds;
+- worker/scheduler health must be observable without exposing secrets.
 
-The tool creates `/www/acdomains/hell.hellpservice.ir/releases/<RELEASE>`, links `storage` and the shared `.env`, installs locked production dependencies as `www`, and writes a redacted journal. Do not substitute an ad-hoc `unzip` on production.
+## Backups
 
-## 4. First installation
+Production backups must be:
 
-For a new installation only:
+- consistent for the database/private files required for recovery;
+- authenticated-encrypted;
+- checksummed/manifested;
+- stored outside the public root;
+- copied to an independent destination according to retention policy;
+- periodically restored in an isolated target-like environment.
 
-1. In aaPanel, create the site `hell.hellpservice.ir` and enable HTTPS.
-2. Set the site document root to `/www/acdomains/hell.hellpservice.ir/current/public`.
-3. Select PHP 8.4 and enable URL rewrite/front-controller handling for `public/index.php`.
-4. Deny access to hidden files and ensure no alias exposes the project or shared root.
-5. Activate the staged release only through the bootstrap's atomic symlink operation.
-6. Open the one-time installer URL using its short-lived setup token.
-7. Enter MariaDB, Redis, Telegram, Owner, and optional integration secrets into protected secret fields.
-8. Complete preflight, migrations, seed, webhook registration, health checks, and lock creation.
+Never expose a database password in process arguments. Temporary plaintext, if unavoidable, must have restrictive permissions and be removed only after verified encrypted output exists.
 
-The installer must end by creating `/www/acdomains/hell.hellpservice.ir/shared/installer.lock`; subsequent installer requests return `404` or `410`. Never share the setup URL or capture it in screenshots.
+A backup that has never been restored is not sufficient release evidence.
 
-Raw OpenLiteSpeed configuration is intentionally not shipped: aaPanel owns/regenerates the vhost file. The approved source of truth is the document root above plus an exported, redacted aaPanel vhost snapshot stored with deployment evidence.
+## Restore
 
-## 5. Scheduler and workers
+Restore is a privileged, explicit operation. It must:
 
-Install exactly one Scheduler Cron entry from `deploy/cron/freedom-platform.cron` using aaPanel Cron or the system crontab. Verify:
+1. authenticate/authorize the operator;
+2. validate backup manifest, checksum, encryption key, and compatibility;
+3. preserve the current state/safety backup before destructive replacement;
+4. restore into an isolated/staged boundary where possible;
+5. run migrations/compatibility steps defined by the restore implementation;
+6. smoke-test and reconcile financial/remote state before reopening.
 
-```bash
-crontab -l | grep -F '/www/acdomains/hell.hellpservice.ir/current' | wc -l
-```
+Never edit ledger/payment history manually to make a restore appear consistent.
 
-Expected: `1`.
+## Update
 
-Copy `deploy/supervisor/freedom-platform.conf` to `/etc/supervisor/conf.d/freedom-platform.conf`, then run as `root`:
+An updater must verify the package and compatibility before mutation, quiesce unsafe work, make a verified pre-update backup, stage code separately, apply reviewed migrations, run health/smoke checks, then atomically activate.
 
-```bash
-supervisorctl reread
-supervisorctl update
-supervisorctl status 'freedom-platform-workers:*'
-```
+Database migrations should use expand/contract compatibility. A code rollback is forbidden when the current schema is not compatible with the previous release.
 
-Expected: all configured processes become `RUNNING`; critical payments/provisioning are isolated from broadcast/report queues. Each process receives a unique `WORKER_NAME`, queue-group metadata, heartbeat interval `30`, and stale threshold `480`. The application records heartbeats while idle and before/after/after-failure job lifecycle events; a heartbeat write failure is logged generically and does not terminate the worker.
+## Rollback
 
-After at least one minute, verify database heartbeat freshness through the application command:
+If activation fails:
 
-```bash
-sudo -u www /www/server/php/84/bin/php \
-  /www/acdomains/hell.hellpservice.ir/current/artisan \
-  operations:check-worker-heartbeats --max-age=480 --json
-```
+- preserve logs/journal/evidence;
+- stop new unsafe financial/provisioning effects if needed;
+- use the guarded release rollback path only when schema compatibility is proven;
+- otherwise restore the verified pre-update backup through the controlled restore process;
+- re-run health, worker/Scheduler, webhook, and reconciliation checks before reopening.
 
-Expected: every configured Supervisor process has a distinct current heartbeat. Stop one non-critical worker during the staging rehearsal, confirm one deduplicated critical alert is created after the threshold, restart it, and confirm the alert resolves.
+Never run `migrate:rollback` blindly on production.
 
-## 6. Permissions
+## Secrets and operational evidence
 
-Application source is immutable to the web process except shared runtime paths. Run as `root` after staging:
+Operational evidence is stored in protected target storage. A repository release record contains only sanitized metadata such as release commit, command/result summary, artifact/checksum identifiers, and known limitations.
 
-```bash
-chown -R www:www /www/acdomains/hell.hellpservice.ir/releases/<RELEASE>
-find /www/acdomains/hell.hellpservice.ir/releases/<RELEASE> -type d -exec chmod 0750 {} \;
-find /www/acdomains/hell.hellpservice.ir/releases/<RELEASE> -type f -exec chmod 0640 {} \;
-chmod 0750 /www/acdomains/hell.hellpservice.ir/releases/<RELEASE>/artisan
-chmod 0600 /www/acdomains/hell.hellpservice.ir/shared/.env
-```
-
-Writable runtime directories live under shared `storage`; do not grant `0777`. Confirm the HTTP/queue user is `www` before applying ownership.
-
-## 7. Activation and verification
-
-Before activation, production `.env` must set `APP_ENV=production`, `APP_DEBUG=false`, `SESSION_SECURE_COOKIE=true`, `SESSION_HTTP_ONLY=true`, `SESSION_SAME_SITE=lax`, `SESSION_ENCRYPT=true`, and `REDIS_QUEUE_RETRY_AFTER=420` or a larger reviewed value. The Redis retry interval must remain greater than every Supervisor worker timeout.
-
-The staged release must contain regular readable `artisan`, `public/index.php`, and `composer.lock`. Shared `.env` and shared `storage` must exist as direct resources under `/www/acdomains/hell.hellpservice.ir/shared`. Do not pre-create conflicting `.env` or `storage` paths inside the candidate.
-
-Activate the candidate only through the verified release switch primitive:
-
-```bash
-sudo -u www /www/server/php/84/bin/php \
-  /www/acdomains/hell.hellpservice.ir/releases/<RELEASE>/deploy/bin/release-switch.php \
-  --root=/www/acdomains/hell.hellpservice.ir \
-  --release=<RELEASE> \
-  --php=/www/server/php/84/bin/php \
-  --journal=/www/acdomains/hell.hellpservice.ir/shared/release-journal.json \
-  --timeout=60
-```
-
-The command:
-
-- validates the release identifier and realpath containment;
-- rejects traversal, candidate symlink escape, unsafe `current`, unapproved shared-resource paths, and missing mandatory files;
-- creates only relative links to `../../shared/.env` and `../../shared/storage`;
-- records the previous release and `composer.lock` SHA-256 in a mode-`0600` redacted journal;
-- removes only a stale `.current.next` symlink and refuses a regular file at that path;
-- atomically renames `.current.next` to `current`;
-- runs the fixed critical redacted health command against the activated candidate;
-- restores the previous `current`, or removes failed first activation, if health verification fails.
-
-Do not substitute `ln -sfn` because it bypasses containment, journaling, shared-link and automatic-health rollback controls.
-
-Then run:
-
-```bash
-sudo -u www /www/server/php/84/bin/php /www/acdomains/hell.hellpservice.ir/current/artisan optimize
-sudo -u www /www/server/php/84/bin/php /www/acdomains/hell.hellpservice.ir/current/artisan queue:restart
-supervisorctl reread
-supervisorctl update
-supervisorctl status 'freedom-platform-workers:*'
-curl --fail --silent --show-error https://hell.hellpservice.ir/health/live
-curl --fail --silent --show-error https://hell.hellpservice.ir/health/ready
-sudo -u www /www/server/php/84/bin/php /www/acdomains/hell.hellpservice.ir/current/artisan health:check --critical --json --redact
-sudo -u www /www/server/php/84/bin/php /www/acdomains/hell.hellpservice.ir/current/artisan reconciliation:critical --fail-on-difference
-```
-
-Verify webhook secret validation with the application smoke command; do not send a forged public request containing the real secret:
-
-```bash
-sudo -u www /www/server/php/84/bin/php /www/acdomains/hell.hellpservice.ir/current/artisan telegram:webhook:verify --redact
-sudo -u www /www/server/php/84/bin/php /www/acdomains/hell.hellpservice.ir/current/artisan scheduler:heartbeat:verify
-sudo -u www /www/server/php/84/bin/php /www/acdomains/hell.hellpservice.ir/current/artisan workers:heartbeat:verify
-```
-
-Expected: all exit `0`, readiness is healthy, reconciliation has no unexplained difference, and Scheduler/worker heartbeats are current. Execute a test-bot onboarding and a Fake-provider purchase/provision/delivery journey before enabling live gateways.
-
-Store redacted evidence under `storage/app/private/operations/evidence/<RELEASE>/deployment/<UTC timestamp>/` and export a sanitized copy for the release record.
-
-## 8. Failure and rollback
-
-If failure occurs before the symlink switch, leave `current` unchanged and delete nothing until the staged journal is reviewed. A failed candidate health check performed by `release-switch.php` automatically restores the previous release. If further failure occurs after activation:
-
-1. Enter maintenance mode if customer/financial safety is affected.
-2. Stop new provider captures/provisioning through the Operations Center.
-3. Preserve logs and the private release journal.
-4. Confirm schema compatibility before any code rollback.
-5. Run the guarded release switch with `--rollback`; never edit the symlink manually.
-6. If schema is incompatible, restore the verified pre-update backup and explicitly accept the documented data-loss window.
-7. Re-run health, reconciliation, webhook, queue, Scheduler and worker checks before reopening.
-
-Compatible code rollback command:
-
-```bash
-sudo -u www /www/server/php/84/bin/php \
-  /www/acdomains/hell.hellpservice.ir/current/deploy/bin/release-switch.php \
-  --root=/www/acdomains/hell.hellpservice.ir \
-  --release=<PREVIOUS_RELEASE> \
-  --php=/www/server/php/84/bin/php \
-  --journal=/www/acdomains/hell.hellpservice.ir/shared/release-journal.json \
-  --timeout=60 \
-  --rollback
-```
-
-Never run `migrate:rollback` blindly and never edit financial rows to make a deployment appear healthy. Full update and rollback policy remains in `docs/18-update-rollback-runbook.md`.
-
-## 9. Target rehearsal evidence checklist
-
-The Phase `0.2.0` target rehearsal must retain sanitized evidence for the exact Git SHA and include:
-
-- independent CLI PHP and LSPHP preflight outputs;
-- aaPanel/OpenLiteSpeed document root resolving to `current/public`;
-- shared `.env` mode `0600`, shared storage, candidate links and `current` resolution;
-- release-switch activation JSON and private-journal metadata without secrets;
-- live/ready HTTP checks and `health:check --critical --json --redact`;
-- exactly one Scheduler Cron entry;
-- Supervisor `reread`, `update`, process status and unique fresh worker heartbeat rows;
-- controlled stale-worker alert creation and recovery;
-- explicit compatible rollback to the previous candidate followed by health checks;
-- reactivation of the intended release and final healthy state.
-
-Do not attach real credentials, raw `.env`, Telegram secrets, provider output, database passwords, or unrestricted aaPanel screenshots to the issue or repository.
+Never commit `.env`, credentials, raw provider responses, unrestricted screenshots, customer data, subscription URLs, or private backup contents.
