@@ -1,43 +1,67 @@
 # Repository Operating Contract
 
-This file defines the durable working rules for humans and AI agents.
+This file defines the durable working rules for humans and AI agents. Chat history is optional context, never project state.
 
-## Authority
+## Authority by kind of information
 
-Use sources in this order:
+Do not use one document as authority for every kind of truth:
 
-1. `docs/specification/master-execution-prompt.md` — normative Version 1 scope.
-2. Live GitHub — PRs, Issues, branches, reviews, and workflow runs.
-3. `PROJECT_STATUS.md` — current phase-level state.
-4. Canonical references linked from `docs/README.md`.
-5. Git history for historical context.
+1. **Version 1 product scope and non-negotiable product/security/correctness requirements:** `docs/specification/master-execution-prompt.md`, with stable IDs indexed in `docs/01-authoritative-requirements.md`.
+2. **Repository execution, branch, review, validation, and Agent rules:** this file and `CONTRIBUTING.md`.
+3. **Current phase, backlog, priority, dependency, blocker, PR/review, and CI state:** live GitHub, starting from Program Issue `#3` and Draft integration PR `#6`.
+4. **Durable architecture/security/testing/operations rules:** canonical references linked from `docs/README.md`.
+5. **Historical implementation context:** Git/PR/Issue/workflow history.
 
-If a lower-authority source conflicts with a higher one, correct or remove the lower source.
+The master specification is not a live task board. Historical instructions in it to create execution ledgers, mutable traceability matrices, per-phase status/evidence files, or similar coordination artifacts are superseded by this repository operating model; they must not be used to recreate retired documentation. This does **not** weaken any product, security, financial-integrity, provider, runtime, testing, restore, or release requirement.
+
+When two sources of the same kind conflict, correct the stale/lower source instead of maintaining both.
 
 ## Branch and PR model
 
 Only two branches are long-lived:
 
-- `main` — release branch;
+- `main` — release/default branch;
 - `develop/v1.0.0-completion` — Version 1 integration branch.
 
-Draft PR `#6` integrates `develop/v1.0.0-completion` into `main` and must remain Draft until explicit final release acceptance.
+Draft PR `#6` integrates `develop/v1.0.0-completion` into `main` and remains Draft until explicit final release acceptance.
 
-Implementation/maintenance work uses temporary `agent/<issue-number>-<slug>` branches created from the current integration head. Worker PRs target `develop/v1.0.0-completion`. Delete temporary branches after merge, cancellation, or abandonment once GitHub preserves the record.
+Normal implementation/maintenance work uses a temporary task branch from the current integration head and a PR targeting `develop/v1.0.0-completion`. Delete temporary branches after merge, cancellation, or abandonment once GitHub preserves the record.
 
-Never push product work directly to `main` or `develop/v1.0.0-completion`, rewrite shared history, force-push shared branches, self-merge a Worker PR, or enable auto-merge for high-risk work.
+Never push product work directly to `main` or `develop/v1.0.0-completion`, rewrite shared history, force-push shared branches, self-merge a Worker PR, or enable auto-merge for high-risk work. An exceptional control-plane bootstrap on a protected/default branch must be explicitly Owner-authorized and documented in its GitHub Issue.
 
-## Task and ownership contract
+## Task contract
 
-Every bounded task must have a GitHub Issue that states the parent/requirements, goal, dependencies/base rule, in/out scope, protected areas, risk, affected security/data/financial/remote/schema/runtime surfaces, required verification, merge prerequisites, and current blocker/handoff state. Use `.github/ISSUE_TEMPLATE/task.yml` for new work when available.
+Every bounded implementation task needs one GitHub Issue. Keep the contract as small as correctness allows.
 
-PRs use `.github/pull_request_template.md`. Sensitive paths are assigned in `.github/CODEOWNERS`; CODEOWNERS expresses intended ownership but does not prove that GitHub branch protection/rulesets require code-owner approval.
+Required information:
 
-High/Critical financial, authorization, security, provider, schema, deployment/release, secret, or irreversible work requires independent review and explicit Owner approval before merge. The applicable CI tier must pass on the final tested PR revision; merge style never substitutes for review or validation.
+- parent/requirement or durable authority;
+- observable goal/outcome;
+- dependencies/base rule;
+- bounded scope and meaningful exclusions;
+- objective acceptance criteria;
+- validation strategy;
+- change risk and initial state.
 
-## Scope and correctness
+Add protected areas, security/privacy, financial/provider, schema/migration, compatibility, runtime/operations, performance, or release constraints **only when they materially affect the task**. Do not require headings filled with `N/A`, repeated handoff prose, copied CI logs, or a separate completion report.
 
-Work from a bounded GitHub Issue. Preserve accepted behavior outside the task scope.
+PRs use `.github/pull_request_template.md`. Sensitive paths are assigned in `.github/CODEOWNERS`; CODEOWNERS expresses intended ownership but does not by itself prove branch/ruleset enforcement.
+
+High/Critical financial, authorization, security, provider, schema, deployment/release, secret, or irreversible work requires independent review and explicit Owner approval before merge unless that exact action was explicitly pre-authorized. The applicable CI tier must pass on the final candidate; merge style never substitutes for review or validation.
+
+## Scope, architecture, and correctness
+
+Work from the owning Issue and preserve accepted behavior outside scope.
+
+The architecture is a modular monolith optimized for future change:
+
+- keep Domain logic framework/infrastructure-independent;
+- Presentation calls Application; Infrastructure implements ports/adapters;
+- cross-module mutation/orchestration goes through explicit Application contracts;
+- do not introduce a new cross-module Domain dependency or architecture-boundary exception merely to shorten a task;
+- prefer module-local value types/snapshots or Application contracts when information crosses module boundaries;
+- refactor when responsibility, reuse, coupling, change frequency, transaction boundaries, or testability justify it — **not** because a file exceeds an arbitrary line count;
+- do not split cohesive behavior into many files solely to satisfy style metrics.
 
 Release-blocking invariants:
 
@@ -62,41 +86,41 @@ Use prepared ORM/query-builder paths, validation, output escaping, least privile
 For every change:
 
 1. read the task Issue and relevant canonical docs;
-2. inspect current implementation/tests before adding a new concept;
+2. inspect current implementation/tests before adding a concept;
 3. make the smallest reliable change;
-4. add focused success, validation, authorization, replay/conflict, concurrency, and failure tests as applicable;
-5. run the appropriate local checks in `CONTRIBUTING.md`;
-6. do not weaken checks to obtain green CI;
-7. keep live progress in GitHub, not new handoff/status documents.
+4. define and add behavior-focused success/failure/security/concurrency tests only where they provide signal;
+5. run the appropriate checks in `CONTRIBUTING.md`;
+6. never weaken checks to manufacture a pass;
+7. keep live progress in GitHub, not new handoff/status/evidence documents;
+8. capture future-useful follow-up work as an actionable Issue rather than burying it in a completion narrative.
 
 ## CI
 
-Every executing GitHub Actions job runs on the owner-controlled self-hosted runner with:
+Every executing GitHub Actions job runs on the owner-controlled self-hosted runner:
 
 ```yaml
 runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
 ```
 
-GitHub-hosted runners are not a fallback. Exact runtime and quality requirements are documented in `docs/06-test-strategy.md`.
+GitHub-hosted runners are not a fallback. Exact runtime and quality requirements are in `docs/06-test-strategy.md`.
 
-CI is risk-based, not ceremonial:
+CI is risk-based:
 
-- **CONTROL CI** is allowed only for PRs to `develop/v1.0.0-completion` whose entire diff is inside the workflow's explicit documentation/governance-only allowlist. It runs repository/project-control validation and secret scanning.
+- **CONTROL CI** is allowed only for PRs to `develop/v1.0.0-completion` whose complete diff is in the explicit documentation/governance-only allowlist. It runs repository/project-control validation and secret scanning.
 - **FULL CI** is required for source, routes, bootstrap/config, schema/migrations, tests, dependencies, static/CI tooling, Docker/runtime/deployment/workflow changes, any unknown path, every PR targeting `main`, and intentional manual release validation.
-- Unknown or unclassifiable changes default to FULL CI.
-- Draft PRs do not consume self-hosted-runner jobs automatically. Marking a PR Ready for review triggers the applicable tier on the current revision.
-- Draft integration PR #6 must not re-run the full suite merely because an already-green Worker PR was merged into `develop`; it receives FULL CI when it is intentionally moved to final review/release validation.
+- MariaDB `10.11` is the mandatory normal integration target. Other compatible MariaDB lines may be run for task-specific, manual, or release compatibility evidence when useful; they are not an automatic gate on every PR unless the task requires them.
+- Unknown changes default to FULL.
+- Draft PRs stay quiet. Marking a PR Ready triggers the applicable tier on the current revision.
+- Draft integration PR `#6` does not re-run FULL merely because already-reviewed Worker work merged into `develop`; it receives intentional FULL validation at the release review boundary.
 
-A green applicable tier may be reused when the tested revision/resulting tree has not changed. Do not rerun CI merely because the same reviewed content was merged without conflict-resolution edits into the unchanged intended base. If the base or resulting content changes, validate again.
-
-On an unchanged revision, rerun only a clearly transient failed job (or failed jobs) when possible. Do not rerun successful jobs without a reason, and never rerun a deterministic failure hoping for green; fix the cause first.
+Reuse green evidence when the tested resulting tree has not materially changed. Rerun only clearly transient failed jobs where possible. Never rerun a deterministic failure hoping for green; fix the cause first.
 
 ## Documentation and evidence
 
 Do not create per-task handoff, overlay, current-state, risk, traceability, or evidence documents. Durable rules belong in an existing canonical document. Dynamic state belongs in GitHub.
 
-Task-level implementation history is preserved by commits, PRs, Issues, reviews, and CI. `evidence/` is reserved for release-candidate/release records that must remain after workflow-artifact retention.
+Task-level implementation history is preserved by commits, PRs, Issues, reviews, and CI. `evidence/` is reserved for release-candidate/release records that have a real retention need.
 
 ## Human approval
 
-Explicit owner approval is required before merging high/critical-risk changes involving financial integrity, authorization, security controls, provider semantics, schema, deployment/release behavior, secrets, or irreversible operations.
+Explicit Owner approval is required before merging high/critical-risk changes involving financial integrity, authorization, security controls, provider semantics, schema, deployment/release behavior, secrets, or irreversible operations unless the exact action was already authorized.

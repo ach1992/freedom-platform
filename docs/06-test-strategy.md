@@ -10,7 +10,7 @@ All executing GitHub Actions jobs run on the owner-controlled self-hosted runner
 runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
 ```
 
-GitHub-hosted runners are not a fallback. The selected host must provide PHP 8.4, Composer 2.10.x, Docker/Compose, Git, Bash, `jq`, and the required PHP extensions. Coverage jobs require PCOV or another explicitly reviewed PHPUnit-compatible driver.
+GitHub-hosted runners are not a fallback. The selected host must provide PHP 8.4, Composer 2.10.x, Docker/Compose, Git, Bash, `jq`, and the required PHP extensions. Coverage runs require PCOV or another explicitly reviewed PHPUnit-compatible driver.
 
 Repository workflows use `scripts/ci/bootstrap-self-hosted-toolchain.sh` to validate the effective runtime. Runner labels alone are not evidence.
 
@@ -33,26 +33,31 @@ Unknown, unclassifiable, or mixed diffs default to FULL CI.
 
 FULL CI is required when source, routes, bootstrap/config, schema/migrations, tests, Composer/dependency state, PHP/static configuration, CI scripts, Docker/runtime/deployment files, GitHub workflow definitions, or any unknown path changes. It is also mandatory for every PR targeting `main`, every push to `main`, and intentional manual release validation.
 
-FULL CI requires:
+Normal FULL CI requires:
 
 1. repository/project-control preflight;
 2. secret scan;
 3. dependency and license policy;
 4. Pint / Composer validation / PHPStan / forbidden-pattern / architecture checks;
-5. complete application suite on disposable MariaDB 10.11 and authenticated Redis;
-6. complete application suite on disposable MariaDB 11.4 and authenticated Redis.
+5. complete application suite on disposable **MariaDB 10.11** with authenticated Redis.
+
+MariaDB 10.11 is the primary required compatibility target. Other MariaDB lines should remain compatible where practical, but they are not an automatic gate on every PR. Run an additional version when a task changes database-sensitive behavior, when compatibility is specifically being evaluated, or as part of deliberate release/hardening validation.
 
 ## Draft and integration behavior
 
 Draft PRs do not automatically consume the self-hosted runner. `ready_for_review` triggers the applicable tier on the current revision.
 
-The long-running integration PR #6 remains Draft during normal Version 1 development. Synchronizing it because an already-reviewed Worker PR was merged into `develop/v1.0.0-completion` is not, by itself, a reason to run the full matrix again. Before final release review, PR #6 is moved to Ready and must pass FULL CI.
+The long-running integration PR #6 remains Draft during normal Version 1 development. Synchronizing it because an already-reviewed task PR was merged into `develop/v1.0.0-completion` is not, by itself, a reason to run the full suite again. Before final release review, PR #6 is moved to Ready and must pass the applicable release validation.
 
-## Evidence reuse and reruns
+## Evidence reuse, artifacts, and reruns
 
-A green applicable CI tier is valid evidence for the final tested PR revision while the tested resulting tree remains unchanged.
+A green applicable CI tier is valid evidence for the final tested PR revision while the tested resulting tree remains materially unchanged.
 
 Do not rerun CI merely because that same reviewed content is merged without conflict-resolution/content edits into the unchanged intended base. Revalidate when a base advance, conflict resolution, post-test edit, dependency/runtime change, or other material difference means the previous run no longer proves the resulting tree.
+
+Routine successful PRs use GitHub checks/results as their evidence. Large diagnostic artifacts are uploaded on failure, and intentional `workflow_dispatch`/release runs may retain artifacts when a real reviewer/release consumer needs them. Do not upload artifacts on every successful job merely to manufacture an evidence trail.
+
+Coverage is useful for deliberate quality/release analysis, but generating and storing a coverage report is not required on every normal FULL PR. Manual/release validation may enable it when the report will be used.
 
 For an unchanged revision:
 
@@ -88,16 +93,16 @@ composer test:quick
 
 This quick path is useful for deterministic local feedback but is not database-engine acceptance evidence.
 
-For disposable MariaDB 11.4 plus authenticated Redis:
+The default disposable integration environment is MariaDB 10.11 plus authenticated Redis:
 
 ```bash
 composer test:integration
 ```
 
-For the other CI-supported MariaDB target:
+Run another MariaDB line explicitly when compatibility evidence is useful, for example:
 
 ```bash
-MARIADB_VERSION=10.11 composer test:integration
+MARIADB_VERSION=11.4 composer test:integration
 ```
 
 The integration entrypoint exports the same database/Redis connection values used by `docker-compose.ci.yml`, starts disposable dependencies, runs PHPUnit, and tears them down even when the test command fails.
@@ -108,12 +113,13 @@ The integration entrypoint exports the same database/Redis connection values use
 - Redis may be restarted/lost without violating durable correctness.
 - Time, randomness, external HTTP, Telegram, SMS, panels, payment providers, and storage destinations should be injectable/deterministic in tests.
 - Critical-path tests cover success, validation, authorization, exact replay, conflicting replay, concurrency/database conflict, failure before side effect, uncertainty after possible side effect, and redaction as applicable.
+- Add tests because they prove behavior or prevent a material regression, not to satisfy a generic test-count target.
 - Monetary tests use integer IRR or fixed-precision decimal, never floating-point money.
 - A fake proves local orchestration semantics only; it does not prove a live provider contract.
 
 ## Non-negotiable invariant coverage
 
-Tests for the owning feature must prove:
+Tests for the owning feature must prove, when applicable:
 
 - no paid provisioning before authoritative capture;
 - duplicate callbacks/jobs/updates/actions create no second durable effect;
@@ -127,9 +133,9 @@ Tests for the owning feature must prove:
 
 ## Evidence model
 
-Task-level verification is preserved by the PR, review, applicable workflow run, and GitHub artifacts. Do not commit a new evidence Markdown file for every task.
+Task-level verification is preserved by the PR, review, applicable workflow result, and retained diagnostic artifact when one is actually needed. Do not commit a new evidence Markdown file for every task.
 
-Repository `evidence/` records are reserved for RC/release summaries that need to outlive workflow artifact retention. A release record may reference exact commit, workflow run, artifact digest, environment, and known limitations without copying raw logs or sensitive payloads.
+Repository `evidence/` records are reserved for RC/release summaries that need to outlive workflow retention. A release record may reference exact commit, workflow run, artifact digest, environment, and known limitations without copying raw logs or sensitive payloads.
 
 ## Failure policy
 
