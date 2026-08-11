@@ -61,25 +61,26 @@ BEGIN
     SET snapshot_tag_count = COALESCE(JSON_LENGTH(JSON_EXTRACT(NEW.configuration_snapshot, '$.subject.tag_codes')), 0);
 
     IF current_account_type IS NULL
-       OR JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.subject.account_type')) <> current_account_type
-       OR JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.subject.account_status')) <> current_account_status
-       OR JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.subject.identity_status')) <> current_identity_status
+       OR COALESCE(JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.subject.account_type')), '') <> current_account_type
+       OR COALESCE(JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.subject.account_status')), '') <> current_account_status
+       OR COALESCE(JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.subject.identity_status')), '') <> current_identity_status
        OR (
             current_tier_code IS NULL
-            AND JSON_TYPE(JSON_EXTRACT(NEW.configuration_snapshot, '$.subject.tier_code')) <> 'NULL'
+            AND COALESCE(JSON_TYPE(JSON_EXTRACT(NEW.configuration_snapshot, '$.subject.tier_code')), 'MISSING') <> 'NULL'
        )
        OR (
             current_tier_code IS NOT NULL
-            AND JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.subject.tier_code')) <> current_tier_code
+            AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.subject.tier_code')), '') <> current_tier_code
        )
        OR (
             current_agent_status IS NULL
-            AND JSON_TYPE(JSON_EXTRACT(NEW.configuration_snapshot, '$.subject.agent_status')) <> 'NULL'
+            AND COALESCE(JSON_TYPE(JSON_EXTRACT(NEW.configuration_snapshot, '$.subject.agent_status')), 'MISSING') <> 'NULL'
        )
        OR (
             current_agent_status IS NOT NULL
-            AND JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.subject.agent_status')) <> current_agent_status
+            AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.subject.agent_status')), '') <> current_agent_status
        )
+       OR COALESCE(JSON_TYPE(JSON_EXTRACT(NEW.configuration_snapshot, '$.subject.tag_codes')), 'MISSING') <> 'ARRAY'
        OR snapshot_tag_count <> current_tag_count
        OR EXISTS (
             SELECT 1
@@ -88,9 +89,12 @@ BEGIN
             WHERE assignments.user_id = NEW.user_id
               AND assignments.removed_at IS NULL
               AND tags.is_active = 1
-              AND JSON_CONTAINS(
-                    JSON_EXTRACT(NEW.configuration_snapshot, '$.subject.tag_codes'),
-                    JSON_QUOTE(tags.code)
+              AND COALESCE(
+                    JSON_CONTAINS(
+                        JSON_EXTRACT(NEW.configuration_snapshot, '$.subject.tag_codes'),
+                        JSON_QUOTE(tags.code)
+                    ),
+                    0
                   ) = 0
        ) THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Payment eligibility subject snapshot is stale.';
