@@ -83,10 +83,6 @@ final readonly class PanelEndpoint
             return;
         }
 
-        if ($this->port !== 443) {
-            throw new InvalidArgumentException('Public panel endpoint port is not allowed.');
-        }
-
         if ($this->hostIsIp) {
             if (! PanelIpAddressPolicy::isPublic($this->host)) {
                 throw new InvalidArgumentException('Public panel endpoint cannot target a non-public IP address.');
