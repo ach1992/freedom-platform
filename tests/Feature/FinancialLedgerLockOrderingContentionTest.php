@@ -183,6 +183,15 @@ namespace Tests\Feature {
             $this->seed();
         }
 
+        protected function tearDown(): void
+        {
+            try {
+                $this->truncateTablesForAllConnections();
+            } finally {
+                parent::tearDown();
+            }
+        }
+
         public function test_top_up_and_canonical_ledger_account_acquisition_complete_without_lock_order_deadlock(): void
         {
             $amountIrr = 730_000;
