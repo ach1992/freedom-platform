@@ -46,8 +46,8 @@ final class ArchitectureBoundaryChecker
     }
 
     /**
-     * @param list<string> $violations
-     * @param list<string> $edges
+     * @param  list<string>  $violations
+     * @param  list<string>  $edges
      */
     private function scanModuleFile(string $relativePath, string $source, array &$violations, array &$edges): void
     {
