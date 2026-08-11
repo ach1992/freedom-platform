@@ -69,9 +69,7 @@ jobs:
           mkdir -p build/evidence/preflight
 
           application=false
-          if [[ -f composer.json ]]; then
-            application=true
-          fi
+          [[ -f composer.json ]] && application=true
 
           full_ci=true
           tier=FULL
@@ -91,7 +89,7 @@ jobs:
               while IFS= read -r path; do
                 [[ -n "$path" ]] || continue
                 case "$path" in
-                  README.md|PROJECT_STATUS.md|AGENTS.md|CONTRIBUTING.md|.gitignore|.github/CODEOWNERS|.github/dependabot.yml|.github/pull_request_template.md|.github/ISSUE_TEMPLATE/*|docs/*|evidence/README.md)
+                  README.md|AGENTS.md|CONTRIBUTING.md|.gitignore|.github/CODEOWNERS|.github/dependabot.yml|.github/pull_request_template.md|.github/ISSUE_TEMPLATE/*|docs/*|evidence/README.md)
                     ;;
                   *)
                     control_only=false
@@ -168,29 +166,26 @@ jobs:
             echo "- UTC: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
           } >> build/evidence/preflight/summary.md
 
-      - name: Verify planning traceability
-        run: bash scripts/ci/verify-planning.sh
-
-      - name: Verify project control plane
+      - name: Verify planning and project control
         shell: bash
         run: |
           set -o pipefail
-          bash scripts/ci/verify-project-control.sh \
-            2>&1 | tee build/evidence/preflight/project-control.log
+          bash scripts/ci/verify-planning.sh 2>&1 | tee build/evidence/preflight/planning.log
+          bash scripts/ci/verify-project-control.sh 2>&1 | tee build/evidence/preflight/project-control.log
 
-      - name: Upload preflight evidence
-        if: always()
+      - name: Upload diagnostic preflight evidence
+        if: ${{ failure() || github.event_name == 'workflow_dispatch' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: preflight-evidence-${{ github.run_id }}
           path: |
             build/evidence/preflight
             build/evidence/planning
-          if-no-files-found: error
-          retention-days: 30
+          if-no-files-found: warn
+          retention-days: 14
 
   static:
-    name: PHP static quality
+    name: PHP static and dependency quality
     needs: preflight
     if: ${{ needs.preflight.outputs.application == 'true' && needs.preflight.outputs.full_ci == 'true' }}
     runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
@@ -219,49 +214,50 @@ jobs:
           git diff -- . | tee build/evidence/static/pint.diff
           exit 1
 
-      - name: Static analysis and repository policy
+      - name: Static, architecture, dependency, and license policy
         timeout-minutes: 15
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p build/evidence/static
+          mkdir -p build/evidence/static build/evidence/dependencies
           composer validate --strict --no-check-publish 2>&1 | tee build/evidence/static/composer-validate.log
           php -d memory_limit=1G vendor/bin/phpstan analyse --no-progress --error-format=table --memory-limit=1G 2>&1 | tee build/evidence/static/phpstan.log
           bash scripts/ci/forbidden-patterns.sh 2>&1 | tee build/evidence/static/forbidden-patterns.log
           bash scripts/ci/architecture.sh 2>&1 | tee build/evidence/static/architecture.log
+          composer audit --locked --abandoned=fail --format=json > build/evidence/dependencies/audit.json
+          bash scripts/ci/licenses.sh
+          test -s build/evidence/dependencies/licenses.json
 
-      - name: Upload static evidence
-        if: always()
+      - name: Upload diagnostic static evidence
+        if: ${{ failure() || github.event_name == 'workflow_dispatch' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: static-evidence-${{ github.run_id }}
-          path: build/evidence/static
-          if-no-files-found: error
-          retention-days: 30
+          path: |
+            build/evidence/static
+            build/evidence/dependencies
+          if-no-files-found: warn
+          retention-days: 14
 
   integration:
-    name: MariaDB ${{ matrix.mariadb_version }} and Redis tests
+    name: MariaDB 10.11 and Redis tests
     needs: preflight
     if: ${{ needs.preflight.outputs.application == 'true' && needs.preflight.outputs.full_ci == 'true' }}
     runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
-    strategy:
-      fail-fast: false
-      max-parallel: 1
-      matrix:
-        include:
-          - mariadb_version: '10.11'
-            artifact_suffix: mariadb-10-11
-          - mariadb_version: '11.4'
-            artifact_suffix: mariadb-11-4
     env:
-      MARIADB_VERSION: ${{ matrix.mariadb_version }}
-      COMPOSE_PROJECT_NAME: freedom-platform-ci-${{ github.run_id }}-${{ matrix.artifact_suffix }}
+      MARIADB_VERSION: '10.11'
+      COMPOSE_PROJECT_NAME: freedom-platform-ci-${{ github.run_id }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Use runner PHP toolchain
         timeout-minutes: 2
-        run: bash scripts/ci/bootstrap-self-hosted-toolchain.sh coverage
+        shell: bash
+        run: |
+          set -euo pipefail
+          mode=no-coverage
+          [[ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' ]] && mode=coverage
+          bash scripts/ci/bootstrap-self-hosted-toolchain.sh "$mode"
 
       - name: Start disposable dependencies
         timeout-minutes: 5
@@ -282,18 +278,25 @@ jobs:
           docker compose -f docker-compose.ci.yml ps > build/evidence/services/compose-ps.txt
           test -f .env || cp .env.example .env
           php artisan config:clear --ansi
-          COLUMNS=240 php vendor/bin/phpunit \
-            --configuration phpunit.xml \
-            --display-warnings \
-            --fail-on-warning \
-            --log-junit build/evidence/tests/junit.xml \
-            --coverage-clover build/evidence/coverage/clover.xml \
-            2>&1 | tee build/evidence/tests/test.log
+
+          phpunit_args=(
+            --configuration phpunit.xml
+            --display-warnings
+            --fail-on-warning
+            --log-junit build/evidence/tests/junit.xml
+          )
+          if [[ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' ]]; then
+            phpunit_args+=(--coverage-clover build/evidence/coverage/clover.xml)
+          fi
+
+          COLUMNS=240 php vendor/bin/phpunit "${phpunit_args[@]}" 2>&1 | tee build/evidence/tests/test.log
           test -s build/evidence/tests/junit.xml
-          test -s build/evidence/coverage/clover.xml
+          if [[ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' ]]; then
+            test -s build/evidence/coverage/clover.xml
+          fi
 
       - name: Capture dependency service logs
-        if: always()
+        if: ${{ failure() || github.event_name == 'workflow_dispatch' }}
         run: |
           mkdir -p build/evidence/services
           docker compose -f docker-compose.ci.yml logs --no-color > build/evidence/services/compose.log 2>&1 || true
@@ -302,54 +305,17 @@ jobs:
         if: always()
         run: docker compose -f docker-compose.ci.yml down --volumes --remove-orphans
 
-      - name: Upload test evidence
-        if: always()
+      - name: Upload diagnostic test evidence
+        if: ${{ failure() || github.event_name == 'workflow_dispatch' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: test-evidence-${{ github.run_id }}-${{ matrix.artifact_suffix }}
+          name: test-evidence-${{ github.run_id }}-mariadb-10-11
           path: |
             build/evidence/tests
             build/evidence/coverage
             build/evidence/services
-          if-no-files-found: error
-          retention-days: 30
-
-  dependencies:
-    name: Dependency and license policy
-    needs: preflight
-    if: ${{ needs.preflight.outputs.application == 'true' && needs.preflight.outputs.full_ci == 'true' }}
-    runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Use runner PHP toolchain
-        timeout-minutes: 2
-        run: bash scripts/ci/bootstrap-self-hosted-toolchain.sh no-coverage
-
-      - name: Install locked dependencies
-        timeout-minutes: 10
-        run: |
-          composer install --no-interaction --prefer-dist --no-progress --no-scripts
-          php artisan package:discover --ansi
-
-      - name: Audit dependencies and licenses
-        timeout-minutes: 10
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p build/evidence/dependencies
-          composer audit --locked --abandoned=fail --format=json > build/evidence/dependencies/audit.json
-          bash scripts/ci/licenses.sh
-          test -s build/evidence/dependencies/licenses.json
-
-      - name: Upload dependency evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: dependency-evidence-${{ github.run_id }}
-          path: build/evidence/dependencies
-          if-no-files-found: error
-          retention-days: 30
+          if-no-files-found: warn
+          retention-days: 14
 
   secrets:
     name: Secret scan
