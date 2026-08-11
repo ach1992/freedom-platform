@@ -18,8 +18,11 @@ use App\Modules\Panels\Infrastructure\PanelHttpFailureType;
 use App\Modules\Panels\Infrastructure\PanelHttpTransport;
 use App\Modules\Panels\Infrastructure\PanelResponseGuard;
 use App\Modules\Panels\Infrastructure\PanelResponseRejected;
+use GuzzleHttp\Exception\ConnectException as GuzzleConnectException;
+use GuzzleHttp\Promise\Create;
 use Illuminate\Filesystem\FilesystemManager;
 use Illuminate\Http\Client\Factory;
+use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use InvalidArgumentException;
 use LogicException;
@@ -96,11 +99,23 @@ final class PanelHttpSecurityTest extends TestCase
         }
     }
 
-    public function test_public_only_rejects_nonstandard_port_but_private_policy_remains_separate(): void
+    public function test_public_policy_preserves_nonstandard_https_port_and_pins_validated_addresses(): void
     {
-        $publicEndpoint = PanelEndpoint::fromInput('https://panel.example.test:8443');
-        $this->expectException(InvalidArgumentException::class);
-        $publicEndpoint->assertAllowedBy(PanelNetworkPolicy::PublicOnly);
+        $resolver = new FixedPanelDnsResolver(['2606:4700:4700::1111', '93.184.216.34']);
+        $pin = (new PanelEndpointConnectPolicy($resolver))->pin(
+            PanelEndpoint::fromInput('https://panel.example.test:8443'),
+            PanelNetworkPolicy::PublicOnly,
+        );
+
+        self::assertSame(1, $resolver->calls);
+        self::assertSame('panel.example.test', $pin->hostname);
+        self::assertSame(8443, $pin->port);
+        self::assertSame(['93.184.216.34', '2606:4700:4700::1111'], $pin->validatedAddresses);
+        self::assertSame(
+            'panel.example.test:8443:93.184.216.34,[2606:4700:4700::1111]',
+            $pin->resolveEntry(),
+        );
+        self::assertSame([$pin->resolveEntry()], $pin->curlOptions()[CURLOPT_RESOLVE]);
     }
 
     public function test_private_policy_can_pin_approved_private_tls_endpoint(): void
@@ -243,6 +258,27 @@ final class PanelHttpSecurityTest extends TestCase
 
         self::assertTrue($exchange->transportFailure);
         self::assertSame(PanelHttpFailureType::Network, $exchange->failure);
+    }
+
+    public function test_expected_timeout_failure_is_typed_deterministically(): void
+    {
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://panel.example.test/api/system' => static function (Request $request) {
+                return Create::rejectionFor(new GuzzleConnectException(
+                    'fixture timeout detail',
+                    $request->toPsrRequest(),
+                    null,
+                    ['errno' => CURLE_OPERATION_TIMEDOUT],
+                ));
+            },
+        ]);
+
+        $exchange = $this->transport(new FixedPanelDnsResolver(['93.184.216.34']))
+            ->request('GET', '/api/system');
+
+        self::assertTrue($exchange->transportFailure);
+        self::assertSame(PanelHttpFailureType::Timeout, $exchange->failure);
     }
 
     public function test_configuration_failure_is_not_swallowed_as_transport_failure(): void
