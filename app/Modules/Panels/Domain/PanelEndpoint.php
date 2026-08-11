@@ -8,20 +8,29 @@ use InvalidArgumentException;
 
 final readonly class PanelEndpoint
 {
+    private const MAX_LENGTH = 2048;
+
     private function __construct(
         public string $value,
         public string $host,
         public bool $hostIsIp,
+        public int $port,
     ) {}
 
     /** @requirement PRV-001 SEC-001 */
     public static function fromInput(string $value): self
     {
-        $normalized = rtrim(trim($value), '/');
-        $parts = parse_url($normalized);
+        if ($value === ''
+            || $value !== trim($value)
+            || strlen($value) > self::MAX_LENGTH
+            || self::containsUnsafeCharacters($value)
+        ) {
+            throw new InvalidArgumentException('Panel endpoint URL is invalid.');
+        }
 
+        $parts = parse_url($value);
         if ($parts === false
-            || ($parts['scheme'] ?? null) !== 'https'
+            || strtolower((string) ($parts['scheme'] ?? '')) !== 'https'
             || ! isset($parts['host'])
             || isset($parts['user'])
             || isset($parts['pass'])
@@ -31,24 +40,41 @@ final readonly class PanelEndpoint
             throw new InvalidArgumentException('Panel endpoint must be an HTTPS URL without credentials, query, or fragment.');
         }
 
-        $host = strtolower(trim((string) $parts['host'], '[]'));
+        $rawHost = (string) $parts['host'];
+        if ($rawHost === '' || str_contains($rawHost, '%') || str_ends_with($rawHost, '.')) {
+            throw new InvalidArgumentException('Panel endpoint host is invalid.');
+        }
+
+        $host = strtolower(trim($rawHost, '[]'));
         $hostIsIp = filter_var($host, FILTER_VALIDATE_IP) !== false;
         $hostIsDomain = filter_var($host, FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME) !== false;
         if (! $hostIsIp && ! $hostIsDomain) {
             throw new InvalidArgumentException('Panel endpoint host is invalid.');
         }
 
-        $port = $parts['port'] ?? null;
-        if ($port !== null && ($port < 1 || $port > 65535)) {
+        $port = $parts['port'] ?? 443;
+        if (! is_int($port) || $port < 1 || $port > 65535) {
             throw new InvalidArgumentException('Panel endpoint port is invalid.');
         }
 
-        $path = $parts['path'] ?? '';
-        if ($path !== '' && (str_contains($path, '..') || preg_match('/[\x00-\x20\x7F]/', $path) === 1)) {
-            throw new InvalidArgumentException('Panel endpoint path is invalid.');
+        $path = (string) ($parts['path'] ?? '');
+        if ($path !== '') {
+            if (! str_starts_with($path, '/')
+                || str_contains($path, '%')
+                || str_contains($path, '..')
+                || self::containsUnsafeCharacters($path)
+            ) {
+                throw new InvalidArgumentException('Panel endpoint path is invalid.');
+            }
+
+            $path = rtrim($path, '/');
         }
 
-        return new self($normalized, $host, $hostIsIp);
+        $authorityHost = $hostIsIp && str_contains($host, ':') ? '['.$host.']' : $host;
+        $portSuffix = $port === 443 ? '' : ':'.$port;
+        $normalized = 'https://'.$authorityHost.$portSuffix.$path;
+
+        return new self($normalized, $host, $hostIsIp, $port);
     }
 
     public function assertAllowedBy(PanelNetworkPolicy $policy): void
@@ -57,14 +83,13 @@ final readonly class PanelEndpoint
             return;
         }
 
+        if ($this->port !== 443) {
+            throw new InvalidArgumentException('Public panel endpoint port is not allowed.');
+        }
+
         if ($this->hostIsIp) {
-            $public = filter_var(
-                $this->host,
-                FILTER_VALIDATE_IP,
-                FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE,
-            );
-            if ($public === false) {
-                throw new InvalidArgumentException('Public-only panel endpoints cannot use private or reserved IP addresses.');
+            if (! PanelIpAddressPolicy::isPublic($this->host)) {
+                throw new InvalidArgumentException('Public panel endpoint cannot target a non-public IP address.');
             }
 
             return;
@@ -75,7 +100,12 @@ final readonly class PanelEndpoint
             || str_ends_with($this->host, '.local')
             || str_ends_with($this->host, '.internal')
         ) {
-            throw new InvalidArgumentException('Public-only panel endpoint host is not allowed.');
+            throw new InvalidArgumentException('Public panel endpoint cannot target a local hostname.');
         }
+    }
+
+    private static function containsUnsafeCharacters(string $value): bool
+    {
+        return str_contains($value, '\\') || preg_match('/[\x00-\x20\x7F]/', $value) === 1;
     }
 }
