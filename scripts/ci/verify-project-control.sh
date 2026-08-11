@@ -49,38 +49,46 @@ grep -F 'no implementation status' docs/01-authoritative-requirements.md >/dev/n
 grep -F 'not a per-task archive' evidence/README.md >/dev/null \
     || fail 'evidence policy must reject per-task repository evidence'
 
-# Current-state duplication is intentionally forbidden.
+# Duplicate machine/current status files are intentionally forbidden.
 for forbidden in docs/project-status.json docs/development/project-status.schema.json; do
     test ! -e "$forbidden" || fail "obsolete duplicate project status remains: $forbidden"
 done
 
-# Per-task/history documents belong in Git/GitHub history, not the active tree.
-shopt -s nullglob
-forbidden_docs=(
-    docs/*traceability*.md
-    docs/phase-*.md
-    docs/[0-9][0-9]-phase-*.md
-    docs/*current*.md
-    docs/*handoff*.md
-    docs/*overlay*.md
-    docs/*transition-checkpoint*.md
-)
-legacy_task_evidence=(
-    evidence/0.*/*.md
-)
-shopt -u nullglob
+# The active documentation tree is allowlisted. Historical task records belong in Git/GitHub history.
+while IFS= read -r path; do
+    case "$path" in
+        docs/README.md|\
+        docs/01-authoritative-requirements.md|\
+        docs/03-risk-register.md|\
+        docs/04-domain-glossary.md|\
+        docs/05-architecture-overview.md|\
+        docs/06-test-strategy.md|\
+        docs/07-security-threat-model.md|\
+        docs/08-data-classification.md|\
+        docs/09-deployment-runbook.md|\
+        docs/development/repository-map.md|\
+        docs/specification/master-execution-prompt.md|\
+        docs/adr/*.md)
+            ;;
+        *)
+            fail "non-canonical documentation file remains in active tree: $path"
+            ;;
+    esac
+done < <(find docs -type f -name '*.md' -print | sort)
 
-((${#forbidden_docs[@]} == 0)) \
-    || fail "obsolete per-task/history documents remain in active docs tree: ${forbidden_docs[*]}"
+# Task-level repository evidence is forbidden; release/RC evidence may be added directly under evidence/ later.
+shopt -s nullglob
+legacy_task_evidence=(evidence/0.*/*.md)
+shopt -u nullglob
 ((${#legacy_task_evidence[@]} == 0)) \
     || fail "obsolete per-task evidence remains in active evidence tree: ${legacy_task_evidence[*]}"
 
-# Durable docs must not reference retired coordination/status files.
+# Canonical docs must not point back to retired coordination/status/evidence material.
 if grep -RIE --include='*.md' \
-    'docs/project-status\.json|current-traceability-overlay|continuation-handoff|phase-[0-9].*traceability|evidence/0\.[0-9]' \
+    'docs/project-status\.json|current-traceability-overlay|continuation-handoff|phase-[0-9].*traceability|evidence/0\.[0-9]|docs/(00|02|10|11|12|13|14|15|16|17|18|19)-' \
     README.md AGENTS.md CONTRIBUTING.md PROJECT_STATUS.md docs/README.md docs/0[1-9]-*.md docs/development/repository-map.md \
     >/dev/null; then
-    fail 'canonical documentation references a retired status/traceability/evidence file'
+    fail 'canonical documentation references a retired status/planning/traceability/evidence file'
 fi
 
 # All workflows use the canonical owner-controlled self-hosted runner.
@@ -91,11 +99,15 @@ shopt -u nullglob
 
 expected_runner_selector='runs-on: [self-hosted, Linux, X64, freedom-staging, php84]'
 for workflow in "${workflow_files[@]}"; do
+    found_runner=false
     while IFS= read -r runner_line; do
         trimmed="${runner_line#"${runner_line%%[![:space:]]*}"}"
         [[ "$trimmed" == "$expected_runner_selector" ]] \
             || fail "workflow must use canonical self-hosted runner selector: $workflow: $trimmed"
+        found_runner=true
     done < <(grep -E '^[[:space:]]*runs-on:' "$workflow" || true)
+
+    [[ "$found_runner" == true ]] || fail "workflow has no explicit self-hosted runs-on selector: $workflow"
 done
 
 # Generic CI validates same-repository Worker PRs targeting develop and stays secret-free.
