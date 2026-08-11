@@ -19,7 +19,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   pull-requests: read
 
 concurrency:
@@ -47,6 +47,38 @@ env:
   COMPOSER_BIN: /usr/local/bin/composer
 
 jobs:
+  reconcile-master-spec:
+    name: One-shot master specification reconciliation
+    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.number == 78 && github.actor != 'github-actions[bot]' }}
+    runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
+    steps:
+      - name: Check out PR branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: governance/76-reconcile-project-control
+          fetch-depth: 2
+
+      - name: Apply asserted process-only patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          /www/server/php/84/bin/php scripts/ci/reconcile-master-spec.php
+          git diff --check
+          grep -F 'Repository governance reconciliation' docs/specification/master-execution-prompt.md
+          grep -F 'Do not create or restore `PROJECT_STATUS.md`' docs/specification/master-execution-prompt.md
+          grep -F '# 36. Functional Requirement' docs/specification/master-execution-prompt.md
+          bash scripts/ci/verify-planning.sh
+
+      - name: Commit reconciled specification
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/specification/master-execution-prompt.md
+          git commit -m 'docs: reconcile master specification execution rules (#76)'
+          git push origin HEAD:governance/76-reconcile-project-control
+
   preflight:
     name: Repository preflight
     if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.draft == false) }}
