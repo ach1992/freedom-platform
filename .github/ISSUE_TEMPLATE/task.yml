@@ -89,8 +89,8 @@ body:
     id: tests
     attributes:
       label: Required verification
-      description: Specify success, validation, authorization, replay/conflict, concurrency, failure, migration, and regression tests as applicable, plus exact-head CI expectations.
-      placeholder: "Focused tests: ...\nMariaDB concurrency: ...\nRegression: ...\nExact-head CI: required"
+      description: Specify focused success/validation/authorization/replay/concurrency/failure checks as applicable and the expected GitHub Actions tier. CONTROL is only for explicit documentation/governance-only diffs; application/runtime/test/CI or unknown paths require FULL.
+      placeholder: "Focused tests: ...\nMariaDB concurrency: ...\nRegression: ...\nExpected CI tier: FULL"
     validations:
       required: true
 
@@ -98,7 +98,7 @@ body:
     id: merge
     attributes:
       label: Merge prerequisites
-      description: List dependencies, review/Owner gates, exact-head CI, migration/provider evidence, or other conditions required before integration.
+      description: List dependencies, review/Owner gates, applicable final-revision CI, migration/provider evidence, or other conditions required before integration. Do not require redundant reruns when unchanged green evidence remains valid.
     validations:
       required: true
 

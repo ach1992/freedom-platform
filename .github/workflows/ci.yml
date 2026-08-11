@@ -10,6 +10,12 @@ on:
     branches:
       - main
       - develop/v1.0.0-completion
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+      - converted_to_draft
   workflow_dispatch:
 
 permissions:
@@ -43,27 +49,86 @@ env:
 jobs:
   preflight:
     name: Repository preflight
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.draft == false) }}
     runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
     outputs:
       application: ${{ steps.mode.outputs.application }}
+      full_ci: ${{ steps.mode.outputs.full_ci }}
+      tier: ${{ steps.mode.outputs.tier }}
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
 
-      - name: Determine phase mode
+      - name: Determine CI tier
         id: mode
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p build/evidence/preflight
+
+          application=false
           if [[ -f composer.json ]]; then
-            echo 'application=true' >> "$GITHUB_OUTPUT"
-            printf '%s\n' '# CI preflight' '' '- Mode: application' > build/evidence/preflight/summary.md
-          else
-            echo 'application=false' >> "$GITHUB_OUTPUT"
-            printf '%s\n' '# CI preflight' '' '- Mode: planning' '- Application gates: not applicable (composer.json is not present)' > build/evidence/preflight/summary.md
+            application=true
           fi
+
+          full_ci=true
+          tier=FULL
+          reason='push, manual run, or main-target PR requires full validation'
+          : > build/evidence/preflight/changed-files.txt
+
+          if [[ "$GITHUB_EVENT_NAME" == 'pull_request' && "${{ github.base_ref }}" == 'develop/v1.0.0-completion' ]]; then
+            if git rev-parse --verify HEAD^1 >/dev/null 2>&1; then
+              git diff --name-only HEAD^1 HEAD | sort -u > build/evidence/preflight/changed-files.txt
+
+              control_only=true
+              if [[ ! -s build/evidence/preflight/changed-files.txt ]]; then
+                control_only=false
+                reason='unable to prove a non-empty control-only diff'
+              fi
+
+              while IFS= read -r path; do
+                [[ -n "$path" ]] || continue
+                case "$path" in
+                  README.md|PROJECT_STATUS.md|AGENTS.md|CONTRIBUTING.md|.gitignore|.github/CODEOWNERS|.github/dependabot.yml|.github/pull_request_template.md|.github/ISSUE_TEMPLATE/*|docs/*|evidence/README.md)
+                    ;;
+                  *)
+                    control_only=false
+                    reason="application, runtime, test, CI, or unknown path changed: $path"
+                    break
+                    ;;
+                esac
+              done < build/evidence/preflight/changed-files.txt
+
+              if [[ "$control_only" == 'true' ]]; then
+                full_ci=false
+                tier=CONTROL
+                reason='all changed paths are in the explicit documentation/governance-only allowlist'
+              fi
+            else
+              reason='PR merge parent unavailable; defaulting safely to full validation'
+            fi
+          fi
+
+          if [[ "$application" != 'true' ]]; then
+            full_ci=false
+            tier=CONTROL
+            reason='application manifest is absent; application gates are not applicable'
+          fi
+
+          echo "application=$application" >> "$GITHUB_OUTPUT"
+          echo "full_ci=$full_ci" >> "$GITHUB_OUTPUT"
+          echo "tier=$tier" >> "$GITHUB_OUTPUT"
+
+          {
+            echo '# CI preflight'
+            echo
+            echo "- Mode: $([[ "$application" == 'true' ]] && echo application || echo planning)"
+            echo "- Tier: $tier"
+            echo "- Full application gates: $full_ci"
+            echo "- Reason: $reason"
+          } > build/evidence/preflight/summary.md
 
       - name: Validate repository contract
         shell: bash
@@ -77,7 +142,11 @@ jobs:
           for path in "${required_repository_files[@]}"; do
             test -s "$path" || { echo "Required repository control file is missing or empty: $path" >&2; exit 1; }
           done
-          docker compose -f docker-compose.ci.yml config --quiet
+
+          if [[ "${{ steps.mode.outputs.full_ci }}" == 'true' ]]; then
+            docker compose -f docker-compose.ci.yml config --quiet
+          fi
+
           if [[ -f composer.json ]]; then
             test -s composer.lock || { echo 'composer.lock is mandatory once composer.json exists.' >&2; exit 1; }
             test -s artisan || { echo 'artisan is mandatory once composer.json exists.' >&2; exit 1; }
@@ -123,7 +192,7 @@ jobs:
   static:
     name: PHP static quality
     needs: preflight
-    if: ${{ needs.preflight.outputs.application == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    if: ${{ needs.preflight.outputs.application == 'true' && needs.preflight.outputs.full_ci == 'true' }}
     runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -173,7 +242,7 @@ jobs:
   integration:
     name: MariaDB ${{ matrix.mariadb_version }} and Redis tests
     needs: preflight
-    if: ${{ needs.preflight.outputs.application == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    if: ${{ needs.preflight.outputs.application == 'true' && needs.preflight.outputs.full_ci == 'true' }}
     runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
     strategy:
       fail-fast: false
@@ -248,7 +317,7 @@ jobs:
   dependencies:
     name: Dependency and license policy
     needs: preflight
-    if: ${{ needs.preflight.outputs.application == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    if: ${{ needs.preflight.outputs.application == 'true' && needs.preflight.outputs.full_ci == 'true' }}
     runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -284,7 +353,7 @@ jobs:
 
   secrets:
     name: Secret scan
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.draft == false) }}
     runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

@@ -36,7 +36,9 @@ High/Critical work involving financial integrity, authorization, security contro
 - [ ] MariaDB concurrency/locking tests are present where correctness depends on them.
 - [ ] Failure/uncertainty and regression behavior is covered where applicable.
 - [ ] Migration/config/runtime compatibility is verified where applicable.
-- [ ] Mandatory CI passes on the exact final PR head.
+- [ ] The applicable CI tier passes on the final tested PR revision.
+
+Expected CI tier: CONTROL / FULL
 
 Commands / focused tests run:
 
@@ -44,11 +46,13 @@ Commands / focused tests run:
 ...
 ```
 
-Exact-head CI run:
+Applicable CI run:
 
 ```text
-pending until final head
+pending until review-ready/final revision
 ```
+
+If reusing prior green evidence or rerunning only failed jobs, state why the tested resulting tree is unchanged and why the narrower rerun is valid.
 
 ## Review and integration
 
