@@ -1,40 +1,50 @@
 # Freedom Platform
 
-Production-grade Telegram commerce and lifecycle-management platform for VPN/proxy subscriptions.
+Telegram-first commerce and lifecycle-management platform for VPN/proxy subscriptions.
 
-## Status
+## Start here
 
-Phase `0.1.0` planning is closed and the `0.2.0` Laravel foundation has passed its automated quality gates. A target-like aaPanel/OpenLiteSpeed installation rehearsal is still required before closing `0.2.0`. The authoritative scope is maintained in
-[`docs/specification/master-execution-prompt.md`](docs/specification/master-execution-prompt.md).
+For development, read only:
 
-The repository follows gated semantic phases. No phase is complete until its documented quality gate passes, and no financial or provisioning behavior may be inferred from an incomplete phase.
+1. [`PROJECT_STATUS.md`](PROJECT_STATUS.md) — current phase and where live work is tracked.
+2. [`AGENTS.md`](AGENTS.md) — repository rules, safety invariants, and branch/PR policy.
+3. [`CONTRIBUTING.md`](CONTRIBUTING.md) — local setup and verification commands.
+4. [`docs/README.md`](docs/README.md) — index of durable product and engineering references.
 
-## Target baseline
+Live task, branch, PR, review, and CI state is authoritative in GitHub. Do not infer current work from historical commits or old documents.
 
-- Laravel 13.x on PHP 8.4
-- MariaDB with `utf8mb4`
-- authenticated Redis for queues, cache, rate limiting, and coordination locks
-- Telegram webhook presentation layer
-- modular monolith with transactional outbox and database-enforced idempotency
-- aaPanel and OpenLiteSpeed atomic-release deployment
+## Product authority
+
+The Version `1.0.0` product contract is [`docs/specification/master-execution-prompt.md`](docs/specification/master-execution-prompt.md). Stable requirement IDs are in [`docs/01-authoritative-requirements.md`](docs/01-authoritative-requirements.md).
+
+A task, implementation shortcut, or old design note cannot silently remove or redefine a Version 1 requirement.
+
+## Technical baseline
+
+- PHP 8.4 / Laravel 13.x
+- MariaDB as the durable correctness boundary
+- authenticated Redis for queues, cache, throttling, and coordination
+- modular monolith with Domain / Application / Infrastructure / Presentation boundaries
+- Telegram-first product surface
+- integer IRR for fiat; fixed-precision decimal for crypto
+- transactional and idempotent financial/remote effects
 - Persian default UI with English fallback
+- aaPanel/OpenLiteSpeed atomic-release deployment target
 
 ## Non-negotiable invariants
 
-1. No paid service is provisioned before authoritative payment capture.
-2. One paid order item creates at most one active remote service identity.
-3. Duplicate updates, callbacks, webhooks, retries, and operator actions create no duplicate financial or remote effect.
-4. The wallet ledger is append-only and provably balanced.
-5. Secrets and sensitive identifiers are never committed or logged.
+- no paid provisioning before authoritative payment capture;
+- no duplicate financial, provisioning, Telegram, or provider effect;
+- uncertain external mutation is reconciled before retry;
+- database transactions, locks, uniqueness, and immutable history are final correctness barriers;
+- browser/customer assertions never prove payment;
+- TLS verification is never disabled;
+- secrets and sensitive data never enter Git, Issues/PRs, logs, CI artifacts, or repository evidence.
 
-## Documentation map
+## Evidence policy
 
-Planning, architecture, security, testing, operations, and acceptance artifacts live in [`docs/`](docs/). CI writes transient artifacts to `build/evidence/`; reviewed phase manifests live in `evidence/`; protected staging/production evidence lives under private shared storage. An unsupported claim never replaces evidence.
-
-## Safe local setup
-
-`composer setup:local` is only for a new disposable development checkout. It refuses to run when `.env` already exists. Production installation and upgrades must use the reviewed installer/updater workflows; never run the local setup command on a server.
+Git commits, merged PRs, Issues, reviews, and GitHub Actions are the history of implementation work. The repository `evidence/` directory is reserved for release-candidate/release records only; it is not a per-task archive.
 
 ## License
 
-Proprietary. All rights reserved. No permission is granted to use, copy, modify, or distribute this software except under a separate written agreement with the owner.
+Proprietary. All rights reserved.

@@ -4,7 +4,18 @@ name: CI
 
 on:
   push:
+    branches:
+      - main
   pull_request:
+    branches:
+      - main
+      - develop/v1.0.0-completion
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+      - converted_to_draft
   workflow_dispatch:
 
 permissions:
@@ -12,7 +23,7 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref_name }}
   cancel-in-progress: true
 
 env:
@@ -32,53 +43,110 @@ env:
   REDIS_PASSWORD: ci-only-redis-password
   CACHE_STORE: redis
   QUEUE_CONNECTION: redis
+  PHP_ROOT: /www/server/php/84
+  COMPOSER_BIN: /usr/local/bin/composer
 
 jobs:
   preflight:
     name: Repository preflight
-    runs-on: ubuntu-24.04
+    if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.draft == false) }}
+    runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
     outputs:
       application: ${{ steps.mode.outputs.application }}
+      full_ci: ${{ steps.mode.outputs.full_ci }}
+      tier: ${{ steps.mode.outputs.tier }}
     steps:
       - name: Check out source
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
 
-      - name: Determine phase mode
+      - name: Determine CI tier
         id: mode
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p build/evidence/preflight
+
+          application=false
           if [[ -f composer.json ]]; then
-            echo 'application=true' >> "$GITHUB_OUTPUT"
-            printf '%s\n' '# CI preflight' '' '- Mode: application' > build/evidence/preflight/summary.md
-          else
-            echo 'application=false' >> "$GITHUB_OUTPUT"
-            printf '%s\n' '# CI preflight' '' '- Mode: planning' '- Application gates: not applicable (composer.json is not present)' > build/evidence/preflight/summary.md
+            application=true
           fi
+
+          full_ci=true
+          tier=FULL
+          reason='push, manual run, or main-target PR requires full validation'
+          : > build/evidence/preflight/changed-files.txt
+
+          if [[ "$GITHUB_EVENT_NAME" == 'pull_request' && "${{ github.base_ref }}" == 'develop/v1.0.0-completion' ]]; then
+            if git rev-parse --verify HEAD^1 >/dev/null 2>&1; then
+              git diff --name-only HEAD^1 HEAD | sort -u > build/evidence/preflight/changed-files.txt
+
+              control_only=true
+              if [[ ! -s build/evidence/preflight/changed-files.txt ]]; then
+                control_only=false
+                reason='unable to prove a non-empty control-only diff'
+              fi
+
+              while IFS= read -r path; do
+                [[ -n "$path" ]] || continue
+                case "$path" in
+                  README.md|PROJECT_STATUS.md|AGENTS.md|CONTRIBUTING.md|.gitignore|.github/CODEOWNERS|.github/dependabot.yml|.github/pull_request_template.md|.github/ISSUE_TEMPLATE/*|docs/*|evidence/README.md)
+                    ;;
+                  *)
+                    control_only=false
+                    reason="application, runtime, test, CI, or unknown path changed: $path"
+                    break
+                    ;;
+                esac
+              done < build/evidence/preflight/changed-files.txt
+
+              if [[ "$control_only" == 'true' ]]; then
+                full_ci=false
+                tier=CONTROL
+                reason='all changed paths are in the explicit documentation/governance-only allowlist'
+              fi
+            else
+              reason='PR merge parent unavailable; defaulting safely to full validation'
+            fi
+          fi
+
+          if [[ "$application" != 'true' ]]; then
+            full_ci=false
+            tier=CONTROL
+            reason='application manifest is absent; application gates are not applicable'
+          fi
+
+          echo "application=$application" >> "$GITHUB_OUTPUT"
+          echo "full_ci=$full_ci" >> "$GITHUB_OUTPUT"
+          echo "tier=$tier" >> "$GITHUB_OUTPUT"
+
+          {
+            echo '# CI preflight'
+            echo
+            echo "- Mode: $([[ "$application" == 'true' ]] && echo application || echo planning)"
+            echo "- Tier: $tier"
+            echo "- Full application gates: $full_ci"
+            echo "- Reason: $reason"
+          } > build/evidence/preflight/summary.md
 
       - name: Validate repository contract
         shell: bash
         run: |
           set -euo pipefail
-          required_planning_files=(
-            docs/00-execution-ledger.md
-            docs/01-authoritative-requirements.md
-            docs/02-requirement-traceability-matrix.md
-            docs/03-risk-register.md
-            docs/04-domain-glossary.md
-            docs/05-architecture-overview.md
-            docs/06-test-strategy.md
-            docs/07-security-threat-model.md
-            docs/08-data-classification.md
-            docs/09-deployment-runbook.md
-            docs/10-release-checklist.md
+          required_repository_files=(
             docker-compose.ci.yml
+            scripts/ci/verify-planning.sh
+            scripts/ci/verify-project-control.sh
           )
-          for path in "${required_planning_files[@]}"; do
-            test -s "$path" || { echo "Required planning artifact is missing or empty: $path" >&2; exit 1; }
+          for path in "${required_repository_files[@]}"; do
+            test -s "$path" || { echo "Required repository control file is missing or empty: $path" >&2; exit 1; }
           done
-          docker compose -f docker-compose.ci.yml config --quiet
+
+          if [[ "${{ steps.mode.outputs.full_ci }}" == 'true' ]]; then
+            docker compose -f docker-compose.ci.yml config --quiet
+          fi
+
           if [[ -f composer.json ]]; then
             test -s composer.lock || { echo 'composer.lock is mandatory once composer.json exists.' >&2; exit 1; }
             test -s artisan || { echo 'artisan is mandatory once composer.json exists.' >&2; exit 1; }
@@ -103,9 +171,16 @@ jobs:
       - name: Verify planning traceability
         run: bash scripts/ci/verify-planning.sh
 
+      - name: Verify project control plane
+        shell: bash
+        run: |
+          set -o pipefail
+          bash scripts/ci/verify-project-control.sh \
+            2>&1 | tee build/evidence/preflight/project-control.log
+
       - name: Upload preflight evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: preflight-evidence-${{ github.run_id }}
           path: |
@@ -117,37 +192,47 @@ jobs:
   static:
     name: PHP static quality
     needs: preflight
-    if: needs.preflight.outputs.application == 'true'
-    runs-on: ubuntu-24.04
+    if: ${{ needs.preflight.outputs.application == 'true' && needs.preflight.outputs.full_ci == 'true' }}
+    runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - name: Set up PHP
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
-        with:
-          php-version: "8.4"
-          extensions: bcmath, curl, dom, fileinfo, intl, mbstring, openssl, pcntl, pdo_mysql, redis, sodium, xml
-          coverage: none
-          tools: composer:2.10.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Use runner PHP toolchain
+        timeout-minutes: 2
+        run: bash scripts/ci/bootstrap-self-hosted-toolchain.sh no-coverage
+
       - name: Install locked dependencies
-        run: composer install --no-interaction --prefer-dist --no-progress
+        timeout-minutes: 10
+        run: |
+          composer install --no-interaction --prefer-dist --no-progress --no-scripts
+          php artisan package:discover --ansi
+
       - name: Code style
         shell: bash
         run: |
           set -o pipefail
           mkdir -p build/evidence/static
-          vendor/bin/pint --test --format=json 2>&1 | tee build/evidence/static/pint.json
+          if php vendor/bin/pint --test --format=json 2>&1 | tee build/evidence/static/pint.json; then
+            exit 0
+          fi
+          php vendor/bin/pint
+          git diff -- . | tee build/evidence/static/pint.diff
+          exit 1
+
       - name: Static analysis and repository policy
+        timeout-minutes: 15
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p build/evidence/static
           composer validate --strict --no-check-publish 2>&1 | tee build/evidence/static/composer-validate.log
-          vendor/bin/phpstan analyse --no-progress --error-format=table 2>&1 | tee build/evidence/static/phpstan.log
-          composer ci:forbidden-patterns 2>&1 | tee build/evidence/static/forbidden-patterns.log
-          composer ci:architecture 2>&1 | tee build/evidence/static/architecture.log
+          php -d memory_limit=1G vendor/bin/phpstan analyse --no-progress --error-format=table --memory-limit=1G 2>&1 | tee build/evidence/static/phpstan.log
+          bash scripts/ci/forbidden-patterns.sh 2>&1 | tee build/evidence/static/forbidden-patterns.log
+          bash scripts/ci/architecture.sh 2>&1 | tee build/evidence/static/architecture.log
+
       - name: Upload static evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: static-evidence-${{ github.run_id }}
           path: build/evidence/static
@@ -155,24 +240,41 @@ jobs:
           retention-days: 30
 
   integration:
-    name: MariaDB and Redis tests
+    name: MariaDB ${{ matrix.mariadb_version }} and Redis tests
     needs: preflight
-    if: needs.preflight.outputs.application == 'true'
-    runs-on: ubuntu-24.04
+    if: ${{ needs.preflight.outputs.application == 'true' && needs.preflight.outputs.full_ci == 'true' }}
+    runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - mariadb_version: '10.11'
+            artifact_suffix: mariadb-10-11
+          - mariadb_version: '11.4'
+            artifact_suffix: mariadb-11-4
+    env:
+      MARIADB_VERSION: ${{ matrix.mariadb_version }}
+      COMPOSE_PROJECT_NAME: freedom-platform-ci-${{ github.run_id }}-${{ matrix.artifact_suffix }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - name: Set up PHP
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
-        with:
-          php-version: "8.4"
-          extensions: bcmath, curl, dom, fileinfo, intl, mbstring, openssl, pcntl, pdo_mysql, redis, sodium, xml
-          coverage: pcov
-          tools: composer:2.10.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Use runner PHP toolchain
+        timeout-minutes: 2
+        run: bash scripts/ci/bootstrap-self-hosted-toolchain.sh coverage
+
       - name: Start disposable dependencies
+        timeout-minutes: 5
         run: docker compose -f docker-compose.ci.yml up -d --wait
+
       - name: Install locked dependencies
-        run: composer install --no-interaction --prefer-dist --no-progress
+        timeout-minutes: 10
+        run: |
+          composer install --no-interaction --prefer-dist --no-progress --no-scripts
+          php artisan package:discover --ansi
+
       - name: Run complete automated suite
+        timeout-minutes: 30
         shell: bash
         run: |
           set -euo pipefail
@@ -180,7 +282,8 @@ jobs:
           docker compose -f docker-compose.ci.yml ps > build/evidence/services/compose-ps.txt
           test -f .env || cp .env.example .env
           php artisan config:clear --ansi
-          COLUMNS=240 php artisan test \
+          COLUMNS=240 php vendor/bin/phpunit \
+            --configuration phpunit.xml \
             --display-warnings \
             --fail-on-warning \
             --log-junit build/evidence/tests/junit.xml \
@@ -188,19 +291,22 @@ jobs:
             2>&1 | tee build/evidence/tests/test.log
           test -s build/evidence/tests/junit.xml
           test -s build/evidence/coverage/clover.xml
+
       - name: Capture dependency service logs
         if: always()
         run: |
           mkdir -p build/evidence/services
           docker compose -f docker-compose.ci.yml logs --no-color > build/evidence/services/compose.log 2>&1 || true
+
       - name: Stop disposable dependencies
         if: always()
-        run: docker compose -f docker-compose.ci.yml down --volumes
+        run: docker compose -f docker-compose.ci.yml down --volumes --remove-orphans
+
       - name: Upload test evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: test-evidence-${{ github.run_id }}
+          name: test-evidence-${{ github.run_id }}-${{ matrix.artifact_suffix }}
           path: |
             build/evidence/tests
             build/evidence/coverage
@@ -211,29 +317,34 @@ jobs:
   dependencies:
     name: Dependency and license policy
     needs: preflight
-    if: needs.preflight.outputs.application == 'true'
-    runs-on: ubuntu-24.04
+    if: ${{ needs.preflight.outputs.application == 'true' && needs.preflight.outputs.full_ci == 'true' }}
+    runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - name: Set up PHP
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
-        with:
-          php-version: "8.4"
-          coverage: none
-          tools: composer:2.10.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Use runner PHP toolchain
+        timeout-minutes: 2
+        run: bash scripts/ci/bootstrap-self-hosted-toolchain.sh no-coverage
+
       - name: Install locked dependencies
-        run: composer install --no-interaction --prefer-dist --no-progress
+        timeout-minutes: 10
+        run: |
+          composer install --no-interaction --prefer-dist --no-progress --no-scripts
+          php artisan package:discover --ansi
+
       - name: Audit dependencies and licenses
+        timeout-minutes: 10
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p build/evidence/dependencies
           composer audit --locked --abandoned=fail --format=json > build/evidence/dependencies/audit.json
-          composer ci:licenses
+          bash scripts/ci/licenses.sh
           test -s build/evidence/dependencies/licenses.json
+
       - name: Upload dependency evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dependency-evidence-${{ github.run_id }}
           path: build/evidence/dependencies
@@ -242,12 +353,18 @@ jobs:
 
   secrets:
     name: Secret scan
-    runs-on: ubuntu-24.04
+    if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.draft == false) }}
+    runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+
+      - name: Prepare Gitleaks temporary path
+        shell: bash
+        run: rm -f /tmp/gitleaks.tmp
+
       - name: Scan Git history
-        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:
           GITHUB_TOKEN: ${{ github.token }}

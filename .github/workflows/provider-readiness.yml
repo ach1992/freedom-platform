@@ -1,0 +1,56 @@
+name: Provider Readiness - Read Only
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Type READ_ONLY_PROVIDER_CHECK to confirm no provider mutation is intended.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: provider-readiness-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  pasarguard:
+    name: PasarGuard v5.2.1 read-only readiness
+    if: ${{ github.ref_name == 'develop/v1.0.0-completion' && inputs.confirm == 'READ_ONLY_PROVIDER_CHECK' }}
+    runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
+    timeout-minutes: 5
+    env:
+      PHP_ROOT: /www/server/php/84
+      PASARGUARD_TEST_ORIGIN: ${{ secrets.PASARGUARD_TEST_ORIGIN }}
+      PASARGUARD_TEST_API_KEY: ${{ secrets.PASARGUARD_TEST_API_KEY }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Validate read-only test configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -x "$PHP_ROOT/bin/php"
+          test -n "${PASARGUARD_TEST_ORIGIN:-}" || { echo 'PASARGUARD_TEST_ORIGIN is not configured.' >&2; exit 1; }
+          test -n "${PASARGUARD_TEST_API_KEY:-}" || { echo 'PASARGUARD_TEST_API_KEY is not configured.' >&2; exit 1; }
+          "$PHP_ROOT/bin/php" -m | grep -Fx curl >/dev/null
+
+      - name: Probe PasarGuard source contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/evidence/provider-readiness
+          "$PHP_ROOT/bin/php" scripts/ci/pasarguard-readonly-probe.php \
+            2>&1 | tee build/evidence/provider-readiness/pasarguard.txt
+
+      - name: Upload sanitized readiness evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: provider-readiness-${{ github.run_id }}
+          path: build/evidence/provider-readiness
+          if-no-files-found: error
+          retention-days: 14

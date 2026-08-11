@@ -32,5 +32,7 @@
         <env name="PULSE_ENABLED" value="false"/>
         <env name="TELESCOPE_ENABLED" value="false"/>
         <env name="NIGHTWATCH_ENABLED" value="false"/>
+        <env name="BENEFIT_CODE_LOOKUP_KEY_CURRENT_VERSION" value="1"/>
+        <env name="BENEFIT_CODE_LOOKUP_KEY_CURRENT" value="benefit-code-test-only-key-material-benefit-code-test-only"/>
     </php>
 </phpunit>

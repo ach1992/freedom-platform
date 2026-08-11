@@ -1,0 +1,483 @@
+<?php
+
+declare(strict_types=1);
+
+namespace {
+    use App\Modules\Wallet\Application\LedgerEntryDraft;
+    use App\Modules\Wallet\Application\LedgerPostingService;
+    use App\Modules\Wallet\Application\WalletHoldService;
+    use App\Modules\Wallet\Application\WalletReconciliationService;
+    use App\Modules\Wallet\Application\WalletTransferService;
+    use App\Modules\Wallet\Domain\IrrMoney;
+    use App\Modules\Wallet\Domain\LedgerDirection;
+    use Illuminate\Contracts\Console\Kernel;
+
+    if (PHP_SAPI === 'cli' && ($argv[1] ?? null) === '--wallet-contention-worker') {
+        require dirname(__DIR__, 2).'/vendor/autoload.php';
+        $app = require dirname(__DIR__, 2).'/bootstrap/app.php';
+        $app->make(Kernel::class)->bootstrap();
+
+        $decoded = base64_decode($argv[2] ?? '', true);
+        if ($decoded === false) {
+            fwrite(STDERR, "Invalid worker payload encoding.\n");
+            exit(2);
+        }
+
+        try {
+            /** @var array<string, mixed> $payload */
+            $payload = json_decode($decoded, true, flags: JSON_THROW_ON_ERROR);
+        } catch (JsonException $exception) {
+            fwrite(STDERR, 'Invalid worker payload: '.$exception->getMessage()."\n");
+            exit(2);
+        }
+
+        echo "READY\n";
+        flush();
+        if (fgets(STDIN) === false) {
+            fwrite(STDERR, "Worker barrier was not released.\n");
+            exit(2);
+        }
+
+        try {
+            $action = $payload['action'] ?? null;
+            if (! is_string($action)) {
+                throw new RuntimeException('Worker action is missing.');
+            }
+
+            if (str_starts_with($action, 'transfer_')) {
+                config()->set('wallet.transfers', [
+                    'enabled' => true,
+                    'allowed_buckets' => ['cash'],
+                    'minimum_irr' => 1,
+                    'maximum_irr' => 5_000_000,
+                    'daily_limit_irr' => 5_000_000,
+                    'fixed_fee_irr' => 0,
+                    'fee_basis_points' => 0,
+                    'confirmation_ttl_seconds' => 900,
+                    'fee_account_code' => null,
+                ]);
+            }
+
+            $result = match ($action) {
+                'hold_place' => (static function () use ($app, $payload): array {
+                    $receipt = $app->make(WalletHoldService::class)->place(
+                        (string) $payload['hold_key'],
+                        (int) $payload['owner_user_id'],
+                        (int) $payload['ledger_account_id'],
+                        IrrMoney::positive((int) $payload['amount_irr']),
+                        (string) $payload['source_type'],
+                        (string) $payload['source_id'],
+                        new DateTimeImmutable((string) $payload['expires_at']),
+                    );
+
+                    return ['id' => $receipt->holdId, 'status' => $receipt->status->value, 'replayed' => $receipt->replayed];
+                })(),
+                'hold_capture' => (static function () use ($app, $payload): array {
+                    $receipt = $app->make(WalletHoldService::class)->capture(
+                        (string) $payload['hold_key'],
+                        (int) $payload['offset_account_id'],
+                        (string) $payload['correlation_id'],
+                    );
+
+                    return ['id' => $receipt->holdId, 'status' => $receipt->status->value, 'replayed' => $receipt->replayed];
+                })(),
+                'hold_release' => (static function () use ($app, $payload): array {
+                    $receipt = $app->make(WalletHoldService::class)->release((string) $payload['hold_key'], (string) $payload['reason']);
+
+                    return ['id' => $receipt->holdId, 'status' => $receipt->status->value, 'replayed' => $receipt->replayed];
+                })(),
+                'ledger_post' => (static function () use ($app, $payload): array {
+                    /** @var list<array{account_id:int, direction:string, amount_irr:int}> $drafts */
+                    $drafts = $payload['entries'];
+                    $entries = array_map(
+                        static fn (array $entry): LedgerEntryDraft => new LedgerEntryDraft(
+                            $entry['account_id'],
+                            LedgerDirection::from($entry['direction']),
+                            IrrMoney::positive($entry['amount_irr']),
+                        ),
+                        $drafts,
+                    );
+                    $receipt = $app->make(LedgerPostingService::class)->post(
+                        (string) $payload['command_key'],
+                        (string) $payload['transaction_type'],
+                        (string) $payload['correlation_id'],
+                        $entries,
+                        (string) $payload['source_type'],
+                        (string) $payload['source_id'],
+                    );
+
+                    return ['id' => $receipt->transactionId, 'replayed' => $receipt->replayed];
+                })(),
+                'transfer_prepare' => (static function () use ($app, $payload): array {
+                    $receipt = $app->make(WalletTransferService::class)->prepare(
+                        (string) $payload['transfer_key'],
+                        (int) $payload['sender_user_id'],
+                        (string) $payload['recipient_public_id'],
+                        'cash',
+                        IrrMoney::positive((int) $payload['amount_irr']),
+                    );
+
+                    return ['id' => $receipt->transferId, 'hold_id' => $receipt->walletHoldId, 'status' => $receipt->status->value, 'replayed' => $receipt->replayed];
+                })(),
+                'transfer_confirm' => (static function () use ($app, $payload): array {
+                    $receipt = $app->make(WalletTransferService::class)->confirm(
+                        (string) $payload['transfer_key'],
+                        (string) $payload['confirmation_key'],
+                        (string) $payload['correlation_id'],
+                    );
+
+                    return ['id' => $receipt->transferId, 'ledger_id' => $receipt->ledgerTransactionId, 'status' => $receipt->status->value, 'replayed' => $receipt->replayed];
+                })(),
+                'reconcile' => (static function () use ($app, $payload): array {
+                    $result = $app->make(WalletReconciliationService::class)->reconcile(
+                        (int) $payload['owner_user_id'],
+                        (int) $payload['ledger_account_id'],
+                    );
+
+                    return [
+                        'snapshot_id' => $result->snapshotId,
+                        'ledger' => $result->balance->ledgerBalance->amount,
+                        'holds' => $result->balance->activeHolds->amount,
+                        'available' => $result->balance->availableBalance->amount,
+                    ];
+                })(),
+                default => throw new RuntimeException('Unknown worker action.'),
+            };
+
+            echo json_encode(['ok' => true, 'result' => $result], JSON_THROW_ON_ERROR)."\n";
+        } catch (Throwable $exception) {
+            echo json_encode(['ok' => false, 'exception' => $exception::class, 'message' => $exception->getMessage()], JSON_THROW_ON_ERROR)."\n";
+        }
+        exit(0);
+    }
+}
+
+namespace Tests\Feature {
+    use App\Modules\Wallet\Application\LedgerEntryDraft;
+    use App\Modules\Wallet\Application\LedgerPostingService;
+    use App\Modules\Wallet\Application\WalletHoldService;
+    use App\Modules\Wallet\Application\WalletTransferService;
+    use App\Modules\Wallet\Domain\IrrMoney;
+    use App\Modules\Wallet\Domain\LedgerDirection;
+    use Illuminate\Foundation\Testing\DatabaseTruncation;
+    use Illuminate\Support\Facades\DB;
+    use Illuminate\Support\Str;
+    use RuntimeException;
+    use Tests\TestCase;
+
+    /** @requirement WAL-002 WAL-003 DAT-002 DAT-003 DAT-004 QUA-001 */
+    final class WalletContentionVerificationTest extends TestCase
+    {
+        use DatabaseTruncation;
+
+        public function test_same_wallet_concurrent_holds_never_over_reserve_available_balance(): void
+        {
+            [$userId, $walletId] = $this->fundedWallet('contention-holds', 1_000_000);
+            $base = [
+                'action' => 'hold_place',
+                'owner_user_id' => $userId,
+                'ledger_account_id' => $walletId,
+                'amount_irr' => 700_000,
+                'source_type' => 'order',
+                'expires_at' => now('UTC')->addHour()->toIso8601String(),
+            ];
+            $results = $this->runConcurrent([
+                $base + ['hold_key' => 'wallet.contention.hold.a', 'source_id' => 'order-a'],
+                $base + ['hold_key' => 'wallet.contention.hold.b', 'source_id' => 'order-b'],
+            ]);
+
+            self::assertSame(1, $this->successCount($results), $this->diagnostic($results));
+            self::assertSame(1, $this->failureCount($results), $this->diagnostic($results));
+            self::assertSame(700_000, (int) DB::table('wallet_holds')->where('status', 'active')->sum('amount_irr'));
+            self::assertSame(300_000, $this->app->make(WalletHoldService::class)->balance($userId, $walletId)->availableBalance->amount);
+        }
+
+        public function test_concurrent_capture_and_release_produce_one_terminal_outcome_only(): void
+        {
+            [$userId, $walletId] = $this->fundedWallet('contention-terminal', 1_000_000);
+            $revenueId = $this->account('system.wallet.contention.terminal.revenue', 'revenue');
+            $this->app->make(WalletHoldService::class)->place(
+                'wallet.contention.terminal.hold',
+                $userId,
+                $walletId,
+                IrrMoney::positive(250_000),
+                'order',
+                'terminal-order',
+                now('UTC')->addHour()->toDateTimeImmutable(),
+            );
+            $ledgerBefore = DB::table('ledger_transactions')->count();
+            $results = $this->runConcurrent([
+                ['action' => 'hold_capture', 'hold_key' => 'wallet.contention.terminal.hold', 'offset_account_id' => $revenueId, 'correlation_id' => 'corr-terminal-capture'],
+                ['action' => 'hold_release', 'hold_key' => 'wallet.contention.terminal.hold', 'reason' => 'terminal release'],
+            ]);
+
+            self::assertSame(1, $this->successCount($results), $this->diagnostic($results));
+            self::assertSame(1, $this->failureCount($results), $this->diagnostic($results));
+            $status = (string) DB::table('wallet_holds')->where('hold_key', 'wallet.contention.terminal.hold')->value('status');
+            self::assertContains($status, ['captured', 'released']);
+            self::assertSame($status === 'captured' ? $ledgerBefore + 1 : $ledgerBefore, DB::table('ledger_transactions')->count());
+        }
+
+        public function test_duplicate_concurrent_ledger_command_finalizes_one_effect_only(): void
+        {
+            $assetId = $this->account('system.wallet.contention.ledger.asset', 'asset');
+            $revenueId = $this->account('system.wallet.contention.ledger.revenue', 'revenue');
+            $payload = [
+                'action' => 'ledger_post',
+                'command_key' => 'ledger.contention.duplicate.000001',
+                'transaction_type' => 'contention_verification',
+                'correlation_id' => 'corr-contention-ledger',
+                'source_type' => 'verification',
+                'source_id' => 'contention-ledger',
+                'entries' => [
+                    ['account_id' => $assetId, 'direction' => 'debit', 'amount_irr' => 100_000],
+                    ['account_id' => $revenueId, 'direction' => 'credit', 'amount_irr' => 100_000],
+                ],
+            ];
+            $results = $this->runConcurrent([$payload, $payload]);
+
+            self::assertSame(2, $this->successCount($results), $this->diagnostic($results));
+            self::assertSame([false, true], $this->replayFlags($results));
+            self::assertSame(1, DB::table('ledger_transactions')->where('command_key', 'ledger.contention.duplicate.000001')->count());
+            self::assertSame(2, DB::table('ledger_entries')->count());
+        }
+
+        public function test_duplicate_concurrent_transfer_prepare_and_confirm_never_duplicate_primary_effects(): void
+        {
+            [$senderId] = $this->fundedWallet('contention-transfer-sender', 1_000_000);
+            $recipientPublicId = (string) Str::ulid();
+            $recipientId = $this->user($recipientPublicId);
+            $this->account('wallet.cash.contention-transfer-recipient.'.$recipientId, 'liability', $recipientId, 'cash');
+            $prepare = [
+                'action' => 'transfer_prepare',
+                'transfer_key' => 'wallet.contention.transfer.000001',
+                'sender_user_id' => $senderId,
+                'recipient_public_id' => $recipientPublicId,
+                'amount_irr' => 300_000,
+            ];
+            $prepareResults = $this->runConcurrent([$prepare, $prepare]);
+
+            self::assertContains($this->successCount($prepareResults), [1, 2], $this->diagnostic($prepareResults));
+            self::assertLessThanOrEqual(1, $this->failureCount($prepareResults), $this->diagnostic($prepareResults));
+            self::assertSame(1, DB::table('wallet_transfers')->where('transfer_key', 'wallet.contention.transfer.000001')->count());
+            self::assertSame(1, DB::table('wallet_holds')->where('source_type', 'wallet_transfer')->where('source_id', 'wallet.contention.transfer.000001')->count());
+
+            $this->enableTransfers();
+            $replay = $this->app->make(WalletTransferService::class)->prepare(
+                'wallet.contention.transfer.000001',
+                $senderId,
+                $recipientPublicId,
+                'cash',
+                IrrMoney::positive(300_000),
+            );
+            self::assertTrue($replay->replayed);
+
+            $confirm = [
+                'action' => 'transfer_confirm',
+                'transfer_key' => 'wallet.contention.transfer.000001',
+                'confirmation_key' => 'confirm-contention-transfer-000001',
+                'correlation_id' => 'corr-contention-transfer',
+            ];
+            $confirmResults = $this->runConcurrent([$confirm, $confirm]);
+
+            self::assertSame(2, $this->successCount($confirmResults), $this->diagnostic($confirmResults));
+            self::assertSame([false, true], $this->replayFlags($confirmResults));
+            self::assertSame('completed', DB::table('wallet_transfers')->where('transfer_key', 'wallet.contention.transfer.000001')->value('status'));
+            self::assertSame(1, DB::table('ledger_transactions')->where('transaction_type', 'wallet_transfer')->count());
+            self::assertSame(1, DB::table('wallet_holds')->where('source_type', 'wallet_transfer')->where('source_id', 'wallet.contention.transfer.000001')->where('status', 'captured')->count());
+        }
+
+        public function test_reconciliation_concurrent_with_mutation_is_internally_consistent(): void
+        {
+            [$userId, $walletId] = $this->fundedWallet('contention-reconcile', 1_000_000);
+            $results = $this->runConcurrent([
+                ['action' => 'reconcile', 'owner_user_id' => $userId, 'ledger_account_id' => $walletId],
+                [
+                    'action' => 'hold_place', 'hold_key' => 'wallet.contention.reconcile.hold',
+                    'owner_user_id' => $userId, 'ledger_account_id' => $walletId, 'amount_irr' => 300_000,
+                    'source_type' => 'order', 'source_id' => 'reconcile-order', 'expires_at' => now('UTC')->addHour()->toIso8601String(),
+                ],
+            ]);
+
+            self::assertSame(2, $this->successCount($results), $this->diagnostic($results));
+            /** @var array{snapshot_id:int, ledger:int, holds:int, available:int} $snapshot */
+            $snapshot = $results[0]['result'];
+            self::assertSame(1_000_000, $snapshot['ledger']);
+            self::assertContains($snapshot['holds'], [0, 300_000]);
+            self::assertSame($snapshot['ledger'] - $snapshot['holds'], $snapshot['available']);
+            self::assertContains($snapshot['available'], [1_000_000, 700_000]);
+            self::assertSame(700_000, $this->app->make(WalletHoldService::class)->balance($userId, $walletId)->availableBalance->amount);
+        }
+
+        public function test_contention_failures_are_explicit_and_never_count_as_primary_effects(): void
+        {
+            [$userId, $walletId] = $this->fundedWallet('contention-errors', 500_000);
+            $base = [
+                'action' => 'hold_place', 'owner_user_id' => $userId, 'ledger_account_id' => $walletId,
+                'amount_irr' => 400_000, 'source_type' => 'order', 'expires_at' => now('UTC')->addHour()->toIso8601String(),
+            ];
+            $results = $this->runConcurrent([
+                $base + ['hold_key' => 'wallet.contention.errors.a', 'source_id' => 'errors-a'],
+                $base + ['hold_key' => 'wallet.contention.errors.b', 'source_id' => 'errors-b'],
+            ]);
+
+            self::assertSame(1, $this->successCount($results), $this->diagnostic($results));
+            self::assertSame(1, $this->failureCount($results), $this->diagnostic($results));
+            $failure = $results[0]['ok'] ? $results[1] : $results[0];
+            self::assertNotSame('', $failure['exception'] ?? '');
+            self::assertNotSame('', $failure['message'] ?? '');
+            self::assertSame(1, DB::table('wallet_holds')->where('status', 'active')->count());
+            self::assertSame(100_000, $this->app->make(WalletHoldService::class)->balance($userId, $walletId)->availableBalance->amount);
+        }
+
+        /** @param list<array<string, mixed>> $payloads @return list<array<string, mixed>> */
+        private function runConcurrent(array $payloads): array
+        {
+            $workers = [];
+            foreach ($payloads as $payload) {
+                $pipes = [];
+                $process = proc_open(
+                    [PHP_BINARY, __FILE__, '--wallet-contention-worker', base64_encode(json_encode($payload, JSON_THROW_ON_ERROR))],
+                    [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
+                    $pipes,
+                    base_path(),
+                );
+                if (! is_resource($process)) {
+                    throw new RuntimeException('Unable to start wallet contention worker.');
+                }
+                if (fgets($pipes[1]) !== "READY\n") {
+                    $stderr = stream_get_contents($pipes[2]);
+                    proc_terminate($process);
+                    proc_close($process);
+                    throw new RuntimeException('Wallet contention worker failed before barrier: '.trim((string) $stderr));
+                }
+                $workers[] = [$process, $pipes];
+            }
+
+            foreach ($workers as [, $pipes]) {
+                fwrite($pipes[0], "GO\n");
+                fclose($pipes[0]);
+            }
+
+            $results = [];
+            foreach ($workers as [$process, $pipes]) {
+                $stdout = stream_get_contents($pipes[1]);
+                $stderr = stream_get_contents($pipes[2]);
+                fclose($pipes[1]);
+                fclose($pipes[2]);
+                $exitCode = proc_close($process);
+                if ($exitCode !== 0 || trim((string) $stderr) !== '') {
+                    throw new RuntimeException(sprintf('Wallet contention worker failed (%d): %s', $exitCode, trim((string) $stderr)));
+                }
+                $decoded = json_decode(trim((string) $stdout), true, flags: JSON_THROW_ON_ERROR);
+                if (! is_array($decoded) || ! isset($decoded['ok']) || ! is_bool($decoded['ok'])) {
+                    throw new RuntimeException('Wallet contention worker returned malformed output.');
+                }
+                $results[] = $decoded;
+            }
+
+            return $results;
+        }
+
+        /** @param list<array<string, mixed>> $results */
+        private function successCount(array $results): int
+        {
+            return count(array_filter($results, static fn (array $result): bool => $result['ok'] === true));
+        }
+
+        /** @param list<array<string, mixed>> $results */
+        private function failureCount(array $results): int
+        {
+            return count($results) - $this->successCount($results);
+        }
+
+        /** @param list<array<string, mixed>> $results @return list<bool> */
+        private function replayFlags(array $results): array
+        {
+            $flags = array_map(static function (array $result): bool {
+                if (($result['ok'] ?? false) !== true || ! is_bool($result['result']['replayed'] ?? null)) {
+                    throw new RuntimeException('Expected replay-aware successful worker result.');
+                }
+
+                return $result['result']['replayed'];
+            }, $results);
+            sort($flags);
+
+            return $flags;
+        }
+
+        /** @param list<array<string, mixed>> $results */
+        private function diagnostic(array $results): string
+        {
+            return json_encode($results, JSON_THROW_ON_ERROR);
+        }
+
+        private function enableTransfers(): void
+        {
+            config()->set('wallet.transfers', [
+                'enabled' => true,
+                'allowed_buckets' => ['cash'],
+                'minimum_irr' => 1,
+                'maximum_irr' => 5_000_000,
+                'daily_limit_irr' => 5_000_000,
+                'fixed_fee_irr' => 0,
+                'fee_basis_points' => 0,
+                'confirmation_ttl_seconds' => 900,
+                'fee_account_code' => null,
+            ]);
+        }
+
+        /** @return array{int,int,int} */
+        private function fundedWallet(string $suffix, int $amount): array
+        {
+            $userId = $this->user((string) Str::ulid());
+            $assetId = $this->account('system.wallet.'.$suffix.'.asset', 'asset');
+            $walletId = $this->account('wallet.cash.'.$suffix.'.'.$userId, 'liability', $userId, 'cash');
+            $this->app->make(LedgerPostingService::class)->post(
+                'ledger.wallet.'.$suffix.'.fund',
+                'wallet_topup_capture',
+                'corr-wallet-'.$suffix.'-fund',
+                [
+                    new LedgerEntryDraft($assetId, LedgerDirection::Debit, IrrMoney::positive($amount)),
+                    new LedgerEntryDraft($walletId, LedgerDirection::Credit, IrrMoney::positive($amount)),
+                ],
+                'verification',
+                'wallet-'.$suffix.'-fund',
+            );
+
+            return [$userId, $walletId, $assetId];
+        }
+
+        private function user(string $publicId): int
+        {
+            $now = now('UTC');
+
+            return (int) DB::table('users')->insertGetId([
+                'public_id' => $publicId,
+                'account_type' => 'customer',
+                'account_status' => 'active',
+                'locale' => 'fa',
+                'first_seen_at' => $now,
+                'last_seen_at' => $now,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+        }
+
+        private function account(string $code, string $class, ?int $userId = null, ?string $bucket = null): int
+        {
+            $now = now('UTC');
+
+            return (int) DB::table('ledger_accounts')->insertGetId([
+                'code' => $code,
+                'account_class' => $class,
+                'owner_user_id' => $userId,
+                'wallet_bucket' => $bucket,
+                'currency' => 'IRR',
+                'is_active' => true,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+        }
+    }
+}

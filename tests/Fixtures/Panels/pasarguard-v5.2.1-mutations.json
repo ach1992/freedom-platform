@@ -1,0 +1,51 @@
+{
+  "provider": "pasarguard",
+  "version": "5.2.1",
+  "remote_id": "42",
+  "target_reference": "pasarguard-group-4",
+  "requests": {
+    "create_service": {
+      "method": "POST",
+      "path": "/api/user",
+      "payload": {
+        "username": "fp_provider_001",
+        "expire": "2027-01-15T08:00:00+00:00",
+        "data_limit": 1073741824,
+        "data_limit_reset_strategy": "no_reset",
+        "group_ids": [4],
+        "status": "active"
+      }
+    },
+    "update_expiry": {"method": "PUT", "path": "/api/user/by-id/42", "payload": {"expire": "2027-01-15T09:00:00+00:00"}},
+    "set_data_allowance": {"method": "PUT", "path": "/api/user/by-id/42", "payload": {"data_limit": 2147483648}},
+    "add_data_allowance": {"method": "PUT", "path": "/api/user/by-id/42", "payload": {"data_limit": 1610612736}},
+    "reset_usage": {"method": "POST", "path": "/api/user/by-id/42/reset", "payload": null},
+    "suspend": {"method": "PUT", "path": "/api/user/by-id/42/disabled", "payload": {"disabled": true}},
+    "activate": {"method": "PUT", "path": "/api/user/by-id/42/disabled", "payload": {"disabled": false}},
+    "delete": {"method": "DELETE", "path": "/api/user/by-id/42", "payload": null},
+    "rotate_subscription_link": {"method": "POST", "path": "/api/user/by-id/42/revoke_sub", "payload": null}
+  },
+  "create_response": {
+    "id": 42,
+    "username": "fp_provider_001",
+    "status": "active",
+    "used_traffic": 0,
+    "lifetime_used_traffic": 0,
+    "created_at": "2026-08-07T00:00:00+00:00",
+    "edit_at": null,
+    "online_at": null,
+    "subscription_url": "https://example.invalid/sub/fixture-pasarguard",
+    "proxy_settings": {"vless": {"id": "00000000-0000-4000-8000-000000000002"}},
+    "expire": "2027-01-15T08:00:00+00:00",
+    "data_limit": 1073741824,
+    "data_limit_reset_strategy": "no_reset",
+    "note": null,
+    "on_hold_expire_duration": null,
+    "on_hold_timeout": null,
+    "group_ids": [4],
+    "auto_delete_in_days": null,
+    "hwid_limit": null,
+    "next_plan": null,
+    "admin": null
+  }
+}
