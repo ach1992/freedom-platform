@@ -10,6 +10,32 @@
 
 `main` is not a development target.
 
+## Task and PR contracts
+
+New bounded engineering work should use `.github/ISSUE_TEMPLATE/task.yml`. The Issue is the live task contract: parent/requirements, goal, dependencies/base rule, in/out scope, protected areas, risk, affected surfaces, verification, merge prerequisites, and blocker/handoff state.
+
+Pull requests use `.github/pull_request_template.md` and must keep their summary, nonclaims, changed surfaces, risk, verification, and review gates explicit. Task state, review reasoning, exact SHAs, and CI runs stay in GitHub rather than new repository handoff/evidence documents.
+
+Sensitive paths are assigned in `.github/CODEOWNERS`. CODEOWNERS identifies the intended reviewer/owner; whether GitHub blocks a merge until code-owner approval depends on repository protection/ruleset settings and must not be assumed from the file alone.
+
+## Risk, state, and labels
+
+Use this small vocabulary when the corresponding repository labels are available:
+
+- risk: `risk:low`, `risk:medium`, `risk:high`, `risk:critical`;
+- type: `type:feature`, `type:defect`, `type:security`, `type:governance`, `type:operations`;
+- workflow: `state:blocked`, `state:review-ready`, `state:owner-approval`.
+
+High/Critical work involving financial integrity, authorization, security controls, provider semantics, schema, deployment/release behavior, secrets, or irreversible operations requires independent review and explicit Owner approval before merge.
+
+## Merge method
+
+Merge style never substitutes for review or green exact-head CI.
+
+- **Squash** documentation, governance, generated/mechanical cleanup, and task branches whose intermediate commits have no durable audit value.
+- Preserve multiple implementation commits with **merge** or **rebase** only when those commit boundaries are intentional, individually reviewable, and useful to future audit/debugging.
+- Never rewrite shared long-lived history to tidy it after integration.
+
 ## Local prerequisites
 
 - Git

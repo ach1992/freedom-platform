@@ -27,6 +27,14 @@ Implementation/maintenance work uses temporary `agent/<issue-number>-<slug>` bra
 
 Never push product work directly to `main` or `develop/v1.0.0-completion`, rewrite shared history, force-push shared branches, self-merge a Worker PR, or enable auto-merge for high-risk work.
 
+## Task and ownership contract
+
+Every bounded task must have a GitHub Issue that states the parent/requirements, goal, dependencies/base rule, in/out scope, protected areas, risk, affected security/data/financial/remote/schema/runtime surfaces, required verification, merge prerequisites, and current blocker/handoff state. Use `.github/ISSUE_TEMPLATE/task.yml` for new work when available.
+
+PRs use `.github/pull_request_template.md`. Sensitive paths are assigned in `.github/CODEOWNERS`; CODEOWNERS expresses intended ownership but does not prove that GitHub branch protection/rulesets require code-owner approval.
+
+High/Critical financial, authorization, security, provider, schema, deployment/release, secret, or irreversible work requires independent review and explicit Owner approval before merge. Exact-head mandatory CI remains required regardless of merge method.
+
 ## Scope and correctness
 
 Work from a bounded GitHub Issue. Preserve accepted behavior outside the task scope.

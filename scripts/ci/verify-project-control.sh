@@ -24,6 +24,9 @@ required_files=(
     docs/09-deployment-runbook.md
     docs/development/repository-map.md
     evidence/README.md
+    .github/CODEOWNERS
+    .github/ISSUE_TEMPLATE/task.yml
+    .github/pull_request_template.md
     .github/workflows/ci.yml
 )
 
@@ -48,6 +51,28 @@ grep -F 'no implementation status' docs/01-authoritative-requirements.md >/dev/n
     || fail 'requirement index must not contain mutable implementation status'
 grep -F 'not a per-task archive' evidence/README.md >/dev/null \
     || fail 'evidence policy must reject per-task repository evidence'
+
+# Team workflow contracts are repository-enforced inputs, while live state remains in GitHub.
+grep -F 'Protected or high-conflict areas' .github/ISSUE_TEMPLATE/task.yml >/dev/null \
+    || fail 'task template lacks protected-area contract'
+grep -F 'Merge prerequisites' .github/ISSUE_TEMPLATE/task.yml >/dev/null \
+    || fail 'task template lacks merge-prerequisite contract'
+grep -F 'Explicit nonclaims' .github/pull_request_template.md >/dev/null \
+    || fail 'PR template lacks explicit nonclaims'
+grep -F 'Mandatory CI passes on the exact final PR head.' .github/pull_request_template.md >/dev/null \
+    || fail 'PR template lacks exact-head CI gate'
+grep -F '/app/Modules/Payments/ @ach1992' .github/CODEOWNERS >/dev/null \
+    || fail 'CODEOWNERS lacks Payments ownership'
+grep -F '/database/migrations/ @ach1992' .github/CODEOWNERS >/dev/null \
+    || fail 'CODEOWNERS lacks migration ownership'
+grep -F '/.github/workflows/ @ach1992' .github/CODEOWNERS >/dev/null \
+    || fail 'CODEOWNERS lacks workflow ownership'
+grep -F '/deploy/ @ach1992' .github/CODEOWNERS >/dev/null \
+    || fail 'CODEOWNERS lacks deployment ownership'
+grep -F 'High/Critical work involving financial integrity' CONTRIBUTING.md >/dev/null \
+    || fail 'contribution guide lacks risk/Owner review gate'
+grep -F 'Merge style never substitutes for review or green exact-head CI.' CONTRIBUTING.md >/dev/null \
+    || fail 'contribution guide lacks merge-method safety rule'
 
 # Duplicate machine/current status files are intentionally forbidden.
 for forbidden in docs/project-status.json docs/development/project-status.schema.json; do

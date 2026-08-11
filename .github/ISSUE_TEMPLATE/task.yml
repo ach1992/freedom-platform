@@ -1,0 +1,123 @@
+name: Task Contract
+description: Create an executable engineering task with explicit scope, risk, verification, and handoff rules.
+title: "[Task] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for bounded implementation, defect, security, operations, or governance work. Live task state belongs in GitHub; do not create per-task handoff or evidence documents.
+
+  - type: textarea
+    id: authority
+    attributes:
+      label: Parent and requirements
+      description: Link the parent phase/issue and list the exact requirement IDs or durable contract this task owns.
+      placeholder: "Parent: #8\nRequirements: PAY-001, SEC-002"
+    validations:
+      required: true
+
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal and outcome
+      description: State the concrete result this task must produce and why it matters.
+      placeholder: "Implement... so that..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies and base rule
+      description: List prerequisite Issues/PRs and the branch/base-ref rule. Resolve the exact live SHA when work starts; do not copy a stale SHA here as permanent truth.
+      placeholder: "Depends on: #...\nBranch from the live head of develop/v1.0.0-completion after dependencies are integrated."
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: In scope
+      description: List the behavior and repository surfaces this task is allowed to change.
+    validations:
+      required: true
+
+  - type: textarea
+    id: non_scope
+    attributes:
+      label: Out of scope and nonclaims
+      description: State adjacent behavior this task must not implement, imply, or claim complete.
+    validations:
+      required: true
+
+  - type: textarea
+    id: protected
+    attributes:
+      label: Protected or high-conflict areas
+      description: List files/modules/contracts that must not change unless this Task Contract is explicitly revised first.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: risk
+    attributes:
+      label: Risk level
+      description: High/Critical financial, authorization, security, provider, schema, deployment/release, secret, or irreversible work requires independent review and explicit Owner approval.
+      options:
+        - Low
+        - Medium
+        - High
+        - Critical
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: implications
+    attributes:
+      label: Impact surfaces
+      description: Check every surface that may be affected; leave unchecked only when genuinely not applicable.
+      options:
+        - label: Security or authorization
+        - label: Sensitive data or privacy
+        - label: Financial integrity or settlement
+        - label: External/provider/remote effect
+        - label: Database schema or migration
+        - label: Configuration or environment
+        - label: Runtime, deployment, or operations
+
+  - type: textarea
+    id: tests
+    attributes:
+      label: Required verification
+      description: Specify success, validation, authorization, replay/conflict, concurrency, failure, migration, and regression tests as applicable, plus exact-head CI expectations.
+      placeholder: "Focused tests: ...\nMariaDB concurrency: ...\nRegression: ...\nExact-head CI: required"
+    validations:
+      required: true
+
+  - type: textarea
+    id: merge
+    attributes:
+      label: Merge prerequisites
+      description: List dependencies, review/Owner gates, exact-head CI, migration/provider evidence, or other conditions required before integration.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: state
+    attributes:
+      label: Initial task state
+      options:
+        - DRAFT
+        - BLOCKED
+        - READY
+    validations:
+      required: true
+
+  - type: textarea
+    id: handoff
+    attributes:
+      label: Blocker or handoff note
+      description: Record only the information another engineer needs to continue from GitHub state. Use "None" when not applicable.
+      placeholder: "None"
+    validations:
+      required: true
