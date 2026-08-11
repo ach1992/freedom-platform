@@ -57,10 +57,12 @@ grep -F 'Protected or high-conflict areas' .github/ISSUE_TEMPLATE/task.yml >/dev
     || fail 'task template lacks protected-area contract'
 grep -F 'Merge prerequisites' .github/ISSUE_TEMPLATE/task.yml >/dev/null \
     || fail 'task template lacks merge-prerequisite contract'
+grep -F 'Expected CI tier' .github/ISSUE_TEMPLATE/task.yml >/dev/null \
+    || fail 'task template lacks CI-tier expectation'
 grep -F 'Explicit nonclaims' .github/pull_request_template.md >/dev/null \
     || fail 'PR template lacks explicit nonclaims'
-grep -F 'Mandatory CI passes on the exact final PR head.' .github/pull_request_template.md >/dev/null \
-    || fail 'PR template lacks exact-head CI gate'
+grep -F 'The applicable CI tier passes on the final tested PR revision.' .github/pull_request_template.md >/dev/null \
+    || fail 'PR template lacks applicable final-revision CI gate'
 grep -F '/app/Modules/Payments/ @ach1992' .github/CODEOWNERS >/dev/null \
     || fail 'CODEOWNERS lacks Payments ownership'
 grep -F '/database/migrations/ @ach1992' .github/CODEOWNERS >/dev/null \
@@ -71,7 +73,7 @@ grep -F '/deploy/ @ach1992' .github/CODEOWNERS >/dev/null \
     || fail 'CODEOWNERS lacks deployment ownership'
 grep -F 'High/Critical work involving financial integrity' CONTRIBUTING.md >/dev/null \
     || fail 'contribution guide lacks risk/Owner review gate'
-grep -F 'Merge style never substitutes for review or green exact-head CI.' CONTRIBUTING.md >/dev/null \
+grep -F 'Merge style never substitutes for review or the applicable green CI tier.' CONTRIBUTING.md >/dev/null \
     || fail 'contribution guide lacks merge-method safety rule'
 
 # Duplicate machine/current status files are intentionally forbidden.
@@ -139,12 +141,24 @@ for workflow in "${workflow_files[@]}"; do
     [[ "$found_runner" == true ]] || fail "workflow has no explicit self-hosted runs-on selector: $workflow"
 done
 
-# Generic CI validates same-repository Worker PRs targeting develop and stays secret-free.
+# Generic CI validates same-repository Worker PRs, avoids automatic Draft runner use, and defaults uncertain changes to FULL.
 ci=.github/workflows/ci.yml
-grep -A5 -F 'pull_request:' "$ci" | grep -F 'develop/v1.0.0-completion' >/dev/null \
+grep -A10 -F 'pull_request:' "$ci" | grep -F 'develop/v1.0.0-completion' >/dev/null \
     || fail 'generic CI does not validate Worker PRs targeting develop/v1.0.0-completion'
+grep -A12 -F 'pull_request:' "$ci" | grep -F 'ready_for_review' >/dev/null \
+    || fail 'generic CI does not trigger validation when a Draft PR becomes review-ready'
 grep -F 'github.event.pull_request.head.repo.full_name == github.repository' "$ci" >/dev/null \
     || fail 'generic CI lacks same-repository protection for the self-hosted runner'
+grep -F 'github.event.pull_request.draft == false' "$ci" >/dev/null \
+    || fail 'generic CI does not suppress automatic self-hosted jobs for Draft PRs'
+grep -F 'full_ci=true' "$ci" >/dev/null \
+    || fail 'generic CI must default changes to FULL validation'
+grep -F "github.base_ref }}\" == 'develop/v1.0.0-completion'" "$ci" >/dev/null \
+    || fail 'generic CI may not downgrade PRs unless they target the integration branch'
+grep -F 'needs.preflight.outputs.full_ci == '\''true'\''' "$ci" >/dev/null \
+    || fail 'expensive CI jobs are not gated by the selected FULL tier'
+grep -F '.github/ISSUE_TEMPLATE/*|docs/*|evidence/README.md)' "$ci" >/dev/null \
+    || fail 'generic CI lacks the explicit control-only allowlist'
 if grep -Eq 'secrets\.(PASARGUARD|STAGING|TELEGRAM|NOWPAYMENTS|ZARINPAL|MELLI|KAVENEGAR)' "$ci"; then
     fail 'generic CI references protected provider/staging/runtime secrets'
 fi
