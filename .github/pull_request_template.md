@@ -2,65 +2,36 @@
 
 Closes/Refs #
 
-## Bounded summary
+## Summary
 
-What changed and what accepted behavior this PR is intended to establish or preserve.
+What changed and what observable outcome this PR establishes or preserves.
 
-## Explicit nonclaims
+State an adjacent nonclaim only when the scope could otherwise be misunderstood.
 
-List adjacent features, effects, environments, provider behavior, or release claims this PR does **not** establish.
+## Risk / material impact
 
-## Changed surfaces
+- Change risk: Low / Medium / High / Critical
+- Material security/data/financial/provider/schema/config/runtime/release impact (only when applicable):
 
-- Modules / paths:
-- Database / migrations:
-- Configuration / environment:
-- Runtime / deployment / operations:
-- External/provider effects:
-
-## Risk and safety
-
-- Risk level: Low / Medium / High / Critical
-- Security / authorization impact:
-- Sensitive-data impact:
-- Financial-integrity impact:
-- Remote/provider-effect impact:
-
-High/Critical work involving financial integrity, authorization, security controls, provider semantics, schema, deployment/release behavior, secrets, or irreversible operations requires independent review and explicit Owner approval.
+High/Critical financial, authorization, security, provider, schema, deployment/release, secret, or irreversible work requires independent review and explicit Owner approval unless the exact action was already authorized.
 
 ## Verification
 
-- [ ] Focused success/validation tests are present where applicable.
-- [ ] Authorization and fail-closed tests are present where applicable.
-- [ ] Replay/conflict/idempotency tests are present where applicable.
-- [ ] MariaDB concurrency/locking tests are present where correctness depends on them.
-- [ ] Failure/uncertainty and regression behavior is covered where applicable.
-- [ ] Migration/config/runtime compatibility is verified where applicable.
-- [ ] The applicable CI tier passes on the final tested PR revision.
-
 Expected CI tier: CONTROL / FULL
 
-Commands / focused tests run:
+Focused commands/tests/results or applicable CI reference:
 
 ```text
 ...
 ```
 
-Applicable CI run:
+If prior green evidence is being reused, state only why the tested resulting tree remains materially unchanged. Do not copy CI logs into the PR.
 
-```text
-pending until review-ready/final revision
-```
+## Review gates
 
-If reusing prior green evidence or rerunning only failed jobs, state why the tested resulting tree is unchanged and why the narrower rerun is valid.
-
-## Review and integration
-
-- [ ] Diff remains inside the owning Issue scope.
-- [ ] No per-task handoff/traceability/evidence document was added.
-- [ ] No unresolved review thread remains.
-- [ ] Required CODEOWNERS/reviewer input is complete where configured.
-- [ ] Explicit Owner approval is recorded when required by risk.
-- [ ] Merge method matches `CONTRIBUTING.md`; merge style does not substitute for review or CI.
+- [ ] The diff remains inside the owning Issue scope and acceptance criteria.
+- [ ] The applicable validation passes on the final candidate, or a valid unchanged result is explicitly reused.
+- [ ] Required independent/Owner review is complete when risk requires it.
+- [ ] No per-task handoff/status/traceability/evidence document was added.
 
 Preferred merge method: squash / merge / rebase
