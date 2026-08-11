@@ -1,0 +1,95 @@
+name: Task Contract
+description: Create a bounded engineering task with only the information needed to implement, verify, review, and continue it safely.
+title: "[Task] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Live task state belongs in GitHub. Keep this contract concise; add conditional risk detail only when it materially affects the work. Do not create per-task handoff, status, traceability, or evidence documents.
+
+  - type: textarea
+    id: authority
+    attributes:
+      label: Parent / requirements
+      description: Link the parent phase/issue and relevant requirement IDs or durable authority. Use "None" only when there is genuinely no parent/requirement.
+      placeholder: "Parent: #8\nRequirements: PAY-001, SEC-002"
+    validations:
+      required: true
+
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal / outcome
+      description: State the observable result this task must produce and why it matters.
+      placeholder: "Implement ... so that ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies / base rule
+      description: List prerequisite Issues/PRs/decisions and the base-branch rule. Resolve the live SHA when work starts instead of preserving a stale SHA here.
+      placeholder: "Depends on: none\nBranch from the current develop/v1.0.0-completion head."
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: Define allowed behavior/surfaces and any adjacent outcome that must explicitly remain out of scope when misunderstanding is likely.
+      placeholder: "In scope:\n- ...\n\nOut of scope (only when useful):\n- ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: List objective behavior or repository conditions that make the task complete.
+      placeholder: "- [ ] ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation strategy
+      description: Define how correctness will be demonstrated before implementation starts. Name focused tests/checks and expected CI tier when relevant; do not require ceremonial tests.
+      placeholder: "Focused validation: ...\nExpected CI tier: FULL"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: risk
+    attributes:
+      label: Change risk
+      description: High/Critical financial, authorization, security, provider, schema, deployment/release, secret, or irreversible work requires independent review and explicit Owner approval unless already authorized.
+      options:
+        - Low
+        - Medium
+        - High
+        - Critical
+    validations:
+      required: true
+
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Material constraints / impacts (optional)
+      description: Add only constraints that matter: protected/high-conflict areas, security/privacy, financial/provider effects, schema/migration, compatibility, runtime/operations, performance, or release impact. Leave empty when none apply.
+      placeholder: "Example: Payments/Wallet are protected; no schema change; preserve provider idempotency."
+    validations:
+      required: false
+
+  - type: dropdown
+    id: state
+    attributes:
+      label: Initial state
+      options:
+        - DRAFT
+        - BLOCKED
+        - READY
+    validations:
+      required: true
