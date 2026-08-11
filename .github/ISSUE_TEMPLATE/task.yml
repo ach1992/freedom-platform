@@ -1,17 +1,17 @@
 name: Task Contract
-description: Create an executable engineering task with explicit scope, risk, verification, and handoff rules.
+description: Create a bounded engineering task with only the information needed to implement, verify, review, and continue it safely.
 title: "[Task] "
 body:
   - type: markdown
     attributes:
       value: |
-        Use this form for bounded implementation, defect, security, operations, or governance work. Live task state belongs in GitHub; do not create per-task handoff or evidence documents.
+        Live task state belongs in GitHub. Keep this contract concise; add conditional risk detail only when it materially affects the work. Do not create per-task handoff, status, traceability, or evidence documents.
 
   - type: textarea
     id: authority
     attributes:
-      label: Parent and requirements
-      description: Link the parent phase/issue and list the exact requirement IDs or durable contract this task owns.
+      label: Parent / requirements
+      description: Link the parent phase/issue and relevant requirement IDs or durable authority. Use "None" only when there is genuinely no parent/requirement.
       placeholder: "Parent: #8\nRequirements: PAY-001, SEC-002"
     validations:
       required: true
@@ -19,50 +19,53 @@ body:
   - type: textarea
     id: goal
     attributes:
-      label: Goal and outcome
-      description: State the concrete result this task must produce and why it matters.
-      placeholder: "Implement... so that..."
+      label: Goal / outcome
+      description: State the observable result this task must produce and why it matters.
+      placeholder: "Implement ... so that ..."
     validations:
       required: true
 
   - type: textarea
     id: dependencies
     attributes:
-      label: Dependencies and base rule
-      description: List prerequisite Issues/PRs and the branch/base-ref rule. Resolve the exact live SHA when work starts; do not copy a stale SHA here as permanent truth.
-      placeholder: "Depends on: #...\nBranch from the live head of develop/v1.0.0-completion after dependencies are integrated."
+      label: Dependencies / base rule
+      description: List prerequisite Issues/PRs/decisions and the base-branch rule. Resolve the live SHA when work starts instead of preserving a stale SHA here.
+      placeholder: "Depends on: none\nBranch from the current develop/v1.0.0-completion head."
     validations:
       required: true
 
   - type: textarea
     id: scope
     attributes:
-      label: In scope
-      description: List the behavior and repository surfaces this task is allowed to change.
+      label: Scope
+      description: Define allowed behavior/surfaces and any adjacent outcome that must explicitly remain out of scope when misunderstanding is likely.
+      placeholder: "In scope:\n- ...\n\nOut of scope (only when useful):\n- ..."
     validations:
       required: true
 
   - type: textarea
-    id: non_scope
+    id: acceptance
     attributes:
-      label: Out of scope and nonclaims
-      description: State adjacent behavior this task must not implement, imply, or claim complete.
+      label: Acceptance criteria
+      description: List objective behavior or repository conditions that make the task complete.
+      placeholder: "- [ ] ..."
     validations:
       required: true
 
   - type: textarea
-    id: protected
+    id: validation
     attributes:
-      label: Protected or high-conflict areas
-      description: List files/modules/contracts that must not change unless this Task Contract is explicitly revised first.
+      label: Validation strategy
+      description: Define how correctness will be demonstrated before implementation starts. Name focused tests/checks and expected CI tier when relevant; do not require ceremonial tests.
+      placeholder: "Focused validation: ...\nExpected CI tier: FULL"
     validations:
       required: true
 
   - type: dropdown
     id: risk
     attributes:
-      label: Risk level
-      description: High/Critical financial, authorization, security, provider, schema, deployment/release, secret, or irreversible work requires independent review and explicit Owner approval.
+      label: Change risk
+      description: High/Critical financial, authorization, security, provider, schema, deployment/release, secret, or irreversible work requires independent review and explicit Owner approval unless already authorized.
       options:
         - Low
         - Medium
@@ -71,53 +74,22 @@ body:
     validations:
       required: true
 
-  - type: checkboxes
-    id: implications
-    attributes:
-      label: Impact surfaces
-      description: Check every surface that may be affected; leave unchecked only when genuinely not applicable.
-      options:
-        - label: Security or authorization
-        - label: Sensitive data or privacy
-        - label: Financial integrity or settlement
-        - label: External/provider/remote effect
-        - label: Database schema or migration
-        - label: Configuration or environment
-        - label: Runtime, deployment, or operations
-
   - type: textarea
-    id: tests
+    id: constraints
     attributes:
-      label: Required verification
-      description: Specify focused success/validation/authorization/replay/concurrency/failure checks as applicable and the expected GitHub Actions tier. CONTROL is only for explicit documentation/governance-only diffs; application/runtime/test/CI or unknown paths require FULL.
-      placeholder: "Focused tests: ...\nMariaDB concurrency: ...\nRegression: ...\nExpected CI tier: FULL"
+      label: Material constraints / impacts (optional)
+      description: Add only constraints that matter: protected/high-conflict areas, security/privacy, financial/provider effects, schema/migration, compatibility, runtime/operations, performance, or release impact. Leave empty when none apply.
+      placeholder: "Example: Payments/Wallet are protected; no schema change; preserve provider idempotency."
     validations:
-      required: true
-
-  - type: textarea
-    id: merge
-    attributes:
-      label: Merge prerequisites
-      description: List dependencies, review/Owner gates, applicable final-revision CI, migration/provider evidence, or other conditions required before integration. Do not require redundant reruns when unchanged green evidence remains valid.
-    validations:
-      required: true
+      required: false
 
   - type: dropdown
     id: state
     attributes:
-      label: Initial task state
+      label: Initial state
       options:
         - DRAFT
         - BLOCKED
         - READY
-    validations:
-      required: true
-
-  - type: textarea
-    id: handoff
-    attributes:
-      label: Blocker or handoff note
-      description: Record only the information another engineer needs to continue from GitHub state. Use "None" when not applicable.
-      placeholder: "None"
     validations:
       required: true
