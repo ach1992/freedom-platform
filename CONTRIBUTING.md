@@ -6,7 +6,8 @@
 2. Fetch the current head of `develop/v1.0.0-completion` / Draft PR `#6`.
 3. Work on a temporary `agent/<issue-number>-<slug>` branch.
 4. Open the PR against `develop/v1.0.0-completion`.
-5. Do not merge your own PR. Delete the task branch after integration or cancellation.
+5. Keep the PR Draft while it is still changing; mark it Ready for review only when the intended validation should run.
+6. Do not merge your own PR. Delete the task branch after integration or cancellation.
 
 `main` is not a development target.
 
@@ -30,7 +31,7 @@ High/Critical work involving financial integrity, authorization, security contro
 
 ## Merge method
 
-Merge style never substitutes for review or green exact-head CI.
+Merge style never substitutes for review or the applicable green CI tier.
 
 - **Squash** documentation, governance, generated/mechanical cleanup, and task branches whose intermediate commits have no durable audit value.
 - Preserve multiple implementation commits with **merge** or **rebase** only when those commit boundaries are intentional, individually reviewable, and useful to future audit/debugging.
@@ -56,9 +57,16 @@ php artisan key:generate
 
 Use development-only database, Redis, Telegram, SMS, panel, and payment values. Prefer deterministic fakes unless the task explicitly owns a controlled integration test.
 
-## Required checks
+## Local verification
 
-Static/policy:
+Repository/project-control checks:
+
+```bash
+bash scripts/ci/verify-planning.sh
+bash scripts/ci/verify-project-control.sh
+```
+
+Static/application policy:
 
 ```bash
 php vendor/bin/pint --test
@@ -66,7 +74,6 @@ php -d memory_limit=1G vendor/bin/phpstan analyse --no-progress --memory-limit=1
 composer validate --strict --no-check-publish
 bash scripts/ci/forbidden-patterns.sh
 bash scripts/ci/architecture.sh
-bash scripts/ci/verify-project-control.sh
 ```
 
 Dependencies:
@@ -94,7 +101,21 @@ To reproduce the other CI database target locally:
 MARIADB_VERSION=10.11 composer test:integration
 ```
 
-`composer test:quick` is not acceptance evidence for migrations, constraints, triggers, locking, or concurrency. Those behaviors require MariaDB. Mandatory acceptance is the repository GitHub Actions workflow on the exact PR head, including both MariaDB targets.
+`composer test:quick` is not acceptance evidence for migrations, constraints, triggers, locking, or concurrency. Those behaviors require MariaDB.
+
+## GitHub Actions tiers
+
+The workflow selects the cheapest safe tier.
+
+**CONTROL CI** is valid only when a PR targets `develop/v1.0.0-completion` and every changed path is in the explicit documentation/governance-only allowlist in `.github/workflows/ci.yml`. It runs repository/project-control validation and secret scanning. Any unknown path defaults to FULL CI.
+
+**FULL CI** runs repository/project-control, secret scan, dependency/license policy, Pint/Composer/PHPStan/forbidden-pattern/architecture checks, and the complete suite on MariaDB 10.11 and 11.4 with authenticated Redis. FULL CI is required for application/runtime/test/CI changes, PRs targeting `main`, and manual release validation.
+
+Draft PRs do not consume self-hosted-runner jobs automatically. Mark a PR Ready for review when the intended CI should run. Draft PR #6 stays quiet while `develop` is receiving already-reviewed Worker merges; before final release review it must be moved to Ready and pass FULL CI.
+
+Do not rerun an unchanged green revision merely because it was merged without content edits into the unchanged intended base. If base/content changes invalidate the tested result, run the applicable tier again.
+
+If an unchanged revision has a clearly transient infrastructure/runner failure, rerun only that failed job or the failed jobs. A deterministic failure must be fixed before another validation attempt; do not repeatedly rerun it hoping for green.
 
 ## Coding rules
 
