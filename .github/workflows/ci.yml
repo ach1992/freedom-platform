@@ -69,22 +69,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          required_planning_files=(
-            docs/00-execution-ledger.md
-            docs/01-authoritative-requirements.md
-            docs/02-requirement-traceability-matrix.md
-            docs/03-risk-register.md
-            docs/04-domain-glossary.md
-            docs/05-architecture-overview.md
-            docs/06-test-strategy.md
-            docs/07-security-threat-model.md
-            docs/08-data-classification.md
-            docs/09-deployment-runbook.md
-            docs/10-release-checklist.md
+          required_repository_files=(
             docker-compose.ci.yml
+            scripts/ci/verify-planning.sh
+            scripts/ci/verify-project-control.sh
           )
-          for path in "${required_planning_files[@]}"; do
-            test -s "$path" || { echo "Required planning artifact is missing or empty: $path" >&2; exit 1; }
+          for path in "${required_repository_files[@]}"; do
+            test -s "$path" || { echo "Required repository control file is missing or empty: $path" >&2; exit 1; }
           done
           docker compose -f docker-compose.ci.yml config --quiet
           if [[ -f composer.json ]]; then
