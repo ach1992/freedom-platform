@@ -28,9 +28,7 @@ final class ArchitectureBoundaryChecker
         }
 
         foreach ($this->phpFiles('app/Shared') as $relativePath => $source) {
-            if (preg_match('/^use\s+App\\\\Modules\\\\/m', $source) === 1) {
-                $violations[] = $relativePath.': Shared code must not depend on a feature module.';
-            }
+            $this->scanSharedFile($relativePath, $source, $violations);
         }
 
         foreach ($this->phpFiles('routes') as $relativePath => $source) {
@@ -39,9 +37,7 @@ final class ArchitectureBoundaryChecker
 
         $edges = array_values(array_unique($edges));
         sort($edges, SORT_STRING);
-        foreach ($this->cycleViolations($edges) as $violation) {
-            $violations[] = $violation;
-        }
+        array_push($violations, ...$this->cycleViolations($edges));
 
         $violations = array_values(array_unique($violations));
         sort($violations, SORT_STRING);
@@ -62,6 +58,17 @@ final class ArchitectureBoundaryChecker
         $sourceModule = $pathParts[1];
         $sourceLayer = $pathParts[2];
 
+        if ($sourceLayer === 'Domain') {
+            preg_match_all('/^use\s+(Illuminate|Symfony|Monolog)\\\\/m', $source, $frameworkImports, PREG_OFFSET_CAPTURE);
+            foreach ($frameworkImports[0] ?? [] as $frameworkImport) {
+                $violations[] = sprintf(
+                    '%s:%d Domain may not import framework infrastructure.',
+                    $relativePath,
+                    $this->lineNumber($source, $frameworkImport[1]),
+                );
+            }
+        }
+
         preg_match_all(
             '/^use\s+App\\\\Modules\\\\([A-Za-z0-9_]+)\\\\(Domain|Application|Infrastructure|Presentation)(?:\\\\[^;]+)?;/m',
             $source,
@@ -74,19 +81,21 @@ final class ArchitectureBoundaryChecker
             $targetLayer = $match[2][0];
             $line = $this->lineNumber($source, $match[0][1]);
 
-            if ($targetModule === $sourceModule) {
+            if ($sourceLayer === 'Domain') {
+                if ($targetModule !== $sourceModule || $targetLayer !== 'Domain') {
+                    $violations[] = sprintf(
+                        '%s:%d Domain may depend only on its own Domain and approved Shared Domain primitives; found %s\\%s.',
+                        $relativePath,
+                        $line,
+                        $targetModule,
+                        $targetLayer,
+                    );
+                }
+
                 continue;
             }
 
-            if ($sourceLayer === 'Domain') {
-                $violations[] = sprintf(
-                    '%s:%d Domain may not import feature module %s (%s).',
-                    $relativePath,
-                    $line,
-                    $targetModule,
-                    $targetLayer,
-                );
-
+            if ($targetModule === $sourceModule) {
                 continue;
             }
 
@@ -117,6 +126,32 @@ final class ArchitectureBoundaryChecker
     }
 
     /** @param list<string> $violations */
+    private function scanSharedFile(string $relativePath, string $source, array &$violations): void
+    {
+        preg_match_all('/^use\s+App\\\\Modules\\\\/m', $source, $featureImports, PREG_OFFSET_CAPTURE);
+        foreach ($featureImports[0] ?? [] as $featureImport) {
+            $violations[] = sprintf(
+                '%s:%d Shared code must not depend on a feature module.',
+                $relativePath,
+                $this->lineNumber($source, $featureImport[1]),
+            );
+        }
+
+        if (! str_starts_with($relativePath, 'app/Shared/Domain/')) {
+            return;
+        }
+
+        preg_match_all('/^use\s+(Illuminate|Symfony|Monolog)\\\\/m', $source, $frameworkImports, PREG_OFFSET_CAPTURE);
+        foreach ($frameworkImports[0] ?? [] as $frameworkImport) {
+            $violations[] = sprintf(
+                '%s:%d Shared Domain may not import framework infrastructure.',
+                $relativePath,
+                $this->lineNumber($source, $frameworkImport[1]),
+            );
+        }
+    }
+
+    /** @param list<string> $violations */
     private function scanPersistence(string $relativePath, string $source, array &$violations): void
     {
         preg_match_all(
@@ -127,10 +162,11 @@ final class ArchitectureBoundaryChecker
         );
 
         foreach ($matches as $match) {
-            $table = preg_split('/\s+as\s+/i', trim($match[1][0]))[0] ?? trim($match[1][0]);
+            $tableParts = preg_split('/\s+as\s+/i', trim($match[1][0]));
+            $table = is_array($tableParts) && isset($tableParts[0]) ? $tableParts[0] : trim($match[1][0]);
             $offset = $match[0][1];
             $statement = substr($source, $offset, $this->statementLength($source, $offset));
-            if (preg_match('/->\s*(insert|insertGetId|insertOrIgnore|update|delete|upsert|updateOrInsert|increment|decrement|truncate)\s*\(/', $statement, $mutation) !== 1) {
+            if (preg_match('/->\s*(insert|insertGetId|insertOrIgnore|update|delete|upsert|updateOrInsert|increment|decrement|truncate)\s*\(/', $statement) !== 1) {
                 continue;
             }
 
@@ -158,7 +194,8 @@ final class ArchitectureBoundaryChecker
             }
 
             $exceptionKey = $relativePath.'|'.$table;
-            if (in_array($exceptionKey, $this->config['persistence_exceptions'] ?? [], true)) {
+            $exceptions = $this->config['persistence_exceptions'] ?? [];
+            if (is_array($exceptions) && in_array($exceptionKey, $exceptions, true)) {
                 continue;
             }
 
@@ -175,7 +212,11 @@ final class ArchitectureBoundaryChecker
 
     private function allowedDependency(string $sourceModule, string $targetModule): bool
     {
-        $allowed = $this->config['allowed_module_dependencies'][$sourceModule] ?? [];
+        $dependencyMap = $this->config['allowed_module_dependencies'] ?? [];
+        if (! is_array($dependencyMap)) {
+            return false;
+        }
+        $allowed = $dependencyMap[$sourceModule] ?? [];
 
         return is_array($allowed) && in_array($targetModule, $allowed, true);
     }
