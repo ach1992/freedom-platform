@@ -153,12 +153,16 @@ return new class extends Migration
 
     private function addChecks(): void
     {
-        DB::statement("ALTER TABLE payment_method_versions ADD CONSTRAINT payment_method_code_chk CHECK (`method_code` REGEXP '^[a-z][a-z0-9_.-]{1,63}$')");
+        DB::statement(<<<'SQL'
+ALTER TABLE payment_method_versions ADD CONSTRAINT payment_method_code_chk CHECK (`method_code` REGEXP '^[a-z][a-z0-9_.-]{1,63}$')
+SQL);
         DB::statement('ALTER TABLE payment_method_versions ADD CONSTRAINT payment_method_version_chk CHECK (`version` >= 1)');
         DB::statement('ALTER TABLE payment_method_versions ADD CONSTRAINT payment_method_hashes_chk CHECK (CHAR_LENGTH(`request_payload_hash`) = 64 AND CHAR_LENGTH(`configuration_snapshot_hash`) = 64 AND CHAR_LENGTH(`correlation_id`) = 64)');
         DB::statement("ALTER TABLE payment_method_versions ADD CONSTRAINT payment_method_snapshot_chk CHECK (JSON_VALID(`configuration_snapshot`) AND JSON_TYPE(`configuration_snapshot`) = 'OBJECT' AND OCTET_LENGTH(`configuration_snapshot`) <= 4096)");
 
-        DB::statement("ALTER TABLE payment_method_rule_versions ADD CONSTRAINT payment_rule_code_chk CHECK (`method_code` REGEXP '^[a-z][a-z0-9_.-]{1,63}$' AND `rule_code` REGEXP '^[a-z][a-z0-9_.-]{1,63}$')");
+        DB::statement(<<<'SQL'
+ALTER TABLE payment_method_rule_versions ADD CONSTRAINT payment_rule_code_chk CHECK (`method_code` REGEXP '^[a-z][a-z0-9_.-]{1,63}$' AND `rule_code` REGEXP '^[a-z][a-z0-9_.-]{1,63}$')
+SQL);
         DB::statement("ALTER TABLE payment_method_rule_versions ADD CONSTRAINT payment_rule_effect_chk CHECK (`effect` IN ('allow','deny'))");
         DB::statement('ALTER TABLE payment_method_rule_versions ADD CONSTRAINT payment_rule_version_chk CHECK (`version` >= 1 AND (`minimum_amount_irr` IS NULL OR `minimum_amount_irr` >= 0) AND (`maximum_amount_irr` IS NULL OR `maximum_amount_irr` >= 0) AND (`minimum_amount_irr` IS NULL OR `maximum_amount_irr` IS NULL OR `minimum_amount_irr` <= `maximum_amount_irr`))');
         DB::statement("ALTER TABLE payment_method_rule_versions ADD CONSTRAINT payment_rule_identity_chk CHECK (`required_identity_status` IS NULL OR `required_identity_status` IN ('unverified','pending','verified','rejected'))");
@@ -177,9 +181,13 @@ SQL);
         DB::statement('ALTER TABLE payment_method_rule_versions ADD CONSTRAINT payment_rule_hashes_chk CHECK (CHAR_LENGTH(`request_payload_hash`) = 64 AND CHAR_LENGTH(`configuration_snapshot_hash`) = 64 AND CHAR_LENGTH(`correlation_id`) = 64)');
         DB::statement("ALTER TABLE payment_method_rule_versions ADD CONSTRAINT payment_rule_json_chk CHECK (JSON_VALID(`account_types`) AND JSON_VALID(`tier_codes`) AND JSON_VALID(`offering_codes`) AND JSON_VALID(`product_ids`) AND JSON_VALID(`sales_server_ids`) AND JSON_VALID(`configuration_snapshot`) AND JSON_TYPE(`configuration_snapshot`) = 'OBJECT' AND OCTET_LENGTH(`configuration_snapshot`) <= 8192)");
 
-        DB::statement("ALTER TABLE payment_method_rule_version_tags ADD CONSTRAINT payment_rule_tag_code_chk CHECK (`tag_code` REGEXP '^[a-z][a-z0-9_.-]{1,63}$')");
+        DB::statement(<<<'SQL'
+ALTER TABLE payment_method_rule_version_tags ADD CONSTRAINT payment_rule_tag_code_chk CHECK (`tag_code` REGEXP '^[a-z][a-z0-9_.-]{1,63}$')
+SQL);
 
-        DB::statement("ALTER TABLE payment_method_health_observations ADD CONSTRAINT payment_health_code_chk CHECK (`method_code` REGEXP '^[a-z][a-z0-9_.-]{1,63}$')");
+        DB::statement(<<<'SQL'
+ALTER TABLE payment_method_health_observations ADD CONSTRAINT payment_health_code_chk CHECK (`method_code` REGEXP '^[a-z][a-z0-9_.-]{1,63}$')
+SQL);
         DB::statement('ALTER TABLE payment_method_health_observations ADD CONSTRAINT payment_health_time_chk CHECK (`expires_at` > `observed_at`)');
         DB::statement('ALTER TABLE payment_method_health_observations ADD CONSTRAINT payment_health_hashes_chk CHECK (CHAR_LENGTH(`request_payload_hash`) = 64 AND CHAR_LENGTH(`configuration_snapshot_hash`) = 64 AND CHAR_LENGTH(`correlation_id`) = 64)');
         DB::statement("ALTER TABLE payment_method_health_observations ADD CONSTRAINT payment_health_snapshot_chk CHECK (JSON_VALID(`configuration_snapshot`) AND JSON_TYPE(`configuration_snapshot`) = 'OBJECT' AND OCTET_LENGTH(`configuration_snapshot`) <= 4096)");
@@ -188,7 +196,9 @@ SQL);
         DB::statement('ALTER TABLE payment_method_eligibility_decisions ADD CONSTRAINT payment_decision_hashes_chk CHECK (CHAR_LENGTH(`request_payload_hash`) = 64 AND CHAR_LENGTH(`configuration_snapshot_hash`) = 64)');
         DB::statement("ALTER TABLE payment_method_eligibility_decisions ADD CONSTRAINT payment_decision_snapshot_chk CHECK (JSON_VALID(`configuration_snapshot`) AND JSON_TYPE(`configuration_snapshot`) = 'OBJECT' AND OCTET_LENGTH(`configuration_snapshot`) <= 32768)");
 
-        DB::statement("ALTER TABLE payment_method_eligibility_decision_methods ADD CONSTRAINT payment_decision_method_code_chk CHECK (`method_code` REGEXP '^[a-z][a-z0-9_.-]{1,63}$' AND `method_version` >= 1 AND (`route_order` IS NULL OR `route_order` >= 1))");
+        DB::statement(<<<'SQL'
+ALTER TABLE payment_method_eligibility_decision_methods ADD CONSTRAINT payment_decision_method_code_chk CHECK (`method_code` REGEXP '^[a-z][a-z0-9_.-]{1,63}$' AND `method_version` >= 1 AND (`route_order` IS NULL OR `route_order` >= 1))
+SQL);
         DB::statement('ALTER TABLE payment_method_eligibility_decision_methods ADD CONSTRAINT payment_decision_method_hashes_chk CHECK (CHAR_LENGTH(`configuration_snapshot_hash`) = 64)');
         DB::statement("ALTER TABLE payment_method_eligibility_decision_methods ADD CONSTRAINT payment_decision_method_snapshot_chk CHECK (JSON_VALID(`configuration_snapshot`) AND JSON_TYPE(`configuration_snapshot`) = 'OBJECT' AND OCTET_LENGTH(`configuration_snapshot`) <= 4096)");
     }
@@ -385,8 +395,21 @@ SQL);
             'payment_method_eligibility_decisions',
             'payment_method_eligibility_decision_methods',
         ] as $table) {
-            DB::unprepared("CREATE TRIGGER {$table}_update_guard BEFORE UPDATE ON {$table} FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = '{$table} records are immutable.'");
-            DB::unprepared("CREATE TRIGGER {$table}_delete_guard BEFORE DELETE ON {$table} FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = '{$table} records are non-deletable.'");
+            $updateSql = sprintf(
+                <<<'SQL'
+CREATE TRIGGER `%1$s_update_guard` BEFORE UPDATE ON `%1$s` FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = '%1$s records are immutable.'
+SQL,
+                $table,
+            );
+            $deleteSql = sprintf(
+                <<<'SQL'
+CREATE TRIGGER `%1$s_delete_guard` BEFORE DELETE ON `%1$s` FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = '%1$s records are non-deletable.'
+SQL,
+                $table,
+            );
+
+            DB::unprepared($updateSql);
+            DB::unprepared($deleteSql);
         }
     }
 
@@ -400,9 +423,13 @@ SQL);
             'payment_method_rule_versions',
             'payment_method_versions',
         ] as $table) {
-            DB::unprepared("DROP TRIGGER IF EXISTS {$table}_insert_guard");
-            DB::unprepared("DROP TRIGGER IF EXISTS {$table}_update_guard");
-            DB::unprepared("DROP TRIGGER IF EXISTS {$table}_delete_guard");
+            $insertGuard = sprintf('DROP TRIGGER IF EXISTS `%s_insert_guard`', $table);
+            $updateGuard = sprintf('DROP TRIGGER IF EXISTS `%s_update_guard`', $table);
+            $deleteGuard = sprintf('DROP TRIGGER IF EXISTS `%s_delete_guard`', $table);
+
+            DB::unprepared($insertGuard);
+            DB::unprepared($updateGuard);
+            DB::unprepared($deleteGuard);
         }
     }
 };
