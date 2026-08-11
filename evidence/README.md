@@ -1,6 +1,6 @@
 # Evidence Policy
 
-This directory is **not** a per-task archive.
+This directory is not a per-task archive.
 
 Implementation history and task-level evidence are authoritative in:
 
