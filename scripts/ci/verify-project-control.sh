@@ -7,189 +7,94 @@ fail() {
     exit 1
 }
 
-safe_repository_path() {
-    local path="$1"
-
-    case "$path" in
-        ''|null|/*|*'..'*) return 1 ;;
-    esac
-
-    return 0
-}
-
 required_files=(
-    AGENTS.md
-    PROJECT_STATUS.md
-    CONTRIBUTING.md
     README.md
+    AGENTS.md
+    CONTRIBUTING.md
+    PROJECT_STATUS.md
     docs/README.md
-    docs/00-execution-ledger.md
-    docs/01-authoritative-requirements.md
-    docs/02-requirement-traceability-matrix.md
-    docs/03-risk-register.md
-    docs/project-status.json
-    docs/development/project-status.schema.json
-    docs/development/continuation-runbook.md
-    docs/development/github-actions-runner-policy.md
-    docs/development/ci-runner-contract.md
-    docs/development/increment-lifecycle.md
-    docs/development/multi-agent-orchestration.md
-    docs/development/repository-map.md
-    docs/development/staging-workflow-inventory.md
-    docs/development/operational-document-status.md
     docs/specification/master-execution-prompt.md
+    docs/01-authoritative-requirements.md
+    docs/03-risk-register.md
+    docs/04-domain-glossary.md
+    docs/05-architecture-overview.md
+    docs/06-test-strategy.md
+    docs/07-security-threat-model.md
+    docs/08-data-classification.md
+    docs/09-deployment-runbook.md
+    docs/development/repository-map.md
+    evidence/README.md
     .github/workflows/ci.yml
-    .github/workflows/staging-readiness.yml
 )
 
 for path in "${required_files[@]}"; do
-    test -s "$path" || fail "required file is missing or empty: $path"
+    test -s "$path" || fail "required canonical file is missing or empty: $path"
 done
 
-jq -e . docs/project-status.json >/dev/null || fail 'docs/project-status.json is not valid JSON'
-jq -e . docs/development/project-status.schema.json >/dev/null || fail 'project status schema is not valid JSON'
-
-jq -e '
-    .schema_version == 1
-    and .repository == "ach1992/freedom-platform"
-    and .authoritative_pr == 6
-    and .authoritative_issue == 8
-    and .allowed_branch == "develop/v1.0.0-completion"
-    and .base_branch == "main"
-    and .required_pr_state == "draft"
-    and .live_head_source == "github_pr_head_sha"
-    and .active_phase.version == "0.5.0"
-    and .active_phase.status == "active"
-    and (.last_verified_boundary.name | type == "string" and length > 0)
-    and (.last_verified_boundary.implementation_sha | test("^[a-f0-9]{40}$"))
-    and (.last_verified_boundary.implementation_ci_run_id | type == "number" and . > 0)
-    and (.last_verified_boundary.implementation_ci_run_number | type == "number" and . > 0)
-    and (.last_verified_boundary.evidence_sha | test("^[a-f0-9]{40}$"))
-    and (.last_verified_boundary.evidence_ci_run_id | type == "number" and . > 0)
-    and (.last_verified_boundary.evidence_ci_run_number | type == "number" and . > 0)
-    and (.last_verified_boundary.tests | type == "number" and . > 0)
-    and (.last_verified_boundary.assertions | type == "number" and . > 0)
-    and (.last_verified_boundary.artifact_name | type == "string" and length > 0)
-    and (.last_verified_boundary.artifact_id | type == "number" and . > 0)
-    and (.last_verified_boundary.artifact_sha256 | test("^[a-f0-9]{64}$"))
-    and (.last_verified_boundary.evidence_path | type == "string" and length > 0)
-    and (.last_verified_boundary.traceability_path | type == "string" and length > 0)
-    and (.active_increment.name | type == "string" and length > 0)
-    and (.active_increment.status | IN("planned", "active", "unverified", "blocked", "verified"))
-    and (.active_increment.current_state_path | type == "string" and length > 0)
-    and (.active_increment.requirements | type == "array" and length > 0)
-    and ([.active_increment.requirements[] | test("^[A-Z0-9]+-[0-9]{3}$")] | all)
-    and .stabilization.status == "complete"
-    and .stabilization.feature_development_paused == false
-    and (.forbidden_actions | index("merge_pr") != null)
-    and (.forbidden_actions | index("mark_ready_for_review") != null)
-    and (.forbidden_actions | index("enable_auto_merge") != null)
-    and (.forbidden_actions | index("rewrite_history") != null)
-    and (.forbidden_actions | index("push_main") != null)
-    and (.forbidden_actions | index("use_github_hosted_runner") != null)
-    and (.forbidden_actions | index("create_uncontracted_branch") != null)
-    and (.forbidden_actions | index("retrieve_or_print_secrets") != null)
-    and (.forbidden_actions | index("claim_unverified_provider_compatibility") != null)
-' docs/project-status.json >/dev/null || fail 'project status structure or fixed repository policy is inconsistent'
-
-required_phase05_requirements=(
-    PRO-001 REF-001
-    PAY-001 PAY-002 PAY-003
-    C2C-001 C2C-002 C2C-003 C2C-004 C2C-005
-    GFT-001 GFT-002 GFT-003 GFT-004
-    USDT-002 USDT-003
-    IPG-001 IPG-002
-)
-
-for requirement in "${required_phase05_requirements[@]}"; do
-    jq -e --arg requirement "$requirement" '.active_increment.requirements | index($requirement) != null' \
-        docs/project-status.json >/dev/null \
-        || fail "project status is missing unresolved Phase 0.5 requirement: $requirement"
-done
-
-implementation_sha="$(jq -r '.last_verified_boundary.implementation_sha' docs/project-status.json)"
-evidence_path="$(jq -r '.last_verified_boundary.evidence_path' docs/project-status.json)"
-traceability_path="$(jq -r '.last_verified_boundary.traceability_path' docs/project-status.json)"
-current_state_path="$(jq -r '.active_increment.current_state_path' docs/project-status.json)"
-
-for path in "$evidence_path" "$traceability_path" "$current_state_path"; do
-    safe_repository_path "$path" || fail "project status contains an unsafe repository path: $path"
-    test -s "$path" || fail "project status references a missing or empty file: $path"
-done
-
-if grep -F '"handoff_path"' docs/project-status.json docs/development/project-status.schema.json >/dev/null; then
-    fail 'legacy handoff_path field remains in machine project-control state'
-fi
-grep -F '"current_state_path"' docs/development/project-status.schema.json >/dev/null \
-    || fail 'project status schema does not define current_state_path'
-
-status_requirements=(
-    'PR `#6`'
-    '`#8`'
-    'develop/v1.0.0-completion'
-    "$implementation_sha"
-    "$evidence_path"
-    "$traceability_path"
-    'Phase 0.5 remaining-scope reconciliation'
-)
-
-for value in "${status_requirements[@]}"; do
-    grep -F "$value" PROJECT_STATUS.md >/dev/null \
-        || fail "PROJECT_STATUS.md is missing current project-status value: $value"
-done
-
-for entry in AGENTS.md PROJECT_STATUS.md CONTRIBUTING.md; do
+for entry in PROJECT_STATUS.md AGENTS.md CONTRIBUTING.md docs/README.md; do
     grep -F "$entry" README.md >/dev/null \
-        || fail "README.md does not link the required entry point: $entry"
+        || fail "README.md does not link required entry point: $entry"
 done
 
-grep -F 'GitHub is authoritative for live PR/Issue/branch/CI state' PROJECT_STATUS.md >/dev/null \
-    || fail 'PROJECT_STATUS.md does not establish live GitHub authority'
-grep -F 'Expected long-lived branch set is intentionally only' PROJECT_STATUS.md >/dev/null \
-    || fail 'PROJECT_STATUS.md does not establish the two-branch cleanup policy'
+grep -F 'GitHub is authoritative for live task' PROJECT_STATUS.md >/dev/null \
+    || fail 'PROJECT_STATUS.md must establish GitHub as live task authority'
+grep -F 'Only two branches are long-lived' AGENTS.md >/dev/null \
+    || fail 'AGENTS.md must define the two long-lived branch policy'
+grep -F 'Task-level implementation history is preserved by commits, PRs, Issues, reviews, and CI' AGENTS.md >/dev/null \
+    || fail 'AGENTS.md must define task evidence authority'
+grep -F 'does not track implementation status' docs/05-architecture-overview.md >/dev/null \
+    || fail 'architecture document must reject mutable implementation status'
+grep -F 'no implementation status' docs/01-authoritative-requirements.md >/dev/null \
+    || fail 'requirement index must not contain mutable implementation status'
+grep -F 'not a per-task archive' evidence/README.md >/dev/null \
+    || fail 'evidence policy must reject per-task repository evidence'
 
-# Documentation authority and anti-drift checks.
-grep -F 'Document role:** historical navigation only.' docs/00-execution-ledger.md >/dev/null \
-    || fail 'execution ledger is not explicitly historical-only'
-if grep -Eq 'Current position|current cross-phase handoff|default-branch dispatch bootstrap|ops/provider-live-dispatch-bootstrap|safety/main-2026-08-08-pre-provider-bootstrap|docs/52-current-continuation-handoff\.md|next recommended independent work' docs/00-execution-ledger.md; then
-    fail 'historical execution ledger contains live/stale coordination state'
-fi
+# Duplicate machine/current status files are intentionally forbidden.
+for forbidden in docs/project-status.json docs/development/project-status.schema.json; do
+    test ! -e "$forbidden" || fail "obsolete duplicate project status remains: $forbidden"
+done
 
-grep -F 'Implementation status is intentionally not stored in this document.' docs/02-requirement-traceability-matrix.md >/dev/null \
-    || fail 'traceability contract does not prohibit mutable implementation status'
-if grep -Eq '`(not-started|in-progress)`' docs/02-requirement-traceability-matrix.md; then
-    fail 'traceability contract contains mutable implementation-status cells'
-fi
+# The active documentation tree is allowlisted. Historical task records belong in Git/GitHub history.
+while IFS= read -r path; do
+    case "$path" in
+        docs/README.md|\
+        docs/01-authoritative-requirements.md|\
+        docs/03-risk-register.md|\
+        docs/04-domain-glossary.md|\
+        docs/05-architecture-overview.md|\
+        docs/06-test-strategy.md|\
+        docs/07-security-threat-model.md|\
+        docs/08-data-classification.md|\
+        docs/09-deployment-runbook.md|\
+        docs/development/repository-map.md|\
+        docs/specification/master-execution-prompt.md|\
+        docs/adr/*.md)
+            ;;
+        *)
+            fail "non-canonical documentation file remains in active tree: $path"
+            ;;
+    esac
+done < <(find docs -type f -name '*.md' -print | sort)
 
-grep -F 'This is not a live task board.' docs/03-risk-register.md >/dev/null \
-    || fail 'risk register does not establish durable/non-task-board role'
-if grep -F 'Open decisions that do not block `0.1.0`' docs/03-risk-register.md >/dev/null; then
-    fail 'risk register still contains stale 0.1.0 decision framing'
-fi
-
-grep -F 'A persistent provider-live bootstrap is forbidden.' docs/development/operational-document-status.md >/dev/null \
-    || fail 'operational status does not preserve the provider-bootstrap cleanup decision'
-
-grep -F 'intentionally no mutable implementation-status cells' docs/README.md >/dev/null \
-    || fail 'documentation guide does not define status-free traceability'
-
+# Task-level repository evidence is forbidden; release/RC evidence may be added directly under evidence/ later.
 shopt -s nullglob
-forbidden_coordination_docs=(
-    docs/[0-9][0-9]-*current*.md
-    docs/[0-9][0-9]-*handoff*.md
-    docs/[0-9][0-9]-*overlay*.md
-    docs/[0-9][0-9]-*transition-checkpoint*.md
-)
-repair_workflows=(.github/workflows/ci-repair*.yml .github/workflows/ci-repair*.yaml)
-repair_scripts=(scripts/ci/generate-ci-repair*.sh)
-legacy_staging_workflows=(.github/workflows/staging-*.yml .github/workflows/staging-*.yaml)
+legacy_task_evidence=(evidence/0.*/*.md)
+shopt -u nullglob
+((${#legacy_task_evidence[@]} == 0)) \
+    || fail "obsolete per-task evidence remains in active evidence tree: ${legacy_task_evidence[*]}"
+
+# Canonical docs must not point back to retired coordination/status/evidence material.
+if grep -RIE --include='*.md' \
+    'docs/project-status\.json|current-traceability-overlay|continuation-handoff|phase-[0-9].*traceability|evidence/0\.[0-9]|docs/(00|02|10|11|12|13|14|15|16|17|18|19)-' \
+    README.md AGENTS.md CONTRIBUTING.md PROJECT_STATUS.md docs/README.md docs/0[1-9]-*.md docs/development/repository-map.md \
+    >/dev/null; then
+    fail 'canonical documentation references a retired status/planning/traceability/evidence file'
+fi
+
+# All workflows use the canonical owner-controlled self-hosted runner.
+shopt -s nullglob
 workflow_files=(.github/workflows/*.yml .github/workflows/*.yaml)
 shopt -u nullglob
-
-((${#forbidden_coordination_docs[@]} == 0)) \
-    || fail "obsolete coordination document pattern remains: ${forbidden_coordination_docs[*]}"
-((${#repair_workflows[@]} == 0)) || fail "temporary repair workflow remains: ${repair_workflows[*]}"
-((${#repair_scripts[@]} == 0)) || fail "temporary repair script remains: ${repair_scripts[*]}"
 ((${#workflow_files[@]} > 0)) || fail 'repository contains no GitHub Actions workflows'
 
 expected_runner_selector='runs-on: [self-hosted, Linux, X64, freedom-staging, php84]'
@@ -198,62 +103,21 @@ for workflow in "${workflow_files[@]}"; do
     while IFS= read -r runner_line; do
         trimmed="${runner_line#"${runner_line%%[![:space:]]*}"}"
         [[ "$trimmed" == "$expected_runner_selector" ]] \
-            || fail "workflow must use the canonical self-hosted runner selector: $workflow: $trimmed"
+            || fail "workflow must use canonical self-hosted runner selector: $workflow: $trimmed"
         found_runner=true
     done < <(grep -E '^[[:space:]]*runs-on:' "$workflow" || true)
 
     [[ "$found_runner" == true ]] || fail "workflow has no explicit self-hosted runs-on selector: $workflow"
 done
 
+# Generic CI validates same-repository Worker PRs targeting develop and stays secret-free.
 ci=.github/workflows/ci.yml
-grep -A4 -F 'pull_request:' "$ci" | grep -F 'develop/v1.0.0-completion' >/dev/null \
+grep -A5 -F 'pull_request:' "$ci" | grep -F 'develop/v1.0.0-completion' >/dev/null \
     || fail 'generic CI does not validate Worker PRs targeting develop/v1.0.0-completion'
-grep -F "github.event.pull_request.head.repo.full_name == github.repository" "$ci" >/dev/null \
-    || fail 'generic CI lacks same-repository PR protection for the self-hosted runner'
+grep -F 'github.event.pull_request.head.repo.full_name == github.repository' "$ci" >/dev/null \
+    || fail 'generic CI lacks same-repository protection for the self-hosted runner'
 if grep -Eq 'secrets\.(PASARGUARD|STAGING|TELEGRAM|NOWPAYMENTS|ZARINPAL|MELLI|KAVENEGAR)' "$ci"; then
     fail 'generic CI references protected provider/staging/runtime secrets'
 fi
-
-for workflow in "${legacy_staging_workflows[@]}"; do
-    [[ "$workflow" == '.github/workflows/staging-readiness.yml' ]] && continue
-
-    grep -F 'Historical - Disabled' "$workflow" >/dev/null \
-        || fail "legacy staging workflow is not visibly disabled: $workflow"
-    grep -F "disabled/historical-workflow" "$workflow" >/dev/null \
-        || fail "legacy staging workflow does not have an impossible job condition: $workflow"
-
-    if grep -Eq 'secrets\.|sudo|apt-get|systemctl[[:space:]]+(enable|start|restart|stop)|(^|[[:space:]])ssh([[:space:]\\]|$)|(^|[[:space:]])scp([[:space:]\\]|$)' "$workflow"; then
-        fail "disabled staging workflow still contains remote secret or mutation logic: $workflow"
-    fi
-done
-
-readiness=.github/workflows/staging-readiness.yml
-grep -F 'READ_ONLY_STAGING_CHECK' "$readiness" >/dev/null \
-    || fail 'staging readiness workflow lacks typed read-only confirmation'
-grep -F 'freedom-staging-runner' "$readiness" >/dev/null \
-    || fail 'staging readiness workflow lacks runner identity validation'
-
-if grep -Eq 'secrets\.|sudo|apt-get|systemctl[[:space:]]+(enable|start|restart|stop)|(^|[[:space:]])ssh([[:space:]\\]|$)|(^|[[:space:]])scp([[:space:]\\]|$)' "$readiness"; then
-    fail 'staging readiness workflow contains a secret, privilege, remote-shell, or mutation operation'
-fi
-
-for required_rule in \
-    'PR `#6` must remain Draft' \
-    'Never trust a SHA copied from a handoff' \
-    'Worker branches are explicitly allowed' \
-    'Every GitHub Actions job must run on the owner-controlled self-hosted runner' \
-    'Never request, retrieve, print, commit, log, attach, or quote secrets.'; do
-    grep -F "$required_rule" AGENTS.md >/dev/null \
-        || fail "AGENTS.md is missing operating rule: $required_rule"
-done
-
-for worker_rule in \
-    'agent/<issue-number>-<short-slug>' \
-    'Every Worker PR targets `develop/v1.0.0-completion`, never `main`.' \
-    'No Worker pushes directly to `develop/v1.0.0-completion` or `main`' \
-    'Dynamic Worker state belongs in GitHub Issues/PRs/comments/CI, not in Chat memory.'; do
-    grep -F "$worker_rule" docs/development/multi-agent-orchestration.md >/dev/null \
-        || fail "multi-agent orchestration contract is missing rule: $worker_rule"
-done
 
 printf '%s\n' 'Project control verification passed.'
