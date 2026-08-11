@@ -1,0 +1,22 @@
+# Sensitive repository surfaces are owner-backed until durable team ownership is assigned.
+/.github/CODEOWNERS @ach1992
+/.github/workflows/ @ach1992
+/.github/ISSUE_TEMPLATE/ @ach1992
+/.github/pull_request_template.md @ach1992
+
+/app/Modules/Payments/ @ach1992
+/app/Modules/Wallet/ @ach1992
+/app/Modules/AccessControl/ @ach1992
+/database/migrations/ @ach1992
+/deploy/ @ach1992
+
+/AGENTS.md @ach1992
+/CONTRIBUTING.md @ach1992
+/PROJECT_STATUS.md @ach1992
+/docs/01-authoritative-requirements.md @ach1992
+/docs/05-architecture-overview.md @ach1992
+/docs/06-test-strategy.md @ach1992
+/docs/07-security-threat-model.md @ach1992
+/docs/08-data-classification.md @ach1992
+/docs/09-deployment-runbook.md @ach1992
+/scripts/ci/ @ach1992
