@@ -143,10 +143,12 @@ done
 
 # Generic CI validates same-repository Worker PRs, avoids automatic Draft runner use, and defaults uncertain changes to FULL.
 ci=.github/workflows/ci.yml
-grep -A10 -F 'pull_request:' "$ci" | grep -F 'develop/v1.0.0-completion' >/dev/null \
+grep -A16 -F 'pull_request:' "$ci" | grep -F 'develop/v1.0.0-completion' >/dev/null \
     || fail 'generic CI does not validate Worker PRs targeting develop/v1.0.0-completion'
-grep -A12 -F 'pull_request:' "$ci" | grep -F 'ready_for_review' >/dev/null \
+grep -A16 -F 'pull_request:' "$ci" | grep -F 'ready_for_review' >/dev/null \
     || fail 'generic CI does not trigger validation when a Draft PR becomes review-ready'
+grep -A16 -F 'pull_request:' "$ci" | grep -F 'converted_to_draft' >/dev/null \
+    || fail 'generic CI cannot cancel active validation when a PR returns to Draft'
 grep -F 'github.event.pull_request.head.repo.full_name == github.repository' "$ci" >/dev/null \
     || fail 'generic CI lacks same-repository protection for the self-hosted runner'
 grep -F 'github.event.pull_request.draft == false' "$ci" >/dev/null \
