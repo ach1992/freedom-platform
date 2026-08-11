@@ -37,12 +37,14 @@ final class HealthCheckCommandTest extends TestCase
 
     public function test_liveness_and_readiness_endpoints_are_safe_and_healthy(): void
     {
+        $release = (string) config('app.version');
+
         $this->getJson('/health/live')
             ->assertOk()
-            ->assertExactJson(['status' => 'alive', 'release' => '0.2.0-dev']);
+            ->assertExactJson(['status' => 'alive', 'release' => $release]);
 
         $this->getJson('/health/ready')
             ->assertOk()
-            ->assertExactJson(['status' => 'healthy', 'release' => '0.2.0-dev']);
+            ->assertExactJson(['status' => 'healthy', 'release' => $release]);
     }
 }
