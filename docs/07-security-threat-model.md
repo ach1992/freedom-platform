@@ -57,10 +57,14 @@ Configurable outbound endpoints must:
 - allow HTTPS only;
 - reject credentials, malformed hosts, unsafe ports, and ambiguous encodings;
 - reject loopback/private/link-local/reserved/metadata destinations;
-- revalidate DNS/IP and every redirect target;
+- resolve every relevant address candidate and reject a `PublicOnly` hostname when any candidate is disallowed;
+- bind the connection to the validated address set so a second DNS lookup or connection reuse cannot bypass validation;
+- revalidate DNS/IP and every redirect target before credentials can be forwarded;
 - preserve hostname/SNI and certificate verification;
 - use bounded connect/response time and response-size limits;
 - use provider/domain allowlists where possible.
+
+`PublicOnly` and explicitly approved private-network policies are separate boundaries; private-panel support must not weaken the public policy.
 
 TLS verification cannot be disabled. Private systems require managed CA/pinning, not `verify=false`.
 
