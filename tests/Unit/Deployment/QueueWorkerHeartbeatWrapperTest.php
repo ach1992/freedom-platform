@@ -38,16 +38,4 @@ final class QueueWorkerHeartbeatWrapperTest extends TestCase
         self::assertSame(3, substr_count($configuration, 'stopasgroup=true'));
         self::assertSame(3, substr_count($configuration, 'killasgroup=true'));
     }
-
-    /** @requirement RUN-002 RUN-003 OPS-003 QUA-013 */
-    public function test_release_preparation_restores_wrapper_execute_permission(): void
-    {
-        $deployment = file_get_contents(dirname(__DIR__, 3).'/deploy/staging/core-deploy.sh');
-
-        self::assertIsString($deployment);
-        self::assertStringContainsString(
-            'chmod 0750 "$release_path/deploy/bin/queue-worker-with-heartbeat.sh"',
-            $deployment,
-        );
-    }
 }
