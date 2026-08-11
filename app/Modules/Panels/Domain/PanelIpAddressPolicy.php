@@ -73,6 +73,7 @@ final class PanelIpAddressPolicy
 
     /** @var list<array{string, int}> */
     private const IPV6_SPECIAL_WITHIN_PUBLIC_ALLOCATIONS = [
+        ['2001:db8::', 32],
         ['2620:4f:8000::', 48],
     ];
 
