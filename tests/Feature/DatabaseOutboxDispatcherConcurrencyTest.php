@@ -58,11 +58,11 @@ namespace {
                     return OutboxDispatchOutcome::Success;
                 }
             };
-            $clock = new class(new \DateTimeImmutable('2026-08-12T00:00:00+00:00')) implements Clock
+            $clock = new class(new DateTimeImmutable('2026-08-12T00:00:00+00:00')) implements Clock
             {
-                public function __construct(private readonly \DateTimeImmutable $now) {}
+                public function __construct(private readonly DateTimeImmutable $now) {}
 
-                public function now(): \DateTimeImmutable
+                public function now(): DateTimeImmutable
                 {
                     return $this->now;
                 }
