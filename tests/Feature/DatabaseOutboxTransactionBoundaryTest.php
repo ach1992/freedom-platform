@@ -9,7 +9,7 @@ use App\Shared\Application\SafeOutboxPayload;
 use App\Shared\Infrastructure\DatabaseOutboxPublisher;
 use DateTimeImmutable;
 use Illuminate\Database\DatabaseManager;
-use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Foundation\Testing\DatabaseTruncation;
 use LogicException;
 use RuntimeException;
 use Tests\TestCase;
@@ -17,7 +17,7 @@ use Tests\TestCase;
 final class DatabaseOutboxTransactionBoundaryTest extends TestCase
 {
     /** @requirement PAY-003 ARCH-004 OPS-003 QUA-004 */
-    use RefreshDatabase;
+    use DatabaseTruncation;
 
     public function test_publish_requires_an_active_transaction(): void
     {
