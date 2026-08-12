@@ -325,7 +325,8 @@ final readonly class WalletCorrectionService
 
             $ownerUserId = $this->positiveDatabaseInt($preview->owner_user_id, 'Wallet correction owner user ID');
             $ledgerAccountId = $this->positiveDatabaseInt($preview->ledger_account_id, 'Wallet correction ledger account ID');
-            $walletBucket = $this->lockWalletAccount($connection, $ownerUserId, $ledgerAccountId);
+            $offsetAccountId = $this->correctionOffsetAccountId($connection);
+            $walletBucket = $this->lockCorrectionAccounts($connection, $ownerUserId, $ledgerAccountId, $offsetAccountId);
             if (! hash_equals($preview->wallet_bucket, $walletBucket)) {
                 throw new RuntimeException('Wallet correction preview bucket no longer matches the target account.');
             }
@@ -385,7 +386,6 @@ final readonly class WalletCorrectionService
                 throw new DomainException('Wallet correction preview does not accept an approval ID.');
             }
 
-            $offsetAccountId = $this->correctionOffsetAccountId($connection);
             $entries = $direction === WalletCorrectionDirection::Credit
                 ? [
                     new LedgerEntryDraft($offsetAccountId, LedgerDirection::Debit, $amount),
@@ -593,6 +593,39 @@ final readonly class WalletCorrectionService
         return $account->wallet_bucket;
     }
 
+    private function lockCorrectionAccounts(
+        Connection $connection,
+        int $ownerUserId,
+        int $ledgerAccountId,
+        int $offsetAccountId,
+    ): string {
+        $accounts = LedgerAccountLockSet::acquire($connection, [$ledgerAccountId, $offsetAccountId]);
+
+        $wallet = $accounts[$ledgerAccountId] ?? null;
+        if ($wallet === null
+            || $wallet->account_class !== 'liability'
+            || $wallet->owner_user_id === null
+            || (int) $wallet->owner_user_id !== $ownerUserId
+            || $wallet->wallet_bucket === null
+            || ! in_array($wallet->wallet_bucket, ['cash', 'promotional'], true)
+            || $wallet->currency !== 'IRR'
+            || ! (bool) $wallet->is_active) {
+            throw new DomainException('Wallet correction target account is not an active owned IRR wallet.');
+        }
+
+        $offset = $accounts[$offsetAccountId] ?? null;
+        if ($offset === null
+            || $offset->account_class !== 'equity'
+            || $offset->owner_user_id !== null
+            || $offset->wallet_bucket !== null
+            || $offset->currency !== 'IRR'
+            || ! (bool) $offset->is_active) {
+            throw new RuntimeException('Wallet correction offset account is unavailable or invalid.');
+        }
+
+        return $wallet->wallet_bucket;
+    }
+
     /** @return array{0:IrrMoney,1:IrrMoney,2:IrrMoney} */
     private function balanceLocked(Connection $connection, int $ledgerAccountId): array
     {
@@ -627,21 +660,14 @@ final readonly class WalletCorrectionService
 
     private function correctionOffsetAccountId(Connection $connection): int
     {
-        /** @var object{id:int|string,account_class:string,owner_user_id:int|string|null,wallet_bucket:string|null,currency:string,is_active:int|bool}|null $account */
-        $account = $connection->table('ledger_accounts')
+        $accountId = $connection->table('ledger_accounts')
             ->where('code', WalletSystemAccountCode::CORRECTION_OFFSET)
-            ->lockForUpdate()
-            ->first(['id', 'account_class', 'owner_user_id', 'wallet_bucket', 'currency', 'is_active']);
-        if ($account === null
-            || $account->account_class !== 'equity'
-            || $account->owner_user_id !== null
-            || $account->wallet_bucket !== null
-            || $account->currency !== 'IRR'
-            || ! (bool) $account->is_active) {
+            ->value('id');
+        if (! is_int($accountId) && ! is_string($accountId)) {
             throw new RuntimeException('Wallet correction offset account is unavailable or invalid.');
         }
 
-        return $this->positiveDatabaseInt($account->id, 'Wallet correction offset account ID');
+        return $this->positiveDatabaseInt($accountId, 'Wallet correction offset account ID');
     }
 
     /** @return PreviewRow|null */

@@ -7,6 +7,7 @@ namespace App\Modules\Payments\Application;
 use App\Modules\Payments\Application\Contracts\PaymentEvidence;
 use App\Modules\Payments\Application\Contracts\VerifiedPaymentEvent;
 use App\Modules\Payments\Domain\PaymentIntentState;
+use App\Modules\Wallet\Application\LedgerAccountLockSet;
 use App\Modules\Wallet\Application\LedgerEntryDraft;
 use App\Modules\Wallet\Application\LedgerPostingService;
 use App\Modules\Wallet\Domain\IrrMoney;
@@ -244,7 +245,7 @@ final readonly class WalletTopUpPaymentService
 
                 $userId = $this->positiveDatabaseInt($intent->user_id, 'Payment intent user ID');
                 $walletAccountId = $this->positiveDatabaseInt($intent->wallet_account_id, 'Payment intent wallet account ID');
-                $this->lockCashWallet($connection, $userId, $walletAccountId);
+                $clearingAccountId = $this->lockCaptureAccounts($connection, $userId, $walletAccountId);
 
                 $state = $this->intentState($intent->state);
                 if ($state === PaymentIntentState::Captured) {
@@ -270,7 +271,6 @@ final readonly class WalletTopUpPaymentService
                 );
 
                 $amount = IrrMoney::positive($this->positiveDatabaseInt($intent->amount_irr, 'Payment intent amount'));
-                $clearingAccountId = $this->lockClearingAccount($connection);
                 $ledgerReceipt = $this->ledger->post(
                     $this->ledgerCommandKey($intentPublicId),
                     self::LEDGER_TRANSACTION_TYPE,
@@ -423,23 +423,45 @@ final readonly class WalletTopUpPaymentService
         }
     }
 
-    private function lockClearingAccount(Connection $connection): int
+    private function lockCaptureAccounts(Connection $connection, int $userId, int $walletAccountId): int
     {
-        /** @var object{id:int|string,account_class:string,owner_user_id:int|string|null,wallet_bucket:string|null,currency:string,is_active:int|bool}|null $account */
-        $account = $connection->table('ledger_accounts')
-            ->where('code', WalletSystemAccountCode::EXTERNAL_TOP_UP_CLEARING)
-            ->lockForUpdate()
-            ->first(['id', 'account_class', 'owner_user_id', 'wallet_bucket', 'currency', 'is_active']);
-        if ($account === null
-            || $account->account_class !== 'asset'
-            || $account->owner_user_id !== null
-            || $account->wallet_bucket !== null
-            || $account->currency !== 'IRR'
-            || ! (bool) $account->is_active) {
+        $clearingAccountId = $this->clearingAccountId($connection);
+        $accounts = LedgerAccountLockSet::acquire($connection, [$walletAccountId, $clearingAccountId]);
+
+        $wallet = $accounts[$walletAccountId] ?? null;
+        if ($wallet === null
+            || $wallet->account_class !== 'liability'
+            || $wallet->owner_user_id === null
+            || (int) $wallet->owner_user_id !== $userId
+            || $wallet->wallet_bucket !== 'cash'
+            || $wallet->currency !== 'IRR'
+            || ! (bool) $wallet->is_active) {
+            throw new DomainException('Wallet top-up target must be an active owned IRR cash wallet.');
+        }
+
+        $clearing = $accounts[$clearingAccountId] ?? null;
+        if ($clearing === null
+            || $clearing->account_class !== 'asset'
+            || $clearing->owner_user_id !== null
+            || $clearing->wallet_bucket !== null
+            || $clearing->currency !== 'IRR'
+            || ! (bool) $clearing->is_active) {
             throw new RuntimeException('Wallet top-up clearing account is unavailable or invalid.');
         }
 
-        return $this->positiveDatabaseInt($account->id, 'Wallet top-up clearing account ID');
+        return $clearingAccountId;
+    }
+
+    private function clearingAccountId(Connection $connection): int
+    {
+        $accountId = $connection->table('ledger_accounts')
+            ->where('code', WalletSystemAccountCode::EXTERNAL_TOP_UP_CLEARING)
+            ->value('id');
+        if (! is_int($accountId) && ! is_string($accountId)) {
+            throw new RuntimeException('Wallet top-up clearing account is unavailable or invalid.');
+        }
+
+        return $this->positiveDatabaseInt($accountId, 'Wallet top-up clearing account ID');
     }
 
     private function creationPayloadHash(
@@ -557,7 +579,7 @@ final readonly class WalletTopUpPaymentService
             || ! hash_equals($row->provider_event_id, $event->providerEventId)
             || ! hash_equals(strtolower($row->event_payload_hash), strtolower($event->payloadHash))
             || ! hash_equals($row->provider_transaction_id, $evidence->providerTransactionId)
-            || ! hash_equals(strtolower($row->evidence_payload_hash), strtolower($evidence->payloadHash))
+            || ! hash_equals(strtolower($row->evidence_payload_hash), strtolower($event->evidence->payloadHash))
             || $row->evidence_authority !== $evidence->authority->value
             || $row->transaction_status !== $evidence->status->value
             || (int) $row->amount_irr !== $evidence->amount->amount()

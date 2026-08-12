@@ -245,7 +245,6 @@ final readonly class WalletTransferService
             $senderUserId = $this->positiveDatabaseInt($transfer->sender_user_id, 'Wallet transfer sender user ID');
             $recipientUserId = $this->positiveDatabaseInt($transfer->recipient_user_id, 'Wallet transfer recipient user ID');
             $this->lockAndValidateUsers($connection, $senderUserId, $recipientUserId, $transfer->recipient_public_id);
-            $this->lockAndValidateStoredWalletAccounts($connection, $transfer);
 
             $feeAccountId = null;
             $fee = IrrMoney::fromInt($this->nonNegativeDatabaseInt($transfer->fee_irr, 'Wallet transfer fee'));
@@ -260,6 +259,7 @@ final readonly class WalletTransferService
             if ($this->databaseDateTime($hold->expires_at, 'Wallet transfer hold expiry') <= $now) {
                 return $this->cancelLocked($connection, $transfer, self::EXPIRED_REASON);
             }
+            $this->lockAndValidatePostingAccounts($connection, $transfer, $feeAccountId);
 
             $senderWalletId = $this->positiveDatabaseInt($transfer->sender_wallet_account_id, 'Wallet transfer sender wallet account ID');
             $recipientWalletId = $this->positiveDatabaseInt($transfer->recipient_wallet_account_id, 'Wallet transfer recipient wallet account ID');
@@ -504,38 +504,47 @@ final readonly class WalletTransferService
     }
 
     /** @param WalletTransferRow $transfer */
-    private function lockAndValidateStoredWalletAccounts(Connection $connection, object $transfer): void
+    private function lockAndValidatePostingAccounts(Connection $connection, object $transfer, ?int $feeAccountId): void
     {
         $senderAccountId = $this->positiveDatabaseInt($transfer->sender_wallet_account_id, 'Wallet transfer sender wallet account ID');
         $recipientAccountId = $this->positiveDatabaseInt($transfer->recipient_wallet_account_id, 'Wallet transfer recipient wallet account ID');
-        $ids = [$senderAccountId, $recipientAccountId];
-        sort($ids, SORT_NUMERIC);
-
-        /** @var list<object{id: int|string, account_class: string, owner_user_id: int|string|null, wallet_bucket: string|null, currency: string, is_active: int|bool}> $accounts */
-        $accounts = $connection->table('ledger_accounts')
-            ->whereIn('id', $ids)
-            ->orderBy('id')
-            ->lockForUpdate()
-            ->get(['id', 'account_class', 'owner_user_id', 'wallet_bucket', 'currency', 'is_active'])
-            ->all();
-        if (count($accounts) !== 2) {
-            throw new DomainException('Wallet transfer wallet account is unavailable.');
+        $accountIds = [$senderAccountId, $recipientAccountId];
+        if ($feeAccountId !== null) {
+            $accountIds[] = $feeAccountId;
+        }
+        $accounts = LedgerAccountLockSet::acquire($connection, $accountIds);
+        $expectedCount = $feeAccountId === null ? 2 : 3;
+        if (count($accounts) !== $expectedCount) {
+            throw new DomainException('Wallet transfer ledger account is unavailable.');
         }
 
         $expectedOwners = [
             $senderAccountId => $this->positiveDatabaseInt($transfer->sender_user_id, 'Wallet transfer sender user ID'),
             $recipientAccountId => $this->positiveDatabaseInt($transfer->recipient_user_id, 'Wallet transfer recipient user ID'),
         ];
-        foreach ($accounts as $account) {
-            $accountId = $this->positiveDatabaseInt($account->id, 'Wallet transfer wallet account ID');
-            if ($account->account_class !== 'liability'
+        foreach ($expectedOwners as $accountId => $ownerUserId) {
+            $account = $accounts[$accountId] ?? null;
+            if ($account === null
+                || $account->account_class !== 'liability'
                 || $account->owner_user_id === null
-                || (int) $account->owner_user_id !== $expectedOwners[$accountId]
+                || (int) $account->owner_user_id !== $ownerUserId
                 || $account->wallet_bucket !== $transfer->wallet_bucket
                 || $account->currency !== 'IRR'
                 || ! (bool) $account->is_active
             ) {
                 throw new DomainException('Wallet transfer wallet account changed or became inactive.');
+            }
+        }
+
+        if ($feeAccountId !== null) {
+            $feeAccount = $accounts[$feeAccountId] ?? null;
+            if ($feeAccount === null
+                || $feeAccount->owner_user_id !== null
+                || $feeAccount->wallet_bucket !== null
+                || $feeAccount->currency !== 'IRR'
+                || ! (bool) $feeAccount->is_active
+            ) {
+                throw new DomainException('Wallet transfer fee account is invalid or inactive.');
             }
         }
     }

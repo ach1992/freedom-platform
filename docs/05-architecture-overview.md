@@ -55,7 +55,8 @@ Redis locks may reduce duplicate work but never replace database constraints or 
 - ledger postings are balanced and append-only;
 - corrections/refunds/reversals are new compensating records, never history edits;
 - one external transaction cannot fund multiple accepted payments;
-- one paid order item cannot create multiple active remote identities.
+- one paid order item cannot create multiple active remote identities;
+- financial commands that X-lock multiple `ledger_accounts` must determine the complete participant account-ID set before the first account X-lock, deduplicate it, and acquire rows in ascending numeric `ledger_accounts.id` order; callers must not pre-lock an incomplete participant subset in an order that can conflict with that complete canonical set.
 
 ## External effects
 
