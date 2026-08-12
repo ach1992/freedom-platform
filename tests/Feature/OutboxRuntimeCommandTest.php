@@ -24,6 +24,13 @@ final class OutboxRuntimeCommandTest extends TestCase
 {
     use RefreshDatabase;
 
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        DB::table('outbox_messages')->delete();
+    }
+
     public function test_registered_handler_dispatches_outside_the_claim_transaction_and_reports_counts_only(): void
     {
         $clock = $this->useClock(new DateTimeImmutable('2026-08-13T00:00:00+00:00'));
