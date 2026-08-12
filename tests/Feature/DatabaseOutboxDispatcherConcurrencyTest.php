@@ -8,7 +8,6 @@ namespace {
     use App\Shared\Application\OutboxMessage;
     use App\Shared\Application\OutboxMessageHandler;
     use App\Shared\Infrastructure\DatabaseOutboxDispatcher;
-    use DateTimeImmutable;
     use Illuminate\Contracts\Console\Kernel;
     use Illuminate\Database\Connection;
     use Illuminate\Database\DatabaseManager;
