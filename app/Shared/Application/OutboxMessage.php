@@ -9,7 +9,7 @@ use InvalidArgumentException;
 final readonly class OutboxMessage
 {
     /**
-     * @param array<string, mixed> $payload
+     * @param  array<string, mixed>  $payload
      */
     public function __construct(
         public string $id,

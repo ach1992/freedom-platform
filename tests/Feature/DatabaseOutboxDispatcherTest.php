@@ -158,7 +158,7 @@ final class DatabaseOutboxDispatcherTest extends TestCase
         $this->expectException(RuntimeException::class);
 
         try {
-            $this->dispatcher()->dispatchOne(new ThrowingOutboxHandler());
+            $this->dispatcher()->dispatchOne(new ThrowingOutboxHandler);
         } finally {
             $this->assertDatabaseHas('outbox_messages', [
                 'id' => $id,
