@@ -35,6 +35,7 @@ final class DatabaseOutboxDispatcherTest extends TestCase
     {
         $id = $this->publish('order:1:paid:v1');
         $database = app(DatabaseManager::class);
+        $baselineTransactionLevel = $database->connection()->transactionLevel();
         $handler = new RecordingOutboxHandler(OutboxDispatchOutcome::Success, $database);
 
         $result = $this->dispatcher()->dispatchOne($handler);
@@ -42,7 +43,7 @@ final class DatabaseOutboxDispatcherTest extends TestCase
         self::assertNotNull($result);
         self::assertSame($id, $result->messageId);
         self::assertSame(OutboxDispatchOutcome::Success, $result->outcome);
-        self::assertSame(0, $handler->transactionLevelAtHandle);
+        self::assertSame($baselineTransactionLevel, $handler->transactionLevelAtHandle);
         self::assertSame(['order_id' => '1'], $handler->messages[0]->payload);
         $this->assertDatabaseHas('outbox_messages', [
             'id' => $id,
