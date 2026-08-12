@@ -46,12 +46,28 @@ namespace {
         });
 
         try {
-            $handler = new ConcurrentRecordingOutboxHandler;
-            $dispatcher = new DatabaseOutboxDispatcher(
-                $database,
-                new ConcurrentOutboxClock(new DateTimeImmutable('2026-08-12T00:00:00+00:00')),
-                60,
-            );
+            $handler = new class implements OutboxMessageHandler
+            {
+                /** @var list<string> */
+                public array $handledEventKeys = [];
+
+                public function handle(OutboxMessage $message): OutboxDispatchOutcome
+                {
+                    $this->handledEventKeys[] = $message->eventKey;
+
+                    return OutboxDispatchOutcome::Success;
+                }
+            };
+            $clock = new class(new \DateTimeImmutable('2026-08-12T00:00:00+00:00')) implements Clock
+            {
+                public function __construct(private readonly \DateTimeImmutable $now) {}
+
+                public function now(): \DateTimeImmutable
+                {
+                    return $this->now;
+                }
+            };
+            $dispatcher = new DatabaseOutboxDispatcher($database, $clock, 60);
             $result = $dispatcher->dispatchOne($handler);
 
             echo json_encode([
@@ -68,29 +84,6 @@ namespace {
         }
 
         exit(0);
-    }
-
-    final class ConcurrentOutboxClock implements Clock
-    {
-        public function __construct(private readonly DateTimeImmutable $now) {}
-
-        public function now(): DateTimeImmutable
-        {
-            return $this->now;
-        }
-    }
-
-    final class ConcurrentRecordingOutboxHandler implements OutboxMessageHandler
-    {
-        /** @var list<string> */
-        public array $handledEventKeys = [];
-
-        public function handle(OutboxMessage $message): OutboxDispatchOutcome
-        {
-            $this->handledEventKeys[] = $message->eventKey;
-
-            return OutboxDispatchOutcome::Success;
-        }
     }
 }
 
