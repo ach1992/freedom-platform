@@ -6,12 +6,13 @@ namespace App\Modules\Operations\Presentation\Console;
 
 use App\Shared\Application\OutboxRuntime;
 use Illuminate\Console\Command;
-use InvalidArgumentException;
 use Throwable;
 
 /** @requirement ARCH-004 OPS-003 QUA-004 SEC-008 */
 final class DispatchOutboxCommand extends Command
 {
+    private const MAX_BATCH_SIZE = 1000;
+
     protected $signature = 'operations:dispatch-outbox
         {--limit=100 : Maximum number of due Outbox messages to examine}
         {--json : Emit JSON only}';
@@ -23,14 +24,12 @@ final class DispatchOutboxCommand extends Command
         $rawLimit = $this->option('limit');
         $limit = filter_var($rawLimit, FILTER_VALIDATE_INT);
 
-        if ($limit === false) {
-            return $this->invalidInput('Outbox dispatch limit must be an integer.');
+        if ($limit === false || $limit < 1 || $limit > self::MAX_BATCH_SIZE) {
+            return $this->invalidInput('Outbox dispatch limit must be an integer between 1 and '.self::MAX_BATCH_SIZE.'.');
         }
 
         try {
             $result = $runtime->dispatchBatch($limit);
-        } catch (InvalidArgumentException $exception) {
-            return $this->invalidInput($exception->getMessage());
         } catch (Throwable) {
             if ($this->option('json')) {
                 $this->line('{"status":"failed","code":"outbox_dispatch_failed"}');
