@@ -11,7 +11,6 @@ namespace {
     use Illuminate\Contracts\Console\Kernel;
     use Illuminate\Database\Connection;
     use Illuminate\Database\DatabaseManager;
-    use RuntimeException;
 
     if (PHP_SAPI === 'cli' && ($argv[1] ?? null) === '--outbox-dispatcher-contention-worker') {
         require dirname(__DIR__, 2).'/vendor/autoload.php';
