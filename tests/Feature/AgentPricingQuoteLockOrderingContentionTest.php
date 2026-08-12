@@ -160,6 +160,15 @@ namespace Tests\Feature {
             $this->seed();
         }
 
+        protected function tearDown(): void
+        {
+            try {
+                $this->truncateDatabaseTables();
+            } finally {
+                parent::tearDown();
+            }
+        }
+
         public function test_quote_and_standalone_agent_pricing_share_one_canonical_lock_order(): void
         {
             $offering = $this->quoteOffering();
