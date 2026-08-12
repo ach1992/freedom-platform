@@ -16,7 +16,7 @@ use Illuminate\Database\DatabaseManager;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
-use RuntimeException;
+use InvalidArgumentException;
 use Tests\TestCase;
 
 /** @requirement ARCH-004 OPS-003 QUA-004 SEC-008 */
@@ -150,14 +150,16 @@ final class OutboxRuntimeCommandTest extends TestCase
 
     public function test_invalid_limit_and_unexpected_runtime_failure_have_deterministic_redacted_exit_behavior(): void
     {
-        self::assertSame(2, Artisan::call('operations:dispatch-outbox', [
-            '--limit' => 0,
-            '--json' => true,
-        ]));
-        self::assertSame(
-            '{"status":"invalid","code":"outbox_dispatch_invalid_input"}',
-            trim(Artisan::output()),
-        );
+        foreach ([0, 1001] as $invalidLimit) {
+            self::assertSame(2, Artisan::call('operations:dispatch-outbox', [
+                '--limit' => $invalidLimit,
+                '--json' => true,
+            ]));
+            self::assertSame(
+                '{"status":"invalid","code":"outbox_dispatch_invalid_input"}',
+                trim(Artisan::output()),
+            );
+        }
 
         $this->app->instance(OutboxRuntime::class, new ThrowingOutboxRuntime);
 
@@ -169,6 +171,12 @@ final class OutboxRuntimeCommandTest extends TestCase
             '{"status":"failed","code":"outbox_dispatch_failed"}',
             trim(Artisan::output()),
         );
+        self::assertStringNotContainsString('sensitive-runtime-detail', Artisan::output());
+
+        self::assertSame(1, Artisan::call('operations:dispatch-outbox', [
+            '--limit' => 1,
+        ]));
+        self::assertStringContainsString('Outbox dispatch failed unexpectedly.', Artisan::output());
         self::assertStringNotContainsString('sensitive-runtime-detail', Artisan::output());
     }
 
@@ -261,6 +269,6 @@ final class ThrowingOutboxRuntime implements OutboxRuntime
 {
     public function dispatchBatch(int $limit): OutboxRuntimeResult
     {
-        throw new RuntimeException('sensitive-runtime-detail');
+        throw new InvalidArgumentException('sensitive-runtime-detail');
     }
 }
