@@ -81,6 +81,13 @@ final readonly class AgentPricingService
                 if ($user === null || $user->account_type !== 'agent' || $user->account_status !== 'active') {
                     throw new DomainException('Agent pricing resolution requires an active agent account.');
                 }
+                /** @var object{product_id:int|string,sales_server_id:int|string}|null $offering */
+                $offering = $db->table('plan_offerings')->where('id', $request->planOfferingId)->lockForUpdate()->first(['product_id', 'sales_server_id']);
+                if ($offering === null) {
+                    throw new DomainException('Agent pricing resolution offering does not exist.');
+                }
+                $productId = $this->positive($offering->product_id, 'Agent pricing product ID');
+                $serverId = $this->positive($offering->sales_server_id, 'Agent pricing sales server ID');
                 /** @var object{id:int|string,status:string,pricing_profile_code:string|null}|null $agent */
                 $agent = $db->table('agent_profiles')->where('user_id', $request->userId)->lockForUpdate()->first(['id', 'status', 'pricing_profile_code']);
                 if ($agent === null || $agent->status !== 'active') {
@@ -100,13 +107,6 @@ final readonly class AgentPricingService
                     throw new DomainException('Agent pricing profile configuration is not active.');
                 }
                 $this->verifyProfileVersion($profileVersion, $profile->profile_code);
-                /** @var object{product_id:int|string,sales_server_id:int|string}|null $offering */
-                $offering = $db->table('plan_offerings')->where('id', $request->planOfferingId)->lockForUpdate()->first(['product_id', 'sales_server_id']);
-                if ($offering === null) {
-                    throw new DomainException('Agent pricing resolution offering does not exist.');
-                }
-                $productId = $this->positive($offering->product_id, 'Agent pricing product ID');
-                $serverId = $this->positive($offering->sales_server_id, 'Agent pricing sales server ID');
                 $rule = $this->selectRule($db, $profileId, $request, $productId, $serverId);
                 $ruleId = $rule === null ? null : $this->positive($rule->agent_pricing_rule_id, 'Agent pricing rule ID');
                 $ruleVersionId = $rule === null ? null : $this->positive($rule->id, 'Agent pricing rule version ID');
