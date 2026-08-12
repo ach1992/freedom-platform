@@ -47,6 +47,10 @@ MariaDB is the final authority for:
 
 Redis locks may reduce duplicate work but never replace database constraints or transactions.
 
+## Pricing transaction rules
+
+- Quote/agent-pricing commands that X-lock the shared pricing roots acquire the subject `users` row before `plan_offerings`, then `agent_profiles`, then the stable `agent_pricing_profiles` root; immutable agent-pricing profile/rule versions are selected only after that stable root barrier, and nested callers already holding the subject/offering must not acquire the shared pricing-profile root before that same offering.
+
 ## Financial rules
 
 - fiat is integer IRR; crypto uses fixed-precision decimal;
