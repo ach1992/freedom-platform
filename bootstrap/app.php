@@ -7,6 +7,7 @@ use App\Modules\Installer\Presentation\Http\Middleware\EnsureInstallerAvailable;
 use App\Modules\Installer\Presentation\Http\Middleware\EnsureInstallerHttps;
 use App\Modules\Installer\Presentation\Http\Middleware\EnsureInstallerUnlocked;
 use App\Modules\Operations\Presentation\Console\CheckWorkerHeartbeatsCommand;
+use App\Modules\Operations\Presentation\Console\DispatchOutboxCommand;
 use App\Modules\Operations\Presentation\Console\HealthCheckCommand;
 use App\Modules\Operations\Presentation\Console\RecordWorkerHeartbeatCommand;
 use App\Modules\Telegram\Presentation\Console\ConfigureTelegramWebhookCommand;
@@ -38,6 +39,7 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withCommands([
         CheckWorkerHeartbeatsCommand::class,
         ConfigureTelegramWebhookCommand::class,
+        DispatchOutboxCommand::class,
         RequeueTelegramUpdatesCommand::class,
         HealthCheckCommand::class,
         IssueInstallerTokenCommand::class,
