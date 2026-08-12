@@ -20,20 +20,21 @@ Complete the production-ready `1.0.0` product defined by this specification from
 
 1. Read the owning requirements and relevant canonical references before changing product behavior.
 2. Use the existing stable requirement IDs in `docs/01-authoritative-requirements.md`; do not create a second requirement ledger or mutable traceability matrix. Link implementation work to requirement IDs through GitHub Issues, PRs, code/tests where useful, and review history.
-3. Use live GitHub as the delivery system: Program Issue `#3` -> active phase Issue -> bounded task Issue -> PR/checks. Dynamic priority, status, blockers, branches, SHAs, reviews, and CI results do not belong in repository status files.
+3. Use live GitHub as the delivery system: Program Issue `#3` -> active phase Issue -> bounded task Issue -> PR/checks. Every independently reviewable task has one owning Issue that records its authority, outcome, dependencies, bounded scope, acceptance criteria, validation strategy, and material risk. Dynamic priority, status, blockers, decisions, branches, SHAs, reviews, and CI results do not belong in repository status files or Chat.
 4. Work in outcome-based phases. A phase closes when its GitHub exit criteria and applicable product/security/financial/operational validation are satisfied, not when a ceremonial report is produced.
 5. Ask the Owner only for decisions that cannot safely be derived from the specification/current repository, or that require real credentials/accounts, privileged infrastructure action, business/legal policy, production rollout, irreversible action, or explicit High/Critical approval.
 6. Never place credentials or sensitive customer/provider/payment data in Chat, commits, fixtures, screenshots, logs, PR/Issue text, or retained evidence.
-7. Testing claims must be reviewable from focused commands/results and applicable CI/checks. Do not create a per-task evidence document or artifact merely to restate a successful workflow run.
-8. Update an existing canonical document only when a durable product, architecture, security, testing, compatibility, or operations rule changes. Keep implementation history in Git/GitHub.
+7. Testing claims must be reviewable from focused commands/results and applicable CI/checks. Run risk-proportionate checks only when they can inform a decision; keep draft PRs quiet, reuse valid green evidence when the resulting tree is materially unchanged, and never weaken or rerun deterministic checks merely to manufacture a pass. Do not create a per-task evidence document or artifact merely to restate a successful workflow run.
+8. Update an existing canonical document only when a durable product, architecture, security, testing, compatibility, or operations rule changes. Keep the repository clean: give each durable concept one canonical home, keep dynamic delivery history in Git/GitHub, and remove obsolete coordination artifacts rather than preserving parallel accounts of state.
 9. Production acceptance does not mean absolute zero defects. It requires no known unresolved Critical/High release defect, all mandatory acceptance checks, proven financial/authorization/idempotency/restore/release invariants where applicable, and explicit treatment of remaining accepted risks.
-10. Keep a Laravel modular monolith with the minimum infrastructure needed for reliable operation. Optimize boundaries for future features/adapters/UI surfaces; do not refactor solely because a file is large or split cohesive behavior merely to reduce line count.
-11. Never provision a paid service before authoritative payment settlement, never create two services for one paid item, and never allow duplicate callbacks/webhooks/retries/operator actions to create a second financial or irreversible remote effect.
-12. Stop acceptance when a financial invariant, authorization boundary, restore/release integrity check, or provisioning idempotency requirement fails.
+10. Keep development fast without lowering safeguards: prefer the smallest safe, cohesive, independently reviewable change; use CI tiers and focused tests in proportion to change risk; avoid work, checks, or documents that do not improve implementation, review, recovery, or release safety.
+11. Keep a Laravel modular monolith with the minimum infrastructure needed for reliable operation. Optimize boundaries for future features/adapters/UI surfaces; do not refactor solely because a file is large or split cohesive behavior merely to reduce line count.
+12. Never provision a paid service before authoritative payment settlement, never create two services for one paid item, and never allow duplicate callbacks/webhooks/retries/operator actions to create a second financial or irreversible remote effect.
+13. Stop acceptance when a financial invariant, authorization boundary, restore/release integrity check, or provisioning idempotency requirement fails.
 
 ## 0.2 State retention and handover
 
-A replacement manager/developer with no Chat history must be able to continue from `README.md`, `AGENTS.md`, `CONTRIBUTING.md`, Program Issue `#3`, Draft integration PR `#6`, the active task, and only the relevant canonical references.
+A new human developer or AI agent with no Chat history must be able to continue from `README.md`, `AGENTS.md`, `CONTRIBUTING.md`, Program Issue `#3`, Draft integration PR `#6`, the active task, and only the relevant canonical references. The GitHub Program/phase/task/PR chain owns live progress and decisions; recovery must not depend on private context, a previous operator, or a synchronized status document.
 
 Do not create or restore `PROJECT_STATUS.md`, execution ledgers, mutable traceability matrices, per-task handoff files, per-task risk/evidence reports, or phase evidence directories merely for coordination. Git/GitHub/CI already preserve that history. Release-candidate/release records may be retained only when they have a real future operational or acceptance consumer.
 ---
@@ -3360,7 +3361,7 @@ Block release on:
 
 Deliver:
 
-- requirement ledger;
+- stable requirement-ID index in `docs/01-authoritative-requirements.md`;
 - domain glossary;
 - use cases;
 - state machines;
@@ -3371,7 +3372,7 @@ Deliver:
 - module boundaries;
 - ADRs;
 - risk register;
-- traceability matrix.
+- GitHub-linked requirement coverage through owning Issues/PRs, code/tests, review, and applicable CI.
 
 Gate: every requirement in this prompt is mapped and no unresolved Critical business ambiguity remains.
 
@@ -3652,13 +3653,13 @@ Use the following official sources to verify current endpoint schemas, signature
 - OpenLiteSpeed documentation: `https://docs.openlitespeed.org/`
 - OWASP ASVS, API Security, and Cheat Sheet Series: `https://owasp.org/`
 
-For each integration, commit a dated contract note containing the tested version, endpoint base URL, authentication method, request/response samples with secrets removed, timeout/retry policy, status mapping, rate limits, webhook signature verification, and contract-test evidence.
+For each integration that enters Version 1, maintain or refresh the smallest applicable canonical contract reference containing the tested version, endpoint base URL, authentication method, request/response samples with secrets removed, timeout/retry policy, status mapping, rate limits, webhook signature verification, and contract-test evidence. Keep task-specific progress, review discussion, and CI history in GitHub; do not create a separate note merely to duplicate that dynamic state.
 
 ---
 
 # 36. Functional Requirement and Workflow Catalogue
 
-The team must copy these IDs into the traceability matrix. Every item requires design, implementation, automated tests, and acceptance evidence.
+The team must use these stable IDs in the owning GitHub Issue/PR, code/tests, and acceptance review where useful; do not copy them into a mutable traceability matrix. Every item requires design, implementation, automated tests, and acceptance evidence.
 
 | ID | Required capability and canonical acceptance workflow |
 |---|---|
