@@ -118,6 +118,15 @@ namespace Tests\Feature {
             }
         }
 
+        protected function tearDown(): void
+        {
+            try {
+                $this->truncateTablesForAllConnections();
+            } finally {
+                parent::tearDown();
+            }
+        }
+
         public function test_two_concurrent_mariadb_workers_dispatch_the_same_message_at_most_once(): void
         {
             $id = '0198a4c7-ff31-7bb9-8222-000000000401';
@@ -243,7 +252,7 @@ namespace Tests\Feature {
                         continue;
                     }
                     $line = fgets($stream);
-                    if ($line !== false) {
+                    if ($line !== false && trim($line) !== '') {
                         return $line;
                     }
                 }
