@@ -4,7 +4,7 @@
 
 1. Read `AGENTS.md`, Program Issue `#3`, and the GitHub Issue for the task.
 2. Confirm the task's parent phase/dependencies and fetch the current head of `develop/v1.0.0-completion` / Draft PR `#6`.
-3. Work on one temporary task branch.
+3. Work on one temporary task branch unless the active Phase explicitly owns one cumulative implementation branch/PR.
 4. Open the PR against `develop/v1.0.0-completion`.
 5. Keep the PR Draft while it is changing; mark it Ready only when the intended validation should run.
 6. Do not merge your own Worker PR. Delete the temporary branch after integration or cancellation once GitHub preserves the history.
@@ -15,33 +15,49 @@ Do not insert a human checkpoint between ordinary reversible steps. When the cur
 
 ## Execution environments and access routing
 
-The project deliberately separates repository control, interactive coding, CI validation, and staging operations. A human or AI contributor should choose the narrowest environment that has the capability required for the task instead of trying to make one environment do everything.
+The project deliberately separates repository control, interactive coding, CI validation, and staging/provider operations. A human or AI contributor should choose the environment that owns the required capability instead of assuming one shell must provide everything.
 
-| Boundary | Use it for | Do not assume |
+| Boundary | Use it for | Important behavior |
 |---|---|---|
-| GitHub repository / ChatGPT GitHub connector | Issues, PRs, refs, repository files, review state, workflow evidence, and other GitHub operations exposed by the connected GitHub App | It is not an interactive shell, does not expose secret values, and does not imply that every GitHub admin endpoint is available through the connector |
-| OpenAI Codex cloud environment linked to this repository | Authenticated working-tree operations that need a real checkout: inspect/edit many files, run shell commands available in the environment, commit, and push task-branch work when that environment has GitHub write capability | It is not a GitHub repository Environment and does not automatically have staging/runtime secrets |
-| GitHub Actions self-hosted runner | Authoritative repository CI, MariaDB/Redis integration validation, and explicitly reviewed operational workflows | It is not a general-purpose remote shell for arbitrary chat commands; only reviewed repository workflows may execute on it |
-| Staging/test host | Target-like runtime checks and explicitly authorized staging/provider operations through repository-owned scripts/workflows | Do not edit the deployed `current` tree as a development checkout and do not SSH/mutate it merely because credentials exist |
+| GitHub repository / ChatGPT GitHub integration | Issues, PRs, refs, repository files, review state, workflow evidence, and GitHub operations exposed by the connected App | This is not an interactive shell and does not reveal secret values. Verify actions from live GitHub after mutation. |
+| Repository-linked OpenAI Codex cloud environment | Broad working-tree inspection/editing, shell commands available in the sandbox, multi-file implementation and task commits | Publish through Codex's GitHub integration / `Create PR` flow. The Codex shell may have no raw `origin`; that is not proof that repository write access is missing. |
+| GitHub Actions self-hosted runner | Authoritative repository CI, MariaDB/Redis integration validation, and reviewed operational/readiness workflows | Only repository workflows execute here. Do not invent a generic chat-to-shell workflow or treat the runner as an arbitrary remote terminal. |
+| Staging/test host | Target-like runtime/readiness and explicitly authorized staging/provider operations | Do not edit the deployed `current` release tree as a developer checkout. Use the owning workflow/runbook path. |
 
-The owner-controlled self-hosted runner is identified by the labels below; exact runtime requirements are owned by `docs/06-test-strategy.md`:
+The self-hosted runner contract is:
 
 ```yaml
+runner name: freedom-staging-runner
 runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
 ```
 
-The Codex cloud environment and a GitHub repository Environment are different products. A GitHub Environment is configured under repository **Settings -> Environments** and can scope deployment rules/secrets for workflow jobs. A Codex environment is configured in OpenAI Codex and provides an agent coding workspace/checkout. Never treat one as proof that the other exists or is configured.
+Exact CI/runtime requirements are owned by `docs/06-test-strategy.md`. Staging/provider workflow and secret interfaces are owned by `docs/09-deployment-runbook.md`.
 
-### Capability selection for an AI or new developer
+### Codex publication rule
 
-Use this order:
+For this repository, Codex-to-GitHub publication has been verified through the Codex UI integration. Therefore:
 
-1. Need current task/PR/branch/CI truth or a supported GitHub mutation -> use GitHub directly/through the connected GitHub integration.
-2. Need a real working tree, shell, broad patch, commit, or authenticated `git push` -> use the repository-linked Codex cloud environment or another explicitly authorized developer checkout.
-3. Need MariaDB 10.11, Redis, static gates, or target-like CI evidence -> use the repository GitHub Actions workflows on the self-hosted runner.
-4. Need staging/provider/deployment mutation -> stop and follow the owning Task Contract plus `docs/09-deployment-runbook.md`; use only the reviewed operational path for that task.
+1. choose `ach1992/freedom-platform` and the intended base branch in Codex;
+2. let Codex prepare the change/commit in its task workspace;
+3. use `Create PR`/the GitHub publication action exposed by Codex;
+4. inspect the resulting GitHub branch/PR directly;
+5. do not conclude that access is broken merely because `git remote -v` in the Codex shell is empty.
 
-Do not put a PAT, SSH private key, password, provider API key, bot token, or `.env` value in Chat, Git, Issues, PR text, setup scripts, or command-line arguments. Secret **names/interfaces** may be documented; values remain in GitHub/environment secret storage or the target's protected runtime storage.
+A normal developer checkout with an authenticated `origin` may use ordinary `git fetch`/`git push`. The Codex sandbox does not need to expose that same transport to be usable.
+
+Do not recreate historical manual patch-relay instructions when the current Codex/GitHub integration can publish the work.
+
+### GitHub Actions and repository permissions
+
+Repository-level Actions settings may permit read/write automation, but the workflow YAML for the exact revision is authoritative for each job's effective `GITHUB_TOKEN` scope. Existing CI/readiness/provider workflows intentionally declare narrow read permissions. A future workflow that genuinely needs mutation must request the smallest explicit permission needed in that workflow.
+
+Never infer that a job can push merely because repository defaults are permissive, and never weaken a workflow's `permissions:` block just to bypass a missing execution path.
+
+### Secrets
+
+Secret values are write-only operational state. Do not ask the Owner to paste a PAT, SSH key, password, provider key, bot token, `.env`, or other secret into Chat. Existing secret **identifiers**, which workflows consume them, and which are currently reserved/unconsumed are documented in `docs/09-deployment-runbook.md`.
+
+When a workflow says a required secret is missing/invalid, ask the Owner only to create or rotate that exact identifier in GitHub Settings. Do not request its value for debugging.
 
 ## Task and PR contracts
 
