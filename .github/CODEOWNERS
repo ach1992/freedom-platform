@@ -7,6 +7,7 @@
 /app/Modules/Payments/ @ach1992
 /app/Modules/Wallet/ @ach1992
 /app/Modules/AccessControl/ @ach1992
+/app/Modules/Promotions/ @ach1992
 /database/migrations/ @ach1992
 /deploy/ @ach1992
 
