@@ -7,6 +7,8 @@ body:
       value: |
         Live task state belongs in GitHub. Keep this contract concise; add conditional risk detail only when it materially affects the work. Do not create per-task handoff, status, traceability, or evidence documents.
 
+        Execution continuity: once the parent objective is authorized and this task is READY, normal reversible implementation/validation/review-preparation continues without another Owner checkpoint. Approval requirements are action-scoped; a "before merge/release" gate does not pause coding, testing, PR maintenance, or dependency-safe follow-on work.
+
   - type: textarea
     id: authority
     attributes:
@@ -65,7 +67,7 @@ body:
     id: risk
     attributes:
       label: Change risk
-      description: High/Critical financial, authorization, security, provider, schema, deployment/release, secret, or irreversible work requires independent review and explicit Owner approval unless already authorized.
+      description: High/Critical financial, authorization, security, provider, schema, deployment/release, secret, or irreversible work requires independent review and explicit Owner approval for the gated merge/release/irreversible action unless already authorized; risk alone does not pause reversible development.
       options:
         - Low
         - Medium
