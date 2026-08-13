@@ -2,241 +2,157 @@
 
 Target environment: Ubuntu/aaPanel/OpenLiteSpeed, PHP 8.4, MariaDB, authenticated Redis.
 
-This document is a **safety contract**, not proof that every described command/capability currently exists. Execute an operational step only when the release/task explicitly authorizes it and the referenced implementation is present on the exact release commit.
+This document is a safety contract, not proof that every described capability currently exists. Execute operational actions only when the owning task/release authorizes them and the implementation exists on the exact GitHub revision.
 
-> **Current execution authority:** GitHub is the project source of truth; the active ChatGPT Master self-executes READY work through the connected GitHub integration, GitHub Actions provides reviewed runtime validation, and external Workers including Codex Cloud are optional rather than the default. No Owner-managed local/server project checkout is assumed. Any older Codex-default or automatic branch-cleanup wording below is superseded by current `AGENTS.md`, `CONTRIBUTING.md`, Program #3, and Phase #8. When a temporary branch appears no longer needed, the Master reports its name to the Owner; cleanup remains Owner-operated.
+## Source and execution topology
 
-## Execution and access topology
+GitHub is the only project/source-of-truth location assumed by the repository. No Owner-managed local or server checkout is required for development continuity.
 
-The project separates coding, GitHub control, CI, and staging operations:
+- **ChatGPT Master + connected GitHub integration** is the normal project-control and self-execution path for repository state and supported GitHub mutations.
+- **GitHub Actions** is the authoritative reviewed shell/runtime path on `freedom-staging-runner` using `[self-hosted, Linux, X64, freedom-staging, php84]`. Workflow checkouts are transient and are not another source repository.
+- **External Workers** are optional. Use one only when isolation, safe parallelism, specialist review, or a missing Master capability materially justifies delegation. Codex Cloud is not a required/default workspace. Durable results must return to GitHub.
+- **Deployment/staging targets** are runtime infrastructure, not developer checkouts and not project recovery sources.
 
-- **GitHub repository / ChatGPT GitHub integration** owns live repository state: Issues, PRs, refs, repository files, reviews and Actions evidence. It is not an interactive server shell and cannot reveal secret values.
-- **Repository-linked OpenAI Codex cloud environment** is the normal broad coding workspace when a task needs a real working tree, shell commands, multi-file edits and commits. Publication to GitHub is through the Codex GitHub integration / `Create PR` flow. A Codex sandbox may show no raw `origin` remote; that alone is not a GitHub-access failure. The supported access check is whether Codex can publish its prepared branch/commit/PR to this repository.
-- **GitHub Actions** runs authoritative repository validation on the owner-controlled self-hosted runner `freedom-staging-runner` selected by `[self-hosted, Linux, X64, freedom-staging, php84]`.
-- **Staging/test host** is target-like infrastructure, not a mutable developer checkout. The known project root is `/www/acdomains/hell.hellpservice.ir`; `current` is a release symlink and must not be edited in place for development.
+Use `CONTRIBUTING.md` for capability routing and `docs/06-test-strategy.md` for CI/runtime validation.
 
-Use `CONTRIBUTING.md` for capability routing and `docs/06-test-strategy.md` for CI/runner execution details.
+## GitHub repository Environments
 
-### Verified GitHub/Codex publication model
+GitHub repository Environments are operational approval/secret boundaries consumed by workflows using `environment:`. They are separate from the transient Actions checkout and from any optional external Worker environment.
 
-A repository-linked Codex task has been verified to create a commit and publish a temporary branch/PR back to this repository through the Codex UI integration. Therefore a future developer/agent should not create a manual patch-relay workflow merely because `git remote -v` inside the Codex sandbox is empty.
+A workflow referencing an Environment does not prove that reviewers, wait timers, or deployment-branch restrictions are configured. Immediately before any privileged/live use, verify both the exact workflow source and the live Environment protection settings. Missing/unreadable protection settings must be treated as unknown or absent for the decision that depends on them, not silently assumed safe.
 
-When Codex publishes work:
+The guarded provider mutation definition references GitHub Environment `provider-live-acceptance`. Its workflow source and live GitHub settings are jointly authoritative for current branch/approval restrictions.
 
-1. select repository `ach1992/freedom-platform` and the intended base branch;
-2. let Codex prepare the task change/commit;
-3. use Codex `Create PR`/GitHub publication flow;
-4. inspect the resulting GitHub branch/PR directly;
-5. keep high-risk cumulative PRs Draft until validation is intentionally requested;
-6. delete temporary verification/task branches after cancellation/integration once GitHub preserves the history.
+## Secret and credential rules
 
-A different developer checkout that has a normal authenticated `origin` may use ordinary `git fetch`/`git push`; this is not required of the Codex cloud sandbox.
+Secret values are write-only operational state. Never paste them into Chat, Git, Issues, PRs, logs, screenshots, or repository evidence.
 
-### GitHub repository Environment vs Codex environment
-
-These are different systems:
-
-- **GitHub repository Environment** is configured under repository `Settings -> Environments` and is consumed by workflow jobs with `environment:`.
-- **Codex cloud environment** is configured in OpenAI Codex and supplies an agent coding workspace linked to the repository.
-
-The guarded provider mutation workflow uses GitHub Environment `provider-live-acceptance`. The workflow itself permits the mutation job only from `develop/v1.0.0-completion` with its explicit confirmation input. Do not infer current GitHub Environment branch restrictions from this document; inspect GitHub Settings if that enforcement matters to a decision.
-
-## Secret and credential interfaces
-
-Secret **values** are write-only operational state. They are not documentation, must never be pasted into Chat, and are not expected to be readable by ChatGPT/Codex/GitHub connectors. A future agent should use an existing secret identifier through the owning workflow instead of asking the Owner to reveal its value.
-
-### Currently consumed by repository workflows
-
-Current provider workflows consume:
+Known workflow/configuration identifiers include:
 
 - `PASARGUARD_TEST_ORIGIN`
 - `PASARGUARD_TEST_API_KEY`
+- `PASARGUARD_TEST_USERNAME`
+- `PASARGUARD_TEST_PASSWORD`
+- `STAGING_DOMAIN`
+- `STAGING_HOST`
+- `STAGING_PORT`
+- `STAGING_USER`
+- `STAGING_PASSWORD`
+- `STAGING_SSH_PRIVATE_KEY`
+- `STAGING_KNOWN_HOSTS`
+- `TELEGRAM_TEST_BOT_TOKEN`
 
-`Provider Readiness - Read Only` uses those identifiers for the read-only PasarGuard probe. `Provider Live Acceptance - PasarGuard` uses the same identifiers in GitHub Environment `provider-live-acceptance` for the explicitly confirmed disposable live-acceptance path.
+The current workflow/source revision is authoritative for whether an identifier is actively consumed. A configured identifier that source does not use is reserved/unconsumed, not permission to invent a new execution path.
 
-### Configured secret interfaces known to the project
+Prefer repository-scoped `GITHUB_TOKEN` for repository-local Actions operations. Introduce another credential type only when a concrete capability cannot be provided safely by `GITHUB_TOKEN`.
 
-The repository/Environment setup has been provisioned with these secret identifiers. Their presence does **not** mean every identifier has a current workflow consumer:
+## Workflow definitions and activation state
 
-- provider test: `PASARGUARD_TEST_ORIGIN`, `PASARGUARD_TEST_API_KEY`, `PASARGUARD_TEST_USERNAME`, `PASARGUARD_TEST_PASSWORD`;
-- staging target: `STAGING_DOMAIN`, `STAGING_HOST`, `STAGING_PORT`, `STAGING_USER`, `STAGING_PASSWORD`;
-- staging SSH/host verification: `STAGING_SSH_PRIVATE_KEY`, `STAGING_KNOWN_HOSTS`;
-- Telegram controlled test integration: `TELEGRAM_TEST_BOT_TOKEN`.
+The paths below are the repository's intended workflow definitions on the revision where they exist. **File existence on `develop` or a task branch is not proof of a currently registered/dispatchable standing workflow.** Before any manual or automated invocation, verify the current default-branch workflow tree, GitHub Actions registration/state, exact source revision, and owning Task/Release authorization.
 
-Before using a configured identifier, search the exact current workflow/source revision. If source does not reference it, treat it as **reserved/unconsumed**, not as authorization to invent a new remote execution path.
-
-Do not duplicate these values into a Codex Environment secret store unless a specific task genuinely needs that capability in Codex and the Task Contract authorizes it. Normal coding does not require staging/provider secret values inside Codex.
-
-### GitHub Actions permissions
-
-Repository Actions settings are intentionally capable of write operations so controlled workflows can support repository automation when required. However each workflow must still declare its own narrow `permissions:` block. Current CI/provider/readiness workflows use read-scoped repository permissions unless a bounded future workflow explicitly needs write access.
-
-Do not infer that a job has write access merely because the repository default allows it. The workflow YAML for the exact revision is the authority.
-
-Prefer repository-scoped `GITHUB_TOKEN` for GitHub operations performed by Actions. Do not create a PAT merely to make normal CI work. A PAT, GitHub App token, deploy key or remote credential is justified only for a concrete capability that `GITHUB_TOKEN` cannot provide.
-
-### Safe secret discovery rule
-
-To determine whether an integration is configured:
-
-1. inspect the owning workflow for the required secret **names**;
-2. inspect GitHub Settings only for presence/ownership when needed;
-3. run the narrow read-only readiness workflow when one exists;
-4. never print/dump secret contexts, `.env`, SSH material or provider credentials for discovery.
-
-A missing/empty secret should be reported by the workflow's preflight. Do not ask for the value in Chat; ask the Owner to create/rotate the named secret in GitHub Settings only when preflight proves it is missing or invalid.
-
-## Existing operational workflows
+Historical Actions registry entries whose workflow files are absent from the current default-branch tree are history/navigation, not execution authority.
 
 ### CI
 
 `.github/workflows/ci.yml`
 
-- runs on the self-hosted runner;
-- Draft PRs intentionally do not consume CI;
-- CONTROL tier handles allowlisted docs/governance-only diffs;
-- FULL tier runs PHP/static/dependency/security gates and MariaDB 10.11 + authenticated Redis integration tests;
-- manual `workflow_dispatch` is available for intentional full validation/coverage evidence.
+- self-hosted-only;
+- Draft PRs stay quiet;
+- CONTROL tier covers allowlisted documentation/governance-only diffs;
+- FULL tier covers source/runtime/workflow/unknown changes and MariaDB 10.11 + authenticated Redis validation;
+- the definition supports manual `workflow_dispatch`; use it only when current GitHub registration exposes it and verify the resulting exact `head_sha` before consuming the evidence.
 
 ### Staging Readiness
 
-`.github/workflows/staging-readiness.yml`
-
-- manual read-only host inspection;
-- confirmation input: `READ_ONLY_STAGING_CHECK`;
-- verifies `RUNNER_NAME=freedom-staging-runner`;
-- reports sanitized PHP/Composer/Docker/service/release-symlink facts;
-- does not require staging SSH secrets and must not mutate the staging target.
+`.github/workflows/staging-readiness.yml` defines a manual read-only runtime readiness path where/when it is registered. It must not become a general remote shell or project checkout.
 
 ### Provider Readiness - Read Only
 
-`.github/workflows/provider-readiness.yml`
-
-- manual read-only PasarGuard readiness probe;
-- run from `develop/v1.0.0-completion`;
-- confirmation input: `READ_ONLY_PROVIDER_CHECK`;
-- consumes `PASARGUARD_TEST_ORIGIN` and `PASARGUARD_TEST_API_KEY`;
-- produces sanitized readiness evidence.
+`.github/workflows/provider-readiness.yml` defines the manual read-only PasarGuard readiness path where/when it is registered and uses only the provider test secret identifiers required by that exact workflow revision.
 
 ### Provider Live Acceptance - PasarGuard
 
-`.github/workflows/provider-live-acceptance.yml`
+`.github/workflows/provider-live-acceptance.yml` defines a privileged disposable provider-mutation path where/when it is deliberately registered for a controlled acceptance task. It is not normal CI. The definition uses GitHub Environment `provider-live-acceptance`, explicit confirmation, branch guards, and only the current workflow-defined inputs/credentials.
 
-- privileged/disposable provider mutation path; not normal CI;
-- only valid from `develop/v1.0.0-completion`;
-- uses GitHub Environment `provider-live-acceptance`;
-- consumes `PASARGUARD_TEST_ORIGIN` and `PASARGUARD_TEST_API_KEY`;
-- requires the explicit confirmation string encoded in the current workflow;
-- must not be run merely to test whether credentials exist.
-
-The workflow source is authoritative for the exact confirmation string, provider version, optional inputs and current safety checks. Do not copy those volatile details into another status document.
+Do not promote/enable a privileged provider workflow merely to discover whether credentials exist. Do not run a mutation workflow merely to discover whether credentials exist.
 
 ## Production layout
 
+A release target should follow the immutable-release pattern:
+
 ```text
 <root>/
-├── releases/<version>/       # immutable code
+├── releases/<version>/
 ├── shared/
-│   ├── .env                 # mode 0600
+│   ├── .env
 │   ├── storage/
 │   ├── backups/
 │   └── update-packages/
 └── current -> releases/<version>
 ```
 
-Only `current/public` is web-exposed. Do not expose repository root, `.env`, shared storage, backups, or provider certificates.
+Only `current/public` is web-exposed. Runtime secrets/private storage/backups must remain outside the public root.
 
-## Preflight
+## Deployment preflight
 
-Before first install or release activation verify:
+Before installation or release activation verify:
 
-- CLI PHP and OpenLiteSpeed PHP are independently compatible PHP 8.4 runtimes;
-- required extensions and Composer are available;
-- MariaDB and authenticated Redis are reachable with least-privilege application credentials;
-- filesystem owner/group/permissions are correct; never use `0777`;
-- HTTPS is valid;
-- only one Scheduler Cron entry exists;
-- Supervisor workers use the reviewed queue/runtime configuration;
-- no secret is passed through command arguments, Chat, Git, or screenshots.
+- compatible PHP 8.4 runtimes and required extensions;
+- MariaDB and authenticated Redis reachability with least privilege;
+- filesystem ownership/permissions without `0777`;
+- valid HTTPS;
+- exactly one Scheduler Cron entry;
+- reviewed Supervisor worker configuration;
+- no secret is exposed in command arguments, Chat, Git, or screenshots.
 
-## Release acceptance before deployment
+## Release gate
 
 Do not deploy unless the exact release candidate has:
 
 - mandatory CI success;
 - reviewed migration/schema compatibility;
-- verified package manifest/checksum/signature policy;
-- target-like install/update/rollback testing applicable to the release;
-- current encrypted backup and restore confidence;
+- verified package integrity metadata;
+- applicable install/update/rollback rehearsal;
+- current backup/restore confidence;
 - no unresolved Critical/High release blocker;
-- explicit owner release approval.
+- explicit Owner release approval.
 
 ## Package and activation
 
 A release package must contain source, lockfile, migrations, release metadata, compatibility metadata, and integrity material without secrets.
 
-Verify package integrity against authenticated release metadata before extraction/activation. Reject path traversal, symlink escape, incompatible runtime/schema, and unverified content.
+Verify package integrity and compatibility before extraction/activation. Reject path traversal, symlink escape, incompatible runtime/schema, and unverified content.
 
-Activation must use the repository's guarded atomic release-switch implementation when available. Do not replace a guarded release primitive with ad-hoc `ln -sfn`, manual file copying over the live tree, or direct edits to an existing release.
-
-After activation run the implemented health/readiness, queue/worker, Scheduler, webhook, and reconciliation checks required by that release. Do not invent commands that are not present in source.
+Use the repository's guarded atomic release-switch implementation when available. Do not replace it with ad-hoc edits to an existing deployed release.
 
 ## Scheduler and workers
 
 - exactly one Cron invokes Laravel Scheduler;
 - Supervisor manages workers;
-- payment/provisioning-critical queues remain isolated from bulk/report/broadcast work as configured;
-- worker timeouts remain below Redis queue retry-after bounds;
-- worker/scheduler health must be observable without exposing secrets.
+- critical queues remain isolated from bulk/report/broadcast work as configured;
+- worker timeouts remain below retry-after bounds;
+- worker/scheduler health is observable without exposing secrets.
 
 ## Backups
 
-Production backups must be:
-
-- consistent for the database/private files required for recovery;
-- authenticated-encrypted;
-- checksummed/manifested;
-- stored outside the public root;
-- copied to an independent destination according to retention policy;
-- periodically restored in an isolated target-like environment.
-
-Never expose a database password in process arguments. Temporary plaintext, if unavoidable, must have restrictive permissions and be removed only after verified encrypted output exists.
+Production backups must be consistent, authenticated-encrypted, checksummed/manifested, stored outside the public root, retained according to policy, and periodically restored in an isolated target-like environment.
 
 A backup that has never been restored is not sufficient release evidence.
 
 ## Restore
 
-Restore is a privileged, explicit operation. It must:
-
-1. authenticate/authorize the operator;
-2. validate backup manifest, checksum, encryption key, and compatibility;
-3. preserve the current state/safety backup before destructive replacement;
-4. restore into an isolated/staged boundary where possible;
-5. run migrations/compatibility steps defined by the restore implementation;
-6. smoke-test and reconcile financial/remote state before reopening.
+Restore is privileged and explicit. It must validate backup integrity/compatibility, preserve a safety copy before destructive replacement, restore through an isolated/staged boundary where possible, and reconcile financial/remote state before reopening.
 
 Never edit ledger/payment history manually to make a restore appear consistent.
 
-## Update
+## Update and rollback
 
-An updater must verify the package and compatibility before mutation, quiesce unsafe work, make a verified pre-update backup, stage code separately, apply reviewed migrations, run health/smoke checks, then atomically activate.
+An updater must verify package and compatibility before mutation, quiesce unsafe work, create a verified pre-update backup, stage code separately, apply reviewed migrations, run health/smoke checks, and atomically activate.
 
-Database migrations should use expand/contract compatibility. A code rollback is forbidden when the current schema is not compatible with the previous release.
+Database migrations should use expand/contract compatibility. A code rollback is forbidden when the current schema is incompatible with the previous release.
 
-## Rollback
+If activation fails, preserve diagnostics, prevent unsafe new effects, and use the guarded rollback/restore path appropriate to the proven schema state. Never run `migrate:rollback` blindly on production.
 
-If activation fails:
+## Operational evidence
 
-- preserve logs/journal/evidence;
-- stop new unsafe financial/provisioning effects if needed;
-- use the guarded release rollback path only when schema compatibility is proven;
-- otherwise restore the verified pre-update backup through the controlled restore process;
-- re-run health, worker/Scheduler, webhook, and reconciliation checks before reopening.
-
-Never run `migrate:rollback` blindly on production.
-
-## Secrets and operational evidence
-
-Operational evidence is stored in protected target storage. A repository release record contains only sanitized metadata such as release commit, command/result summary, artifact/checksum identifiers, and known limitations.
-
-Never commit `.env`, credentials, raw provider responses, unrestricted screenshots, customer data, subscription URLs, or private backup contents.
+Keep detailed operational evidence in protected target storage. Repository release records contain only sanitized metadata needed for release audit. Never commit credentials, private provider payloads, customer data, subscription URLs, or private backup contents.
