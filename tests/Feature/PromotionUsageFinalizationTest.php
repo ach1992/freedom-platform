@@ -22,7 +22,7 @@ use DateTimeZone;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
-use RuntimeException;
+use Illuminate\Support\Str;
 use Tests\Support\CreatesPromotionUsageFixtures;
 use Tests\TestCase;
 
@@ -118,7 +118,7 @@ final class PromotionUsageFinalizationTest extends TestCase
             ->value('configuration_snapshot_hash');
 
         $this->expectQuery(fn (): mixed => DB::table('promotion_usage_releases')->insert([
-            'public_id' => (string) \Illuminate\Support\Str::ulid(),
+            'public_id' => (string) Str::ulid(),
             'release_key' => 'promotion.release.guards.000001',
             'request_payload_hash' => hash('sha256', 'release'),
             'promotion_usage_reservation_id' => $reservation->reservationId,
