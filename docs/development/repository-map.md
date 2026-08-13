@@ -8,7 +8,7 @@ This map is navigation only. It does not contain live task, branch, CI, or imple
 |---|---|
 | `README.md` | project orientation and zero-context recovery path |
 | `AGENTS.md` | repository operating, architecture, safety, and authority rules |
-| `CONTRIBUTING.md` | local setup and verification workflow |
+| `CONTRIBUTING.md` | execution/access routing and verification workflow |
 | GitHub Program Issue `#3` | live phase/backlog/dependency state |
 | GitHub Draft PR `#6` | live Version 1 integration line toward `main` |
 | `docs/README.md` | canonical documentation index |
@@ -82,13 +82,13 @@ Use deterministic fixtures/fakes for unavailable external systems. Real provider
 | Path | Purpose |
 |---|---|
 | `.github/workflows/ci.yml` | risk-based repository CI on owner-controlled self-hosted runners |
-| `.github/workflows/` | controlled workflow definitions; inspect before executing |
+| `.github/workflows/` | controlled workflow definitions; verify current default-branch registration and live GitHub state before treating one as callable |
 | `scripts/ci/` | static/security/project-control checks |
 | `docker-compose.ci.yml` | disposable MariaDB/Redis test dependencies |
 | `deploy/bin/` | guarded runtime/deployment primitives |
 | `deploy/supervisor/` | Supervisor templates |
 
-Retired staging bootstrap/mutation automation is Git history, not an active repository path or implementation template. Never execute an operational file solely because it exists.
+A workflow definition staged on an integration/task branch is code under review, not proof of a standing execution entrypoint. Historical Actions registry entries whose files are absent from the current default-branch tree are navigation/history only. Retired staging bootstrap/mutation automation is Git history, not an active repository path or implementation template. Never execute an operational file solely because it exists.
 
 ## Task navigation
 
