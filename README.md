@@ -7,12 +7,22 @@ Telegram-first commerce and lifecycle-management platform for VPN/proxy subscrip
 For development or project recovery, use this order:
 
 1. [`AGENTS.md`](AGENTS.md) — repository authority, safety rules, branch/PR policy, and delivery model.
-2. [`CONTRIBUTING.md`](CONTRIBUTING.md) — local setup and canonical verification commands.
+2. [`CONTRIBUTING.md`](CONTRIBUTING.md) — GitHub-only execution routing and canonical verification commands.
 3. [Program Issue #3](https://github.com/ach1992/freedom-platform/issues/3) — live Version 1 phase/backlog/dependency state.
 4. [Draft integration PR #6](https://github.com/ach1992/freedom-platform/pull/6) — live integration head toward `main`.
 5. [`docs/README.md`](docs/README.md) — index of durable product, architecture, security, testing, and operations references.
 
-GitHub is authoritative for current phase/task priority, dependencies, blockers, branches, PRs, reviews, and CI. Do not maintain a repository status snapshot that duplicates this state. A replacement manager or developer should be able to recover current work from the sources above without chat history.
+GitHub is authoritative for current phase/task priority, dependencies, blockers, branches, PRs, reviews, CI, and repository source. Do not maintain a repository status snapshot that duplicates this state. A replacement manager or developer should be able to recover current work from the sources above without chat history.
+
+## Execution model
+
+The project is maintained from GitHub. No Owner-managed local checkout or server checkout is assumed to exist or to contain project truth.
+
+- The active ChatGPT Master normally self-executes dependency-safe READY work through the connected GitHub integration and repository-native automation.
+- External coding Workers are optional capacity only when isolation, safe parallelism, specialist review, or a missing capability materially justifies delegation. Codex Cloud is not a required or default execution path.
+- Commands that require an actual runtime, MariaDB, Redis, or repository shell execute through reviewed GitHub Actions on the owner-controlled self-hosted runner. Workflow checkouts are transient execution workspaces, not an alternative source of truth.
+- Every repository mutation is verified against live GitHub state after the write.
+- When a temporary branch appears no longer needed, the Master reports its name to the Owner; branch cleanup remains Owner-operated.
 
 ## Product authority
 
