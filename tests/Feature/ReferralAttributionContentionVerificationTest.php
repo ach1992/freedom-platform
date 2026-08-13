@@ -139,7 +139,7 @@ namespace Tests\Feature {
         }
 
         /**
-         * @param list<array{referred_user_id:int,inviter_token:string}> $payloads
+         * @param  list<array{referred_user_id:int,inviter_token:string}>  $payloads
          * @return list<array<string, mixed>>
          */
         private function runConcurrent(array $payloads): array
@@ -217,6 +217,7 @@ namespace Tests\Feature {
                 foreach ($read as $stream) {
                     if ($stream === $worker['pipes'][2]) {
                         $stderr .= stream_get_contents($stream);
+
                         continue;
                     }
                     $line = fgets($stream);
