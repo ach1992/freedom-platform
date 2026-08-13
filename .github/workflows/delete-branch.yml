@@ -1,0 +1,171 @@
+name: Delete temporary branch
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch_name:
+        description: "Temporary task branch to delete (task/* only)"
+        required: true
+        type: string
+      confirm_delete:
+        description: "Confirm deletion after all safety checks pass"
+        required: true
+        default: false
+        type: boolean
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: delete-temporary-branch
+  cancel-in-progress: false
+
+jobs:
+  delete-branch:
+    name: Validate and delete temporary branch
+    if: >-
+      github.actor == github.repository_owner &&
+      (
+        github.event_name == 'workflow_dispatch' ||
+        (
+          github.event_name == 'issue_comment' &&
+          github.event.issue.number == 105 &&
+          github.event.issue.pull_request == null &&
+          startsWith(github.event.comment.body, '/delete-branch ')
+        )
+      )
+    runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY: ${{ github.repository }}
+      REPOSITORY_OWNER: ${{ github.repository_owner }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      EVENT_NAME: ${{ github.event_name }}
+      MANUAL_BRANCH: ${{ inputs.branch_name }}
+      MANUAL_CONFIRM: ${{ inputs.confirm_delete }}
+      COMMENT_BODY: ${{ github.event.comment.body }}
+
+    steps:
+      - name: Resolve and validate request
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          fail() {
+            echo "ERROR: $1" >&2
+            exit 1
+          }
+
+          if [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
+            [[ "${MANUAL_CONFIRM}" == "true" ]] || fail "confirm_delete must be true."
+            branch="${MANUAL_BRANCH}"
+          else
+            if [[ "${COMMENT_BODY}" =~ ^/delete-branch[[:space:]]+(task/[A-Za-z0-9][A-Za-z0-9._/-]{0,190})[[:space:]]+CONFIRM[[:space:]]*$ ]]; then
+              branch="${BASH_REMATCH[1]}"
+            else
+              fail "Comment command must be exactly: /delete-branch task/<name> CONFIRM"
+            fi
+          fi
+
+          [[ "${branch}" =~ ^task/[A-Za-z0-9][A-Za-z0-9._/-]{0,190}$ ]] || fail "Only task/* branch names with safe characters are allowed."
+          [[ "${branch}" != *".."* ]] || fail "Branch name must not contain '..'."
+          [[ "${branch}" != *"//"* ]] || fail "Branch name must not contain '//'."
+          [[ "${branch}" != *.lock ]] || fail "Branch name must not end with '.lock'."
+          [[ "${branch}" != */ ]] || fail "Branch name must not end with '/'."
+
+          case "${branch}" in
+            main|"${DEFAULT_BRANCH}"|develop/v1.0.0-completion|develop/*|release/*)
+              fail "Long-lived or release branches cannot be deleted by this workflow."
+              ;;
+          esac
+
+          echo "Validated request for temporary branch: ${branch}"
+          printf 'BRANCH_NAME=%s\n' "${branch}" >> "${GITHUB_ENV}"
+
+      - name: Verify branch is safe to delete
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          fail() {
+            echo "ERROR: $1" >&2
+            exit 1
+          }
+
+          api_get() {
+            curl --fail --silent --show-error --location \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$1"
+          }
+
+          encoded_branch="$(jq -rn --arg value "${BRANCH_NAME}" '$value | @uri')"
+          branch_json="$(api_get "https://api.github.com/repos/${REPOSITORY}/branches/${encoded_branch}")" \
+            || fail "Branch does not exist or cannot be inspected."
+
+          branch_sha="$(jq -er '.commit.sha' <<<"${branch_json}")" \
+            || fail "Could not resolve branch SHA."
+          protected="$(jq -r '.protected // false' <<<"${branch_json}")"
+          [[ "${protected}" == "false" ]] || fail "Protected branches cannot be deleted."
+
+          head_query="$(jq -rn --arg value "${REPOSITORY_OWNER}:${BRANCH_NAME}" '$value | @uri')"
+          base_query="$(jq -rn --arg value "${BRANCH_NAME}" '$value | @uri')"
+
+          open_head_json="$(api_get "https://api.github.com/repos/${REPOSITORY}/pulls?state=open&head=${head_query}&per_page=100")"
+          [[ "$(jq 'length' <<<"${open_head_json}")" -eq 0 ]] \
+            || fail "Branch is the head of an open pull request."
+
+          open_base_json="$(api_get "https://api.github.com/repos/${REPOSITORY}/pulls?state=open&base=${base_query}&per_page=100")"
+          [[ "$(jq 'length' <<<"${open_base_json}")" -eq 0 ]] \
+            || fail "Branch is the base of an open pull request."
+
+          closed_head_json="$(api_get "https://api.github.com/repos/${REPOSITORY}/pulls?state=closed&head=${head_query}&per_page=100")"
+          merged_exact_head_count="$(jq --arg sha "${branch_sha}" '[.[] | select(.merged_at != null and .head.sha == $sha)] | length' <<<"${closed_head_json}")"
+          [[ "${merged_exact_head_count}" -gt 0 ]] \
+            || fail "Branch HEAD is not preserved by a merged pull request; refusing destructive cleanup."
+
+          echo "Safety checks passed for ${BRANCH_NAME} at ${branch_sha}."
+          printf 'BRANCH_SHA=%s\n' "${branch_sha}" >> "${GITHUB_ENV}"
+
+      - name: Delete branch reference
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          delete_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            --request DELETE \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${REPOSITORY}/git/refs/heads/${BRANCH_NAME}")"
+
+          if [[ "${delete_status}" != "204" ]]; then
+            echo "ERROR: GitHub refused branch deletion (HTTP ${delete_status})." >&2
+            exit 1
+          fi
+
+          echo "Deleted ${BRANCH_NAME} at ${BRANCH_SHA}."
+
+      - name: Verify deletion
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          encoded_branch="$(jq -rn --arg value "${BRANCH_NAME}" '$value | @uri')"
+          verify_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${REPOSITORY}/branches/${encoded_branch}")"
+
+          [[ "${verify_status}" == "404" ]] || {
+            echo "ERROR: Branch still resolves after deletion (HTTP ${verify_status})." >&2
+            exit 1
+          }
+
+          echo "Verified: ${BRANCH_NAME} no longer exists."
