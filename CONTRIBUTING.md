@@ -3,7 +3,7 @@
 ## Workflow
 
 1. Read `AGENTS.md`, Program Issue `#3`, and the GitHub Issue for the task.
-2. Confirm the task's parent phase/dependencies and fetch the current head of `develop/v1.0.0-completion` / Draft PR `#6`.
+2. Confirm the task's parent phase/dependencies and inspect the current head of `develop/v1.0.0-completion` / Draft PR `#6` from GitHub.
 3. Work on one temporary task branch unless the active Phase explicitly owns one cumulative implementation branch/PR.
 4. Open the PR against `develop/v1.0.0-completion`.
 5. Keep the PR Draft while it is changing; mark it Ready only when the intended validation should run.
@@ -24,7 +24,7 @@ The project deliberately separates GitHub control, runtime execution, and deploy
 | ChatGPT Master + connected GitHub integration | Normal self-execution: Issues, PRs, refs, repository files, reviews, branch/PR maintenance, and Actions evidence exposed by the connected App | This is the default path. Verify every mutation from live GitHub. It is not an interactive server shell and does not reveal secret values. |
 | GitHub Actions self-hosted runner | Authoritative shell/runtime execution, repository CI, MariaDB/Redis integration validation, and reviewed operational/readiness workflows | Workflows create transient checkouts for the exact GitHub revision. They are not a second project source and must not become a generic chat-to-shell interface. |
 | External coding/review Worker | Optional delegated implementation/review when isolation, safe parallelism, specialist expertise, or a missing Master capability materially helps | Not a default prerequisite. Durable work must return to GitHub for Master verification. Codex Cloud is only one possible optional Worker, not the normal execution path. |
-| Staging/test host | Target-like runtime/readiness and explicitly authorized staging/provider operations | Runtime state is not source state. Do not edit the deployed `current` release tree as a developer checkout. |
+| Deployment/staging target | Target-like runtime/readiness and explicitly authorized deployment/provider operations | Runtime state is not source state. Never treat a deployed tree as a developer checkout or hidden project copy. |
 
 The self-hosted runner contract is:
 
@@ -43,7 +43,7 @@ Delegate only when there is a concrete benefit: independent review, isolation of
 
 ### GitHub Actions and repository permissions
 
-Repository-level Actions settings may permit read/write automation, but the workflow YAML for the exact revision is authoritative for each job's effective `GITHUB_TOKEN` scope. Existing CI/readiness/provider workflows intentionally declare narrow read permissions. A future workflow that genuinely needs mutation must request the smallest explicit permission needed in that workflow.
+Repository-level Actions settings may permit read/write automation, but the workflow YAML for the exact revision is authoritative for each job's effective `GITHUB_TOKEN` scope. Existing CI/readiness/provider workflows intentionally declare narrow permissions. A workflow that genuinely needs mutation must request the smallest explicit permission needed.
 
 Never infer that a job can push merely because repository defaults are permissive, and never weaken a workflow's `permissions:` block just to bypass a missing execution path.
 
@@ -73,16 +73,20 @@ Merge style never substitutes for review or the applicable green CI tier.
 - Preserve multiple implementation commits with **merge** or **rebase** only when those boundaries are intentional, reviewable, and useful for later audit/debugging.
 - Never rewrite shared long-lived history merely to make it look tidy.
 
-## Local prerequisites
+## Reproducible execution prerequisites
+
+These prerequisites describe any reviewed execution environment that needs to run the repository; they are **not** an assumption that the Owner maintains a local checkout.
 
 - Git
 - Docker + Compose
 - PHP 8.4 with project extensions, or the repository CI PHP environment
 - Composer 2.10.x
 
-Never use production/staging secrets or real customer data locally.
+Never use production/staging secrets or real customer data in a development/test execution environment.
 
-## Setup
+## Bootstrap commands
+
+When a reviewed Actions/Worker environment needs a repository runtime:
 
 ```bash
 composer install --no-interaction --prefer-dist --no-progress --no-scripts
@@ -93,7 +97,7 @@ php artisan key:generate
 
 Use development-only database, Redis, Telegram, SMS, panel, and payment values. Prefer deterministic fakes unless the task explicitly owns a controlled integration test.
 
-## Local verification
+## Verification commands
 
 Repository/project-control checks:
 
@@ -119,7 +123,7 @@ composer audit --locked --abandoned=fail
 bash scripts/ci/licenses.sh
 ```
 
-Fast local application feedback (SQLite; not database-engine acceptance evidence):
+Fast application feedback (SQLite; not database-engine acceptance evidence):
 
 ```bash
 composer test:quick
