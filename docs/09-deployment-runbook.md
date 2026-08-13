@@ -15,17 +15,6 @@ GitHub is the only project/source-of-truth location assumed by the repository. N
 
 Use `CONTRIBUTING.md` for capability routing and `docs/06-test-strategy.md` for CI/runtime validation.
 
-## GitHub-native repository controls
-
-When the connected integration lacks a recurring repository mutation, a bounded GitHub workflow may provide that exact capability if its Task Contract, validation, auditability, and least-privilege permissions justify it. Do not create generic command runners.
-
-`.github/workflows/delete-branch.yml` on `main` is the accepted automated branch-cleanup control. It supports:
-
-- manual `workflow_dispatch` with a branch name and explicit confirmation;
-- an owner-only Issue `#105` command path usable from the connected ChatGPT Master.
-
-It accepts only temporary `task/*` branches and fails closed for protected branches, branches participating in open PRs, and branch HEADs not preserved by a merged PR. It uses repository `GITHUB_TOKEN`, not a PAT.
-
 ## GitHub repository Environments
 
 GitHub repository Environments are operational approval/secret boundaries consumed by workflows using `environment:`. They are separate from the transient Actions checkout and from any optional external Worker environment.
