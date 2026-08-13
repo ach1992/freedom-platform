@@ -25,21 +25,24 @@ Only two branches are long-lived:
 
 Draft PR `#6` integrates `develop/v1.0.0-completion` into `main` and remains Draft until explicit final release acceptance.
 
-Normal implementation/maintenance work uses a temporary task branch from the current integration head and a PR targeting `develop/v1.0.0-completion`. An active Phase may explicitly own one cumulative implementation branch/PR; when it does, continue on that branch instead of creating parallel task branches. Delete temporary branches after merge, cancellation, or abandonment once GitHub preserves the record.
+Normal implementation/maintenance work uses a temporary task branch from the current integration head and a PR targeting `develop/v1.0.0-completion`. An active Phase may explicitly own one cumulative implementation branch/PR; when it does, continue on that branch instead of creating parallel task branches.
+
+Delete temporary branches after merge, cancellation, or abandonment only when GitHub preserves the required work record and the branch is proven safe to remove. The default-branch `.github/workflows/delete-branch.yml` is the guarded automated path for merged `task/*` cleanup; it refuses long-lived/protected/open-PR/unmerged branch state. Actual deletion remains a destructive action and requires an explicit Owner request.
 
 Never push product work directly to `main` or `develop/v1.0.0-completion`, rewrite shared history, force-push shared branches, self-merge a Worker PR, or enable auto-merge for high-risk work. An exceptional control-plane bootstrap on a protected/default branch must be explicitly Owner-authorized and documented in its GitHub Issue.
 
 ## Execution access
 
-Do not rediscover or reinvent the project's execution path in every new chat.
+GitHub is the project's source location and current-state authority. Do not assume the Owner keeps another authoritative checkout on a personal machine, server, or staging host.
 
-- Use the connected GitHub integration for live Issues/PRs/refs/repository files/review/Actions state and supported GitHub mutations.
-- Use the repository-linked Codex cloud environment for broad working-tree/shell/multi-file implementation. Publish prepared work through Codex's GitHub `Create PR`/publication flow. A Codex shell may expose no raw `origin`; this is not evidence that repository write access is missing.
-- Use GitHub Actions on self-hosted runner `freedom-staging-runner` (`[self-hosted, Linux, X64, freedom-staging, php84]`) for authoritative CI and MariaDB/Redis validation. The runner is reached through reviewed workflows, not as a generic chat shell.
-- Existing secret identifiers, their workflow consumers/reserved status, GitHub Environment use, staging root, and provider/readiness workflow entrypoints are documented in `docs/09-deployment-runbook.md`. Do **not** ask the Owner to paste secret values into Chat merely to make an agent environment convenient.
-- Detailed capability routing is in `CONTRIBUTING.md`; CI execution is in `docs/06-test-strategy.md`.
+- **Normal Master execution:** the active ChatGPT Master self-executes dependency-safe READY work through the connected GitHub integration and repository-native GitHub capabilities whenever they can perform the task safely.
+- **Runtime-required work:** commands that require a real checkout, PHP, Composer, MariaDB, Redis, Docker, or shell execution run through reviewed GitHub Actions on the owner-controlled self-hosted runner `freedom-staging-runner` with labels `[self-hosted, Linux, X64, freedom-staging, php84]`. An Actions checkout is transient execution state, not a second project source.
+- **External Workers:** delegation is optional, not the default. Use an external coding/review Worker only when isolation, safe parallelism, specialist review, or a capability unavailable to the Master materially justifies it. Any Worker must publish all durable work back to GitHub for Master verification.
+- **No Codex dependency:** repository-linked Codex Cloud may be used only as an optional external Worker when explicitly useful; it is not the normal or required execution path.
+- **Unsupported GitHub mutation:** when a recurring GitHub operation is not exposed directly by the connected integration, prefer a narrowly scoped, reviewed GitHub-native workflow with least privilege over inventing a local checkout, PAT relay, or generic remote shell. `.github/workflows/delete-branch.yml` is the accepted example for guarded temporary-branch deletion.
+- **Secrets:** existing secret identifiers, their workflow consumers/reserved status, GitHub Environment use, and provider/readiness entrypoints are documented in `docs/09-deployment-runbook.md`. Never ask the Owner to paste secret values into Chat.
 
-If a historical comment says a manual patch relay is required because a prior sandbox could not push, verify the current live Task/Phase/PR bodies first. Current repository/Codex/Actions capabilities supersede old runtime-specific workarounds.
+Detailed capability routing is in `CONTRIBUTING.md`; CI execution is in `docs/06-test-strategy.md`.
 
 ## Task contract
 
@@ -63,7 +66,9 @@ High/Critical financial, authorization, security, provider, schema, deployment/r
 
 ## Continuous execution
 
-When the current objective is authorized and a dependency-safe Task Contract is `READY`, continue through normal reversible engineering steps without asking for another Owner confirmation merely because the task is High/Critical risk or because one bounded slice finished. This includes task/branch/PR maintenance, implementation, targeted validation, CI preparation, self-review, corrections, and selecting or creating the next just-in-time READY task under the active phase.
+When the current objective is authorized and a dependency-safe Task Contract is `READY`, the Master should self-execute normal reversible engineering steps without asking for another Owner confirmation merely because the task is High/Critical risk or because one bounded slice finished. This includes task/branch/PR maintenance, implementation, targeted validation, CI preparation, self-review, corrections, and selecting or creating the next just-in-time READY task under the active phase.
+
+Delegate only when there is a concrete execution/review benefit. Worker availability is capacity, not a prerequisite for progress.
 
 A Master/agent stops only for a real boundary: an unresolved product/business-policy or architecture decision that cannot be derived safely, missing credentials/access/capability that blocks the required action, a material risk/scope escalation, destructive or irreversible action, production/deployment action, or an explicit merge/release approval gate. Historical Issue comments or handoff/checkpoint instructions that conflict with the current Program/Phase state are context only and must not create a new pause unless the live authoritative Issue still marks that gate active.
 
@@ -109,10 +114,11 @@ For every change:
 2. inspect current implementation/tests before adding a concept;
 3. make the smallest reliable change;
 4. define and add behavior-focused success/failure/security/concurrency tests only where they provide signal;
-5. run the appropriate checks in `CONTRIBUTING.md`;
+5. run the appropriate checks in `CONTRIBUTING.md`/`docs/06-test-strategy.md` through the available reviewed execution path;
 6. never weaken checks to manufacture a pass;
 7. keep live progress in GitHub, not new handoff/status/evidence documents;
-8. capture future-useful follow-up work as an actionable Issue rather than burying it in a completion narrative.
+8. capture future-useful follow-up work as an actionable Issue rather than burying it in a completion narrative;
+9. verify the live GitHub object/ref after every repository mutation.
 
 ## CI
 
@@ -131,7 +137,7 @@ CI is risk-based:
 - MariaDB `10.11` is the mandatory normal integration target. Other compatible MariaDB lines may be run for task-specific, manual, or release compatibility evidence when useful; they are not an automatic gate on every PR unless the task requires them.
 - Unknown changes default to FULL.
 - Draft PRs stay quiet. Marking a PR Ready triggers the applicable tier on the current revision.
-- Draft integration PR `#6` does not re-run FULL merely because already-reviewed Worker work merged into `develop`; it receives intentional FULL validation at the release review boundary.
+- Draft integration PR `#6` does not re-run FULL merely because already-reviewed work merged into `develop`; it receives intentional FULL validation at the release review boundary.
 
 Reuse green evidence when the tested resulting tree has not materially changed. Rerun only clearly transient failed jobs where possible. Never rerun a deterministic failure hoping for green; fix the cause first.
 

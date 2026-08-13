@@ -3,26 +3,26 @@
 ## Workflow
 
 1. Read `AGENTS.md`, Program Issue `#3`, and the GitHub Issue for the task.
-2. Confirm the task's parent phase/dependencies and fetch the current head of `develop/v1.0.0-completion` / Draft PR `#6`.
+2. Confirm the task's parent phase/dependencies and inspect the current head of `develop/v1.0.0-completion` / Draft PR `#6` from GitHub.
 3. Work on one temporary task branch unless the active Phase explicitly owns one cumulative implementation branch/PR.
 4. Open the PR against `develop/v1.0.0-completion`.
 5. Keep the PR Draft while it is changing; mark it Ready only when the intended validation should run.
-6. Do not merge your own Worker PR. Delete the temporary branch after integration or cancellation once GitHub preserves the history.
+6. Do not merge your own Worker PR. Delete a temporary branch only after integration/cancellation and after its preservation/safety state is verified.
 
-`main` is the release/default branch, not a normal development target. Current project state lives in GitHub; there is no repository status snapshot to synchronize.
+`main` is the release/default branch, not a normal development target. Current project state and source live in GitHub; there is no Owner-maintained local/server project checkout to synchronize and no repository status snapshot to maintain.
 
 Do not insert a human checkpoint between ordinary reversible steps. When the current objective is authorized and READY work exists, continue implementation, targeted validation, PR maintenance, self-review/correction, and dependency-safe follow-on task selection. Stop only for a real blocker/decision/capability boundary or for the specific action that is explicitly approval-gated.
 
-## Execution environments and access routing
+## Execution boundaries and access routing
 
-The project deliberately separates repository control, interactive coding, CI validation, and staging/provider operations. A human or AI contributor should choose the environment that owns the required capability instead of assuming one shell must provide everything.
+The project deliberately separates GitHub control, runtime execution, and deployment operations. GitHub remains the project source of truth in every case.
 
 | Boundary | Use it for | Important behavior |
 |---|---|---|
-| GitHub repository / ChatGPT GitHub integration | Issues, PRs, refs, repository files, review state, workflow evidence, and GitHub operations exposed by the connected App | This is not an interactive shell and does not reveal secret values. Verify actions from live GitHub after mutation. |
-| Repository-linked OpenAI Codex cloud environment | Broad working-tree inspection/editing, shell commands available in the sandbox, multi-file implementation and task commits | Publish through Codex's GitHub integration / `Create PR` flow. The Codex shell may have no raw `origin`; that is not proof that repository write access is missing. |
-| GitHub Actions self-hosted runner | Authoritative repository CI, MariaDB/Redis integration validation, and reviewed operational/readiness workflows | Only repository workflows execute here. Do not invent a generic chat-to-shell workflow or treat the runner as an arbitrary remote terminal. |
-| Staging/test host | Target-like runtime/readiness and explicitly authorized staging/provider operations | Do not edit the deployed `current` release tree as a developer checkout. Use the owning workflow/runbook path. |
+| ChatGPT Master + connected GitHub integration | Normal self-execution: Issues, PRs, refs, repository files, reviews, branch/PR maintenance, and Actions evidence exposed by the connected App | This is the default path. Verify every mutation from live GitHub. It is not an interactive server shell and does not reveal secret values. |
+| GitHub Actions self-hosted runner | Authoritative shell/runtime execution, repository CI, MariaDB/Redis integration validation, and reviewed operational/readiness workflows | Workflows create transient checkouts for the exact GitHub revision. They are not a second project source and must not become a generic chat-to-shell interface. |
+| External coding/review Worker | Optional delegated implementation/review when isolation, safe parallelism, specialist expertise, or a missing Master capability materially helps | Not a default prerequisite. Durable work must return to GitHub for Master verification. Codex Cloud is only one possible optional Worker, not the normal execution path. |
+| Deployment/staging target | Target-like runtime/readiness and explicitly authorized deployment/provider operations | Runtime state is not source state. Never treat a deployed tree as a developer checkout or hidden project copy. |
 
 The self-hosted runner contract is:
 
@@ -33,23 +33,30 @@ runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
 
 Exact CI/runtime requirements are owned by `docs/06-test-strategy.md`. Staging/provider workflow and secret interfaces are owned by `docs/09-deployment-runbook.md`.
 
-### Codex publication rule
+### Master self-execution and Worker delegation
 
-For this repository, Codex-to-GitHub publication has been verified through the Codex UI integration. Therefore:
+The active ChatGPT Master should perform normal reversible READY work itself when the connected GitHub integration and repository-native automation expose the required capability. Do not route broad work to Codex Cloud merely because earlier documentation used it as the default working tree.
 
-1. choose `ach1992/freedom-platform` and the intended base branch in Codex;
-2. let Codex prepare the change/commit in its task workspace;
-3. use `Create PR`/the GitHub publication action exposed by Codex;
-4. inspect the resulting GitHub branch/PR directly;
-5. do not conclude that access is broken merely because `git remote -v` in the Codex shell is empty.
+Delegate only when there is a concrete benefit: independent review, isolation of risky experiments, safe parallelism, specialist capability, or an execution capability that the Master cannot obtain through GitHub/Actions. A Worker never becomes the project source of truth and never merges its own high-risk work.
 
-A normal developer checkout with an authenticated `origin` may use ordinary `git fetch`/`git push`. The Codex sandbox does not need to expose that same transport to be usable.
+### GitHub-native branch cleanup
 
-Do not recreate historical manual patch-relay instructions when the current Codex/GitHub integration can publish the work.
+`.github/workflows/delete-branch.yml` lives on `main` because the default branch owns the repository control entrypoint. It is the accepted automated path for deleting merged temporary task branches.
+
+Supported entrypoints:
+
+1. manual `workflow_dispatch` with `branch_name` and explicit `confirm_delete=true`;
+2. owner-only control command on Issue `#105`: `/delete-branch task/<name> CONFIRM`.
+
+The second path exists so the connected ChatGPT Master can request the same guarded operation even when its GitHub connector does not expose workflow dispatch directly. The workflow itself remains authoritative for safety.
+
+The workflow allows only `task/*`, and fails closed for protected branches, any branch participating in an open PR, and any branch whose exact current HEAD is not preserved by a merged PR. The long-lived/default/release branch model is outside the allowed prefix and additionally guarded. It uses repository-scoped `GITHUB_TOKEN` with only the permissions needed to inspect PR state and delete the ref. Do not broaden it to arbitrary branch prefixes, arbitrary commands, or a general-purpose write shell.
+
+An unmerged/abandoned branch may contain unique work and therefore requires separate explicit inspection before any manual destructive cleanup; the automated workflow intentionally refuses it.
 
 ### GitHub Actions and repository permissions
 
-Repository-level Actions settings may permit read/write automation, but the workflow YAML for the exact revision is authoritative for each job's effective `GITHUB_TOKEN` scope. Existing CI/readiness/provider workflows intentionally declare narrow read permissions. A future workflow that genuinely needs mutation must request the smallest explicit permission needed in that workflow.
+Repository-level Actions settings may permit read/write automation, but the workflow YAML for the exact revision is authoritative for each job's effective `GITHUB_TOKEN` scope. Existing CI/readiness/provider workflows intentionally declare narrow permissions. A workflow that genuinely needs mutation must request the smallest explicit permission needed.
 
 Never infer that a job can push merely because repository defaults are permissive, and never weaken a workflow's `permissions:` block just to bypass a missing execution path.
 
@@ -79,16 +86,20 @@ Merge style never substitutes for review or the applicable green CI tier.
 - Preserve multiple implementation commits with **merge** or **rebase** only when those boundaries are intentional, reviewable, and useful for later audit/debugging.
 - Never rewrite shared long-lived history merely to make it look tidy.
 
-## Local prerequisites
+## Reproducible execution prerequisites
+
+These prerequisites describe any reviewed execution environment that needs to run the repository; they are **not** an assumption that the Owner maintains a local checkout.
 
 - Git
 - Docker + Compose
 - PHP 8.4 with project extensions, or the repository CI PHP environment
 - Composer 2.10.x
 
-Never use production/staging secrets or real customer data locally.
+Never use production/staging secrets or real customer data in a development/test execution environment.
 
-## Setup
+## Bootstrap commands
+
+When a reviewed Actions/Worker environment needs a repository runtime:
 
 ```bash
 composer install --no-interaction --prefer-dist --no-progress --no-scripts
@@ -99,7 +110,7 @@ php artisan key:generate
 
 Use development-only database, Redis, Telegram, SMS, panel, and payment values. Prefer deterministic fakes unless the task explicitly owns a controlled integration test.
 
-## Local verification
+## Verification commands
 
 Repository/project-control checks:
 
@@ -125,7 +136,7 @@ composer audit --locked --abandoned=fail
 bash scripts/ci/licenses.sh
 ```
 
-Fast local application feedback (SQLite; not database-engine acceptance evidence):
+Fast application feedback (SQLite; not database-engine acceptance evidence):
 
 ```bash
 composer test:quick
