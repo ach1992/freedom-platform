@@ -4,6 +4,49 @@ Target environment: Ubuntu/aaPanel/OpenLiteSpeed, PHP 8.4, MariaDB, authenticate
 
 This document is a **safety contract**, not proof that every described command/capability currently exists. Execute an operational step only when the release/task explicitly authorizes it and the referenced implementation is present on the exact release commit.
 
+## Execution and access topology
+
+The project separates coding, CI, and staging operations:
+
+- GitHub is the source of truth for repository state, Issues, PRs, workflow definitions, and workflow evidence.
+- A repository-linked Codex cloud environment may provide an authenticated development checkout for shell-based implementation, commits, and task-branch pushes. It is not a GitHub repository Environment and does not inherit GitHub Actions secrets merely because it is linked to the same repository.
+- GitHub Actions runs only on the owner-controlled self-hosted runner selected by `[self-hosted, Linux, X64, freedom-staging, php84]`. CI checkouts live in the runner workspace and are not the deployed staging tree.
+- The staging target root known to repository operational checks is `/www/acdomains/hell.hellpservice.ir`; `current` is a release symlink. Never use `current` as a mutable developer checkout.
+
+Use `CONTRIBUTING.md` for capability routing and `docs/06-test-strategy.md` for the runner/CI trust boundary.
+
+### GitHub repository Environment vs Codex environment
+
+These names refer to different systems:
+
+- **GitHub repository Environment** is configured under repository `Settings -> Environments`; a workflow job may reference one with `environment:` to add an operational boundary for branch/tag policy, environment-specific credentials, or approvals supported by the active GitHub plan.
+- **Codex cloud environment** is configured in OpenAI Codex and provides an agent coding workspace linked to the repository.
+
+The guarded provider mutation workflow references the GitHub Environment name `provider-live-acceptance`. Before executing that workflow, verify in GitHub Settings that the environment exists and that its deployment branch/tag policy matches the intended integration branch. Do not infer GitHub Environment configuration from the existence of a Codex environment.
+
+## Secret and credential interfaces
+
+Secret **values** are never documentation. GitHub repository/environment settings or protected target storage own the values; workflow/source code owns which secret identifiers are actually consumed.
+
+The repository's operational setup contains capability groups for:
+
+- disposable PasarGuard test/provider access used by controlled provider checks;
+- staging host/domain and remote-access credentials reserved for explicitly reviewed staging operations;
+- SSH host-verification material for any future reviewed SSH path;
+- a controlled Telegram test-bot credential reserved for task-owned integration/acceptance work.
+
+A configured credential is not proof that a capability is active or accepted. Before using or deleting one, inspect the exact current workflow/source revision and the owning Task Contract. If current source does not reference a configured credential, treat it as reserved only; do not create a new execution path merely because the credential exists.
+
+Do not create a generic workflow that dumps secrets, environment variables, `.env`, SSH material, or repository settings for discovery. Validate only the presence of the exact secret identifiers required by the owning workflow, keep values write-only, and redact operational evidence.
+
+### GitHub Actions authentication
+
+Prefer the repository-scoped `GITHUB_TOKEN` for GitHub operations performed by a workflow. Keep default workflow permissions restrictive and grant write permissions explicitly only to a bounded workflow/job that genuinely needs them.
+
+Do not create a broad PAT merely to make ordinary CI work. A PAT, GitHub App installation token, SSH deploy key, or another credential is justified only when `GITHUB_TOKEN` cannot satisfy a specific bounded requirement such as a cross-repository operation or another platform constraint documented by the owning task.
+
+The existence of staging remote-access credentials does not authorize arbitrary shell execution. A workflow using them must define the exact command path, input validation, host verification, evidence/redaction behavior, rollback/safety conditions, and approval gate required by its Task Contract.
+
 ## Production layout
 
 ```text
