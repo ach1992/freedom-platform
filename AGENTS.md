@@ -25,9 +25,21 @@ Only two branches are long-lived:
 
 Draft PR `#6` integrates `develop/v1.0.0-completion` into `main` and remains Draft until explicit final release acceptance.
 
-Normal implementation/maintenance work uses a temporary task branch from the current integration head and a PR targeting `develop/v1.0.0-completion`. Delete temporary branches after merge, cancellation, or abandonment once GitHub preserves the record.
+Normal implementation/maintenance work uses a temporary task branch from the current integration head and a PR targeting `develop/v1.0.0-completion`. An active Phase may explicitly own one cumulative implementation branch/PR; when it does, continue on that branch instead of creating parallel task branches. Delete temporary branches after merge, cancellation, or abandonment once GitHub preserves the record.
 
 Never push product work directly to `main` or `develop/v1.0.0-completion`, rewrite shared history, force-push shared branches, self-merge a Worker PR, or enable auto-merge for high-risk work. An exceptional control-plane bootstrap on a protected/default branch must be explicitly Owner-authorized and documented in its GitHub Issue.
+
+## Execution access
+
+Do not rediscover or reinvent the project's execution path in every new chat.
+
+- Use the connected GitHub integration for live Issues/PRs/refs/repository files/review/Actions state and supported GitHub mutations.
+- Use the repository-linked Codex cloud environment for broad working-tree/shell/multi-file implementation. Publish prepared work through Codex's GitHub `Create PR`/publication flow. A Codex shell may expose no raw `origin`; this is not evidence that repository write access is missing.
+- Use GitHub Actions on self-hosted runner `freedom-staging-runner` (`[self-hosted, Linux, X64, freedom-staging, php84]`) for authoritative CI and MariaDB/Redis validation. The runner is reached through reviewed workflows, not as a generic chat shell.
+- Existing secret identifiers, their workflow consumers/reserved status, GitHub Environment use, staging root, and provider/readiness workflow entrypoints are documented in `docs/09-deployment-runbook.md`. Do **not** ask the Owner to paste secret values into Chat merely to make an agent environment convenient.
+- Detailed capability routing is in `CONTRIBUTING.md`; CI execution is in `docs/06-test-strategy.md`.
+
+If a historical comment says a manual patch relay is required because a prior sandbox could not push, verify the current live Task/Phase/PR bodies first. Current repository/Codex/Actions capabilities supersede old runtime-specific workarounds.
 
 ## Task contract
 
