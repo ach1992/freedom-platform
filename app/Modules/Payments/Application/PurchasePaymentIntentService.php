@@ -261,7 +261,10 @@ final readonly class PurchasePaymentIntentService
         return $row;
     }
 
-    /** @param DecisionRow $decision @param QuoteRow $quote */
+    /**
+     * @param DecisionRow $decision
+     * @param QuoteRow $quote
+     */
     private function assertDecisionMatchesQuote(object $decision, object $quote, int $userId, DateTimeImmutable $now): void
     {
         if ((int) $decision->user_id !== $userId
@@ -349,7 +352,11 @@ final readonly class PurchasePaymentIntentService
         );
     }
 
-    /** @param QuoteRow $quote @param DecisionRow $decision @param DecisionMethodRow $method */
+    /**
+     * @param QuoteRow $quote
+     * @param DecisionRow $decision
+     * @param DecisionMethodRow $method
+     */
     private function creationPayloadHash(int $userId, object $quote, object $decision, object $method): string
     {
         return hash('sha256', json_encode([
