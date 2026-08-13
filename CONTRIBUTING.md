@@ -7,9 +7,11 @@
 3. Work on one temporary task branch unless the active Phase explicitly owns one cumulative implementation branch/PR.
 4. Open the PR against `develop/v1.0.0-completion`.
 5. Keep the PR Draft while it is changing; mark it Ready only when the intended validation should run.
-6. Do not merge your own Worker PR. Delete a temporary branch only after integration/cancellation and after its preservation/safety state is verified.
+6. Do not merge your own Worker PR.
 
 `main` is the release/default branch, not a normal development target. Current project state and source live in GitHub; there is no Owner-maintained local/server project checkout to synchronize and no repository status snapshot to maintain.
+
+When a temporary branch appears no longer needed, the Master reports its name to the Owner. Branch cleanup is Owner-operated; do not delete branches automatically or add branch-deletion automation unless the Owner explicitly changes this policy later.
 
 Do not insert a human checkpoint between ordinary reversible steps. When the current objective is authorized and READY work exists, continue implementation, targeted validation, PR maintenance, self-review/correction, and dependency-safe follow-on task selection. Stop only for a real blocker/decision/capability boundary or for the specific action that is explicitly approval-gated.
 
@@ -38,21 +40,6 @@ Exact CI/runtime requirements are owned by `docs/06-test-strategy.md`. Staging/p
 The active ChatGPT Master should perform normal reversible READY work itself when the connected GitHub integration and repository-native automation expose the required capability. Do not route broad work to Codex Cloud merely because earlier documentation used it as the default working tree.
 
 Delegate only when there is a concrete benefit: independent review, isolation of risky experiments, safe parallelism, specialist capability, or an execution capability that the Master cannot obtain through GitHub/Actions. A Worker never becomes the project source of truth and never merges its own high-risk work.
-
-### GitHub-native branch cleanup
-
-`.github/workflows/delete-branch.yml` lives on `main` because the default branch owns the repository control entrypoint. It is the accepted automated path for deleting merged temporary task branches.
-
-Supported entrypoints:
-
-1. manual `workflow_dispatch` with `branch_name` and explicit `confirm_delete=true`;
-2. owner-only control command on Issue `#105`: `/delete-branch task/<name> CONFIRM`.
-
-The second path exists so the connected ChatGPT Master can request the same guarded operation even when its GitHub connector does not expose workflow dispatch directly. The workflow itself remains authoritative for safety.
-
-The workflow allows only `task/*`, and fails closed for protected branches, any branch participating in an open PR, and any branch whose exact current HEAD is not preserved by a merged PR. The long-lived/default/release branch model is outside the allowed prefix and additionally guarded. It uses repository-scoped `GITHUB_TOKEN` with only the permissions needed to inspect PR state and delete the ref. Do not broaden it to arbitrary branch prefixes, arbitrary commands, or a general-purpose write shell.
-
-An unmerged/abandoned branch may contain unique work and therefore requires separate explicit inspection before any manual destructive cleanup; the automated workflow intentionally refuses it.
 
 ### GitHub Actions and repository permissions
 
