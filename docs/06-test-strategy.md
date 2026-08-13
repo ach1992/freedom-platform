@@ -1,18 +1,43 @@
 # Testing and CI Contract
 
-This document defines durable verification requirements. Live run IDs, test counts, artifacts, and current failures belong in GitHub.
+This document defines durable verification requirements. Live run IDs, test counts, artifacts, current failures, runner online/offline state, and repository setting state belong in GitHub.
 
 ## Mandatory CI environment
 
 All executing GitHub Actions jobs run on the owner-controlled self-hosted runner:
 
 ```yaml
+runner name: freedom-staging-runner
 runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
 ```
 
 GitHub-hosted runners are not a fallback. The selected host must provide PHP 8.4, Composer 2.10.x, Docker/Compose, Git, Bash, `jq`, and the required PHP extensions. Coverage runs require PCOV or another explicitly reviewed PHPUnit-compatible driver.
 
 Repository workflows use `scripts/ci/bootstrap-self-hosted-toolchain.sh` to validate the effective runtime. Runner labels alone are not evidence.
+
+### How a developer/agent uses the runner
+
+The runner is reached through GitHub Actions, not by assuming direct SSH or an arbitrary remote shell is available to the current chat/coding sandbox.
+
+- A non-Draft PR targeting `develop/v1.0.0-completion` triggers the applicable CI tier on the PR revision.
+- Draft PRs intentionally stay quiet. Marking a Draft PR **Ready for review** is the normal way to request CI for its current head.
+- `.github/workflows/ci.yml` also supports `workflow_dispatch` for intentional manual full validation/coverage.
+- `.github/workflows/staging-readiness.yml` is the read-only way to verify sanitized host/runtime facts when runner/staging readiness itself is in question.
+- Provider readiness/live workflows are operational paths, not substitutes for normal application CI; their secret/environment interfaces are documented in `docs/09-deployment-runbook.md`.
+
+If a future coding environment cannot run MariaDB/Docker locally, that is not by itself a project blocker. Publish the reversible task branch/PR through the supported GitHub path and obtain authoritative MariaDB/Redis/static evidence on this self-hosted runner before acceptance/merge.
+
+If the runner is offline or a job cannot acquire the expected labels, inspect live GitHub `Settings -> Actions -> Runners` and the workflow run. Do not invent a replacement GitHub-hosted runner or weaken database-sensitive validation.
+
+### Runner role and trust boundary
+
+The self-hosted runner is the repository's authoritative CI execution boundary, not a general remote shell. `actions/checkout` creates a workflow checkout in the runner workspace for the exact GitHub revision being tested. That workspace is separate from any deployed staging release tree; development and CI must not edit a deployed `current` release in place.
+
+Only reviewed repository workflows may run commands on the runner. Do not add an arbitrary command input, unrestricted SSH bridge, or chat-to-shell workflow merely to make remote execution convenient. A workflow that needs write access, staging/provider mutation, deployment credentials, or another privileged capability must be owned by a bounded Task Contract, scope its `GITHUB_TOKEN` permissions explicitly, and preserve the approval/validation gates appropriate to the risk.
+
+Because a self-hosted runner executes repository-controlled code on an owner-controlled machine, workflow changes and contributors able to influence executed code are part of the runner security boundary. Never execute untrusted fork/PR code with privileged secrets or a write-capable token.
+
+The execution/capability routing for GitHub integration vs Codex workspace vs Actions runner is in `CONTRIBUTING.md`. Staging/secret handling is in `docs/09-deployment-runbook.md`.
 
 ## CI tiers
 
@@ -48,6 +73,18 @@ MariaDB 10.11 is the primary required compatibility target. Other MariaDB lines 
 Draft PRs do not automatically consume the self-hosted runner. `ready_for_review` triggers the applicable tier on the current revision.
 
 The long-running integration PR #6 remains Draft during normal Version 1 development. Synchronizing it because an already-reviewed task PR was merged into `develop/v1.0.0-completion` is not, by itself, a reason to run the full suite again. Before final release review, PR #6 is moved to Ready and must pass the applicable release validation.
+
+## Workflow permissions and secrets
+
+Repository-level Actions settings may allow read/write automation and PR creation, but that is only the outer capability ceiling. Each workflow's explicit `permissions:` block is authoritative for its effective `GITHUB_TOKEN` access on that revision.
+
+Current CI/readiness/provider workflows deliberately request read-scoped repository permissions. When a future workflow genuinely needs to mutate GitHub state, grant the narrow job/workflow permission explicitly, for example `contents: write` only for a bounded task that must update a branch, rather than relying on broad repository defaults.
+
+`GITHUB_TOKEN` is repository-scoped; it is not a replacement for arbitrary cross-repository/server credentials.
+
+Secrets are referenced by identifier from GitHub repository/environment storage and are never echoed for discovery. A workflow must validate only whether a required secret is present, then use it through the narrow owning adapter/script. Secret values must not be uploaded in diagnostic artifacts or copied into repository evidence.
+
+Operational secret identifiers, current workflow consumers, reserved interfaces and GitHub Environment boundaries are documented in `docs/09-deployment-runbook.md`.
 
 ## Evidence reuse, artifacts, and reruns
 

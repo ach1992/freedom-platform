@@ -4,7 +4,7 @@
 
 1. Read `AGENTS.md`, Program Issue `#3`, and the GitHub Issue for the task.
 2. Confirm the task's parent phase/dependencies and fetch the current head of `develop/v1.0.0-completion` / Draft PR `#6`.
-3. Work on one temporary task branch.
+3. Work on one temporary task branch unless the active Phase explicitly owns one cumulative implementation branch/PR.
 4. Open the PR against `develop/v1.0.0-completion`.
 5. Keep the PR Draft while it is changing; mark it Ready only when the intended validation should run.
 6. Do not merge your own Worker PR. Delete the temporary branch after integration or cancellation once GitHub preserves the history.
@@ -12,6 +12,52 @@
 `main` is the release/default branch, not a normal development target. Current project state lives in GitHub; there is no repository status snapshot to synchronize.
 
 Do not insert a human checkpoint between ordinary reversible steps. When the current objective is authorized and READY work exists, continue implementation, targeted validation, PR maintenance, self-review/correction, and dependency-safe follow-on task selection. Stop only for a real blocker/decision/capability boundary or for the specific action that is explicitly approval-gated.
+
+## Execution environments and access routing
+
+The project deliberately separates repository control, interactive coding, CI validation, and staging/provider operations. A human or AI contributor should choose the environment that owns the required capability instead of assuming one shell must provide everything.
+
+| Boundary | Use it for | Important behavior |
+|---|---|---|
+| GitHub repository / ChatGPT GitHub integration | Issues, PRs, refs, repository files, review state, workflow evidence, and GitHub operations exposed by the connected App | This is not an interactive shell and does not reveal secret values. Verify actions from live GitHub after mutation. |
+| Repository-linked OpenAI Codex cloud environment | Broad working-tree inspection/editing, shell commands available in the sandbox, multi-file implementation and task commits | Publish through Codex's GitHub integration / `Create PR` flow. The Codex shell may have no raw `origin`; that is not proof that repository write access is missing. |
+| GitHub Actions self-hosted runner | Authoritative repository CI, MariaDB/Redis integration validation, and reviewed operational/readiness workflows | Only repository workflows execute here. Do not invent a generic chat-to-shell workflow or treat the runner as an arbitrary remote terminal. |
+| Staging/test host | Target-like runtime/readiness and explicitly authorized staging/provider operations | Do not edit the deployed `current` release tree as a developer checkout. Use the owning workflow/runbook path. |
+
+The self-hosted runner contract is:
+
+```yaml
+runner name: freedom-staging-runner
+runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
+```
+
+Exact CI/runtime requirements are owned by `docs/06-test-strategy.md`. Staging/provider workflow and secret interfaces are owned by `docs/09-deployment-runbook.md`.
+
+### Codex publication rule
+
+For this repository, Codex-to-GitHub publication has been verified through the Codex UI integration. Therefore:
+
+1. choose `ach1992/freedom-platform` and the intended base branch in Codex;
+2. let Codex prepare the change/commit in its task workspace;
+3. use `Create PR`/the GitHub publication action exposed by Codex;
+4. inspect the resulting GitHub branch/PR directly;
+5. do not conclude that access is broken merely because `git remote -v` in the Codex shell is empty.
+
+A normal developer checkout with an authenticated `origin` may use ordinary `git fetch`/`git push`. The Codex sandbox does not need to expose that same transport to be usable.
+
+Do not recreate historical manual patch-relay instructions when the current Codex/GitHub integration can publish the work.
+
+### GitHub Actions and repository permissions
+
+Repository-level Actions settings may permit read/write automation, but the workflow YAML for the exact revision is authoritative for each job's effective `GITHUB_TOKEN` scope. Existing CI/readiness/provider workflows intentionally declare narrow read permissions. A future workflow that genuinely needs mutation must request the smallest explicit permission needed in that workflow.
+
+Never infer that a job can push merely because repository defaults are permissive, and never weaken a workflow's `permissions:` block just to bypass a missing execution path.
+
+### Secrets
+
+Secret values are write-only operational state. Do not ask the Owner to paste a PAT, SSH key, password, provider key, bot token, `.env`, or other secret into Chat. Existing secret **identifiers**, which workflows consume them, and which are currently reserved/unconsumed are documented in `docs/09-deployment-runbook.md`.
+
+When a workflow says a required secret is missing/invalid, ask the Owner only to create or rotate that exact identifier in GitHub Settings. Do not request its value for debugging.
 
 ## Task and PR contracts
 
@@ -21,7 +67,7 @@ Add security/data/financial/provider/schema/runtime/compatibility/protected-area
 
 Pull requests use `.github/pull_request_template.md`: link the Issue, summarize the change, state material risk/impact, and provide the focused verification or applicable CI result. Record a nonclaim only when adjacent scope could otherwise be misunderstood.
 
-Sensitive paths are assigned in `.github/CODEOWNERS`. CODEOWNERS identifies intended ownership; actual merge enforcement depends on repository protection/rulesets.
+Sensitive paths are assigned in `.github/CODEOWNERS`. CODEOWNERS identifies intended ownership; actual merge enforcement depends on repository protection/rulesets. Verify live repository settings before relying on protection as an enforced fact.
 
 High/Critical work involving financial integrity, authorization, security controls, provider semantics, schema, deployment/release behavior, secrets, or irreversible operations requires independent review and explicit Owner approval before merge unless that exact merge/action was already authorized. This gate does not by itself block reversible implementation, testing, review preparation, or continuation to another dependency-safe READY task.
 
