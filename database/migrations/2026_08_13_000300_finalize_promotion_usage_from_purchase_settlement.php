@@ -17,7 +17,8 @@ return new class extends Migration
             $table->ulid('public_id')->unique();
             $table->string('redemption_key', 128)->unique();
             $table->char('request_payload_hash', 64);
-            $table->unsignedBigInteger('promotion_usage_reservation_id')->unique();
+            $table->unsignedBigInteger('promotion_usage_reservation_id');
+            $table->unique('promotion_usage_reservation_id', 'promotion_redemption_reservation_unique');
             $table->foreign('promotion_usage_reservation_id', 'promotion_redemption_reservation_fk')
                 ->references('id')->on('promotion_usage_reservations')->restrictOnDelete();
             $table->foreignId('purchase_settlement_id')->unique()->constrained('purchase_settlements')->restrictOnDelete();
