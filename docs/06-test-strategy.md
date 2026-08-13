@@ -15,9 +15,9 @@ GitHub-hosted runners are not a fallback. The selected host must provide PHP 8.4
 
 Repository workflows use `scripts/ci/bootstrap-self-hosted-toolchain.sh` to validate the effective runtime. Runner labels alone are not evidence.
 
-### How a developer/agent uses the runner
+### How the Master/developer uses the runner
 
-The runner is reached through GitHub Actions, not by assuming direct SSH or an arbitrary remote shell is available to the current chat/coding sandbox.
+GitHub is the project source of truth; no Owner-maintained local or server checkout is assumed. The runner is reached through GitHub Actions, not by assuming direct SSH or an arbitrary remote shell is available to the current chat or another coding environment.
 
 - A non-Draft PR targeting `develop/v1.0.0-completion` triggers the applicable CI tier on the PR revision.
 - Draft PRs intentionally stay quiet. Marking a Draft PR **Ready for review** is the normal way to request CI for its current head.
@@ -25,7 +25,7 @@ The runner is reached through GitHub Actions, not by assuming direct SSH or an a
 - `.github/workflows/staging-readiness.yml` is the read-only way to verify sanitized host/runtime facts when runner/staging readiness itself is in question.
 - Provider readiness/live workflows are operational paths, not substitutes for normal application CI; their secret/environment interfaces are documented in `docs/09-deployment-runbook.md`.
 
-If a future coding environment cannot run MariaDB/Docker locally, that is not by itself a project blocker. Publish the reversible task branch/PR through the supported GitHub path and obtain authoritative MariaDB/Redis/static evidence on this self-hosted runner before acceptance/merge.
+If the active Master cannot run MariaDB/Docker/shell work directly, that is not by itself a project blocker. Persist the reversible task branch/PR through the connected GitHub integration or another reviewed GitHub-native path, then obtain authoritative MariaDB/Redis/static evidence on this self-hosted runner before acceptance/merge. An external Worker is optional only when isolation, safe parallelism, specialist review, or a missing Master capability materially justifies delegation.
 
 If the runner is offline or a job cannot acquire the expected labels, inspect live GitHub `Settings -> Actions -> Runners` and the workflow run. Do not invent a replacement GitHub-hosted runner or weaken database-sensitive validation.
 
@@ -37,7 +37,7 @@ Only reviewed repository workflows may run commands on the runner. Do not add an
 
 Because a self-hosted runner executes repository-controlled code on an owner-controlled machine, workflow changes and contributors able to influence executed code are part of the runner security boundary. Never execute untrusted fork/PR code with privileged secrets or a write-capable token.
 
-The execution/capability routing for GitHub integration vs Codex workspace vs Actions runner is in `CONTRIBUTING.md`. Staging/secret handling is in `docs/09-deployment-runbook.md`.
+The execution/capability routing for ChatGPT Master vs optional external Worker vs Actions runner is in `CONTRIBUTING.md`. Staging/secret handling is in `docs/09-deployment-runbook.md`.
 
 ## CI tiers
 
@@ -104,7 +104,9 @@ For an unchanged revision:
 
 A stale, skipped Draft run, queued run, superseded run, cleanup-only run for a non-cleanup change, or failed applicable run is not acceptance evidence.
 
-## Local commands
+## Reproducible commands
+
+These commands define the repository's reproducible execution contract. They may run in a reviewed GitHub Actions checkout or an explicitly delegated Worker environment; they do not imply an Owner-maintained local project copy.
 
 Install/bootstrap and repository/static policy checks:
 
@@ -128,7 +130,7 @@ Fast developer feedback uses the PHPUnit configuration's in-memory SQLite defaul
 composer test:quick
 ```
 
-This quick path is useful for deterministic local feedback but is not database-engine acceptance evidence.
+This quick path is useful for deterministic feedback but is not database-engine acceptance evidence.
 
 The default disposable integration environment is MariaDB 10.11 plus authenticated Redis:
 
