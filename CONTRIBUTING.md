@@ -7,22 +7,24 @@
 3. Work on one temporary task branch unless the active Phase explicitly owns one cumulative implementation branch/PR.
 4. Open the PR against `develop/v1.0.0-completion`.
 5. Keep the PR Draft while it is changing; mark it Ready only when the intended validation should run.
-6. Do not merge your own Worker PR. Delete the temporary branch after integration or cancellation once GitHub preserves the history.
+6. Do not merge your own Worker PR.
 
-`main` is the release/default branch, not a normal development target. Current project state lives in GitHub; there is no repository status snapshot to synchronize.
+`main` is the release/default branch, not a normal development target. Current project state and source live in GitHub; there is no Owner-maintained local/server project checkout to synchronize and no repository status snapshot to maintain.
+
+When a temporary branch appears no longer needed, the Master reports its name to the Owner. Branch cleanup is Owner-operated; do not delete branches automatically or add branch-deletion automation unless the Owner explicitly changes this policy later.
 
 Do not insert a human checkpoint between ordinary reversible steps. When the current objective is authorized and READY work exists, continue implementation, targeted validation, PR maintenance, self-review/correction, and dependency-safe follow-on task selection. Stop only for a real blocker/decision/capability boundary or for the specific action that is explicitly approval-gated.
 
-## Execution environments and access routing
+## Execution boundaries and access routing
 
-The project deliberately separates repository control, interactive coding, CI validation, and staging/provider operations. A human or AI contributor should choose the environment that owns the required capability instead of assuming one shell must provide everything.
+The project deliberately separates GitHub control, runtime execution, and deployment operations. GitHub remains the project source of truth in every case.
 
 | Boundary | Use it for | Important behavior |
 |---|---|---|
-| GitHub repository / ChatGPT GitHub integration | Issues, PRs, refs, repository files, review state, workflow evidence, and GitHub operations exposed by the connected App | This is not an interactive shell and does not reveal secret values. Verify actions from live GitHub after mutation. |
-| Repository-linked OpenAI Codex cloud environment | Broad working-tree inspection/editing, shell commands available in the sandbox, multi-file implementation and task commits | Publish through Codex's GitHub integration / `Create PR` flow. The Codex shell may have no raw `origin`; that is not proof that repository write access is missing. |
-| GitHub Actions self-hosted runner | Authoritative repository CI, MariaDB/Redis integration validation, and reviewed operational/readiness workflows | Only repository workflows execute here. Do not invent a generic chat-to-shell workflow or treat the runner as an arbitrary remote terminal. |
-| Staging/test host | Target-like runtime/readiness and explicitly authorized staging/provider operations | Do not edit the deployed `current` release tree as a developer checkout. Use the owning workflow/runbook path. |
+| ChatGPT Master + connected GitHub integration | Normal self-execution: Issues, PRs, refs, repository files, reviews, branch/PR maintenance, and Actions evidence exposed by the connected App | This is the default path. Verify every mutation from live GitHub. It is not an interactive server shell and does not reveal secret values. |
+| GitHub Actions self-hosted runner | Authoritative shell/runtime execution, repository CI, MariaDB/Redis integration validation, and reviewed operational/readiness workflows | Workflows create transient checkouts for the exact GitHub revision. They are not a second project source and must not become a generic chat-to-shell interface. |
+| External coding/review Worker | Optional delegated implementation/review when isolation, safe parallelism, specialist expertise, or a missing Master capability materially helps | Not a default prerequisite. Durable work must return to GitHub for Master verification. Codex Cloud is only one possible optional Worker, not the normal execution path. |
+| Staging/test host | Target-like runtime/readiness and explicitly authorized staging/provider operations | Runtime state is not source state. Do not edit the deployed `current` release tree as a developer checkout. |
 
 The self-hosted runner contract is:
 
@@ -33,19 +35,11 @@ runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
 
 Exact CI/runtime requirements are owned by `docs/06-test-strategy.md`. Staging/provider workflow and secret interfaces are owned by `docs/09-deployment-runbook.md`.
 
-### Codex publication rule
+### Master self-execution and Worker delegation
 
-For this repository, Codex-to-GitHub publication has been verified through the Codex UI integration. Therefore:
+The active ChatGPT Master should perform normal reversible READY work itself when the connected GitHub integration and repository-native automation expose the required capability. Do not route broad work to Codex Cloud merely because earlier documentation used it as the default working tree.
 
-1. choose `ach1992/freedom-platform` and the intended base branch in Codex;
-2. let Codex prepare the change/commit in its task workspace;
-3. use `Create PR`/the GitHub publication action exposed by Codex;
-4. inspect the resulting GitHub branch/PR directly;
-5. do not conclude that access is broken merely because `git remote -v` in the Codex shell is empty.
-
-A normal developer checkout with an authenticated `origin` may use ordinary `git fetch`/`git push`. The Codex sandbox does not need to expose that same transport to be usable.
-
-Do not recreate historical manual patch-relay instructions when the current Codex/GitHub integration can publish the work.
+Delegate only when there is a concrete benefit: independent review, isolation of risky experiments, safe parallelism, specialist capability, or an execution capability that the Master cannot obtain through GitHub/Actions. A Worker never becomes the project source of truth and never merges its own high-risk work.
 
 ### GitHub Actions and repository permissions
 
