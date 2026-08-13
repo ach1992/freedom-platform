@@ -22,7 +22,7 @@ The project is maintained from GitHub. No Owner-managed local checkout or server
 - External coding Workers are optional capacity only when isolation, safe parallelism, specialist review, or a missing capability materially justifies delegation. Codex Cloud is not a required or default execution path.
 - Commands that require an actual runtime, MariaDB, Redis, or repository shell execute through reviewed GitHub Actions on the owner-controlled self-hosted runner. Workflow checkouts are transient execution workspaces, not an alternative source of truth.
 - Every repository mutation is verified against live GitHub state after the write.
-- Safe deletion of merged temporary `task/*` branches is provided by `.github/workflows/delete-branch.yml` on `main`; it refuses long-lived, protected, open-PR, or unmerged branch state.
+- When a temporary branch appears no longer needed, the Master reports its name to the Owner; branch cleanup remains Owner-operated.
 
 ## Product authority
 
