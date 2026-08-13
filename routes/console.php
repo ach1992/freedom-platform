@@ -22,6 +22,15 @@ Schedule::command('operations:check-worker-heartbeats', [
     ->withoutOverlapping()
     ->onOneServer();
 
+Schedule::command('operations:dispatch-outbox', [
+    '--limit' => 100,
+    '--json' => true,
+])
+    ->name('operations.dispatch-outbox')
+    ->everyMinute()
+    ->withoutOverlapping()
+    ->onOneServer();
+
 Schedule::command('wallet:maintenance', [
     '--hold-limit' => 100,
     '--wallet-limit' => 200,

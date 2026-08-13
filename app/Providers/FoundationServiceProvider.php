@@ -5,9 +5,14 @@ declare(strict_types=1);
 namespace App\Providers;
 
 use App\Shared\Application\Clock;
+use App\Shared\Application\OutboxEventHandler;
+use App\Shared\Application\OutboxMessageRouter;
 use App\Shared\Application\OutboxPublisher;
+use App\Shared\Application\OutboxRuntime;
 use App\Shared\Application\RandomGenerator;
+use App\Shared\Infrastructure\DatabaseOutboxDispatcher;
 use App\Shared\Infrastructure\DatabaseOutboxPublisher;
+use App\Shared\Infrastructure\DatabaseOutboxRuntime;
 use App\Shared\Infrastructure\SecureRandomGenerator;
 use App\Shared\Infrastructure\SystemClock;
 use Illuminate\Contracts\Foundation\Application;
@@ -27,5 +32,13 @@ final class FoundationServiceProvider extends ServiceProvider
                 $application->make(Clock::class),
             ),
         );
+        $this->app->singleton(DatabaseOutboxDispatcher::class);
+        $this->app->singleton(
+            OutboxMessageRouter::class,
+            fn (Application $application): OutboxMessageRouter => new OutboxMessageRouter(
+                $application->tagged(OutboxEventHandler::class),
+            ),
+        );
+        $this->app->singleton(OutboxRuntime::class, DatabaseOutboxRuntime::class);
     }
 }
