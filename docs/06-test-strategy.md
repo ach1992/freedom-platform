@@ -1,6 +1,6 @@
 # Testing and CI Contract
 
-This document defines durable verification requirements. Live run IDs, test counts, artifacts, and current failures belong in GitHub.
+This document defines durable verification requirements. Live run IDs, test counts, artifacts, current failures, runner online/offline state, and repository setting state belong in GitHub.
 
 ## Mandatory CI environment
 
@@ -13,6 +13,16 @@ runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
 GitHub-hosted runners are not a fallback. The selected host must provide PHP 8.4, Composer 2.10.x, Docker/Compose, Git, Bash, `jq`, and the required PHP extensions. Coverage runs require PCOV or another explicitly reviewed PHPUnit-compatible driver.
 
 Repository workflows use `scripts/ci/bootstrap-self-hosted-toolchain.sh` to validate the effective runtime. Runner labels alone are not evidence.
+
+### Runner role and trust boundary
+
+The self-hosted runner is the repository's authoritative CI execution boundary, not a general remote shell. `actions/checkout` creates a workflow checkout in the runner workspace for the exact GitHub revision being tested. That workspace is separate from any deployed staging release tree; development and CI must not edit a deployed `current` release in place.
+
+Only reviewed repository workflows may run commands on the runner. Do not add an arbitrary command input, unrestricted SSH bridge, or chat-to-shell workflow merely to make remote execution convenient. A workflow that needs write access, staging/provider mutation, deployment credentials, or another privileged capability must be owned by a bounded Task Contract, scope its `GITHUB_TOKEN` permissions explicitly, and preserve the approval/validation gates appropriate to the risk.
+
+Because a self-hosted runner executes repository-controlled code on an owner-controlled machine, workflow changes and contributors able to influence executed code are part of the runner security boundary. Never execute untrusted fork/PR code with privileged secrets or a write-capable token.
+
+The execution/capability routing for GitHub connector vs Codex checkout vs Actions runner is in `CONTRIBUTING.md`. Staging/secret handling is in `docs/09-deployment-runbook.md`.
 
 ## CI tiers
 
@@ -48,6 +58,16 @@ MariaDB 10.11 is the primary required compatibility target. Other MariaDB lines 
 Draft PRs do not automatically consume the self-hosted runner. `ready_for_review` triggers the applicable tier on the current revision.
 
 The long-running integration PR #6 remains Draft during normal Version 1 development. Synchronizing it because an already-reviewed task PR was merged into `develop/v1.0.0-completion` is not, by itself, a reason to run the full suite again. Before final release review, PR #6 is moved to Ready and must pass the applicable release validation.
+
+## Workflow permissions and secrets
+
+Default repository/workflow permissions should remain as restrictive as the task allows. Existing CI workflows intentionally request read-only repository permissions unless a workflow has a concrete need for more.
+
+When a workflow genuinely needs to mutate GitHub state, grant the narrow job/workflow permission explicitly, for example `contents: write` only for a task that must update a branch, rather than changing every workflow to broad write access. `GITHUB_TOKEN` is repository-scoped; it is not a replacement for arbitrary cross-repository/server credentials.
+
+Secrets are referenced by identifier from GitHub/environment storage and are never echoed for discovery. A workflow must validate only whether a required secret is present, then use it through the narrow owning adapter/script. Secret values must not be uploaded in diagnostic artifacts or copied into repository evidence.
+
+Operational secret-name interfaces and their owning boundaries are documented in `docs/09-deployment-runbook.md`.
 
 ## Evidence reuse, artifacts, and reruns
 
