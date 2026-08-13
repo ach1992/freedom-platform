@@ -27,7 +27,7 @@ Draft PR `#6` integrates `develop/v1.0.0-completion` into `main` and remains Dra
 
 Normal implementation/maintenance work uses a temporary task branch from the current integration head and a PR targeting `develop/v1.0.0-completion`. An active Phase may explicitly own one cumulative implementation branch/PR; when it does, continue on that branch instead of creating parallel task branches.
 
-Delete temporary branches after merge, cancellation, or abandonment only when GitHub preserves the required work record and the branch is proven safe to remove. The default-branch `.github/workflows/delete-branch.yml` is the guarded automated path for merged `task/*` cleanup; it refuses long-lived/protected/open-PR/unmerged branch state. Actual deletion remains a destructive action and requires an explicit Owner request.
+When a temporary branch appears no longer needed, the Master reports the branch name to the Owner. Branch cleanup is Owner-operated; the Master does not remove branches automatically or create branch-cleanup automation unless the Owner explicitly changes this policy later.
 
 Never push product work directly to `main` or `develop/v1.0.0-completion`, rewrite shared history, force-push shared branches, self-merge a Worker PR, or enable auto-merge for high-risk work. An exceptional control-plane bootstrap on a protected/default branch must be explicitly Owner-authorized and documented in its GitHub Issue.
 
@@ -39,7 +39,7 @@ GitHub is the project's source location and current-state authority. Do not assu
 - **Runtime-required work:** commands that require a real checkout, PHP, Composer, MariaDB, Redis, Docker, or shell execution run through reviewed GitHub Actions on the owner-controlled self-hosted runner `freedom-staging-runner` with labels `[self-hosted, Linux, X64, freedom-staging, php84]`. An Actions checkout is transient execution state, not a second project source.
 - **External Workers:** delegation is optional, not the default. Use an external coding/review Worker only when isolation, safe parallelism, specialist review, or a capability unavailable to the Master materially justifies it. Any Worker must publish all durable work back to GitHub for Master verification.
 - **No Codex dependency:** repository-linked Codex Cloud may be used only as an optional external Worker when explicitly useful; it is not the normal or required execution path.
-- **Unsupported GitHub mutation:** when a recurring GitHub operation is not exposed directly by the connected integration, prefer a narrowly scoped, reviewed GitHub-native workflow with least privilege over inventing a local checkout, PAT relay, or generic remote shell. `.github/workflows/delete-branch.yml` is the accepted example for guarded temporary-branch deletion.
+- **GitHub-native capability rule:** prefer the connected GitHub integration and existing reviewed repository workflows. Do not invent a personal local checkout, PAT relay, or generic remote shell merely for convenience.
 - **Secrets:** existing secret identifiers, their workflow consumers/reserved status, GitHub Environment use, and provider/readiness entrypoints are documented in `docs/09-deployment-runbook.md`. Never ask the Owner to paste secret values into Chat.
 
 Detailed capability routing is in `CONTRIBUTING.md`; CI execution is in `docs/06-test-strategy.md`.
