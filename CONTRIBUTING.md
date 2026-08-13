@@ -15,7 +15,7 @@ Do not insert a human checkpoint between ordinary reversible steps. When the cur
 
 ## Execution environments and access routing
 
-The project deliberately separates repository control, interactive coding, CI validation, and staging operations. A human or AI contributor should choose the environment that owns the required capability instead of assuming one shell must provide everything.
+The project deliberately separates repository control, interactive coding, CI validation, and staging/provider operations. A human or AI contributor should choose the environment that owns the required capability instead of assuming one shell must provide everything.
 
 | Boundary | Use it for | Important behavior |
 |---|---|---|
