@@ -4,6 +4,8 @@ Target environment: Ubuntu/aaPanel/OpenLiteSpeed, PHP 8.4, MariaDB, authenticate
 
 This document is a **safety contract**, not proof that every described command/capability currently exists. Execute an operational step only when the release/task explicitly authorizes it and the referenced implementation is present on the exact release commit.
 
+> **Current execution authority:** GitHub is the project source of truth; the active ChatGPT Master self-executes READY work through the connected GitHub integration, GitHub Actions provides reviewed runtime validation, and external Workers including Codex Cloud are optional rather than the default. No Owner-managed local/server project checkout is assumed. Any older Codex-default or automatic branch-cleanup wording below is superseded by current `AGENTS.md`, `CONTRIBUTING.md`, Program #3, and Phase #8. When a temporary branch appears no longer needed, the Master reports its name to the Owner; cleanup remains Owner-operated.
+
 ## Execution and access topology
 
 The project separates coding, GitHub control, CI, and staging operations:
