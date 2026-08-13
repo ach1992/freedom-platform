@@ -26,10 +26,14 @@ GitHub-hosted runners are not a fallback.
 
 - A non-Draft PR targeting `develop/v1.0.0-completion` triggers the applicable CI tier.
 - Draft PRs stay quiet until marked Ready for review.
-- `.github/workflows/ci.yml` supports intentional manual validation through `workflow_dispatch`.
-- Runtime/readiness/provider workflows remain narrow operational entrypoints and are not substitutes for normal CI.
+- `.github/workflows/ci.yml` defines intentional manual validation through `workflow_dispatch`, but a definition is callable only when current GitHub/default-branch registration exposes that workflow.
+- A workflow file that exists only on an integration/task branch is code under review, not proof of a standing execution entrypoint.
+- Historical Actions registry entries or old successful runs do not prove that a workflow is currently callable. Verify the current default-branch workflow tree/registration before depending on an invocation path.
+- Runtime/readiness/provider workflow definitions remain narrow operational capabilities and are not substitutes for normal CI.
 
-If the Master cannot execute MariaDB/Docker/shell work directly, that is not itself a blocker. Persist reversible work on GitHub and use the self-hosted Actions path for authoritative runtime evidence. Delegate to an external Worker only when that materially improves execution or review.
+If the Master cannot execute MariaDB/Docker/shell work directly, that is not itself a blocker. Persist reversible work on GitHub and use the self-hosted Actions path for authoritative runtime evidence when the current GitHub capability can invoke it. If the current Chat connector cannot invoke a required validation run, continue independent reversible implementation/review work and surface that invocation boundary before the decision that actually consumes exact-head evidence. Do not weaken Draft/merge/release policy merely to work around a tool limitation.
+
+Delegate to an external Worker only when that materially improves execution or review.
 
 ## CI tiers
 
@@ -61,6 +65,8 @@ MariaDB 10.11 is the primary required compatibility target. Other compatible Mar
 ## Workflow permissions
 
 Each workflow's explicit `permissions:` block is authoritative for its `GITHUB_TOKEN` access. Grant only the capability the workflow requires. Repository-local automation should prefer repository-scoped `GITHUB_TOKEN`; do not introduce a PAT merely to replace a capability that `GITHUB_TOKEN` already provides.
+
+Repository settings/protection endpoints that the connected GitHub App cannot read must be treated as **unknown**, not as enabled or disabled by assumption. Use observable branch/API state, workflow source, actual run/job evidence, and Owner-visible settings when a decision truly depends on those controls.
 
 ## Evidence reuse and reruns
 

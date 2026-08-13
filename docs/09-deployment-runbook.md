@@ -19,7 +19,9 @@ Use `CONTRIBUTING.md` for capability routing and `docs/06-test-strategy.md` for 
 
 GitHub repository Environments are operational approval/secret boundaries consumed by workflows using `environment:`. They are separate from the transient Actions checkout and from any optional external Worker environment.
 
-The guarded provider mutation workflow uses GitHub Environment `provider-live-acceptance`. The workflow source and live GitHub settings are authoritative for its current branch/approval restrictions.
+A workflow referencing an Environment does not prove that reviewers, wait timers, or deployment-branch restrictions are configured. Immediately before any privileged/live use, verify both the exact workflow source and the live Environment protection settings. Missing/unreadable protection settings must be treated as unknown or absent for the decision that depends on them, not silently assumed safe.
+
+The guarded provider mutation definition references GitHub Environment `provider-live-acceptance`. Its workflow source and live GitHub settings are jointly authoritative for current branch/approval restrictions.
 
 ## Secret and credential rules
 
@@ -44,7 +46,11 @@ The current workflow/source revision is authoritative for whether an identifier 
 
 Prefer repository-scoped `GITHUB_TOKEN` for repository-local Actions operations. Introduce another credential type only when a concrete capability cannot be provided safely by `GITHUB_TOKEN`.
 
-## Existing operational workflows
+## Workflow definitions and activation state
+
+The paths below are the repository's intended workflow definitions on the revision where they exist. **File existence on `develop` or a task branch is not proof of a currently registered/dispatchable standing workflow.** Before any manual or automated invocation, verify the current default-branch workflow tree, GitHub Actions registration/state, exact source revision, and owning Task/Release authorization.
+
+Historical Actions registry entries whose workflow files are absent from the current default-branch tree are history/navigation, not execution authority.
 
 ### CI
 
@@ -54,21 +60,21 @@ Prefer repository-scoped `GITHUB_TOKEN` for repository-local Actions operations.
 - Draft PRs stay quiet;
 - CONTROL tier covers allowlisted documentation/governance-only diffs;
 - FULL tier covers source/runtime/workflow/unknown changes and MariaDB 10.11 + authenticated Redis validation;
-- manual `workflow_dispatch` is available for intentional validation.
+- the definition supports manual `workflow_dispatch`; use it only when current GitHub registration exposes it and verify the resulting exact `head_sha` before consuming the evidence.
 
 ### Staging Readiness
 
-`.github/workflows/staging-readiness.yml` is a manual read-only runtime readiness path. It must not become a general remote shell or project checkout.
+`.github/workflows/staging-readiness.yml` defines a manual read-only runtime readiness path where/when it is registered. It must not become a general remote shell or project checkout.
 
 ### Provider Readiness - Read Only
 
-`.github/workflows/provider-readiness.yml` is the manual read-only PasarGuard readiness path and uses the provider test secret identifiers required by the current workflow.
+`.github/workflows/provider-readiness.yml` defines the manual read-only PasarGuard readiness path where/when it is registered and uses only the provider test secret identifiers required by that exact workflow revision.
 
 ### Provider Live Acceptance - PasarGuard
 
-`.github/workflows/provider-live-acceptance.yml` is a privileged disposable provider-mutation path, not normal CI. It uses GitHub Environment `provider-live-acceptance`, explicit confirmation, and only the current workflow-defined inputs/credentials.
+`.github/workflows/provider-live-acceptance.yml` defines a privileged disposable provider-mutation path where/when it is deliberately registered for a controlled acceptance task. It is not normal CI. The definition uses GitHub Environment `provider-live-acceptance`, explicit confirmation, branch guards, and only the current workflow-defined inputs/credentials.
 
-Do not run a mutation workflow merely to discover whether credentials exist.
+Do not promote/enable a privileged provider workflow merely to discover whether credentials exist. Do not run a mutation workflow merely to discover whether credentials exist.
 
 ## Production layout
 
