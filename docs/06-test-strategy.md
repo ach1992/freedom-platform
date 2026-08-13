@@ -28,7 +28,6 @@ GitHub-hosted runners are not a fallback.
 - Draft PRs stay quiet until marked Ready for review.
 - `.github/workflows/ci.yml` supports intentional manual validation through `workflow_dispatch`.
 - Runtime/readiness/provider workflows remain narrow operational entrypoints and are not substitutes for normal CI.
-- A bounded GitHub-native control workflow may perform a specific repository mutation only when its Task Contract, validation, and least-privilege permissions justify it.
 
 If the Master cannot execute MariaDB/Docker/shell work directly, that is not itself a blocker. Persist reversible work on GitHub and use the self-hosted Actions path for authoritative runtime evidence. Delegate to an external Worker only when that materially improves execution or review.
 
@@ -61,11 +60,7 @@ MariaDB 10.11 is the primary required compatibility target. Other compatible Mar
 
 ## Workflow permissions
 
-Each workflow's explicit `permissions:` block is authoritative for its `GITHUB_TOKEN` access. Grant only the capability the workflow requires.
-
-For example, guarded temporary-branch cleanup may request `contents: write` to delete the ref and `pull-requests: read` to prove the branch is not in active PR use. It must not receive unrelated write scopes.
-
-Repository-local automation should prefer repository-scoped `GITHUB_TOKEN`; do not introduce a PAT merely to replace a capability that `GITHUB_TOKEN` already provides.
+Each workflow's explicit `permissions:` block is authoritative for its `GITHUB_TOKEN` access. Grant only the capability the workflow requires. Repository-local automation should prefer repository-scoped `GITHUB_TOKEN`; do not introduce a PAT merely to replace a capability that `GITHUB_TOKEN` already provides.
 
 ## Evidence reuse and reruns
 
