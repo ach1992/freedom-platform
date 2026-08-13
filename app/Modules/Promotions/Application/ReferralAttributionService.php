@@ -63,6 +63,7 @@ final readonly class ReferralAttributionService
             }
 
             $this->lockUsers($connection, [$referredUserId, $inviterUserId]);
+            $this->lockExistingPurchaseIntents($connection, $referredUserId);
             $existing = $this->relationshipForUser($connection, $referredUserId, true);
             if ($existing !== null) {
                 if ((int) $existing->inviter_user_id === $inviterUserId
@@ -131,6 +132,7 @@ final readonly class ReferralAttributionService
             }
 
             $this->lockUsers($connection, [$referredUserId, $inviterUserId]);
+            $this->lockExistingPurchaseIntents($connection, $referredUserId);
             $relationship = $this->relationshipForUser($connection, $referredUserId, true);
             if ($relationship === null) {
                 throw new DomainException('Referral relationship does not exist.');
@@ -226,6 +228,17 @@ final readonly class ReferralAttributionService
         }
     }
 
+    private function lockExistingPurchaseIntents(Connection $connection, int $referredUserId): void
+    {
+        $connection->table('payment_intents')
+            ->where('user_id', $referredUserId)
+            ->where('purpose', 'purchase')
+            ->orderBy('id')
+            ->lockForUpdate()
+            ->pluck('id')
+            ->all();
+    }
+
     /** @return RelationshipRow|null */
     private function relationshipForUser(Connection $connection, int $referredUserId, bool $lock): ?object
     {
@@ -252,7 +265,9 @@ final readonly class ReferralAttributionService
     {
         return $connection->table('purchase_settlements')
             ->where('user_id', $userId)
-            ->exists();
+            ->orderBy('id')
+            ->lockForUpdate()
+            ->first(['id']) !== null;
     }
 
     /** @param RelationshipRow $relationship */
