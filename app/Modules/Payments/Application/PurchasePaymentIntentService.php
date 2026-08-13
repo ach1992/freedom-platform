@@ -262,8 +262,8 @@ final readonly class PurchasePaymentIntentService
     }
 
     /**
-     * @param DecisionRow $decision
-     * @param QuoteRow $quote
+     * @param  DecisionRow  $decision
+     * @param  QuoteRow  $quote
      */
     private function assertDecisionMatchesQuote(object $decision, object $quote, int $userId, DateTimeImmutable $now): void
     {
@@ -353,9 +353,9 @@ final readonly class PurchasePaymentIntentService
     }
 
     /**
-     * @param QuoteRow $quote
-     * @param DecisionRow $decision
-     * @param DecisionMethodRow $method
+     * @param  QuoteRow  $quote
+     * @param  DecisionRow  $decision
+     * @param  DecisionMethodRow  $method
      */
     private function creationPayloadHash(int $userId, object $quote, object $decision, object $method): string
     {
