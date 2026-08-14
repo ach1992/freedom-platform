@@ -53,7 +53,7 @@ final readonly class UsdtManualReviewDecisionService
                 ->where('review.public_id', $reviewPublicId)
                 ->lockForUpdate()
                 ->first([
-                    'review.id as review_id', 'review.state as review_state',
+                    'review.id as review_id', 'review.state as review_state', 'review.decided_by_administrator_id',
                     'submission.id as submission_id', 'submission.public_id as submission_public_id', 'submission.state as submission_state', 'submission.txid',
                     'authority.network', 'authority.chain_id', 'authority.token_contract', 'authority.destination_address',
                     'authority.expected_amount_base_units', 'authority.minimum_confirmations', 'authority.created_at as authority_created_at',
@@ -65,6 +65,9 @@ final readonly class UsdtManualReviewDecisionService
             $this->assertExactManualEvidence($authority, $evidence);
 
             if ($authority->review_state === 'approved') {
+                if ((int) $authority->decided_by_administrator_id !== $administratorId) {
+                    throw new RuntimeException('USDT manual review was already approved by a different administrator.');
+                }
                 return (string) $authority->submission_public_id;
             }
             if ($authority->review_state !== 'pending'
