@@ -18,10 +18,11 @@ final readonly class CardToCardProviderPollingService
         private DatabaseManager $database,
         private CardToCardBankTransactionService $transactions,
         private CardToCardMatchingService $matching,
+        private CardToCardSettlementService $settlements,
         private Clock $clock,
     ) {}
 
-    /** @return array{ingested:int,matched:int,reviewed:int,next_cursor:?string} */
+    /** @return array{ingested:int,matched:int,captured:int,reviewed:int,next_cursor:?string} */
     public function poll(BankTransactionVerificationProvider $provider, string $correlationId): array
     {
         if (preg_match('/\A[A-Za-z0-9:_.-]{2,64}\z/', $provider->code()) !== 1) {
@@ -40,13 +41,15 @@ final readonly class CardToCardProviderPollingService
 
         try {
             $page = $provider->fetch($cursor);
-            $ingested = $matched = $reviewed = 0;
+            $ingested = $matched = $captured = $reviewed = 0;
             foreach ($page->transactions as $observation) {
                 $receipt = $this->transactions->ingest($provider->code(), $observation, 'poll', $correlationId);
                 $ingested++;
                 $outcome = $this->matching->match($receipt->publicId, $correlationId);
-                if ($outcome->matchId !== null) {
+                if ($outcome->matchPublicId !== null) {
                     $matched++;
+                    $this->settlements->capture($outcome->matchPublicId, $correlationId);
+                    $captured++;
                 } elseif ($outcome->reviewId !== null) {
                     $reviewed++;
                 }
@@ -69,6 +72,7 @@ final readonly class CardToCardProviderPollingService
             return [
                 'ingested' => $ingested,
                 'matched' => $matched,
+                'captured' => $captured,
                 'reviewed' => $reviewed,
                 'next_cursor' => $page->nextCursor,
             ];
