@@ -19,6 +19,7 @@ final readonly class CardToCardProviderPollingService
         private CardToCardBankTransactionService $transactions,
         private CardToCardMatchingService $matching,
         private CardToCardSettlementService $settlements,
+        private CardToCardReconciliationService $reconciliation,
         private Clock $clock,
     ) {}
 
@@ -45,14 +46,19 @@ final readonly class CardToCardProviderPollingService
             foreach ($page->transactions as $observation) {
                 $receipt = $this->transactions->ingest($provider->code(), $observation, 'poll', $correlationId);
                 $ingested++;
-                $outcome = $this->matching->match($receipt->publicId, $correlationId);
-                if ($outcome->matchPublicId !== null) {
-                    $matched++;
-                    $this->settlements->capture($outcome->matchPublicId, $correlationId);
-                    $captured++;
-                } elseif ($outcome->reviewId !== null) {
-                    $reviewed++;
+
+                if ($receipt->status === 'settled') {
+                    $outcome = $this->matching->match($receipt->publicId, $correlationId);
+                    if ($outcome->matchPublicId !== null) {
+                        $matched++;
+                        $this->settlements->capture($outcome->matchPublicId, $correlationId);
+                        $captured++;
+                    } elseif ($outcome->reviewId !== null) {
+                        $reviewed++;
+                    }
                 }
+
+                $this->reconciliation->inspectTransaction($receipt->publicId, $correlationId);
             }
 
             $this->database->connection()->transaction(function (Connection $connection) use ($provider, $page): void {
@@ -77,14 +83,20 @@ final readonly class CardToCardProviderPollingService
                 'next_cursor' => $page->nextCursor,
             ];
         } catch (Throwable $exception) {
+            $failureCode = substr($exception::class, 0, 64);
             $this->database->connection()->table('c2c_provider_cursors')->updateOrInsert(
                 ['provider_code' => $provider->code()],
                 [
                     'last_failure_at' => $this->timestamp(),
-                    'last_failure_code' => substr($exception::class, 0, 64),
+                    'last_failure_code' => $failureCode,
                     'updated_at' => $this->timestamp(),
                 ],
             );
+            try {
+                $this->reconciliation->recordProviderFailure($provider->code(), $failureCode, $correlationId);
+            } catch (Throwable) {
+                // Preserve the original provider failure. Reconciliation evidence is best-effort here.
+            }
             throw $exception;
         }
     }
