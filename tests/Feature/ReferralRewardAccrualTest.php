@@ -36,6 +36,7 @@ use DateTimeImmutable;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use Tests\TestCase;
 
 final class ReferralRewardAccrualClock implements Clock
@@ -172,6 +173,35 @@ final class ReferralRewardAccrualTest extends TestCase
         self::assertSame(0, DB::table('referral_reward_accruals')->count());
         self::assertSame(0, DB::table('referral_rewards')->count());
         self::assertSame(2, DB::table('users')->whereIn('id', [$inviter, $referred])->count());
+    }
+
+    public function test_database_rejects_forged_recipient_outside_immutable_policy(): void
+    {
+        $inviter = $this->quoteUser('customer');
+        $referred = $this->quoteUser('customer');
+        $attribution = $this->app->make(ReferralAttributionService::class);
+        $token = $attribution->identityForUser($inviter);
+        $attribution->bind($referred, $token);
+        $this->createRewardRule('forged-recipient', $token, PromotionDiscountType::Fixed, 100_000, null, null, false, ReferralRewardRecipient::Inviter, null, null, false, null, null, null);
+
+        $settlement = $this->capturePurchaseFor($referred, 'forged-recipient');
+        $created = $this->app->make(ReferralRewardAccrualService::class)->accrue($settlement->publicId, $this->correlation('accrue-forged-recipient'));
+        self::assertNotNull($created);
+
+        $this->assertQueryRejected(static fn (): bool => DB::table('referral_rewards')->insert([
+            'public_id' => (string) Str::ulid(),
+            'accrual_id' => $created->accrualId,
+            'purchase_settlement_id' => $settlement->settlementId,
+            'recipient_role' => 'referred',
+            'recipient_user_id' => $referred,
+            'amount_irr' => $created->rewardAmountIrr,
+            'state' => 'pending',
+            'release_at' => $created->releaseAt->format('Y-m-d H:i:s.u'),
+            'expires_at' => null,
+            'transferable' => false,
+            'created_at' => $created->createdAt->format('Y-m-d H:i:s.u'),
+        ]));
+        self::assertSame(1, DB::table('referral_rewards')->count());
     }
 
     private function createRewardRule(string $suffix, string $referralSourceCode, PromotionDiscountType $discountType, ?int $fixedRewardIrr, ?int $basisPoints, ?int $maximumRewardIrr, bool $firstPurchaseOnly, ReferralRewardRecipient $recipient, ?int $pendingHours, ?int $expiryHours, bool $transferable, ?int $totalUseLimit, ?int $perUserUseLimit, ?int $perReferralUseLimit): void
