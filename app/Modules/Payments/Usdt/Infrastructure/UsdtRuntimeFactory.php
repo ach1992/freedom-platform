@@ -49,7 +49,13 @@ final readonly class UsdtRuntimeFactory
                 $this->integer('usdt.rate.http_connect_timeout_seconds'),
                 $this->integer('usdt.rate.http_max_response_bytes'),
             ),
-            new TetherlandUsdtRateProvider,
+            new WallexUsdtRateProvider(
+                $this->http,
+                $this->clock,
+                $this->integer('usdt.rate.http_timeout_seconds'),
+                $this->integer('usdt.rate.http_connect_timeout_seconds'),
+                $this->integer('usdt.rate.http_max_response_bytes'),
+            ),
         ];
         if (is_string($manual) && $manual !== '') {
             $providers[] = new ManualUsdtRateProvider($manual, $this->clock);
