@@ -14,7 +14,7 @@ final class HttpZarinpalTransportTest extends TestCase
 {
     private const MERCHANT = '00000000-0000-0000-0000-000000000000';
 
-    public function test_request_uses_fixed_official_endpoint_irr_and_disables_provider_auto_verify(): void
+    public function test_request_uses_fixed_official_endpoint_irr_and_order_metadata(): void
     {
         $authority = 'A'.str_repeat('1', 35);
         Http::fake([
@@ -45,7 +45,7 @@ final class HttpZarinpalTransportTest extends TestCase
                 && ($data['currency'] ?? null) === 'IRR'
                 && ($data['callback_url'] ?? null) === 'https://example.test/payments/zarinpal/callback'
                 && data_get($data, 'metadata.order_id') === '01H00000000000000000000000'
-                && data_get($data, 'metadata.auto_verify') === false;
+                && ! array_key_exists('auto_verify', (array) ($data['metadata'] ?? []));
         });
     }
 
