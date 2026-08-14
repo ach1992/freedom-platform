@@ -78,7 +78,7 @@ final class ReferralRewardAccrualTest extends TestCase
 
         $settlement = $this->capturePurchaseFor($referred, 'fixed-first');
         $service = $this->app->make(ReferralRewardAccrualService::class);
-        $created = $service->accrue($settlement->publicId, $this->correlation('accrue-fixed'));
+        $created = $service->accrue($settlement->settlementPublicId, $this->correlation('accrue-fixed'));
 
         self::assertNotNull($created);
         self::assertFalse($created->replayed);
@@ -92,7 +92,7 @@ final class ReferralRewardAccrualTest extends TestCase
         self::assertSame('pending', DB::table('referral_rewards')->value('state'));
         self::assertSame(1, DB::table('outbox_messages')->where('event_type', 'referral.reward.pending')->count());
 
-        $replay = $service->accrue($settlement->publicId, $this->correlation('accrue-fixed-replay'));
+        $replay = $service->accrue($settlement->settlementPublicId, $this->correlation('accrue-fixed-replay'));
         self::assertNotNull($replay);
         self::assertTrue($replay->replayed);
         self::assertSame($created->accrualId, $replay->accrualId);
@@ -101,7 +101,7 @@ final class ReferralRewardAccrualTest extends TestCase
         self::assertSame(1, DB::table('outbox_messages')->where('event_type', 'referral.reward.pending')->count());
 
         $secondSettlement = $this->capturePurchaseFor($referred, 'fixed-second');
-        self::assertNull($service->accrue($secondSettlement->publicId, $this->correlation('accrue-fixed-second')));
+        self::assertNull($service->accrue($secondSettlement->settlementPublicId, $this->correlation('accrue-fixed-second')));
         self::assertSame(1, DB::table('referral_reward_accruals')->count());
     }
 
@@ -115,7 +115,7 @@ final class ReferralRewardAccrualTest extends TestCase
         $this->createRewardRule('percentage', $token, PromotionDiscountType::Percentage, null, 2500, 120_000, false, ReferralRewardRecipient::Both, 48, 72, true, 3, 3, 3);
 
         $settlement = $this->capturePurchaseFor($referred, 'percentage');
-        $created = $this->app->make(ReferralRewardAccrualService::class)->accrue($settlement->publicId, $this->correlation('accrue-percentage'));
+        $created = $this->app->make(ReferralRewardAccrualService::class)->accrue($settlement->settlementPublicId, $this->correlation('accrue-percentage'));
 
         self::assertNotNull($created);
         self::assertSame(120_000, $created->rewardAmountIrr);
@@ -169,7 +169,7 @@ final class ReferralRewardAccrualTest extends TestCase
         }
 
         $settlement = $this->capturePurchaseFor($referred, 'shared-phone');
-        self::assertNull($this->app->make(ReferralRewardAccrualService::class)->accrue($settlement->publicId, $this->correlation('accrue-shared-phone')));
+        self::assertNull($this->app->make(ReferralRewardAccrualService::class)->accrue($settlement->settlementPublicId, $this->correlation('accrue-shared-phone')));
         self::assertSame(0, DB::table('referral_reward_accruals')->count());
         self::assertSame(0, DB::table('referral_rewards')->count());
         self::assertSame(2, DB::table('users')->whereIn('id', [$inviter, $referred])->count());
@@ -185,7 +185,7 @@ final class ReferralRewardAccrualTest extends TestCase
         $this->createRewardRule('forged-recipient', $token, PromotionDiscountType::Fixed, 100_000, null, null, false, ReferralRewardRecipient::Inviter, null, null, false, null, null, null);
 
         $settlement = $this->capturePurchaseFor($referred, 'forged-recipient');
-        $created = $this->app->make(ReferralRewardAccrualService::class)->accrue($settlement->publicId, $this->correlation('accrue-forged-recipient'));
+        $created = $this->app->make(ReferralRewardAccrualService::class)->accrue($settlement->settlementPublicId, $this->correlation('accrue-forged-recipient'));
         self::assertNotNull($created);
 
         $this->assertQueryRejected(static fn (): bool => DB::table('referral_rewards')->insert([
@@ -199,7 +199,7 @@ final class ReferralRewardAccrualTest extends TestCase
             'release_at' => $created->releaseAt->format('Y-m-d H:i:s.u'),
             'expires_at' => null,
             'transferable' => false,
-            'created_at' => $created->createdAt->format('Y-m-d H:i:s.u'),
+            'created_at' => $this->timestamp(),
         ]));
         self::assertSame(1, DB::table('referral_rewards')->count());
     }
