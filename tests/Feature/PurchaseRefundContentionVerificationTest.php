@@ -175,7 +175,7 @@ namespace Tests\Feature {
             $failures = array_values(array_filter($results, static fn (array $result): bool => $result['ok'] === false));
             self::assertCount(1, $successes);
             self::assertCount(1, $failures);
-            self::assertSame('Purchase refund would exceed authoritative captured amount.', $failures[0]['message']);
+            self::assertSame('Purchase refund would exceed authoritative refundable captured amount.', $failures[0]['message']);
             self::assertSame(1, DB::table('purchase_refunds')->count());
             self::assertSame($amount, (int) DB::table('purchase_refunds')->sum('amount_irr'));
             self::assertSame('partially_refunded', DB::table('payment_intents')->where('public_id', $settlement->intentPublicId)->value('state'));

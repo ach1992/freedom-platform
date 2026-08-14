@@ -8,6 +8,7 @@ use App\Modules\Payments\Usdt\Application\Contracts\BlockchainTransactionVerific
 use App\Modules\Payments\Usdt\Application\Contracts\UsdtBlockchainVerificationEvidence;
 use App\Modules\Payments\Usdt\Application\Contracts\UsdtBlockchainVerificationRequest;
 use App\Modules\Payments\Usdt\Application\UsdtBlockchainVerificationService;
+use App\Modules\Payments\Usdt\Application\UsdtBep20Asset;
 use App\Modules\Payments\Usdt\Application\UsdtReconciliationService;
 use App\Modules\Payments\Usdt\Infrastructure\FakeBlockchainTransactionVerificationProvider;
 use App\Shared\Application\Clock;
@@ -63,7 +64,7 @@ final class UsdtBep20ReconciliationTest extends TestCase
         $this->clock = new UsdtReconciliationClock(new DateTimeImmutable('2026-08-14T07:00:00+00:00'));
         $this->app->instance(Clock::class, $this->clock);
         config()->set('payments.usdt_bep20.chain_id', 56);
-        config()->set('payments.usdt_bep20.token_contract', '0x'.str_repeat('aa', 20));
+        config()->set('payments.usdt_bep20.token_contract', UsdtBep20Asset::TOKEN_CONTRACT);
         config()->set('payments.usdt_bep20.minimum_confirmations', 15);
         $this->configureUsdtBep20Method($this->clock, 'reconciliation');
     }

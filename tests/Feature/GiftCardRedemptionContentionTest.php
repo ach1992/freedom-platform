@@ -298,7 +298,7 @@ namespace Tests\Feature {
                 $administratorId,
                 'gift_card',
                 true,
-                now('UTC')->addMinutes(20),
+                now('UTC')->addMinutes(20)->toDateTimeImmutable(),
                 'Gift-card contention provider is healthy.',
                 hash('sha256', 'gift-contention-health'),
             );
@@ -358,6 +358,10 @@ namespace Tests\Feature {
                     }
                     $line = fgets($stream);
                     if ($line !== false) {
+                        if (trim($line) === '') {
+                            continue;
+                        }
+
                         return $line;
                     }
                 }

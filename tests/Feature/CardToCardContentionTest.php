@@ -394,6 +394,10 @@ namespace Tests\Feature {
                     }
                     $line = fgets($stream);
                     if ($line !== false) {
+                        if (trim($line) === '') {
+                            continue;
+                        }
+
                         return $line;
                     }
                 }

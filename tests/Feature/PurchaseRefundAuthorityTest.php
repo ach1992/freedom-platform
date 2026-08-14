@@ -168,7 +168,7 @@ final class PurchaseRefundAuthorityTest extends TestCase
         );
 
         $this->assertDomainMessage(
-            'Purchase refund would exceed authoritative captured amount.',
+            'Purchase refund would exceed authoritative refundable captured amount.',
             fn (): mixed => $service->record(
                 'purchase.refund.bounds.000002',
                 $settlement->settlementPublicId,

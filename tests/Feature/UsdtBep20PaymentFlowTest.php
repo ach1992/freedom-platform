@@ -10,6 +10,7 @@ use App\Modules\Orders\Domain\QuoteOverrideSource;
 use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
 use App\Modules\Payments\Usdt\Application\Contracts\UsdtBlockchainVerificationEvidence;
 use App\Modules\Payments\Usdt\Application\UsdtAmountQuoteService;
+use App\Modules\Payments\Usdt\Application\UsdtBep20Asset;
 use App\Modules\Payments\Usdt\Application\UsdtBlockchainVerificationService;
 use App\Modules\Payments\Usdt\Application\UsdtCircuitBreaker;
 use App\Modules\Payments\Usdt\Application\UsdtDestinationWalletService;
@@ -95,7 +96,7 @@ final class UsdtBep20PaymentFlowTest extends TestCase
         $this->clock = new UsdtPaymentFlowClock(new DateTimeImmutable('2026-08-14T06:00:00+00:00'));
         $this->app->instance(Clock::class, $this->clock);
         config()->set('payments.usdt_bep20.chain_id', 56);
-        config()->set('payments.usdt_bep20.token_contract', '0x'.str_repeat('aa', 20));
+        config()->set('payments.usdt_bep20.token_contract', UsdtBep20Asset::TOKEN_CONTRACT);
         config()->set('payments.usdt_bep20.minimum_confirmations', 15);
         $this->configurePaymentMethod();
     }

@@ -188,7 +188,7 @@ final class ReferralRewardAccrualTest extends TestCase
         $created = $this->app->make(ReferralRewardAccrualService::class)->accrue($settlement->settlementPublicId, $this->correlation('accrue-forged-recipient'));
         self::assertNotNull($created);
 
-        $this->assertQueryRejected(static fn (): bool => DB::table('referral_rewards')->insert([
+        $this->assertQueryRejected(fn (): bool => DB::table('referral_rewards')->insert([
             'public_id' => (string) Str::ulid(),
             'accrual_id' => $created->accrualId,
             'purchase_settlement_id' => $settlement->settlementId,

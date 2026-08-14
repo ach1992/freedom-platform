@@ -170,7 +170,7 @@ final class GiftCardPaymentFlowTest extends TestCase
             );
             self::fail('Expected validation-only evidence to be rejected for manual approval.');
         } catch (DomainException $exception) {
-            self::assertStringContainsString('authoritative redeemed evidence', $exception->getMessage());
+            self::assertStringContainsString('authoritative post-submission redeemed evidence', $exception->getMessage());
         }
 
         $redeemed = $this->evidence('redeem', 'redeemed', 'manual-redeem', 'manual-redeem-tx', $purchase['amount']);
