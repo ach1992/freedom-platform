@@ -152,10 +152,12 @@ jobs:
 
           rm .github/workflows/phase-0.5-nowpayments-fix.yml
           git diff --check
-          php -l app/Modules/Payments/NowPayments/Application/NowPaymentsPaymentService.php
-          php -l tests/Feature/CardToCardManualReviewContentionTest.php
-          php -l tests/Feature/PurchaseRefundContentionVerificationTest.php
-          php -l tests/Feature/ZarinpalRequestContentionVerificationTest.php
+          PHP_BIN=/www/server/php/84/bin/php
+          PHP_INI=/www/server/php/84/etc/php-cli.ini
+          "$PHP_BIN" -c "$PHP_INI" -l app/Modules/Payments/NowPayments/Application/NowPaymentsPaymentService.php
+          "$PHP_BIN" -c "$PHP_INI" -l tests/Feature/CardToCardManualReviewContentionTest.php
+          "$PHP_BIN" -c "$PHP_INI" -l tests/Feature/PurchaseRefundContentionVerificationTest.php
+          "$PHP_BIN" -c "$PHP_INI" -l tests/Feature/ZarinpalRequestContentionVerificationTest.php
 
       - name: Commit and push once
         shell: bash
