@@ -14,6 +14,7 @@ use DateTimeZone;
 use DomainException;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Str;
 use RuntimeException;
 use Throwable;
@@ -42,10 +43,7 @@ final readonly class UsdtBlockchainVerificationService
         if ($authority === null) {
             throw new DomainException('USDT TXID submission does not exist.');
         }
-        if ($authority->submission_state === 'captured') {
-            return $this->verifiedTransfers->settlePersisted($submissionPublicId, $correlationId);
-        }
-        if ($authority->submission_state === 'verified') {
+        if (in_array($authority->submission_state, ['captured', 'verified'], true)) {
             return $this->verifiedTransfers->settlePersisted($submissionPublicId, $correlationId);
         }
         if ($authority->submission_state === 'pending_manual_review') {
@@ -76,13 +74,13 @@ final readonly class UsdtBlockchainVerificationService
         }
 
         $this->validateEvidenceEnvelope($evidence, (string) $authority->txid);
-        $this->recordEvent($authority, $provider->code(), $evidence);
 
         if ($evidence->outcome === 'success' && $evidence->transactionStatus === 'success') {
             $reason = $this->mismatchReason($authority, $evidence);
             if ($reason === null) {
                 return $this->verifiedTransfers->recordAndSettle($submissionPublicId, $provider->code(), $evidence, $correlationId);
             }
+            $this->recordEvent($authority, $provider->code(), $evidence);
             if ($reason === 'insufficient_confirmations') {
                 $this->recordFinding($authority, $reason, 'warning', $provider->code(), $evidence, $correlationId);
                 return $this->receipt($this->authority($submissionPublicId) ?? $authority, false);
@@ -90,6 +88,7 @@ final readonly class UsdtBlockchainVerificationService
             return $this->queueManualReview($authority, $reason, $provider->code(), $evidence, $correlationId);
         }
 
+        $this->recordEvent($authority, $provider->code(), $evidence);
         if ($evidence->outcome === 'pending'
             || $evidence->outcome === 'uncertain'
             || $evidence->outcome === 'unavailable'
@@ -227,36 +226,62 @@ final readonly class UsdtBlockchainVerificationService
     private function recordEvent(object $authority, string $providerCode, UsdtBlockchainVerificationEvidence $evidence): void
     {
         $connection = $this->database->connection();
-        $existing = $connection->table('usdt_chain_verification_events')->where('provider_code', $providerCode)->where('provider_event_id', $evidence->providerEventId)->first();
+        $existing = $connection->table('usdt_chain_verification_events')
+            ->where('provider_code', $providerCode)
+            ->where(function ($query) use ($evidence): void {
+                $query->where('provider_event_id', $evidence->providerEventId)
+                    ->orWhere('evidence_hash', strtolower($evidence->evidenceHash));
+            })
+            ->first();
         if ($existing !== null) {
-            if ((int) $existing->usdt_txid_submission_id !== (int) $authority->submission_id
-                || ! hash_equals((string) $existing->txid, strtolower($evidence->txid))
-                || ! hash_equals(strtolower((string) $existing->evidence_hash), strtolower($evidence->evidenceHash))) {
-                throw new RuntimeException('USDT chain verification event replay conflicts with accepted evidence.');
-            }
+            $this->assertEventReplay($existing, $authority, $providerCode, $evidence);
             return;
         }
-        $connection->table('usdt_chain_verification_events')->insert([
-            'public_id' => (string) Str::ulid(),
-            'usdt_txid_submission_id' => (int) $authority->submission_id,
-            'provider_code' => $providerCode,
-            'provider_event_id' => $evidence->providerEventId,
-            'txid' => strtolower($evidence->txid),
-            'outcome' => $evidence->outcome,
-            'transaction_status' => $evidence->transactionStatus,
-            'network' => $evidence->network,
-            'chain_id' => $evidence->chainId,
-            'token_contract' => $evidence->tokenContract === null ? null : strtolower($evidence->tokenContract),
-            'destination_address' => $evidence->destinationAddress === null ? null : strtolower($evidence->destinationAddress),
-            'amount_base_units' => $evidence->amountBaseUnits,
-            'token_decimals' => $evidence->tokenDecimals,
-            'confirmations' => $evidence->confirmations,
-            'block_number' => $evidence->blockNumber,
-            'transaction_at' => $evidence->transactionAt === null ? null : $this->databaseDateTime($evidence->transactionAt),
-            'evidence_hash' => strtolower($evidence->evidenceHash),
-            'observed_at' => $this->databaseDateTime($evidence->observedAt),
-            'created_at' => $this->timestamp(),
-        ]);
+        try {
+            $connection->table('usdt_chain_verification_events')->insert([
+                'public_id' => (string) Str::ulid(),
+                'usdt_txid_submission_id' => (int) $authority->submission_id,
+                'provider_code' => $providerCode,
+                'provider_event_id' => $evidence->providerEventId,
+                'txid' => strtolower($evidence->txid),
+                'outcome' => $evidence->outcome,
+                'transaction_status' => $evidence->transactionStatus,
+                'network' => $evidence->network,
+                'chain_id' => $evidence->chainId,
+                'token_contract' => $evidence->tokenContract === null ? null : strtolower($evidence->tokenContract),
+                'destination_address' => $evidence->destinationAddress === null ? null : strtolower($evidence->destinationAddress),
+                'amount_base_units' => $evidence->amountBaseUnits,
+                'token_decimals' => $evidence->tokenDecimals,
+                'confirmations' => $evidence->confirmations,
+                'block_number' => $evidence->blockNumber,
+                'transaction_at' => $evidence->transactionAt === null ? null : $this->databaseDateTime($evidence->transactionAt),
+                'evidence_hash' => strtolower($evidence->evidenceHash),
+                'observed_at' => $this->databaseDateTime($evidence->observedAt),
+                'created_at' => $this->timestamp(),
+            ]);
+        } catch (QueryException $exception) {
+            $replay = $connection->table('usdt_chain_verification_events')
+                ->where('provider_code', $providerCode)
+                ->where(function ($query) use ($evidence): void {
+                    $query->where('provider_event_id', $evidence->providerEventId)
+                        ->orWhere('evidence_hash', strtolower($evidence->evidenceHash));
+                })
+                ->first();
+            if ($replay === null) {
+                throw $exception;
+            }
+            $this->assertEventReplay($replay, $authority, $providerCode, $evidence);
+        }
+    }
+
+    private function assertEventReplay(object $row, object $authority, string $providerCode, UsdtBlockchainVerificationEvidence $evidence): void
+    {
+        if ((int) $row->usdt_txid_submission_id !== (int) $authority->submission_id
+            || ! hash_equals((string) $row->provider_code, $providerCode)
+            || ! hash_equals((string) $row->txid, strtolower($evidence->txid))
+            || ! hash_equals(strtolower((string) $row->evidence_hash), strtolower($evidence->evidenceHash))) {
+            throw new RuntimeException('USDT chain verification event replay conflicts with accepted evidence.');
+        }
     }
 
     private function validateEvidenceEnvelope(UsdtBlockchainVerificationEvidence $evidence, string $expectedTxid): void
@@ -264,9 +289,26 @@ final readonly class UsdtBlockchainVerificationService
         if (! in_array($evidence->outcome, ['success','pending','rejected','uncertain','unavailable'], true)
             || ! in_array($evidence->transactionStatus, ['success','pending','failed','reverted','not_found','unknown'], true)
             || ! hash_equals($expectedTxid, strtolower($evidence->txid))
+            || preg_match('/\A0x[a-fA-F0-9]{64}\z/', $evidence->txid) !== 1
             || preg_match('/\A[a-fA-F0-9]{64}\z/', $evidence->evidenceHash) !== 1
-            || $evidence->providerEventId === '' || strlen($evidence->providerEventId) > 191) {
+            || $evidence->providerEventId === '' || strlen($evidence->providerEventId) > 191
+            || preg_match('/[\x00-\x20\x7F]/', $evidence->providerEventId) === 1) {
             throw new DomainException('USDT blockchain verification evidence envelope is invalid.');
+        }
+        if ($evidence->network !== null && preg_match('/\A[A-Za-z0-9:_.-]{1,16}\z/', $evidence->network) !== 1) {
+            throw new DomainException('USDT blockchain verification network evidence is invalid.');
+        }
+        foreach ([$evidence->tokenContract, $evidence->destinationAddress] as $address) {
+            if ($address !== null && preg_match('/\A0x[a-fA-F0-9]{40}\z/', $address) !== 1) {
+                throw new DomainException('USDT blockchain verification address evidence is invalid.');
+            }
+        }
+        if (($evidence->chainId !== null && $evidence->chainId < 1)
+            || ($evidence->amountBaseUnits !== null && $evidence->amountBaseUnits < 1)
+            || ($evidence->tokenDecimals !== null && ($evidence->tokenDecimals < 0 || $evidence->tokenDecimals > 36))
+            || ($evidence->confirmations !== null && $evidence->confirmations < 0)
+            || ($evidence->blockNumber !== null && $evidence->blockNumber < 0)) {
+            throw new DomainException('USDT blockchain verification numeric evidence is invalid.');
         }
     }
 
