@@ -61,8 +61,8 @@ final readonly class UsdtReconciliationService
             (int) $authority->chain_id,
             (string) $authority->token_contract,
             (string) $authority->destination_address,
-            (int) $authority->expected_amount_base_units,
-            UsdtTokenAmount::DECIMALS,
+            UsdtTokenAmount::normalizeBaseUnits((string) $authority->expected_amount_base_units),
+            (int) $authority->token_decimals,
             (int) $authority->minimum_confirmations,
         );
         try {
@@ -91,14 +91,19 @@ final readonly class UsdtReconciliationService
         if ($evidence->outcome !== 'success' || $evidence->transactionStatus !== 'success') {
             return 'local_captured_chain_not_successful';
         }
+        $actualBaseUnits = $evidence->amountBaseUnits === null ? null : UsdtTokenAmount::normalizeBaseUnits($evidence->amountBaseUnits);
+        $expectedBaseUnits = UsdtTokenAmount::normalizeBaseUnits((string) $authority->expected_amount_base_units);
         if ($evidence->network !== $authority->network
             || $evidence->chainId !== (int) $authority->chain_id
             || $evidence->tokenContract === null
             || ! hash_equals((string) $authority->token_contract, strtolower($evidence->tokenContract))
+            || ! hash_equals(UsdtBep20Asset::TOKEN_CONTRACT, strtolower($evidence->tokenContract))
             || $evidence->destinationAddress === null
             || ! hash_equals((string) $authority->destination_address, strtolower($evidence->destinationAddress))
-            || $evidence->amountBaseUnits !== (int) $authority->expected_amount_base_units
-            || $evidence->tokenDecimals !== UsdtTokenAmount::DECIMALS) {
+            || $actualBaseUnits === null
+            || ! hash_equals($expectedBaseUnits, $actualBaseUnits)
+            || $evidence->tokenDecimals !== (int) $authority->token_decimals
+            || (int) $authority->token_decimals !== UsdtBep20Asset::TOKEN_DECIMALS) {
             return 'local_captured_chain_identity_mismatch';
         }
         return null;
@@ -112,7 +117,7 @@ final readonly class UsdtReconciliationService
             ->where('submission.public_id', $submissionPublicId)
             ->first([
                 'submission.id as submission_id', 'submission.public_id as submission_public_id', 'submission.txid', 'submission.state as submission_state',
-                'authority.network', 'authority.chain_id', 'authority.token_contract', 'authority.destination_address',
+                'authority.network', 'authority.chain_id', 'authority.token_contract', 'authority.token_decimals', 'authority.destination_address',
                 'authority.expected_amount_base_units', 'authority.minimum_confirmations',
                 'transfer.id as transfer_id', 'transfer.public_id as transfer_public_id', 'transfer.purchase_settlement_id',
             ]);
