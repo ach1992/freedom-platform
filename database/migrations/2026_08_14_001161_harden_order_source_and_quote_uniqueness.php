@@ -11,7 +11,7 @@ return new class extends Migration
     public function up(): void
     {
         DB::statement('ALTER TABLE orders DROP CONSTRAINT orders_source_type_chk');
-        DB::statement("ALTER TABLE orders ADD CONSTRAINT orders_source_type_chk CHECK (`source_type` IN ('purchase','trial','benefit_code','admin_grant'))");
+        DB::statement("ALTER TABLE orders ADD CONSTRAINT orders_source_type_chk CHECK (`source_type` IN ('purchase','trial','gift','service_code','benefit_code','admin_grant'))");
         DB::statement("ALTER TABLE orders ADD CONSTRAINT orders_non_purchase_finance_shape_chk CHECK (`source_type` = 'purchase' OR (`purchase_settlement_id` IS NULL AND `purchase_settlement_public_id` IS NULL AND `payment_intent_id` IS NULL AND `payment_intent_public_id` IS NULL))");
         DB::statement('ALTER TABLE orders ADD CONSTRAINT orders_source_quote_unique UNIQUE (`source_quote_id`)');
     }
