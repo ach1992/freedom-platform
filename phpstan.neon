@@ -9,5 +9,7 @@ parameters:
         - config
         - database
         - routes
+    stubFiles:
+        - stubs/IlluminateDatabaseQueryBuilder.stub
     tmpDir: build/cache/phpstan
     treatPhpDocTypesAsCertain: false
