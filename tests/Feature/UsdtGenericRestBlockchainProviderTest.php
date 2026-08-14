@@ -134,7 +134,7 @@ final class UsdtGenericRestBlockchainProviderTest extends TestCase
             56,
             '0x'.str_repeat('aa', 20),
             '0x'.str_repeat('bb', 20),
-            1_000_000,
+            '1000000',
             6,
             15,
         );
