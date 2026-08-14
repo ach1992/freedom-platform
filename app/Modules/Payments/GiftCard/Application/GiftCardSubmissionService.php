@@ -14,6 +14,7 @@ use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Str;
 use RuntimeException;
+use Throwable;
 
 final readonly class GiftCardSubmissionService
 {
@@ -222,19 +223,58 @@ final readonly class GiftCardSubmissionService
             $connection = $this->database->connection();
             $duplicate = null;
             if ($codeHash !== null) {
-                $duplicate = $connection->table('gift_card_submissions')->where('code_lookup_hash', $codeHash)->first(['id']);
+                $duplicate = $connection->table('gift_card_submissions')->where('code_lookup_hash', $codeHash)->first(['id', 'public_id']);
             }
             if ($duplicate === null && $imageContentHash !== null) {
-                $duplicate = $connection->table('gift_card_submissions')->where('image_content_hash', $imageContentHash)->first(['id']);
+                $duplicate = $connection->table('gift_card_submissions')->where('image_content_hash', $imageContentHash)->first(['id', 'public_id']);
             }
             if ($duplicate === null && $telegramFileUniqueId !== null) {
-                $duplicate = $connection->table('gift_card_submissions')->where('telegram_file_unique_id', $telegramFileUniqueId)->first(['id']);
+                $duplicate = $connection->table('gift_card_submissions')->where('telegram_file_unique_id', $telegramFileUniqueId)->first(['id', 'public_id']);
             }
             if ($duplicate !== null) {
+                $duplicateEvidenceHash = $codeHash
+                    ?? $imageContentHash
+                    ?? ($telegramFileUniqueId === null ? null : hash('sha256', $telegramFileUniqueId));
+                $this->recordDuplicateFindingSafely(
+                    (int) $duplicate->id,
+                    (string) $duplicate->public_id,
+                    $duplicateEvidenceHash,
+                    $correlationId,
+                );
                 throw new RuntimeException('Gift-card evidence is already bound to another purchase.', 0, $exception);
             }
 
             throw $exception;
+        }
+    }
+
+    private function recordDuplicateFindingSafely(
+        int $submissionId,
+        string $submissionPublicId,
+        ?string $evidenceHash,
+        string $correlationId,
+    ): void {
+        try {
+            $findingKey = hash('sha256', implode("\0", [
+                'duplicate_submission_evidence',
+                $submissionPublicId,
+                $evidenceHash ?? '',
+            ]));
+            $this->database->connection()->table('gift_card_reconciliation_findings')->insertOrIgnore([
+                'public_id' => (string) Str::ulid(),
+                'gift_card_submission_id' => $submissionId,
+                'finding_key' => $findingKey,
+                'finding_type' => 'duplicate_submission_evidence',
+                'severity' => 'high',
+                'provider_code' => null,
+                'provider_event_id' => null,
+                'provider_transaction_id' => null,
+                'evidence_hash' => $evidenceHash,
+                'correlation_id' => $correlationId,
+                'created_at' => $this->timestamp(),
+            ]);
+        } catch (Throwable) {
+            // Preserve the original duplicate-evidence rejection.
         }
     }
 
