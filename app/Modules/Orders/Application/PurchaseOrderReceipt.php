@@ -20,7 +20,8 @@ final readonly class PurchaseOrderReceipt
         public int $userId,
         public OrderState $state,
         public int $stateVersion,
-        public Money $amount,
+        public Money $commercialAmount,
+        public Money $settledAmount,
         public DateTimeImmutable $paidAt,
         public bool $replayed = false,
     ) {}
