@@ -43,14 +43,45 @@ final readonly class GiftCardRedemptionService
         }
         $this->assertToken($externalProviderCode, 'Gift-card provider code', 2, 64);
         $this->assertToken($correlationId, 'Gift-card redemption correlation ID', 8, 64);
-        $this->validateRedeemEvidence($evidence);
 
-        $this->persistRedemption($submissionPublicId, $externalProviderCode, $evidence);
+        try {
+            $this->validateRedeemEvidence($evidence);
+        } catch (Throwable $exception) {
+            if ($evidence->outcome === 'success' && $evidence->status === 'redeemed') {
+                $this->recordFindingSafely(
+                    $submissionPublicId,
+                    'provider_redeemed_evidence_invalid',
+                    'critical',
+                    $externalProviderCode,
+                    $evidence->providerEventId,
+                    $evidence->providerTransactionId,
+                    $evidence->evidenceHash,
+                    $correlationId,
+                );
+            }
+            throw $exception;
+        }
+
+        try {
+            $this->persistRedemption($submissionPublicId, $externalProviderCode, $evidence);
+        } catch (Throwable $exception) {
+            $this->recordFindingSafely(
+                $submissionPublicId,
+                'provider_captured_redemption_persist_failed',
+                'critical',
+                $externalProviderCode,
+                $evidence->providerEventId,
+                $evidence->providerTransactionId,
+                $evidence->evidenceHash,
+                $correlationId,
+            );
+            throw $exception;
+        }
 
         try {
             return $this->settlePersistedRedemption($submissionPublicId, $correlationId);
         } catch (Throwable $exception) {
-            $this->recordFinding(
+            $this->recordFindingSafely(
                 $submissionPublicId,
                 'provider_captured_local_not_captured',
                 'critical',
@@ -186,7 +217,8 @@ final readonly class GiftCardRedemptionService
                     ->first([
                         'submission.id', 'submission.payment_intent_id', 'submission.claimed_face_value',
                         'submission.claimed_currency', 'submission.claimed_brand', 'submission.claimed_region',
-                        'submission.state', 'type.provider_code', 'type.face_currency', 'type.brand', 'type.region',
+                        'submission.state', 'submission.submitted_at',
+                        'type.provider_code', 'type.face_currency', 'type.brand', 'type.region',
                         'intent.amount_irr', 'intent.currency', 'intent.provider_code as intent_provider_code',
                     ]);
                 if ($submission === null) {
@@ -318,8 +350,35 @@ final readonly class GiftCardRedemptionService
             || (($submission->claimed_region === null) !== ($evidence->region === null))
             || ($evidence->region !== null && ! hash_equals((string) $submission->claimed_region, $evidence->region))
             || (($submission->region === null) !== ($evidence->region === null))
-            || ($evidence->region !== null && ! hash_equals((string) $submission->region, $evidence->region))) {
-            throw new DomainException('Gift-card redeemed evidence does not exactly match the accepted purchase/type claim.');
+            || ($evidence->region !== null && ! hash_equals((string) $submission->region, $evidence->region))
+            || $evidence->occurredAt->setTimezone(new DateTimeZone('UTC')) < $this->storedDateTime((string) $submission->submitted_at)) {
+            throw new DomainException('Gift-card redeemed evidence does not exactly match the accepted post-submission purchase/type claim.');
+        }
+    }
+
+    private function recordFindingSafely(
+        string $submissionPublicId,
+        string $findingType,
+        string $severity,
+        ?string $providerCode,
+        ?string $providerEventId,
+        ?string $providerTransactionId,
+        ?string $evidenceHash,
+        string $correlationId,
+    ): void {
+        try {
+            $this->recordFinding(
+                $submissionPublicId,
+                $findingType,
+                $severity,
+                $providerCode,
+                $providerEventId,
+                $providerTransactionId,
+                $evidenceHash,
+                $correlationId,
+            );
+        } catch (Throwable) {
+            // Preserve the original provider/local failure. Logging/outer incident handling can still report it.
         }
     }
 
