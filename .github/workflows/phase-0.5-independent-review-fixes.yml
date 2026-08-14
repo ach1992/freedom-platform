@@ -7,6 +7,7 @@ on:
     paths:
       - .github/workflows/phase-0.5-independent-review-fixes.yml
       - .github/phase-0.5-independent-review-fixes.py
+      - .github/phase-0.5-review-test-fixture-fix.py
 
 permissions:
   contents: write
@@ -49,7 +50,7 @@ jobs:
           base=916c8d23cbe68e3f41070122e8ba910562238fc8
           test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
           git merge-base --is-ancestor "$base" "${GITHUB_SHA}"
-          unexpected="$(git diff --name-only "$base".."${GITHUB_SHA}" | grep -Ev '^(\.github/workflows/phase-0\.5-independent-review-fixes\.yml|\.github/phase-0\.5-independent-review-fixes\.py)$' || true)"
+          unexpected="$(git diff --name-only "$base".."${GITHUB_SHA}" | grep -Ev '^(\.github/workflows/phase-0\.5-independent-review-fixes\.yml|\.github/phase-0\.5-independent-review-fixes\.py|\.github/phase-0\.5-review-test-fixture-fix\.py)$' || true)"
           test -z "$unexpected"
           git fetch origin task/8-phase-0.5-completion
           test "$(git rev-parse origin/task/8-phase-0.5-completion)" = "${GITHUB_SHA}"
@@ -68,6 +69,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 .github/phase-0.5-independent-review-fixes.py
+          python3 .github/phase-0.5-review-test-fixture-fix.py
           vendor/bin/pint app/Modules/Payments/NowPayments/Application/NowPaymentsPaymentService.php tests/Feature/NowPaymentsPaymentServiceTest.php app/Modules/Payments/GiftCard/Application/GiftCardSubmissionService.php tests/Feature/GiftCardLookupKeyRotationTest.php config/payments.php
           git diff --check
           php -l app/Modules/Payments/NowPayments/Application/NowPaymentsPaymentService.php
