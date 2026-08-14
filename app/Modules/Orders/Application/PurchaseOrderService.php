@@ -110,6 +110,8 @@ final readonly class PurchaseOrderService
 {
     private const SOURCE_TYPE = 'purchase';
 
+    private const DEADLOCK_RETRY_ATTEMPTS = 3;
+
     public function __construct(
         private DatabaseManager $database,
         private Clock $clock,
@@ -215,7 +217,7 @@ final readonly class PurchaseOrderService
                     $this->storedDateTime($settlement->settled_at, 'Purchase settlement timestamp'),
                     false,
                 );
-            });
+            }, self::DEADLOCK_RETRY_ATTEMPTS);
         } catch (QueryException $exception) {
             $replay = $this->replayAfterUniqueRace($settlementPublicId);
             if ($replay !== null) {
