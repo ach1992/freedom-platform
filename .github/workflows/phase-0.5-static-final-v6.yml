@@ -1,0 +1,180 @@
+name: Phase 0.5 final static correction v6
+
+on:
+  push:
+    branches:
+      - task/8-phase-0.5-completion
+    paths:
+      - .github/workflows/phase-0.5-static-final-v6.yml
+
+permissions:
+  contents: write
+
+jobs:
+  correct:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: task/8-phase-0.5-completion
+          fetch-depth: 0
+
+      - name: Guard staging-only drift
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          git merge-base --is-ancestor f0aa75143c0330ff35466453c523bab92fcf5f72 "${GITHUB_SHA}"
+          unexpected="$(git diff --name-only f0aa75143c0330ff35466453c523bab92fcf5f72.."${GITHUB_SHA}" | grep -Ev '^\.github/workflows/phase-0\.5-static-final(-v[23456])?\.yml$' || true)"
+          test -z "$unexpected"
+          git fetch origin task/8-phase-0.5-completion
+          test "$(git rev-parse origin/task/8-phase-0.5-completion)" = "${GITHUB_SHA}"
+
+      - name: Bootstrap PHP 8.4
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/ci/bootstrap-self-hosted-toolchain.sh no-coverage
+          export PATH="$(tail -n 1 "$GITHUB_PATH"):$PATH"
+          composer install --no-interaction --prefer-dist --no-progress --no-scripts
+
+      - name: Execute validated final manifest and contract fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+          from textwrap import dedent
+
+          workflow = Path('.github/workflows/phase-0.5-static-final.yml').read_text()
+          start_marker = "          python3 <<'PY'\n"
+          end_marker = "\n          PY\n\n          mapfile -t modified_php"
+          start = workflow.index(start_marker) + len(start_marker)
+          end = workflow.index(end_marker, start)
+          script = dedent(workflow[start:end])
+
+          block_start = script.index('old_ids = """')
+          block_end = script.index('# Referral lifecycle:', block_start)
+          repaired_ids = r'''i8 = ' ' * 8
+          i12 = ' ' * 12
+          head = i8 + "$rewardPublicIds = $connection->table('referral_rewards')\n"
+          tail = i12 + "->map(static fn (mixed $value): string => (string) $value)\n" + i12 + "->all();\n\n" + i8 + "return new ReferralRewardAccrualReceipt("
+          if text.count(head) != 1 or text.count(tail) != 1:
+              raise SystemExit('ReferralRewardAccrualService live reward-list anchors changed.')
+          text = text.replace(head, i8 + "$rewardPublicIds = array_values($connection->table('referral_rewards')\n", 1)
+          text = text.replace(tail, i12 + "->map(static fn (mixed $value): string => (string) $value)\n" + i12 + "->all());\n\n" + i8 + "return new ReferralRewardAccrualReceipt(", 1)
+          accrual.write_text(text)
+
+          '''
+          script = script[:block_start] + repaired_ids + script[block_end:]
+
+          catch_start = script.index('# QueryException extends RuntimeException;')
+          catch_end = script.index('# Only two internal states are accepted;', catch_start)
+          repaired_catch = r'''txid = Path('app/Modules/Payments/Usdt/Application/UsdtTxidSubmissionService.php')
+          text = txid.read_text()
+          i8 = ' ' * 8
+          i12 = ' ' * 12
+          i16 = ' ' * 16
+          i20 = ' ' * 20
+          runtime_head = i8 + '} catch (RuntimeException $exception) {\n' + i12 + "if ($exception->getMessage() === 'USDT TXID is already bound to another payment authority.') {\n"
+          runtime_new = ''.join([
+              i8, '} catch (RuntimeException $exception) {\n',
+              i12, 'if ($exception instanceof QueryException) {\n',
+              i16, "$duplicate = $this->database->connection()->table('usdt_txid_submissions')->where('txid', $txid)->first(['id']);\n",
+              i16, 'if ($duplicate !== null) {\n',
+              i20, '$this->recordDuplicateFinding((int) $duplicate->id, $txid, $correlationId);\n',
+              i20, "throw new RuntimeException('USDT TXID is already bound to another payment authority.', 0, $exception);\n",
+              i16, '}\n',
+              i16, 'throw $exception;\n',
+              i12, '}\n\n',
+              i12, "if ($exception->getMessage() === 'USDT TXID is already bound to another payment authority.') {\n",
+          ])
+          query_catch = ''.join([
+              i8, '} catch (QueryException $exception) {\n',
+              i12, "$duplicate = $this->database->connection()->table('usdt_txid_submissions')->where('txid', $txid)->first(['id']);\n",
+              i12, 'if ($duplicate !== null) {\n',
+              i16, '$this->recordDuplicateFinding((int) $duplicate->id, $txid, $correlationId);\n',
+              i16, "throw new RuntimeException('USDT TXID is already bound to another payment authority.', 0, $exception);\n",
+              i12, '}\n',
+              i12, 'throw $exception;\n',
+              i8, '}\n',
+          ])
+          if text.count(runtime_head) != 1 or text.count(query_catch) != 1:
+              raise SystemExit(f'UsdtTxidSubmissionService live catch anchors changed: runtime={text.count(runtime_head)} query={text.count(query_catch)}')
+          text = text.replace(runtime_head, runtime_new, 1)
+          text = text.replace(query_catch, i8 + '}\n', 1)
+          txid.write_text(text)
+
+          '''
+          script = script[:catch_start] + repaired_catch + script[catch_end:]
+          Path('/tmp/phase-0.5-static-final.py').write_text(script)
+          PY
+          python3 /tmp/phase-0.5-static-final.py
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          targets = [
+              'app/Modules/Payments/CardToCard/Application/CardToCardBankTransactionService.php',
+              'app/Modules/Payments/CardToCard/Application/CardToCardDestinationService.php',
+              'app/Modules/Payments/CardToCard/Application/CardToCardManualSubmissionService.php',
+              'app/Modules/Payments/GiftCard/Application/GiftCardPaymentService.php',
+              'app/Modules/Payments/GiftCard/Application/GiftCardReconciliationService.php',
+              'app/Modules/Payments/GiftCard/Application/GiftCardReleaseService.php',
+              'app/Modules/Payments/GiftCard/Application/GiftCardSubmissionService.php',
+          ]
+          for path in targets:
+              p = Path(path)
+              text = p.read_text()
+              import_old = 'use Illuminate\\Contracts\\Encryption\\Encrypter;\n'
+              import_new = 'use Illuminate\\Contracts\\Encryption\\StringEncrypter;\n'
+              type_old = 'private Encrypter $encrypter'
+              type_new = 'private StringEncrypter $encrypter'
+              if text.count(import_old) != 1 or text.count(type_old) != 1:
+                  raise SystemExit(f'{path}: encryption contract markers changed.')
+              p.write_text(text.replace(import_old, import_new, 1).replace(type_old, type_new, 1))
+          PY
+
+          mapfile -t modified_php < <(git diff --name-only -- app database | grep '\.php$' | sort)
+          test "${#modified_php[@]}" -eq 17
+          vendor/bin/pint "${modified_php[@]}"
+          git diff --check
+          for file in "${modified_php[@]}"; do php -l "$file"; done
+
+      - name: Require zero PHPStan errors before push
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/logs
+          set +e
+          vendor/bin/phpstan analyse --no-progress --error-format=json --memory-limit=1G > build/logs/phpstan-final.json 2> build/logs/phpstan-final.stderr
+          status=$?
+          set -e
+          count="$(python3 - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path('build/logs/phpstan-final.json').read_text())
+          totals = data.get('totals', {})
+          print(int(totals.get('errors', 0)) + int(totals.get('file_errors', 0)))
+          PY
+          )"
+          echo "phpstan_status=$status errors=$count"
+          if [[ "$status" -ne 0 || "$count" -ne 0 ]]; then
+            cat build/logs/phpstan-final.json
+            cat build/logs/phpstan-final.stderr >&2
+            exit 1
+          fi
+
+      - name: Commit product changes only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app database
+          git diff --cached --quiet && { echo 'Expected final static corrections, found none.' >&2; exit 1; }
+          git commit -m 'fix(phase-0.5): close final static analysis gaps'
+          git fetch origin task/8-phase-0.5-completion
+          test "$(git rev-parse origin/task/8-phase-0.5-completion)" = "${GITHUB_SHA}"
+          git push origin HEAD:task/8-phase-0.5-completion
