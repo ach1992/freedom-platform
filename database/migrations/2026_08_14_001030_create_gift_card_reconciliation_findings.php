@@ -14,7 +14,11 @@ return new class extends Migration
         Schema::create('gift_card_reconciliation_findings', function (Blueprint $table): void {
             $table->bigIncrements('id');
             $table->ulid('public_id')->unique();
-            $table->foreignId('gift_card_submission_id')->constrained('gift_card_submissions')->restrictOnDelete();
+            $table->foreignId('gift_card_submission_id');
+            $table->foreign('gift_card_submission_id', 'gift_card_recon_submission_fk')
+                ->references('id')
+                ->on('gift_card_submissions')
+                ->restrictOnDelete();
             $table->string('finding_key', 128)->unique();
             $table->string('finding_type', 64);
             $table->string('severity', 16);

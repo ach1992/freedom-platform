@@ -51,7 +51,11 @@ return new class extends Migration
 
         Schema::create('nowpayments_payment_observations', function (Blueprint $table): void {
             $table->bigIncrements('id');
-            $table->foreignId('nowpayments_payment_authority_id')->constrained('nowpayments_payment_authorities')->restrictOnDelete();
+            $table->foreignId('nowpayments_payment_authority_id');
+            $table->foreign('nowpayments_payment_authority_id', 'nowpayments_observation_authority_fk')
+                ->references('id')
+                ->on('nowpayments_payment_authorities')
+                ->restrictOnDelete();
             $table->string('event_key', 191)->unique();
             $table->string('event_type', 32);
             $table->string('provider_payment_id', 64)->nullable();

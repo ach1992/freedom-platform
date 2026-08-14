@@ -39,7 +39,8 @@ return new class extends Migration
         Schema::create('zarinpal_payment_verifications', function (Blueprint $table): void {
             $table->bigIncrements('id');
             $table->ulid('public_id')->unique();
-            $table->foreignId('zarinpal_payment_request_id')->unique();
+            $table->foreignId('zarinpal_payment_request_id');
+            $table->unique('zarinpal_payment_request_id', 'zpv_request_unique');
             $table->foreign('zarinpal_payment_request_id', 'zpv_request_fk')->references('id')->on('zarinpal_payment_requests')->restrictOnDelete();
             $table->foreignId('purchase_settlement_id')->unique()->constrained('purchase_settlements')->restrictOnDelete();
             $table->string('authority', 64)->unique();
@@ -59,7 +60,11 @@ return new class extends Migration
 
         Schema::create('zarinpal_payment_observations', function (Blueprint $table): void {
             $table->bigIncrements('id');
-            $table->foreignId('zarinpal_payment_request_id')->constrained('zarinpal_payment_requests')->restrictOnDelete();
+            $table->foreignId('zarinpal_payment_request_id');
+            $table->foreign('zarinpal_payment_request_id', 'zpo_request_fk')
+                ->references('id')
+                ->on('zarinpal_payment_requests')
+                ->restrictOnDelete();
             $table->string('event_key', 191)->unique();
             $table->string('event_type', 32);
             $table->string('provider_status', 32)->nullable();

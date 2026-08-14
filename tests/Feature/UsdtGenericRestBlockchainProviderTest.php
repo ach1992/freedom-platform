@@ -40,7 +40,7 @@ final class UsdtGenericRestBlockchainProviderTest extends TestCase
         $evidence = $provider->lookup($this->request($txid));
         self::assertSame('success', $evidence->outcome);
         self::assertSame('success', $evidence->transactionStatus);
-        self::assertSame(1_000_000, $evidence->amountBaseUnits);
+        self::assertSame('1000000', $evidence->amountBaseUnits);
         self::assertSame(20, $evidence->confirmations);
         self::assertSame(56, $evidence->chainId);
 
@@ -65,7 +65,7 @@ final class UsdtGenericRestBlockchainProviderTest extends TestCase
         ]);
 
         $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessage('must be an integer, never a float');
+        $this->expectExceptionMessage('must be an integer string, never a float');
         $this->provider()->lookup($this->request($txid));
     }
 

@@ -41,7 +41,11 @@ return new class extends Migration
 
         Schema::create('c2c_destination_account_events', function (Blueprint $table): void {
             $table->bigIncrements('id');
-            $table->foreignId('c2c_destination_account_id')->constrained('c2c_destination_accounts')->restrictOnDelete();
+            $table->foreignId('c2c_destination_account_id');
+            $table->foreign('c2c_destination_account_id', 'c2c_dest_event_account_fk')
+                ->references('id')
+                ->on('c2c_destination_accounts')
+                ->restrictOnDelete();
             $table->string('event_type', 16);
             $table->char('configuration_hash', 64);
             $table->string('reason', 191);
