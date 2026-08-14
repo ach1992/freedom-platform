@@ -25,19 +25,9 @@ final class NowPaymentsTransportContractTest extends TestCase
 
     public function test_create_uses_fixed_official_endpoint_api_key_and_unquoted_decimal_json_number(): void
     {
+        $responseBody = '{"payment_id":900001,"payment_status":"waiting","pay_address":"0x1111111111111111111111111111111111111111","price_amount":11.11111112,"price_currency":"usd","pay_amount":"12.500000000000000000","pay_currency":"usdtbsc","order_id":"payment-intent:01J00000000000000000000000","created_at":"2026-08-14T06:30:00Z","updated_at":"2026-08-14T06:30:00Z"}';
         Http::fake([
-            'https://api.nowpayments.io/v1/payment' => Http::response([
-                'payment_id' => 900001,
-                'payment_status' => 'waiting',
-                'pay_address' => '0x1111111111111111111111111111111111111111',
-                'price_amount' => 11.11111112,
-                'price_currency' => 'usd',
-                'pay_amount' => '12.500000000000000000',
-                'pay_currency' => 'usdtbsc',
-                'order_id' => 'payment-intent:01J00000000000000000000000',
-                'created_at' => '2026-08-14T06:30:00Z',
-                'updated_at' => '2026-08-14T06:30:00Z',
-            ], 201),
+            'https://api.nowpayments.io/v1/payment' => Http::response($responseBody, 201, ['Content-Type' => 'application/json']),
         ]);
         $transport = new HttpNowPaymentsTransport($this->app->make(Factory::class), 'test-api-key');
         $request = new NowPaymentsCreateRequest(
