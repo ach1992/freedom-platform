@@ -12,6 +12,7 @@ use App\Modules\Promotions\Domain\PromotionDiscountType;
 use App\Modules\Promotions\Domain\PromotionRuleDefinition;
 use App\Modules\Promotions\Domain\PromotionRuleKind;
 use App\Modules\Promotions\Domain\PromotionRuleState;
+use App\Modules\Promotions\Domain\ReferralRewardPolicy;
 use App\Shared\Application\Clock;
 use DateTimeImmutable;
 use DateTimeZone;
@@ -611,6 +612,9 @@ final readonly class PromotionRuleService
         if ($kind === PromotionRuleKind::Promotion && $definition->referralSourceCode !== null) {
             throw new DomainException('Promotion pricing rule cannot contain referral source identity.');
         }
+        if ($kind !== PromotionRuleKind::Referral && $definition->referralRewardRecipient !== null) {
+            throw new DomainException('Promotion pricing rule cannot contain referral reward policy.');
+        }
     }
 
     /** @param RuleVersionRow $row */
@@ -624,6 +628,7 @@ final readonly class PromotionRuleService
         if ($row->action !== null && $action === null) {
             throw new RuntimeException('Stored promotion action is invalid.');
         }
+        $rewardPolicy = ReferralRewardPolicy::fromConfigurationSnapshot($row->configuration_snapshot);
 
         try {
             $definition = new PromotionRuleDefinition(
@@ -648,6 +653,11 @@ final readonly class PromotionRuleService
                 $action,
                 $row->referral_source_code,
                 (bool) $row->allows_free_order,
+                $rewardPolicy?->recipient,
+                $rewardPolicy?->pendingHours,
+                $rewardPolicy?->expiryHours,
+                $rewardPolicy?->transferable,
+                $rewardPolicy?->perReferralUseLimit,
             );
         } catch (\InvalidArgumentException $exception) {
             throw new RuntimeException('Stored promotion rule configuration is invalid.', previous: $exception);
