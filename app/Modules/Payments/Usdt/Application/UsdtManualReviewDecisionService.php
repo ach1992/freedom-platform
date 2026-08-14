@@ -55,7 +55,7 @@ final readonly class UsdtManualReviewDecisionService
                 ->first([
                     'review.id as review_id', 'review.state as review_state', 'review.decided_by_administrator_id',
                     'submission.id as submission_id', 'submission.public_id as submission_public_id', 'submission.state as submission_state', 'submission.txid',
-                    'authority.network', 'authority.chain_id', 'authority.token_contract', 'authority.destination_address',
+                    'authority.network', 'authority.chain_id', 'authority.token_contract', 'authority.token_decimals', 'authority.destination_address',
                     'authority.expected_amount_base_units', 'authority.minimum_confirmations', 'authority.created_at as authority_created_at',
                     'intent.state as intent_state', 'intent.captured_at',
                 ]);
@@ -175,6 +175,8 @@ final readonly class UsdtManualReviewDecisionService
 
     private function assertExactManualEvidence(object $authority, UsdtBlockchainVerificationEvidence $evidence): void
     {
+        $actualBaseUnits = $evidence->amountBaseUnits === null ? null : UsdtTokenAmount::normalizeBaseUnits($evidence->amountBaseUnits);
+        $expectedBaseUnits = UsdtTokenAmount::normalizeBaseUnits((string) $authority->expected_amount_base_units);
         if ($evidence->outcome !== 'success'
             || $evidence->transactionStatus !== 'success'
             || ! hash_equals((string) $authority->txid, strtolower($evidence->txid))
@@ -182,15 +184,18 @@ final readonly class UsdtManualReviewDecisionService
             || $evidence->chainId !== (int) $authority->chain_id
             || $evidence->tokenContract === null
             || ! hash_equals((string) $authority->token_contract, strtolower($evidence->tokenContract))
+            || ! hash_equals(UsdtBep20Asset::TOKEN_CONTRACT, strtolower($evidence->tokenContract))
             || $evidence->destinationAddress === null
             || ! hash_equals((string) $authority->destination_address, strtolower($evidence->destinationAddress))
-            || $evidence->amountBaseUnits !== (int) $authority->expected_amount_base_units
-            || $evidence->tokenDecimals !== UsdtTokenAmount::DECIMALS
+            || $actualBaseUnits === null
+            || ! hash_equals($expectedBaseUnits, $actualBaseUnits)
+            || $evidence->tokenDecimals !== (int) $authority->token_decimals
+            || (int) $authority->token_decimals !== UsdtBep20Asset::TOKEN_DECIMALS
             || $evidence->confirmations === null
             || $evidence->confirmations < (int) $authority->minimum_confirmations
             || $evidence->transactionAt === null
             || $evidence->transactionAt < $this->storedDateTime((string) $authority->authority_created_at)) {
-            throw new DomainException('USDT manual approval requires exact authoritative BEP20 transfer evidence.');
+            throw new DomainException('USDT manual approval requires exact authoritative canonical BSC-USDT transfer evidence.');
         }
         if ($evidence->providerEventId === '' || strlen($evidence->providerEventId) > 191
             || preg_match('/\A[a-fA-F0-9]{64}\z/', $evidence->evidenceHash) !== 1) {
