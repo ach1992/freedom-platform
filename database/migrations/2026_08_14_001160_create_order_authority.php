@@ -108,7 +108,7 @@ return new class extends Migration
     public function down(): void
     {
         if (DB::table('orders')->exists()) {
-            throw new \RuntimeException('Cannot roll back Order authority while Orders exist.');
+            throw new RuntimeException('Cannot roll back Order authority while Orders exist.');
         }
 
         DB::unprepared('DROP TRIGGER IF EXISTS order_items_delete_guard');
