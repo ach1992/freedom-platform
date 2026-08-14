@@ -18,6 +18,7 @@ use RuntimeException;
 /**
  * Bounded Generic REST gift-card adapter.
  * Mappings are direct object keys only. No JSONPath, templates, script, SQL, shell, or dynamic code is evaluated.
+ * Private image/Telegram references never leave the trusted application boundary; this generic adapter is code-input only.
  */
 final class GenericRestGiftCardVerificationProvider implements GiftCardVerificationProvider
 {
@@ -203,6 +204,9 @@ final class GenericRestGiftCardVerificationProvider implements GiftCardVerificat
         if (preg_match('/\A[a-f0-9]{64}\z/', $request->operationKey) !== 1) {
             throw new DomainException('Generic gift-card operation key is invalid.');
         }
+        if ($request->code === null) {
+            throw new DomainException('Generic REST gift-card verification requires code input; private image references are never exported.');
+        }
 
         $addresses = ($this->resolver)($this->host);
         if (! is_array($addresses) || $addresses === []) {
@@ -237,7 +241,6 @@ final class GenericRestGiftCardVerificationProvider implements GiftCardVerificat
             'face_currency' => $request->faceCurrency,
             'face_value' => $request->faceValue,
             'code' => $request->code,
-            'image_reference' => $request->privateImageReference,
         ];
         $response = Http::withHeaders($headers)
             ->timeout($this->timeoutSeconds)
