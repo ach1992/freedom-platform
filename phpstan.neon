@@ -9,7 +9,11 @@ parameters:
         - config
         - database
         - routes
-    stubFiles:
-        - stubs/IlluminateDatabaseQueryBuilder.stub
     tmpDir: build/cache/phpstan
     treatPhpDocTypesAsCertain: false
+
+services:
+    -
+        class: App\PHPStan\DatabaseQueryBuilderExpressionTypeExtension
+        tags:
+            - phpstan.broker.expressionTypeResolverExtension
