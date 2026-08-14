@@ -65,7 +65,13 @@ final readonly class PurchaseRefundService
                 if ($intent === null) {
                     throw new RuntimeException('Purchase settlement payment intent is unavailable.');
                 }
-                $this->assertSettlementIntentAuthority($settlement, $intent, $providerCode, $event->evidence);
+                $refundableCapturedAmount = $this->assertSettlementIntentAuthority(
+                    $connection,
+                    $settlement,
+                    $intent,
+                    $providerCode,
+                    $event->evidence,
+                );
 
                 $existing = $this->refundByKey($connection, $refundKey, true);
                 if ($existing !== null) {
@@ -82,7 +88,6 @@ final readonly class PurchaseRefundService
                     throw new DomainException('Purchase payment intent is not refundable from its current state.');
                 }
 
-                $settlementAmount = $this->positiveInt($settlement->amount_irr, 'Purchase settlement amount');
                 $refundAmount = $event->evidence->amount->amount();
                 $alreadyRefunded = $this->nonNegativeInt(
                     $connection->table('purchase_refunds')
@@ -90,12 +95,13 @@ final readonly class PurchaseRefundService
                         ->sum('amount_irr'),
                     'Previously refunded purchase amount',
                 );
-                if ($alreadyRefunded > $settlementAmount || $refundAmount > $settlementAmount - $alreadyRefunded) {
-                    throw new DomainException('Purchase refund would exceed authoritative captured amount.');
+                if ($alreadyRefunded > $refundableCapturedAmount
+                    || $refundAmount > $refundableCapturedAmount - $alreadyRefunded) {
+                    throw new DomainException('Purchase refund would exceed authoritative refundable captured amount.');
                 }
 
                 $cumulative = $alreadyRefunded + $refundAmount;
-                $resultingState = $cumulative === $settlementAmount
+                $resultingState = $cumulative === $refundableCapturedAmount
                     ? PaymentIntentState::Refunded
                     : PaymentIntentState::PartiallyRefunded;
                 $providerEvent = $this->recordProviderEvent($connection, $intentId, $providerCode, $event);
@@ -231,25 +237,52 @@ final readonly class PurchaseRefundService
     }
 
     private function assertSettlementIntentAuthority(
+        Connection $connection,
         object $settlement,
         object $intent,
         string $providerCode,
         PaymentEvidence $evidence,
-    ): void {
+    ): int {
         if ($intent->purpose !== self::PURPOSE
             || (int) $intent->id !== (int) $settlement->payment_intent_id
             || (int) $intent->user_id !== (int) $settlement->user_id
             || ! hash_equals($intent->provider_code, $settlement->provider_code)
             || ! hash_equals($providerCode, $settlement->provider_code)
-            || (int) $intent->amount_irr !== (int) $settlement->amount_irr
             || $intent->currency !== $settlement->currency
             || $evidence->amount->currency() !== $settlement->currency
             || $intent->captured_at === null) {
             throw new RuntimeException('Purchase refund settlement authority is inconsistent.');
         }
+
+        if ($settlement->provider_code === 'card_to_card') {
+            $authority = $connection->table('c2c_transaction_matches as match_row')
+                ->join('c2c_amount_reservations as reservation_row', 'reservation_row.id', '=', 'match_row.c2c_amount_reservation_id')
+                ->where('match_row.purchase_settlement_id', $this->positiveInt($settlement->id, 'Purchase settlement ID'))
+                ->where('match_row.payment_intent_id', $this->positiveInt($intent->id, 'Payment intent ID'))
+                ->where('match_row.state', 'captured')
+                ->where('reservation_row.payment_intent_id', $this->positiveInt($intent->id, 'Payment intent ID'))
+                ->first([
+                    'reservation_row.base_amount_irr',
+                    'reservation_row.payable_amount_irr',
+                ]);
+            if ($authority === null
+                || (int) $authority->base_amount_irr !== (int) $intent->amount_irr
+                || (int) $authority->payable_amount_irr !== (int) $settlement->amount_irr) {
+                throw new RuntimeException('Purchase refund card-to-card amount authority is inconsistent.');
+            }
+            $refundableCapturedAmount = $this->positiveInt($authority->base_amount_irr, 'C2C refundable base amount');
+        } else {
+            if ((int) $intent->amount_irr !== (int) $settlement->amount_irr) {
+                throw new RuntimeException('Purchase refund settlement amount authority is inconsistent.');
+            }
+            $refundableCapturedAmount = $this->positiveInt($settlement->amount_irr, 'Purchase refundable captured amount');
+        }
+
         if ($evidence->occurredAt->setTimezone(new DateTimeZone('UTC')) < $this->storedDateTime($settlement->settled_at)) {
             throw new DomainException('Purchase refund evidence cannot predate authoritative settlement.');
         }
+
+        return $refundableCapturedAmount;
     }
 
     private function refundByKey(Connection $connection, string $refundKey, bool $lock = false): ?object
