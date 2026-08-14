@@ -281,9 +281,9 @@ final readonly class PurchaseOrderService
     }
 
     /**
-     * @param SettlementRow $settlement
-     * @param IntentRow $intent
-     * @param QuoteRow $quote
+     * @param  SettlementRow  $settlement
+     * @param  IntentRow  $intent
+     * @param  QuoteRow  $quote
      */
     private function assertSettlementAuthority(object $settlement, object $intent, object $quote): void
     {
@@ -356,8 +356,8 @@ final readonly class PurchaseOrderService
     }
 
     /**
-     * @param OrderRow $order
-     * @param SettlementRow $settlement
+     * @param  OrderRow  $order
+     * @param  SettlementRow  $settlement
      */
     private function replayReceipt(Connection $connection, object $order, object $settlement): PurchaseOrderReceipt
     {
@@ -392,7 +392,7 @@ final readonly class PurchaseOrderService
             || (int) $order->total_amount_irr !== (int) $settlement->amount_irr
             || $order->currency !== $settlement->currency
             || $order->paid_at === null
-            || !$this->sameInstant($order->paid_at, $settlement->settled_at)) {
+            || ! $this->sameInstant($order->paid_at, $settlement->settled_at)) {
             throw new RuntimeException('Stored purchase Order integrity check failed.');
         }
 
@@ -415,8 +415,8 @@ final readonly class PurchaseOrderService
     }
 
     /**
-     * @param OrderItemRow $item
-     * @param QuoteRow $quote
+     * @param  OrderItemRow  $item
+     * @param  QuoteRow  $quote
      */
     private function assertItemMatchesQuote(object $item, object $quote): void
     {
