@@ -62,7 +62,7 @@ final readonly class CardToCardMatchingService
                 ->where('intent.purpose', 'purchase')
                 ->where('intent.payment_method_code', 'card_to_card')
                 ->where('intent.provider_code', 'card_to_card')
-                ->where('intent.state', 'awaiting_user_action')
+                ->whereIn('intent.state', ['awaiting_user_action', 'submitted'])
                 ->whereNull('intent.captured_at')
                 ->orderBy('reservation.id')
                 ->lockForUpdate()
@@ -141,7 +141,7 @@ final readonly class CardToCardMatchingService
                 ->where('intent.purpose', 'purchase')
                 ->where('intent.payment_method_code', 'card_to_card')
                 ->where('intent.provider_code', 'card_to_card')
-                ->where('intent.state', 'awaiting_user_action')
+                ->whereIn('intent.state', ['awaiting_user_action', 'submitted'])
                 ->whereNull('intent.captured_at')
                 ->lockForUpdate()
                 ->first(['reservation.*']);
