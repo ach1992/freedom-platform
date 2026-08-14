@@ -70,17 +70,17 @@ jobs:
             $payCurrency = (string) $current->pay_currency;
             $priceAmountUsd = NowPaymentsDecimal::normalize($result->priceAmount, NowPaymentsDecimal::PRICE_PRECISION);
             $providerPayAmount = NowPaymentsDecimal::normalize($result->payAmount, 18);
-            $settlementEvidenceHash = hash('sha256', implode("\\0", [
-                self::PROVIDER_CODE,
-                $providerPaymentId,
-                (string) $amountIrr,
-                'IRR',
-                $priceAmountUsd,
-                $payCurrency,
-                $providerPayAmount,
-                $rateSource,
-                'finished',
-            ]));
+            $settlementEvidenceHash = hash('sha256', json_encode([
+                'provider_code' => self::PROVIDER_CODE,
+                'provider_payment_id' => $providerPaymentId,
+                'amount_irr' => $amountIrr,
+                'currency' => 'IRR',
+                'price_amount_usd' => $priceAmountUsd,
+                'pay_currency' => $payCurrency,
+                'provider_pay_amount' => $providerPayAmount,
+                'rate_source' => $rateSource,
+                'provider_status' => 'finished',
+            ], JSON_THROW_ON_ERROR));
             $eventId = 'settlement:'.$settlementEvidenceHash;
             $settlementEvent = new VerifiedPaymentEvent(
                 $eventId,
