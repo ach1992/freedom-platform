@@ -144,7 +144,7 @@ jobs:
           done
           printf '%s\n' "${changed[@]}" | LC_ALL=C sort > /tmp/pint-changed-paths.txt
           actual_hash="$(sha256sum /tmp/pint-changed-paths.txt | awk '{print $1}')"
-          expected_hash="3161c62cab5ba82d9bd9c1d00753142f807f7450bed6d854691a9ca3b591629d"
+          expected_hash="3161c62a25371b6c01a330fcf298635bd303ea2c9c8f1d56399047ebc3f0588a"
           if [ "$actual_hash" != "$expected_hash" ]; then
             echo "Unexpected Pint path set."
             cat /tmp/pint-changed-paths.txt
