@@ -30,9 +30,13 @@ use RuntimeException;
 final readonly class InitialProvisioningQueueService
 {
     private const SOURCE_TYPE = 'purchase';
+
     private const OPERATION_TYPE = 'initial_provision';
+
     private const EVENT_TYPE = 'provisioning.initial.requested';
+
     private const AGGREGATE_TYPE = 'provisioning_operation';
+
     private const DEADLOCK_RETRY_ATTEMPTS = 3;
 
     public function __construct(
@@ -293,10 +297,10 @@ final readonly class InitialProvisioningQueueService
     }
 
     /**
-     * @param OrderRow $order
-     * @param OrderItemRow $item
-     * @param SettlementRow $settlement
-     * @param IntentRow $intent
+     * @param  OrderRow  $order
+     * @param  OrderItemRow  $item
+     * @param  SettlementRow  $settlement
+     * @param  IntentRow  $intent
      */
     private function assertNewQueueAuthority(object $order, object $item, object $settlement, object $intent): void
     {
@@ -342,11 +346,11 @@ final readonly class InitialProvisioningQueueService
     }
 
     /**
-     * @param OrderRow $order
-     * @param OrderItemRow $item
-     * @param SettlementRow $settlement
-     * @param IntentRow $intent
-     * @param OperationRow $operation
+     * @param  OrderRow  $order
+     * @param  OrderItemRow  $item
+     * @param  SettlementRow  $settlement
+     * @param  IntentRow  $intent
+     * @param  OperationRow  $operation
      */
     private function replayReceipt(
         Connection $connection,
