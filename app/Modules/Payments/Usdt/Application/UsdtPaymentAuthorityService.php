@@ -12,6 +12,7 @@ use DateTimeZone;
 use DomainException;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Str;
 use RuntimeException;
 
@@ -41,105 +42,123 @@ final readonly class UsdtPaymentAuthorityService
             throw new DomainException('USDT payment preparation identity is invalid.');
         }
         $this->assertCorrelation($correlationId);
-        [$chainId, $tokenContract, $minimumConfirmations] = $this->trustedPolicy();
 
-        return $this->database->connection()->transaction(function (Connection $connection) use (
-            $authorityKey,
-            $intentCreationKey,
-            $userId,
-            $sourceQuotePublicId,
-            $eligibilityDecisionPublicId,
-            $amountQuotePublicId,
-            $correlationId,
-            $chainId,
-            $tokenContract,
-            $minimumConfirmations,
-        ): UsdtPaymentAuthorityReceipt {
-            $existing = $connection->table('usdt_payment_authorities')->where('authority_key', $authorityKey)->lockForUpdate()->first();
-            if ($existing !== null) {
-                if ((int) $existing->user_id !== $userId || $existing->source_quote_public_id !== $sourceQuotePublicId) {
-                    throw new RuntimeException('USDT payment authority key conflicts with accepted preparation.');
-                }
-                $amountQuote = $connection->table('usdt_amount_quotes')->where('id', $existing->usdt_amount_quote_id)->first(['public_id']);
-                if ($amountQuote === null || $amountQuote->public_id !== $amountQuotePublicId) {
-                    throw new RuntimeException('USDT payment authority replay conflicts with amount quote.');
-                }
-                return $this->receipt($connection, $existing, true);
-            }
-
-            $now = $this->timestamp();
-            $amountQuote = $connection->table('usdt_amount_quotes')
-                ->where('public_id', $amountQuotePublicId)
-                ->lockForUpdate()
-                ->first();
-            if ($amountQuote === null) {
-                throw new DomainException('USDT amount quote does not exist.');
-            }
-            if ((int) $amountQuote->user_id !== $userId
-                || $amountQuote->source_quote_public_id !== $sourceQuotePublicId
-                || $amountQuote->network !== 'BEP20'
-                || $this->storedDateTime((string) $amountQuote->expires_at) <= $this->clock->now()) {
-                throw new DomainException('USDT amount quote is not current for this purchase.');
-            }
-
-            $intentReceipt = $this->purchaseIntents->create(
+        try {
+            return $this->database->connection()->transaction(function (Connection $connection) use (
+                $authorityKey,
                 $intentCreationKey,
                 $userId,
                 $sourceQuotePublicId,
                 $eligibilityDecisionPublicId,
-                self::METHOD_CODE,
+                $amountQuotePublicId,
                 $correlationId,
-            );
-            if ($intentReceipt->state !== PaymentIntentState::AwaitingUserAction
-                || $intentReceipt->amount->currency() !== 'IRR'
-                || $intentReceipt->amount->amount() !== (int) $amountQuote->order_amount_irr) {
-                throw new RuntimeException('USDT purchase intent does not match the locked amount quote.');
-            }
-            $intent = $connection->table('payment_intents')->where('public_id', $intentReceipt->intentPublicId)->lockForUpdate()->first();
-            if ($intent === null) {
-                throw new RuntimeException('USDT purchase intent authority disappeared during preparation.');
+            ): UsdtPaymentAuthorityReceipt {
+                $existing = $connection->table('usdt_payment_authorities')->where('authority_key', $authorityKey)->lockForUpdate()->first();
+                if ($existing !== null) {
+                    return $this->replayReceipt($connection, $existing, $userId, $sourceQuotePublicId, $amountQuotePublicId);
+                }
+
+                [$chainId, $tokenContract, $minimumConfirmations] = $this->trustedPolicy();
+                $now = $this->timestamp();
+                $amountQuote = $connection->table('usdt_amount_quotes')
+                    ->where('public_id', $amountQuotePublicId)
+                    ->lockForUpdate()
+                    ->first();
+                if ($amountQuote === null) {
+                    throw new DomainException('USDT amount quote does not exist.');
+                }
+                if ((int) $amountQuote->user_id !== $userId
+                    || $amountQuote->source_quote_public_id !== $sourceQuotePublicId
+                    || $amountQuote->network !== 'BEP20'
+                    || $this->storedDateTime((string) $amountQuote->expires_at) <= $this->clock->now()) {
+                    throw new DomainException('USDT amount quote is not current for this purchase.');
+                }
+
+                $intentReceipt = $this->purchaseIntents->create(
+                    $intentCreationKey,
+                    $userId,
+                    $sourceQuotePublicId,
+                    $eligibilityDecisionPublicId,
+                    self::METHOD_CODE,
+                    $correlationId,
+                );
+                if ($intentReceipt->state !== PaymentIntentState::AwaitingUserAction
+                    || $intentReceipt->amount->currency() !== 'IRR'
+                    || $intentReceipt->amount->amount() !== (int) $amountQuote->order_amount_irr) {
+                    throw new RuntimeException('USDT purchase intent does not match the locked amount quote.');
+                }
+                $intent = $connection->table('payment_intents')->where('public_id', $intentReceipt->intentPublicId)->lockForUpdate()->first();
+                if ($intent === null) {
+                    throw new RuntimeException('USDT purchase intent authority disappeared during preparation.');
+                }
+
+                $expectedBaseUnits = UsdtTokenAmount::toBaseUnits((string) $amountQuote->exact_usdt);
+                $policyHash = hash('sha256', json_encode([
+                    'formula_version' => 'usdt-bep20-payment-v1',
+                    'method_code' => self::METHOD_CODE,
+                    'network' => 'BEP20',
+                    'chain_id' => $chainId,
+                    'token_contract' => $tokenContract,
+                    'minimum_confirmations' => $minimumConfirmations,
+                    'token_decimals' => UsdtTokenAmount::DECIMALS,
+                ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES));
+
+                $authorityId = (int) $connection->table('usdt_payment_authorities')->insertGetId([
+                    'public_id' => (string) Str::ulid(),
+                    'authority_key' => $authorityKey,
+                    'payment_intent_id' => (int) $intent->id,
+                    'usdt_amount_quote_id' => (int) $amountQuote->id,
+                    'user_id' => $userId,
+                    'source_quote_id' => (int) $amountQuote->source_quote_id,
+                    'source_quote_public_id' => (string) $amountQuote->source_quote_public_id,
+                    'source_amount_irr' => (int) $amountQuote->order_amount_irr,
+                    'destination_wallet_version_id' => (int) $amountQuote->destination_wallet_version_id,
+                    'destination_address' => strtolower((string) $amountQuote->destination_address),
+                    'network' => 'BEP20',
+                    'chain_id' => $chainId,
+                    'token_contract' => $tokenContract,
+                    'expected_amount_base_units' => $expectedBaseUnits,
+                    'minimum_confirmations' => $minimumConfirmations,
+                    'quote_expires_at' => (string) $amountQuote->expires_at,
+                    'destination_configuration_hash' => strtolower((string) $amountQuote->destination_configuration_hash),
+                    'amount_quote_configuration_hash' => strtolower((string) $amountQuote->configuration_snapshot_hash),
+                    'policy_snapshot_hash' => $policyHash,
+                    'created_at' => $now,
+                ]);
+                $stored = $connection->table('usdt_payment_authorities')->where('id', $authorityId)->first();
+                if ($stored === null) {
+                    throw new RuntimeException('USDT payment authority persistence failed.');
+                }
+
+                return $this->receipt($connection, $stored, false);
+            }, 3);
+        } catch (QueryException $exception) {
+            $connection = $this->database->connection();
+            $existing = $connection->table('usdt_payment_authorities')->where('authority_key', $authorityKey)->first();
+            if ($existing === null) {
+                throw $exception;
             }
 
-            $expectedBaseUnits = UsdtTokenAmount::toBaseUnits((string) $amountQuote->exact_usdt);
-            $policyHash = hash('sha256', json_encode([
-                'formula_version' => 'usdt-bep20-payment-v1',
-                'method_code' => self::METHOD_CODE,
-                'network' => 'BEP20',
-                'chain_id' => $chainId,
-                'token_contract' => $tokenContract,
-                'minimum_confirmations' => $minimumConfirmations,
-                'token_decimals' => UsdtTokenAmount::DECIMALS,
-            ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES));
+            return $this->replayReceipt($connection, $existing, $userId, $sourceQuotePublicId, $amountQuotePublicId);
+        }
+    }
 
-            $authorityId = (int) $connection->table('usdt_payment_authorities')->insertGetId([
-                'public_id' => (string) Str::ulid(),
-                'authority_key' => $authorityKey,
-                'payment_intent_id' => (int) $intent->id,
-                'usdt_amount_quote_id' => (int) $amountQuote->id,
-                'user_id' => $userId,
-                'source_quote_id' => (int) $amountQuote->source_quote_id,
-                'source_quote_public_id' => (string) $amountQuote->source_quote_public_id,
-                'source_amount_irr' => (int) $amountQuote->order_amount_irr,
-                'destination_wallet_version_id' => (int) $amountQuote->destination_wallet_version_id,
-                'destination_address' => strtolower((string) $amountQuote->destination_address),
-                'network' => 'BEP20',
-                'chain_id' => $chainId,
-                'token_contract' => $tokenContract,
-                'expected_amount_base_units' => $expectedBaseUnits,
-                'minimum_confirmations' => $minimumConfirmations,
-                'quote_expires_at' => (string) $amountQuote->expires_at,
-                'destination_configuration_hash' => strtolower((string) $amountQuote->destination_configuration_hash),
-                'amount_quote_configuration_hash' => strtolower((string) $amountQuote->configuration_snapshot_hash),
-                'policy_snapshot_hash' => $policyHash,
-                'created_at' => $now,
-            ]);
-            $stored = $connection->table('usdt_payment_authorities')->where('id', $authorityId)->first();
-            if ($stored === null) {
-                throw new RuntimeException('USDT payment authority persistence failed.');
-            }
+    private function replayReceipt(
+        Connection $connection,
+        object $existing,
+        int $userId,
+        string $sourceQuotePublicId,
+        string $amountQuotePublicId,
+    ): UsdtPaymentAuthorityReceipt {
+        if ((int) $existing->user_id !== $userId || $existing->source_quote_public_id !== $sourceQuotePublicId) {
+            throw new RuntimeException('USDT payment authority key conflicts with accepted preparation.');
+        }
+        $amountQuote = $connection->table('usdt_amount_quotes')->where('id', $existing->usdt_amount_quote_id)->first(['public_id']);
+        if ($amountQuote === null || $amountQuote->public_id !== $amountQuotePublicId) {
+            throw new RuntimeException('USDT payment authority replay conflicts with amount quote.');
+        }
 
-            return $this->receipt($connection, $stored, false);
-        }, 3);
+        return $this->receipt($connection, $existing, true);
     }
 
     /** @return array{int,string,int} */
