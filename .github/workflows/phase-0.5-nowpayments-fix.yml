@@ -1,0 +1,129 @@
+name: Phase 0.5 NOWPayments replay correction
+
+on:
+  push:
+    branches:
+      - task/8-phase-0.5-completion
+    paths:
+      - .github/workflows/phase-0.5-nowpayments-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  correct:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: task/8-phase-0.5-completion
+          fetch-depth: 0
+
+      - name: Guard exact starting head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          git merge-base --is-ancestor 0ae006d3706da97d8be6e154152f48e5595c46b1 "${GITHUB_SHA}"
+          git fetch origin task/8-phase-0.5-completion
+          test "$(git rev-parse origin/task/8-phase-0.5-completion)" = "${GITHUB_SHA}"
+
+      - name: Stabilize settlement evidence identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path('app/Modules/Payments/NowPayments/Application/NowPaymentsPaymentService.php')
+          text = path.read_text()
+          old = """            $settledAt = $result->updatedAt ?? $this->clock->now();
+            $eventId = 'status:'.strtolower($result->responseHash);
+            $settlementEvent = new VerifiedPaymentEvent(
+                $eventId,
+                strtolower($result->responseHash),
+                new PaymentEvidence(
+                    ProviderOperationOutcome::Success,
+                    PaymentEvidenceAuthority::Authoritative,
+                    PaymentTransactionStatus::Settled,
+                    (string) $current->provider_payment_id,
+                    $eventId,
+                    Money::irr($this->positiveInt($current->amount_irr, 'NOWPayments authority amount')),
+                    $settledAt,
+                    $settledAt,
+                    strtolower($result->responseHash),
+                    [
+                        'provider_status' => 'finished',
+                        'pricing_policy_code' => self::PRICING_POLICY_CODE,
+                        'rate_source' => (string) $current->rate_source,
+                        'price_currency' => 'USD',
+                        'pay_currency' => (string) $current->pay_currency,
+                    ],
+                ),
+            );
+"""
+          new = """            $settledAt = $result->updatedAt ?? $this->clock->now();
+            $providerPaymentId = (string) $current->provider_payment_id;
+            $amountIrr = $this->positiveInt($current->amount_irr, 'NOWPayments authority amount');
+            $rateSource = (string) $current->rate_source;
+            $payCurrency = (string) $current->pay_currency;
+            $priceAmountUsd = NowPaymentsDecimal::normalize($result->priceAmount, NowPaymentsDecimal::PRICE_PRECISION);
+            $providerPayAmount = NowPaymentsDecimal::normalize($result->payAmount, 18);
+            $settlementEvidenceHash = hash('sha256', implode("\\0", [
+                self::PROVIDER_CODE,
+                $providerPaymentId,
+                (string) $amountIrr,
+                'IRR',
+                $priceAmountUsd,
+                $payCurrency,
+                $providerPayAmount,
+                $rateSource,
+                'finished',
+            ]));
+            $eventId = 'settlement:'.$settlementEvidenceHash;
+            $settlementEvent = new VerifiedPaymentEvent(
+                $eventId,
+                $settlementEvidenceHash,
+                new PaymentEvidence(
+                    ProviderOperationOutcome::Success,
+                    PaymentEvidenceAuthority::Authoritative,
+                    PaymentTransactionStatus::Settled,
+                    $providerPaymentId,
+                    $eventId,
+                    Money::irr($amountIrr),
+                    $settledAt,
+                    $settledAt,
+                    $settlementEvidenceHash,
+                    [
+                        'provider_status' => 'finished',
+                        'pricing_policy_code' => self::PRICING_POLICY_CODE,
+                        'rate_source' => $rateSource,
+                        'price_currency' => 'USD',
+                        'pay_currency' => $payCurrency,
+                    ],
+                ),
+            );
+"""
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f'Expected one NOWPayments settlement block, found {count}.')
+          path.write_text(text.replace(old, new))
+          PY
+
+          rm .github/workflows/phase-0.5-nowpayments-fix.yml
+          git diff --check
+          php -l app/Modules/Payments/NowPayments/Application/NowPaymentsPaymentService.php
+
+      - name: Commit and push once
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --quiet && { echo 'Expected NOWPayments correction, found none.' >&2; exit 1; }
+          git commit -m 'fix(phase-0.5): stabilize NOWPayments settlement replay'
+          git fetch origin task/8-phase-0.5-completion
+          test "$(git rev-parse origin/task/8-phase-0.5-completion)" = "${GITHUB_SHA}"
+          git push origin HEAD:task/8-phase-0.5-completion
