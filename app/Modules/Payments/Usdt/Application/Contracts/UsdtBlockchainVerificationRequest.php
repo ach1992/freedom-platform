@@ -12,7 +12,7 @@ final readonly class UsdtBlockchainVerificationRequest
         public int $chainId,
         public string $tokenContract,
         public string $destinationAddress,
-        public int $expectedAmountBaseUnits,
+        public string $expectedAmountBaseUnits,
         public int $tokenDecimals,
         public int $minimumConfirmations,
     ) {}
