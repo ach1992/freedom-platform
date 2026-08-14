@@ -50,6 +50,8 @@ final class PurchaseOrderAuthorityHardeningTest extends TestCase
         $clause = strtolower((string) $sourceConstraint->CHECK_CLAUSE);
         self::assertStringContainsString("'purchase'", $clause);
         self::assertStringContainsString("'trial'", $clause);
+        self::assertStringContainsString("'gift'", $clause);
+        self::assertStringContainsString("'service_code'", $clause);
         self::assertStringContainsString("'benefit_code'", $clause);
         self::assertStringContainsString("'admin_grant'", $clause);
 
