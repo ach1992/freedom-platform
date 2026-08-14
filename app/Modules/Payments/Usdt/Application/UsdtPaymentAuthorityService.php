@@ -58,7 +58,7 @@ final readonly class UsdtPaymentAuthorityService
                     return $this->replayReceipt($connection, $existing, $userId, $sourceQuotePublicId, $amountQuotePublicId);
                 }
 
-                [$chainId, $tokenContract, $minimumConfirmations] = $this->trustedPolicy();
+                [$chainId, $tokenContract, $tokenDecimals, $minimumConfirmations] = $this->trustedPolicy();
                 $now = $this->timestamp();
                 $amountQuote = $connection->table('usdt_amount_quotes')
                     ->where('public_id', $amountQuotePublicId)
@@ -69,7 +69,7 @@ final readonly class UsdtPaymentAuthorityService
                 }
                 if ((int) $amountQuote->user_id !== $userId
                     || $amountQuote->source_quote_public_id !== $sourceQuotePublicId
-                    || $amountQuote->network !== 'BEP20'
+                    || $amountQuote->network !== UsdtBep20Asset::NETWORK
                     || $this->storedDateTime((string) $amountQuote->expires_at) <= $this->clock->now()) {
                     throw new DomainException('USDT amount quote is not current for this purchase.');
                 }
@@ -92,15 +92,16 @@ final readonly class UsdtPaymentAuthorityService
                     throw new RuntimeException('USDT purchase intent authority disappeared during preparation.');
                 }
 
-                $expectedBaseUnits = UsdtTokenAmount::toBaseUnits((string) $amountQuote->exact_usdt);
+                $expectedBaseUnits = UsdtTokenAmount::toBaseUnits((string) $amountQuote->exact_usdt, $tokenDecimals);
                 $policyHash = hash('sha256', json_encode([
-                    'formula_version' => 'usdt-bep20-payment-v1',
+                    'formula_version' => 'usdt-bep20-payment-v2',
                     'method_code' => self::METHOD_CODE,
-                    'network' => 'BEP20',
+                    'network' => UsdtBep20Asset::NETWORK,
                     'chain_id' => $chainId,
                     'token_contract' => $tokenContract,
+                    'token_decimals' => $tokenDecimals,
                     'minimum_confirmations' => $minimumConfirmations,
-                    'token_decimals' => UsdtTokenAmount::DECIMALS,
+                    'quote_precision' => UsdtTokenAmount::QUOTE_DECIMALS,
                 ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES));
 
                 $authorityId = (int) $connection->table('usdt_payment_authorities')->insertGetId([
@@ -114,9 +115,10 @@ final readonly class UsdtPaymentAuthorityService
                     'source_amount_irr' => (int) $amountQuote->order_amount_irr,
                     'destination_wallet_version_id' => (int) $amountQuote->destination_wallet_version_id,
                     'destination_address' => strtolower((string) $amountQuote->destination_address),
-                    'network' => 'BEP20',
+                    'network' => UsdtBep20Asset::NETWORK,
                     'chain_id' => $chainId,
                     'token_contract' => $tokenContract,
+                    'token_decimals' => $tokenDecimals,
                     'expected_amount_base_units' => $expectedBaseUnits,
                     'minimum_confirmations' => $minimumConfirmations,
                     'quote_expires_at' => (string) $amountQuote->expires_at,
@@ -161,21 +163,25 @@ final readonly class UsdtPaymentAuthorityService
         return $this->receipt($connection, $existing, true);
     }
 
-    /** @return array{int,string,int} */
+    /** @return array{int,string,int,int} */
     private function trustedPolicy(): array
     {
         $chainId = filter_var(config('payments.usdt_bep20.chain_id'), FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+        $tokenDecimals = filter_var(config('payments.usdt_bep20.token_decimals'), FILTER_VALIDATE_INT, ['options' => ['min_range' => 0, 'max_range' => 36]]);
         $minimumConfirmations = filter_var(config('payments.usdt_bep20.minimum_confirmations'), FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => 1000]]);
         $tokenContract = config('payments.usdt_bep20.token_contract');
-        if ($chainId !== 56 || $minimumConfirmations === false || ! is_string($tokenContract)) {
-            throw new RuntimeException('Trusted USDT BEP20 verification policy is not configured.');
+        if ($chainId !== UsdtBep20Asset::CHAIN_ID
+            || $tokenDecimals !== UsdtBep20Asset::TOKEN_DECIMALS
+            || $minimumConfirmations === false
+            || ! is_string($tokenContract)) {
+            throw new RuntimeException('Trusted USDT BEP20 verification policy is not configured for the canonical BSC asset.');
         }
         $tokenContract = strtolower(trim($tokenContract));
-        if (preg_match('/\A0x[a-f0-9]{40}\z/', $tokenContract) !== 1) {
-            throw new RuntimeException('Trusted USDT BEP20 token contract is not configured securely.');
+        if (! hash_equals(UsdtBep20Asset::TOKEN_CONTRACT, $tokenContract)) {
+            throw new RuntimeException('Trusted USDT BEP20 token contract does not match the canonical BSC asset.');
         }
 
-        return [(int) $chainId, $tokenContract, (int) $minimumConfirmations];
+        return [(int) $chainId, $tokenContract, (int) $tokenDecimals, (int) $minimumConfirmations];
     }
 
     private function receipt(Connection $connection, object $row, bool $replayed): UsdtPaymentAuthorityReceipt
@@ -196,8 +202,9 @@ final readonly class UsdtPaymentAuthorityService
             (string) $row->network,
             (int) $row->chain_id,
             (string) $row->token_contract,
+            (int) $row->token_decimals,
             (string) $row->destination_address,
-            (int) $row->expected_amount_base_units,
+            UsdtTokenAmount::normalizeBaseUnits((string) $row->expected_amount_base_units),
             (int) $row->minimum_confirmations,
             $this->storedDateTime((string) $row->quote_expires_at),
             $replayed,
