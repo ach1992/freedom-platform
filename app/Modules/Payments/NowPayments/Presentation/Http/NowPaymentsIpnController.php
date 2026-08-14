@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Payments\NowPayments\Presentation\Http;
 
-use App\Modules\Payments\NowPayments\Application\NowPaymentsPaymentService;
+use App\Modules\Payments\NowPayments\Application\NowPaymentsIpnIngressService;
 use DomainException;
 use Illuminate\Contracts\Container\Container;
 use Illuminate\Http\JsonResponse;
@@ -26,8 +26,8 @@ final class NowPaymentsIpnController
         }
 
         try {
-            $payments = $container->make(NowPaymentsPaymentService::class);
-            $receipt = $payments->handleIpn(
+            $ingress = $container->make(NowPaymentsIpnIngressService::class);
+            $receipt = $ingress->handle(
                 $request->getContent(),
                 $signature,
                 (string) Str::uuid(),
