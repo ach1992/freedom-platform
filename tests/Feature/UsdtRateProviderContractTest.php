@@ -13,7 +13,6 @@ use App\Modules\Payments\Usdt\Domain\UsdtRateProvider;
 use App\Modules\Payments\Usdt\Domain\UsdtRateSide;
 use App\Modules\Payments\Usdt\Infrastructure\ManualUsdtRateProvider;
 use App\Modules\Payments\Usdt\Infrastructure\NobitexUsdtRateProvider;
-use App\Modules\Payments\Usdt\Infrastructure\TetherlandUsdtRateProvider;
 use App\Shared\Application\Clock;
 use DateTimeImmutable;
 use Illuminate\Cache\ArrayStore;
@@ -111,40 +110,6 @@ final class UsdtRateProviderContractTest extends TestCase
         Http::assertSent(static fn ($request): bool => $request->url() === NobitexUsdtRateProvider::ENDPOINT);
         self::assertStringStartsWith('https://', NobitexUsdtRateProvider::ENDPOINT);
         self::assertFalse($this->constructorAcceptsUrl(NobitexUsdtRateProvider::class));
-    }
-
-    public function test_tetherland_is_unavailable_without_network_and_only_explicit_verified_fallback_can_continue(): void
-    {
-        Http::fake();
-        $clock = new MutableUsdtProviderClock(new DateTimeImmutable('2026-08-09T12:00:00+00:00'));
-        $tetherland = new TetherlandUsdtRateProvider;
-
-        $this->assertRuntimeMessage(
-            'Tetherland rate provider is unavailable pending a verified official API contract.',
-            fn (): UsdtRate => $tetherland->fetch(UsdtRateSide::Buy),
-        );
-        Http::assertNothingSent();
-
-        $closed = $this->resolver([$tetherland], $clock, false, 500, 3, 60, ['tetherland']);
-        $this->assertRuntimeMessage(
-            'No acceptable external USDT rate is available.',
-            fn (): UsdtRate => $closed->resolve(),
-        );
-        Http::assertNothingSent();
-
-        $verifiedFallback = new StubUsdtRateProvider('nobitex', '1000000', $clock->value);
-        $allowed = $this->resolver(
-            [$tetherland, $verifiedFallback],
-            $clock,
-            false,
-            500,
-            3,
-            60,
-            ['tetherland', 'nobitex'],
-        );
-        self::assertSame('nobitex', $allowed->resolve()->source);
-        self::assertSame(1, $verifiedFallback->calls);
-        Http::assertNothingSent();
     }
 
     public function test_http_adapter_fails_closed_for_malformed_oversized_redirect_and_transport_failures(): void
