@@ -135,8 +135,8 @@ jobs:
           )
           replace_once(
               'tests/Feature/UsdtVerifiedTransferContentionTest.php',
-              '    use App\\Modules\\Payments\\Usdt\\Application\\Contracts\\UsdtBlockchainVerificationEvidence;\n',
-              '    use App\\Modules\\Payments\\Usdt\\Application\\Contracts\\UsdtBlockchainVerificationEvidence;\n    use App\\Modules\\Payments\\Usdt\\Application\\UsdtBep20Asset;\n',
+              "namespace {\n    use App\\Modules\\Payments\\Usdt\\Application\\Contracts\\UsdtBlockchainVerificationEvidence;\n    use App\\Modules\\Payments\\Usdt\\Application\\UsdtVerifiedTransferService;",
+              "namespace {\n    use App\\Modules\\Payments\\Usdt\\Application\\Contracts\\UsdtBlockchainVerificationEvidence;\n    use App\\Modules\\Payments\\Usdt\\Application\\UsdtBep20Asset;\n    use App\\Modules\\Payments\\Usdt\\Application\\UsdtVerifiedTransferService;",
           )
           replace_once(
               'tests/Feature/UsdtVerifiedTransferContentionTest.php',
