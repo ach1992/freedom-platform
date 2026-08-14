@@ -89,17 +89,16 @@ final class GiftCardGenericRestProviderTest extends TestCase
 
     public function test_non_https_or_non_allowlisted_origins_are_rejected_at_configuration_boundary(): void
     {
-        $common = [
-            'providerCode' => 'generic_gift',
-            'operationPaths' => ['validate' => '/api/validate'],
-            'fieldMap' => $this->fieldMap(),
-            'outcomeMap' => ['ok' => 'success'],
-            'statusMap' => ['valid' => 'valid'],
-            'allowedHosts' => ['gift.example.com'],
-        ];
-
         try {
-            new GenericRestGiftCardVerificationProvider(baseUrl: 'http://gift.example.com', ...$common);
+            new GenericRestGiftCardVerificationProvider(
+                providerCode: 'generic_gift',
+                baseUrl: 'http://gift.example.com',
+                operationPaths: ['validate' => '/api/validate'],
+                fieldMap: $this->fieldMap(),
+                outcomeMap: ['ok' => 'success'],
+                statusMap: ['valid' => 'valid'],
+                allowedHosts: ['gift.example.com'],
+            );
             self::fail('Expected non-HTTPS gift-card provider origin to be rejected.');
         } catch (DomainException $exception) {
             self::assertStringContainsString('HTTPS', $exception->getMessage());
