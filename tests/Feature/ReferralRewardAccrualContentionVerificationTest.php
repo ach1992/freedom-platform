@@ -127,7 +127,7 @@ namespace Tests\Feature {
             $this->createRewardRule('duplicate', $token, null);
             $settlement = $this->capturePurchaseFor($referred, 'duplicate');
             $payload = [
-                'settlement_public_id' => $settlement->publicId,
+                'settlement_public_id' => $settlement->settlementPublicId,
                 'correlation_id' => $this->correlation('duplicate'),
             ];
 
@@ -161,11 +161,11 @@ namespace Tests\Feature {
 
             $results = $this->runConcurrent([
                 [
-                    'settlement_public_id' => $firstSettlement->publicId,
+                    'settlement_public_id' => $firstSettlement->settlementPublicId,
                     'correlation_id' => $this->correlation('final-slot-a'),
                 ],
                 [
-                    'settlement_public_id' => $secondSettlement->publicId,
+                    'settlement_public_id' => $secondSettlement->settlementPublicId,
                     'correlation_id' => $this->correlation('final-slot-b'),
                 ],
             ]);
