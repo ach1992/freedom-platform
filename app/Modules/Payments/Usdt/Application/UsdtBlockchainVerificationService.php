@@ -17,6 +17,7 @@ use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Str;
 use RuntimeException;
+use stdClass;
 use Throwable;
 
 final readonly class UsdtBlockchainVerificationService
@@ -109,7 +110,7 @@ final readonly class UsdtBlockchainVerificationService
         );
     }
 
-    private function beginVerification(object $authority, string $correlationId): void
+    private function beginVerification(stdClass $authority, string $correlationId): void
     {
         $this->database->connection()->transaction(function (Connection $connection) use ($authority, $correlationId): void {
             $submission = $connection->table('usdt_txid_submissions')->where('id', $authority->submission_id)->lockForUpdate()->first();
@@ -139,7 +140,7 @@ final readonly class UsdtBlockchainVerificationService
         }, 3);
     }
 
-    private function markProviderUnavailable(object $authority, string $providerCode, string $correlationId): void
+    private function markProviderUnavailable(stdClass $authority, string $providerCode, string $correlationId): void
     {
         $this->database->connection()->table('usdt_txid_submissions')->where('id', $authority->submission_id)->where('state', 'verifying')->update([
             'state' => 'provider_unavailable',
@@ -147,7 +148,7 @@ final readonly class UsdtBlockchainVerificationService
         $this->recordFinding($authority, 'chain_provider_lookup_failed', 'warning', $providerCode, null, $correlationId);
     }
 
-    private function queueManualReview(object $authority, string $reason, string $providerCode, ?UsdtBlockchainVerificationEvidence $evidence, string $correlationId): UsdtProcessingReceipt
+    private function queueManualReview(stdClass $authority, string $reason, string $providerCode, ?UsdtBlockchainVerificationEvidence $evidence, string $correlationId): UsdtProcessingReceipt
     {
         $this->database->connection()->transaction(function (Connection $connection) use ($authority, $reason, $correlationId): void {
             $submission = $connection->table('usdt_txid_submissions')->where('id', $authority->submission_id)->lockForUpdate()->first();
@@ -187,7 +188,7 @@ final readonly class UsdtBlockchainVerificationService
         return $this->receipt($this->authority((string) $authority->submission_public_id) ?? $authority, false);
     }
 
-    private function mismatchReason(object $authority, UsdtBlockchainVerificationEvidence $evidence): ?string
+    private function mismatchReason(stdClass $authority, UsdtBlockchainVerificationEvidence $evidence): ?string
     {
         if ($evidence->network !== $authority->network || $evidence->chainId !== (int) $authority->chain_id) {
             return 'wrong_network';
@@ -230,7 +231,7 @@ final readonly class UsdtBlockchainVerificationService
         return null;
     }
 
-    private function recordEvent(object $authority, string $providerCode, UsdtBlockchainVerificationEvidence $evidence): void
+    private function recordEvent(stdClass $authority, string $providerCode, UsdtBlockchainVerificationEvidence $evidence): void
     {
         $connection = $this->database->connection();
         $existing = $connection->table('usdt_chain_verification_events')
@@ -282,7 +283,7 @@ final readonly class UsdtBlockchainVerificationService
         }
     }
 
-    private function assertEventReplay(object $row, object $authority, string $providerCode, UsdtBlockchainVerificationEvidence $evidence): void
+    private function assertEventReplay(stdClass $row, stdClass $authority, string $providerCode, UsdtBlockchainVerificationEvidence $evidence): void
     {
         if ((int) $row->usdt_txid_submission_id !== (int) $authority->submission_id
             || ! hash_equals((string) $row->provider_code, $providerCode)
@@ -322,7 +323,7 @@ final readonly class UsdtBlockchainVerificationService
         }
     }
 
-    private function authority(string $submissionPublicId): ?object
+    private function authority(string $submissionPublicId): ?stdClass
     {
         return $this->database->connection()->table('usdt_txid_submissions as submission')
             ->join('usdt_payment_authorities as authority', 'authority.id', '=', 'submission.usdt_payment_authority_id')
@@ -338,7 +339,7 @@ final readonly class UsdtBlockchainVerificationService
             ]);
     }
 
-    private function receipt(object $authority, bool $replayed): UsdtProcessingReceipt
+    private function receipt(stdClass $authority, bool $replayed): UsdtProcessingReceipt
     {
         $review = $this->database->connection()->table('usdt_manual_reviews')->where('usdt_txid_submission_id', $authority->submission_id)->value('public_id');
         $settlement = $authority->purchase_settlement_id === null ? null : $this->database->connection()->table('purchase_settlements')->where('id', $authority->purchase_settlement_id)->value('public_id');
@@ -353,9 +354,9 @@ final readonly class UsdtBlockchainVerificationService
         );
     }
 
-    private function recordFinding(object $authority, string $type, string $severity, ?string $providerCode, ?UsdtBlockchainVerificationEvidence $evidence, string $correlationId): void
+    private function recordFinding(stdClass $authority, string $type, string $severity, ?string $providerCode, ?UsdtBlockchainVerificationEvidence $evidence, string $correlationId): void
     {
-        $key = hash('sha256', implode("\0", [(string) $authority->submission_public_id, $type, $providerCode ?? '', $evidence?->providerEventId ?? '', $evidence?->evidenceHash ?? '']));
+        $key = hash('sha256', implode("\0", [(string) $authority->submission_public_id, $type, $providerCode ?? '', $evidence->providerEventId ?? '', $evidence->evidenceHash ?? '']));
         $this->database->connection()->table('usdt_reconciliation_findings')->insertOrIgnore([
             'public_id' => (string) Str::ulid(),
             'usdt_txid_submission_id' => (int) $authority->submission_id,

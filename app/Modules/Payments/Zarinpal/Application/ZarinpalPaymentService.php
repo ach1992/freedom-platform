@@ -24,6 +24,7 @@ use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Str;
 use RuntimeException;
+use stdClass;
 
 final readonly class ZarinpalPaymentService
 {
@@ -392,7 +393,7 @@ final readonly class ZarinpalPaymentService
         });
     }
 
-    private function prepareIntentForCapture(object $intent, string $correlationId): void
+    private function prepareIntentForCapture(stdClass $intent, string $correlationId): void
     {
         $state = PaymentIntentState::tryFrom($intent->state)
             ?? throw new RuntimeException('Stored payment intent state is invalid.');
@@ -422,7 +423,7 @@ final readonly class ZarinpalPaymentService
     }
 
     private function moveToManualReview(
-        object $request,
+        stdClass $request,
         string $eventType,
         ?string $providerStatus,
         ?int $providerCode,
@@ -452,9 +453,9 @@ final readonly class ZarinpalPaymentService
         return $this->receipt($request, true);
     }
 
-    private function setState(object $request, ZarinpalRequestState $to): object
+    private function setState(stdClass $request, ZarinpalRequestState $to): stdClass
     {
-        return $this->database->connection()->transaction(function (Connection $connection) use ($request, $to): object {
+        return $this->database->connection()->transaction(function (Connection $connection) use ($request, $to): stdClass {
             $current = $this->requiredRequest($connection, (int) $request->id, true);
             if ($this->state($current->state) !== $to) {
                 $this->updateRequestState($connection, $current, $to);
@@ -464,7 +465,7 @@ final readonly class ZarinpalPaymentService
         });
     }
 
-    private function setStateAndReceipt(object $request, ZarinpalRequestState $to): ZarinpalPaymentReceipt
+    private function setStateAndReceipt(stdClass $request, ZarinpalRequestState $to): ZarinpalPaymentReceipt
     {
         if ($this->state($request->state) === $to) {
             return $this->receipt($request, true);
@@ -503,9 +504,10 @@ final readonly class ZarinpalPaymentService
         ]);
     }
 
+    /** @param array<string, int|string|null> $extra */
     private function updateRequestState(
         Connection $connection,
-        object $request,
+        stdClass $request,
         ZarinpalRequestState $to,
         array $extra = [],
     ): void {
@@ -527,7 +529,7 @@ final readonly class ZarinpalPaymentService
 
     private function observe(
         Connection $connection,
-        object $request,
+        stdClass $request,
         string $eventType,
         ?string $providerStatus,
         ?int $providerCode,
@@ -558,14 +560,14 @@ final readonly class ZarinpalPaymentService
                 'created_at' => $this->timestamp(),
             ]);
         } catch (QueryException $exception) {
-            if ($connection->table('zarinpal_payment_observations')->where('event_key', $eventKey)->exists()) {
+            if ($connection->table('zarinpal_payment_observations')->where('event_key', $eventKey)->first(['id']) !== null) {
                 return;
             }
             throw $exception;
         }
     }
 
-    private function receipt(object $request, bool $replayed): ZarinpalPaymentReceipt
+    private function receipt(stdClass $request, bool $replayed): ZarinpalPaymentReceipt
     {
         $state = $this->state($request->state);
         $verification = $this->verificationByRequestId(
@@ -638,7 +640,7 @@ final readonly class ZarinpalPaymentService
         ];
     }
 
-    private function requestPayloadHash(object $intent, string $configurationHash): string
+    private function requestPayloadHash(stdClass $intent, string $configurationHash): string
     {
         return hash('sha256', json_encode([
             'payment_intent_public_id' => $intent->public_id,
@@ -650,7 +652,7 @@ final readonly class ZarinpalPaymentService
         ], JSON_THROW_ON_ERROR));
     }
 
-    private function assertZarinpalIntentIdentity(object $intent): void
+    private function assertZarinpalIntentIdentity(stdClass $intent): void
     {
         if ($intent->purpose !== 'purchase'
             || $intent->provider_code !== self::PROVIDER_CODE
@@ -660,7 +662,7 @@ final readonly class ZarinpalPaymentService
         }
     }
 
-    private function intentByPublicId(Connection $connection, string $publicId, bool $lock = false): ?object
+    private function intentByPublicId(Connection $connection, string $publicId, bool $lock = false): ?stdClass
     {
         $query = $connection->table('payment_intents')->where('public_id', $publicId);
         if ($lock) {
@@ -670,14 +672,14 @@ final readonly class ZarinpalPaymentService
         return $query->first(['id', 'public_id', 'purpose', 'provider_code', 'amount_irr', 'currency', 'state', 'captured_at']);
     }
 
-    private function intentById(Connection $connection, int $id): ?object
+    private function intentById(Connection $connection, int $id): ?stdClass
     {
         return $connection->table('payment_intents')->where('id', $id)->first([
             'id', 'public_id', 'purpose', 'provider_code', 'amount_irr', 'currency', 'state', 'captured_at',
         ]);
     }
 
-    private function requestByIntentId(Connection $connection, int $intentId, bool $lock = false): ?object
+    private function requestByIntentId(Connection $connection, int $intentId, bool $lock = false): ?stdClass
     {
         $query = $connection->table('zarinpal_payment_requests')->where('payment_intent_id', $intentId);
         if ($lock) {
@@ -687,17 +689,17 @@ final readonly class ZarinpalPaymentService
         return $query->first($this->requestColumns());
     }
 
-    private function requestByAuthority(Connection $connection, string $authority): ?object
+    private function requestByAuthority(Connection $connection, string $authority): ?stdClass
     {
         return $connection->table('zarinpal_payment_requests')->where('authority', $authority)->first($this->requestColumns());
     }
 
-    private function requestByPublicId(Connection $connection, string $publicId): ?object
+    private function requestByPublicId(Connection $connection, string $publicId): ?stdClass
     {
         return $connection->table('zarinpal_payment_requests')->where('public_id', $publicId)->first($this->requestColumns());
     }
 
-    private function requestById(Connection $connection, int $id, bool $lock = false): ?object
+    private function requestById(Connection $connection, int $id, bool $lock = false): ?stdClass
     {
         $query = $connection->table('zarinpal_payment_requests')->where('id', $id);
         if ($lock) {
@@ -707,13 +709,13 @@ final readonly class ZarinpalPaymentService
         return $query->first($this->requestColumns());
     }
 
-    private function requiredRequest(Connection $connection, int $id, bool $lock = false): object
+    private function requiredRequest(Connection $connection, int $id, bool $lock = false): stdClass
     {
         return $this->requestById($connection, $id, $lock)
             ?? throw new RuntimeException('Zarinpal request is unavailable.');
     }
 
-    private function verificationByRequestId(Connection $connection, int $requestId, bool $lock = false): ?object
+    private function verificationByRequestId(Connection $connection, int $requestId, bool $lock = false): ?stdClass
     {
         $query = $connection->table('zarinpal_payment_verifications')->where('zarinpal_payment_request_id', $requestId);
         if ($lock) {

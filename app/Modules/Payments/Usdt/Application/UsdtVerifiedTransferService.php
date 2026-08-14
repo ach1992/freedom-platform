@@ -127,7 +127,6 @@ final readonly class UsdtVerifiedTransferService
                 [
                     'network' => UsdtBep20Asset::NETWORK,
                     'txid' => (string) $authority->txid,
-                    'token_contract' => UsdtBep20Asset::TOKEN_CONTRACT,
                 ],
             ),
         );

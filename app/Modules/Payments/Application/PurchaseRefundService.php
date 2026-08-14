@@ -20,6 +20,7 @@ use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Str;
 use RuntimeException;
+use stdClass;
 
 final readonly class PurchaseRefundService
 {
@@ -206,7 +207,7 @@ final readonly class PurchaseRefundService
         $this->normalizeSafeEvidence($event->evidence->safeEvidence);
     }
 
-    private function settlementByPublicId(Connection $connection, string $publicId, bool $lock = false): ?object
+    private function settlementByPublicId(Connection $connection, string $publicId, bool $lock = false): ?stdClass
     {
         $query = $connection->table('purchase_settlements')->where('public_id', $publicId);
         if ($lock) {
@@ -216,14 +217,14 @@ final readonly class PurchaseRefundService
         return $query->first(['id', 'public_id', 'payment_intent_id', 'user_id', 'provider_code', 'amount_irr', 'currency', 'settled_at']);
     }
 
-    private function settlementById(Connection $connection, int $id): ?object
+    private function settlementById(Connection $connection, int $id): ?stdClass
     {
         return $connection->table('purchase_settlements')->where('id', $id)->first([
             'id', 'public_id', 'payment_intent_id', 'user_id', 'provider_code', 'amount_irr', 'currency', 'settled_at',
         ]);
     }
 
-    private function intentById(Connection $connection, int $id, bool $lock = false): ?object
+    private function intentById(Connection $connection, int $id, bool $lock = false): ?stdClass
     {
         $query = $connection->table('payment_intents')->where('id', $id);
         if ($lock) {
@@ -238,8 +239,8 @@ final readonly class PurchaseRefundService
 
     private function assertSettlementIntentAuthority(
         Connection $connection,
-        object $settlement,
-        object $intent,
+        stdClass $settlement,
+        stdClass $intent,
         string $providerCode,
         PaymentEvidence $evidence,
     ): int {
@@ -285,7 +286,7 @@ final readonly class PurchaseRefundService
         return $refundableCapturedAmount;
     }
 
-    private function refundByKey(Connection $connection, string $refundKey, bool $lock = false): ?object
+    private function refundByKey(Connection $connection, string $refundKey, bool $lock = false): ?stdClass
     {
         $query = $connection->table('purchase_refunds')->where('refund_key', $refundKey);
         if ($lock) {
@@ -299,7 +300,7 @@ final readonly class PurchaseRefundService
         ]);
     }
 
-    private function refundByProviderRefundId(Connection $connection, string $providerCode, string $providerRefundId): ?object
+    private function refundByProviderRefundId(Connection $connection, string $providerCode, string $providerRefundId): ?stdClass
     {
         return $connection->table('purchase_refunds')
             ->where('provider_code', $providerCode)
@@ -316,7 +317,7 @@ final readonly class PurchaseRefundService
         int $intentId,
         string $providerCode,
         VerifiedPaymentEvent $event,
-    ): object {
+    ): stdClass {
         $existing = $connection->table('payment_provider_events')
             ->where('provider_code', $providerCode)
             ->where('provider_event_id', $event->providerEventId)
@@ -362,7 +363,7 @@ final readonly class PurchaseRefundService
         return $row;
     }
 
-    private function assertProviderEventMatches(object $row, int $intentId, VerifiedPaymentEvent $event): void
+    private function assertProviderEventMatches(stdClass $row, int $intentId, VerifiedPaymentEvent $event): void
     {
         $evidence = $event->evidence;
         $expectedSettledAt = $evidence->settledAt === null ? null : $this->databaseDateTime($evidence->settledAt);
@@ -383,7 +384,7 @@ final readonly class PurchaseRefundService
     }
 
     private function replayReceipt(
-        object $row,
+        stdClass $row,
         string $payloadHash,
         string $purchaseSettlementPublicId,
         string $paymentIntentPublicId,
@@ -464,7 +465,10 @@ final readonly class PurchaseRefundService
         ], JSON_THROW_ON_ERROR));
     }
 
-    /** @param array<string, scalar|null> $safeEvidence @return array<string, scalar|null> */
+    /**
+     * @param  array<string, scalar|null>  $safeEvidence
+     * @return array<string, scalar|null>
+     */
     private function normalizeSafeEvidence(array $safeEvidence): array
     {
         if (count($safeEvidence) > 32) {

@@ -251,7 +251,7 @@ namespace Tests\Feature {
                 'IRR',
                 'Steam',
                 'GLOBAL',
-                now('UTC'),
+                now('UTC')->toDateTimeImmutable(),
                 hash('sha256', 'gift-contention-validate-evidence'),
                 ['source' => 'gift_contention_setup'],
             ));
@@ -265,7 +265,7 @@ namespace Tests\Feature {
                 'IRR',
                 'Steam',
                 'GLOBAL',
-                now('UTC'),
+                now('UTC')->toDateTimeImmutable(),
                 hash('sha256', 'gift-contention-uncertain-evidence'),
                 ['source' => 'gift_contention_setup'],
             ));

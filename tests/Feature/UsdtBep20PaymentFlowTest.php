@@ -187,7 +187,7 @@ final class UsdtBep20PaymentFlowTest extends TestCase
         $payment = $this->preparedPayment('underpaid');
         $submission = $this->submit($payment, 'underpaid', '0x'.str_repeat('3c', 32));
         $provider = new FakeBlockchainTransactionVerificationProvider('fake_bep20');
-        $underpaid = $this->evidence($submission->txid, $payment['expected_base_units'] - 1, $this->clock->value->modify('+60 seconds'), 20, 'underpaid');
+        $underpaid = $this->evidence($submission->txid, bcsub($payment['expected_base_units'], '1', 0), $this->clock->value->modify('+60 seconds'), 20, 'underpaid');
         $provider->put($underpaid);
 
         $pending = $this->app->make(UsdtBlockchainVerificationService::class)->verify(
@@ -385,7 +385,7 @@ final class UsdtBep20PaymentFlowTest extends TestCase
         );
     }
 
-    private function evidence(string $txid, int $amountBaseUnits, DateTimeImmutable $transactionAt, int $confirmations, string $suffix): UsdtBlockchainVerificationEvidence
+    private function evidence(string $txid, string $amountBaseUnits, DateTimeImmutable $transactionAt, int $confirmations, string $suffix): UsdtBlockchainVerificationEvidence
     {
         return new UsdtBlockchainVerificationEvidence(
             'success',
@@ -393,11 +393,11 @@ final class UsdtBep20PaymentFlowTest extends TestCase
             'chain-event-'.$suffix,
             strtolower($txid),
             'BEP20',
-            56,
-            '0x'.str_repeat('aa', 20),
+            UsdtBep20Asset::CHAIN_ID,
+            UsdtBep20Asset::TOKEN_CONTRACT,
             '0x'.str_repeat('bb', 20),
             $amountBaseUnits,
-            6,
+            UsdtBep20Asset::TOKEN_DECIMALS,
             $confirmations,
             12345678,
             $transactionAt,

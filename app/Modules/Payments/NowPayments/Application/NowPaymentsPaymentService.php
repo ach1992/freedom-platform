@@ -26,6 +26,7 @@ use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Str;
 use RuntimeException;
+use stdClass;
 use Throwable;
 
 final readonly class NowPaymentsPaymentService
@@ -251,7 +252,7 @@ final readonly class NowPaymentsPaymentService
         return $this->refresh($this->intentPublicIdForAuthority($authority), $correlationId);
     }
 
-    private function acceptCreateResult(object $authority, NowPaymentsPaymentResult $result, string $correlationId): NowPaymentsPaymentReceipt
+    private function acceptCreateResult(stdClass $authority, NowPaymentsPaymentResult $result, string $correlationId): NowPaymentsPaymentReceipt
     {
         $mismatch = $this->createMismatchCode($authority, $result);
 
@@ -305,7 +306,7 @@ final readonly class NowPaymentsPaymentService
         });
     }
 
-    private function recordCreateFailure(object $authority, bool $uncertain, string $correlationId): NowPaymentsPaymentReceipt
+    private function recordCreateFailure(stdClass $authority, bool $uncertain, string $correlationId): NowPaymentsPaymentReceipt
     {
         return $this->database->connection()->transaction(function (Connection $connection) use (
             $authority,
@@ -354,7 +355,7 @@ final readonly class NowPaymentsPaymentService
         });
     }
 
-    private function applyStatus(object $authority, NowPaymentsPaymentResult $result, string $correlationId): NowPaymentsPaymentReceipt
+    private function applyStatus(stdClass $authority, NowPaymentsPaymentResult $result, string $correlationId): NowPaymentsPaymentReceipt
     {
         $capture = false;
         $settlementEvent = null;
@@ -365,7 +366,7 @@ final readonly class NowPaymentsPaymentService
             $correlationId,
             &$capture,
             &$settlementEvent,
-        ): object {
+        ): stdClass {
             $current = $this->requiredAuthority($connection, (int) $authority->id, true);
             $state = $this->authorityState((string) $current->state);
             $this->observe($connection, $current, 'status_lookup', $result->paymentStatus, $result->responseHash, $correlationId);
@@ -565,7 +566,7 @@ final readonly class NowPaymentsPaymentService
     }
 
     private function recordMismatch(
-        object $authority,
+        stdClass $authority,
         NowPaymentsPaymentResult $result,
         string $code,
         string $correlationId,
@@ -601,7 +602,7 @@ final readonly class NowPaymentsPaymentService
         });
     }
 
-    private function markManualReviewWithoutProviderId(object $authority, string $correlationId): NowPaymentsPaymentReceipt
+    private function markManualReviewWithoutProviderId(stdClass $authority, string $correlationId): NowPaymentsPaymentReceipt
     {
         return $this->database->connection()->transaction(function (Connection $connection) use ($authority, $correlationId): NowPaymentsPaymentReceipt {
             $current = $this->requiredAuthority($connection, (int) $authority->id, true);
@@ -627,7 +628,7 @@ final readonly class NowPaymentsPaymentService
         });
     }
 
-    private function createMismatchCode(object $authority, NowPaymentsPaymentResult $result): ?string
+    private function createMismatchCode(stdClass $authority, NowPaymentsPaymentResult $result): ?string
     {
         if (! hash_equals((string) $authority->order_id, $result->orderId)) {
             return 'create_order_id_mismatch';
@@ -651,7 +652,7 @@ final readonly class NowPaymentsPaymentService
         return null;
     }
 
-    private function statusMismatchCode(object $authority, NowPaymentsPaymentResult $result): ?string
+    private function statusMismatchCode(stdClass $authority, NowPaymentsPaymentResult $result): ?string
     {
         if (! hash_equals((string) $authority->provider_payment_id, $result->providerPaymentId)) {
             return 'status_payment_id_mismatch';
@@ -676,7 +677,7 @@ final readonly class NowPaymentsPaymentService
         return null;
     }
 
-    private function moveAuthorityToManualReview(Connection $connection, object $authority): object
+    private function moveAuthorityToManualReview(Connection $connection, stdClass $authority): stdClass
     {
         $state = $this->authorityState((string) $authority->state);
         if ($state === NowPaymentsAuthorityState::ManualReview) {
@@ -691,7 +692,7 @@ final readonly class NowPaymentsPaymentService
         return $authority;
     }
 
-    private function transitionAuthority(Connection $connection, object $authority, NowPaymentsAuthorityState $to): void
+    private function transitionAuthority(Connection $connection, stdClass $authority, NowPaymentsAuthorityState $to): void
     {
         $from = $this->authorityState((string) $authority->state);
         if ($from === $to) {
@@ -858,7 +859,7 @@ final readonly class NowPaymentsPaymentService
 
     private function observe(
         Connection $connection,
-        object $authority,
+        stdClass $authority,
         string $eventType,
         ?string $providerStatus,
         string $responseHash,
@@ -884,7 +885,7 @@ final readonly class NowPaymentsPaymentService
                 'created_at' => $this->timestamp(),
             ]);
         } catch (QueryException $exception) {
-            if (! $connection->table('nowpayments_payment_observations')->where('event_key', $eventKey)->exists()) {
+            if ($connection->table('nowpayments_payment_observations')->where('event_key', $eventKey)->first(['id']) === null) {
                 throw $exception;
             }
         }
@@ -892,7 +893,7 @@ final readonly class NowPaymentsPaymentService
 
     private function finding(
         Connection $connection,
-        object $authority,
+        stdClass $authority,
         string $code,
         string $severity,
         ?string $providerStatus,
@@ -922,7 +923,7 @@ final readonly class NowPaymentsPaymentService
                 'created_at' => $this->timestamp(),
             ]);
         } catch (QueryException $exception) {
-            if (! $connection->table('nowpayments_reconciliation_findings')->where('finding_key', $findingKey)->exists()) {
+            if ($connection->table('nowpayments_reconciliation_findings')->where('finding_key', $findingKey)->first(['id']) === null) {
                 throw $exception;
             }
         }
@@ -1029,7 +1030,7 @@ final readonly class NowPaymentsPaymentService
         ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES));
     }
 
-    private function assertEligibleIntent(object $intent): void
+    private function assertEligibleIntent(stdClass $intent): void
     {
         if ($intent->purpose !== 'purchase'
             || $intent->provider_code !== self::PROVIDER_CODE
@@ -1039,7 +1040,7 @@ final readonly class NowPaymentsPaymentService
         }
     }
 
-    private function receipt(object $authority, bool $replayed): NowPaymentsPaymentReceipt
+    private function receipt(stdClass $authority, bool $replayed): NowPaymentsPaymentReceipt
     {
         $intentPublicId = $this->intentPublicIdForAuthority($authority);
         $settlementPublicId = $this->database->connection()->table('purchase_settlements')
@@ -1066,7 +1067,7 @@ final readonly class NowPaymentsPaymentService
         );
     }
 
-    private function intentPublicIdForAuthority(object $authority): string
+    private function intentPublicIdForAuthority(stdClass $authority): string
     {
         $value = $this->database->connection()->table('payment_intents')
             ->where('id', (int) $authority->payment_intent_id)
@@ -1078,7 +1079,7 @@ final readonly class NowPaymentsPaymentService
         return $value;
     }
 
-    private function intentByPublicId(Connection $connection, string $publicId, bool $lock = false): ?object
+    private function intentByPublicId(Connection $connection, string $publicId, bool $lock = false): ?stdClass
     {
         $query = $connection->table('payment_intents')->where('public_id', $publicId);
         if ($lock) {
@@ -1088,7 +1089,7 @@ final readonly class NowPaymentsPaymentService
         return $query->first(['id', 'public_id', 'purpose', 'provider_code', 'amount_irr', 'currency', 'state', 'captured_at']);
     }
 
-    private function authorityByIntentPublicId(Connection $connection, string $intentPublicId): ?object
+    private function authorityByIntentPublicId(Connection $connection, string $intentPublicId): ?stdClass
     {
         $intentId = $connection->table('payment_intents')->where('public_id', $intentPublicId)->value('id');
         if ($intentId === null) {
@@ -1098,7 +1099,7 @@ final readonly class NowPaymentsPaymentService
         return $this->authorityByIntentId($connection, (int) $intentId);
     }
 
-    private function authorityByIntentId(Connection $connection, int $intentId, bool $lock = false): ?object
+    private function authorityByIntentId(Connection $connection, int $intentId, bool $lock = false): ?stdClass
     {
         $query = $connection->table('nowpayments_payment_authorities')->where('payment_intent_id', $intentId);
         if ($lock) {
@@ -1108,14 +1109,14 @@ final readonly class NowPaymentsPaymentService
         return $query->first($this->authorityColumns());
     }
 
-    private function authorityByPublicId(Connection $connection, string $publicId): ?object
+    private function authorityByPublicId(Connection $connection, string $publicId): ?stdClass
     {
         return $connection->table('nowpayments_payment_authorities')
             ->where('public_id', $publicId)
             ->first($this->authorityColumns());
     }
 
-    private function authorityById(Connection $connection, int $id, bool $lock = false): ?object
+    private function authorityById(Connection $connection, int $id, bool $lock = false): ?stdClass
     {
         $query = $connection->table('nowpayments_payment_authorities')->where('id', $id);
         if ($lock) {
@@ -1125,7 +1126,7 @@ final readonly class NowPaymentsPaymentService
         return $query->first($this->authorityColumns());
     }
 
-    private function requiredAuthority(Connection $connection, int $id, bool $lock = false): object
+    private function requiredAuthority(Connection $connection, int $id, bool $lock = false): stdClass
     {
         return $this->authorityById($connection, $id, $lock)
             ?? throw new RuntimeException('NOWPayments authority is unavailable.');

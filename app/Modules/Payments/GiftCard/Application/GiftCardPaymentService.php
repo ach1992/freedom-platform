@@ -15,6 +15,7 @@ use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Support\Str;
 use RuntimeException;
+use stdClass;
 use Throwable;
 
 final readonly class GiftCardPaymentService
@@ -211,6 +212,7 @@ final readonly class GiftCardPaymentService
         }, 3);
     }
 
+    /** @param list<string> $fromStates */
     private function beginProviderMutation(string $submissionPublicId, string $operation, array $fromStates, string $toState): GiftCardProviderRequest
     {
         return $this->database->connection()->transaction(function (Connection $connection) use ($submissionPublicId, $operation, $fromStates, $toState): GiftCardProviderRequest {
@@ -283,7 +285,7 @@ final readonly class GiftCardPaymentService
 
     private function routeMismatch(
         Connection $connection,
-        object $authority,
+        stdClass $authority,
         string $providerCode,
         GiftCardProviderEvidence $evidence,
         string $correlationId,
@@ -330,7 +332,7 @@ final readonly class GiftCardPaymentService
         }, 3);
     }
 
-    private function createReview(Connection $connection, object $authority, string $reasonCode, string $correlationId): void
+    private function createReview(Connection $connection, stdClass $authority, string $reasonCode, string $correlationId): void
     {
         $existing = $connection->table('gift_card_reviews')->where('gift_card_submission_id', $authority->submission_id)->lockForUpdate()->first();
         if ($existing === null) {
@@ -355,7 +357,7 @@ final readonly class GiftCardPaymentService
         $this->advanceIntentToPendingReview($connection, $authority, $correlationId);
     }
 
-    private function providerRequest(object $authority, string $operation): GiftCardProviderRequest
+    private function providerRequest(stdClass $authority, string $operation): GiftCardProviderRequest
     {
         $code = $authority->encrypted_code === null ? null : $this->encrypter->decryptString((string) $authority->encrypted_code);
 
@@ -372,7 +374,7 @@ final readonly class GiftCardPaymentService
         );
     }
 
-    private function advanceIntentToVerifying(Connection $connection, object $authority, string $correlationId): void
+    private function advanceIntentToVerifying(Connection $connection, stdClass $authority, string $correlationId): void
     {
         if ($authority->intent_state === PaymentIntentState::Verifying->value) {
             return;
@@ -383,7 +385,7 @@ final readonly class GiftCardPaymentService
         $this->transitionIntent($connection, (int) $authority->payment_intent_id, PaymentIntentState::Submitted, PaymentIntentState::Verifying, 'gift_card_verification_started', $correlationId);
     }
 
-    private function advanceIntentToPendingReview(Connection $connection, object $authority, string $correlationId): void
+    private function advanceIntentToPendingReview(Connection $connection, stdClass $authority, string $correlationId): void
     {
         $state = PaymentIntentState::from((string) $authority->intent_state);
         if ($state === PaymentIntentState::Submitted) {
@@ -399,7 +401,7 @@ final readonly class GiftCardPaymentService
         $this->transitionIntent($connection, (int) $authority->payment_intent_id, PaymentIntentState::Verifying, PaymentIntentState::PendingManualReview, 'gift_card_manual_review_required', $correlationId);
     }
 
-    private function failIntent(Connection $connection, object $authority, string $correlationId, string $reason): void
+    private function failIntent(Connection $connection, stdClass $authority, string $correlationId, string $reason): void
     {
         $stateValue = (string) $connection->table('payment_intents')->where('id', $authority->payment_intent_id)->value('state');
         $state = PaymentIntentState::from($stateValue);
@@ -457,7 +459,7 @@ final readonly class GiftCardPaymentService
         }
     }
 
-    private function providerEvidenceMatchesClaim(object $authority, GiftCardProviderEvidence $evidence): bool
+    private function providerEvidenceMatchesClaim(stdClass $authority, GiftCardProviderEvidence $evidence): bool
     {
         return $evidence->faceValue !== null
             && $evidence->currency !== null
@@ -469,7 +471,7 @@ final readonly class GiftCardPaymentService
             && ($evidence->region === null || hash_equals((string) $authority->claimed_region, $evidence->region));
     }
 
-    private function recordProviderEvent(Connection $connection, object $authority, string $providerCode, GiftCardProviderEvidence $evidence): object
+    private function recordProviderEvent(Connection $connection, stdClass $authority, string $providerCode, GiftCardProviderEvidence $evidence): stdClass
     {
         if ($authority->provider_code !== $providerCode) {
             throw new RuntimeException('Gift-card provider evidence does not match type authority.');
@@ -521,7 +523,7 @@ final readonly class GiftCardPaymentService
         return $row;
     }
 
-    private function receipt(Connection $connection, object $authority, bool $replayed): GiftCardProcessingReceipt
+    private function receipt(Connection $connection, stdClass $authority, bool $replayed): GiftCardProcessingReceipt
     {
         $review = $connection->table('gift_card_reviews')->where('gift_card_submission_id', $authority->submission_id)->first(['public_id']);
         $redemption = $connection->table('gift_card_redemptions')->where('gift_card_submission_id', $authority->submission_id)->first(['public_id', 'purchase_settlement_id']);
@@ -540,7 +542,7 @@ final readonly class GiftCardPaymentService
         );
     }
 
-    private function submissionAuthority(Connection $connection, string $publicId, bool $lock = false): ?object
+    private function submissionAuthority(Connection $connection, string $publicId, bool $lock = false): ?stdClass
     {
         $query = $connection->table('gift_card_submissions as submission')
             ->join('gift_card_types as type', 'type.id', '=', 'submission.gift_card_type_id')
@@ -596,7 +598,7 @@ final readonly class GiftCardPaymentService
 
     private function recordFindingInConnection(
         Connection $connection,
-        object $authority,
+        stdClass $authority,
         string $type,
         string $severity,
         ?string $providerCode,

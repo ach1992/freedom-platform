@@ -199,7 +199,7 @@ final class UsdtBep20ReconciliationTest extends TestCase
         self::assertSame(1, DB::table('payment_provider_transactions')->where('provider_code', 'usdt_bep20')->count());
     }
 
-    private function successEvidence(string $txid, int $amountBaseUnits, DateTimeImmutable $transactionAt, int $confirmations, string $suffix): UsdtBlockchainVerificationEvidence
+    private function successEvidence(string $txid, string $amountBaseUnits, DateTimeImmutable $transactionAt, int $confirmations, string $suffix): UsdtBlockchainVerificationEvidence
     {
         return new UsdtBlockchainVerificationEvidence(
             'success',
@@ -207,11 +207,11 @@ final class UsdtBep20ReconciliationTest extends TestCase
             'chain-event-'.$suffix,
             $txid,
             'BEP20',
-            56,
-            '0x'.str_repeat('aa', 20),
+            UsdtBep20Asset::CHAIN_ID,
+            UsdtBep20Asset::TOKEN_CONTRACT,
             '0x'.str_repeat('bb', 20),
             $amountBaseUnits,
-            6,
+            UsdtBep20Asset::TOKEN_DECIMALS,
             $confirmations,
             12345678,
             $transactionAt,
