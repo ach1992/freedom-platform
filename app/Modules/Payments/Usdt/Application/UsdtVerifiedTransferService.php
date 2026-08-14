@@ -40,7 +40,6 @@ final readonly class UsdtVerifiedTransferService
     ): UsdtProcessingReceipt {
         $this->assertIdentity($submissionPublicId, $providerCode, $correlationId);
         $this->validateSuccessfulEvidence($evidence);
-
         $this->persistVerifiedTransfer($submissionPublicId, $providerCode, $evidence);
 
         try {
@@ -76,7 +75,8 @@ final readonly class UsdtVerifiedTransferService
                 'transfer.txid', 'transfer.amount_base_units', 'transfer.confirmations', 'transfer.evidence_hash',
                 'transfer.transaction_at', 'transfer.verified_at', 'transfer.purchase_settlement_id',
                 'submission.id as submission_id', 'submission.state as submission_state',
-                'authority.source_amount_irr', 'intent.public_id as intent_public_id', 'intent.state as intent_state',
+                'authority.source_amount_irr', 'authority.token_decimals',
+                'intent.public_id as intent_public_id', 'intent.state as intent_state',
                 'event_row.provider_event_id as provider_event_id',
             ]);
         if ($authority === null) {
@@ -102,10 +102,13 @@ final readonly class UsdtVerifiedTransferService
         if ($authority->submission_state !== 'verified') {
             throw new RuntimeException('USDT verified transfer is not in a settleable local state.');
         }
+        if ((int) $authority->token_decimals !== UsdtBep20Asset::TOKEN_DECIMALS) {
+            throw new RuntimeException('USDT verified transfer token precision is inconsistent with canonical BSC asset authority.');
+        }
 
         $transactionAt = $this->storedDateTime((string) $authority->transaction_at);
         $verifiedAt = $this->storedDateTime((string) $authority->verified_at);
-        $commonTransactionId = hash('sha256', "BEP20\0".(string) $authority->txid);
+        $commonTransactionId = hash('sha256', UsdtBep20Asset::NETWORK."\0".(string) $authority->txid);
         $commonEventId = hash('sha256', (string) $authority->provider_code."\0".(string) $authority->provider_event_id);
         $verifiedEvent = new VerifiedPaymentEvent(
             $commonEventId,
@@ -120,7 +123,11 @@ final readonly class UsdtVerifiedTransferService
                 $transactionAt,
                 $verifiedAt,
                 strtolower((string) $authority->evidence_hash),
-                ['network' => 'BEP20', 'txid' => (string) $authority->txid],
+                [
+                    'network' => UsdtBep20Asset::NETWORK,
+                    'txid' => (string) $authority->txid,
+                    'token_contract' => UsdtBep20Asset::TOKEN_CONTRACT,
+                ],
             ),
         );
 
@@ -176,7 +183,7 @@ final readonly class UsdtVerifiedTransferService
                     ->first([
                         'submission.id as submission_id', 'submission.state as submission_state', 'submission.txid',
                         'authority.id as authority_id', 'authority.payment_intent_id', 'authority.network', 'authority.chain_id',
-                        'authority.token_contract', 'authority.destination_address', 'authority.expected_amount_base_units',
+                        'authority.token_contract', 'authority.token_decimals', 'authority.destination_address', 'authority.expected_amount_base_units',
                         'authority.minimum_confirmations', 'authority.created_at as authority_created_at', 'authority.quote_expires_at',
                         'intent.state as intent_state', 'intent.captured_at',
                     ]);
@@ -199,6 +206,7 @@ final readonly class UsdtVerifiedTransferService
                 $this->assertEvidenceMatchesAuthority($authority, $evidence);
 
                 $eventRow = $this->recordChainEvent($connection, (int) $authority->submission_id, $providerCode, $evidence);
+                $normalizedBaseUnits = UsdtTokenAmount::normalizeBaseUnits($evidence->amountBaseUnits ?? throw new DomainException('USDT successful evidence lacks raw token amount.'));
                 $transferId = (int) $connection->table('usdt_verified_transfers')->insertGetId([
                     'public_id' => (string) Str::ulid(),
                     'usdt_payment_authority_id' => (int) $authority->authority_id,
@@ -207,7 +215,7 @@ final readonly class UsdtVerifiedTransferService
                     'payment_intent_id' => (int) $authority->payment_intent_id,
                     'provider_code' => $providerCode,
                     'txid' => strtolower($evidence->txid),
-                    'amount_base_units' => (int) $evidence->amountBaseUnits,
+                    'amount_base_units' => $normalizedBaseUnits,
                     'confirmations' => (int) $evidence->confirmations,
                     'evidence_hash' => strtolower($evidence->evidenceHash),
                     'transaction_at' => $this->databaseDateTime($evidence->transactionAt ?? throw new DomainException('USDT successful evidence lacks transaction time.')),
@@ -258,7 +266,7 @@ final readonly class UsdtVerifiedTransferService
             'chain_id' => $evidence->chainId,
             'token_contract' => $evidence->tokenContract === null ? null : strtolower($evidence->tokenContract),
             'destination_address' => $evidence->destinationAddress === null ? null : strtolower($evidence->destinationAddress),
-            'amount_base_units' => $evidence->amountBaseUnits,
+            'amount_base_units' => $evidence->amountBaseUnits === null ? null : UsdtTokenAmount::normalizeBaseUnits($evidence->amountBaseUnits),
             'token_decimals' => $evidence->tokenDecimals,
             'confirmations' => $evidence->confirmations,
             'block_number' => $evidence->blockNumber,
@@ -284,20 +292,25 @@ final readonly class UsdtVerifiedTransferService
         }
         if (preg_match('/\A0x[a-fA-F0-9]{64}\z/', $evidence->txid) !== 1
             || preg_match('/\A[a-fA-F0-9]{64}\z/', $evidence->evidenceHash) !== 1
-            || $evidence->providerEventId === '' || strlen($evidence->providerEventId) > 191) {
+            || $evidence->providerEventId === '' || strlen($evidence->providerEventId) > 191
+            || preg_match('/[\x00-\x20\x7F]/', $evidence->providerEventId) === 1) {
             throw new DomainException('USDT blockchain evidence identity is invalid.');
         }
+        UsdtTokenAmount::normalizeBaseUnits($evidence->amountBaseUnits);
     }
 
     private function assertEvidenceMatchesAuthority(object $authority, UsdtBlockchainVerificationEvidence $evidence): void
     {
+        $actualBaseUnits = UsdtTokenAmount::normalizeBaseUnits($evidence->amountBaseUnits ?? throw new DomainException('USDT blockchain evidence lacks raw amount.'));
+        $expectedBaseUnits = UsdtTokenAmount::normalizeBaseUnits((string) $authority->expected_amount_base_units);
         if (! hash_equals((string) $authority->txid, strtolower($evidence->txid))
             || $evidence->network !== $authority->network
             || $evidence->chainId !== (int) $authority->chain_id
             || ! hash_equals((string) $authority->token_contract, strtolower((string) $evidence->tokenContract))
             || ! hash_equals((string) $authority->destination_address, strtolower((string) $evidence->destinationAddress))
-            || $evidence->amountBaseUnits !== (int) $authority->expected_amount_base_units
-            || $evidence->tokenDecimals !== UsdtTokenAmount::DECIMALS
+            || ! hash_equals($expectedBaseUnits, $actualBaseUnits)
+            || $evidence->tokenDecimals !== (int) $authority->token_decimals
+            || (int) $authority->token_decimals !== UsdtBep20Asset::TOKEN_DECIMALS
             || $evidence->confirmations < (int) $authority->minimum_confirmations) {
             throw new DomainException('USDT blockchain evidence does not exactly match the prepared payment authority.');
         }
