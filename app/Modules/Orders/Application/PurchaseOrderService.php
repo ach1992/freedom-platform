@@ -78,6 +78,7 @@ use RuntimeException;
  *     state:string,
  *     state_version:int|string,
  *     total_amount_irr:int|string,
+ *     settled_amount_irr:int|string|null,
  *     currency:string,
  *     paid_at:string|null
  * }
@@ -153,6 +154,8 @@ final readonly class PurchaseOrderService
                 $timestamp = $this->timestamp();
                 $orderPublicId = (string) Str::ulid();
                 $itemPublicId = (string) Str::ulid();
+                $commercialAmountIrr = $this->positiveDatabaseInt($intent->amount_irr, 'Purchase commercial amount');
+                $settledAmountIrr = $this->positiveDatabaseInt($settlement->amount_irr, 'Purchase settled amount');
                 $orderId = (int) $connection->table('orders')->insertGetId([
                     'public_id' => $orderPublicId,
                     'source_type' => self::SOURCE_TYPE,
@@ -166,7 +169,8 @@ final readonly class PurchaseOrderService
                     'source_quote_configuration_hash' => strtolower($quote->configuration_snapshot_hash),
                     'state' => OrderState::Paid->value,
                     'state_version' => 1,
-                    'total_amount_irr' => $this->positiveDatabaseInt($settlement->amount_irr, 'Purchase settlement amount'),
+                    'total_amount_irr' => $commercialAmountIrr,
+                    'settled_amount_irr' => $settledAmountIrr,
                     'currency' => $settlement->currency,
                     'paid_at' => $settlement->settled_at,
                     'creation_correlation_id' => $correlationId,
@@ -201,7 +205,7 @@ final readonly class PurchaseOrderService
                     'created_at' => $timestamp,
                 ]);
 
-                $this->recordAudit($connection, $orderPublicId, $settlement, $correlationId);
+                $this->recordAudit($connection, $orderPublicId, $settlement, $intent, $correlationId);
 
                 return new PurchaseOrderReceipt(
                     $orderId,
@@ -213,7 +217,8 @@ final readonly class PurchaseOrderService
                     $this->positiveDatabaseInt($settlement->user_id, 'Purchase settlement user ID'),
                     OrderState::Paid,
                     1,
-                    Money::irr($this->positiveDatabaseInt($settlement->amount_irr, 'Purchase settlement amount')),
+                    Money::irr($commercialAmountIrr),
+                    Money::irr($settledAmountIrr),
                     $this->storedDateTime($settlement->settled_at, 'Purchase settlement timestamp'),
                     false,
                 );
@@ -293,7 +298,8 @@ final readonly class PurchaseOrderService
         $intentId = $this->positiveDatabaseInt($intent->id, 'Payment intent ID');
         $quoteId = $this->positiveDatabaseInt($quote->id, 'Source Quote ID');
         $userId = $this->positiveDatabaseInt($settlement->user_id, 'Purchase settlement user ID');
-        $amountIrr = $this->positiveDatabaseInt($settlement->amount_irr, 'Purchase settlement amount');
+        $this->positiveDatabaseInt($settlement->amount_irr, 'Purchase settled amount');
+        $commercialAmountIrr = $this->positiveDatabaseInt($intent->amount_irr, 'Purchase commercial amount');
 
         if ($settlementId < 1
             || $intentId !== $this->positiveDatabaseInt($settlement->payment_intent_id, 'Purchase settlement payment intent ID')
@@ -307,8 +313,7 @@ final readonly class PurchaseOrderService
             || (int) $quote->user_id !== $userId
             || (int) $settlement->source_quote_id !== $quoteId
             || ! hash_equals($settlement->source_quote_public_id, $quote->public_id)
-            || (int) $intent->amount_irr !== $amountIrr
-            || (int) $quote->final_price_irr !== $amountIrr
+            || (int) $quote->final_price_irr !== $commercialAmountIrr
             || $settlement->currency !== 'IRR'
             || $intent->currency !== $settlement->currency
             || $quote->currency !== $settlement->currency
@@ -336,7 +341,7 @@ final readonly class PurchaseOrderService
         $row = $query->first([
             'id', 'public_id', 'source_type', 'purchase_settlement_id', 'purchase_settlement_public_id',
             'payment_intent_id', 'payment_intent_public_id', 'user_id', 'source_quote_id', 'source_quote_public_id',
-            'source_quote_configuration_hash', 'state', 'state_version', 'total_amount_irr', 'currency', 'paid_at',
+            'source_quote_configuration_hash', 'state', 'state_version', 'total_amount_irr', 'settled_amount_irr', 'currency', 'paid_at',
         ]);
 
         return $row;
@@ -391,7 +396,10 @@ final readonly class PurchaseOrderService
             || ! hash_equals(strtolower($order->source_quote_configuration_hash), strtolower($quote->configuration_snapshot_hash))
             || $order->state !== OrderState::Paid->value
             || (int) $order->state_version !== 1
-            || (int) $order->total_amount_irr !== (int) $settlement->amount_irr
+            || (int) $order->total_amount_irr !== (int) $intent->amount_irr
+            || (int) $order->total_amount_irr !== (int) $quote->final_price_irr
+            || $order->settled_amount_irr === null
+            || (int) $order->settled_amount_irr !== (int) $settlement->amount_irr
             || $order->currency !== $settlement->currency
             || $order->paid_at === null
             || ! $this->sameInstant($order->paid_at, $settlement->settled_at)) {
@@ -410,7 +418,8 @@ final readonly class PurchaseOrderService
             $this->positiveDatabaseInt($settlement->user_id, 'Purchase settlement user ID'),
             OrderState::Paid,
             1,
-            Money::irr($this->positiveDatabaseInt($settlement->amount_irr, 'Purchase settlement amount')),
+            Money::irr($this->positiveDatabaseInt($intent->amount_irr, 'Purchase commercial amount')),
+            Money::irr($this->positiveDatabaseInt($settlement->amount_irr, 'Purchase settled amount')),
             $this->storedDateTime($settlement->settled_at, 'Purchase settlement timestamp'),
             true,
         );
@@ -446,8 +455,11 @@ final readonly class PurchaseOrderService
         }
     }
 
-    /** @param SettlementRow $settlement */
-    private function recordAudit(Connection $connection, string $orderPublicId, object $settlement, string $correlationId): void
+    /**
+     * @param  SettlementRow  $settlement
+     * @param  IntentRow  $intent
+     */
+    private function recordAudit(Connection $connection, string $orderPublicId, object $settlement, object $intent, string $correlationId): void
     {
         $connection->table('audit_logs')->insert([
             'actor_type' => 'system',
@@ -459,7 +471,8 @@ final readonly class PurchaseOrderService
             'after_safe_data' => json_encode([
                 'purchase_settlement_public_id' => $settlement->public_id,
                 'source_quote_public_id' => $settlement->source_quote_public_id,
-                'amount_irr' => (int) $settlement->amount_irr,
+                'commercial_amount_irr' => (int) $intent->amount_irr,
+                'settled_amount_irr' => (int) $settlement->amount_irr,
                 'currency' => $settlement->currency,
                 'state' => OrderState::Paid->value,
                 'state_version' => 1,
