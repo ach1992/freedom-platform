@@ -7,6 +7,7 @@ namespace Tests\Feature;
 require_once __DIR__.'/AgentPricingQuoteIntegrationTestSupport.php';
 require_once __DIR__.'/PurchaseOrderTestSupport.php';
 
+use App\Modules\Orders\Application\PurchaseOrderReceipt;
 use App\Modules\Orders\Application\PurchaseOrderService;
 use App\Modules\Orders\Domain\OrderState;
 use App\Modules\Payments\Application\Contracts\PaymentEvidence;
@@ -14,6 +15,7 @@ use App\Modules\Payments\Application\Contracts\PaymentEvidenceAuthority;
 use App\Modules\Payments\Application\Contracts\PaymentTransactionStatus;
 use App\Modules\Payments\Application\Contracts\ProviderOperationOutcome;
 use App\Modules\Payments\Application\Contracts\VerifiedPaymentEvent;
+use App\Modules\Payments\Application\PurchaseRefundReceipt;
 use App\Modules\Payments\Application\PurchaseRefundService;
 use App\Modules\Payments\Application\PurchaseSettlementReceipt;
 use App\Modules\Payments\Domain\PaymentIntentState;
@@ -252,7 +254,7 @@ final class InitialProvisioningQueueAuthorityTest extends TestCase
         }
     }
 
-    /** @return array{0:PurchaseSettlementReceipt,1:\App\Modules\Orders\Application\PurchaseOrderReceipt} */
+    /** @return array{0:PurchaseSettlementReceipt,1:PurchaseOrderReceipt} */
     private function createPaidOrder(string $suffix): array
     {
         $settlement = $this->createPurchaseOrderSettlement($suffix);
@@ -264,7 +266,7 @@ final class InitialProvisioningQueueAuthorityTest extends TestCase
         return [$settlement, $order];
     }
 
-    private function recordFullRefund(PurchaseSettlementReceipt $settlement, string $suffix): \App\Modules\Payments\Application\PurchaseRefundReceipt
+    private function recordFullRefund(PurchaseSettlementReceipt $settlement, string $suffix): PurchaseRefundReceipt
     {
         $occurredAt = $this->purchaseOrderClock->value->modify('+5 minutes');
 
