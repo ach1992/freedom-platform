@@ -35,7 +35,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          scripts/ci/bootstrap-self-hosted-toolchain.sh no-coverage
+          bash scripts/ci/bootstrap-self-hosted-toolchain.sh no-coverage
           composer install --no-interaction --prefer-dist --no-progress --no-scripts
 
       - name: Apply evidence-backed corrections
