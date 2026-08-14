@@ -18,6 +18,7 @@ use App\Shared\Domain\Money;
 use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
+use Database\Seeders\WalletFinancialFoundationSeeder;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -37,6 +38,7 @@ final class PurchaseOrderAuthorityHardeningTest extends TestCase
         $this->seed(IdentityAccessFoundationSeeder::class);
         $this->seed(CatalogAccessFoundationSeeder::class);
         $this->seed(PaymentEligibilityAccessFoundationSeeder::class);
+        $this->seed(WalletFinancialFoundationSeeder::class);
         $this->bootPurchaseOrderClock();
     }
 
@@ -131,7 +133,8 @@ final class PurchaseOrderAuthorityHardeningTest extends TestCase
             'created_at' => $this->purchaseOrderTimestamp(),
             'updated_at' => $this->purchaseOrderTimestamp(),
         ]);
-        $walletIntent = $this->app->make(WalletTopUpPaymentService::class)->create(
+        $walletPayments = $this->app->make(WalletTopUpPaymentService::class);
+        $walletIntent = $walletPayments->create(
             'topup.intent.order.guard.000001',
             $purchaseSettlement->userId,
             $walletAccountId,
@@ -139,6 +142,14 @@ final class PurchaseOrderAuthorityHardeningTest extends TestCase
             Money::irr($purchaseSettlement->amount->amount()),
             $this->purchaseOrderCorrelation('wallet-guard-intent'),
         );
+        $walletSettlement = $walletPayments->capture(
+            $walletIntent->intentPublicId,
+            'fake_gateway',
+            $this->purchaseEvent('wallet-top-up-authority', $purchaseSettlement->amount->amount()),
+            $this->purchaseOrderCorrelation('wallet-guard-capture'),
+        );
+        self::assertSame('captured', $walletSettlement->state->value);
+        self::assertSame(1, DB::table('wallet_top_up_settlements')->count());
         $walletIntentId = (int) DB::table('payment_intents')->where('public_id', $walletIntent->intentPublicId)->value('id');
 
         $this->assertQueryRejected(fn (): bool => DB::table('orders')->insert([
