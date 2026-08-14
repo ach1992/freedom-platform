@@ -20,6 +20,7 @@ use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
 use DateTimeImmutable;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
@@ -35,7 +36,11 @@ final class ReconciliationFixedC2cAdjustmentGenerator implements CardToCardAdjus
 final class ReconciliationC2cClock implements Clock
 {
     public function __construct(public DateTimeImmutable $value) {}
-    public function now(): DateTimeImmutable { return $this->value; }
+
+    public function now(): DateTimeImmutable
+    {
+        return $this->value;
+    }
 }
 
 /** @requirement C2C-005 DAT-002 DAT-003 DAT-004 QUA-004 */
@@ -54,7 +59,7 @@ final class CardToCardReconciliationTest extends TestCase
         $this->seed(PaymentEligibilityAccessFoundationSeeder::class);
         $this->clock = new ReconciliationC2cClock(new DateTimeImmutable('2026-08-14T14:00:00+00:00'));
         $this->app->instance(Clock::class, $this->clock);
-        $this->app->instance(CardToCardAdjustmentGenerator::class, new ReconciliationFixedC2cAdjustmentGenerator());
+        $this->app->instance(CardToCardAdjustmentGenerator::class, new ReconciliationFixedC2cAdjustmentGenerator);
         config()->set('payments.card_to_card.lookup_key', str_repeat('r', 32));
 
         $administratorId = $this->ownerAdministrator();
@@ -116,7 +121,7 @@ final class CardToCardReconciliationTest extends TestCase
         try {
             DB::table('c2c_reconciliation_findings')->where('id', $findingId)->update(['severity' => 'warning']);
             self::fail('Expected immutable reconciliation finding update to fail.');
-        } catch (\Illuminate\Database\QueryException) {
+        } catch (QueryException) {
             self::assertTrue(true);
         }
     }

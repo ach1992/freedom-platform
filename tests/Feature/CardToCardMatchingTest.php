@@ -16,12 +16,13 @@ use App\Modules\Payments\Application\PurchaseRefundService;
 use App\Modules\Payments\CardToCard\Application\CardToCardBankTransactionService;
 use App\Modules\Payments\CardToCard\Application\CardToCardDestinationService;
 use App\Modules\Payments\CardToCard\Application\CardToCardMatchingService;
+use App\Modules\Payments\CardToCard\Application\CardToCardPaymentReceipt;
 use App\Modules\Payments\CardToCard\Application\CardToCardPaymentService;
 use App\Modules\Payments\CardToCard\Application\CardToCardSettlementService;
 use App\Modules\Payments\CardToCard\Application\Contracts\BankTransactionObservation;
 use App\Modules\Payments\CardToCard\Application\Contracts\CardToCardAdjustmentGenerator;
-use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
 use App\Modules\Payments\Domain\PaymentIntentState;
+use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
 use App\Shared\Application\Clock;
 use App\Shared\Domain\Money;
 use Database\Seeders\CatalogAccessFoundationSeeder;
@@ -69,7 +70,7 @@ final class CardToCardMatchingTest extends TestCase
         $this->seed(PaymentEligibilityAccessFoundationSeeder::class);
         $this->clock = new CardToCardMatchingClock(new DateTimeImmutable('2026-08-14T10:00:00+00:00'));
         $this->app->instance(Clock::class, $this->clock);
-        $this->app->instance(CardToCardAdjustmentGenerator::class, new MatchingFixedCardToCardAdjustmentGenerator());
+        $this->app->instance(CardToCardAdjustmentGenerator::class, new MatchingFixedCardToCardAdjustmentGenerator);
         config()->set('payments.card_to_card.lookup_key', str_repeat('m', 32));
         $this->configureMethod();
         $this->app->make(CardToCardDestinationService::class)->register(
@@ -316,7 +317,7 @@ final class CardToCardMatchingTest extends TestCase
         self::assertSame(1, DB::table('c2c_match_reviews')->count());
     }
 
-    private function payment(string $suffix): \App\Modules\Payments\CardToCard\Application\CardToCardPaymentReceipt
+    private function payment(string $suffix): CardToCardPaymentReceipt
     {
         $user = $this->quoteUser('customer');
         $offering = $this->quoteOffering();

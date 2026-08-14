@@ -7,9 +7,11 @@ namespace Tests\Feature;
 use App\Modules\Orders\Application\QuotePricingInput;
 use App\Modules\Orders\Application\QuoteService;
 use App\Modules\Orders\Domain\QuoteOverrideSource;
+use App\Modules\Payments\CardToCard\Application\CardToCardBankTransactionService;
 use App\Modules\Payments\CardToCard\Application\CardToCardDestinationService;
 use App\Modules\Payments\CardToCard\Application\CardToCardManualSubmissionService;
 use App\Modules\Payments\CardToCard\Application\CardToCardMatchingService;
+use App\Modules\Payments\CardToCard\Application\CardToCardPaymentReceipt;
 use App\Modules\Payments\CardToCard\Application\CardToCardPaymentService;
 use App\Modules\Payments\CardToCard\Application\CardToCardProviderPollingService;
 use App\Modules\Payments\CardToCard\Application\CardToCardReviewDecisionService;
@@ -61,7 +63,7 @@ final class CardToCardManualAndPollingFlowTest extends TestCase
         $this->seed(PaymentEligibilityAccessFoundationSeeder::class);
         $this->clock = new ManualPollingC2cClock(new DateTimeImmutable('2026-08-14T12:00:00+00:00'));
         $this->app->instance(Clock::class, $this->clock);
-        $this->app->instance(CardToCardAdjustmentGenerator::class, new ManualPollingFixedC2cAdjustmentGenerator());
+        $this->app->instance(CardToCardAdjustmentGenerator::class, new ManualPollingFixedC2cAdjustmentGenerator);
         config()->set('payments.card_to_card.lookup_key', str_repeat('p', 32));
         $this->configureMethod();
         $this->app->make(CardToCardDestinationService::class)->register(
@@ -125,7 +127,7 @@ final class CardToCardManualAndPollingFlowTest extends TestCase
         self::assertTrue($replay->replayed);
         self::assertSame($submission->submissionId, $replay->submissionId);
 
-        $bank = $this->app->make(\App\Modules\Payments\CardToCard\Application\CardToCardBankTransactionService::class)->ingest(
+        $bank = $this->app->make(CardToCardBankTransactionService::class)->ingest(
             'fake',
             $this->observation('manual-late', $payment['receipt']->payableAmountIrr, $paidAt),
             'fake',
@@ -171,7 +173,7 @@ final class CardToCardManualAndPollingFlowTest extends TestCase
         self::assertSame(1, DB::table('purchase_settlements')->where('provider_code', 'card_to_card')->count());
     }
 
-    /** @return array{user_id:int,receipt:\App\Modules\Payments\CardToCard\Application\CardToCardPaymentReceipt} */
+    /** @return array{user_id:int,receipt:CardToCardPaymentReceipt} */
     private function payment(string $suffix): array
     {
         $user = $this->quoteUser('customer');

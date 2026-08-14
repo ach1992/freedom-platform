@@ -14,7 +14,7 @@ return new class extends Migration
             throw new RuntimeException('Cannot reinterpret pre-release USDT authorities from 6-decimal raw units; clear non-production USDT payment data first.');
         }
 
-        DB::statement("ALTER TABLE usdt_payment_authorities ADD COLUMN token_decimals TINYINT UNSIGNED NOT NULL DEFAULT 18 AFTER token_contract");
+        DB::statement('ALTER TABLE usdt_payment_authorities ADD COLUMN token_decimals TINYINT UNSIGNED NOT NULL DEFAULT 18 AFTER token_contract');
         DB::statement('ALTER TABLE usdt_payment_authorities MODIFY expected_amount_base_units DECIMAL(65,0) UNSIGNED NOT NULL');
         DB::statement('ALTER TABLE usdt_chain_verification_events MODIFY amount_base_units DECIMAL(65,0) UNSIGNED NULL');
         DB::statement('ALTER TABLE usdt_verified_transfers MODIFY amount_base_units DECIMAL(65,0) UNSIGNED NOT NULL');

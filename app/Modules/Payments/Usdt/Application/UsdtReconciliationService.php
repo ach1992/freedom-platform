@@ -45,7 +45,7 @@ final readonly class UsdtReconciliationService
         if ($authority->transfer_id !== null && $authority->purchase_settlement_id === null) {
             return $this->verifiedTransfers->settlePersisted($submissionPublicId, $correlationId);
         }
-        if (in_array($authority->submission_state, ['submitted','verifying','provider_unavailable'], true)) {
+        if (in_array($authority->submission_state, ['submitted', 'verifying', 'provider_unavailable'], true)) {
             return $this->verification->verify($submissionPublicId, $provider, $correlationId);
         }
         if ($authority->submission_state === 'pending_manual_review') {
@@ -85,7 +85,7 @@ final readonly class UsdtReconciliationService
         if (! hash_equals((string) $authority->txid, strtolower($evidence->txid))) {
             return 'post_capture_txid_mismatch';
         }
-        if (in_array($evidence->transactionStatus, ['failed','reverted'], true)) {
+        if (in_array($evidence->transactionStatus, ['failed', 'reverted'], true)) {
             return 'post_capture_chain_reversal';
         }
         if ($evidence->outcome !== 'success' || $evidence->transactionStatus !== 'success') {
@@ -106,6 +106,7 @@ final readonly class UsdtReconciliationService
             || (int) $authority->token_decimals !== UsdtBep20Asset::TOKEN_DECIMALS) {
             return 'local_captured_chain_identity_mismatch';
         }
+
         return null;
     }
 
@@ -127,6 +128,7 @@ final readonly class UsdtReconciliationService
     {
         $review = $this->database->connection()->table('usdt_manual_reviews')->where('usdt_txid_submission_id', $authority->submission_id)->value('public_id');
         $settlement = $authority->purchase_settlement_id === null ? null : $this->database->connection()->table('purchase_settlements')->where('id', $authority->purchase_settlement_id)->value('public_id');
+
         return new UsdtProcessingReceipt(
             (string) $authority->submission_public_id,
             (string) $authority->submission_state,

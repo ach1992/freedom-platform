@@ -89,6 +89,7 @@ final readonly class UsdtVerifiedTransferService
             if (! is_string($settlementPublicId) || $authority->submission_state !== 'captured' || $authority->intent_state !== 'captured') {
                 throw new RuntimeException('USDT verified transfer settlement linkage is inconsistent.');
             }
+
             return new UsdtProcessingReceipt(
                 $submissionPublicId,
                 'captured',
@@ -148,6 +149,7 @@ final readonly class UsdtVerifiedTransferService
                 if ((int) $transfer->purchase_settlement_id !== $settlement->settlementId) {
                     throw new RuntimeException('USDT verified transfer is linked to another settlement.');
                 }
+
                 return;
             }
             $connection->table('usdt_verified_transfers')->where('id', $transfer->id)->update([
@@ -197,6 +199,7 @@ final readonly class UsdtVerifiedTransferService
                         || ! hash_equals(strtolower((string) $existing->evidence_hash), strtolower($evidence->evidenceHash))) {
                         throw new RuntimeException('USDT submission already has conflicting verified transfer authority.');
                     }
+
                     return;
                 }
                 if (! in_array($authority->submission_state, ['verifying', 'pending_manual_review'], true)
@@ -252,6 +255,7 @@ final readonly class UsdtVerifiedTransferService
                 || ! hash_equals(strtolower((string) $existing->evidence_hash), strtolower($evidence->evidenceHash))) {
                 throw new RuntimeException('USDT chain event replay conflicts with accepted evidence.');
             }
+
             return $existing;
         }
         $id = (int) $connection->table('usdt_chain_verification_events')->insertGetId([
@@ -279,6 +283,7 @@ final readonly class UsdtVerifiedTransferService
         if ($row === null) {
             throw new RuntimeException('USDT chain event persistence failed.');
         }
+
         return $row;
     }
 
@@ -325,7 +330,7 @@ final readonly class UsdtVerifiedTransferService
 
     private function recordFinding(string $submissionPublicId, string $type, string $severity, ?string $providerCode, ?UsdtBlockchainVerificationEvidence $evidence, string $correlationId): void
     {
-        $submission = $this->database->connection()->table('usdt_txid_submissions')->where('public_id', $submissionPublicId)->first(['id','txid']);
+        $submission = $this->database->connection()->table('usdt_txid_submissions')->where('public_id', $submissionPublicId)->first(['id', 'txid']);
         if ($submission === null) {
             return;
         }
@@ -348,6 +353,7 @@ final readonly class UsdtVerifiedTransferService
     private function reviewPublicId(int $submissionId): ?string
     {
         $value = $this->database->connection()->table('usdt_manual_reviews')->where('usdt_txid_submission_id', $submissionId)->value('public_id');
+
         return is_string($value) ? $value : null;
     }
 
@@ -372,6 +378,7 @@ final readonly class UsdtVerifiedTransferService
         if ($date === false) {
             throw new RuntimeException('Stored USDT timestamp is invalid.');
         }
+
         return $date;
     }
 

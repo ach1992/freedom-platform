@@ -183,6 +183,7 @@ final readonly class GiftCardRedemptionService
                 if ((int) $redemption->purchase_settlement_id !== $settlement->settlementId) {
                     throw new RuntimeException('Gift-card redemption is linked to another settlement.');
                 }
+
                 return;
             }
             $connection->table('gift_card_redemptions')->where('id', $redemption->id)->update([

@@ -50,6 +50,7 @@ final readonly class GiftCardReconciliationService
 
         if (! $provider->capabilities()->status) {
             $this->recordFinding($authority, 'status_lookup_unsupported', $authority->state === 'captured' ? 'high' : 'warning', null, $correlationId);
+
             return $this->receipt($authority, true);
         }
 
@@ -94,6 +95,7 @@ final readonly class GiftCardReconciliationService
                     ->where('state', 'reserving')
                     ->update(['state' => 'reserved']);
             }
+
             return $this->receipt($this->authority($submissionPublicId) ?? $authority, false);
         }
 
@@ -106,6 +108,7 @@ final readonly class GiftCardReconciliationService
                     ->where('state', 'validating')
                     ->update(['state' => 'valid_unreserved']);
             }
+
             return $this->receipt($this->authority($submissionPublicId) ?? $authority, false);
         }
 
@@ -184,6 +187,7 @@ final readonly class GiftCardReconciliationService
                 || ! hash_equals(strtolower((string) $existing->evidence_hash), strtolower($evidence->evidenceHash))) {
                 throw new RuntimeException('Gift-card status event replay conflicts with accepted evidence.');
             }
+
             return;
         }
 

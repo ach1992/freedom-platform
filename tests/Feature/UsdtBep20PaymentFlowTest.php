@@ -14,9 +14,11 @@ use App\Modules\Payments\Usdt\Application\UsdtBlockchainVerificationService;
 use App\Modules\Payments\Usdt\Application\UsdtCircuitBreaker;
 use App\Modules\Payments\Usdt\Application\UsdtDestinationWalletService;
 use App\Modules\Payments\Usdt\Application\UsdtManualReviewDecisionService;
+use App\Modules\Payments\Usdt\Application\UsdtPaymentAuthorityReceipt;
 use App\Modules\Payments\Usdt\Application\UsdtPaymentAuthorityService;
 use App\Modules\Payments\Usdt\Application\UsdtRateResolver;
 use App\Modules\Payments\Usdt\Application\UsdtTokenAmount;
+use App\Modules\Payments\Usdt\Application\UsdtTxidSubmissionReceipt;
 use App\Modules\Payments\Usdt\Application\UsdtTxidSubmissionService;
 use App\Modules\Payments\Usdt\Domain\UsdtRate;
 use App\Modules\Payments\Usdt\Domain\UsdtRatePolicy;
@@ -37,6 +39,7 @@ use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use RuntimeException;
 use Tests\TestCase;
 
@@ -279,7 +282,7 @@ final class UsdtBep20PaymentFlowTest extends TestCase
         ]);
 
         $this->assertQueryRejected(static fn (): bool => DB::table('purchase_settlements')->insert([
-            'public_id' => (string) \Illuminate\Support\Str::ulid(),
+            'public_id' => (string) Str::ulid(),
             'payment_intent_id' => $intent->id,
             'provider_transaction_row_id' => $transactionRowId,
             'user_id' => $intent->user_id,
@@ -296,7 +299,7 @@ final class UsdtBep20PaymentFlowTest extends TestCase
         self::assertSame(0, DB::table('purchase_settlements')->count());
     }
 
-    /** @return array{authority:\App\Modules\Payments\Usdt\Application\UsdtPaymentAuthorityReceipt,amount_irr:int,expected_base_units:int} */
+    /** @return array{authority:UsdtPaymentAuthorityReceipt,amount_irr:int,expected_base_units:int} */
     private function preparedPayment(string $suffix): array
     {
         $userId = $this->quoteUser('customer');
@@ -342,7 +345,7 @@ final class UsdtBep20PaymentFlowTest extends TestCase
         ];
     }
 
-    private function submit(array $payment, string $suffix, string $txid, ?string $privateEvidence = null, ?string $contentHash = null): \App\Modules\Payments\Usdt\Application\UsdtTxidSubmissionReceipt
+    private function submit(array $payment, string $suffix, string $txid, ?string $privateEvidence = null, ?string $contentHash = null): UsdtTxidSubmissionReceipt
     {
         return $this->app->make(UsdtTxidSubmissionService::class)->submit(
             'usdt.payment.txid.'.$suffix,
@@ -366,6 +369,7 @@ final class UsdtBep20PaymentFlowTest extends TestCase
             new UsdtCircuitBreaker(new Repository(new ArrayStore), $this->clock, 3, 60),
             $this->clock,
         );
+
         return new UsdtAmountQuoteService(
             $this->app->make(DatabaseManager::class),
             $this->app->make(QuoteService::class),
@@ -430,6 +434,7 @@ final class UsdtBep20PaymentFlowTest extends TestCase
     private function nonOwnerAdministrator(): int
     {
         $now = now('UTC');
+
         return (int) DB::table('administrators')->insertGetId([
             'user_id' => $this->quoteUser('customer'),
             'status' => 'active',

@@ -37,13 +37,21 @@ use Tests\TestCase;
 final class FakeNowPaymentsTransport implements NowPaymentsTransport
 {
     public int $createCalls = 0;
+
     public int $statusCalls = 0;
+
     public ?NowPaymentsCreateRequest $lastCreateRequest = null;
+
     public bool $createUncertain = false;
+
     public string $createStatus = 'waiting';
+
     public string $statusValue = 'waiting';
+
     public string $payAmount = '12.500000000000000000';
+
     public ?string $actuallyPaid = null;
+
     public string $providerPaymentId = '900001';
 
     public function create(NowPaymentsCreateRequest $request): NowPaymentsPaymentResult
@@ -136,6 +144,7 @@ final class NowPaymentsPaymentServiceTest extends TestCase
     use RefreshDatabase;
 
     private FakeNowPaymentsTransport $transport;
+
     private NowPaymentsTestClock $clock;
 
     protected function setUp(): void
@@ -146,7 +155,7 @@ final class NowPaymentsPaymentServiceTest extends TestCase
         $this->seed(PaymentEligibilityAccessFoundationSeeder::class);
         $this->clock = new NowPaymentsTestClock(new DateTimeImmutable('2026-08-14T06:30:00+00:00'));
         $this->app->instance(Clock::class, $this->clock);
-        $this->transport = new FakeNowPaymentsTransport();
+        $this->transport = new FakeNowPaymentsTransport;
 
         config()->set('app.url', 'https://payments.example.test');
         config()->set('services.nowpayments.enabled', true);

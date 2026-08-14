@@ -24,25 +24,32 @@ final class GenericRestGiftCardVerificationProvider implements GiftCardVerificat
 {
     /** @var array<string,string> */
     private array $operationPaths;
+
     /** @var array<string,string> */
     private array $fieldMap;
+
     /** @var array<string,string> */
     private array $outcomeMap;
+
     /** @var array<string,string> */
     private array $statusMap;
+
     /** @var list<string> */
     private array $allowedHosts;
+
     private Closure $resolver;
+
     private string $host;
+
     private int $port;
 
     /**
-     * @param array<string,string> $operationPaths keys: validate,reserve,redeem,release,status; values: absolute paths
-     * @param array<string,string> $fieldMap canonical keys: event_id,transaction_id,outcome,status,face_value,currency,brand,region,occurred_at
-     * @param array<string,string> $outcomeMap provider value => success|pending|rejected|uncertain|unavailable
-     * @param array<string,string> $statusMap provider value => canonical bounded status token
-     * @param list<string> $allowedHosts
-     * @param null|callable(string):list<string> $resolver
+     * @param  array<string,string>  $operationPaths  keys: validate,reserve,redeem,release,status; values: absolute paths
+     * @param  array<string,string>  $fieldMap  canonical keys: event_id,transaction_id,outcome,status,face_value,currency,brand,region,occurred_at
+     * @param  array<string,string>  $outcomeMap  provider value => success|pending|rejected|uncertain|unavailable
+     * @param  array<string,string>  $statusMap  provider value => canonical bounded status token
+     * @param  list<string>  $allowedHosts
+     * @param  null|callable(string):list<string>  $resolver
      */
     public function __construct(
         private readonly string $providerCode,
@@ -337,6 +344,7 @@ final class GenericRestGiftCardVerificationProvider implements GiftCardVerificat
         if (strlen($value) < $min || strlen($value) > $max || preg_match('/[\x00-\x1F\x7F]/', $value) === 1) {
             throw new RuntimeException('Generic gift-card required field '.$canonical.' is invalid.');
         }
+
         return $value;
     }
 
@@ -354,6 +362,7 @@ final class GenericRestGiftCardVerificationProvider implements GiftCardVerificat
         if (strlen($value) < $min || strlen($value) > $max || preg_match('/[\x00-\x1F\x7F]/', $value) === 1) {
             throw new RuntimeException('Generic gift-card optional field '.$canonical.' is invalid.');
         }
+
         return $value;
     }
 
@@ -382,6 +391,7 @@ final class GenericRestGiftCardVerificationProvider implements GiftCardVerificat
         if ($integer < 1) {
             throw new RuntimeException('Generic gift-card face value must be positive.');
         }
+
         return $integer;
     }
 
@@ -391,6 +401,7 @@ final class GenericRestGiftCardVerificationProvider implements GiftCardVerificat
         if ($date === false) {
             throw new RuntimeException('Generic gift-card provider timestamp is invalid.');
         }
+
         return $date->setTimezone(new DateTimeZone('UTC'));
     }
 
@@ -403,6 +414,7 @@ final class GenericRestGiftCardVerificationProvider implements GiftCardVerificat
             }
         }
         ksort($value, SORT_STRING);
+
         return $value;
     }
 
@@ -420,6 +432,7 @@ final class GenericRestGiftCardVerificationProvider implements GiftCardVerificat
                 $addresses[] = $address;
             }
         }
+
         return array_values(array_unique($addresses));
     }
 

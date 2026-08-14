@@ -30,14 +30,16 @@ final class GenericRestBankTransactionVerificationProvider implements BankTransa
     private array $allowedHosts;
 
     private Closure $resolver;
+
     private string $host;
+
     private int $port;
 
     /**
-     * @param array<string, string> $fieldMap canonical keys: transaction_id, event_id, destination_card, amount, status, occurred_at, sender_card, sender_name, reference
-     * @param array<string, string> $statusMap provider value => pending|settled|reversed|failed
-     * @param list<string> $allowedHosts
-     * @param null|callable(string):list<string> $resolver
+     * @param  array<string, string>  $fieldMap  canonical keys: transaction_id, event_id, destination_card, amount, status, occurred_at, sender_card, sender_name, reference
+     * @param  array<string, string>  $statusMap  provider value => pending|settled|reversed|failed
+     * @param  list<string>  $allowedHosts
+     * @param  null|callable(string):list<string>  $resolver
      */
     public function __construct(
         private readonly string $providerCode,

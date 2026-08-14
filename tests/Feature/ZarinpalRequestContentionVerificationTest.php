@@ -7,6 +7,7 @@ namespace {
     use App\Modules\Payments\Zarinpal\Application\Contracts\ZarinpalRequestResult;
     use App\Modules\Payments\Zarinpal\Application\Contracts\ZarinpalTransport;
     use App\Modules\Payments\Zarinpal\Application\Contracts\ZarinpalVerifyResult;
+    use App\Modules\Payments\Zarinpal\Application\ZarinpalPaymentService;
     use Illuminate\Contracts\Console\Kernel;
 
     final class ZarinpalRequestContentionTransport implements ZarinpalTransport
@@ -79,7 +80,7 @@ namespace {
         }
 
         try {
-            $receipt = $app->make(\App\Modules\Payments\Zarinpal\Application\ZarinpalPaymentService::class)->initiate(
+            $receipt = $app->make(ZarinpalPaymentService::class)->initiate(
                 $payload['request_key'],
                 $payload['intent_public_id'],
                 $payload['correlation_id'],
@@ -208,7 +209,7 @@ namespace Tests\Feature {
         }
 
         /**
-         * @param list<array<string, string>> $payloads
+         * @param  list<array<string, string>>  $payloads
          * @return list<array<string, mixed>>
          */
         private function runConcurrent(array $payloads): array
@@ -285,6 +286,7 @@ namespace Tests\Feature {
                 foreach ($read as $stream) {
                     if ($stream === $worker['pipes'][2]) {
                         $stderr .= stream_get_contents($stream);
+
                         continue;
                     }
                     $line = fgets($stream);

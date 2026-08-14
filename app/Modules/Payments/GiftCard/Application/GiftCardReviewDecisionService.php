@@ -70,6 +70,7 @@ final readonly class GiftCardReviewDecisionService
                 if ((int) $authority->decided_by_administrator_id !== $administratorId) {
                     throw new RuntimeException('Gift-card review was already approved by a different administrator.');
                 }
+
                 return (string) $authority->submission_public_id;
             }
             if ($authority->review_state !== 'pending' || $authority->submission_state !== 'pending_manual_review') {

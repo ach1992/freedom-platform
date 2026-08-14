@@ -12,6 +12,7 @@ use App\Modules\Payments\GiftCard\Application\Contracts\GiftCardProviderCapabili
 use App\Modules\Payments\GiftCard\Application\Contracts\GiftCardProviderEvidence;
 use App\Modules\Payments\GiftCard\Application\GiftCardPaymentService;
 use App\Modules\Payments\GiftCard\Application\GiftCardReconciliationService;
+use App\Modules\Payments\GiftCard\Application\GiftCardSubmissionReceipt;
 use App\Modules\Payments\GiftCard\Application\GiftCardSubmissionService;
 use App\Modules\Payments\GiftCard\Application\GiftCardTypeService;
 use App\Modules\Payments\GiftCard\Infrastructure\FakeGiftCardVerificationProvider;
@@ -141,7 +142,7 @@ final class GiftCardReconciliationTest extends TestCase
             ->count());
     }
 
-    /** @return array{0:\App\Modules\Payments\GiftCard\Application\GiftCardSubmissionReceipt,1:int} */
+    /** @return array{0:GiftCardSubmissionReceipt,1:int} */
     private function submission(string $suffix): array
     {
         $user = $this->quoteUser('customer');

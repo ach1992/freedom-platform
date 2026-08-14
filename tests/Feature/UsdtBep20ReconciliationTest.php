@@ -76,7 +76,7 @@ final class UsdtBep20ReconciliationTest extends TestCase
         try {
             $this->app->make(UsdtBlockchainVerificationService::class)->verify(
                 $submission->publicId,
-                new ThrowingUsdtBlockchainProvider(),
+                new ThrowingUsdtBlockchainProvider,
                 $this->usdtSupportCorrelation('provider-failure-first'),
             );
             self::fail('Expected synthetic USDT chain provider outage.');

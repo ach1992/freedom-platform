@@ -97,6 +97,7 @@ final readonly class ReferralRewardLifecycleService
                 $state = $this->state($reward->state);
                 if (in_array($state, [ReferralRewardState::Canceled, ReferralRewardState::Reversed], true)) {
                     $receipts[] = $this->receipt($reward, false, true);
+
                     continue;
                 }
                 $receipts[] = $this->applyRefundToLockedReward($connection, $reward, $refund, $correlationId);

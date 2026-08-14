@@ -68,6 +68,7 @@ final readonly class UsdtManualReviewDecisionService
                 if ((int) $authority->decided_by_administrator_id !== $administratorId) {
                     throw new RuntimeException('USDT manual review was already approved by a different administrator.');
                 }
+
                 return (string) $authority->submission_public_id;
             }
             if ($authority->review_state !== 'pending'
@@ -255,6 +256,7 @@ final readonly class UsdtManualReviewDecisionService
         if ($date === false) {
             throw new RuntimeException('Stored USDT timestamp is invalid.');
         }
+
         return $date;
     }
 

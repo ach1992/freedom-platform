@@ -29,6 +29,7 @@ use App\Modules\Promotions\Domain\PromotionRuleDefinition;
 use App\Modules\Promotions\Domain\PromotionRuleKind;
 use App\Modules\Promotions\Domain\PromotionRuleState;
 use App\Modules\Promotions\Domain\ReferralRewardRecipient;
+use App\Shared\Application\Clock;
 use App\Shared\Domain\Money;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
@@ -107,7 +108,7 @@ trait ReferralRewardLifecycleTestSupport
 
     private function createLifecyclePromotionalWallet(int $userId, string $suffix): int
     {
-        $now = $this->app->make(\App\Shared\Application\Clock::class)->now()->format('Y-m-d H:i:s.u');
+        $now = $this->app->make(Clock::class)->now()->format('Y-m-d H:i:s.u');
 
         return (int) DB::table('ledger_accounts')->insertGetId([
             'code' => 'wallet.promotional.referral.'.$userId.'.'.$suffix,
@@ -129,7 +130,7 @@ trait ReferralRewardLifecycleTestSupport
     ): PurchaseRefundReceipt {
         $amount = $amountIrr ?? $settlement->amount->amount();
         $eventId = 'referral-lifecycle-refund-event-'.$suffix;
-        $now = $this->app->make(\App\Shared\Application\Clock::class)->now();
+        $now = $this->app->make(Clock::class)->now();
 
         return $this->app->make(PurchaseRefundService::class)->record(
             'referral.lifecycle.refund.'.$suffix,
@@ -158,7 +159,7 @@ trait ReferralRewardLifecycleTestSupport
     /** @return array{0:PurchaseSettlementReceipt,1:string} */
     private function captureLifecyclePurchase(int $userId, string $suffix): array
     {
-        $clock = $this->app->make(\App\Shared\Application\Clock::class);
+        $clock = $this->app->make(Clock::class);
         $administratorId = $this->ownerAdministrator();
         $offering = $this->quoteOffering();
         $quote = $this->app->make(QuoteService::class)->create(

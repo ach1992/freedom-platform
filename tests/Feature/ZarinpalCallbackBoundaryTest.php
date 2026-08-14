@@ -62,7 +62,7 @@ final class ZarinpalCallbackBoundaryTest extends TestCase
         $this->seed(IdentityAccessFoundationSeeder::class);
         $this->seed(CatalogAccessFoundationSeeder::class);
         $this->seed(PaymentEligibilityAccessFoundationSeeder::class);
-        $this->transport = new CallbackBoundaryZarinpalTransport();
+        $this->transport = new CallbackBoundaryZarinpalTransport;
         $this->app->instance(ZarinpalTransport::class, $this->transport);
         config()->set('app.url', 'http://localhost');
         config()->set('services.zarinpal.enabled', true);

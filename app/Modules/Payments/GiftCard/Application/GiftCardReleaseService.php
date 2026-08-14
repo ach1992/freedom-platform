@@ -62,7 +62,6 @@ final readonly class GiftCardReleaseService
         return $this->finalize($submissionPublicId, $provider->code(), $evidence, $correlationId);
     }
 
-    /** @return GiftCardProviderRequest|GiftCardProcessingReceipt */
     private function prepare(string $submissionPublicId, string $providerCode): GiftCardProviderRequest|GiftCardProcessingReceipt
     {
         return $this->database->connection()->transaction(function (Connection $connection) use ($submissionPublicId, $providerCode): GiftCardProviderRequest|GiftCardProcessingReceipt {

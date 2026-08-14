@@ -12,6 +12,7 @@ use App\Modules\Payments\GiftCard\Application\Contracts\GiftCardProviderCapabili
 use App\Modules\Payments\GiftCard\Application\Contracts\GiftCardProviderEvidence;
 use App\Modules\Payments\GiftCard\Application\GiftCardPaymentService;
 use App\Modules\Payments\GiftCard\Application\GiftCardReviewDecisionService;
+use App\Modules\Payments\GiftCard\Application\GiftCardSubmissionReceipt;
 use App\Modules\Payments\GiftCard\Application\GiftCardSubmissionService;
 use App\Modules\Payments\GiftCard\Application\GiftCardTypeService;
 use App\Modules\Payments\GiftCard\Infrastructure\FakeGiftCardVerificationProvider;
@@ -271,7 +272,7 @@ final class GiftCardPaymentFlowTest extends TestCase
         ];
     }
 
-    private function submit(array $purchase, string $suffix, string $typeCode, string $code): \App\Modules\Payments\GiftCard\Application\GiftCardSubmissionReceipt
+    private function submit(array $purchase, string $suffix, string $typeCode, string $code): GiftCardSubmissionReceipt
     {
         return $this->app->make(GiftCardSubmissionService::class)->submit(
             'gift.submission.'.$suffix,

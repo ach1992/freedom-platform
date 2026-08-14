@@ -105,6 +105,7 @@ namespace Tests\Feature {
     use App\Modules\Payments\GiftCard\Application\Contracts\GiftCardProviderCapabilities;
     use App\Modules\Payments\GiftCard\Application\Contracts\GiftCardProviderEvidence;
     use App\Modules\Payments\GiftCard\Application\GiftCardPaymentService;
+    use App\Modules\Payments\GiftCard\Application\GiftCardSubmissionReceipt;
     use App\Modules\Payments\GiftCard\Application\GiftCardSubmissionService;
     use App\Modules\Payments\GiftCard\Application\GiftCardTypeService;
     use App\Modules\Payments\GiftCard\Infrastructure\FakeGiftCardVerificationProvider;
@@ -200,7 +201,7 @@ namespace Tests\Feature {
             }
         }
 
-        /** @return array{0:\App\Modules\Payments\GiftCard\Application\GiftCardSubmissionReceipt,1:int} */
+        /** @return array{0:GiftCardSubmissionReceipt,1:int} */
         private function submissionInRedeemingState(): array
         {
             $user = $this->quoteUser('customer');
@@ -352,6 +353,7 @@ namespace Tests\Feature {
                 foreach ($read as $stream) {
                     if ($stream === $worker['pipes'][2]) {
                         $stderr .= stream_get_contents($stream);
+
                         continue;
                     }
                     $line = fgets($stream);
@@ -373,6 +375,7 @@ namespace Tests\Feature {
         {
             /** @var array<string,mixed> $result */
             $result = json_decode($this->readLine($worker, $phase), true, flags: JSON_THROW_ON_ERROR);
+
             return $result;
         }
 

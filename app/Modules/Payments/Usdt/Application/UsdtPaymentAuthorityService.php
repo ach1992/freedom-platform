@@ -217,6 +217,7 @@ final readonly class UsdtPaymentAuthorityService
         if ($date === false) {
             throw new RuntimeException('Stored USDT payment authority timestamp is invalid.');
         }
+
         return $date;
     }
 

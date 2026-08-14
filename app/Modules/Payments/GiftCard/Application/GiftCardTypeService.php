@@ -14,6 +14,7 @@ use RuntimeException;
 final readonly class GiftCardTypeService
 {
     private const SUBMISSION_MODES = ['image_only', 'code_only', 'either', 'both'];
+
     private const VERIFICATION_MODES = [
         'manual_only',
         'automatic_only',

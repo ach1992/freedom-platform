@@ -7,8 +7,8 @@ namespace App\Modules\Payments\CardToCard\Application;
 use App\Shared\Application\Clock;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Str;
-use RuntimeException;
 
 final readonly class CardToCardReconciliationService
 {
@@ -156,11 +156,12 @@ final readonly class CardToCardReconciliationService
                 'detected_at' => $this->timestamp(),
                 'created_at' => $this->timestamp(),
             ]);
-        } catch (\Illuminate\Database\QueryException $exception) {
+        } catch (QueryException $exception) {
             $raced = $connection->table('c2c_reconciliation_findings')->where('finding_key', $findingKey)->first(['public_id']);
             if ($raced === null) {
                 throw $exception;
             }
+
             return (string) $raced->public_id;
         }
 

@@ -9,6 +9,7 @@ use DomainException;
 final class UsdtTokenAmount
 {
     public const QUOTE_DECIMALS = 6;
+
     public const MAX_BASE_UNIT_DIGITS = 65;
 
     public static function toBaseUnits(string $value, int $tokenDecimals): string
@@ -49,6 +50,7 @@ final class UsdtTokenAmount
             if ($value < 1) {
                 throw new DomainException('USDT raw token amount must be positive.');
             }
+
             return (string) $value;
         }
 

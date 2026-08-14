@@ -113,7 +113,6 @@ namespace Tests\Feature {
     use App\Modules\Payments\Usdt\Application\UsdtDestinationWalletService;
     use App\Modules\Payments\Usdt\Application\UsdtPaymentAuthorityService;
     use App\Modules\Payments\Usdt\Application\UsdtRateResolver;
-    use App\Modules\Payments\Usdt\Application\UsdtTokenAmount;
     use App\Modules\Payments\Usdt\Application\UsdtTxidSubmissionService;
     use App\Modules\Payments\Usdt\Domain\UsdtRate;
     use App\Modules\Payments\Usdt\Domain\UsdtRatePolicy;
@@ -175,6 +174,7 @@ namespace Tests\Feature {
         use DatabaseTruncation;
 
         private const WORKER_TIMEOUT_SECONDS = 20;
+
         private UsdtContentionClock $clock;
 
         protected function setUp(): void
@@ -343,6 +343,7 @@ namespace Tests\Feature {
             $primary = new UsdtContentionRateProvider('nobitex', '1000000', $this->clock->value);
             $secondary = new UsdtContentionRateProvider('secondary', '1005000', $this->clock->value);
             $policy = new UsdtRatePolicy(['nobitex', 'secondary'], UsdtRateSide::Buy, 120, '100000', '10000000', 500, false, 3, 60);
+
             return new UsdtAmountQuoteService(
                 $this->app->make(DatabaseManager::class),
                 $this->app->make(QuoteService::class),
@@ -436,6 +437,7 @@ namespace Tests\Feature {
                 foreach ($read as $stream) {
                     if ($stream === $worker['pipes'][2]) {
                         $stderr .= stream_get_contents($stream);
+
                         continue;
                     }
                     $line = fgets($stream);
@@ -464,6 +466,7 @@ namespace Tests\Feature {
             if (! is_array($decoded)) {
                 throw new RuntimeException('USDT contention result is not an object.');
             }
+
             return $decoded;
         }
 

@@ -24,18 +24,22 @@ use DateTimeImmutable;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
-use RuntimeException;
 use Tests\TestCase;
 
 final class FakeZarinpalTransport implements ZarinpalTransport
 {
     public int $requestCalls = 0;
+
     public int $verifyCalls = 0;
+
     public int $inquiryCalls = 0;
+
     public int $unverifiedCalls = 0;
 
     public ZarinpalRequestResult $requestResult;
+
     public ZarinpalVerifyResult $verifyResult;
+
     public ZarinpalInquiryResult $inquiryResult;
 
     /** @var list<ZarinpalUnverifiedCandidate> */
@@ -94,6 +98,7 @@ final class ZarinpalPaymentServiceTest extends TestCase
     use RefreshDatabase;
 
     private FakeZarinpalTransport $transport;
+
     private ZarinpalPaymentTestClock $clock;
 
     protected function setUp(): void
@@ -104,7 +109,7 @@ final class ZarinpalPaymentServiceTest extends TestCase
         $this->seed(PaymentEligibilityAccessFoundationSeeder::class);
         $this->clock = new ZarinpalPaymentTestClock(new DateTimeImmutable('2026-08-14T08:00:00+00:00'));
         $this->app->instance(Clock::class, $this->clock);
-        $this->transport = new FakeZarinpalTransport();
+        $this->transport = new FakeZarinpalTransport;
         $this->app->instance(ZarinpalTransport::class, $this->transport);
         config()->set('app.url', 'http://localhost');
         config()->set('services.zarinpal.enabled', true);

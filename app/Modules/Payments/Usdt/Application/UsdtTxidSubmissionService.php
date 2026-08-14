@@ -81,7 +81,7 @@ final readonly class UsdtTxidSubmissionService
                     return $this->receipt($connection, $existing, true);
                 }
 
-                $duplicate = $connection->table('usdt_txid_submissions')->where('txid', $txid)->lockForUpdate()->first(['id','usdt_payment_authority_id']);
+                $duplicate = $connection->table('usdt_txid_submissions')->where('txid', $txid)->lockForUpdate()->first(['id', 'usdt_payment_authority_id']);
                 if ($duplicate !== null) {
                     throw new RuntimeException('USDT TXID is already bound to another payment authority.');
                 }
@@ -190,6 +190,7 @@ final readonly class UsdtTxidSubmissionService
         if (preg_match('/\A0x[a-f0-9]{64}\z/', $value) !== 1) {
             throw new DomainException('USDT TXID must be one lowercase-compatible EVM transaction hash.');
         }
+
         return $value;
     }
 
@@ -202,6 +203,7 @@ final readonly class UsdtTxidSubmissionService
         if (preg_match('/\A[a-f0-9]{64}\z/', $value) !== 1) {
             throw new DomainException($label.' is invalid.');
         }
+
         return $value;
     }
 
@@ -214,6 +216,7 @@ final readonly class UsdtTxidSubmissionService
         if (mb_strlen($value) > $maximum || preg_match('/[\x00-\x1F\x7F]/', $value) === 1) {
             throw new DomainException($label.' is invalid.');
         }
+
         return $value;
     }
 

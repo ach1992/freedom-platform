@@ -11,9 +11,11 @@ use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService
 use App\Modules\Payments\Usdt\Application\UsdtAmountQuoteService;
 use App\Modules\Payments\Usdt\Application\UsdtCircuitBreaker;
 use App\Modules\Payments\Usdt\Application\UsdtDestinationWalletService;
+use App\Modules\Payments\Usdt\Application\UsdtPaymentAuthorityReceipt;
 use App\Modules\Payments\Usdt\Application\UsdtPaymentAuthorityService;
 use App\Modules\Payments\Usdt\Application\UsdtRateResolver;
 use App\Modules\Payments\Usdt\Application\UsdtTokenAmount;
+use App\Modules\Payments\Usdt\Application\UsdtTxidSubmissionReceipt;
 use App\Modules\Payments\Usdt\Application\UsdtTxidSubmissionService;
 use App\Modules\Payments\Usdt\Domain\UsdtRate;
 use App\Modules\Payments\Usdt\Domain\UsdtRatePolicy;
@@ -23,6 +25,7 @@ use App\Shared\Application\Clock;
 use Illuminate\Cache\ArrayStore;
 use Illuminate\Cache\Repository;
 use Illuminate\Database\DatabaseManager;
+use Illuminate\Support\Facades\DB;
 
 final class ReusableUsdtBep20RateProvider implements UsdtRateProvider
 {
@@ -52,7 +55,7 @@ trait UsdtBep20TestSupport
 {
     use AgentPricingQuoteIntegrationTestSupport;
 
-    /** @return array{authority:\App\Modules\Payments\Usdt\Application\UsdtPaymentAuthorityReceipt,submission:\App\Modules\Payments\Usdt\Application\UsdtTxidSubmissionReceipt,amount_irr:int,amount_base_units:int,transaction_at:\DateTimeImmutable} */
+    /** @return array{authority:UsdtPaymentAuthorityReceipt,submission:UsdtTxidSubmissionReceipt,amount_irr:int,amount_base_units:int,transaction_at:\DateTimeImmutable} */
     private function prepareUsdtBep20Submission(string $suffix, Clock $clock, string $txid): array
     {
         $user = $this->quoteUser('customer');
@@ -97,7 +100,7 @@ trait UsdtBep20TestSupport
             null,
             $this->usdtSupportCorrelation('txid-'.$suffix),
         );
-        $authorityCreatedAt = \Illuminate\Support\Facades\DB::table('usdt_payment_authorities')->where('id', $authority->authorityId)->value('created_at');
+        $authorityCreatedAt = DB::table('usdt_payment_authorities')->where('id', $authority->authorityId)->value('created_at');
         if (! is_string($authorityCreatedAt)) {
             throw new \RuntimeException('USDT test support authority timestamp is unavailable.');
         }
@@ -141,6 +144,7 @@ trait UsdtBep20TestSupport
         $primary = new ReusableUsdtBep20RateProvider('nobitex', '1000000', $clock->now());
         $secondary = new ReusableUsdtBep20RateProvider('secondary', '1005000', $clock->now());
         $policy = new UsdtRatePolicy(['nobitex', 'secondary'], UsdtRateSide::Buy, 120, '100000', '10000000', 500, false, 3, 60);
+
         return new UsdtAmountQuoteService(
             $this->app->make(DatabaseManager::class),
             $this->app->make(QuoteService::class),

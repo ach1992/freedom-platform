@@ -23,22 +23,28 @@ final class GenericRestBlockchainTransactionVerificationProvider implements Bloc
 {
     /** @var array<string,string> */
     private array $fieldMap;
+
     /** @var array<string,string> */
     private array $outcomeMap;
+
     /** @var array<string,string> */
     private array $statusMap;
+
     /** @var list<string> */
     private array $allowedHosts;
+
     private Closure $resolver;
+
     private string $host;
+
     private int $port;
 
     /**
-     * @param array<string,string> $fieldMap canonical keys: event_id,outcome,status,txid,network,chain_id,token_contract,destination_address,amount_base_units,token_decimals,confirmations,block_number,transaction_at,observed_at
-     * @param array<string,string> $outcomeMap provider value => success|pending|rejected|uncertain|unavailable
-     * @param array<string,string> $statusMap provider value => success|pending|failed|reverted|not_found|unknown
-     * @param list<string> $allowedHosts
-     * @param null|callable(string):list<string> $resolver
+     * @param  array<string,string>  $fieldMap  canonical keys: event_id,outcome,status,txid,network,chain_id,token_contract,destination_address,amount_base_units,token_decimals,confirmations,block_number,transaction_at,observed_at
+     * @param  array<string,string>  $outcomeMap  provider value => success|pending|rejected|uncertain|unavailable
+     * @param  array<string,string>  $statusMap  provider value => success|pending|failed|reverted|not_found|unknown
+     * @param  list<string>  $allowedHosts
+     * @param  null|callable(string):list<string>  $resolver
      */
     public function __construct(
         private readonly string $providerCode,
@@ -91,12 +97,12 @@ final class GenericRestBlockchainTransactionVerificationProvider implements Bloc
             }
         }
 
-        foreach (['outcome','status','txid','observed_at'] as $canonical) {
+        foreach (['outcome', 'status', 'txid', 'observed_at'] as $canonical) {
             if (! isset($fieldMap[$canonical])) {
                 throw new DomainException('Generic chain field mapping is incomplete.');
             }
         }
-        $supported = ['event_id','outcome','status','txid','network','chain_id','token_contract','destination_address','amount_base_units','token_decimals','confirmations','block_number','transaction_at','observed_at'];
+        $supported = ['event_id', 'outcome', 'status', 'txid', 'network', 'chain_id', 'token_contract', 'destination_address', 'amount_base_units', 'token_decimals', 'confirmations', 'block_number', 'transaction_at', 'observed_at'];
         foreach ($fieldMap as $canonical => $providerField) {
             if (! in_array($canonical, $supported, true)) {
                 throw new DomainException('Generic chain field mapping contains an unsupported canonical field.');
@@ -109,19 +115,19 @@ final class GenericRestBlockchainTransactionVerificationProvider implements Bloc
             throw new DomainException('Generic chain outcome/status maps cannot be empty.');
         }
         foreach ($outcomeMap as $providerValue => $canonical) {
-            if ($providerValue === '' || strlen($providerValue) > 64 || ! in_array($canonical, ['success','pending','rejected','uncertain','unavailable'], true)) {
+            if ($providerValue === '' || strlen($providerValue) > 64 || ! in_array($canonical, ['success', 'pending', 'rejected', 'uncertain', 'unavailable'], true)) {
                 throw new DomainException('Generic chain outcome mapping is invalid.');
             }
         }
         foreach ($statusMap as $providerValue => $canonical) {
-            if ($providerValue === '' || strlen($providerValue) > 64 || ! in_array($canonical, ['success','pending','failed','reverted','not_found','unknown'], true)) {
+            if ($providerValue === '' || strlen($providerValue) > 64 || ! in_array($canonical, ['success', 'pending', 'failed', 'reverted', 'not_found', 'unknown'], true)) {
                 throw new DomainException('Generic chain status mapping is invalid.');
             }
         }
         $this->outcomeMap = $outcomeMap;
         $this->statusMap = $statusMap;
 
-        if (! in_array($authType, ['none','bearer','api_key'], true)) {
+        if (! in_array($authType, ['none', 'bearer', 'api_key'], true)) {
             throw new DomainException('Generic chain authentication type is unsupported.');
         }
         if ($authType !== 'none' && ($credential === null || $credential === '' || strlen($credential) > 4096)) {
@@ -262,6 +268,7 @@ final class GenericRestBlockchainTransactionVerificationProvider implements Bloc
         if (strlen($value) < $min || strlen($value) > $max || preg_match('/[\x00-\x1F\x7F]/', $value) === 1) {
             throw new RuntimeException('Generic chain required field '.$canonical.' is invalid.');
         }
+
         return $value;
     }
 
@@ -279,6 +286,7 @@ final class GenericRestBlockchainTransactionVerificationProvider implements Bloc
         if (strlen($value) < $min || strlen($value) > $max || preg_match('/[\x00-\x1F\x7F]/', $value) === 1) {
             throw new RuntimeException('Generic chain optional field '.$canonical.' is invalid.');
         }
+
         return $value;
     }
 
@@ -306,6 +314,7 @@ final class GenericRestBlockchainTransactionVerificationProvider implements Bloc
         if ($integer < $minimum || $integer > $maximum) {
             throw new RuntimeException('Generic chain integer field '.$canonical.' is out of range.');
         }
+
         return $integer;
     }
 
@@ -321,6 +330,7 @@ final class GenericRestBlockchainTransactionVerificationProvider implements Bloc
             if ($value < 1) {
                 throw new RuntimeException('Generic chain raw amount must be positive.');
             }
+
             return (string) $value;
         }
         if (! is_string($value)) {
@@ -344,6 +354,7 @@ final class GenericRestBlockchainTransactionVerificationProvider implements Bloc
         if (preg_match('/\A0x[a-f0-9]{40}\z/', $value) !== 1) {
             throw new RuntimeException('Generic chain address field '.$canonical.' is invalid.');
         }
+
         return $value;
     }
 
@@ -353,6 +364,7 @@ final class GenericRestBlockchainTransactionVerificationProvider implements Bloc
         if ($date === false) {
             throw new RuntimeException('Generic chain provider timestamp is invalid.');
         }
+
         return $date->setTimezone(new DateTimeZone('UTC'));
     }
 
@@ -365,6 +377,7 @@ final class GenericRestBlockchainTransactionVerificationProvider implements Bloc
             }
         }
         ksort($value, SORT_STRING);
+
         return $value;
     }
 
@@ -382,6 +395,7 @@ final class GenericRestBlockchainTransactionVerificationProvider implements Bloc
                 $addresses[] = $address;
             }
         }
+
         return array_values(array_unique($addresses));
     }
 
@@ -400,7 +414,7 @@ final class GenericRestBlockchainTransactionVerificationProvider implements Bloc
     private function assertHeaderName(string $value): void
     {
         if (preg_match('/\A[A-Za-z0-9-]{1,64}\z/', $value) !== 1
-            || in_array(strtolower($value), ['host','content-length','connection','transfer-encoding'], true)) {
+            || in_array(strtolower($value), ['host', 'content-length', 'connection', 'transfer-encoding'], true)) {
             throw new DomainException('Generic chain API-key header name is invalid.');
         }
     }

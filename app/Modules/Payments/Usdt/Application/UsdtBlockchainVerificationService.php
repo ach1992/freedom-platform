@@ -83,8 +83,10 @@ final readonly class UsdtBlockchainVerificationService
             $this->recordEvent($authority, $provider->code(), $evidence);
             if ($reason === 'insufficient_confirmations') {
                 $this->recordFinding($authority, $reason, 'warning', $provider->code(), $evidence, $correlationId);
+
                 return $this->receipt($this->authority($submissionPublicId) ?? $authority, false);
             }
+
             return $this->queueManualReview($authority, $reason, $provider->code(), $evidence, $correlationId);
         }
 
@@ -94,6 +96,7 @@ final readonly class UsdtBlockchainVerificationService
             || $evidence->outcome === 'unavailable'
             || in_array($evidence->transactionStatus, ['pending', 'not_found', 'unknown'], true)) {
             $this->recordFinding($authority, 'chain_verification_pending_or_uncertain', 'warning', $provider->code(), $evidence, $correlationId);
+
             return $this->receipt($this->authority($submissionPublicId) ?? $authority, false);
         }
 
@@ -239,6 +242,7 @@ final readonly class UsdtBlockchainVerificationService
             ->first();
         if ($existing !== null) {
             $this->assertEventReplay($existing, $authority, $providerCode, $evidence);
+
             return;
         }
         try {
@@ -290,8 +294,8 @@ final readonly class UsdtBlockchainVerificationService
 
     private function validateEvidenceEnvelope(UsdtBlockchainVerificationEvidence $evidence, string $expectedTxid): void
     {
-        if (! in_array($evidence->outcome, ['success','pending','rejected','uncertain','unavailable'], true)
-            || ! in_array($evidence->transactionStatus, ['success','pending','failed','reverted','not_found','unknown'], true)
+        if (! in_array($evidence->outcome, ['success', 'pending', 'rejected', 'uncertain', 'unavailable'], true)
+            || ! in_array($evidence->transactionStatus, ['success', 'pending', 'failed', 'reverted', 'not_found', 'unknown'], true)
             || ! hash_equals($expectedTxid, strtolower($evidence->txid))
             || preg_match('/\A0x[a-fA-F0-9]{64}\z/', $evidence->txid) !== 1
             || preg_match('/\A[a-fA-F0-9]{64}\z/', $evidence->evidenceHash) !== 1
@@ -338,6 +342,7 @@ final readonly class UsdtBlockchainVerificationService
     {
         $review = $this->database->connection()->table('usdt_manual_reviews')->where('usdt_txid_submission_id', $authority->submission_id)->value('public_id');
         $settlement = $authority->purchase_settlement_id === null ? null : $this->database->connection()->table('purchase_settlements')->where('id', $authority->purchase_settlement_id)->value('public_id');
+
         return new UsdtProcessingReceipt(
             (string) $authority->submission_public_id,
             (string) $authority->submission_state,
@@ -406,6 +411,7 @@ final readonly class UsdtBlockchainVerificationService
         if ($date === false) {
             throw new RuntimeException('Stored USDT timestamp is invalid.');
         }
+
         return $date;
     }
 

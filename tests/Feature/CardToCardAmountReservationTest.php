@@ -52,6 +52,7 @@ final class CardToCardAmountReservationTest extends TestCase
     use RefreshDatabase;
 
     private CardToCardAmountClock $clock;
+
     private FixedCardToCardAdjustmentGenerator $adjustments;
 
     protected function setUp(): void
@@ -62,7 +63,7 @@ final class CardToCardAmountReservationTest extends TestCase
         $this->seed(PaymentEligibilityAccessFoundationSeeder::class);
         $this->clock = new CardToCardAmountClock(new DateTimeImmutable('2026-08-14T09:00:00+00:00'));
         $this->app->instance(Clock::class, $this->clock);
-        $this->adjustments = new FixedCardToCardAdjustmentGenerator();
+        $this->adjustments = new FixedCardToCardAdjustmentGenerator;
         $this->app->instance(CardToCardAdjustmentGenerator::class, $this->adjustments);
         config()->set('payments.card_to_card.lookup_key', str_repeat('k', 32));
         $this->configureMethod();

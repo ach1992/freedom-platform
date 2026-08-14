@@ -153,7 +153,7 @@ return new class extends Migration
         if (DB::table('usdt_txid_submissions')->exists()) {
             throw new RuntimeException('Cannot roll back USDT BEP20 payment authority after TXID submission exists.');
         }
-        foreach (['usdt_reconciliation_findings','usdt_manual_reviews','usdt_verified_transfers','usdt_chain_verification_events','usdt_txid_submissions','usdt_payment_authorities'] as $table) {
+        foreach (['usdt_reconciliation_findings', 'usdt_manual_reviews', 'usdt_verified_transfers', 'usdt_chain_verification_events', 'usdt_txid_submissions', 'usdt_payment_authorities'] as $table) {
             Schema::dropIfExists($table);
         }
     }

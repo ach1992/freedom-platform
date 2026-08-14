@@ -52,7 +52,7 @@ namespace {
                     (string) $payload['provider_refund_id'],
                     $eventId,
                     Money::irr((int) $payload['amount_irr']),
-                    new \DateTimeImmutable((string) $payload['occurred_at']),
+                    new DateTimeImmutable((string) $payload['occurred_at']),
                     null,
                     (string) $payload['evidence_payload_hash'],
                     ['provider_reference' => (string) $payload['provider_refund_id']],
@@ -283,7 +283,7 @@ namespace Tests\Feature {
         }
 
         /**
-         * @param list<array<string, mixed>> $payloads
+         * @param  list<array<string, mixed>>  $payloads
          * @return list<array<string, mixed>>
          */
         private function runConcurrent(array $payloads): array
@@ -360,6 +360,7 @@ namespace Tests\Feature {
                 foreach ($read as $stream) {
                     if ($stream === $worker['pipes'][2]) {
                         $stderr .= stream_get_contents($stream);
+
                         continue;
                     }
                     $line = fgets($stream);

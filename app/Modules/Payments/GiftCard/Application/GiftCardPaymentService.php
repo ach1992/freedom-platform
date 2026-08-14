@@ -97,7 +97,6 @@ final readonly class GiftCardPaymentService
         return $this->redemptions->recordAndSettle($submissionPublicId, $provider->code(), $redeem, $correlationId);
     }
 
-    /** @return GiftCardProviderRequest|GiftCardProcessingReceipt */
     private function beginValidation(string $submissionPublicId, string $providerCode, string $correlationId): GiftCardProviderRequest|GiftCardProcessingReceipt
     {
         return $this->database->connection()->transaction(function (Connection $connection) use ($submissionPublicId, $providerCode, $correlationId): GiftCardProviderRequest|GiftCardProcessingReceipt {
@@ -119,6 +118,7 @@ final readonly class GiftCardPaymentService
             }
             if ($authority->verification_mode === 'manual_only') {
                 $this->createReview($connection, $authority, 'manual_only', $correlationId);
+
                 return $this->receipt($connection, $this->submissionAuthority($connection, $submissionPublicId) ?? $authority, false);
             }
 
@@ -151,16 +151,19 @@ final readonly class GiftCardPaymentService
                 if ($authority->claimed_currency !== 'IRR' || (int) $authority->claimed_face_value !== (int) $authority->amount_irr) {
                     $this->recordFindingInConnection($connection, $authority, 'unsupported_settlement_currency_or_amount', 'high', $providerCode, $evidence, $correlationId);
                     $this->createReview($connection, $authority, 'unsupported_settlement_currency_or_amount', $correlationId);
+
                     return $this->receipt($connection, $this->submissionAuthority($connection, $submissionPublicId) ?? $authority, false);
                 }
                 if ($authority->verification_mode === 'automatic_with_manual_approval_above_limit'
                     && $authority->manual_approval_limit_face_value !== null
                     && (int) $authority->claimed_face_value > (int) $authority->manual_approval_limit_face_value) {
                     $this->createReview($connection, $authority, 'manual_approval_threshold', $correlationId);
+
                     return $this->receipt($connection, $this->submissionAuthority($connection, $submissionPublicId) ?? $authority, false);
                 }
 
                 $connection->table('gift_card_submissions')->where('id', $authority->submission_id)->update(['state' => 'valid_unreserved']);
+
                 return 'ready';
             }
 
@@ -168,10 +171,12 @@ final readonly class GiftCardPaymentService
                 if ($this->allowsManualFallback((string) $authority->verification_mode)) {
                     $this->recordFindingInConnection($connection, $authority, 'validation_not_authoritative', 'warning', $providerCode, $evidence, $correlationId);
                     $this->createReview($connection, $authority, 'validation_not_authoritative', $correlationId);
+
                     return $this->receipt($connection, $this->submissionAuthority($connection, $submissionPublicId) ?? $authority, false);
                 }
                 $connection->table('gift_card_submissions')->where('id', $authority->submission_id)->update(['state' => 'provider_unavailable']);
                 $this->failIntent($connection, $authority, $correlationId, 'gift_card_provider_unavailable');
+
                 return $this->receipt($connection, $this->submissionAuthority($connection, $submissionPublicId) ?? $authority, false);
             }
 
@@ -182,6 +187,7 @@ final readonly class GiftCardPaymentService
             };
             $connection->table('gift_card_submissions')->where('id', $authority->submission_id)->update(['state' => $terminalState]);
             $this->failIntent($connection, $authority, $correlationId, 'gift_card_'.$terminalState);
+
             return $this->receipt($connection, $this->submissionAuthority($connection, $submissionPublicId) ?? $authority, false);
         }, 3);
     }
@@ -200,6 +206,7 @@ final readonly class GiftCardPaymentService
                 $connection->table('gift_card_submissions')->where('id', $authority->submission_id)->update(['state' => 'provider_unavailable']);
                 $this->failIntent($connection, $authority, $correlationId, 'gift_card_redeem_unsupported');
             }
+
             return $this->receipt($connection, $this->submissionAuthority($connection, $submissionPublicId) ?? $authority, false);
         }, 3);
     }
@@ -215,6 +222,7 @@ final readonly class GiftCardPaymentService
                 throw new RuntimeException('Gift-card provider mutation state is not retry-safe.');
             }
             $connection->table('gift_card_submissions')->where('id', $authority->submission_id)->update(['state' => $toState]);
+
             return $this->providerRequest($authority, $operation);
         }, 3);
     }
@@ -238,10 +246,12 @@ final readonly class GiftCardPaymentService
                     return $this->routeMismatch($connection, $authority, $providerCode, $evidence, $correlationId, 'reserve_identity_mismatch');
                 }
                 $connection->table('gift_card_submissions')->where('id', $authority->submission_id)->update(['state' => 'reserved']);
+
                 return 'ready';
             }
             $this->recordFindingInConnection($connection, $authority, 'reserve_not_confirmed', 'high', $providerCode, $evidence, $correlationId);
             $this->createReview($connection, $authority, 'reserve_not_confirmed', $correlationId);
+
             return $this->receipt($connection, $this->submissionAuthority($connection, $submissionPublicId) ?? $authority, false);
         }, 3);
     }
@@ -261,10 +271,12 @@ final readonly class GiftCardPaymentService
             $this->recordProviderEvent($connection, $authority, $providerCode, $evidence);
             if (in_array($evidence->outcome, ['pending', 'uncertain', 'unavailable'], true)) {
                 $this->recordFindingInConnection($connection, $authority, 'redeem_not_confirmed', 'critical', $providerCode, $evidence, $correlationId);
+
                 return $this->receipt($connection, $authority, false);
             }
             $connection->table('gift_card_submissions')->where('id', $authority->submission_id)->update(['state' => 'rejected']);
             $this->failIntent($connection, $authority, $correlationId, 'gift_card_redeem_rejected');
+
             return $this->receipt($connection, $this->submissionAuthority($connection, $submissionPublicId) ?? $authority, false);
         }, 3);
     }
@@ -284,6 +296,7 @@ final readonly class GiftCardPaymentService
             $connection->table('gift_card_submissions')->where('id', $authority->submission_id)->update(['state' => 'rejected']);
             $this->failIntent($connection, $authority, $correlationId, 'gift_card_provider_identity_mismatch');
         }
+
         return $this->receipt($connection, $this->submissionAuthority($connection, (string) $authority->submission_public_id) ?? $authority, false);
     }
 
@@ -296,6 +309,7 @@ final readonly class GiftCardPaymentService
         ?Throwable $exception = null,
     ): GiftCardProcessingReceipt {
         unset($exception);
+
         return $this->database->connection()->transaction(function (Connection $connection) use ($submissionPublicId, $findingType, $providerCode, $correlationId, $mutationUncertain): GiftCardProcessingReceipt {
             $authority = $this->submissionAuthority($connection, $submissionPublicId, true);
             if ($authority === null) {
@@ -311,6 +325,7 @@ final readonly class GiftCardPaymentService
                 $connection->table('gift_card_submissions')->where('id', $authority->submission_id)->update(['state' => 'provider_unavailable']);
                 $this->failIntent($connection, $authority, $correlationId, 'gift_card_provider_unavailable');
             }
+
             return $this->receipt($connection, $this->submissionAuthority($connection, $submissionPublicId) ?? $authority, false);
         }, 3);
     }
@@ -343,6 +358,7 @@ final readonly class GiftCardPaymentService
     private function providerRequest(object $authority, string $operation): GiftCardProviderRequest
     {
         $code = $authority->encrypted_code === null ? null : $this->encrypter->decryptString((string) $authority->encrypted_code);
+
         return new GiftCardProviderRequest(
             hash('sha256', 'gift-card:'.$authority->submission_public_id.':'.$operation),
             (string) $authority->submission_public_id,
@@ -396,6 +412,7 @@ final readonly class GiftCardPaymentService
         }
         if ($state === PaymentIntentState::PendingManualReview) {
             $this->transitionIntent($connection, (int) $authority->payment_intent_id, PaymentIntentState::PendingManualReview, PaymentIntentState::Failed, $reason, $correlationId);
+
             return;
         }
         if ($state !== PaymentIntentState::Verifying) {
@@ -476,6 +493,7 @@ final readonly class GiftCardPaymentService
                 || ! hash_equals(strtolower((string) $existing->evidence_hash), strtolower($evidence->evidenceHash))) {
                 throw new RuntimeException('Gift-card provider event replay conflicts with accepted evidence.');
             }
+
             return $existing;
         }
         $id = (int) $connection->table('gift_card_provider_events')->insertGetId([
@@ -499,6 +517,7 @@ final readonly class GiftCardPaymentService
         if ($row === null) {
             throw new RuntimeException('Gift-card provider event persistence failed.');
         }
+
         return $row;
     }
 
@@ -510,6 +529,7 @@ final readonly class GiftCardPaymentService
         if ($redemption !== null && $redemption->purchase_settlement_id !== null) {
             $settlementPublicId = $connection->table('purchase_settlements')->where('id', $redemption->purchase_settlement_id)->value('public_id');
         }
+
         return new GiftCardProcessingReceipt(
             (string) $authority->submission_public_id,
             (string) $authority->state,
@@ -529,6 +549,7 @@ final readonly class GiftCardPaymentService
         if ($lock) {
             $query->lockForUpdate();
         }
+
         return $query->first([
             'submission.id as submission_id', 'submission.public_id as submission_public_id',
             'submission.payment_intent_id', 'submission.encrypted_code', 'submission.private_image_reference',

@@ -53,7 +53,7 @@ return new class extends Migration
             $table->dateTime('provider_reverse_eligible_until', 6);
             $table->dateTime('created_at', 6);
         });
-        DB::statement("ALTER TABLE zarinpal_payment_verifications ADD CONSTRAINT zarinpal_verification_code_chk CHECK (`provider_verify_code` IN (100,101))");
+        DB::statement('ALTER TABLE zarinpal_payment_verifications ADD CONSTRAINT zarinpal_verification_code_chk CHECK (`provider_verify_code` IN (100,101))');
         DB::statement("ALTER TABLE zarinpal_payment_verifications ADD CONSTRAINT zarinpal_verification_money_chk CHECK (`amount_irr` > 0 AND `currency` = 'IRR')");
         DB::statement('ALTER TABLE zarinpal_payment_verifications ADD CONSTRAINT zarinpal_verification_hash_chk CHECK (CHAR_LENGTH(`evidence_payload_hash`) = 64)');
         DB::statement('ALTER TABLE zarinpal_payment_verifications ADD CONSTRAINT zarinpal_verification_reverse_window_chk CHECK (`provider_reverse_eligible_until` >= `verified_at`)');

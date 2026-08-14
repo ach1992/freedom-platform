@@ -56,13 +56,13 @@ return new class extends Migration
             $table->index(['recipient_user_id', 'state', 'release_at'], 'referral_reward_recipient_state_idx');
         });
 
-        DB::statement("ALTER TABLE referral_reward_accruals ADD CONSTRAINT referral_reward_accrual_amount_chk CHECK (`qualifying_amount_irr` > 0 AND `reward_amount_irr` > 0 AND `reward_amount_irr` <= `qualifying_amount_irr`)");
+        DB::statement('ALTER TABLE referral_reward_accruals ADD CONSTRAINT referral_reward_accrual_amount_chk CHECK (`qualifying_amount_irr` > 0 AND `reward_amount_irr` > 0 AND `reward_amount_irr` <= `qualifying_amount_irr`)');
         DB::statement("ALTER TABLE referral_reward_accruals ADD CONSTRAINT referral_reward_accrual_recipient_chk CHECK (`recipient_policy` IN ('inviter','referred','both'))");
         DB::statement('ALTER TABLE referral_reward_accruals ADD CONSTRAINT referral_reward_accrual_expiry_chk CHECK (`expires_at` IS NULL OR `expires_at` > `release_at`)');
         DB::statement("ALTER TABLE referral_reward_accruals ADD CONSTRAINT referral_reward_accrual_hash_chk CHECK (`rule_configuration_hash` REGEXP '^[0-9a-f]{64}$')");
 
         DB::statement("ALTER TABLE referral_rewards ADD CONSTRAINT referral_reward_role_chk CHECK (`recipient_role` IN ('inviter','referred'))");
-        DB::statement("ALTER TABLE referral_rewards ADD CONSTRAINT referral_reward_amount_chk CHECK (`amount_irr` > 0)");
+        DB::statement('ALTER TABLE referral_rewards ADD CONSTRAINT referral_reward_amount_chk CHECK (`amount_irr` > 0)');
         DB::statement("ALTER TABLE referral_rewards ADD CONSTRAINT referral_reward_state_chk CHECK (`state` = 'pending')");
         DB::statement('ALTER TABLE referral_rewards ADD CONSTRAINT referral_reward_expiry_chk CHECK (`expires_at` IS NULL OR `expires_at` > `release_at`)');
 

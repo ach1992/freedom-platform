@@ -14,6 +14,7 @@ use DateTimeZone;
 use DomainException;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Factory;
+use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
 use Psr\Http\Message\ResponseInterface;
 use RuntimeException;
@@ -82,7 +83,7 @@ final readonly class HttpNowPaymentsTransport implements NowPaymentsTransport
         return $this->parseResponse($response, false);
     }
 
-    private function client(): \Illuminate\Http\Client\PendingRequest
+    private function client(): PendingRequest
     {
         return $this->http
             ->withHeaders([

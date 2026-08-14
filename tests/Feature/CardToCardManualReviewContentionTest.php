@@ -98,13 +98,20 @@ namespace Tests\Feature {
 
     final class ReviewContentionAdjustmentGenerator implements CardToCardAdjustmentGenerator
     {
-        public function generate(int $minimumIrr, int $maximumIrr): int { return $minimumIrr; }
+        public function generate(int $minimumIrr, int $maximumIrr): int
+        {
+            return $minimumIrr;
+        }
     }
 
     final class ReviewContentionClock implements Clock
     {
         public function __construct(public DateTimeImmutable $value) {}
-        public function now(): DateTimeImmutable { return $this->value; }
+
+        public function now(): DateTimeImmutable
+        {
+            return $this->value;
+        }
     }
 
     /** @requirement C2C-004 C2C-005 ACL-002 DAT-002 DAT-003 DAT-004 QUA-004 */
@@ -114,6 +121,7 @@ namespace Tests\Feature {
         use DatabaseTruncation;
 
         private ReviewContentionClock $clock;
+
         private const TIMEOUT = 20;
 
         protected function setUp(): void
@@ -127,7 +135,7 @@ namespace Tests\Feature {
             $this->seed(PaymentEligibilityAccessFoundationSeeder::class);
             $this->clock = new ReviewContentionClock(new DateTimeImmutable('2026-08-14T15:00:00+00:00'));
             $this->app->instance(Clock::class, $this->clock);
-            $this->app->instance(CardToCardAdjustmentGenerator::class, new ReviewContentionAdjustmentGenerator());
+            $this->app->instance(CardToCardAdjustmentGenerator::class, new ReviewContentionAdjustmentGenerator);
             config()->set('payments.card_to_card.lookup_key', str_repeat('q', 32));
 
             $administratorId = $this->ownerAdministrator();
@@ -220,6 +228,7 @@ namespace Tests\Feature {
             /** @var array{0:resource,1:resource,2:resource} $pipes */
             stream_set_blocking($pipes[1], false);
             stream_set_blocking($pipes[2], false);
+
             return ['process' => $process, 'pipes' => $pipes];
         }
 
@@ -244,6 +253,7 @@ namespace Tests\Feature {
                 foreach ($read as $stream) {
                     if ($stream === $worker['pipes'][2]) {
                         $stderr .= stream_get_contents($stream);
+
                         continue;
                     }
                     $line = fgets($stream);
@@ -264,6 +274,7 @@ namespace Tests\Feature {
         {
             /** @var array<string,mixed> $result */
             $result = json_decode($this->line($worker, $phase), true, flags: JSON_THROW_ON_ERROR);
+
             return $result;
         }
 

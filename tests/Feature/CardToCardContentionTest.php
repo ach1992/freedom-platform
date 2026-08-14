@@ -23,7 +23,7 @@ namespace {
         require dirname(__DIR__, 2).'/vendor/autoload.php';
         $app = require dirname(__DIR__, 2).'/bootstrap/app.php';
         $app->make(Kernel::class)->bootstrap();
-        $app->instance(CardToCardAdjustmentGenerator::class, new C2cContentionFixedAdjustmentGenerator());
+        $app->instance(CardToCardAdjustmentGenerator::class, new C2cContentionFixedAdjustmentGenerator);
         $database = $app->make(DatabaseManager::class);
         $connection = $database->connection();
         $connection->statement('SET SESSION innodb_lock_wait_timeout = 5');
@@ -147,7 +147,7 @@ namespace Tests\Feature {
             $this->seed(IdentityAccessFoundationSeeder::class);
             $this->seed(CatalogAccessFoundationSeeder::class);
             $this->seed(PaymentEligibilityAccessFoundationSeeder::class);
-            $this->app->instance(CardToCardAdjustmentGenerator::class, new \C2cContentionFixedAdjustmentGenerator());
+            $this->app->instance(CardToCardAdjustmentGenerator::class, new \C2cContentionFixedAdjustmentGenerator);
             config()->set('payments.card_to_card.lookup_key', str_repeat('c', 32));
             $this->configureMethod();
             $this->app->make(CardToCardDestinationService::class)->register(
@@ -389,6 +389,7 @@ namespace Tests\Feature {
                 foreach ($read as $stream) {
                     if ($stream === $worker['pipes'][2]) {
                         $stderr .= stream_get_contents($stream);
+
                         continue;
                     }
                     $line = fgets($stream);

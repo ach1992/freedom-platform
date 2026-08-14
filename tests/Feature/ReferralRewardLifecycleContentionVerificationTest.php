@@ -128,8 +128,8 @@ namespace Tests\Feature {
     final class ReferralRewardLifecycleContentionVerificationTest extends TestCase
     {
         use AgentPricingQuoteIntegrationTestSupport;
-        use ReferralRewardLifecycleTestSupport;
         use DatabaseTruncation;
+        use ReferralRewardLifecycleTestSupport;
 
         private const WORKER_TIMEOUT_SECONDS = 25;
 
@@ -227,7 +227,7 @@ namespace Tests\Feature {
         }
 
         /**
-         * @param list<array<string, mixed>> $payloads
+         * @param  list<array<string, mixed>>  $payloads
          * @return list<array<string, mixed>>
          */
         private function runConcurrent(array $payloads): array
@@ -304,6 +304,7 @@ namespace Tests\Feature {
                 foreach ($read as $stream) {
                     if ($stream === $worker['pipes'][2]) {
                         $stderr .= stream_get_contents($stream);
+
                         continue;
                     }
                     $line = fgets($stream);
