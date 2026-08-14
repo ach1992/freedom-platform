@@ -31,7 +31,6 @@ use Throwable;
 final readonly class NowPaymentsPaymentService
 {
     private const PROVIDER_CODE = 'nowpayments';
-
     private const PRICING_POLICY_CODE = 'shared_usdt_rate_as_usd_proxy_v1';
 
     /** @var list<string> */
@@ -46,11 +45,8 @@ final readonly class NowPaymentsPaymentService
     ) {}
 
     /** @requirement IPG-002 PAY-002 PAY-003 DAT-002 DAT-003 DAT-004 SEC-002 INT-001 INT-002 QUA-001 QUA-004 */
-    public function create(
-        string $intentPublicId,
-        string $requestKey,
-        string $correlationId,
-    ): NowPaymentsPaymentReceipt {
+    public function create(string $intentPublicId, string $requestKey, string $correlationId): NowPaymentsPaymentReceipt
+    {
         $this->assertUlid($intentPublicId, 'Payment intent public ID');
         $this->assertToken($requestKey, 'NOWPayments request key', 8, 128);
         $this->assertToken($correlationId, 'NOWPayments correlation ID', 8, 64);
@@ -71,7 +67,7 @@ final readonly class NowPaymentsPaymentService
 
             return $this->receipt($existing, true);
         }
-        if ($this->intentState((string) $intent->state) !== PaymentIntentState::Created) {
+        if ($this->intentState((string) $intent->state) !== PaymentIntentState::AwaitingUserAction) {
             throw new DomainException('Payment intent is not ready for NOWPayments initiation.');
         }
 
@@ -108,9 +104,10 @@ final readonly class NowPaymentsPaymentService
             }
             $this->assertEligibleIntent($lockedIntent);
             if ($this->positiveInt($lockedIntent->amount_irr, 'Payment intent amount') !== $amountIrr
-                || $this->intentState((string) $lockedIntent->state) !== PaymentIntentState::Created) {
+                || $this->intentState((string) $lockedIntent->state) !== PaymentIntentState::AwaitingUserAction) {
                 throw new DomainException('Payment intent changed before NOWPayments initiation was claimed.');
             }
+
             $lockedIntentId = $this->positiveInt($lockedIntent->id, 'Payment intent ID');
             $existingAuthority = $this->authorityByIntentId($transaction, $lockedIntentId, true);
             if ($existingAuthority !== null) {
@@ -163,7 +160,7 @@ final readonly class NowPaymentsPaymentService
 
             $this->audit(
                 $transaction,
-                $lockedIntent->public_id,
+                (string) $lockedIntent->public_id,
                 'payment.nowpayments.create_claimed',
                 'nowpayments_create_claimed',
                 [
@@ -184,16 +181,14 @@ final readonly class NowPaymentsPaymentService
             return $this->receipt($authority, true);
         }
 
-        $request = new NowPaymentsCreateRequest(
-            (string) $authority->price_amount_usd,
-            (string) $authority->pay_currency,
-            (string) $authority->order_id,
-            'Freedom purchase '.$intentPublicId,
-            (string) $authority->callback_url,
-        );
-
         try {
-            $result = $this->transport->create($request);
+            $result = $this->transport->create(new NowPaymentsCreateRequest(
+                (string) $authority->price_amount_usd,
+                (string) $authority->pay_currency,
+                (string) $authority->order_id,
+                'Freedom purchase '.$intentPublicId,
+                (string) $authority->callback_url,
+            ));
         } catch (NowPaymentsTransportException $exception) {
             return $this->recordCreateFailure($authority, $exception->uncertain, $correlationId);
         } catch (Throwable) {
@@ -222,10 +217,9 @@ final readonly class NowPaymentsPaymentService
 
             return $this->receipt($authority, true);
         }
-        $providerPaymentId = (string) $authority->provider_payment_id;
 
         try {
-            $result = $this->transport->status($providerPaymentId);
+            $result = $this->transport->status((string) $authority->provider_payment_id);
         } catch (Throwable) {
             $this->database->connection()->transaction(function (Connection $connection) use ($authority, $correlationId): void {
                 $current = $this->requiredAuthority($connection, $this->positiveInt($authority->id, 'NOWPayments authority ID'), true);
@@ -248,8 +242,7 @@ final readonly class NowPaymentsPaymentService
     {
         $this->assertToken($correlationId, 'NOWPayments IPN correlation ID', 8, 64);
         $configuration = $this->configuration();
-        $secret = $configuration['ipn_secret'];
-        $verifier = new NowPaymentsIpnVerifier($secret, $configuration['max_ipn_body_bytes']);
+        $verifier = new NowPaymentsIpnVerifier($configuration['ipn_secret'], $configuration['max_ipn_body_bytes']);
         $payload = $verifier->verify($rawBody, $signature);
         $paymentId = $verifier->paymentId($payload);
         $authority = $this->authorityByProviderPaymentId($this->database->connection(), $paymentId);
@@ -257,6 +250,7 @@ final readonly class NowPaymentsPaymentService
             throw new DomainException('NOWPayments IPN payment is not bound to a local payment intent.');
         }
         $rawHash = hash('sha256', $rawBody);
+
         $this->database->connection()->transaction(function (Connection $connection) use (
             $authority,
             $paymentId,
@@ -264,19 +258,10 @@ final readonly class NowPaymentsPaymentService
             $correlationId,
         ): void {
             $current = $this->requiredAuthority($connection, (int) $authority->id, true);
-            $this->observe(
-                $connection,
-                $current,
-                'ipn_received',
-                $paymentId,
-                $rawHash,
-                $correlationId,
-            );
+            $this->observe($connection, $current, 'ipn_received', $paymentId, $rawHash, $correlationId);
         });
 
-        $intentPublicId = $this->intentPublicIdForAuthority($authority);
-
-        return $this->refresh($intentPublicId, $correlationId);
+        return $this->refresh($this->intentPublicIdForAuthority($authority), $correlationId);
     }
 
     /** @requirement IPG-002 INT-001 INT-002 QUA-004 */
@@ -292,11 +277,8 @@ final readonly class NowPaymentsPaymentService
         return $this->refresh($this->intentPublicIdForAuthority($authority), $correlationId);
     }
 
-    private function acceptCreateResult(
-        object $authority,
-        NowPaymentsPaymentResult $result,
-        string $correlationId,
-    ): NowPaymentsPaymentReceipt {
+    private function acceptCreateResult(object $authority, NowPaymentsPaymentResult $result, string $correlationId): NowPaymentsPaymentReceipt
+    {
         $mismatch = $this->createMismatchCode($authority, $result);
 
         return $this->database->connection()->transaction(function (Connection $connection) use (
@@ -310,7 +292,6 @@ final readonly class NowPaymentsPaymentService
                 return $this->receipt($current, true);
             }
 
-            $now = $this->timestamp();
             $updated = $connection->table('nowpayments_payment_authorities')
                 ->where('id', (int) $current->id)
                 ->where('state', NowPaymentsAuthorityState::Initiating->value)
@@ -324,7 +305,7 @@ final readonly class NowPaymentsPaymentService
                     'create_response_hash' => strtolower($result->responseHash),
                     'provider_created_at' => $result->createdAt === null ? null : $this->databaseDateTime($result->createdAt),
                     'last_status_at' => $result->updatedAt === null ? null : $this->databaseDateTime($result->updatedAt),
-                    'updated_at' => $now,
+                    'updated_at' => $this->timestamp(),
                 ]);
             if ($updated !== 1) {
                 throw new RuntimeException('NOWPayments create result raced with another writer.');
@@ -341,14 +322,11 @@ final readonly class NowPaymentsPaymentService
                 return $this->receipt($manual, false);
             }
 
-            $this->transitionIntent(
-                $connection,
-                (int) $fresh->payment_intent_id,
-                PaymentIntentState::Created,
-                PaymentIntentState::AwaitingUserAction,
-                'nowpayments_payment_created',
-                $correlationId,
-            );
+            // #92 already moved purchase PaymentIntent from created to awaiting_user_action.
+            // Successful provider creation must not write a duplicate or backward lifecycle transition here.
+            if ($this->intentStateForId($connection, (int) $fresh->payment_intent_id) !== PaymentIntentState::AwaitingUserAction) {
+                throw new RuntimeException('NOWPayments purchase intent changed during provider creation.');
+            }
 
             return $this->receipt($fresh, false);
         });
@@ -393,13 +371,11 @@ final readonly class NowPaymentsPaymentService
         });
     }
 
-    private function applyStatus(
-        object $authority,
-        NowPaymentsPaymentResult $result,
-        string $correlationId,
-    ): NowPaymentsPaymentReceipt {
+    private function applyStatus(object $authority, NowPaymentsPaymentResult $result, string $correlationId): NowPaymentsPaymentReceipt
+    {
         $capture = false;
         $settlementEvent = null;
+
         $fresh = $this->database->connection()->transaction(function (Connection $connection) use (
             $authority,
             $result,
@@ -439,13 +415,14 @@ final readonly class NowPaymentsPaymentService
                 return $current;
             }
 
-            $changes = [
-                'provider_status' => $result->paymentStatus,
-                'provider_actually_paid' => $result->actuallyPaid,
-                'last_status_at' => $this->databaseDateTime($result->updatedAt ?? $this->clock->now()),
-                'updated_at' => $this->timestamp(),
-            ];
-            $connection->table('nowpayments_payment_authorities')->where('id', (int) $current->id)->update($changes);
+            $connection->table('nowpayments_payment_authorities')
+                ->where('id', (int) $current->id)
+                ->update([
+                    'provider_status' => $result->paymentStatus,
+                    'provider_actually_paid' => $result->actuallyPaid,
+                    'last_status_at' => $this->databaseDateTime($result->updatedAt ?? $this->clock->now()),
+                    'updated_at' => $this->timestamp(),
+                ]);
             $current = $this->requiredAuthority($connection, (int) $current->id, true);
 
             if (in_array($result->paymentStatus, self::IN_PROGRESS_STATUSES, true)) {
@@ -493,9 +470,11 @@ final readonly class NowPaymentsPaymentService
             }
 
             if ($result->paymentStatus !== 'finished') {
+                $current = $this->moveAuthorityToManualReview($connection, $current);
+                $this->ensureIntentManualReview($connection, (int) $current->payment_intent_id, $correlationId);
                 $this->finding($connection, $current, 'unsupported_provider_status', 'high', $result->paymentStatus, $result->responseHash, $correlationId);
 
-                return $this->moveAuthorityToManualReview($connection, $current);
+                return $current;
             }
 
             if ($result->payAmount === null
@@ -508,13 +487,15 @@ final readonly class NowPaymentsPaymentService
                 return $current;
             }
 
+            $state = $this->authorityState((string) $current->state);
             if ($state === NowPaymentsAuthorityState::Created || $state === NowPaymentsAuthorityState::ManualReview) {
                 $this->transitionAuthority($connection, $current, NowPaymentsAuthorityState::Finished);
                 $current = $this->requiredAuthority($connection, (int) $current->id, true);
             }
             $this->ensureIntentSubmitted($connection, (int) $current->payment_intent_id, $correlationId);
+
             $settledAt = $result->updatedAt ?? $this->clock->now();
-            $eventId = 'status:'.$result->responseHash;
+            $eventId = 'status:'.strtolower($result->responseHash);
             $settlementEvent = new VerifiedPaymentEvent(
                 $eventId,
                 strtolower($result->responseHash),
@@ -574,12 +555,8 @@ final readonly class NowPaymentsPaymentService
         return $this->receipt($this->requiredAuthority($this->database->connection(), (int) $fresh->id), false);
     }
 
-    private function recordMismatch(
-        object $authority,
-        NowPaymentsPaymentResult $result,
-        string $code,
-        string $correlationId,
-    ): NowPaymentsPaymentReceipt {
+    private function recordMismatch(object $authority, NowPaymentsPaymentResult $result, string $code, string $correlationId): NowPaymentsPaymentReceipt
+    {
         return $this->database->connection()->transaction(function (Connection $connection) use (
             $authority,
             $result,
@@ -589,8 +566,15 @@ final readonly class NowPaymentsPaymentService
             $current = $this->requiredAuthority($connection, (int) $authority->id, true);
             $state = $this->authorityState((string) $current->state);
             $this->observe($connection, $current, 'mismatch', $result->paymentStatus, $result->responseHash, $correlationId);
-            $severity = $state === NowPaymentsAuthorityState::Finished ? 'critical' : 'high';
-            $this->finding($connection, $current, $code, $severity, $result->paymentStatus, $result->responseHash, $correlationId);
+            $this->finding(
+                $connection,
+                $current,
+                $code,
+                $state === NowPaymentsAuthorityState::Finished ? 'critical' : 'high',
+                $result->paymentStatus,
+                $result->responseHash,
+                $correlationId,
+            );
             if ($state === NowPaymentsAuthorityState::Created) {
                 $this->transitionAuthority($connection, $current, NowPaymentsAuthorityState::ManualReview);
                 $current = $this->requiredAuthority($connection, (int) $current->id, true);
@@ -723,8 +707,7 @@ final readonly class NowPaymentsPaymentService
     private function ensureIntentVerifying(Connection $connection, int $intentId, string $correlationId): void
     {
         $this->ensureIntentSubmitted($connection, $intentId, $correlationId);
-        $state = $this->intentStateForId($connection, $intentId);
-        if ($state === PaymentIntentState::Submitted) {
+        if ($this->intentStateForId($connection, $intentId) === PaymentIntentState::Submitted) {
             $this->transitionIntent(
                 $connection,
                 $intentId,
@@ -739,9 +722,6 @@ final readonly class NowPaymentsPaymentService
     private function ensureIntentManualReview(Connection $connection, int $intentId, string $correlationId): void
     {
         $state = $this->intentStateForId($connection, $intentId);
-        if ($state === PaymentIntentState::Created) {
-            return;
-        }
         if ($state === PaymentIntentState::AwaitingUserAction) {
             $this->transitionIntent($connection, $intentId, $state, PaymentIntentState::Submitted, 'nowpayments_review_payment_observed', $correlationId);
             $state = PaymentIntentState::Submitted;
@@ -771,26 +751,12 @@ final readonly class NowPaymentsPaymentService
     {
         $state = $this->intentStateForId($connection, $intentId);
         if ($state === PaymentIntentState::AwaitingUserAction) {
-            $this->transitionIntent(
-                $connection,
-                $intentId,
-                $state,
-                PaymentIntentState::Expired,
-                'nowpayments_provider_expired',
-                $correlationId,
-            );
+            $this->transitionIntent($connection, $intentId, $state, PaymentIntentState::Expired, 'nowpayments_provider_expired', $correlationId);
 
             return;
         }
         if (in_array($state, [PaymentIntentState::Submitted, PaymentIntentState::Verifying, PaymentIntentState::PendingManualReview], true)) {
-            $this->transitionIntent(
-                $connection,
-                $intentId,
-                $state,
-                PaymentIntentState::Failed,
-                'nowpayments_provider_expired_after_submission',
-                $correlationId,
-            );
+            $this->transitionIntent($connection, $intentId, $state, PaymentIntentState::Failed, 'nowpayments_provider_expired_after_submission', $correlationId);
         }
     }
 
