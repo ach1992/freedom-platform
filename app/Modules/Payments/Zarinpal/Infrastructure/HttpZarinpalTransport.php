@@ -40,7 +40,6 @@ final readonly class HttpZarinpalTransport implements ZarinpalTransport
             'callback_url' => $callbackUrl,
             'metadata' => [
                 'order_id' => $orderId,
-                'auto_verify' => false,
             ],
         ]);
         if ($response === null || $response->serverError()) {
