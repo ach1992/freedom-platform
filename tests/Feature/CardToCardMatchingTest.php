@@ -11,6 +11,7 @@ use App\Modules\Payments\CardToCard\Application\CardToCardBankTransactionService
 use App\Modules\Payments\CardToCard\Application\CardToCardDestinationService;
 use App\Modules\Payments\CardToCard\Application\CardToCardMatchingService;
 use App\Modules\Payments\CardToCard\Application\CardToCardPaymentService;
+use App\Modules\Payments\CardToCard\Application\CardToCardSettlementService;
 use App\Modules\Payments\CardToCard\Application\Contracts\BankTransactionObservation;
 use App\Modules\Payments\CardToCard\Application\Contracts\CardToCardAdjustmentGenerator;
 use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
@@ -19,6 +20,7 @@ use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
 use DateTimeImmutable;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
@@ -41,7 +43,7 @@ final class CardToCardMatchingClock implements Clock
     }
 }
 
-/** @requirement C2C-001 C2C-002 C2C-003 C2C-004 C2C-005 PAY-002 DAT-002 DAT-003 DAT-004 SEC-002 QUA-001 QUA-004 */
+/** @requirement C2C-001 C2C-002 C2C-003 C2C-004 C2C-005 PAY-002 PAY-003 DAT-002 DAT-003 DAT-004 SEC-002 QUA-001 QUA-004 */
 final class CardToCardMatchingTest extends TestCase
 {
     use AgentPricingQuoteIntegrationTestSupport;
@@ -99,6 +101,75 @@ final class CardToCardMatchingTest extends TestCase
         $replay = $this->app->make(CardToCardMatchingService::class)->match($bank->publicId, $this->correlation('match-auto-replay'));
         self::assertTrue($replay->replayed);
         self::assertSame($match->matchId, $replay->matchId);
+    }
+
+    public function test_exact_match_settles_payable_amount_through_common_authority_and_replays_once(): void
+    {
+        $payment = $this->payment('settlement');
+        $bank = $this->app->make(CardToCardBankTransactionService::class)->ingest(
+            'fake',
+            $this->observation('settlement', $payment->payableAmountIrr, $this->clock->value->modify('+2 minutes')),
+            'fake',
+            $this->correlation('bank-settlement'),
+        );
+        $match = $this->app->make(CardToCardMatchingService::class)->match($bank->publicId, $this->correlation('match-settlement'));
+        self::assertNotNull($match->matchPublicId);
+
+        $captured = $this->app->make(CardToCardSettlementService::class)->capture(
+            $match->matchPublicId,
+            $this->correlation('capture-settlement'),
+        );
+
+        self::assertFalse($captured->replayed);
+        self::assertSame($payment->baseAmountIrr, $captured->baseAmountIrr);
+        self::assertSame($payment->adjustmentAmountIrr, $captured->adjustmentAmountIrr);
+        self::assertSame($payment->payableAmountIrr, $captured->payableAmountIrr);
+        self::assertSame('captured', DB::table('payment_intents')->where('public_id', $payment->paymentIntent->intentPublicId)->value('state'));
+        self::assertSame($payment->baseAmountIrr, (int) DB::table('payment_intents')->where('public_id', $payment->paymentIntent->intentPublicId)->value('amount_irr'));
+        self::assertSame($payment->payableAmountIrr, (int) DB::table('purchase_settlements')->where('id', $captured->purchaseSettlementId)->value('amount_irr'));
+        self::assertSame('captured', DB::table('c2c_transaction_matches')->where('id', $captured->matchId)->value('state'));
+        self::assertSame($captured->purchaseSettlementId, (int) DB::table('c2c_transaction_matches')->where('id', $captured->matchId)->value('purchase_settlement_id'));
+        self::assertNull(DB::table('c2c_amount_reservations')->where('id', $payment->reservationId)->value('active_lock'));
+        self::assertSame('matched', DB::table('c2c_amount_reservations')->where('id', $payment->reservationId)->value('release_reason'));
+
+        $commonProviderTransactionId = (string) DB::table('purchase_settlements')
+            ->where('id', $captured->purchaseSettlementId)
+            ->value('provider_transaction_id');
+        self::assertSame(hash('sha256', "fake\0fake-tx-settlement"), $commonProviderTransactionId);
+        self::assertNotSame('fake-tx-settlement', $commonProviderTransactionId);
+
+        $replay = $this->app->make(CardToCardSettlementService::class)->capture(
+            $match->matchPublicId,
+            $this->correlation('capture-settlement-replay'),
+        );
+        self::assertTrue($replay->replayed);
+        self::assertSame($captured->purchaseSettlementId, $replay->purchaseSettlementId);
+        self::assertSame(1, DB::table('purchase_settlements')->where('payment_intent_id', DB::table('payment_intents')->where('public_id', $payment->paymentIntent->intentPublicId)->value('id'))->count());
+        self::assertSame(1, DB::table('payment_provider_transactions')->where('provider_code', 'card_to_card')->count());
+    }
+
+    public function test_database_rejects_direct_match_capture_without_authoritative_purchase_settlement(): void
+    {
+        $payment = $this->payment('forged-capture');
+        $bank = $this->app->make(CardToCardBankTransactionService::class)->ingest(
+            'fake',
+            $this->observation('forged-capture', $payment->payableAmountIrr, $this->clock->value->modify('+1 minute')),
+            'fake',
+            $this->correlation('bank-forged-capture'),
+        );
+        $match = $this->app->make(CardToCardMatchingService::class)->match($bank->publicId, $this->correlation('match-forged-capture'));
+        self::assertNotNull($match->matchId);
+
+        $this->assertQueryRejected(static fn (): int => DB::table('c2c_transaction_matches')
+            ->where('id', $match->matchId)
+            ->update([
+                'state' => 'captured',
+                'purchase_settlement_id' => null,
+                'captured_at' => '2026-08-14 10:03:00.000000',
+            ]));
+
+        self::assertSame('matched', DB::table('c2c_transaction_matches')->where('id', $match->matchId)->value('state'));
+        self::assertSame(0, DB::table('purchase_settlements')->count());
     }
 
     public function test_late_settled_transaction_requires_review_and_manual_acceptance_is_auditable(): void
@@ -220,5 +291,15 @@ final class CardToCardMatchingTest extends TestCase
     private function correlation(string $suffix): string
     {
         return hash('sha256', 'c2c-match:'.$suffix);
+    }
+
+    private function assertQueryRejected(callable $callback): void
+    {
+        try {
+            $callback();
+            self::fail('Expected card-to-card database authority rejection.');
+        } catch (QueryException) {
+            self::assertTrue(true);
+        }
     }
 }
