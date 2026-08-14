@@ -4,7 +4,7 @@ The normative Version `1.0.0` requirements are defined in `docs/specification/ma
 
 A requirement is not complete because a class, migration, document, fake, or test exists. Completion is determined from the applicable GitHub Issue/PR, exact-head CI, review, and final release acceptance.
 
-For the two explicit Owner-approved Version 1 provider clarifications below, these durable rules supersede conflicting historical provider names or pricing-source wording that remains in the master specification. No other master-specification requirement is changed.
+The two explicit Owner-approved Version 1 provider clarifications below are also reflected in the master specification. They remain repeated here to keep the stable requirement IDs unambiguous; no other master-specification requirement is changed.
 
 ## Version 1 provider clarifications
 

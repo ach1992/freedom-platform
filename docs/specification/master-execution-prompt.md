@@ -1485,10 +1485,12 @@ Requirements:
 
 Version 1 supports:
 
-- manual rate;
-- Nobitex public market data;
-- Tetherland price data;
+- managed Manual IRR-per-USDT rate;
+- Nobitex public USDT/RLS market data;
+- Wallex public `USDTTMN` spot-market data;
 - future adapters.
+
+Runtime selection is deterministic: `Nobitex -> Wallex -> Manual`. The Manual rate is a protected DB-backed, versioned, audited product setting. Deployment configuration is bootstrap fallback only before a managed value exists; it is not a second runtime authority.
 
 Configuration:
 
@@ -1532,6 +1534,9 @@ Use fixed-precision decimal and configurable round-up, default up to 6 decimal p
 - separate API key and IPN secret;
 - verify IPN signature according to current official canonicalization rules;
 - invalid signature changes no financial state;
+- use the same selected IRR-per-USDT authority as direct USDT pricing (`Nobitex -> Wallex -> Manual`) as the explicit Version 1 business pricing proxy required for `price_currency=usd`; this is a pricing policy, not a claim that USD and USDT are economically identical;
+- snapshot the selected rate source, exact rate, provider evidence identity, pricing-policy identity, derived USD `price_amount`, pay currency, and rounding policy immutably for each payment;
+- do not introduce a separate USD/IRR provider or Manual USD rate in Version 1;
 - compare payment ID, order ID, amount, pay currency, price currency, and status;
 - re-query authoritative status for sensitive transitions;
 - duplicate and out-of-order IPNs are idempotent;
@@ -3646,7 +3651,7 @@ Use the following official sources to verify current endpoint schemas, signature
 - Melli Payamak API: `https://www.melipayamak.com/api/`
 - Kavenegar REST API: `https://kavenegar.com/rest.html`
 - Nobitex API: `https://apidocs.nobitex.ir/`
-- Tetherland public price endpoint: `https://api.tetherland.com/currencies`
+- Wallex public markets endpoint: `https://api.wallex.ir/hector/web/v1/markets`
 - PHP 8.4 manual: `https://www.php.net/manual/en/`
 - MariaDB documentation: `https://mariadb.com/docs/`
 - Redis documentation: `https://redis.io/docs/latest/`
@@ -3704,10 +3709,10 @@ The team must use these stable IDs in the owning GitHub Issue/PR, code/tests, an
 | `GFT-003` | Automatic gift-card verification works through Fake and Generic REST providers and separates validate, reserve, redeem/capture, release, and balance/status checks. |
 | `GFT-004` | A code or external redemption cannot fund two payments. Unknown, already-used, wrong-value, wrong-region, pending, or provider-error responses never auto-capture and are reconciled/manual-reviewed. |
 | `USDT-001` | Direct USDT displays BEP20 clearly, locks an IRR-to-USDT quote, destination address, exact decimal amount, source rate, margin, and expiration. |
-| `USDT-002` | Rate providers include manual, Nobitex, and Tetherland with priority/fallback, stale-rate limits, min/max sanity checks, divergence guard, and test connection. |
+| `USDT-002` | Rate providers include managed Manual IRR-per-USDT, Nobitex public USDT/RLS, and Wallex public `USDTTMN`, with deterministic `Nobitex -> Wallex -> Manual` selection, stale-rate limits, min/max sanity checks, divergence guard, circuit breaking, protected managed-setting history, and test connection. |
 | `USDT-003` | Customer submits TXID and optional evidence; TXID uniqueness, network, destination, amount, confirmations, and time are reviewed manually and remain adapter-ready for automatic chain verification. |
 | `IPG-001` | Zarinpal request, redirect, callback, server-side verify, amount/authority matching, duplicate verify handling, refund capability detection, and reconciliation are implemented against official docs. |
-| `IPG-002` | NOWPayments create-payment, IPN signature verification, server-side status lookup, amount/currency/order matching, partial/over/under payment policy, expiration, and reconciliation are implemented. |
+| `IPG-002` | NOWPayments implements create-payment, IPN signature verification, server-side status lookup, amount/currency/order matching, partial/over/under payment policy, expiration, and reconciliation. Version 1 pricing uses the same snapshotted IRR-per-USDT authority as direct USDT as the explicit `price_currency=usd` pricing proxy; no separate USD/IRR provider or Manual USD authority exists. |
 | `WAL-001` | Wallet top-up uses a normal Payment Intent; a successful external settlement creates one balanced ledger transaction and updates the cash balance. |
 | `WAL-002` | Cash and promotional-credit buckets use append-only double-entry ledger transactions, holds, capture/release, balance snapshots, and reconciliation. |
 | `WAL-003` | User-to-user transfer validates recipient, limits, status, transferable bucket, fee, and confirmation, then posts debit/credit atomically. |
