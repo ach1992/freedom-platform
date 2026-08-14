@@ -91,8 +91,8 @@ jobs:
           )
           replace_once(
               'tests/Feature/GiftCardRedemptionContentionTest.php',
-              "                now('UTC')->addMinutes(30),",
-              "                now('UTC')->addMinutes(30)->toDateTimeImmutable(),",
+              "new QuotePricingInput(QuoteOverrideSource::None, null, null, null, 0, now('UTC')->addMinutes(30))",
+              "new QuotePricingInput(QuoteOverrideSource::None, null, null, null, 0, now('UTC')->addMinutes(30)->toDateTimeImmutable())",
           )
 
           teardown = """        protected function tearDown(): void
@@ -268,9 +268,11 @@ jobs:
           modified_php=(
             app/Modules/Payments/GiftCard/Application/GiftCardSubmissionService.php
             tests/Feature/CardToCardContentionTest.php
+            tests/Feature/CardToCardManualReviewContentionTest.php
             tests/Feature/CardToCardMatchingTest.php
             tests/Feature/GiftCardLookupKeyRotationTest.php
             tests/Feature/GiftCardRedemptionContentionTest.php
+            tests/Feature/PurchaseRefundContentionVerificationTest.php
             tests/Feature/ReferralRewardAccrualContentionVerificationTest.php
             tests/Feature/ReferralRewardLifecycleContentionVerificationTest.php
             tests/Feature/UsdtBep20PaymentFlowTest.php
