@@ -147,6 +147,16 @@ namespace Tests\Feature {
             );
         }
 
+        protected function tearDown(): void
+        {
+            try {
+                if (isset($this->app)) {
+                    $this->truncateDatabaseTables();
+                }
+            } finally {
+                parent::tearDown();
+            }
+        }
         public function test_two_concurrent_manual_approvals_produce_one_financial_result(): void
         {
             $user = $this->quoteUser('customer');
@@ -258,6 +268,10 @@ namespace Tests\Feature {
                     }
                     $line = fgets($stream);
                     if ($line !== false) {
+                        if (trim($line) === '') {
+                            continue;
+                        }
+
                         return $line;
                     }
                 }

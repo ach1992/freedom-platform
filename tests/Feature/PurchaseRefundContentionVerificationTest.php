@@ -139,6 +139,16 @@ namespace Tests\Feature {
             $this->app->instance(Clock::class, $this->clock);
         }
 
+        protected function tearDown(): void
+        {
+            try {
+                if (isset($this->app)) {
+                    $this->truncateDatabaseTables();
+                }
+            } finally {
+                parent::tearDown();
+            }
+        }
         public function test_concurrent_duplicate_refund_creates_once_and_replays_once(): void
         {
             [$settlement, $providerCode] = $this->capturePurchase('duplicate');
@@ -365,6 +375,10 @@ namespace Tests\Feature {
                     }
                     $line = fgets($stream);
                     if ($line !== false) {
+                        if (trim($line) === '') {
+                            continue;
+                        }
+
                         return $line;
                     }
                 }

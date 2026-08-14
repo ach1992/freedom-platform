@@ -487,26 +487,43 @@ final readonly class NowPaymentsPaymentService
             $this->ensureIntentSubmitted($connection, (int) $current->payment_intent_id, $correlationId);
 
             $settledAt = $result->updatedAt ?? $this->clock->now();
-            $eventId = 'status:'.strtolower($result->responseHash);
+            $providerPaymentId = (string) $current->provider_payment_id;
+            $amountIrr = $this->positiveInt($current->amount_irr, 'NOWPayments authority amount');
+            $rateSource = (string) $current->rate_source;
+            $payCurrency = (string) $current->pay_currency;
+            $priceAmountUsd = NowPaymentsDecimal::normalize($result->priceAmount, NowPaymentsDecimal::PRICE_PRECISION);
+            $providerPayAmount = NowPaymentsDecimal::normalize($result->payAmount, 18);
+            $settlementEvidenceHash = hash('sha256', json_encode([
+                'provider_code' => self::PROVIDER_CODE,
+                'provider_payment_id' => $providerPaymentId,
+                'amount_irr' => $amountIrr,
+                'currency' => 'IRR',
+                'price_amount_usd' => $priceAmountUsd,
+                'pay_currency' => $payCurrency,
+                'provider_pay_amount' => $providerPayAmount,
+                'rate_source' => $rateSource,
+                'provider_status' => 'finished',
+            ], JSON_THROW_ON_ERROR));
+            $eventId = 'settlement:'.$settlementEvidenceHash;
             $settlementEvent = new VerifiedPaymentEvent(
                 $eventId,
-                strtolower($result->responseHash),
+                $settlementEvidenceHash,
                 new PaymentEvidence(
                     ProviderOperationOutcome::Success,
                     PaymentEvidenceAuthority::Authoritative,
                     PaymentTransactionStatus::Settled,
-                    (string) $current->provider_payment_id,
+                    $providerPaymentId,
                     $eventId,
-                    Money::irr($this->positiveInt($current->amount_irr, 'NOWPayments authority amount')),
+                    Money::irr($amountIrr),
                     $settledAt,
                     $settledAt,
-                    strtolower($result->responseHash),
+                    $settlementEvidenceHash,
                     [
                         'provider_status' => 'finished',
                         'pricing_policy_code' => self::PRICING_POLICY_CODE,
-                        'rate_source' => (string) $current->rate_source,
+                        'rate_source' => $rateSource,
                         'price_currency' => 'USD',
-                        'pay_currency' => (string) $current->pay_currency,
+                        'pay_currency' => $payCurrency,
                     ],
                 ),
             );

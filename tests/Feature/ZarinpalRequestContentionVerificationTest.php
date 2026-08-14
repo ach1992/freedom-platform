@@ -134,6 +134,16 @@ namespace Tests\Feature {
             $this->seed(PaymentEligibilityAccessFoundationSeeder::class);
         }
 
+        protected function tearDown(): void
+        {
+            try {
+                if (isset($this->app)) {
+                    $this->truncateDatabaseTables();
+                }
+            } finally {
+                parent::tearDown();
+            }
+        }
         public function test_concurrent_initiation_claims_one_external_request_mutation(): void
         {
             $intentPublicId = $this->purchaseIntent();
