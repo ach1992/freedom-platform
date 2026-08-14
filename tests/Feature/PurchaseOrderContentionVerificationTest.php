@@ -70,8 +70,8 @@ namespace Tests\Feature {
     final class PurchaseOrderContentionVerificationTest extends TestCase
     {
         use AgentPricingQuoteIntegrationTestSupport;
-        use PurchaseOrderTestSupport;
         use DatabaseTruncation;
+        use PurchaseOrderTestSupport;
 
         private const WORKER_TIMEOUT_SECONDS = 20;
 
@@ -119,7 +119,7 @@ namespace Tests\Feature {
         }
 
         /**
-         * @param list<array<string, string>> $payloads
+         * @param  list<array<string, string>>  $payloads
          * @return list<array<string, mixed>>
          */
         private function runConcurrent(array $payloads): array
