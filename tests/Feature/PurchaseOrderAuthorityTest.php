@@ -167,6 +167,61 @@ final class PurchaseOrderAuthorityTest extends TestCase
         self::assertSame(1, DB::table('order_state_histories')->where('order_id', $receipt->orderId)->count());
     }
 
+    public function test_database_rejects_wrong_quote_amount_and_currency_purchase_identity(): void
+    {
+        $settlement = $this->createPurchaseOrderSettlement('mismatch');
+        $otherSettlement = $this->createPurchaseOrderSettlement('mismatch-other');
+        $settlementRow = DB::table('purchase_settlements')->where('id', $settlement->settlementId)->first();
+        self::assertNotNull($settlementRow);
+        $intent = DB::table('payment_intents')->where('id', $settlementRow->payment_intent_id)->first();
+        self::assertNotNull($intent);
+        $quote = DB::table('quotes')->where('id', $settlementRow->source_quote_id)->first();
+        self::assertNotNull($quote);
+        $otherQuote = DB::table('quotes')->where('public_id', $otherSettlement->sourceQuotePublicId)->first();
+        self::assertNotNull($otherQuote);
+
+        $baseOrder = [
+            'source_type' => 'purchase',
+            'purchase_settlement_id' => $settlementRow->id,
+            'purchase_settlement_public_id' => $settlementRow->public_id,
+            'payment_intent_id' => $intent->id,
+            'payment_intent_public_id' => $intent->public_id,
+            'user_id' => $settlementRow->user_id,
+            'source_quote_id' => $quote->id,
+            'source_quote_public_id' => $quote->public_id,
+            'source_quote_configuration_hash' => $quote->configuration_snapshot_hash,
+            'state' => 'paid',
+            'state_version' => 1,
+            'total_amount_irr' => $settlementRow->amount_irr,
+            'currency' => 'IRR',
+            'paid_at' => $settlementRow->settled_at,
+            'created_at' => $this->purchaseOrderTimestamp(),
+            'updated_at' => $this->purchaseOrderTimestamp(),
+        ];
+
+        $this->assertQueryRejected(fn (): bool => DB::table('orders')->insert(array_replace($baseOrder, [
+            'public_id' => (string) Str::ulid(),
+            'source_quote_id' => $otherQuote->id,
+            'source_quote_public_id' => $otherQuote->public_id,
+            'source_quote_configuration_hash' => $otherQuote->configuration_snapshot_hash,
+            'creation_correlation_id' => $this->purchaseOrderCorrelation('wrong-quote'),
+        ])));
+        $this->assertQueryRejected(fn (): bool => DB::table('orders')->insert(array_replace($baseOrder, [
+            'public_id' => (string) Str::ulid(),
+            'total_amount_irr' => (int) $settlementRow->amount_irr + 1,
+            'creation_correlation_id' => $this->purchaseOrderCorrelation('wrong-amount'),
+        ])));
+        $this->assertQueryRejected(fn (): bool => DB::table('orders')->insert(array_replace($baseOrder, [
+            'public_id' => (string) Str::ulid(),
+            'currency' => 'USD',
+            'creation_correlation_id' => $this->purchaseOrderCorrelation('wrong-currency'),
+        ])));
+
+        self::assertSame(0, DB::table('orders')->count());
+        self::assertSame(0, DB::table('order_items')->count());
+        self::assertSame(0, DB::table('order_state_histories')->count());
+    }
+
     public function test_unknown_or_malformed_settlement_cannot_create_order(): void
     {
         $service = $this->app->make(PurchaseOrderService::class);
