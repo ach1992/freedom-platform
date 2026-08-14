@@ -16,4 +16,11 @@ return [
         'code_lookup_previous_key' => env('GIFT_CARD_CODE_LOOKUP_PREVIOUS_KEY'),
         'code_lookup_previous_key_version' => env('GIFT_CARD_CODE_LOOKUP_PREVIOUS_KEY_VERSION'),
     ],
+    'usdt_bep20' => [
+        'chain_id' => env('USDT_BEP20_CHAIN_ID', 56),
+        'token_contract' => env('USDT_BEP20_TOKEN_CONTRACT'),
+        'minimum_confirmations' => env('USDT_BEP20_MINIMUM_CONFIRMATIONS', 15),
+        'generic_rest_timeout_seconds' => env('USDT_BEP20_GENERIC_REST_TIMEOUT_SECONDS', 10),
+        'generic_rest_max_body_bytes' => env('USDT_BEP20_GENERIC_REST_MAX_BODY_BYTES', 262144),
+    ],
 ];
