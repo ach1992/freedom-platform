@@ -18,7 +18,8 @@ return [
     ],
     'usdt_bep20' => [
         'chain_id' => env('USDT_BEP20_CHAIN_ID', 56),
-        'token_contract' => env('USDT_BEP20_TOKEN_CONTRACT'),
+        'token_contract' => env('USDT_BEP20_TOKEN_CONTRACT', '0x55d398326f99059ff775485246999027b3197955'),
+        'token_decimals' => env('USDT_BEP20_TOKEN_DECIMALS', 18),
         'minimum_confirmations' => env('USDT_BEP20_MINIMUM_CONFIRMATIONS', 15),
         'generic_rest_timeout_seconds' => env('USDT_BEP20_GENERIC_REST_TIMEOUT_SECONDS', 10),
         'generic_rest_max_body_bytes' => env('USDT_BEP20_GENERIC_REST_MAX_BODY_BYTES', 262144),
