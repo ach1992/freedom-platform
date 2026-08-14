@@ -18,7 +18,7 @@ final readonly class UsdtBlockchainVerificationEvidence
         public ?int $chainId,
         public ?string $tokenContract,
         public ?string $destinationAddress,
-        public ?int $amountBaseUnits,
+        public ?string $amountBaseUnits,
         public ?int $tokenDecimals,
         public ?int $confirmations,
         public ?int $blockNumber,
