@@ -103,6 +103,20 @@ final class NowPaymentsTransportContractTest extends TestCase
         Http::assertSent(static fn ($request): bool => $request->url() === 'https://api.nowpayments.io/v1/payment/900001');
     }
 
+    public function test_current_sending_status_normalizes_to_non_final_spending_and_zero_paid_amount_is_valid(): void
+    {
+        $responseBody = '{"payment_id":900001,"payment_status":"sending","pay_address":"0x1111111111111111111111111111111111111111","price_amount":"11.11111112","price_currency":"usd","pay_amount":"12.500000000000000000","actually_paid":"0","pay_currency":"usdtbsc","order_id":"payment-intent:01J00000000000000000000000","created_at":"2026-08-14T06:30:00Z","updated_at":"2026-08-14T06:31:00Z"}';
+        Http::fake([
+            'https://api.nowpayments.io/v1/payment/900001' => Http::response($responseBody, 200, ['Content-Type' => 'application/json']),
+        ]);
+        $transport = new HttpNowPaymentsTransport($this->app->make(Factory::class), 'test-api-key');
+
+        $result = $transport->status('900001');
+        self::assertSame('spending', $result->paymentStatus);
+        self::assertSame('0.000000000000000000', $result->actuallyPaid);
+        self::assertNotSame('finished', $result->paymentStatus);
+    }
+
     public function test_ipn_signature_uses_sorted_json_hmac_sha512_and_rejects_tampering(): void
     {
         $secret = 'nowpayments-test-secret';
