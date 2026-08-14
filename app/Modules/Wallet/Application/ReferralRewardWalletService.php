@@ -14,8 +14,6 @@ use RuntimeException;
 
 final readonly class ReferralRewardWalletService
 {
-    private const WALLET_BUCKET = 'promotional';
-
     private const RELEASE_TRANSACTION_TYPE = 'referral_reward_release';
 
     private const REVERSAL_TRANSACTION_TYPE = 'referral_reward_reversal';
@@ -23,6 +21,7 @@ final readonly class ReferralRewardWalletService
     public function __construct(
         private DatabaseManager $database,
         private LedgerPostingService $ledger,
+        private WalletAccountProvisioningService $accounts,
     ) {}
 
     /** @requirement REF-001 WAL-002 DAT-002 DAT-003 DAT-004 QUA-001 */
@@ -108,21 +107,8 @@ final readonly class ReferralRewardWalletService
     /** @return array{0:int,1:int} */
     private function resolveAccounts(int $recipientUserId): array
     {
+        $walletAccountId = $this->accounts->ensurePromotionalForUser($recipientUserId);
         $connection = $this->database->connection();
-        /** @var object{id:int|string,account_class:string,owner_user_id:int|string|null,wallet_bucket:string|null,currency:string,is_active:int|bool}|null $wallet */
-        $wallet = $connection->table('ledger_accounts')
-            ->where('owner_user_id', $recipientUserId)
-            ->where('wallet_bucket', self::WALLET_BUCKET)
-            ->first(['id', 'account_class', 'owner_user_id', 'wallet_bucket', 'currency', 'is_active']);
-        if ($wallet === null
-            || $wallet->account_class !== 'liability'
-            || $wallet->owner_user_id === null
-            || (int) $wallet->owner_user_id !== $recipientUserId
-            || $wallet->wallet_bucket !== self::WALLET_BUCKET
-            || $wallet->currency !== 'IRR'
-            || ! (bool) $wallet->is_active) {
-            throw new DomainException('Referral reward requires an active promotional wallet account.');
-        }
 
         /** @var object{id:int|string,account_class:string,owner_user_id:int|string|null,wallet_bucket:string|null,currency:string,is_active:int|bool}|null $expense */
         $expense = $connection->table('ledger_accounts')
@@ -138,7 +124,7 @@ final readonly class ReferralRewardWalletService
         }
 
         return [
-            $this->positiveInt($wallet->id, 'Referral reward promotional wallet account ID'),
+            $walletAccountId,
             $this->positiveInt($expense->id, 'Referral reward expense ledger account ID'),
         ];
     }
