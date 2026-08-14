@@ -48,4 +48,16 @@ return [
         'timeout_seconds' => env('ZARINPAL_TIMEOUT_SECONDS', 15),
     ],
 
+    'nowpayments' => [
+        'enabled' => env('NOWPAYMENTS_ENABLED', false),
+        'api_key' => env('NOWPAYMENTS_API_KEY'),
+        'ipn_secret' => env('NOWPAYMENTS_IPN_SECRET'),
+        'ipn_callback_url' => env('NOWPAYMENTS_IPN_CALLBACK_URL'),
+        'pay_currency' => env('NOWPAYMENTS_PAY_CURRENCY'),
+        'connect_timeout_seconds' => env('NOWPAYMENTS_CONNECT_TIMEOUT_SECONDS', 5),
+        'timeout_seconds' => env('NOWPAYMENTS_TIMEOUT_SECONDS', 15),
+        'max_response_bytes' => env('NOWPAYMENTS_MAX_RESPONSE_BYTES', 262144),
+        'max_ipn_body_bytes' => env('NOWPAYMENTS_MAX_IPN_BODY_BYTES', 262144),
+    ],
+
 ];
