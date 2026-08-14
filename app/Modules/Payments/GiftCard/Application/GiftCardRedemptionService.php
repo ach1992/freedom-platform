@@ -122,7 +122,9 @@ final readonly class GiftCardRedemptionService
         }
 
         if ($authority->purchase_settlement_id !== null) {
-            $settlement = $connection->table('purchase_settlements')->where('id', $authority->purchase_settlement_id)->first(['public_id']);
+            $settlement = $connection->table('purchase_settlements')
+                ->where('id', $authority->purchase_settlement_id)
+                ->first(['public_id']);
             if ($settlement === null || $authority->submission_state !== 'captured' || $authority->intent_state !== 'captured') {
                 throw new RuntimeException('Gift-card redemption settlement linkage is inconsistent.');
             }
@@ -224,12 +226,9 @@ final readonly class GiftCardRedemptionService
                 if ($submission === null) {
                     throw new DomainException('Gift-card submission does not exist.');
                 }
-                if ($submission->provider_code !== $externalProviderCode
-                    || $submission->intent_provider_code !== 'gift_card'
-                    || $submission->state !== 'redeeming') {
-                    throw new RuntimeException('Gift-card redemption provider/state authority is inconsistent.');
+                if ($submission->provider_code !== $externalProviderCode || $submission->intent_provider_code !== 'gift_card') {
+                    throw new RuntimeException('Gift-card redemption provider authority is inconsistent.');
                 }
-                $this->assertEvidenceMatchesSubmission($submission, $evidence);
 
                 $existingRedemption = $connection->table('gift_card_redemptions')
                     ->where('gift_card_submission_id', $submission->id)
@@ -238,11 +237,19 @@ final readonly class GiftCardRedemptionService
                 if ($existingRedemption !== null) {
                     if ($existingRedemption->provider_code !== $externalProviderCode
                         || ! hash_equals((string) $existingRedemption->provider_redemption_id, (string) $evidence->providerTransactionId)
-                        || ! hash_equals(strtolower((string) $existingRedemption->evidence_hash), strtolower($evidence->evidenceHash))) {
+                        || ! hash_equals(strtolower((string) $existingRedemption->evidence_hash), strtolower($evidence->evidenceHash))
+                        || (int) $existingRedemption->amount_irr !== (int) $evidence->faceValue
+                        || $existingRedemption->currency !== $evidence->currency) {
                         throw new RuntimeException('Gift-card submission already has conflicting redemption authority.');
                     }
+
                     return;
                 }
+
+                if ($submission->state !== 'redeeming') {
+                    throw new RuntimeException('Gift-card redemption state authority is inconsistent.');
+                }
+                $this->assertEvidenceMatchesSubmission($submission, $evidence);
 
                 $providerEvent = $this->recordProviderEvent($connection, (int) $submission->id, $externalProviderCode, $evidence);
                 $connection->table('gift_card_redemptions')->insert([
@@ -261,13 +268,22 @@ final readonly class GiftCardRedemptionService
                 ]);
             }, 3);
         } catch (QueryException $exception) {
-            $conflict = $this->database->connection()->table('gift_card_redemptions')
+            $connection = $this->database->connection();
+            $transactionConflict = $connection->table('gift_card_redemptions')
                 ->where('provider_code', $externalProviderCode)
                 ->where('provider_redemption_id', $evidence->providerTransactionId)
                 ->first(['gift_card_submission_id']);
-            if ($conflict !== null) {
+            if ($transactionConflict !== null) {
                 throw new RuntimeException('Gift-card provider redemption is already bound to another purchase.', 0, $exception);
             }
+            $evidenceConflict = $connection->table('gift_card_redemptions')
+                ->where('provider_code', $externalProviderCode)
+                ->where('evidence_hash', strtolower($evidence->evidenceHash))
+                ->first(['gift_card_submission_id']);
+            if ($evidenceConflict !== null) {
+                throw new RuntimeException('Gift-card provider redemption evidence is already bound to another purchase.', 0, $exception);
+            }
+
             throw $exception;
         }
     }
@@ -292,6 +308,7 @@ final readonly class GiftCardRedemptionService
                 || ! hash_equals(strtolower((string) $existing->evidence_hash), strtolower($evidence->evidenceHash))) {
                 throw new RuntimeException('Gift-card provider event replay conflicts with accepted evidence.');
             }
+
             return $existing;
         }
 
@@ -316,6 +333,7 @@ final readonly class GiftCardRedemptionService
         if ($row === null) {
             throw new RuntimeException('Gift-card provider event persistence failed.');
         }
+
         return $row;
     }
 
@@ -378,7 +396,7 @@ final readonly class GiftCardRedemptionService
                 $correlationId,
             );
         } catch (Throwable) {
-            // Preserve the original provider/local failure. Logging/outer incident handling can still report it.
+            // Preserve the original provider/local failure. Outer incident handling can still report it.
         }
     }
 
@@ -426,6 +444,7 @@ final readonly class GiftCardRedemptionService
         if ($date === false) {
             throw new RuntimeException('Stored gift-card timestamp is invalid.');
         }
+
         return $date;
     }
 
