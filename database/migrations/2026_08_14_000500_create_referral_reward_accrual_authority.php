@@ -77,7 +77,10 @@ return new class extends Migration
             throw new RuntimeException('Cannot roll back referral reward authority while reward state exists.');
         }
         if (DB::table('pricing_rule_versions')
-            ->whereRaw("JSON_CONTAINS_PATH(configuration_snapshot, 'one', '$.referral_reward_recipient') = 1")
+            ->whereRaw(
+                "JSON_CONTAINS_PATH(configuration_snapshot, 'one', ?) = 1",
+                ['$.referral_reward_recipient'],
+            )
             ->exists()) {
             throw new RuntimeException('Cannot roll back referral reward policy support while reward-enabled rule versions exist.');
         }
