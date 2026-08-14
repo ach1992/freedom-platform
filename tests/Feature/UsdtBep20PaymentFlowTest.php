@@ -331,7 +331,7 @@ final class UsdtBep20PaymentFlowTest extends TestCase
             $userId,
             $source->quotePublicId,
             $eligibility->publicId,
-            $amountQuote->quotePublicId,
+            $amountQuote->publicId,
             $this->correlation('authority-'.$suffix),
         );
 
