@@ -8,6 +8,8 @@ use App\Modules\AccessControl\Application\AdministratorPermissionAuthorizer;
 use App\Modules\Payments\Domain\PaymentIntentState;
 use App\Modules\Payments\GiftCard\Application\Contracts\GiftCardProviderEvidence;
 use App\Shared\Application\Clock;
+use DateTimeImmutable;
+use DateTimeZone;
 use DomainException;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
@@ -55,6 +57,7 @@ final readonly class GiftCardReviewDecisionService
                     'review.id as review_id', 'review.state as review_state', 'review.decided_by_administrator_id',
                     'submission.id as submission_id', 'submission.public_id as submission_public_id', 'submission.state as submission_state',
                     'submission.claimed_face_value', 'submission.claimed_currency', 'submission.claimed_brand', 'submission.claimed_region',
+                    'submission.submitted_at',
                     'type.provider_code', 'type.face_currency', 'type.brand', 'type.region',
                     'intent.id as payment_intent_id', 'intent.amount_irr', 'intent.currency', 'intent.state as intent_state',
                 ]);
@@ -181,6 +184,7 @@ final readonly class GiftCardReviewDecisionService
             || $evidence->status !== 'redeemed'
             || $evidence->providerTransactionId === null
             || $evidence->faceValue === null
+            || $evidence->faceValue < 1
             || $evidence->currency !== 'IRR'
             || $evidence->brand === null
             || $authority->provider_code !== $providerCode
@@ -194,9 +198,12 @@ final readonly class GiftCardReviewDecisionService
             || (($authority->claimed_region === null) !== ($evidence->region === null))
             || ($evidence->region !== null && ! hash_equals((string) $authority->claimed_region, $evidence->region))
             || (($authority->region === null) !== ($evidence->region === null))
-            || ($evidence->region !== null && ! hash_equals((string) $authority->region, $evidence->region))) {
-            throw new DomainException('Gift-card manual approval requires exact authoritative redeemed evidence.');
+            || ($evidence->region !== null && ! hash_equals((string) $authority->region, $evidence->region))
+            || $evidence->occurredAt->setTimezone(new DateTimeZone('UTC')) < $this->storedDateTime((string) $authority->submitted_at)) {
+            throw new DomainException('Gift-card manual approval requires exact authoritative post-submission redeemed evidence.');
         }
+        $this->assertPrintable($evidence->providerEventId, 'Gift-card manual approval provider event ID', 1, 191);
+        $this->assertPrintable($evidence->providerTransactionId, 'Gift-card manual approval provider redemption ID', 1, 191);
         if (preg_match('/\A[a-fA-F0-9]{64}\z/', $evidence->evidenceHash) !== 1) {
             throw new DomainException('Gift-card manual approval evidence hash is invalid.');
         }
@@ -234,6 +241,24 @@ final readonly class GiftCardReviewDecisionService
         $this->assertToken($correlationId, 'Gift-card review correlation ID', 8, 64);
     }
 
+    private function assertPrintable(string $value, string $label, int $minimum, int $maximum): void
+    {
+        $length = strlen($value);
+        if ($length < $minimum || $length > $maximum || preg_match('/\A[\x21-\x7E]+\z/', $value) !== 1) {
+            throw new DomainException($label.' is invalid.');
+        }
+    }
+
+    private function storedDateTime(string $value): DateTimeImmutable
+    {
+        $date = DateTimeImmutable::createFromFormat('!Y-m-d H:i:s.u', $value, new DateTimeZone('UTC'));
+        if ($date === false) {
+            throw new RuntimeException('Stored gift-card review timestamp is invalid.');
+        }
+
+        return $date;
+    }
+
     private function assertToken(string $value, string $label, int $minimum, int $maximum): void
     {
         $length = strlen($value);
@@ -244,6 +269,6 @@ final readonly class GiftCardReviewDecisionService
 
     private function timestamp(): string
     {
-        return $this->clock->now()->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s.u');
+        return $this->clock->now()->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s.u');
     }
 }
