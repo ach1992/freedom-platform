@@ -21,6 +21,7 @@ use DateTimeZone;
 use DomainException;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Str;
 use RuntimeException;
 
@@ -45,17 +46,16 @@ final readonly class ZarinpalPaymentService
         $this->assertToken($correlationId, 'Zarinpal request correlation ID', 8, 64);
         $configuration = $this->configuration();
 
-        $request = $this->database->connection()->transaction(function (Connection $connection) use (
+        [$request, $claimed] = $this->database->connection()->transaction(function (Connection $connection) use (
             $requestKey,
             $paymentIntentPublicId,
-            $correlationId,
             $configuration,
-        ): object {
+        ): array {
             $intent = $this->intentByPublicId($connection, $paymentIntentPublicId, true);
             if ($intent === null) {
                 throw new DomainException('Payment intent does not exist.');
             }
-            $this->assertInitiationIntent($intent);
+            $this->assertZarinpalIntentIdentity($intent);
             $payloadHash = $this->requestPayloadHash($intent, $configuration['hash']);
 
             $existing = $this->requestByIntentId($connection, $this->positiveInt($intent->id, 'Payment intent ID'), true);
@@ -65,7 +65,7 @@ final readonly class ZarinpalPaymentService
                     throw new RuntimeException('Zarinpal payment intent is already bound to a different request identity.');
                 }
 
-                return $existing;
+                return [$existing, false];
             }
 
             $requestId = (int) $connection->table('zarinpal_payment_requests')->insertGetId([
@@ -91,10 +91,10 @@ final readonly class ZarinpalPaymentService
                 throw new RuntimeException('Zarinpal request persistence failed.');
             }
 
-            return $created;
+            return [$created, true];
         });
 
-        if ($this->state($request->state) !== ZarinpalRequestState::Initiating) {
+        if (! $claimed) {
             return $this->receipt($request, true);
         }
 
@@ -125,9 +125,10 @@ final readonly class ZarinpalPaymentService
 
             if ($result->uncertain) {
                 $this->updateRequestState($connection, $current, ZarinpalRequestState::Uncertain);
-                $this->observe($connection, $current, 'request_uncertain', null, null, null, $correlationId);
+                $fresh = $this->requiredRequest($connection, (int) $current->id);
+                $this->observe($connection, $fresh, 'request_uncertain', null, null, null, $correlationId);
 
-                return $this->receipt($this->requiredRequest($connection, (int) $current->id), false);
+                return $this->receipt($fresh, false);
             }
             if (! $result->accepted || $result->authority === null) {
                 $this->updateRequestState(
@@ -136,9 +137,10 @@ final readonly class ZarinpalPaymentService
                     ZarinpalRequestState::Failed,
                     ['request_provider_code' => $result->providerCode],
                 );
-                $this->observe($connection, $current, 'request_rejected', null, $result->providerCode, null, $correlationId);
+                $fresh = $this->requiredRequest($connection, (int) $current->id);
+                $this->observe($connection, $fresh, 'request_rejected', null, $result->providerCode, null, $correlationId);
 
-                return $this->receipt($this->requiredRequest($connection, (int) $current->id), false);
+                return $this->receipt($fresh, false);
             }
 
             $this->assertAuthority($result->authority);
@@ -260,9 +262,13 @@ final readonly class ZarinpalPaymentService
         if ($inquiry->status === 'REVERSED') {
             return $this->moveToManualReview($request, 'manual_review', 'REVERSED', $inquiry->providerCode, null, $correlationId);
         }
-        if ($inquiry->status === 'FAILED'
-            && in_array($this->state($request->state), [ZarinpalRequestState::Redirectable, ZarinpalRequestState::ManualReview], true)) {
-            return $this->setStateAndReceipt($request, ZarinpalRequestState::Failed);
+        if ($inquiry->status === 'FAILED') {
+            if ($this->state($request->state) === ZarinpalRequestState::Verified) {
+                return $this->moveToManualReview($request, 'manual_review', 'FAILED', $inquiry->providerCode, null, $correlationId);
+            }
+            if (in_array($this->state($request->state), [ZarinpalRequestState::Redirectable, ZarinpalRequestState::ManualReview], true)) {
+                return $this->setStateAndReceipt($request, ZarinpalRequestState::Failed);
+            }
         }
 
         return $this->receipt($request, true);
@@ -539,17 +545,24 @@ final readonly class ZarinpalPaymentService
         if ($connection->table('zarinpal_payment_observations')->where('event_key', $eventKey)->exists()) {
             return;
         }
-        $connection->table('zarinpal_payment_observations')->insert([
-            'zarinpal_payment_request_id' => $this->positiveInt($request->id, 'Zarinpal request ID'),
-            'event_key' => $eventKey,
-            'event_type' => $eventType,
-            'provider_status' => $providerStatus,
-            'provider_code' => $providerCode,
-            'candidate_count' => $candidateCount,
-            'occurred_at' => $this->timestamp(),
-            'correlation_id' => $correlationId,
-            'created_at' => $this->timestamp(),
-        ]);
+        try {
+            $connection->table('zarinpal_payment_observations')->insert([
+                'zarinpal_payment_request_id' => $this->positiveInt($request->id, 'Zarinpal request ID'),
+                'event_key' => $eventKey,
+                'event_type' => $eventType,
+                'provider_status' => $providerStatus,
+                'provider_code' => $providerCode,
+                'candidate_count' => $candidateCount,
+                'occurred_at' => $this->timestamp(),
+                'correlation_id' => $correlationId,
+                'created_at' => $this->timestamp(),
+            ]);
+        } catch (QueryException $exception) {
+            if ($connection->table('zarinpal_payment_observations')->where('event_key', $eventKey)->exists()) {
+                return;
+            }
+            throw $exception;
+        }
     }
 
     private function receipt(object $request, bool $replayed): ZarinpalPaymentReceipt
@@ -637,14 +650,12 @@ final readonly class ZarinpalPaymentService
         ], JSON_THROW_ON_ERROR));
     }
 
-    private function assertInitiationIntent(object $intent): void
+    private function assertZarinpalIntentIdentity(object $intent): void
     {
         if ($intent->purpose !== 'purchase'
             || $intent->provider_code !== self::PROVIDER_CODE
             || $intent->currency !== 'IRR'
-            || $this->positiveInt($intent->amount_irr, 'Payment intent amount') < 1
-            || $intent->state !== PaymentIntentState::Created->value
-            || $intent->captured_at !== null) {
+            || $this->positiveInt($intent->amount_irr, 'Payment intent amount') < 1) {
             throw new DomainException('Payment intent is not eligible for Zarinpal initiation.');
         }
     }
