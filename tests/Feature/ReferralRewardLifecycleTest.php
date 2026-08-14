@@ -50,13 +50,13 @@ final class ReferralRewardLifecycleTest extends TestCase
     public function test_mature_reward_releases_once_through_balanced_promotional_wallet_effect(): void
     {
         $fixture = $this->pendingReferralRewardFixture('release');
-        $walletId = $this->createLifecyclePromotionalWallet($fixture['recipient_user_id'], 'release');
         $service = $this->app->make(ReferralRewardLifecycleService::class);
 
         $early = $service->process($fixture['reward_public_id'], $this->lifecycleCorrelation('release-early'));
         self::assertSame(ReferralRewardState::Pending, $early->state);
         self::assertFalse($early->changed);
         self::assertSame(0, DB::table('ledger_transactions')->where('transaction_type', 'referral_reward_release')->count());
+        self::assertSame(0, DB::table('ledger_accounts')->where('owner_user_id', $fixture['recipient_user_id'])->where('wallet_bucket', 'promotional')->count());
 
         $this->clock->value = $this->clock->value->modify('+2 hours');
         $released = $service->process($fixture['reward_public_id'], $this->lifecycleCorrelation('release-due'));
@@ -65,11 +65,17 @@ final class ReferralRewardLifecycleTest extends TestCase
         self::assertNotNull($released->releaseLedgerTransactionId);
         self::assertNull($released->reversalLedgerTransactionId);
         self::assertNull($released->purchaseRefundId);
+        $walletId = (int) DB::table('ledger_accounts')
+            ->where('owner_user_id', $fixture['recipient_user_id'])
+            ->where('wallet_bucket', 'promotional')
+            ->value('id');
+        self::assertGreaterThan(0, $walletId);
 
         $replay = $service->process($fixture['reward_public_id'], $this->lifecycleCorrelation('release-replay'));
         self::assertSame(ReferralRewardState::Released, $replay->state);
         self::assertTrue($replay->replayed);
         self::assertSame($released->releaseLedgerTransactionId, $replay->releaseLedgerTransactionId);
+        self::assertSame(1, DB::table('ledger_accounts')->where('owner_user_id', $fixture['recipient_user_id'])->where('wallet_bucket', 'promotional')->count());
         self::assertSame(1, DB::table('ledger_transactions')->where('transaction_type', 'referral_reward_release')->count());
         self::assertSame(1, DB::table('referral_reward_lifecycle_events')->where('event_type', 'released')->count());
         self::assertSame(1, DB::table('outbox_messages')->where('event_type', 'referral.reward.released')->count());
@@ -106,6 +112,7 @@ final class ReferralRewardLifecycleTest extends TestCase
         self::assertSame($refund->refundId, $receipts[0]->purchaseRefundId);
         self::assertNull($receipts[0]->releaseLedgerTransactionId);
         self::assertNull($receipts[0]->reversalLedgerTransactionId);
+        self::assertSame(0, DB::table('ledger_accounts')->where('owner_user_id', $fixture['recipient_user_id'])->where('wallet_bucket', 'promotional')->count());
         self::assertSame(0, DB::table('ledger_transactions')->whereIn('transaction_type', ['referral_reward_release', 'referral_reward_reversal'])->count());
         self::assertSame(1, DB::table('referral_reward_lifecycle_events')->where('event_type', 'canceled')->count());
         self::assertSame(0, DB::table('outbox_messages')->whereIn('event_type', ['referral.reward.released', 'referral.reward.reversed'])->count());
@@ -121,12 +128,16 @@ final class ReferralRewardLifecycleTest extends TestCase
     public function test_refund_after_release_creates_one_compensating_reversal_and_replays(): void
     {
         $fixture = $this->pendingReferralRewardFixture('reverse');
-        $walletId = $this->createLifecyclePromotionalWallet($fixture['recipient_user_id'], 'reverse');
         $service = $this->app->make(ReferralRewardLifecycleService::class);
         $this->clock->value = $this->clock->value->modify('+2 hours');
 
         $released = $service->process($fixture['reward_public_id'], $this->lifecycleCorrelation('reverse-release'));
         self::assertSame(ReferralRewardState::Released, $released->state);
+        $walletId = (int) DB::table('ledger_accounts')
+            ->where('owner_user_id', $fixture['recipient_user_id'])
+            ->where('wallet_bucket', 'promotional')
+            ->value('id');
+        self::assertGreaterThan(0, $walletId);
         $refund = $this->recordLifecycleRefund($fixture['settlement'], $fixture['provider_code'], 'reverse');
         $reversed = $service->applyPurchaseRefund($refund->publicId, $this->lifecycleCorrelation('reverse-apply'));
 
@@ -152,6 +163,7 @@ final class ReferralRewardLifecycleTest extends TestCase
         self::assertSame(ReferralRewardState::Reversed, $replay[0]->state);
         self::assertTrue($replay[0]->replayed);
         self::assertSame($reversed[0]->reversalLedgerTransactionId, $replay[0]->reversalLedgerTransactionId);
+        self::assertSame(1, DB::table('ledger_accounts')->where('owner_user_id', $fixture['recipient_user_id'])->where('wallet_bucket', 'promotional')->count());
         self::assertSame(2, DB::table('ledger_transactions')->whereIn('transaction_type', ['referral_reward_release', 'referral_reward_reversal'])->count());
     }
 
@@ -164,7 +176,6 @@ final class ReferralRewardLifecycleTest extends TestCase
             'released_at' => now('UTC'),
         ]));
 
-        $this->createLifecyclePromotionalWallet($fixture['recipient_user_id'], 'guards');
         $this->clock->value = $this->clock->value->modify('+2 hours');
         $released = $this->app->make(ReferralRewardLifecycleService::class)->process(
             $fixture['reward_public_id'],
