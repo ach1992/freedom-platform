@@ -62,7 +62,7 @@ jobs:
                     ],
                 ),
             );
-"""
+          """
           new = """            $settledAt = $result->updatedAt ?? $this->clock->now();
             $providerPaymentId = (string) $current->provider_payment_id;
             $amountIrr = $this->positiveInt($current->amount_irr, 'NOWPayments authority amount');
@@ -104,7 +104,7 @@ jobs:
                     ],
                 ),
             );
-"""
+          """
           count = text.count(old)
           if count != 1:
               raise SystemExit(f'Expected one NOWPayments settlement block, found {count}.')
