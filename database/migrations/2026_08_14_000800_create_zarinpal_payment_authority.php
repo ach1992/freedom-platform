@@ -39,7 +39,8 @@ return new class extends Migration
         Schema::create('zarinpal_payment_verifications', function (Blueprint $table): void {
             $table->bigIncrements('id');
             $table->ulid('public_id')->unique();
-            $table->foreignId('zarinpal_payment_request_id')->unique()->constrained('zarinpal_payment_requests')->restrictOnDelete();
+            $table->foreignId('zarinpal_payment_request_id')->unique();
+            $table->foreign('zarinpal_payment_request_id', 'zpv_request_fk')->references('id')->on('zarinpal_payment_requests')->restrictOnDelete();
             $table->foreignId('purchase_settlement_id')->unique()->constrained('purchase_settlements')->restrictOnDelete();
             $table->string('authority', 64)->unique();
             $table->string('provider_ref_id', 64)->unique();
