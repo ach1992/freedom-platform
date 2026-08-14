@@ -243,7 +243,7 @@ BEGIN
       AND quote_row.final_price_irr = NEW.final_price_irr
       AND quote_row.currency = NEW.currency
       AND quote_row.configuration_snapshot_hash = NEW.configuration_snapshot_hash
-      AND BINARY quote_row.configuration_snapshot = BINARY NEW.configuration_snapshot;
+      AND LOWER(SHA2(CAST(NEW.configuration_snapshot AS CHAR), 256)) = LOWER(NEW.configuration_snapshot_hash);
 
     IF valid_quote_count <> 1 THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Order Item must match its immutable source Quote snapshot.';
