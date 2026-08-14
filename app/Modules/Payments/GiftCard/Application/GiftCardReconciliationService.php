@@ -10,7 +10,6 @@ use App\Modules\Payments\GiftCard\Application\Contracts\GiftCardVerificationProv
 use App\Shared\Application\Clock;
 use DomainException;
 use Illuminate\Contracts\Encryption\Encrypter;
-use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Support\Str;
 use RuntimeException;
@@ -78,31 +77,12 @@ final readonly class GiftCardReconciliationService
         }
 
         if ($evidence->outcome === 'success' && $evidence->status === 'redeemed') {
-            if ($authority->state !== 'redeeming') {
-                $this->recordFinding($authority, 'provider_captured_unexpected_local_state', 'critical', $evidence, $correlationId);
-                return $this->receipt($this->authority($submissionPublicId) ?? $authority, false);
-            }
-            $redeemEvidence = new GiftCardProviderEvidence(
-                'redeem',
-                'success',
-                'redeemed',
-                $evidence->providerEventId,
-                $evidence->providerTransactionId,
-                $evidence->faceValue,
-                $evidence->currency,
-                $evidence->brand,
-                $evidence->region,
-                $evidence->occurredAt,
-                $evidence->evidenceHash,
-                $evidence->safeEvidence,
-            );
+            $finding = $authority->state === 'redeeming'
+                ? 'provider_captured_local_redemption_missing'
+                : 'provider_captured_unexpected_local_state';
+            $this->recordFinding($authority, $finding, 'critical', $evidence, $correlationId);
 
-            return $this->redemptions->recordAndSettle(
-                $submissionPublicId,
-                $provider->code(),
-                $redeemEvidence,
-                $correlationId,
-            );
+            return $this->receipt($this->authority($submissionPublicId) ?? $authority, false);
         }
 
         if ($authority->state === 'reserving' && $evidence->outcome === 'success' && $evidence->status === 'reserved') {
