@@ -1,4 +1,4 @@
-name: Phase 0.5 NOWPayments replay correction
+name: Phase 0.5 bounded replay and isolation correction
 
 on:
   push:
@@ -29,91 +29,130 @@ jobs:
           git fetch origin task/8-phase-0.5-completion
           test "$(git rev-parse origin/task/8-phase-0.5-completion)" = "${GITHUB_SHA}"
 
-      - name: Stabilize settlement evidence identity
+      - name: Apply evidence-backed corrections
         shell: bash
         run: |
           set -euo pipefail
           python3 <<'PY'
           from pathlib import Path
 
-          path = Path('app/Modules/Payments/NowPayments/Application/NowPaymentsPaymentService.php')
-          text = path.read_text()
-          old = """            $settledAt = $result->updatedAt ?? $this->clock->now();
-            $eventId = 'status:'.strtolower($result->responseHash);
-            $settlementEvent = new VerifiedPaymentEvent(
-                $eventId,
-                strtolower($result->responseHash),
-                new PaymentEvidence(
-                    ProviderOperationOutcome::Success,
-                    PaymentEvidenceAuthority::Authoritative,
-                    PaymentTransactionStatus::Settled,
-                    (string) $current->provider_payment_id,
-                    $eventId,
-                    Money::irr($this->positiveInt($current->amount_irr, 'NOWPayments authority amount')),
-                    $settledAt,
-                    $settledAt,
-                    strtolower($result->responseHash),
-                    [
-                        'provider_status' => 'finished',
-                        'pricing_policy_code' => self::PRICING_POLICY_CODE,
-                        'rate_source' => (string) $current->rate_source,
-                        'price_currency' => 'USD',
-                        'pay_currency' => (string) $current->pay_currency,
-                    ],
-                ),
-            );
+          def replace_exact(path: str, old: str, new: str, expected: int = 1) -> None:
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != expected:
+                  raise SystemExit(f"{path}: expected {expected} occurrence(s), found {count}: {old!r}")
+              p.write_text(text.replace(old, new))
+
+          # Keep raw responseHash on the observation audit trail, but make common
+          # settlement replay identity depend only on accepted financial facts.
+          service = Path('app/Modules/Payments/NowPayments/Application/NowPaymentsPaymentService.php')
+          text = service.read_text()
+          start_marker = "            $settledAt = $result->updatedAt ?? $this->clock->now();\n"
+          end_marker = "            $captureReceipt = $this->purchaseSettlements->capture(\n"
+          if text.count(start_marker) != 1 or text.count(end_marker) != 1:
+              raise SystemExit('NOWPayments finished-settlement markers are not unique.')
+          start = text.index(start_marker)
+          end = text.index(end_marker, start)
+          new_lines = [
+              "            $settledAt = $result->updatedAt ?? $this->clock->now();",
+              "            $providerPaymentId = (string) $current->provider_payment_id;",
+              "            $amountIrr = $this->positiveInt($current->amount_irr, 'NOWPayments authority amount');",
+              "            $rateSource = (string) $current->rate_source;",
+              "            $payCurrency = (string) $current->pay_currency;",
+              "            $priceAmountUsd = NowPaymentsDecimal::normalize($result->priceAmount, NowPaymentsDecimal::PRICE_PRECISION);",
+              "            $providerPayAmount = NowPaymentsDecimal::normalize($result->payAmount, 18);",
+              "            $settlementEvidenceHash = hash('sha256', json_encode([",
+              "                'provider_code' => self::PROVIDER_CODE,",
+              "                'provider_payment_id' => $providerPaymentId,",
+              "                'amount_irr' => $amountIrr,",
+              "                'currency' => 'IRR',",
+              "                'price_amount_usd' => $priceAmountUsd,",
+              "                'pay_currency' => $payCurrency,",
+              "                'provider_pay_amount' => $providerPayAmount,",
+              "                'rate_source' => $rateSource,",
+              "                'provider_status' => 'finished',",
+              "            ], JSON_THROW_ON_ERROR));",
+              "            $eventId = 'settlement:'.$settlementEvidenceHash;",
+              "            $settlementEvent = new VerifiedPaymentEvent(",
+              "                $eventId,",
+              "                $settlementEvidenceHash,",
+              "                new PaymentEvidence(",
+              "                    ProviderOperationOutcome::Success,",
+              "                    PaymentEvidenceAuthority::Authoritative,",
+              "                    PaymentTransactionStatus::Settled,",
+              "                    $providerPaymentId,",
+              "                    $eventId,",
+              "                    Money::irr($amountIrr),",
+              "                    $settledAt,",
+              "                    $settledAt,",
+              "                    $settlementEvidenceHash,",
+              "                    [",
+              "                        'provider_status' => 'finished',",
+              "                        'pricing_policy_code' => self::PRICING_POLICY_CODE,",
+              "                        'rate_source' => $rateSource,",
+              "                        'price_currency' => 'USD',",
+              "                        'pay_currency' => $payCurrency,",
+              "                    ],",
+              "                ),",
+              "            );",
+              "",
+          ]
+          service.write_text(text[:start] + '\n'.join(new_lines) + text[end:])
+
+          teardown = """        protected function tearDown(): void
+          {
+              try {
+                  if (isset($this->app)) {
+                      $this->truncateDatabaseTables();
+                  }
+              } finally {
+                  parent::tearDown();
+              }
+          }
+
           """
-          new = """            $settledAt = $result->updatedAt ?? $this->clock->now();
-            $providerPaymentId = (string) $current->provider_payment_id;
-            $amountIrr = $this->positiveInt($current->amount_irr, 'NOWPayments authority amount');
-            $rateSource = (string) $current->rate_source;
-            $payCurrency = (string) $current->pay_currency;
-            $priceAmountUsd = NowPaymentsDecimal::normalize($result->priceAmount, NowPaymentsDecimal::PRICE_PRECISION);
-            $providerPayAmount = NowPaymentsDecimal::normalize($result->payAmount, 18);
-            $settlementEvidenceHash = hash('sha256', json_encode([
-                'provider_code' => self::PROVIDER_CODE,
-                'provider_payment_id' => $providerPaymentId,
-                'amount_irr' => $amountIrr,
-                'currency' => 'IRR',
-                'price_amount_usd' => $priceAmountUsd,
-                'pay_currency' => $payCurrency,
-                'provider_pay_amount' => $providerPayAmount,
-                'rate_source' => $rateSource,
-                'provider_status' => 'finished',
-            ], JSON_THROW_ON_ERROR));
-            $eventId = 'settlement:'.$settlementEvidenceHash;
-            $settlementEvent = new VerifiedPaymentEvent(
-                $eventId,
-                $settlementEvidenceHash,
-                new PaymentEvidence(
-                    ProviderOperationOutcome::Success,
-                    PaymentEvidenceAuthority::Authoritative,
-                    PaymentTransactionStatus::Settled,
-                    $providerPaymentId,
-                    $eventId,
-                    Money::irr($amountIrr),
-                    $settledAt,
-                    $settledAt,
-                    $settlementEvidenceHash,
-                    [
-                        'provider_status' => 'finished',
-                        'pricing_policy_code' => self::PRICING_POLICY_CODE,
-                        'rate_source' => $rateSource,
-                        'price_currency' => 'USD',
-                        'pay_currency' => $payCurrency,
-                    ],
-                ),
-            );
+          teardown_targets = {
+              'tests/Feature/CardToCardManualReviewContentionTest.php': '        public function test_two_concurrent_manual_approvals_produce_one_financial_result(): void\n',
+              'tests/Feature/PurchaseRefundContentionVerificationTest.php': '        public function test_concurrent_duplicate_refund_creates_once_and_replays_once(): void\n',
+              'tests/Feature/ZarinpalRequestContentionVerificationTest.php': '        public function test_concurrent_initiation_claims_one_external_request_mutation(): void\n',
+          }
+          for path, anchor in teardown_targets.items():
+              p = Path(path)
+              body = p.read_text()
+              if '        protected function tearDown(): void\n' in body:
+                  raise SystemExit(f'{path}: tearDown already present unexpectedly.')
+              if body.count(anchor) != 1:
+                  raise SystemExit(f'{path}: test anchor is not unique.')
+              p.write_text(body.replace(anchor, teardown + anchor))
+
+          blank_sensitive_reader = """                    $line = fgets($stream);
+                    if ($line !== false) {
+                        return $line;
+                    }
           """
-          count = text.count(old)
-          if count != 1:
-              raise SystemExit(f'Expected one NOWPayments settlement block, found {count}.')
-          path.write_text(text.replace(old, new))
+          blank_tolerant_reader = """                    $line = fgets($stream);
+                    if ($line !== false) {
+                        if (trim($line) === '') {
+                            continue;
+                        }
+
+                        return $line;
+                    }
+          """
+          for path in [
+              'tests/Feature/CardToCardManualReviewContentionTest.php',
+              'tests/Feature/PurchaseRefundContentionVerificationTest.php',
+          ]:
+              replace_exact(path, blank_sensitive_reader, blank_tolerant_reader)
           PY
 
           rm .github/workflows/phase-0.5-nowpayments-fix.yml
           git diff --check
           php -l app/Modules/Payments/NowPayments/Application/NowPaymentsPaymentService.php
+          php -l tests/Feature/CardToCardManualReviewContentionTest.php
+          php -l tests/Feature/PurchaseRefundContentionVerificationTest.php
+          php -l tests/Feature/ZarinpalRequestContentionVerificationTest.php
 
       - name: Commit and push once
         shell: bash
@@ -122,8 +161,8 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
-          git diff --cached --quiet && { echo 'Expected NOWPayments correction, found none.' >&2; exit 1; }
-          git commit -m 'fix(phase-0.5): stabilize NOWPayments settlement replay'
+          git diff --cached --quiet && { echo 'Expected bounded corrections, found none.' >&2; exit 1; }
+          git commit -m 'fix(phase-0.5): stabilize replay and contention isolation'
           git fetch origin task/8-phase-0.5-completion
           test "$(git rev-parse origin/task/8-phase-0.5-completion)" = "${GITHUB_SHA}"
           git push origin HEAD:task/8-phase-0.5-completion
