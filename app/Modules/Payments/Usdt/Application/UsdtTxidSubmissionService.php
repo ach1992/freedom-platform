@@ -129,13 +129,40 @@ final readonly class UsdtTxidSubmissionService
 
                 return $this->receipt($connection, $stored, false);
             }, 3);
+        } catch (RuntimeException $exception) {
+            if ($exception->getMessage() === 'USDT TXID is already bound to another payment authority.') {
+                $duplicate = $this->database->connection()->table('usdt_txid_submissions')->where('txid', $txid)->first(['id']);
+                if ($duplicate !== null) {
+                    $this->recordDuplicateFinding((int) $duplicate->id, $txid, $correlationId);
+                }
+            }
+            throw $exception;
         } catch (QueryException $exception) {
             $duplicate = $this->database->connection()->table('usdt_txid_submissions')->where('txid', $txid)->first(['id']);
             if ($duplicate !== null) {
+                $this->recordDuplicateFinding((int) $duplicate->id, $txid, $correlationId);
                 throw new RuntimeException('USDT TXID is already bound to another payment authority.', 0, $exception);
             }
             throw $exception;
         }
+    }
+
+    private function recordDuplicateFinding(int $submissionId, string $txid, string $correlationId): void
+    {
+        $key = hash('sha256', 'usdt-duplicate-txid'."\0".$submissionId."\0".$txid);
+        $this->database->connection()->table('usdt_reconciliation_findings')->insertOrIgnore([
+            'public_id' => (string) Str::ulid(),
+            'usdt_txid_submission_id' => $submissionId,
+            'finding_key' => $key,
+            'finding_type' => 'duplicate_txid',
+            'severity' => 'high',
+            'provider_code' => null,
+            'txid' => $txid,
+            'provider_event_id' => null,
+            'evidence_hash' => null,
+            'correlation_id' => strtolower($correlationId),
+            'created_at' => $this->timestamp(),
+        ]);
     }
 
     private function receipt(Connection $connection, object $row, bool $replayed): UsdtTxidSubmissionReceipt
