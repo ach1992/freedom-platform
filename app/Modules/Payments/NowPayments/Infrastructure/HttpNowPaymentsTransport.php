@@ -31,6 +31,7 @@ final readonly class HttpNowPaymentsTransport implements NowPaymentsTransport
         'confirming',
         'confirmed',
         'spending',
+        'sending',
         'partially_paid',
         'finished',
         'failed',
@@ -164,17 +165,23 @@ final readonly class HttpNowPaymentsTransport implements NowPaymentsTransport
 
         $paymentId = $this->scalarString($payload['payment_id'] ?? null, 'NOWPayments payment ID', 1, 64);
         $this->assertProviderPaymentId($paymentId);
-        $status = $this->scalarString($payload['payment_status'] ?? null, 'NOWPayments payment status', 3, 32);
+        $status = strtolower($this->scalarString($payload['payment_status'] ?? null, 'NOWPayments payment status', 3, 32));
         if (! in_array($status, self::STATUSES, true)) {
             throw new NowPaymentsTransportException('NOWPayments returned an unknown payment status.', $mutation);
         }
+        // Current NOWPayments help uses `sending`, while older API material uses `spending`.
+        // Keep one stable internal non-final state; neither spelling can authorize settlement.
+        if ($status === 'sending') {
+            $status = 'spending';
+        }
+
         $priceAmount = $this->rawDecimal($body, $payload, 'price_amount', true, NowPaymentsDecimal::PRICE_PRECISION);
         $priceCurrency = strtoupper($this->scalarString($payload['price_currency'] ?? null, 'NOWPayments price currency', 2, 16));
         $payCurrency = strtolower($this->scalarString($payload['pay_currency'] ?? null, 'NOWPayments pay currency', 2, 32));
         $this->assertCurrency($payCurrency, 'NOWPayments pay currency');
         $orderId = $this->scalarString($payload['order_id'] ?? null, 'NOWPayments order ID', 4, 128);
         $payAmount = $this->rawDecimal($body, $payload, 'pay_amount', false, 18);
-        $actuallyPaid = $this->rawDecimal($body, $payload, 'actually_paid', false, 18);
+        $actuallyPaid = $this->rawDecimal($body, $payload, 'actually_paid', false, 18, true);
         $payAddress = $this->nullableScalarString($payload['pay_address'] ?? null, 256);
 
         return new NowPaymentsPaymentResult(
@@ -200,6 +207,7 @@ final readonly class HttpNowPaymentsTransport implements NowPaymentsTransport
         string $field,
         bool $required,
         int $precision,
+        bool $allowZero = false,
     ): ?string {
         $key = preg_quote($field, '/');
         $pattern = '/"'.$key.'"\s*:\s*(?:"([0-9]+(?:\.[0-9]+)?)"|([0-9]+(?:\.[0-9]+)?))(?=\s*[,}])/';
@@ -215,7 +223,23 @@ final readonly class HttpNowPaymentsTransport implements NowPaymentsTransport
         }
         $raw = $matches[0][1] !== '' ? $matches[0][1] : $matches[0][2];
 
-        return NowPaymentsDecimal::normalize($raw, $precision);
+        return $allowZero
+            ? $this->nonNegativeDecimal($raw, $precision)
+            : NowPaymentsDecimal::normalize($raw, $precision);
+    }
+
+    private function nonNegativeDecimal(string $value, int $precision): string
+    {
+        if ($precision < 0 || $precision > 18
+            || preg_match('/\A(?:0|[1-9][0-9]{0,29})(?:\.[0-9]{1,18})?\z/', $value) !== 1) {
+            throw new RuntimeException('NOWPayments non-negative decimal value is invalid.');
+        }
+        $normalized = bcadd($value, '0', $precision);
+        if (bccomp($normalized, '0', $precision) < 0) {
+            throw new RuntimeException('NOWPayments non-negative decimal value is invalid.');
+        }
+
+        return $normalized;
     }
 
     private function nullableProviderDate(mixed $value): ?DateTimeImmutable
