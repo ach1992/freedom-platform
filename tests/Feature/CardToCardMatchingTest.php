@@ -7,6 +7,12 @@ namespace Tests\Feature;
 use App\Modules\Orders\Application\QuotePricingInput;
 use App\Modules\Orders\Application\QuoteService;
 use App\Modules\Orders\Domain\QuoteOverrideSource;
+use App\Modules\Payments\Application\Contracts\PaymentEvidence;
+use App\Modules\Payments\Application\Contracts\PaymentEvidenceAuthority;
+use App\Modules\Payments\Application\Contracts\PaymentTransactionStatus;
+use App\Modules\Payments\Application\Contracts\ProviderOperationOutcome;
+use App\Modules\Payments\Application\Contracts\VerifiedPaymentEvent;
+use App\Modules\Payments\Application\PurchaseRefundService;
 use App\Modules\Payments\CardToCard\Application\CardToCardBankTransactionService;
 use App\Modules\Payments\CardToCard\Application\CardToCardDestinationService;
 use App\Modules\Payments\CardToCard\Application\CardToCardMatchingService;
@@ -15,14 +21,18 @@ use App\Modules\Payments\CardToCard\Application\CardToCardSettlementService;
 use App\Modules\Payments\CardToCard\Application\Contracts\BankTransactionObservation;
 use App\Modules\Payments\CardToCard\Application\Contracts\CardToCardAdjustmentGenerator;
 use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
+use App\Modules\Payments\Domain\PaymentIntentState;
 use App\Shared\Application\Clock;
+use App\Shared\Domain\Money;
 use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
 use DateTimeImmutable;
+use DomainException;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use Tests\TestCase;
 
 final class MatchingFixedCardToCardAdjustmentGenerator implements CardToCardAdjustmentGenerator
@@ -43,7 +53,7 @@ final class CardToCardMatchingClock implements Clock
     }
 }
 
-/** @requirement C2C-001 C2C-002 C2C-003 C2C-004 C2C-005 PAY-002 PAY-003 DAT-002 DAT-003 DAT-004 SEC-002 QUA-001 QUA-004 */
+/** @requirement C2C-001 C2C-002 C2C-003 C2C-004 C2C-005 PAY-002 PAY-003 WAL-004 DAT-002 DAT-003 DAT-004 SEC-002 QUA-001 QUA-004 */
 final class CardToCardMatchingTest extends TestCase
 {
     use AgentPricingQuoteIntegrationTestSupport;
@@ -146,6 +156,91 @@ final class CardToCardMatchingTest extends TestCase
         self::assertSame($captured->purchaseSettlementId, $replay->purchaseSettlementId);
         self::assertSame(1, DB::table('purchase_settlements')->where('payment_intent_id', DB::table('payment_intents')->where('public_id', $payment->paymentIntent->intentPublicId)->value('id'))->count());
         self::assertSame(1, DB::table('payment_provider_transactions')->where('provider_code', 'card_to_card')->count());
+    }
+
+    public function test_c2c_refund_cap_excludes_non_refundable_exact_adjustment_in_application_and_database(): void
+    {
+        $payment = $this->payment('refund-cap');
+        $bank = $this->app->make(CardToCardBankTransactionService::class)->ingest(
+            'fake',
+            $this->observation('refund-cap', $payment->payableAmountIrr, $this->clock->value->modify('+2 minutes')),
+            'fake',
+            $this->correlation('bank-refund-cap'),
+        );
+        $match = $this->app->make(CardToCardMatchingService::class)->match($bank->publicId, $this->correlation('match-refund-cap'));
+        self::assertNotNull($match->matchPublicId);
+        $captured = $this->app->make(CardToCardSettlementService::class)->capture(
+            $match->matchPublicId,
+            $this->correlation('capture-refund-cap'),
+        );
+
+        $this->clock->value = $this->clock->value->modify('+5 minutes');
+        $refunds = $this->app->make(PurchaseRefundService::class);
+        try {
+            $refunds->record(
+                'c2c.refund.over-cap',
+                $captured->purchaseSettlementPublicId,
+                'card_to_card',
+                $this->refundEvent('over-cap', $payment->payableAmountIrr, $this->clock->value),
+                $this->correlation('refund-over-cap'),
+            );
+            self::fail('Expected C2C refund to reject the non-refundable exact adjustment.');
+        } catch (DomainException $exception) {
+            self::assertStringContainsString('refundable captured amount', $exception->getMessage());
+        }
+        self::assertSame(0, DB::table('purchase_refunds')->count());
+
+        $settlement = DB::table('purchase_settlements')->where('id', $captured->purchaseSettlementId)->first();
+        self::assertNotNull($settlement);
+        $providerEventId = (int) DB::table('payment_provider_events')->insertGetId([
+            'payment_intent_id' => $settlement->payment_intent_id,
+            'provider_code' => 'card_to_card',
+            'provider_event_id' => 'db-refund-event-over-cap',
+            'event_payload_hash' => hash('sha256', 'db-refund-event-over-cap'),
+            'provider_transaction_id' => 'db-refund-tx-over-cap',
+            'evidence_payload_hash' => hash('sha256', 'db-refund-evidence-over-cap'),
+            'evidence_authority' => 'authoritative',
+            'transaction_status' => 'refunded',
+            'amount_irr' => $payment->baseAmountIrr + 1,
+            'currency' => 'IRR',
+            'occurred_at' => $this->clock->value->format('Y-m-d H:i:s.u'),
+            'settled_at' => null,
+            'safe_evidence' => '{}',
+            'created_at' => $this->clock->value->format('Y-m-d H:i:s.u'),
+        ]);
+        $this->assertQueryRejected(static fn (): bool => DB::table('purchase_refunds')->insert([
+            'public_id' => (string) Str::ulid(),
+            'refund_key' => 'c2c.refund.db-over-cap',
+            'payload_hash' => hash('sha256', 'c2c.refund.db-over-cap'),
+            'purchase_settlement_id' => $settlement->id,
+            'payment_intent_id' => $settlement->payment_intent_id,
+            'provider_event_row_id' => $providerEventId,
+            'user_id' => $settlement->user_id,
+            'provider_code' => 'card_to_card',
+            'provider_refund_id' => 'db-refund-tx-over-cap',
+            'evidence_payload_hash' => hash('sha256', 'db-refund-evidence-over-cap'),
+            'amount_irr' => $payment->baseAmountIrr + 1,
+            'cumulative_refunded_irr' => $payment->baseAmountIrr + 1,
+            'currency' => 'IRR',
+            'resulting_payment_state' => 'refunded',
+            'refunded_at' => $this->clock->value->format('Y-m-d H:i:s.u'),
+            'correlation_id' => $this->correlation('db-refund-over-cap'),
+            'created_at' => $this->clock->value->format('Y-m-d H:i:s.u'),
+        ]));
+        self::assertSame(0, DB::table('purchase_refunds')->count());
+
+        $refund = $refunds->record(
+            'c2c.refund.full-base',
+            $captured->purchaseSettlementPublicId,
+            'card_to_card',
+            $this->refundEvent('full-base', $payment->baseAmountIrr, $this->clock->value->modify('+1 minute')),
+            $this->correlation('refund-full-base'),
+        );
+        self::assertSame($payment->baseAmountIrr, $refund->amount->amount());
+        self::assertSame($payment->baseAmountIrr, $refund->cumulativeRefunded->amount());
+        self::assertSame(PaymentIntentState::Refunded, $refund->state);
+        self::assertSame('refunded', DB::table('payment_intents')->where('public_id', $payment->paymentIntent->intentPublicId)->value('state'));
+        self::assertSame($payment->baseAmountIrr, (int) DB::table('purchase_refunds')->sum('amount_irr'));
     }
 
     public function test_database_rejects_direct_match_capture_without_authoritative_purchase_settlement(): void
@@ -260,6 +355,29 @@ final class CardToCardMatchingTest extends TestCase
             null,
             'reference-'.$suffix,
             hash('sha256', 'fake-bank-evidence:'.$suffix),
+        );
+    }
+
+    private function refundEvent(string $suffix, int $amountIrr, DateTimeImmutable $occurredAt): VerifiedPaymentEvent
+    {
+        $eventId = 'refund-event-'.$suffix;
+        $payloadHash = hash('sha256', 'c2c-refund-evidence:'.$suffix);
+
+        return new VerifiedPaymentEvent(
+            $eventId,
+            $payloadHash,
+            new PaymentEvidence(
+                ProviderOperationOutcome::Success,
+                PaymentEvidenceAuthority::Authoritative,
+                PaymentTransactionStatus::Refunded,
+                'refund-transaction-'.$suffix,
+                $eventId,
+                Money::irr($amountIrr),
+                $occurredAt,
+                null,
+                $payloadHash,
+                ['source' => 'manual_external'],
+            ),
         );
     }
 
