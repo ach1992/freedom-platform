@@ -267,7 +267,7 @@ final class GiftCardPaymentFlowTest extends TestCase
             'user_id' => $user,
             'quote_public_id' => $quote->quotePublicId,
             'eligibility_public_id' => $decision->publicId,
-            'amount' => $quote->amount->amount(),
+            'amount' => $quote->finalPriceIrr,
         ];
     }
 
