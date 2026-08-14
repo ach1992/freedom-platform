@@ -18,8 +18,8 @@ return new class extends Migration
 
     public function down(): void
     {
-        if (DB::table('orders')->where('source_type', '<>', 'purchase')->exists()) {
-            throw new RuntimeException('Cannot narrow Order source vocabulary while non-purchase Orders exist.');
+        if (DB::table('orders')->exists()) {
+            throw new RuntimeException('Cannot roll back Order source/Quote hardening while Orders exist.');
         }
 
         DB::statement('ALTER TABLE orders DROP CONSTRAINT orders_source_quote_unique');
