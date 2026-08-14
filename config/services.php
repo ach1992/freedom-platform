@@ -37,4 +37,15 @@ return [
         ],
     ],
 
+    'zarinpal' => [
+        'enabled' => env('ZARINPAL_ENABLED', false),
+        'merchant_id' => env('ZARINPAL_MERCHANT_ID'),
+        'callback_url' => env(
+            'ZARINPAL_CALLBACK_URL',
+            rtrim((string) env('APP_URL', 'http://localhost:8000'), '/').'/payments/zarinpal/callback',
+        ),
+        'connect_timeout_seconds' => env('ZARINPAL_CONNECT_TIMEOUT_SECONDS', 5),
+        'timeout_seconds' => env('ZARINPAL_TIMEOUT_SECONDS', 15),
+    ],
+
 ];
