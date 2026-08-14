@@ -110,6 +110,9 @@ final readonly class WallexUsdtRateProvider implements UsdtRateProvider
             throw new RuntimeException('Wallex USDTTMN price exceeds supported fixed precision.');
         }
         $canonicalToman = $matches[1].($fraction === '' ? '' : '.'.$fraction);
+        if (! is_numeric($canonicalToman)) {
+            throw new RuntimeException('Wallex USDTTMN price is invalid.');
+        }
         $irr = bcmul($canonicalToman, '10', 8);
 
         return UsdtDecimal::rate($irr);

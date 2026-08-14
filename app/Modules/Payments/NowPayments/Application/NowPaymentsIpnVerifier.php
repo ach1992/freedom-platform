@@ -48,6 +48,7 @@ final readonly class NowPaymentsIpnVerifier
         return $payload;
     }
 
+    /** @param array<string, mixed> $payload */
     public function paymentId(array $payload): string
     {
         $value = $payload['payment_id'] ?? null;

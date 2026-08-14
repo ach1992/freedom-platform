@@ -41,7 +41,11 @@ return new class extends Migration
 
     private function createReservationInsertGuard(string $intentState): void
     {
-        $state = str_replace("'", "''", $intentState);
+        $state = match ($intentState) {
+            'awaiting_user_action' => 'awaiting_user_action',
+            'created' => 'created',
+            default => throw new RuntimeException('Unsupported C2C payment intent state.'),
+        };
         DB::unprepared(<<<SQL
 CREATE TRIGGER c2c_amount_reservations_insert_guard
 BEFORE INSERT ON c2c_amount_reservations
@@ -80,7 +84,11 @@ SQL);
 
     private function createMatchInsertGuard(string $intentState): void
     {
-        $state = str_replace("'", "''", $intentState);
+        $state = match ($intentState) {
+            'awaiting_user_action' => 'awaiting_user_action',
+            'created' => 'created',
+            default => throw new RuntimeException('Unsupported C2C payment intent state.'),
+        };
         DB::unprepared(<<<SQL
 CREATE TRIGGER c2c_transaction_matches_insert_guard
 BEFORE INSERT ON c2c_transaction_matches

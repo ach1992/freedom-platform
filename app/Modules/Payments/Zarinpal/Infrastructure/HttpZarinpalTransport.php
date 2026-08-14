@@ -153,6 +153,7 @@ final readonly class HttpZarinpalTransport implements ZarinpalTransport
         return $candidates;
     }
 
+    /** @param array<string, mixed> $payload */
     private function post(string $url, array $payload): ?Response
     {
         try {

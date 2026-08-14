@@ -99,7 +99,7 @@ final readonly class NowPaymentsIpnIngressService
                     'created_at' => $this->timestamp(),
                 ]);
             } catch (QueryException $exception) {
-                if (! $transaction->table('nowpayments_payment_observations')->where('event_key', $eventKey)->exists()) {
+                if ($transaction->table('nowpayments_payment_observations')->where('event_key', $eventKey)->first(['id']) === null) {
                     throw $exception;
                 }
             }

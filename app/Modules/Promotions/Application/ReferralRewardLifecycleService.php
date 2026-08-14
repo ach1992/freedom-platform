@@ -17,6 +17,7 @@ use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Support\Str;
 use RuntimeException;
+use stdClass;
 
 final readonly class ReferralRewardLifecycleService
 {
@@ -73,7 +74,7 @@ final readonly class ReferralRewardLifecycleService
         $this->assertToken($correlationId, 'Referral reward refund correlation ID', 8, 64);
 
         return $this->database->connection()->transaction(function (Connection $connection) use ($purchaseRefundPublicId, $correlationId): array {
-            /** @var object{id:int|string,public_id:string,purchase_settlement_id:int|string}|null $refund */
+            /** @var stdClass|null $refund */
             $refund = $connection->table('purchase_refunds')
                 ->where('public_id', $purchaseRefundPublicId)
                 ->first(['id', 'public_id', 'purchase_settlement_id']);
@@ -84,7 +85,7 @@ final readonly class ReferralRewardLifecycleService
             $settlementId = $this->positiveInt($refund->purchase_settlement_id, 'Purchase refund settlement ID');
             $this->lockSettlement($connection, $settlementId);
 
-            /** @var list<object> $rewards */
+            /** @var list<stdClass> $rewards */
             $rewards = $connection->table('referral_rewards')
                 ->where('purchase_settlement_id', $settlementId)
                 ->orderBy('id')
@@ -109,7 +110,7 @@ final readonly class ReferralRewardLifecycleService
 
     private function releaseLocked(
         Connection $connection,
-        object $reward,
+        stdClass $reward,
         string $correlationId,
     ): ReferralRewardLifecycleReceipt {
         if ($this->state($reward->state) !== ReferralRewardState::Pending) {
@@ -173,8 +174,8 @@ final readonly class ReferralRewardLifecycleService
 
     private function applyRefundToLockedReward(
         Connection $connection,
-        object $reward,
-        object $refund,
+        stdClass $reward,
+        stdClass $refund,
         string $correlationId,
     ): ReferralRewardLifecycleReceipt {
         $state = $this->state($reward->state);
@@ -192,8 +193,8 @@ final readonly class ReferralRewardLifecycleService
 
     private function cancelLocked(
         Connection $connection,
-        object $reward,
-        object $refund,
+        stdClass $reward,
+        stdClass $refund,
         string $correlationId,
     ): ReferralRewardLifecycleReceipt {
         $rewardId = $this->positiveInt($reward->id, 'Referral reward ID');
@@ -231,8 +232,8 @@ final readonly class ReferralRewardLifecycleService
 
     private function reverseLocked(
         Connection $connection,
-        object $reward,
-        object $refund,
+        stdClass $reward,
+        stdClass $refund,
         string $correlationId,
     ): ReferralRewardLifecycleReceipt {
         $releaseLedgerId = $this->positiveInt($reward->release_ledger_transaction_id, 'Referral reward release ledger transaction ID');
@@ -294,7 +295,7 @@ final readonly class ReferralRewardLifecycleService
         return $this->receipt($current, true, $ledger->replayed);
     }
 
-    private function lockRewardByPublicId(Connection $connection, string $rewardPublicId): object
+    private function lockRewardByPublicId(Connection $connection, string $rewardPublicId): stdClass
     {
         /** @var object{id:int|string,purchase_settlement_id:int|string}|null $candidate */
         $candidate = $connection->table('referral_rewards')
@@ -308,7 +309,7 @@ final readonly class ReferralRewardLifecycleService
             $connection,
             $this->positiveInt($candidate->purchase_settlement_id, 'Referral reward purchase settlement ID'),
         );
-        /** @var object|null $reward */
+        /** @var stdClass|null $reward */
         $reward = $connection->table('referral_rewards')
             ->where('id', $this->positiveInt($candidate->id, 'Referral reward ID'))
             ->lockForUpdate()
@@ -331,7 +332,7 @@ final readonly class ReferralRewardLifecycleService
         }
     }
 
-    private function firstRefundForSettlement(Connection $connection, int $settlementId): ?object
+    private function firstRefundForSettlement(Connection $connection, int $settlementId): ?stdClass
     {
         return $connection->table('purchase_refunds')
             ->where('purchase_settlement_id', $settlementId)
@@ -339,7 +340,7 @@ final readonly class ReferralRewardLifecycleService
             ->first(['id', 'public_id', 'purchase_settlement_id']);
     }
 
-    private function rewardById(Connection $connection, int $rewardId): ?object
+    private function rewardById(Connection $connection, int $rewardId): ?stdClass
     {
         return $connection->table('referral_rewards')->where('id', $rewardId)->first($this->rewardColumns());
     }
@@ -355,7 +356,7 @@ final readonly class ReferralRewardLifecycleService
         ];
     }
 
-    private function receipt(object $reward, bool $changed, bool $replayed): ReferralRewardLifecycleReceipt
+    private function receipt(stdClass $reward, bool $changed, bool $replayed): ReferralRewardLifecycleReceipt
     {
         return new ReferralRewardLifecycleReceipt(
             $this->positiveInt($reward->id, 'Referral reward ID'),

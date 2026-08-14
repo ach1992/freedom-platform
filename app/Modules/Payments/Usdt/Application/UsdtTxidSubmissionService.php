@@ -131,18 +131,20 @@ final readonly class UsdtTxidSubmissionService
                 return $this->receipt($connection, $stored, false);
             }, 3);
         } catch (RuntimeException $exception) {
+            if ($exception instanceof QueryException) {
+                $duplicate = $this->database->connection()->table('usdt_txid_submissions')->where('txid', $txid)->first(['id']);
+                if ($duplicate !== null) {
+                    $this->recordDuplicateFinding((int) $duplicate->id, $txid, $correlationId);
+                    throw new RuntimeException('USDT TXID is already bound to another payment authority.', 0, $exception);
+                }
+                throw $exception;
+            }
+
             if ($exception->getMessage() === 'USDT TXID is already bound to another payment authority.') {
                 $duplicate = $this->database->connection()->table('usdt_txid_submissions')->where('txid', $txid)->first(['id']);
                 if ($duplicate !== null) {
                     $this->recordDuplicateFinding((int) $duplicate->id, $txid, $correlationId);
                 }
-            }
-            throw $exception;
-        } catch (QueryException $exception) {
-            $duplicate = $this->database->connection()->table('usdt_txid_submissions')->where('txid', $txid)->first(['id']);
-            if ($duplicate !== null) {
-                $this->recordDuplicateFinding((int) $duplicate->id, $txid, $correlationId);
-                throw new RuntimeException('USDT TXID is already bound to another payment authority.', 0, $exception);
             }
             throw $exception;
         }

@@ -8,7 +8,7 @@ use App\Modules\Payments\CardToCard\Application\Contracts\BankTransactionObserva
 use App\Shared\Application\Clock;
 use DateTimeZone;
 use DomainException;
-use Illuminate\Contracts\Encryption\Encrypter;
+use Illuminate\Contracts\Encryption\StringEncrypter;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\QueryException;
@@ -24,7 +24,7 @@ final readonly class CardToCardBankTransactionService
 
     public function __construct(
         private DatabaseManager $database,
-        private Encrypter $encrypter,
+        private StringEncrypter $encrypter,
         private Clock $clock,
     ) {}
 

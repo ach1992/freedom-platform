@@ -19,6 +19,7 @@ use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Str;
 use RuntimeException;
+use stdClass;
 
 final readonly class ReferralRewardAccrualService
 {
@@ -243,7 +244,7 @@ final readonly class ReferralRewardAccrualService
         int $relationshipId,
         int $settlementId,
         int $lockedSettlementId,
-    ): ?object {
+    ): ?stdClass {
         $settledAtString = $this->databaseDateTime($settledAt);
         $latestByRule = [];
         $rows = $connection->table('pricing_rule_versions as v')
@@ -316,8 +317,8 @@ final readonly class ReferralRewardAccrualService
         if ($qualified === []) {
             return null;
         }
-        $highestPriority = max(array_map(static fn (object $row): int => (int) $row->priority, $qualified));
-        $winners = array_values(array_filter($qualified, static fn (object $row): bool => (int) $row->priority === $highestPriority));
+        $highestPriority = max(array_map(static fn (stdClass $row): int => (int) $row->priority, $qualified));
+        $winners = array_values(array_filter($qualified, static fn (stdClass $row): bool => (int) $row->priority === $highestPriority));
         if (count($winners) !== 1) {
             throw new RuntimeException('Referral reward rule resolution is ambiguous.');
         }
@@ -325,7 +326,7 @@ final readonly class ReferralRewardAccrualService
         return $winners[0];
     }
 
-    private function capacityAvailable(Connection $connection, object $rule, int $referredUserId, int $relationshipId): bool
+    private function capacityAvailable(Connection $connection, stdClass $rule, int $referredUserId, int $relationshipId): bool
     {
         $versionId = $this->positiveInt($rule->id, 'Referral rule version ID');
         if ($rule->total_use_limit !== null
@@ -345,7 +346,7 @@ final readonly class ReferralRewardAccrualService
         return true;
     }
 
-    private function calculateReward(object $rule, int $amountIrr): int
+    private function calculateReward(stdClass $rule, int $amountIrr): int
     {
         $type = PromotionDiscountType::tryFrom($rule->discount_type)
             ?? throw new RuntimeException('Stored referral reward calculation type is invalid.');
@@ -386,7 +387,7 @@ final readonly class ReferralRewardAccrualService
             || ($audience === 'agents' && $accountType === 'agent');
     }
 
-    private function accrualBySettlementPublicId(Connection $connection, string $publicId, bool $lock = false): ?object
+    private function accrualBySettlementPublicId(Connection $connection, string $publicId, bool $lock = false): ?stdClass
     {
         $query = $connection->table('referral_reward_accruals')->where('purchase_settlement_public_id', $publicId);
         if ($lock) {
@@ -398,14 +399,14 @@ final readonly class ReferralRewardAccrualService
         ]);
     }
 
-    private function receipt(Connection $connection, object $row, bool $replayed): ReferralRewardAccrualReceipt
+    private function receipt(Connection $connection, stdClass $row, bool $replayed): ReferralRewardAccrualReceipt
     {
-        $rewardPublicIds = $connection->table('referral_rewards')
+        $rewardPublicIds = array_values($connection->table('referral_rewards')
             ->where('accrual_id', $this->positiveInt($row->id, 'Referral reward accrual ID'))
             ->orderBy('recipient_role')
             ->pluck('public_id')
             ->map(static fn (mixed $value): string => (string) $value)
-            ->all();
+            ->all());
 
         return new ReferralRewardAccrualReceipt(
             $this->positiveInt($row->id, 'Referral reward accrual ID'),

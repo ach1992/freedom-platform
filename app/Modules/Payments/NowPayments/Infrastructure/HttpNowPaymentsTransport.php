@@ -235,6 +235,9 @@ final readonly class HttpNowPaymentsTransport implements NowPaymentsTransport
             || preg_match('/\A(?:0|[1-9][0-9]{0,29})(?:\.[0-9]{1,18})?\z/', $value) !== 1) {
             throw new RuntimeException('NOWPayments non-negative decimal value is invalid.');
         }
+        if (! is_numeric($value)) {
+            throw new RuntimeException('NOWPayments non-negative decimal value is invalid.');
+        }
         $normalized = bcadd($value, '0', $precision);
         if (bccomp($normalized, '0', $precision) < 0) {
             throw new RuntimeException('NOWPayments non-negative decimal value is invalid.');

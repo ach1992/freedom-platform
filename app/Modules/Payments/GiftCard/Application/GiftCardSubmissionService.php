@@ -8,7 +8,7 @@ use App\Modules\Payments\Application\PurchasePaymentIntentService;
 use App\Modules\Payments\Domain\PaymentIntentState;
 use App\Shared\Application\Clock;
 use DomainException;
-use Illuminate\Contracts\Encryption\Encrypter;
+use Illuminate\Contracts\Encryption\StringEncrypter;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\QueryException;
@@ -24,7 +24,7 @@ final readonly class GiftCardSubmissionService
     public function __construct(
         private DatabaseManager $database,
         private PurchasePaymentIntentService $purchaseIntents,
-        private Encrypter $encrypter,
+        private StringEncrypter $encrypter,
         private Clock $clock,
     ) {}
 

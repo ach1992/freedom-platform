@@ -9,7 +9,7 @@ use App\Modules\Payments\GiftCard\Application\Contracts\GiftCardProviderRequest;
 use App\Modules\Payments\GiftCard\Application\Contracts\GiftCardVerificationProvider;
 use App\Shared\Application\Clock;
 use DomainException;
-use Illuminate\Contracts\Encryption\Encrypter;
+use Illuminate\Contracts\Encryption\StringEncrypter;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Support\Str;
 use RuntimeException;
@@ -20,7 +20,7 @@ final readonly class GiftCardReconciliationService
 {
     public function __construct(
         private DatabaseManager $database,
-        private Encrypter $encrypter,
+        private StringEncrypter $encrypter,
         private GiftCardRedemptionService $redemptions,
         private Clock $clock,
     ) {}

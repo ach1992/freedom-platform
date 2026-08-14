@@ -34,7 +34,9 @@ final class NowPaymentsDecimal
             || preg_match('/\A(?:0|[1-9][0-9]{0,29})(?:\.[0-9]{1,18})?\z/', $value) !== 1) {
             throw new DomainException('NOWPayments decimal value is invalid.');
         }
-        /** @var numeric-string $value */
+        if (! is_numeric($value)) {
+            throw new DomainException('NOWPayments decimal value is invalid.');
+        }
         $normalized = bcadd($value, '0', $precision);
         if (bccomp($normalized, '0', $precision) <= 0) {
             throw new DomainException('NOWPayments decimal value must be positive.');
@@ -54,7 +56,9 @@ final class NowPaymentsDecimal
         $normalized = self::normalize($value, $precision);
         $trimmed = rtrim(rtrim($normalized, '0'), '.');
         $result = $trimmed === '' ? '0' : $trimmed;
-        /** @var numeric-string $result */
+        if (! is_numeric($result)) {
+            throw new DomainException('NOWPayments decimal JSON value is invalid.');
+        }
 
         return $result;
     }
