@@ -7,6 +7,7 @@ namespace App\Modules\Payments\Usdt\Infrastructure;
 use App\Modules\Payments\Usdt\Application\Contracts\BlockchainTransactionVerificationProvider;
 use App\Modules\Payments\Usdt\Application\Contracts\UsdtBlockchainVerificationEvidence;
 use App\Modules\Payments\Usdt\Application\Contracts\UsdtBlockchainVerificationRequest;
+use App\Modules\Payments\Usdt\Application\UsdtTokenAmount;
 use Closure;
 use DateTimeImmutable;
 use DateTimeZone;
@@ -143,6 +144,8 @@ final class GenericRestBlockchainTransactionVerificationProvider implements Bloc
         if (preg_match('/\A0x[a-f0-9]{64}\z/', $request->txid) !== 1) {
             throw new DomainException('Generic chain lookup TXID is invalid.');
         }
+        UsdtTokenAmount::normalizeBaseUnits($request->expectedAmountBaseUnits);
+
         $addresses = ($this->resolver)($this->host);
         if (! is_array($addresses) || $addresses === []) {
             throw new RuntimeException('Generic chain host did not resolve to a usable address.');
@@ -212,7 +215,7 @@ final class GenericRestBlockchainTransactionVerificationProvider implements Bloc
         $tokenContract = $this->optionalAddress($decoded, 'token_contract');
         $destination = $this->optionalAddress($decoded, 'destination_address');
         $chainId = $this->optionalInteger($decoded, 'chain_id', 1, 1_000_000);
-        $amountBaseUnits = $this->optionalInteger($decoded, 'amount_base_units', 1, PHP_INT_MAX);
+        $amountBaseUnits = $this->optionalUnsignedDecimalString($decoded, 'amount_base_units');
         $tokenDecimals = $this->optionalInteger($decoded, 'token_decimals', 0, 36);
         $confirmations = $this->optionalInteger($decoded, 'confirmations', 0, 10_000_000);
         $blockNumber = $this->optionalInteger($decoded, 'block_number', 0, PHP_INT_MAX);
@@ -304,6 +307,30 @@ final class GenericRestBlockchainTransactionVerificationProvider implements Bloc
             throw new RuntimeException('Generic chain integer field '.$canonical.' is out of range.');
         }
         return $integer;
+    }
+
+    /** @param array<string,mixed> $row */
+    private function optionalUnsignedDecimalString(array $row, string $canonical): ?string
+    {
+        $field = $this->fieldMap[$canonical] ?? null;
+        if ($field === null || ! array_key_exists($field, $row) || $row[$field] === null || $row[$field] === '') {
+            return null;
+        }
+        $value = $row[$field];
+        if (is_int($value)) {
+            if ($value < 1) {
+                throw new RuntimeException('Generic chain raw amount must be positive.');
+            }
+            return (string) $value;
+        }
+        if (! is_string($value)) {
+            throw new RuntimeException('Generic chain raw amount must be an integer string, never a float.');
+        }
+        try {
+            return UsdtTokenAmount::normalizeBaseUnits($value);
+        } catch (DomainException $exception) {
+            throw new RuntimeException('Generic chain raw amount is invalid.', 0, $exception);
+        }
     }
 
     /** @param array<string,mixed> $row */
