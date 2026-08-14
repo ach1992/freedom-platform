@@ -108,25 +108,30 @@ final class InitialProvisioningQueueAuthorityTest extends TestCase
         self::assertSame(PaymentIntentState::Captured->value, DB::table('payment_intents')->where('public_id', $settlement->intentPublicId)->value('state'));
     }
 
-    public function test_authoritative_refund_before_queue_fails_closed_without_any_provisioning_effect(): void
+    public function test_refund_lifecycle_states_before_queue_fail_closed_without_any_provisioning_effect(): void
     {
-        [$settlement, $order] = $this->createPaidOrder('refund-before');
-        $refund = $this->recordFullRefund($settlement, 'refund-before');
-        self::assertSame(PaymentIntentState::Refunded, $refund->state);
+        [$pendingSettlement, $pendingOrder] = $this->createPaidOrder('refund-pending-before');
+        $pendingAmount = $this->partialRefundAmount($pendingSettlement);
+        $this->placeAuthoritativeRefundPending($pendingSettlement, 'refund-pending-before', $pendingAmount);
+        self::assertSame(
+            PaymentIntentState::RefundPending->value,
+            DB::table('payment_intents')->where('public_id', $pendingSettlement->intentPublicId)->value('state'),
+        );
+        $this->assertQueueCreationFailsClosed($pendingOrder, 'refund-pending');
 
-        $this->expectException(DomainException::class);
-        try {
-            $this->app->make(InitialProvisioningQueueService::class)->queueInitial(
-                $order->orderPublicId,
-                $this->purchaseOrderCorrelation('queue-refunded'),
-            );
-        } finally {
-            self::assertSame(0, DB::table('service_subscriptions')->count());
-            self::assertSame(0, DB::table('provisioning_operations')->count());
-            self::assertSame(0, DB::table('outbox_messages')->where('event_type', 'provisioning.initial.requested')->count());
-            self::assertSame(OrderState::Paid->value, DB::table('orders')->where('id', $order->orderId)->value('state'));
-            self::assertSame(1, (int) DB::table('orders')->where('id', $order->orderId)->value('state_version'));
-        }
+        [$partialSettlement, $partialOrder] = $this->createPaidOrder('partial-refund-before');
+        $partialRefund = $this->recordRefund(
+            $partialSettlement,
+            'partial-refund-before',
+            $this->partialRefundAmount($partialSettlement),
+        );
+        self::assertSame(PaymentIntentState::PartiallyRefunded, $partialRefund->state);
+        $this->assertQueueCreationFailsClosed($partialOrder, 'partially-refunded');
+
+        [$refundedSettlement, $refundedOrder] = $this->createPaidOrder('refund-before');
+        $refund = $this->recordFullRefund($refundedSettlement, 'refund-before');
+        self::assertSame(PaymentIntentState::Refunded, $refund->state);
+        $this->assertQueueCreationFailsClosed($refundedOrder, 'refunded');
     }
 
     public function test_exact_replay_after_later_refund_returns_existing_queue_identity_but_creates_no_new_effect(): void
@@ -266,8 +271,133 @@ final class InitialProvisioningQueueAuthorityTest extends TestCase
         return [$settlement, $order];
     }
 
+    private function assertQueueCreationFailsClosed(PurchaseOrderReceipt $order, string $suffix): void
+    {
+        try {
+            $this->app->make(InitialProvisioningQueueService::class)->queueInitial(
+                $order->orderPublicId,
+                $this->purchaseOrderCorrelation('queue-'.$suffix),
+            );
+            self::fail('Refunded purchase Order must not create initial provisioning authority.');
+        } catch (DomainException) {
+            self::assertSame(0, DB::table('service_subscriptions')->count());
+            self::assertSame(0, DB::table('provisioning_operations')->count());
+            self::assertSame(0, DB::table('outbox_messages')->where('event_type', 'provisioning.initial.requested')->count());
+            self::assertSame(OrderState::Paid->value, DB::table('orders')->where('id', $order->orderId)->value('state'));
+            self::assertSame(1, (int) DB::table('orders')->where('id', $order->orderId)->value('state_version'));
+        }
+    }
+
+    private function partialRefundAmount(PurchaseSettlementReceipt $settlement): int
+    {
+        $total = $settlement->amount->amount();
+        self::assertGreaterThan(1, $total);
+
+        return intdiv($total, 2);
+    }
+
+    private function placeAuthoritativeRefundPending(
+        PurchaseSettlementReceipt $settlement,
+        string $suffix,
+        int $amountIrr,
+    ): void {
+        $settlementRow = DB::table('purchase_settlements')
+            ->where('public_id', $settlement->settlementPublicId)
+            ->first(['id', 'payment_intent_id', 'user_id']);
+        self::assertNotNull($settlementRow);
+
+        $occurredAt = $this->purchaseOrderClock->value->modify('+5 minutes');
+        $occurredAtDatabase = $occurredAt->format('Y-m-d H:i:s.u');
+        $providerEventId = 'evt-provisioning-refund-'.$suffix;
+        $providerRefundId = 'refund-txn-'.$suffix;
+        $eventPayloadHash = hash('sha256', 'provisioning-refund-event:'.$suffix);
+        $evidencePayloadHash = hash('sha256', 'provisioning-refund-evidence:'.$suffix);
+        $correlationId = $this->purchaseOrderCorrelation('refund-'.$suffix);
+        $currency = $settlement->amount->currency();
+        $intentId = (int) $settlementRow->payment_intent_id;
+
+        $providerEventRowId = (int) DB::table('payment_provider_events')->insertGetId([
+            'payment_intent_id' => $intentId,
+            'provider_code' => $settlement->providerCode,
+            'provider_event_id' => $providerEventId,
+            'event_payload_hash' => $eventPayloadHash,
+            'provider_transaction_id' => $providerRefundId,
+            'evidence_payload_hash' => $evidencePayloadHash,
+            'evidence_authority' => PaymentEvidenceAuthority::Authoritative->value,
+            'transaction_status' => PaymentTransactionStatus::Refunded->value,
+            'amount_irr' => $amountIrr,
+            'currency' => $currency,
+            'occurred_at' => $occurredAtDatabase,
+            'settled_at' => $occurredAtDatabase,
+            'safe_evidence' => json_encode(['provider_reference' => $providerRefundId], JSON_THROW_ON_ERROR),
+            'created_at' => $this->purchaseOrderTimestamp(),
+        ]);
+
+        $payloadHash = hash('sha256', json_encode([
+            'purchase_settlement_public_id' => $settlement->settlementPublicId,
+            'provider_code' => $settlement->providerCode,
+            'provider_event_id' => $providerEventId,
+            'event_payload_hash' => $eventPayloadHash,
+            'provider_refund_id' => $providerRefundId,
+            'evidence_payload_hash' => $evidencePayloadHash,
+            'evidence_authority' => PaymentEvidenceAuthority::Authoritative->value,
+            'transaction_status' => PaymentTransactionStatus::Refunded->value,
+            'amount_irr' => $amountIrr,
+            'currency' => $currency,
+            'occurred_at' => $occurredAtDatabase,
+            'settled_at' => $occurredAtDatabase,
+        ], JSON_THROW_ON_ERROR));
+
+        $refundId = (int) DB::table('purchase_refunds')->insertGetId([
+            'public_id' => (string) Str::ulid(),
+            'refund_key' => 'provisioning-refund-'.$suffix,
+            'payload_hash' => $payloadHash,
+            'purchase_settlement_id' => (int) $settlementRow->id,
+            'payment_intent_id' => $intentId,
+            'provider_event_row_id' => $providerEventRowId,
+            'user_id' => (int) $settlementRow->user_id,
+            'provider_code' => $settlement->providerCode,
+            'provider_refund_id' => $providerRefundId,
+            'evidence_payload_hash' => $evidencePayloadHash,
+            'amount_irr' => $amountIrr,
+            'cumulative_refunded_irr' => $amountIrr,
+            'currency' => $currency,
+            'resulting_payment_state' => PaymentIntentState::PartiallyRefunded->value,
+            'refunded_at' => $occurredAtDatabase,
+            'correlation_id' => $correlationId,
+            'created_at' => $this->purchaseOrderTimestamp(),
+        ]);
+
+        $updated = DB::table('payment_intents')
+            ->where('id', $intentId)
+            ->where('state', PaymentIntentState::Captured->value)
+            ->update([
+                'state' => PaymentIntentState::RefundPending->value,
+                'latest_purchase_refund_id' => $refundId,
+                'updated_at' => $this->purchaseOrderTimestamp(),
+            ]);
+        self::assertSame(1, $updated);
+
+        DB::table('payment_intent_state_histories')->insert([
+            'payment_intent_id' => $intentId,
+            'from_state' => PaymentIntentState::Captured->value,
+            'to_state' => PaymentIntentState::RefundPending->value,
+            'reason_code' => 'authoritative_purchase_refund_received',
+            'correlation_id' => $correlationId,
+            'created_at' => $this->purchaseOrderTimestamp(),
+        ]);
+    }
+
     private function recordFullRefund(PurchaseSettlementReceipt $settlement, string $suffix): PurchaseRefundReceipt
     {
+        return $this->recordRefund($settlement, $suffix, $settlement->amount->amount());
+    }
+
+    private function recordRefund(
+        PurchaseSettlementReceipt $settlement,
+        string $suffix,
+        int $amountIrr,
+    ): PurchaseRefundReceipt {
         $occurredAt = $this->purchaseOrderClock->value->modify('+5 minutes');
 
         return $this->app->make(PurchaseRefundService::class)->record(
@@ -283,7 +413,7 @@ final class InitialProvisioningQueueAuthorityTest extends TestCase
                     PaymentTransactionStatus::Refunded,
                     'refund-txn-'.$suffix,
                     'evt-provisioning-refund-'.$suffix,
-                    Money::irr($settlement->amount->amount()),
+                    Money::irr($amountIrr),
                     $occurredAt,
                     $occurredAt,
                     hash('sha256', 'provisioning-refund-evidence:'.$suffix),
