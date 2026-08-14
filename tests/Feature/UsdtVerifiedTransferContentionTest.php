@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace {
     use App\Modules\Payments\Usdt\Application\Contracts\UsdtBlockchainVerificationEvidence;
+    use App\Modules\Payments\Usdt\Application\UsdtBep20Asset;
     use App\Modules\Payments\Usdt\Application\UsdtVerifiedTransferService;
     use Illuminate\Contracts\Console\Kernel;
     use Illuminate\Database\Connection;
@@ -65,11 +66,11 @@ namespace {
                 (string) $payload['provider_event_id'],
                 (string) $payload['txid'],
                 'BEP20',
-                56,
+                UsdtBep20Asset::CHAIN_ID,
                 (string) $payload['token_contract'],
                 (string) $payload['destination_address'],
-                (int) $payload['amount_base_units'],
-                6,
+                (string) $payload['amount_base_units'],
+                UsdtBep20Asset::TOKEN_DECIMALS,
                 (int) $payload['confirmations'],
                 (int) $payload['block_number'],
                 new DateTimeImmutable((string) $payload['transaction_at']),

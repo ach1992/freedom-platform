@@ -342,7 +342,7 @@ final class UsdtBep20PaymentFlowTest extends TestCase
         return [
             'authority' => $authority,
             'amount_irr' => $source->finalPriceIrr,
-            'expected_base_units' => UsdtTokenAmount::toBaseUnits($amountQuote->exactUsdt),
+            'expected_base_units' => UsdtTokenAmount::toBaseUnits($amountQuote->exactUsdt, UsdtBep20Asset::TOKEN_DECIMALS),
         ];
     }
 

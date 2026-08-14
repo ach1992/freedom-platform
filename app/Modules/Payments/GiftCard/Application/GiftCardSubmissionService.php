@@ -77,6 +77,9 @@ final readonly class GiftCardSubmissionService
 
         $keyVersion = $normalizedCode === null ? null : $this->lookupKeyVersion();
         $codeHash = $normalizedCode === null ? null : hash_hmac('sha256', $normalizedCode, $this->lookupKey());
+        $previousLookup = $normalizedCode === null || $keyVersion === null ? null : $this->previousLookupKey($keyVersion);
+        $previousCodeHash = $previousLookup === null || $normalizedCode === null ? null : hash_hmac('sha256', $normalizedCode, $previousLookup['key']);
+        $previousKeyVersion = $previousLookup['version'] ?? null;
         $maskedCode = $normalizedCode === null ? null : $this->maskCode($normalizedCode);
 
         try {
@@ -98,6 +101,8 @@ final readonly class GiftCardSubmissionService
                 $imageContentHash,
                 $keyVersion,
                 $codeHash,
+                $previousCodeHash,
+                $previousKeyVersion,
                 $maskedCode,
                 $correlationId,
             ): GiftCardSubmissionReceipt {
@@ -142,15 +147,48 @@ final readonly class GiftCardSubmissionService
                     $claimedRegion,
                 );
 
+                $previousPayloadHash = null;
+                if ($previousCodeHash !== null && $previousKeyVersion !== null) {
+                    $previousPayloadHash = $this->requestPayloadHash(
+                        (int) $intent->id,
+                        (int) $type->id,
+                        (int) $type->version,
+                        (string) $type->configuration_hash,
+                        $userId,
+                        $previousCodeHash,
+                        $previousKeyVersion,
+                        $privateImageReference,
+                        $telegramFileId,
+                        $telegramFileUniqueId,
+                        $imageContentHash,
+                        $claimedFaceValue,
+                        $claimedCurrency,
+                        $claimedBrand,
+                        $claimedRegion,
+                    );
+                }
+
                 $existing = $connection->table('gift_card_submissions')->where('submission_key', $submissionKey)->lockForUpdate()->first();
                 if ($existing !== null) {
                     if ((int) $existing->payment_intent_id !== (int) $intent->id
                         || (int) $existing->gift_card_type_id !== (int) $type->id
-                        || ! hash_equals(strtolower((string) $existing->request_payload_hash), $payloadHash)) {
+                        || (! hash_equals(strtolower((string) $existing->request_payload_hash), $payloadHash)
+                            && ($previousPayloadHash === null
+                                || ! hash_equals(strtolower((string) $existing->request_payload_hash), $previousPayloadHash)))) {
                         throw new RuntimeException('Gift-card submission key conflicts with accepted evidence.');
                     }
 
                     return $this->receipt($connection, $existing, true);
+                }
+
+                if ($previousCodeHash !== null) {
+                    $historicalDuplicate = $connection->table('gift_card_submissions')
+                        ->where('code_lookup_hash', $previousCodeHash)
+                        ->lockForUpdate()
+                        ->first(['id', 'public_id']);
+                    if ($historicalDuplicate !== null) {
+                        throw new RuntimeException('Gift-card evidence is already bound to another purchase.');
+                    }
                 }
 
                 if (! (bool) $type->active) {
@@ -242,6 +280,24 @@ final readonly class GiftCardSubmissionService
                     $correlationId,
                 );
                 throw new RuntimeException('Gift-card evidence is already bound to another purchase.', 0, $exception);
+            }
+
+            throw $exception;
+        } catch (RuntimeException $exception) {
+            if ($previousCodeHash !== null
+                && $exception->getMessage() === 'Gift-card evidence is already bound to another purchase.') {
+                $connection = $this->database->connection();
+                $duplicate = $connection->table('gift_card_submissions')
+                    ->where('code_lookup_hash', $previousCodeHash)
+                    ->first(['id', 'public_id']);
+                if ($duplicate !== null) {
+                    $this->recordDuplicateFindingSafely(
+                        (int) $duplicate->id,
+                        (string) $duplicate->public_id,
+                        $previousCodeHash,
+                        $correlationId,
+                    );
+                }
             }
 
             throw $exception;
@@ -416,6 +472,29 @@ final readonly class GiftCardSubmissionService
         }
 
         return (int) $version;
+    }
+
+    /** @return array{key:string,version:int}|null */
+    private function previousLookupKey(int $currentVersion): ?array
+    {
+        $key = config('payments.gift_card.code_lookup_previous_key');
+        $rawVersion = config('payments.gift_card.code_lookup_previous_key_version');
+        $keyConfigured = is_string($key) && trim($key) !== '';
+        $versionConfigured = $rawVersion !== null && $rawVersion !== '';
+
+        if (! $keyConfigured && ! $versionConfigured) {
+            return null;
+        }
+        if (! $keyConfigured || strlen($key) < 32) {
+            throw new RuntimeException('Gift-card previous code lookup key is not configured securely.');
+        }
+
+        $version = filter_var($rawVersion, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+        if ($version === false || (int) $version >= $currentVersion) {
+            throw new RuntimeException('Gift-card previous code lookup key version is invalid.');
+        }
+
+        return ['key' => $key, 'version' => (int) $version];
     }
 
     private function assertToken(string $value, string $label, int $minimum, int $maximum): void

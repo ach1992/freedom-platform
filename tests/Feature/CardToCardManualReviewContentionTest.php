@@ -157,6 +157,7 @@ namespace Tests\Feature {
                 parent::tearDown();
             }
         }
+
         public function test_two_concurrent_manual_approvals_produce_one_financial_result(): void
         {
             $user = $this->quoteUser('customer');

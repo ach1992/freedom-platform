@@ -209,7 +209,7 @@ final class CardToCardMatchingTest extends TestCase
             'safe_evidence' => '{}',
             'created_at' => $this->clock->value->format('Y-m-d H:i:s.u'),
         ]);
-        $this->assertQueryRejected(static fn (): bool => DB::table('purchase_refunds')->insert([
+        $this->assertQueryRejected(fn (): bool => DB::table('purchase_refunds')->insert([
             'public_id' => (string) Str::ulid(),
             'refund_key' => 'c2c.refund.db-over-cap',
             'payload_hash' => hash('sha256', 'c2c.refund.db-over-cap'),

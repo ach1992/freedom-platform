@@ -149,6 +149,7 @@ namespace Tests\Feature {
                 parent::tearDown();
             }
         }
+
         public function test_concurrent_duplicate_refund_creates_once_and_replays_once(): void
         {
             [$settlement, $providerCode] = $this->capturePurchase('duplicate');

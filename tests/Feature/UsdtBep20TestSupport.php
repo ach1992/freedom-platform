@@ -9,6 +9,7 @@ use App\Modules\Orders\Application\QuoteService;
 use App\Modules\Orders\Domain\QuoteOverrideSource;
 use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
 use App\Modules\Payments\Usdt\Application\UsdtAmountQuoteService;
+use App\Modules\Payments\Usdt\Application\UsdtBep20Asset;
 use App\Modules\Payments\Usdt\Application\UsdtCircuitBreaker;
 use App\Modules\Payments\Usdt\Application\UsdtDestinationWalletService;
 use App\Modules\Payments\Usdt\Application\UsdtPaymentAuthorityReceipt;
@@ -109,7 +110,7 @@ trait UsdtBep20TestSupport
             'authority' => $authority,
             'submission' => $submission,
             'amount_irr' => $quote->finalPriceIrr,
-            'amount_base_units' => UsdtTokenAmount::toBaseUnits($amountQuote->exactUsdt),
+            'amount_base_units' => UsdtTokenAmount::toBaseUnits($amountQuote->exactUsdt, UsdtBep20Asset::TOKEN_DECIMALS),
             'transaction_at' => new \DateTimeImmutable($authorityCreatedAt, new \DateTimeZone('UTC')),
         ];
     }

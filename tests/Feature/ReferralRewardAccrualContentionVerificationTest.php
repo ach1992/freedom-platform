@@ -121,6 +121,17 @@ namespace Tests\Feature {
             $this->app->instance(Clock::class, $this->clock);
         }
 
+        protected function tearDown(): void
+        {
+            try {
+                if (isset($this->app)) {
+                    $this->truncateDatabaseTables();
+                }
+            } finally {
+                parent::tearDown();
+            }
+        }
+
         public function test_concurrent_duplicate_settlement_creates_once_and_replays_once(): void
         {
             [$token, $referred] = $this->referralPair();

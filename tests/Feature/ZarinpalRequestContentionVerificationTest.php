@@ -10,6 +10,8 @@ namespace {
     use App\Modules\Payments\Zarinpal\Application\ZarinpalPaymentService;
     use Illuminate\Contracts\Console\Kernel;
 
+    require_once dirname(__DIR__, 2).'/vendor/autoload.php';
+
     final class ZarinpalRequestContentionTransport implements ZarinpalTransport
     {
         public function __construct(private string $counterPath) {}
@@ -50,7 +52,7 @@ namespace {
     }
 
     if (PHP_SAPI === 'cli' && ($argv[1] ?? null) === '--zarinpal-request-contention-worker') {
-        require dirname(__DIR__, 2).'/vendor/autoload.php';
+        require_once dirname(__DIR__, 2).'/vendor/autoload.php';
         $app = require dirname(__DIR__, 2).'/bootstrap/app.php';
         $app->make(Kernel::class)->bootstrap();
         $decoded = base64_decode($argv[2] ?? '', true);
@@ -144,6 +146,7 @@ namespace Tests\Feature {
                 parent::tearDown();
             }
         }
+
         public function test_concurrent_initiation_claims_one_external_request_mutation(): void
         {
             $intentPublicId = $this->purchaseIntent();

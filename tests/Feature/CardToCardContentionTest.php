@@ -10,6 +10,8 @@ namespace {
     use Illuminate\Database\Connection;
     use Illuminate\Database\DatabaseManager;
 
+    require_once dirname(__DIR__, 2).'/vendor/autoload.php';
+
     final class C2cContentionFixedAdjustmentGenerator implements CardToCardAdjustmentGenerator
     {
         public function generate(int $minimumIrr, int $maximumIrr): int
@@ -20,7 +22,7 @@ namespace {
 
     $c2cContentionMode = PHP_SAPI === 'cli' ? ($argv[1] ?? null) : null;
     if (in_array($c2cContentionMode, ['--c2c-create-worker', '--c2c-capture-worker'], true)) {
-        require dirname(__DIR__, 2).'/vendor/autoload.php';
+        require_once dirname(__DIR__, 2).'/vendor/autoload.php';
         $app = require dirname(__DIR__, 2).'/bootstrap/app.php';
         $app->make(Kernel::class)->bootstrap();
         $app->instance(CardToCardAdjustmentGenerator::class, new C2cContentionFixedAdjustmentGenerator);

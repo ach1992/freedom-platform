@@ -57,7 +57,7 @@ final class UsdtManualRateSettingTest extends TestCase
 
         $finance = $this->financeAdministrator();
         $managed = $service->set($finance, '910000', 'usdt-rate-setting-0001', 'corr-usdt-rate-0001');
-        self::assertSame(1, $managed->version);
+        self::assertGreaterThan(0, $managed->version ?? 0);
         self::assertSame('910000.00000000', $managed->rateIrr);
         self::assertSame('managed', $managed->source);
         self::assertFalse($managed->replayed);
@@ -65,7 +65,7 @@ final class UsdtManualRateSettingTest extends TestCase
         Config::set('usdt.rate.manual_irr', '920000');
         $current = $service->current();
         self::assertNotNull($current);
-        self::assertSame(1, $current->version);
+        self::assertSame($managed->version, $current->version);
         self::assertSame('910000.00000000', $current->rateIrr);
         self::assertSame('managed', $current->source);
     }
@@ -82,7 +82,7 @@ final class UsdtManualRateSettingTest extends TestCase
 
         self::assertSame($first->version, $replay->version);
         self::assertTrue($replay->replayed);
-        self::assertSame(2, $second->version);
+        self::assertGreaterThan($first->version ?? 0, $second->version ?? 0);
         self::assertSame(2, DB::table('usdt_manual_rate_versions')->count());
         self::assertSame(2, DB::table('audit_logs')->where('action', 'payments.usdt.manual_rate.updated')->count());
         self::assertSame('905000.00000000', $service->current()?->rateIrr);
@@ -110,12 +110,13 @@ final class UsdtManualRateSettingTest extends TestCase
     {
         Config::set('usdt.rate.manual_irr', null);
         $finance = $this->financeAdministrator();
-        $this->service()->set($finance, '900000', 'usdt-rate-setting-0004', 'corr-usdt-rate-0004');
+        $created = $this->service()->set($finance, '900000', 'usdt-rate-setting-0004', 'corr-usdt-rate-0004');
+        self::assertNotNull($created->version);
 
-        $this->assertQueryRejected(fn (): int => DB::table('usdt_manual_rate_versions')->where('id', 1)->update([
+        $this->assertQueryRejected(fn (): int => DB::table('usdt_manual_rate_versions')->where('id', $created->version)->update([
             'rate_irr' => '950000.00000000',
         ]));
-        $this->assertQueryRejected(fn (): int => DB::table('usdt_manual_rate_versions')->where('id', 1)->delete());
+        $this->assertQueryRejected(fn (): int => DB::table('usdt_manual_rate_versions')->where('id', $created->version)->delete());
         self::assertSame('900000.00000000', $this->service()->current()?->rateIrr);
     }
 

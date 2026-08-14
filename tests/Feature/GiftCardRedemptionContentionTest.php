@@ -210,7 +210,7 @@ namespace Tests\Feature {
                 'gift.contention.quote',
                 $user,
                 $offering['id'],
-                new QuotePricingInput(QuoteOverrideSource::None, null, null, null, 0, now('UTC')->addMinutes(30)),
+                new QuotePricingInput(QuoteOverrideSource::None, null, null, null, 0, now('UTC')->addMinutes(30)->toDateTimeImmutable()),
                 hash('sha256', 'gift-contention-quote'),
             );
             $decision = $this->app->make(PaymentMethodEligibilityService::class)->evaluate(

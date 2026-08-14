@@ -79,6 +79,10 @@ final class GiftCardLookupKeyRotationTest extends TestCase
         config()->set('payments.gift_card.code_lookup_key_version', 2);
         config()->set('payments.gift_card.code_lookup_previous_key', $oldKey);
         config()->set('payments.gift_card.code_lookup_previous_key_version', 1);
+
+        $this->submit($first, 'first', $code);
+        self::assertSame(1, DB::table('gift_card_submissions')->count());
+
         $second = $this->purchase('second');
 
         try {

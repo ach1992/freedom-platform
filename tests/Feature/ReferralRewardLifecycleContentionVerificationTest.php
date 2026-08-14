@@ -146,6 +146,17 @@ namespace Tests\Feature {
             $this->app->instance(Clock::class, $this->clock);
         }
 
+        protected function tearDown(): void
+        {
+            try {
+                if (isset($this->app)) {
+                    $this->truncateDatabaseTables();
+                }
+            } finally {
+                parent::tearDown();
+            }
+        }
+
         public function test_duplicate_mature_workers_create_exactly_one_release_effect(): void
         {
             $fixture = $this->pendingReferralRewardFixture('contention-duplicate', 1);
