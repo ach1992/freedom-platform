@@ -4,6 +4,13 @@ The normative Version `1.0.0` requirements are defined in `docs/specification/ma
 
 A requirement is not complete because a class, migration, document, fake, or test exists. Completion is determined from the applicable GitHub Issue/PR, exact-head CI, review, and final release acceptance.
 
+For the two explicit Owner-approved Version 1 provider clarifications below, these durable rules supersede conflicting historical provider names or pricing-source wording that remains in the master specification. No other master-specification requirement is changed.
+
+## Version 1 provider clarifications
+
+- `USDT-002`: the supported rate-source set is Manual, Nobitex public USDT/RLS market data, and Wallex public `USDTTMN` spot-market data. Wallex replaces the historically named Tetherland source. Runtime selection remains deterministic with freshness, sanity, divergence, circuit-breaker, and explicit Manual fallback policy. The Manual IRR-per-USDT rate is a protected managed product setting with versioned/audited history; deployment configuration is bootstrap fallback only when no managed setting exists. The common provider contract remains extensible for future rate sources.
+- `IPG-002`: NOWPayments uses the same selected IRR-per-USDT rate authority as direct USDT pricing (`Nobitex -> Wallex -> Manual`) as the explicit Version 1 business pricing proxy for required `price_currency=usd`. This is a product pricing policy, not a claim that USD and USDT are economically identical. The selected source, exact rate, provider evidence identity, pricing-policy identity, derived USD `price_amount`, pay currency, and rounding policy are snapshotted immutably per payment. Existing payments are never reconstructed from a later/current rate, and no separate USD/IRR manual rate is permitted in Version 1.
+
 ## Functional requirement IDs
 
 - Onboarding: `ONB-001`, `ONB-002`, `ONB-003`, `ONB-004`, `ONB-005`
@@ -62,6 +69,6 @@ These IDs make normative architecture, data, runtime, security, localization, in
 
 ## Usage
 
-Issues and PRs should reference only the requirement IDs they actually own. The Issue defines the bounded acceptance criteria for that increment; the master specification remains authoritative if an Issue is incomplete or ambiguous.
+Issues and PRs should reference only the requirement IDs they actually own. The Issue defines the bounded acceptance criteria for that increment; the master specification remains authoritative if an Issue is incomplete or ambiguous, except for an explicit durable clarification recorded in this file.
 
 Do not add status columns, completion percentages, current SHAs, active branch names, or CI run IDs to this file.
