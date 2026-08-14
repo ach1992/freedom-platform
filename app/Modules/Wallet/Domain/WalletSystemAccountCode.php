@@ -10,5 +10,7 @@ final class WalletSystemAccountCode
 
     public const EXTERNAL_TOP_UP_CLEARING = 'system.payment.wallet-topup.clearing';
 
+    public const REFERRAL_REWARD_EXPENSE = 'system.referral.reward.expense';
+
     private function __construct() {}
 }
