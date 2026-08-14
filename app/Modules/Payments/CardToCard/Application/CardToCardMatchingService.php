@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Payments\CardToCard\Application;
 
+use App\Modules\AccessControl\Application\AdministratorPermissionAuthorizer;
 use App\Shared\Application\Clock;
 use DomainException;
 use Illuminate\Database\Connection;
@@ -13,9 +14,12 @@ use RuntimeException;
 
 final readonly class CardToCardMatchingService
 {
+    private const REVIEW_PERMISSION = 'access.sensitive_actions.approve';
+
     public function __construct(
         private DatabaseManager $database,
         private Clock $clock,
+        private AdministratorPermissionAuthorizer $authorizer,
     ) {}
 
     /** @requirement C2C-004 C2C-005 PAY-002 DAT-002 DAT-003 DAT-004 QUA-001 QUA-004 */
@@ -90,7 +94,7 @@ final readonly class CardToCardMatchingService
         }, 3);
     }
 
-    /** @requirement C2C-004 C2C-005 DAT-002 DAT-003 DAT-004 QUA-004 */
+    /** @requirement C2C-004 C2C-005 ACL-002 SEC-002 DAT-002 DAT-003 DAT-004 QUA-004 */
     public function acceptReview(
         string $reviewPublicId,
         string $reservationPublicId,
@@ -104,6 +108,7 @@ final readonly class CardToCardMatchingService
         if ($administratorId < 1) {
             throw new DomainException('C2C review administrator ID must be positive.');
         }
+        $this->authorizer->authorize($administratorId, self::REVIEW_PERMISSION);
         $this->assertReason($reason);
         $this->assertToken($correlationId, 'C2C review correlation ID', 8, 64);
 
@@ -169,12 +174,13 @@ final readonly class CardToCardMatchingService
         }, 3);
     }
 
-    /** @requirement C2C-004 C2C-005 DAT-003 DAT-004 QUA-004 */
+    /** @requirement C2C-004 C2C-005 ACL-002 SEC-002 DAT-003 DAT-004 QUA-004 */
     public function rejectReview(string $reviewPublicId, int $administratorId, string $reason): CardToCardMatchReceipt
     {
         if (! Str::isUlid($reviewPublicId) || $administratorId < 1) {
             throw new DomainException('C2C review identity is invalid.');
         }
+        $this->authorizer->authorize($administratorId, self::REVIEW_PERMISSION);
         $this->assertReason($reason);
 
         return $this->database->connection()->transaction(function (Connection $connection) use ($reviewPublicId, $administratorId, $reason): CardToCardMatchReceipt {
