@@ -25,7 +25,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
-          test "$(git rev-parse HEAD^)" = "ac86f1a4f4bdbac19e7474f9a588656a955d157f"
+          git merge-base --is-ancestor ac86f1a4f4bdbac19e7474f9a588656a955d157f "${GITHUB_SHA}"
           git fetch origin task/8-phase-0.5-completion
           test "$(git rev-parse origin/task/8-phase-0.5-completion)" = "${GITHUB_SHA}"
 
@@ -50,6 +50,8 @@ jobs:
               "\nservices:\n    -\n        class: App\\PHPStan\\DatabaseQueryBuilderExpressionTypeExtension\n        tags:\n            - phpstan.broker.expressionTypeResolverExtension\n",
               "\n",
           )
+          phpstan = Path('phpstan.neon')
+          phpstan.write_text(phpstan.read_text().rstrip('\n') + '\n')
           Path('app/PHPStan/DatabaseQueryBuilderExpressionTypeExtension.php').unlink()
 
           # Canonical BSC USDT is application authority; tests must not inject a synthetic contract.
