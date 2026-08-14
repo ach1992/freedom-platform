@@ -44,12 +44,10 @@ jobs:
                   raise SystemExit(f"{path}: expected {expected} occurrence(s), found {count}: {old!r}")
               p.write_text(text.replace(old, new))
 
-          # Keep raw responseHash on the observation audit trail, but make common
-          # settlement replay identity depend only on accepted financial facts.
           service = Path('app/Modules/Payments/NowPayments/Application/NowPaymentsPaymentService.php')
           text = service.read_text()
           start_marker = "            $settledAt = $result->updatedAt ?? $this->clock->now();\n"
-          end_marker = "            $captureReceipt = $this->purchaseSettlements->capture(\n"
+          end_marker = "            $capture = true;\n"
           if text.count(start_marker) != 1 or text.count(end_marker) != 1:
               raise SystemExit('NOWPayments finished-settlement markers are not unique.')
           start = text.index(start_marker)
@@ -100,18 +98,19 @@ jobs:
           ]
           service.write_text(text[:start] + '\n'.join(new_lines) + text[end:])
 
-          teardown = """        protected function tearDown(): void
-          {
-              try {
-                  if (isset($this->app)) {
-                      $this->truncateDatabaseTables();
-                  }
-              } finally {
-                  parent::tearDown();
-              }
-          }
-
-          """
+          teardown = '\n'.join([
+              '        protected function tearDown(): void',
+              '        {',
+              '            try {',
+              '                if (isset($this->app)) {',
+              '                    $this->truncateDatabaseTables();',
+              '                }',
+              '            } finally {',
+              '                parent::tearDown();',
+              '            }',
+              '        }',
+              '',
+          ])
           teardown_targets = {
               'tests/Feature/CardToCardManualReviewContentionTest.php': '        public function test_two_concurrent_manual_approvals_produce_one_financial_result(): void\n',
               'tests/Feature/PurchaseRefundContentionVerificationTest.php': '        public function test_concurrent_duplicate_refund_creates_once_and_replays_once(): void\n',
@@ -126,20 +125,24 @@ jobs:
                   raise SystemExit(f'{path}: test anchor is not unique.')
               p.write_text(body.replace(anchor, teardown + anchor))
 
-          blank_sensitive_reader = """                    $line = fgets($stream);
-                    if ($line !== false) {
-                        return $line;
-                    }
-          """
-          blank_tolerant_reader = """                    $line = fgets($stream);
-                    if ($line !== false) {
-                        if (trim($line) === '') {
-                            continue;
-                        }
-
-                        return $line;
-                    }
-          """
+          blank_sensitive_reader = '\n'.join([
+              '                    $line = fgets($stream);',
+              '                    if ($line !== false) {',
+              '                        return $line;',
+              '                    }',
+              '',
+          ])
+          blank_tolerant_reader = '\n'.join([
+              '                    $line = fgets($stream);',
+              '                    if ($line !== false) {',
+              "                        if (trim($line) === '') {",
+              '                            continue;',
+              '                        }',
+              '',
+              '                        return $line;',
+              '                    }',
+              '',
+          ])
           for path in [
               'tests/Feature/CardToCardManualReviewContentionTest.php',
               'tests/Feature/PurchaseRefundContentionVerificationTest.php',
