@@ -1,0 +1,89 @@
+name: Phase 0.5 forbidden-pattern correction
+
+on:
+  push:
+    branches:
+      - task/8-phase-0.5-completion
+    paths:
+      - .github/workflows/phase-0.5-forbidden-pattern-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  correct:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: task/8-phase-0.5-completion
+          fetch-depth: 0
+
+      - name: Guard staging-only drift
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          git merge-base --is-ancestor 8f84cd01d6815728693c24aa94bc0ae999e59a57 "${GITHUB_SHA}"
+          unexpected="$(git diff --name-only 8f84cd01d6815728693c24aa94bc0ae999e59a57.."${GITHUB_SHA}" | grep -Ev '^\.github/workflows/phase-0\.5-forbidden-pattern-fix\.yml$' || true)"
+          test -z "$unexpected"
+          git fetch origin task/8-phase-0.5-completion
+          test "$(git rev-parse origin/task/8-phase-0.5-completion)" = "${GITHUB_SHA}"
+
+      - name: Bootstrap PHP 8.4
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/ci/bootstrap-self-hosted-toolchain.sh no-coverage
+          export PATH="$(tail -n 1 "$GITHUB_PATH"):$PATH"
+          composer install --no-interaction --prefer-dist --no-progress --no-scripts
+          php artisan package:discover --ansi
+
+      - name: Parameterize referral JSON path query
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path('database/migrations/2026_08_14_000500_create_referral_reward_accrual_authority.php')
+          text = path.read_text()
+          old = '''            ->whereRaw("JSON_CONTAINS_PATH(configuration_snapshot, 'one', '$.referral_reward_recipient') = 1")'''
+          new = '''            ->whereRaw(
+                          "JSON_CONTAINS_PATH(configuration_snapshot, 'one', ?) = 1",
+                          ['$.referral_reward_recipient'],
+                      )'''
+          if text.count(old) != 1:
+              raise SystemExit(f'Expected one referral rollback JSON-path query, found {text.count(old)}.')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          vendor/bin/pint database/migrations/2026_08_14_000500_create_referral_reward_accrual_authority.php
+          git diff --check
+          php -l database/migrations/2026_08_14_000500_create_referral_reward_accrual_authority.php
+
+      - name: Validate full static gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          composer validate --strict --no-check-publish
+          php -d memory_limit=1G vendor/bin/phpstan analyse --no-progress --error-format=table --memory-limit=1G
+          bash scripts/ci/forbidden-patterns.sh
+          bash scripts/ci/architecture.sh
+          composer audit --locked --abandoned=fail --format=json > /tmp/phase-0.5-audit.json
+          bash scripts/ci/licenses.sh
+          test -s build/evidence/dependencies/licenses.json
+
+      - name: Commit product correction only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          test "$(git diff --name-only | grep -v '^database/migrations/2026_08_14_000500_create_referral_reward_accrual_authority.php$' || true)" = ""
+          git add database/migrations/2026_08_14_000500_create_referral_reward_accrual_authority.php
+          git diff --cached --quiet && { echo 'Expected migration correction, found none.' >&2; exit 1; }
+          git commit -m 'fix(phase-0.5): parameterize referral rollback JSON path'
+          git fetch origin task/8-phase-0.5-completion
+          test "$(git rev-parse origin/task/8-phase-0.5-completion)" = "${GITHUB_SHA}"
+          git push origin HEAD:task/8-phase-0.5-completion
