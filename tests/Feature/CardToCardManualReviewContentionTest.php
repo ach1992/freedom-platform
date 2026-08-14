@@ -191,8 +191,8 @@ namespace Tests\Feature {
                 $this->send($a, 'CONTINUE');
                 $this->send($b, 'CONTINUE');
 
-                $ra = $this->json($a, 'A result');
-                $rb = $this->json($b, 'B result');
+                $ra = $this->workerJson($a, 'A result');
+                $rb = $this->workerJson($b, 'B result');
                 self::assertTrue((bool) ($ra['ok'] ?? false), json_encode($ra, JSON_THROW_ON_ERROR));
                 self::assertTrue((bool) ($rb['ok'] ?? false), json_encode($rb, JSON_THROW_ON_ERROR));
                 self::assertSame((int) $ra['settlement_id'], (int) $rb['settlement_id']);
@@ -260,7 +260,7 @@ namespace Tests\Feature {
             throw new RuntimeException('C2C review worker timed out during '.$phase.': '.$stderr);
         }
 
-        private function json(array $worker, string $phase): array
+        private function workerJson(array $worker, string $phase): array
         {
             /** @var array<string,mixed> $result */
             $result = json_decode($this->line($worker, $phase), true, flags: JSON_THROW_ON_ERROR);
