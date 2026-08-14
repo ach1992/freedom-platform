@@ -83,8 +83,8 @@ jobs:
               ],
               'tests/Feature/UsdtGenericRestBlockchainProviderTest.php': [
                   (
-                      '$this->assertSame(1_000_000, $evidence->amountBaseUnits);',
-                      "$this->assertSame('1000000', $evidence->amountBaseUnits);",
+                      'self::assertSame(1_000_000, $evidence->amountBaseUnits);',
+                      "self::assertSame('1000000', $evidence->amountBaseUnits);",
                   ),
                   (
                       "$this->expectExceptionMessage('must be an integer, never a float');",
