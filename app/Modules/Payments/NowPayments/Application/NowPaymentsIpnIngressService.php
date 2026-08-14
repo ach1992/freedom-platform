@@ -20,6 +20,7 @@ final readonly class NowPaymentsIpnIngressService
         'confirming',
         'confirmed',
         'spending',
+        'sending',
         'partially_paid',
         'finished',
         'failed',
