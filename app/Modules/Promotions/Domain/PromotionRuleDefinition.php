@@ -142,11 +142,17 @@ final readonly class PromotionRuleDefinition
         ];
 
         if ($this->referralRewardRecipient !== null) {
-            $snapshot['per_referral_use_limit'] = $this->perReferralUseLimit;
-            $snapshot['referral_expiry_hours'] = $this->referralExpiryHours;
-            $snapshot['referral_pending_hours'] = $this->referralPendingHours;
             $snapshot['referral_reward_recipient'] = $this->referralRewardRecipient->value;
             $snapshot['referral_transferable'] = $this->referralTransferable ?? false;
+            if ($this->referralPendingHours !== null) {
+                $snapshot['referral_pending_hours'] = $this->referralPendingHours;
+            }
+            if ($this->referralExpiryHours !== null) {
+                $snapshot['referral_expiry_hours'] = $this->referralExpiryHours;
+            }
+            if ($this->perReferralUseLimit !== null) {
+                $snapshot['per_referral_use_limit'] = $this->perReferralUseLimit;
+            }
         }
 
         ksort($snapshot, SORT_STRING);
