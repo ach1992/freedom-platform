@@ -184,7 +184,7 @@ final class NowPaymentsPaymentServiceTest extends TestCase
     {
         $intentPublicId = $this->purchaseIntent('finished', 10_000_000);
         $service = $this->service();
-        $service->create(''.$intentPublicId, 'nowpayments.create.finished.000001', $this->correlation('create-finished'));
+        $service->create($intentPublicId, 'nowpayments.create.finished.000001', $this->correlation('create-finished'));
         $this->transport->statusValue = 'finished';
         $this->transport->actuallyPaid = $this->transport->payAmount;
 
@@ -274,7 +274,7 @@ final class NowPaymentsPaymentServiceTest extends TestCase
             '100000',
             '10000000',
             500,
-            false,
+            true,
             3,
             60,
         );
