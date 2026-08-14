@@ -8,6 +8,7 @@ use App\Modules\Orders\Application\PurchaseOrderService;
 use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
+use Illuminate\Database\Migrations\Migration;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
@@ -38,7 +39,7 @@ final class PurchaseOrderMigrationRollbackVerificationTest extends TestCase
         );
         self::assertSame(1, DB::table('orders')->count());
 
-        /** @var \Illuminate\Database\Migrations\Migration $migration */
+        /** @var Migration $migration */
         $migration = require database_path('migrations/2026_08_14_001161_harden_order_source_and_quote_uniqueness.php');
 
         try {
