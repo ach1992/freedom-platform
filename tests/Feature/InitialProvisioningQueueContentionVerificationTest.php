@@ -224,7 +224,7 @@ namespace Tests\Feature {
         }
 
         /**
-         * @param list<array<string, string>> $payloads
+         * @param  list<array<string, string>>  $payloads
          * @return list<array<string, mixed>>
          */
         private function runConcurrent(array $payloads): array
@@ -301,6 +301,7 @@ namespace Tests\Feature {
                 foreach ($read as $stream) {
                     if ($stream === $worker['pipes'][2]) {
                         $stderr .= stream_get_contents($stream);
+
                         continue;
                     }
                     $line = fgets($stream);
