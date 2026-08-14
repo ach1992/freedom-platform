@@ -12,26 +12,30 @@ return new class extends Migration
     {
         DB::unprepared('DROP TRIGGER IF EXISTS c2c_amount_reservations_insert_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS c2c_transaction_matches_insert_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS c2c_transaction_matches_update_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS purchase_settlements_insert_guard');
 
         $this->createReservationInsertGuard('awaiting_user_action');
         $this->createMatchInsertGuard('awaiting_user_action');
+        $this->createCompositeMatchUpdateGuard();
         $this->createPayableAwarePurchaseSettlementGuard();
     }
 
     public function down(): void
     {
-        if (DB::table('c2c_transaction_matches')->where('state', 'captured')->exists()
+        if (DB::table('c2c_transaction_matches')->exists()
             || DB::table('purchase_settlements')->where('provider_code', 'card_to_card')->exists()) {
-            throw new RuntimeException('Cannot roll back C2C payable settlement authority after card-to-card capture exists.');
+            throw new RuntimeException('Cannot roll back C2C payable settlement authority after card-to-card matching/capture exists.');
         }
 
         DB::unprepared('DROP TRIGGER IF EXISTS c2c_amount_reservations_insert_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS c2c_transaction_matches_insert_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS c2c_transaction_matches_update_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS purchase_settlements_insert_guard');
 
         $this->createReservationInsertGuard('created');
         $this->createMatchInsertGuard('created');
+        $this->createPriorMatchUpdateGuard();
         $this->createPriorPurchaseSettlementGuard();
     }
 
@@ -112,6 +116,49 @@ END
 SQL);
     }
 
+    private function createCompositeMatchUpdateGuard(): void
+    {
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER c2c_transaction_matches_update_guard
+BEFORE UPDATE ON c2c_transaction_matches
+FOR EACH ROW
+BEGIN
+    DECLARE valid_settlement_count INT DEFAULT 0;
+
+    IF NOT (NEW.public_id <=> OLD.public_id)
+       OR NOT (NEW.c2c_bank_transaction_id <=> OLD.c2c_bank_transaction_id)
+       OR NOT (NEW.c2c_amount_reservation_id <=> OLD.c2c_amount_reservation_id)
+       OR NOT (NEW.payment_intent_id <=> OLD.payment_intent_id)
+       OR NOT (NEW.match_mode <=> OLD.match_mode)
+       OR NOT (NEW.matched_at <=> OLD.matched_at)
+       OR NOT (NEW.correlation_id <=> OLD.correlation_id)
+       OR NOT (NEW.created_at <=> OLD.created_at) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'C2C transaction match identity is immutable.';
+    END IF;
+
+    IF OLD.state = 'matched' AND NEW.state = 'captured' THEN
+        SELECT COUNT(*) INTO valid_settlement_count
+        FROM purchase_settlements settlement_row
+        INNER JOIN c2c_bank_transactions transaction_row ON transaction_row.id = OLD.c2c_bank_transaction_id
+        INNER JOIN c2c_amount_reservations reservation_row ON reservation_row.id = OLD.c2c_amount_reservation_id
+        WHERE settlement_row.id = NEW.purchase_settlement_id
+          AND settlement_row.payment_intent_id = OLD.payment_intent_id
+          AND settlement_row.provider_code = 'card_to_card'
+          AND settlement_row.provider_transaction_id = SHA2(CONCAT(transaction_row.provider_code, CHAR(0), transaction_row.provider_transaction_id), 256)
+          AND settlement_row.amount_irr = reservation_row.payable_amount_irr
+          AND settlement_row.currency = 'IRR';
+        IF valid_settlement_count <> 1 OR NEW.captured_at IS NULL THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'C2C captured match requires authoritative purchase settlement.';
+        END IF;
+    ELSEIF NOT (NEW.state <=> OLD.state)
+       OR NOT (NEW.purchase_settlement_id <=> OLD.purchase_settlement_id)
+       OR NOT (NEW.captured_at <=> OLD.captured_at) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'C2C transaction match lifecycle transition is invalid.';
+    END IF;
+END
+SQL);
+    }
+
     private function createPayableAwarePurchaseSettlementGuard(): void
     {
         DB::unprepared(<<<'SQL'
@@ -152,7 +199,7 @@ BEGIN
           AND match_row.state = 'matched'
           AND match_row.purchase_settlement_id IS NULL
           AND transaction_row.status = 'settled'
-          AND transaction_row.provider_transaction_id = NEW.provider_transaction_id
+          AND SHA2(CONCAT(transaction_row.provider_code, CHAR(0), transaction_row.provider_transaction_id), 256) = NEW.provider_transaction_id
           AND transaction_row.amount_irr = NEW.amount_irr
           AND transaction_row.currency = NEW.currency
           AND reservation_row.payment_intent_id = NEW.payment_intent_id
@@ -177,6 +224,49 @@ BEGIN
 
     IF valid_provider_count <> 1 THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Purchase settlement requires one matching authoritative provider transaction.';
+    END IF;
+END
+SQL);
+    }
+
+    private function createPriorMatchUpdateGuard(): void
+    {
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER c2c_transaction_matches_update_guard
+BEFORE UPDATE ON c2c_transaction_matches
+FOR EACH ROW
+BEGIN
+    DECLARE valid_settlement_count INT DEFAULT 0;
+
+    IF NOT (NEW.public_id <=> OLD.public_id)
+       OR NOT (NEW.c2c_bank_transaction_id <=> OLD.c2c_bank_transaction_id)
+       OR NOT (NEW.c2c_amount_reservation_id <=> OLD.c2c_amount_reservation_id)
+       OR NOT (NEW.payment_intent_id <=> OLD.payment_intent_id)
+       OR NOT (NEW.match_mode <=> OLD.match_mode)
+       OR NOT (NEW.matched_at <=> OLD.matched_at)
+       OR NOT (NEW.correlation_id <=> OLD.correlation_id)
+       OR NOT (NEW.created_at <=> OLD.created_at) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'C2C transaction match identity is immutable.';
+    END IF;
+
+    IF OLD.state = 'matched' AND NEW.state = 'captured' THEN
+        SELECT COUNT(*) INTO valid_settlement_count
+        FROM purchase_settlements settlement_row
+        INNER JOIN c2c_bank_transactions transaction_row ON transaction_row.id = OLD.c2c_bank_transaction_id
+        INNER JOIN c2c_amount_reservations reservation_row ON reservation_row.id = OLD.c2c_amount_reservation_id
+        WHERE settlement_row.id = NEW.purchase_settlement_id
+          AND settlement_row.payment_intent_id = OLD.payment_intent_id
+          AND settlement_row.provider_code = 'card_to_card'
+          AND settlement_row.provider_transaction_id = transaction_row.provider_transaction_id
+          AND settlement_row.amount_irr = reservation_row.payable_amount_irr
+          AND settlement_row.currency = 'IRR';
+        IF valid_settlement_count <> 1 OR NEW.captured_at IS NULL THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'C2C captured match requires authoritative purchase settlement.';
+        END IF;
+    ELSEIF NOT (NEW.state <=> OLD.state)
+       OR NOT (NEW.purchase_settlement_id <=> OLD.purchase_settlement_id)
+       OR NOT (NEW.captured_at <=> OLD.captured_at) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'C2C transaction match lifecycle transition is invalid.';
     END IF;
 END
 SQL);
