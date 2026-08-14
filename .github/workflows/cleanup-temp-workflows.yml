@@ -1,0 +1,33 @@
+name: One-time temporary workflow cleanup
+
+on:
+  push:
+    branches:
+      - task/8-phase-0.5-completion
+    paths:
+      - .github/workflows/cleanup-temp-workflows.yml
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Remove temporary write-enabled workflows
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm -f .github/workflows/cleanup-temp-workflows.yml
+          if [ -f .github/workflows/nowpayments-replay-fix.yml ]; then
+            git rm -f .github/workflows/nowpayments-replay-fix.yml
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore(ci): remove temporary validation workflows (#8)"
+          git push origin HEAD:task/8-phase-0.5-completion
