@@ -258,7 +258,7 @@ final readonly class PurchaseSettlementService
         }
 
         if ($providerCode === 'card_to_card') {
-            $validC2cAuthority = $connection->table('c2c_transaction_matches as match_row')
+            $authority = $connection->table('c2c_transaction_matches as match_row')
                 ->join('c2c_amount_reservations as reservation_row', 'reservation_row.id', '=', 'match_row.c2c_amount_reservation_id')
                 ->join('c2c_bank_transactions as transaction_row', 'transaction_row.id', '=', 'match_row.c2c_bank_transaction_id')
                 ->where('match_row.payment_intent_id', $this->positiveDatabaseInt($intent->id, 'Payment intent ID'))
@@ -266,11 +266,17 @@ final readonly class PurchaseSettlementService
                 ->where('reservation_row.payment_intent_id', $this->positiveDatabaseInt($intent->id, 'Payment intent ID'))
                 ->where('reservation_row.payable_amount_irr', $evidence->amount->amount())
                 ->where('transaction_row.status', 'settled')
-                ->where('transaction_row.provider_transaction_id', $evidence->providerTransactionId)
                 ->where('transaction_row.amount_irr', $evidence->amount->amount())
                 ->where('transaction_row.currency', $evidence->amount->currency())
-                ->exists();
-            if (! $validC2cAuthority) {
+                ->first([
+                    'transaction_row.provider_code as bank_provider_code',
+                    'transaction_row.provider_transaction_id as bank_provider_transaction_id',
+                ]);
+            if ($authority === null
+                || ! hash_equals(
+                    hash('sha256', $authority->bank_provider_code."\0".$authority->bank_provider_transaction_id),
+                    $evidence->providerTransactionId,
+                )) {
                 throw new RuntimeException('Authoritative card-to-card evidence does not match the accepted payable amount authority.');
             }
         } elseif ((int) $intent->amount_irr !== $evidence->amount->amount()) {
