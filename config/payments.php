@@ -10,4 +10,8 @@ return [
         'adjustment_min_irr' => env('C2C_ADJUSTMENT_MIN_IRR', 1000),
         'adjustment_max_irr' => env('C2C_ADJUSTMENT_MAX_IRR', 9990),
     ],
+    'gift_card' => [
+        'code_lookup_key' => env('GIFT_CARD_CODE_LOOKUP_KEY'),
+        'code_lookup_key_version' => env('GIFT_CARD_CODE_LOOKUP_KEY_VERSION', 1),
+    ],
 ];
