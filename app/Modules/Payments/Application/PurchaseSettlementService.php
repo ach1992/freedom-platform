@@ -106,7 +106,7 @@ final readonly class PurchaseSettlementService
                 if ($intent === null) {
                     throw new DomainException('Payment intent does not exist.');
                 }
-                $this->assertCaptureMatchesIntent($intent, $providerCode, $event->evidence);
+                $this->assertCaptureMatchesIntent($connection, $intent, $providerCode, $event->evidence);
                 $intentId = $this->positiveDatabaseInt($intent->id, 'Payment intent ID');
 
                 $providerEvent = $this->recordProviderEvent($connection, $intentId, $providerCode, $event);
@@ -241,18 +241,42 @@ final readonly class PurchaseSettlementService
     }
 
     /** @param PurchaseIntentRow $intent */
-    private function assertCaptureMatchesIntent(object $intent, string $providerCode, PaymentEvidence $evidence): void
-    {
+    private function assertCaptureMatchesIntent(
+        Connection $connection,
+        object $intent,
+        string $providerCode,
+        PaymentEvidence $evidence,
+    ): void {
         if ($intent->purpose !== self::PURPOSE || $intent->wallet_account_id !== null) {
             throw new RuntimeException('Payment intent purpose is not purchase settlement.');
         }
         if (! hash_equals($intent->provider_code, $providerCode)) {
             throw new RuntimeException('Payment provider does not match the immutable intent.');
         }
-        if ($intent->currency !== $evidence->amount->currency()
-            || (int) $intent->amount_irr !== $evidence->amount->amount()) {
+        if ($intent->currency !== $evidence->amount->currency()) {
+            throw new RuntimeException('Authoritative provider evidence currency does not match the payment intent.');
+        }
+
+        if ($providerCode === 'card_to_card') {
+            $validC2cAuthority = $connection->table('c2c_transaction_matches as match_row')
+                ->join('c2c_amount_reservations as reservation_row', 'reservation_row.id', '=', 'match_row.c2c_amount_reservation_id')
+                ->join('c2c_bank_transactions as transaction_row', 'transaction_row.id', '=', 'match_row.c2c_bank_transaction_id')
+                ->where('match_row.payment_intent_id', $this->positiveDatabaseInt($intent->id, 'Payment intent ID'))
+                ->whereIn('match_row.state', ['matched', 'captured'])
+                ->where('reservation_row.payment_intent_id', $this->positiveDatabaseInt($intent->id, 'Payment intent ID'))
+                ->where('reservation_row.payable_amount_irr', $evidence->amount->amount())
+                ->where('transaction_row.status', 'settled')
+                ->where('transaction_row.provider_transaction_id', $evidence->providerTransactionId)
+                ->where('transaction_row.amount_irr', $evidence->amount->amount())
+                ->where('transaction_row.currency', $evidence->amount->currency())
+                ->exists();
+            if (! $validC2cAuthority) {
+                throw new RuntimeException('Authoritative card-to-card evidence does not match the accepted payable amount authority.');
+            }
+        } elseif ((int) $intent->amount_irr !== $evidence->amount->amount()) {
             throw new RuntimeException('Authoritative provider evidence amount does not match the payment intent.');
         }
+
         $this->positiveDatabaseInt($intent->source_quote_id, 'Purchase source Quote ID');
         $this->requiredString($intent->source_quote_public_id, 'Purchase source Quote public ID');
     }
@@ -545,7 +569,7 @@ final readonly class PurchaseSettlementService
         }
 
         try {
-            $this->assertCaptureMatchesIntent($intent, $providerCode, $event->evidence);
+            $this->assertCaptureMatchesIntent($connection, $intent, $providerCode, $event->evidence);
 
             return $this->replaySettlement($connection, $intent, $settlement, $providerCode, $event);
         } catch (DomainException|RuntimeException) {
