@@ -63,6 +63,29 @@ final class PurchaseOrderAuthorityHardeningTest extends TestCase
         );
         self::assertNotNull($quoteIndex);
         self::assertSame(0, (int) $quoteIndex->NON_UNIQUE);
+
+        $userId = $this->quoteUser('customer');
+        $this->assertQueryRejected(fn (): bool => DB::table('orders')->insert([
+            'public_id' => (string) Str::ulid(),
+            'source_type' => 'trial',
+            'purchase_settlement_id' => null,
+            'purchase_settlement_public_id' => null,
+            'payment_intent_id' => null,
+            'payment_intent_public_id' => null,
+            'user_id' => $userId,
+            'source_quote_id' => null,
+            'source_quote_public_id' => null,
+            'source_quote_configuration_hash' => null,
+            'state' => 'draft',
+            'state_version' => 1,
+            'total_amount_irr' => 0,
+            'currency' => 'IRR',
+            'paid_at' => null,
+            'creation_correlation_id' => $this->purchaseOrderCorrelation('reserved-trial-source'),
+            'created_at' => $this->purchaseOrderTimestamp(),
+            'updated_at' => $this->purchaseOrderTimestamp(),
+        ]));
+        self::assertSame(0, DB::table('orders')->count());
     }
 
     public function test_second_authoritative_settlement_for_same_quote_cannot_create_second_order_and_capture_stays_successful(): void
