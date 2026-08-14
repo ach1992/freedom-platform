@@ -46,7 +46,8 @@ final readonly class GiftCardPaymentService
         if ($prepared instanceof GiftCardProcessingReceipt) {
             return $prepared;
         }
-        if (! $provider->capabilities()->validate) {
+        $capabilities = $provider->capabilities();
+        if (! $capabilities->validate) {
             return $this->handleProviderFailure($submissionPublicId, 'validation_unsupported', $provider->code(), $correlationId, false);
         }
 
@@ -56,12 +57,16 @@ final readonly class GiftCardPaymentService
             return $this->handleProviderFailure($submissionPublicId, 'validation_call_failed', $provider->code(), $correlationId, false, $exception);
         }
 
-        $next = $this->recordValidation($submissionPublicId, $provider->code(), $validation, $correlationId);
-        if ($next instanceof GiftCardProcessingReceipt) {
-            return $next;
+        $validationResult = $this->recordValidation($submissionPublicId, $provider->code(), $validation, $correlationId);
+        if ($validationResult instanceof GiftCardProcessingReceipt) {
+            return $validationResult;
         }
 
-        if ($next === 'reserve') {
+        if (! $capabilities->redeem) {
+            return $this->routeMissingRedeemCapability($submissionPublicId, $provider->code(), $correlationId);
+        }
+
+        if ($capabilities->reserve) {
             $reserveRequest = $this->beginProviderMutation($submissionPublicId, 'reserve', ['valid_unreserved'], 'reserving');
             try {
                 $reserve = $provider->reserve($reserveRequest);
@@ -103,10 +108,7 @@ final readonly class GiftCardPaymentService
             if ($authority->provider_code !== $providerCode) {
                 throw new DomainException('Gift-card provider does not match the immutable type authority.');
             }
-            if ($authority->state === 'captured') {
-                return $this->receipt($connection, $authority, true);
-            }
-            if ($authority->state === 'pending_manual_review') {
+            if (in_array($authority->state, ['captured', 'pending_manual_review'], true)) {
                 return $this->receipt($connection, $authority, true);
             }
             if (in_array($authority->state, ['validating', 'reserving', 'redeeming'], true)) {
@@ -115,7 +117,6 @@ final readonly class GiftCardPaymentService
             if ($authority->state !== 'submitted') {
                 return $this->receipt($connection, $authority, true);
             }
-
             if ($authority->verification_mode === 'manual_only') {
                 $this->createReview($connection, $authority, 'manual_only', $correlationId);
                 return $this->receipt($connection, $this->submissionAuthority($connection, $submissionPublicId) ?? $authority, false);
@@ -128,7 +129,7 @@ final readonly class GiftCardPaymentService
         }, 3);
     }
 
-    /** @return 'reserve'|'redeem'|GiftCardProcessingReceipt */
+    /** @return 'ready'|GiftCardProcessingReceipt */
     private function recordValidation(
         string $submissionPublicId,
         string $providerCode,
@@ -144,7 +145,9 @@ final readonly class GiftCardPaymentService
             $this->recordProviderEvent($connection, $authority, $providerCode, $evidence);
 
             if ($evidence->outcome === 'success' && $evidence->status === 'valid') {
-                $this->assertProviderEvidenceMatchesClaim($authority, $evidence);
+                if (! $this->providerEvidenceMatchesClaim($authority, $evidence)) {
+                    return $this->routeMismatch($connection, $authority, $providerCode, $evidence, $correlationId, 'validation_identity_mismatch');
+                }
                 if ($authority->claimed_currency !== 'IRR' || (int) $authority->claimed_face_value !== (int) $authority->amount_irr) {
                     $this->recordFindingInConnection($connection, $authority, 'unsupported_settlement_currency_or_amount', 'high', $providerCode, $evidence, $correlationId);
                     $this->createReview($connection, $authority, 'unsupported_settlement_currency_or_amount', $correlationId);
@@ -158,11 +161,11 @@ final readonly class GiftCardPaymentService
                 }
 
                 $connection->table('gift_card_submissions')->where('id', $authority->submission_id)->update(['state' => 'valid_unreserved']);
-                return $this->providerCapabilitiesRequireReserve($authority, $providerCode) ? 'reserve' : 'redeem';
+                return 'ready';
             }
 
             if (in_array($evidence->outcome, ['pending', 'uncertain', 'unavailable'], true)) {
-                if (in_array($authority->verification_mode, ['automatic_then_manual', 'manual_fallback_on_provider_failure'], true)) {
+                if ($this->allowsManualFallback((string) $authority->verification_mode)) {
                     $this->recordFindingInConnection($connection, $authority, 'validation_not_authoritative', 'warning', $providerCode, $evidence, $correlationId);
                     $this->createReview($connection, $authority, 'validation_not_authoritative', $correlationId);
                     return $this->receipt($connection, $this->submissionAuthority($connection, $submissionPublicId) ?? $authority, false);
@@ -183,6 +186,24 @@ final readonly class GiftCardPaymentService
         }, 3);
     }
 
+    private function routeMissingRedeemCapability(string $submissionPublicId, string $providerCode, string $correlationId): GiftCardProcessingReceipt
+    {
+        return $this->database->connection()->transaction(function (Connection $connection) use ($submissionPublicId, $providerCode, $correlationId): GiftCardProcessingReceipt {
+            $authority = $this->submissionAuthority($connection, $submissionPublicId, true);
+            if ($authority === null || $authority->state !== 'valid_unreserved') {
+                throw new RuntimeException('Gift-card redeem capability resolution state changed.');
+            }
+            $this->recordFindingInConnection($connection, $authority, 'redeem_unsupported', 'high', $providerCode, null, $correlationId);
+            if ($this->allowsManualFallback((string) $authority->verification_mode)) {
+                $this->createReview($connection, $authority, 'redeem_unsupported', $correlationId);
+            } else {
+                $connection->table('gift_card_submissions')->where('id', $authority->submission_id)->update(['state' => 'provider_unavailable']);
+                $this->failIntent($connection, $authority, $correlationId, 'gift_card_redeem_unsupported');
+            }
+            return $this->receipt($connection, $this->submissionAuthority($connection, $submissionPublicId) ?? $authority, false);
+        }, 3);
+    }
+
     private function beginProviderMutation(string $submissionPublicId, string $operation, array $fromStates, string $toState): GiftCardProviderRequest
     {
         return $this->database->connection()->transaction(function (Connection $connection) use ($submissionPublicId, $operation, $fromStates, $toState): GiftCardProviderRequest {
@@ -198,7 +219,7 @@ final readonly class GiftCardPaymentService
         }, 3);
     }
 
-    /** @return 'redeem'|GiftCardProcessingReceipt */
+    /** @return 'ready'|GiftCardProcessingReceipt */
     private function recordReserve(
         string $submissionPublicId,
         string $providerCode,
@@ -213,9 +234,11 @@ final readonly class GiftCardPaymentService
             $this->validateProviderEvidence($evidence, 'reserve');
             $this->recordProviderEvent($connection, $authority, $providerCode, $evidence);
             if ($evidence->outcome === 'success' && $evidence->status === 'reserved') {
-                $this->assertProviderEvidenceMatchesClaim($authority, $evidence);
+                if (! $this->providerEvidenceMatchesClaim($authority, $evidence)) {
+                    return $this->routeMismatch($connection, $authority, $providerCode, $evidence, $correlationId, 'reserve_identity_mismatch');
+                }
                 $connection->table('gift_card_submissions')->where('id', $authority->submission_id)->update(['state' => 'reserved']);
-                return 'redeem';
+                return 'ready';
             }
             $this->recordFindingInConnection($connection, $authority, 'reserve_not_confirmed', 'high', $providerCode, $evidence, $correlationId);
             $this->createReview($connection, $authority, 'reserve_not_confirmed', $correlationId);
@@ -246,6 +269,24 @@ final readonly class GiftCardPaymentService
         }, 3);
     }
 
+    private function routeMismatch(
+        Connection $connection,
+        object $authority,
+        string $providerCode,
+        GiftCardProviderEvidence $evidence,
+        string $correlationId,
+        string $findingType,
+    ): GiftCardProcessingReceipt {
+        $this->recordFindingInConnection($connection, $authority, $findingType, 'high', $providerCode, $evidence, $correlationId);
+        if ($this->allowsManualFallback((string) $authority->verification_mode)) {
+            $this->createReview($connection, $authority, $findingType, $correlationId);
+        } else {
+            $connection->table('gift_card_submissions')->where('id', $authority->submission_id)->update(['state' => 'rejected']);
+            $this->failIntent($connection, $authority, $correlationId, 'gift_card_provider_identity_mismatch');
+        }
+        return $this->receipt($connection, $this->submissionAuthority($connection, (string) $authority->submission_public_id) ?? $authority, false);
+    }
+
     private function handleProviderFailure(
         string $submissionPublicId,
         string $findingType,
@@ -264,7 +305,7 @@ final readonly class GiftCardPaymentService
             if ($mutationUncertain) {
                 return $this->receipt($connection, $authority, false);
             }
-            if (in_array($authority->verification_mode, ['automatic_then_manual', 'manual_fallback_on_provider_failure'], true)) {
+            if ($this->allowsManualFallback((string) $authority->verification_mode)) {
                 $this->createReview($connection, $authority, $findingType, $correlationId);
             } else {
                 $connection->table('gift_card_submissions')->where('id', $authority->submission_id)->update(['state' => 'provider_unavailable']);
@@ -272,30 +313,6 @@ final readonly class GiftCardPaymentService
             }
             return $this->receipt($connection, $this->submissionAuthority($connection, $submissionPublicId) ?? $authority, false);
         }, 3);
-    }
-
-    private function providerRequest(object $authority, string $operation): GiftCardProviderRequest
-    {
-        $code = $authority->encrypted_code === null ? null : $this->encrypter->decryptString((string) $authority->encrypted_code);
-        return new GiftCardProviderRequest(
-            hash('sha256', 'gift-card:'.$authority->submission_public_id.':'.$operation),
-            (string) $authority->submission_public_id,
-            (string) $authority->type_code,
-            (string) $authority->claimed_brand,
-            $authority->claimed_region === null ? null : (string) $authority->claimed_region,
-            (string) $authority->claimed_currency,
-            (int) $authority->claimed_face_value,
-            $code,
-            $authority->private_image_reference === null ? null : (string) $authority->private_image_reference,
-        );
-    }
-
-    private function providerCapabilitiesRequireReserve(object $authority, string $providerCode): bool
-    {
-        unset($authority, $providerCode);
-        // The caller chooses based on the concrete provider capability immediately after validation.
-        // Kept as false here so providers with atomic redeem do not create a synthetic reservation.
-        return false;
     }
 
     private function createReview(Connection $connection, object $authority, string $reasonCode, string $correlationId): void
@@ -317,11 +334,26 @@ final readonly class GiftCardPaymentService
         } elseif ($existing->state !== 'pending') {
             throw new RuntimeException('Gift-card review was already decided.');
         }
-
         if ($authority->state !== 'pending_manual_review') {
             $connection->table('gift_card_submissions')->where('id', $authority->submission_id)->update(['state' => 'pending_manual_review']);
         }
         $this->advanceIntentToPendingReview($connection, $authority, $correlationId);
+    }
+
+    private function providerRequest(object $authority, string $operation): GiftCardProviderRequest
+    {
+        $code = $authority->encrypted_code === null ? null : $this->encrypter->decryptString((string) $authority->encrypted_code);
+        return new GiftCardProviderRequest(
+            hash('sha256', 'gift-card:'.$authority->submission_public_id.':'.$operation),
+            (string) $authority->submission_public_id,
+            (string) $authority->type_code,
+            (string) $authority->claimed_brand,
+            $authority->claimed_region === null ? null : (string) $authority->claimed_region,
+            (string) $authority->claimed_currency,
+            (int) $authority->claimed_face_value,
+            $code,
+            $authority->private_image_reference === null ? null : (string) $authority->private_image_reference,
+        );
     }
 
     private function advanceIntentToVerifying(Connection $connection, object $authority, string $correlationId): void
@@ -408,16 +440,16 @@ final readonly class GiftCardPaymentService
         }
     }
 
-    private function assertProviderEvidenceMatchesClaim(object $authority, GiftCardProviderEvidence $evidence): void
+    private function providerEvidenceMatchesClaim(object $authority, GiftCardProviderEvidence $evidence): bool
     {
-        if ($evidence->faceValue === null || $evidence->currency === null || $evidence->brand === null
-            || (int) $authority->claimed_face_value !== $evidence->faceValue
-            || $authority->claimed_currency !== $evidence->currency
-            || $authority->claimed_brand !== $evidence->brand
-            || (($authority->claimed_region === null) !== ($evidence->region === null))
-            || ($evidence->region !== null && ! hash_equals((string) $authority->claimed_region, $evidence->region))) {
-            throw new DomainException('Gift-card provider evidence does not match the immutable submitted claim.');
-        }
+        return $evidence->faceValue !== null
+            && $evidence->currency !== null
+            && $evidence->brand !== null
+            && (int) $authority->claimed_face_value === $evidence->faceValue
+            && $authority->claimed_currency === $evidence->currency
+            && $authority->claimed_brand === $evidence->brand
+            && (($authority->claimed_region === null) === ($evidence->region === null))
+            && ($evidence->region === null || hash_equals((string) $authority->claimed_region, $evidence->region));
     }
 
     private function recordProviderEvent(Connection $connection, object $authority, string $providerCode, GiftCardProviderEvidence $evidence): object
@@ -513,6 +545,15 @@ final readonly class GiftCardPaymentService
             ->join('gift_card_submissions as submission', 'submission.id', '=', 'redemption.gift_card_submission_id')
             ->where('submission.public_id', $submissionPublicId)
             ->exists();
+    }
+
+    private function allowsManualFallback(string $verificationMode): bool
+    {
+        return in_array($verificationMode, [
+            'automatic_then_manual',
+            'manual_fallback_on_provider_failure',
+            'automatic_with_manual_approval_above_limit',
+        ], true);
     }
 
     private function recordFinding(
