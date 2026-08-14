@@ -136,7 +136,7 @@ final class CardToCardAmountReservationTest extends TestCase
         self::assertSame(1001, $second->adjustmentAmountIrr);
         self::assertNotSame($first->payableAmountIrr, $second->payableAmountIrr);
         self::assertSame(2, DB::table('c2c_amount_reservations')->where('active_lock', 1)->count());
-        self::assertSame('created', DB::table('payment_intents')->where('public_id', $first->paymentIntent->intentPublicId)->value('state'));
+        self::assertSame('awaiting_user_action', DB::table('payment_intents')->where('public_id', $first->paymentIntent->intentPublicId)->value('state'));
     }
 
     public function test_creation_replay_returns_same_intent_and_reservation_without_new_amount(): void
