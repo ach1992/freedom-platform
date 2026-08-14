@@ -13,5 +13,7 @@ return [
     'gift_card' => [
         'code_lookup_key' => env('GIFT_CARD_CODE_LOOKUP_KEY'),
         'code_lookup_key_version' => env('GIFT_CARD_CODE_LOOKUP_KEY_VERSION', 1),
+        'code_lookup_previous_key' => env('GIFT_CARD_CODE_LOOKUP_PREVIOUS_KEY'),
+        'code_lookup_previous_key_version' => env('GIFT_CARD_CODE_LOOKUP_PREVIOUS_KEY_VERSION'),
     ],
 ];
