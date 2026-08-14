@@ -83,8 +83,8 @@ final class GenericRestGiftCardVerificationProvider implements GiftCardVerificat
         }
 
         $supportedOperations = ['validate', 'reserve', 'redeem', 'release', 'status'];
-        if (! isset($operationPaths['validate']) || ! isset($operationPaths['redeem'])) {
-            throw new DomainException('Generic gift-card provider requires validate and redeem operations.');
+        if (! isset($operationPaths['validate'])) {
+            throw new DomainException('Generic gift-card provider requires a validate operation.');
         }
         foreach ($operationPaths as $operation => $path) {
             if (! in_array($operation, $supportedOperations, true)
@@ -365,7 +365,14 @@ final class GenericRestGiftCardVerificationProvider implements GiftCardVerificat
         if (is_int($value)) {
             $integer = $value;
         } elseif (is_string($value) && preg_match('/\A[0-9]+\z/', $value) === 1) {
-            $integer = (int) $value;
+            $normalized = ltrim($value, '0');
+            $normalized = $normalized === '' ? '0' : $normalized;
+            $maximum = (string) PHP_INT_MAX;
+            if (strlen($normalized) > strlen($maximum)
+                || (strlen($normalized) === strlen($maximum) && strcmp($normalized, $maximum) > 0)) {
+                throw new RuntimeException('Generic gift-card face value overflows integer range.');
+            }
+            $integer = (int) $normalized;
         } else {
             throw new RuntimeException('Generic gift-card face value must be an integer, never a float.');
         }
