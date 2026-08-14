@@ -15,6 +15,7 @@ use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Support\Str;
 use RuntimeException;
+use stdClass;
 use Throwable;
 
 final readonly class GiftCardReleaseService
@@ -166,7 +167,7 @@ final readonly class GiftCardReleaseService
         }, 3);
     }
 
-    private function authority(Connection $connection, string $submissionPublicId, bool $lock = false): ?object
+    private function authority(Connection $connection, string $submissionPublicId, bool $lock = false): ?stdClass
     {
         $query = $connection->table('gift_card_submissions as submission')
             ->join('gift_card_types as type', 'type.id', '=', 'submission.gift_card_type_id')
@@ -185,7 +186,7 @@ final readonly class GiftCardReleaseService
         ]);
     }
 
-    private function request(object $authority): GiftCardProviderRequest
+    private function request(stdClass $authority): GiftCardProviderRequest
     {
         $code = $authority->encrypted_code === null ? null : $this->encrypter->decryptString((string) $authority->encrypted_code);
 
@@ -202,7 +203,7 @@ final readonly class GiftCardReleaseService
         );
     }
 
-    private function validateEvidence(object $authority, string $providerCode, GiftCardProviderEvidence $evidence): void
+    private function validateEvidence(stdClass $authority, string $providerCode, GiftCardProviderEvidence $evidence): void
     {
         if ($authority->provider_code !== $providerCode
             || $evidence->operation !== 'release'
@@ -228,7 +229,7 @@ final readonly class GiftCardReleaseService
         }
     }
 
-    private function recordProviderEvent(Connection $connection, object $authority, string $providerCode, GiftCardProviderEvidence $evidence): void
+    private function recordProviderEvent(Connection $connection, stdClass $authority, string $providerCode, GiftCardProviderEvidence $evidence): void
     {
         $existing = $connection->table('gift_card_provider_events')
             ->where('provider_code', $providerCode)
@@ -293,7 +294,7 @@ final readonly class GiftCardReleaseService
 
     private function recordFindingInConnection(
         Connection $connection,
-        object $authority,
+        stdClass $authority,
         string $findingType,
         string $severity,
         string $providerCode,
@@ -304,9 +305,9 @@ final readonly class GiftCardReleaseService
             (string) $authority->submission_public_id,
             $findingType,
             $providerCode,
-            $evidence?->providerEventId ?? '',
-            $evidence?->providerTransactionId ?? '',
-            $evidence?->evidenceHash ?? '',
+            $evidence->providerEventId ?? '',
+            $evidence->providerTransactionId ?? '',
+            $evidence->evidenceHash ?? '',
         ]));
         $connection->table('gift_card_reconciliation_findings')->insertOrIgnore([
             'public_id' => (string) Str::ulid(),
@@ -323,7 +324,7 @@ final readonly class GiftCardReleaseService
         ]);
     }
 
-    private function receipt(Connection $connection, object $authority, bool $replayed): GiftCardProcessingReceipt
+    private function receipt(Connection $connection, stdClass $authority, bool $replayed): GiftCardProcessingReceipt
     {
         $reviewPublicId = $connection->table('gift_card_reviews')
             ->where('gift_card_submission_id', $authority->submission_id)

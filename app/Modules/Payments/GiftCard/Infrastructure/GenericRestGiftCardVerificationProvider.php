@@ -405,7 +405,10 @@ final class GenericRestGiftCardVerificationProvider implements GiftCardVerificat
         return $date->setTimezone(new DateTimeZone('UTC'));
     }
 
-    /** @param array<string,mixed> $value @return array<string,mixed> */
+    /**
+     * @param  array<string, mixed>  $value
+     * @return array<string, mixed>
+     */
     private function canonicalize(array $value): array
     {
         foreach ($value as $key => $item) {

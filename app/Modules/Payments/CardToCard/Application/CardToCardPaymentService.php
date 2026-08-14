@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Payments\CardToCard\Application;
 
+use App\Modules\Payments\Application\PurchasePaymentIntentReceipt;
 use App\Modules\Payments\Application\PurchasePaymentIntentService;
 use App\Modules\Payments\CardToCard\Application\Contracts\CardToCardAdjustmentGenerator;
 use App\Shared\Application\Clock;
@@ -15,6 +16,7 @@ use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Str;
 use RuntimeException;
+use stdClass;
 
 final readonly class CardToCardPaymentService
 {
@@ -77,7 +79,7 @@ final readonly class CardToCardPaymentService
                 throw new RuntimeException('Card-to-card base amount must be positive integer IRR.');
             }
 
-            /** @var list<object> $destinations */
+            /** @var list<stdClass> $destinations */
             $destinations = $connection->table('c2c_destination_accounts')
                 ->where('state', 'active')
                 ->orderBy('priority')
@@ -112,7 +114,7 @@ final readonly class CardToCardPaymentService
         );
     }
 
-    private function reserveOnDestination(Connection $connection, int $intentId, int $baseAmountIrr, object $destination): ?object
+    private function reserveOnDestination(Connection $connection, int $intentId, int $baseAmountIrr, stdClass $destination): ?stdClass
     {
         $minimum = (bool) $destination->adjustment_enabled ? (int) $destination->adjustment_min_irr : 0;
         $maximum = (bool) $destination->adjustment_enabled ? (int) $destination->adjustment_max_irr : 0;
@@ -170,7 +172,7 @@ final readonly class CardToCardPaymentService
         return null;
     }
 
-    private function destinationHasDailyCapacity(Connection $connection, object $destination, int $baseAmountIrr): bool
+    private function destinationHasDailyCapacity(Connection $connection, stdClass $destination, int $baseAmountIrr): bool
     {
         if ($destination->daily_limit_irr === null) {
             return true;
@@ -199,7 +201,7 @@ final readonly class CardToCardPaymentService
             ]);
     }
 
-    private function receipt(Connection $connection, object $intent, object $reservation, bool $replayed): CardToCardPaymentReceipt
+    private function receipt(Connection $connection, PurchasePaymentIntentReceipt $intent, stdClass $reservation, bool $replayed): CardToCardPaymentReceipt
     {
         $destination = $connection->table('c2c_destination_accounts')
             ->where('id', $reservation->c2c_destination_account_id)

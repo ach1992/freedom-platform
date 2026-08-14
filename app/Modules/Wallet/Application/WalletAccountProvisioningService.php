@@ -68,6 +68,7 @@ final readonly class WalletAccountProvisioningService
         }, 3);
     }
 
+    /** @param object{id:int|string,code:string,account_class:string,owner_user_id:int|string|null,wallet_bucket:string|null,currency:string,is_active:int|bool} $account */
     private function validatedAccountId(object $account, int $userId): int
     {
         if ($account->account_class !== 'liability'

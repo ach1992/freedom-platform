@@ -14,6 +14,7 @@ use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Support\Str;
 use RuntimeException;
+use stdClass;
 
 final readonly class CardToCardManualSubmissionService
 {
@@ -164,7 +165,7 @@ final readonly class CardToCardManualSubmissionService
 
     private function replayOrConflict(
         Connection $connection,
-        object $row,
+        stdClass $row,
         int $userId,
         string $reservationPublicId,
         int $claimedAmountIrr,
@@ -196,7 +197,7 @@ final readonly class CardToCardManualSubmissionService
         return $this->receipt($connection, $row, true);
     }
 
-    private function receipt(Connection $connection, object $row, bool $replayed): CardToCardManualSubmissionReceipt
+    private function receipt(Connection $connection, stdClass $row, bool $replayed): CardToCardManualSubmissionReceipt
     {
         $intent = $connection->table('payment_intents')->where('id', $row->payment_intent_id)->first(['public_id']);
         $reservation = $connection->table('c2c_amount_reservations')->where('id', $row->c2c_amount_reservation_id)->first(['public_id']);

@@ -14,6 +14,7 @@ use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Str;
 use RuntimeException;
+use stdClass;
 
 final readonly class CardToCardBankTransactionService
 {
@@ -184,7 +185,7 @@ final readonly class CardToCardBankTransactionService
     }
 
     private function assertSameIdentity(
-        object $transaction,
+        stdClass $transaction,
         int $destinationId,
         int $amountIrr,
         string $occurredAt,
@@ -214,7 +215,7 @@ final readonly class CardToCardBankTransactionService
         }
     }
 
-    private function receipt(Connection $connection, object $transaction, bool $replayed): CardToCardBankTransactionReceipt
+    private function receipt(Connection $connection, stdClass $transaction, bool $replayed): CardToCardBankTransactionReceipt
     {
         $destinationPublicId = $connection->table('c2c_destination_accounts')
             ->where('id', $transaction->c2c_destination_account_id)

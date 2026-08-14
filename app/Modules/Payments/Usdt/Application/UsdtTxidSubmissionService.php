@@ -12,6 +12,7 @@ use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Str;
 use RuntimeException;
+use stdClass;
 
 final readonly class UsdtTxidSubmissionService
 {
@@ -165,7 +166,7 @@ final readonly class UsdtTxidSubmissionService
         ]);
     }
 
-    private function receipt(Connection $connection, object $row, bool $replayed): UsdtTxidSubmissionReceipt
+    private function receipt(Connection $connection, stdClass $row, bool $replayed): UsdtTxidSubmissionReceipt
     {
         $authority = $connection->table('usdt_payment_authorities')->where('id', $row->usdt_payment_authority_id)->first(['public_id']);
         $intent = $connection->table('payment_intents')->where('id', $row->payment_intent_id)->first(['public_id']);

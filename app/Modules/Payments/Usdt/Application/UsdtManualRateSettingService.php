@@ -13,6 +13,7 @@ use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
 use RuntimeException;
+use stdClass;
 
 final readonly class UsdtManualRateSettingService
 {
@@ -139,6 +140,7 @@ final readonly class UsdtManualRateSettingService
         });
     }
 
+    /** @return numeric-string */
     private function validatedRate(string $rateIrr): string
     {
         $normalized = UsdtDecimal::rate(trim($rateIrr));
@@ -156,7 +158,7 @@ final readonly class UsdtManualRateSettingService
         return $normalized;
     }
 
-    private function receipt(object $row, bool $replayed): UsdtManualRateSettingReceipt
+    private function receipt(stdClass $row, bool $replayed): UsdtManualRateSettingReceipt
     {
         return new UsdtManualRateSettingReceipt(
             $this->positiveInt($row->id, 'USDT manual rate version'),

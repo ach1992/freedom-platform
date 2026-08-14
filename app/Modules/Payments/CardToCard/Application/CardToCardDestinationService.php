@@ -11,6 +11,7 @@ use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Support\Str;
 use RuntimeException;
+use stdClass;
 
 final readonly class CardToCardDestinationService
 {
@@ -261,7 +262,7 @@ final readonly class CardToCardDestinationService
         ], JSON_THROW_ON_ERROR));
     }
 
-    private function configurationHashFromRow(object $row): string
+    private function configurationHashFromRow(stdClass $row): string
     {
         return hash('sha256', json_encode([
             'code' => $row->code,
@@ -290,7 +291,7 @@ final readonly class CardToCardDestinationService
         ]);
     }
 
-    private function receipt(object $row, bool $replayed): CardToCardDestinationReceipt
+    private function receipt(stdClass $row, bool $replayed): CardToCardDestinationReceipt
     {
         return new CardToCardDestinationReceipt(
             (int) $row->id,

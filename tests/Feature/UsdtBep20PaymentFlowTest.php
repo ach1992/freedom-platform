@@ -209,7 +209,7 @@ final class UsdtBep20PaymentFlowTest extends TestCase
             );
             self::fail('Expected exact-chain manual approval guard.');
         } catch (DomainException $exception) {
-            self::assertStringContainsString('exact authoritative BEP20', $exception->getMessage());
+            self::assertStringContainsString('exact authoritative canonical BSC-USDT', $exception->getMessage());
         }
         self::assertSame(0, DB::table('usdt_verified_transfers')->count());
         self::assertSame(0, DB::table('purchase_settlements')->count());

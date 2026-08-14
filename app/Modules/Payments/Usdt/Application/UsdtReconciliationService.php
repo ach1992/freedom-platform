@@ -12,6 +12,7 @@ use DomainException;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Support\Str;
 use RuntimeException;
+use stdClass;
 use Throwable;
 
 final readonly class UsdtReconciliationService
@@ -80,7 +81,7 @@ final readonly class UsdtReconciliationService
         return $this->receipt($this->authority($submissionPublicId) ?? $authority, true);
     }
 
-    private function capturedMismatch(object $authority, UsdtBlockchainVerificationEvidence $evidence): ?string
+    private function capturedMismatch(stdClass $authority, UsdtBlockchainVerificationEvidence $evidence): ?string
     {
         if (! hash_equals((string) $authority->txid, strtolower($evidence->txid))) {
             return 'post_capture_txid_mismatch';
@@ -110,7 +111,7 @@ final readonly class UsdtReconciliationService
         return null;
     }
 
-    private function authority(string $submissionPublicId): ?object
+    private function authority(string $submissionPublicId): ?stdClass
     {
         return $this->database->connection()->table('usdt_txid_submissions as submission')
             ->join('usdt_payment_authorities as authority', 'authority.id', '=', 'submission.usdt_payment_authority_id')
@@ -124,7 +125,7 @@ final readonly class UsdtReconciliationService
             ]);
     }
 
-    private function receipt(object $authority, bool $replayed): UsdtProcessingReceipt
+    private function receipt(stdClass $authority, bool $replayed): UsdtProcessingReceipt
     {
         $review = $this->database->connection()->table('usdt_manual_reviews')->where('usdt_txid_submission_id', $authority->submission_id)->value('public_id');
         $settlement = $authority->purchase_settlement_id === null ? null : $this->database->connection()->table('purchase_settlements')->where('id', $authority->purchase_settlement_id)->value('public_id');
@@ -139,9 +140,9 @@ final readonly class UsdtReconciliationService
         );
     }
 
-    private function recordFinding(object $authority, string $type, string $severity, string $providerCode, ?UsdtBlockchainVerificationEvidence $evidence, string $correlationId): void
+    private function recordFinding(stdClass $authority, string $type, string $severity, string $providerCode, ?UsdtBlockchainVerificationEvidence $evidence, string $correlationId): void
     {
-        $key = hash('sha256', implode("\0", [(string) $authority->submission_public_id, $type, $providerCode, $evidence?->providerEventId ?? '', $evidence?->evidenceHash ?? '']));
+        $key = hash('sha256', implode("\0", [(string) $authority->submission_public_id, $type, $providerCode, $evidence->providerEventId ?? '', $evidence->evidenceHash ?? '']));
         $this->database->connection()->table('usdt_reconciliation_findings')->insertOrIgnore([
             'public_id' => (string) Str::ulid(),
             'usdt_txid_submission_id' => (int) $authority->submission_id,

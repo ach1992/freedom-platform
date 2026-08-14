@@ -15,6 +15,7 @@ use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Str;
 use RuntimeException;
+use stdClass;
 
 final readonly class UsdtPaymentAuthorityService
 {
@@ -147,7 +148,7 @@ final readonly class UsdtPaymentAuthorityService
 
     private function replayReceipt(
         Connection $connection,
-        object $existing,
+        stdClass $existing,
         int $userId,
         string $sourceQuotePublicId,
         string $amountQuotePublicId,
@@ -184,7 +185,7 @@ final readonly class UsdtPaymentAuthorityService
         return [(int) $chainId, $tokenContract, (int) $tokenDecimals, (int) $minimumConfirmations];
     }
 
-    private function receipt(Connection $connection, object $row, bool $replayed): UsdtPaymentAuthorityReceipt
+    private function receipt(Connection $connection, stdClass $row, bool $replayed): UsdtPaymentAuthorityReceipt
     {
         $intentPublicId = $connection->table('payment_intents')->where('id', $row->payment_intent_id)->value('public_id');
         $amountQuotePublicId = $connection->table('usdt_amount_quotes')->where('id', $row->usdt_amount_quote_id)->value('public_id');

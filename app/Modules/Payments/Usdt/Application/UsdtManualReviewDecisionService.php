@@ -15,6 +15,7 @@ use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Support\Str;
 use RuntimeException;
+use stdClass;
 
 final readonly class UsdtManualReviewDecisionService
 {
@@ -174,7 +175,7 @@ final readonly class UsdtManualReviewDecisionService
         }, 3);
     }
 
-    private function assertExactManualEvidence(object $authority, UsdtBlockchainVerificationEvidence $evidence): void
+    private function assertExactManualEvidence(stdClass $authority, UsdtBlockchainVerificationEvidence $evidence): void
     {
         $actualBaseUnits = $evidence->amountBaseUnits === null ? null : UsdtTokenAmount::normalizeBaseUnits($evidence->amountBaseUnits);
         $expectedBaseUnits = UsdtTokenAmount::normalizeBaseUnits((string) $authority->expected_amount_base_units);

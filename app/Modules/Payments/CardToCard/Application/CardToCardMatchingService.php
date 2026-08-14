@@ -11,6 +11,7 @@ use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Support\Str;
 use RuntimeException;
+use stdClass;
 
 final readonly class CardToCardMatchingService
 {
@@ -56,7 +57,7 @@ final readonly class CardToCardMatchingService
                 return $this->createReview($connection, $transaction, 'transaction_not_settled', 0, $correlationId);
             }
 
-            /** @var list<object> $candidates */
+            /** @var list<stdClass> $candidates */
             $candidates = $connection->table('c2c_amount_reservations as reservation')
                 ->join('payment_intents as intent', 'intent.id', '=', 'reservation.payment_intent_id')
                 ->where('reservation.c2c_destination_account_id', $transaction->c2c_destination_account_id)
@@ -78,7 +79,7 @@ final readonly class CardToCardMatchingService
 
             $onTime = array_values(array_filter(
                 $candidates,
-                static fn (object $candidate): bool => $transaction->occurred_at <= $candidate->expires_at,
+                static fn (stdClass $candidate): bool => $transaction->occurred_at <= $candidate->expires_at,
             ));
             if (count($onTime) === 1) {
                 return $this->createMatch($connection, $transaction, $onTime[0], 'automatic', $correlationId);
@@ -215,7 +216,7 @@ final readonly class CardToCardMatchingService
         }, 3);
     }
 
-    private function createMatch(Connection $connection, object $transaction, object $reservation, string $mode, string $correlationId): CardToCardMatchReceipt
+    private function createMatch(Connection $connection, stdClass $transaction, stdClass $reservation, string $mode, string $correlationId): CardToCardMatchReceipt
     {
         $matchId = (int) $connection->table('c2c_transaction_matches')->insertGetId([
             'public_id' => (string) Str::ulid(),
@@ -238,7 +239,7 @@ final readonly class CardToCardMatchingService
         return $this->matchReceipt($connection, $transaction, $match, false);
     }
 
-    private function createReview(Connection $connection, object $transaction, string $reason, int $candidateCount, string $correlationId): CardToCardMatchReceipt
+    private function createReview(Connection $connection, stdClass $transaction, string $reason, int $candidateCount, string $correlationId): CardToCardMatchReceipt
     {
         $now = $this->timestamp();
         $reviewId = (int) $connection->table('c2c_match_reviews')->insertGetId([
@@ -262,7 +263,7 @@ final readonly class CardToCardMatchingService
         return $this->reviewReceipt($transaction, $review, false);
     }
 
-    private function matchReceipt(Connection $connection, object $transaction, object $match, bool $replayed): CardToCardMatchReceipt
+    private function matchReceipt(Connection $connection, stdClass $transaction, stdClass $match, bool $replayed): CardToCardMatchReceipt
     {
         $reservation = $connection->table('c2c_amount_reservations')->where('id', $match->c2c_amount_reservation_id)->first(['id', 'public_id']);
         if ($reservation === null) {
@@ -284,7 +285,7 @@ final readonly class CardToCardMatchingService
         );
     }
 
-    private function reviewReceipt(object $transaction, object $review, bool $replayed): CardToCardMatchReceipt
+    private function reviewReceipt(stdClass $transaction, stdClass $review, bool $replayed): CardToCardMatchReceipt
     {
         return new CardToCardMatchReceipt(
             (int) $transaction->id,

@@ -15,6 +15,7 @@ use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Support\Str;
 use RuntimeException;
+use stdClass;
 
 final readonly class GiftCardReviewDecisionService
 {
@@ -178,7 +179,7 @@ final readonly class GiftCardReviewDecisionService
         }, 3);
     }
 
-    private function assertRedeemedEvidenceMatchesAuthority(object $authority, string $providerCode, GiftCardProviderEvidence $evidence): void
+    private function assertRedeemedEvidenceMatchesAuthority(stdClass $authority, string $providerCode, GiftCardProviderEvidence $evidence): void
     {
         if ($evidence->operation !== 'redeem'
             || $evidence->outcome !== 'success'

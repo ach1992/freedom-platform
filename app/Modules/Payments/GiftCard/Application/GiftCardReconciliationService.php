@@ -13,6 +13,7 @@ use Illuminate\Contracts\Encryption\Encrypter;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Support\Str;
 use RuntimeException;
+use stdClass;
 use Throwable;
 
 final readonly class GiftCardReconciliationService
@@ -123,7 +124,7 @@ final readonly class GiftCardReconciliationService
         return $this->receipt($this->authority($submissionPublicId) ?? $authority, false);
     }
 
-    private function authority(string $submissionPublicId): ?object
+    private function authority(string $submissionPublicId): ?stdClass
     {
         return $this->database->connection()->table('gift_card_submissions as submission')
             ->join('gift_card_types as type', 'type.id', '=', 'submission.gift_card_type_id')
@@ -141,7 +142,7 @@ final readonly class GiftCardReconciliationService
             ]);
     }
 
-    private function statusRequest(object $authority): GiftCardProviderRequest
+    private function statusRequest(stdClass $authority): GiftCardProviderRequest
     {
         $code = $authority->encrypted_code === null ? null : $this->encrypter->decryptString((string) $authority->encrypted_code);
 
@@ -171,7 +172,7 @@ final readonly class GiftCardReconciliationService
         }
     }
 
-    private function recordStatusEvent(object $authority, GiftCardProviderEvidence $evidence): void
+    private function recordStatusEvent(stdClass $authority, GiftCardProviderEvidence $evidence): void
     {
         $connection = $this->database->connection();
         $existing = $connection->table('gift_card_provider_events')
@@ -210,7 +211,7 @@ final readonly class GiftCardReconciliationService
         ]);
     }
 
-    private function matchesClaim(object $authority, GiftCardProviderEvidence $evidence): bool
+    private function matchesClaim(stdClass $authority, GiftCardProviderEvidence $evidence): bool
     {
         return $evidence->faceValue !== null
             && $evidence->currency !== null
@@ -223,7 +224,7 @@ final readonly class GiftCardReconciliationService
     }
 
     private function recordFinding(
-        object $authority,
+        stdClass $authority,
         string $type,
         string $severity,
         ?GiftCardProviderEvidence $evidence,
@@ -255,7 +256,7 @@ final readonly class GiftCardReconciliationService
         ]);
     }
 
-    private function receipt(object $authority, bool $replayed): GiftCardProcessingReceipt
+    private function receipt(stdClass $authority, bool $replayed): GiftCardProcessingReceipt
     {
         $settlementPublicId = null;
         if ($authority->purchase_settlement_id !== null) {

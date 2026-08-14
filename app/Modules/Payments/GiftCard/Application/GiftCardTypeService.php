@@ -10,6 +10,7 @@ use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Support\Str;
 use RuntimeException;
+use stdClass;
 
 final readonly class GiftCardTypeService
 {
@@ -172,7 +173,7 @@ final readonly class GiftCardTypeService
         ], JSON_THROW_ON_ERROR));
     }
 
-    private function receipt(object $row, bool $replayed): GiftCardTypeReceipt
+    private function receipt(stdClass $row, bool $replayed): GiftCardTypeReceipt
     {
         return new GiftCardTypeReceipt(
             (int) $row->id,

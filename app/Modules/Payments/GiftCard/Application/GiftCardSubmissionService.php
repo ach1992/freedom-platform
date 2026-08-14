@@ -14,6 +14,7 @@ use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Str;
 use RuntimeException;
+use stdClass;
 use Throwable;
 
 final readonly class GiftCardSubmissionService
@@ -334,7 +335,7 @@ final readonly class GiftCardSubmissionService
         }
     }
 
-    private function assertClaimMatchesType(object $type, string $currency, string $brand, ?string $region): void
+    private function assertClaimMatchesType(stdClass $type, string $currency, string $brand, ?string $region): void
     {
         if ((string) $type->face_currency !== $currency
             || (string) $type->brand !== $brand
@@ -394,7 +395,7 @@ final readonly class GiftCardSubmissionService
         ], JSON_THROW_ON_ERROR));
     }
 
-    private function receipt(Connection $connection, object $row, bool $replayed): GiftCardSubmissionReceipt
+    private function receipt(Connection $connection, stdClass $row, bool $replayed): GiftCardSubmissionReceipt
     {
         $intent = $connection->table('payment_intents')->where('id', $row->payment_intent_id)->first(['public_id']);
         $type = $connection->table('gift_card_types')->where('id', $row->gift_card_type_id)->first(['type_code']);

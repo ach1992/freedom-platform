@@ -20,6 +20,7 @@ use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Support\Str;
 use RuntimeException;
+use stdClass;
 
 final readonly class CardToCardSettlementService
 {
@@ -203,10 +204,10 @@ final readonly class CardToCardSettlementService
 
     private function replay(
         Connection $connection,
-        object $match,
-        object $transaction,
-        object $reservation,
-        object $intent,
+        stdClass $match,
+        stdClass $transaction,
+        stdClass $reservation,
+        stdClass $intent,
     ): CardToCardSettlementReceipt {
         if ($match->purchase_settlement_id === null || $match->captured_at === null) {
             throw new RuntimeException('Captured C2C match is missing settlement authority.');

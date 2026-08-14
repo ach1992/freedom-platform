@@ -21,6 +21,7 @@ use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Str;
 use RuntimeException;
+use stdClass;
 use Throwable;
 
 final readonly class UsdtVerifiedTransferService
@@ -244,7 +245,7 @@ final readonly class UsdtVerifiedTransferService
         }
     }
 
-    private function recordChainEvent(Connection $connection, int $submissionId, string $providerCode, UsdtBlockchainVerificationEvidence $evidence): object
+    private function recordChainEvent(Connection $connection, int $submissionId, string $providerCode, UsdtBlockchainVerificationEvidence $evidence): stdClass
     {
         $existing = $connection->table('usdt_chain_verification_events')
             ->where('provider_code', $providerCode)->where('provider_event_id', $evidence->providerEventId)->lockForUpdate()->first();
@@ -303,7 +304,7 @@ final readonly class UsdtVerifiedTransferService
         UsdtTokenAmount::normalizeBaseUnits($evidence->amountBaseUnits);
     }
 
-    private function assertEvidenceMatchesAuthority(object $authority, UsdtBlockchainVerificationEvidence $evidence): void
+    private function assertEvidenceMatchesAuthority(stdClass $authority, UsdtBlockchainVerificationEvidence $evidence): void
     {
         $actualBaseUnits = UsdtTokenAmount::normalizeBaseUnits($evidence->amountBaseUnits ?? throw new DomainException('USDT blockchain evidence lacks raw amount.'));
         $expectedBaseUnits = UsdtTokenAmount::normalizeBaseUnits((string) $authority->expected_amount_base_units);
@@ -333,7 +334,7 @@ final readonly class UsdtVerifiedTransferService
         if ($submission === null) {
             return;
         }
-        $key = hash('sha256', implode("\0", [$submissionPublicId, $type, $providerCode ?? '', $evidence?->providerEventId ?? '', $evidence?->evidenceHash ?? '']));
+        $key = hash('sha256', implode("\0", [$submissionPublicId, $type, $providerCode ?? '', $evidence->providerEventId ?? '', $evidence->evidenceHash ?? '']));
         $this->database->connection()->table('usdt_reconciliation_findings')->insertOrIgnore([
             'public_id' => (string) Str::ulid(),
             'usdt_txid_submission_id' => (int) $submission->id,
