@@ -27,6 +27,7 @@ return new class extends Migration
             $table->string('state', 32);
             $table->unsignedBigInteger('state_version');
             $table->bigInteger('total_amount_irr');
+            $table->bigInteger('settled_amount_irr')->nullable();
             $table->char('currency', 3);
             $table->dateTime('paid_at', 6)->nullable();
             $table->string('creation_correlation_id', 64);
@@ -85,9 +86,9 @@ return new class extends Migration
         DB::statement("ALTER TABLE orders ADD CONSTRAINT orders_source_type_chk CHECK (`source_type` = 'purchase')");
         DB::statement("ALTER TABLE orders ADD CONSTRAINT orders_state_chk CHECK (`state` IN ('draft','quoted','awaiting_payment','payment_pending_review','paid','provisioning_queued','provisioning','completed','needs_review','canceled','refund_pending','refunded','partially_refunded'))");
         DB::statement('ALTER TABLE orders ADD CONSTRAINT orders_state_version_chk CHECK (`state_version` >= 1)');
-        DB::statement('ALTER TABLE orders ADD CONSTRAINT orders_amount_chk CHECK (`total_amount_irr` >= 0)');
+        DB::statement('ALTER TABLE orders ADD CONSTRAINT orders_amount_chk CHECK (`total_amount_irr` >= 0 AND (`settled_amount_irr` IS NULL OR `settled_amount_irr` >= 0))');
         DB::statement("ALTER TABLE orders ADD CONSTRAINT orders_currency_chk CHECK (`currency` = 'IRR')");
-        DB::statement("ALTER TABLE orders ADD CONSTRAINT orders_purchase_shape_chk CHECK (`source_type` <> 'purchase' OR (`purchase_settlement_id` IS NOT NULL AND `purchase_settlement_public_id` IS NOT NULL AND `payment_intent_id` IS NOT NULL AND `payment_intent_public_id` IS NOT NULL AND `source_quote_id` IS NOT NULL AND `source_quote_public_id` IS NOT NULL AND `source_quote_configuration_hash` IS NOT NULL AND `state` = 'paid' AND `state_version` = 1 AND `paid_at` IS NOT NULL AND `total_amount_irr` > 0))");
+        DB::statement("ALTER TABLE orders ADD CONSTRAINT orders_purchase_shape_chk CHECK (`source_type` <> 'purchase' OR (`purchase_settlement_id` IS NOT NULL AND `purchase_settlement_public_id` IS NOT NULL AND `payment_intent_id` IS NOT NULL AND `payment_intent_public_id` IS NOT NULL AND `source_quote_id` IS NOT NULL AND `source_quote_public_id` IS NOT NULL AND `source_quote_configuration_hash` IS NOT NULL AND `state` = 'paid' AND `state_version` = 1 AND `paid_at` IS NOT NULL AND `total_amount_irr` > 0 AND `settled_amount_irr` > 0))");
         DB::statement("ALTER TABLE orders ADD CONSTRAINT orders_quote_hash_chk CHECK (`source_quote_configuration_hash` IS NULL OR `source_quote_configuration_hash` REGEXP '^[0-9a-f]{64}$')");
 
         DB::statement("ALTER TABLE order_items ADD CONSTRAINT order_items_account_type_chk CHECK (`account_type_snapshot` IN ('customer','agent'))");
@@ -149,7 +150,7 @@ BEGIN
       AND settlement_row.user_id = NEW.user_id
       AND settlement_row.source_quote_id = NEW.source_quote_id
       AND settlement_row.source_quote_public_id = NEW.source_quote_public_id
-      AND settlement_row.amount_irr = NEW.total_amount_irr
+      AND settlement_row.amount_irr = NEW.settled_amount_irr
       AND settlement_row.currency = NEW.currency
       AND settlement_row.settled_at = NEW.paid_at
       AND intent_row.public_id = NEW.payment_intent_public_id
