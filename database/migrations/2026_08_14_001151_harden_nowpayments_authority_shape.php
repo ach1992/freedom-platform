@@ -18,11 +18,11 @@ ADD CONSTRAINT nowpayments_authority_provider_shape_chk CHECK (
         AND `provider_payment_id` IS NULL
         AND `provider_status` IS NULL
         AND `create_response_hash` IS NULL)
-    OR (`state` IN ('uncertain','failed') AND (
+    OR (`state` IN ('uncertain','failed','manual_review') AND (
         (`provider_payment_id` IS NULL AND `provider_status` IS NULL AND `create_response_hash` IS NULL)
         OR (`provider_payment_id` IS NOT NULL AND `provider_status` IS NOT NULL AND `create_response_hash` IS NOT NULL)
     ))
-    OR (`state` IN ('created','manual_review','finished','expired')
+    OR (`state` IN ('created','finished','expired')
         AND `provider_payment_id` IS NOT NULL
         AND `provider_status` IS NOT NULL
         AND `create_response_hash` IS NOT NULL)
