@@ -46,7 +46,7 @@ return new class extends Migration
 
         Schema::create('provisioning_operation_histories', function (Blueprint $table): void {
             $table->bigIncrements('id');
-            $table->foreignId('provisioning_operation_id')->constrained('provisioning_operations')->restrictOnDelete();
+            $table->foreignId('provisioning_operation_id')->constrained('provisioning_operations', indexName: 'prov_op_hist_operation_fk')->restrictOnDelete();
             $table->string('from_state', 32)->nullable();
             $table->string('to_state', 32);
             $table->unsignedBigInteger('from_version')->nullable();
