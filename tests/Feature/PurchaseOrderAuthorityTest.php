@@ -49,7 +49,8 @@ final class PurchaseOrderAuthorityTest extends TestCase
         self::assertSame($settlement->intentPublicId, $receipt->paymentIntentPublicId);
         self::assertSame($settlement->sourceQuotePublicId, $receipt->sourceQuotePublicId);
         self::assertSame($settlement->userId, $receipt->userId);
-        self::assertSame($settlement->amount->amount(), $receipt->amount->amount());
+        self::assertSame($settlement->amount->amount(), $receipt->commercialAmount->amount());
+        self::assertSame($settlement->amount->amount(), $receipt->settledAmount->amount());
         self::assertSame(1, DB::table('orders')->count());
         self::assertSame(1, DB::table('order_items')->count());
         self::assertSame(1, DB::table('order_state_histories')->count());
@@ -62,6 +63,7 @@ final class PurchaseOrderAuthorityTest extends TestCase
         self::assertSame(1, (int) $order->state_version);
         self::assertSame($settlement->settlementId, (int) $order->purchase_settlement_id);
         self::assertSame($settlement->amount->amount(), (int) $order->total_amount_irr);
+        self::assertSame($settlement->amount->amount(), (int) $order->settled_amount_irr);
         self::assertSame('IRR', $order->currency);
 
         $item = DB::table('order_items')->where('order_id', $receipt->orderId)->first();
@@ -92,6 +94,8 @@ final class PurchaseOrderAuthorityTest extends TestCase
         self::assertSame($receipt->orderId, $replay->orderId);
         self::assertSame($receipt->orderPublicId, $replay->orderPublicId);
         self::assertSame($receipt->orderItemPublicId, $replay->orderItemPublicId);
+        self::assertSame($receipt->commercialAmount->amount(), $replay->commercialAmount->amount());
+        self::assertSame($receipt->settledAmount->amount(), $replay->settledAmount->amount());
         self::assertSame(1, DB::table('orders')->count());
         self::assertSame(1, DB::table('order_items')->count());
         self::assertSame(1, DB::table('order_state_histories')->count());
@@ -122,7 +126,8 @@ final class PurchaseOrderAuthorityTest extends TestCase
             'source_quote_configuration_hash' => $quote->configuration_snapshot_hash,
             'state' => 'paid',
             'state_version' => 1,
-            'total_amount_irr' => $settlementRow->amount_irr,
+            'total_amount_irr' => $intent->amount_irr,
+            'settled_amount_irr' => $settlementRow->amount_irr,
             'currency' => 'IRR',
             'paid_at' => $settlementRow->settled_at,
             'creation_correlation_id' => $this->purchaseOrderCorrelation('forged-order'),
@@ -143,7 +148,7 @@ final class PurchaseOrderAuthorityTest extends TestCase
         ]));
         $this->assertQueryRejected(fn (): int => DB::table('orders')->where('id', $receipt->orderId)->delete());
         $this->assertQueryRejected(fn (): int => DB::table('order_items')->where('order_id', $receipt->orderId)->update([
-            'final_price_irr' => $settlement->amount->amount() + 1,
+            'final_price_irr' => $receipt->commercialAmount->amount() + 1,
         ]));
         $this->assertQueryRejected(fn (): int => DB::table('order_items')->where('order_id', $receipt->orderId)->delete());
         $this->assertQueryRejected(fn (): int => DB::table('order_state_histories')->where('order_id', $receipt->orderId)->update([
@@ -167,7 +172,7 @@ final class PurchaseOrderAuthorityTest extends TestCase
         self::assertSame(1, DB::table('order_state_histories')->where('order_id', $receipt->orderId)->count());
     }
 
-    public function test_database_rejects_wrong_quote_amount_and_currency_purchase_identity(): void
+    public function test_database_rejects_wrong_quote_commercial_settled_amount_and_currency_purchase_identity(): void
     {
         $settlement = $this->createPurchaseOrderSettlement('mismatch');
         $otherSettlement = $this->createPurchaseOrderSettlement('mismatch-other');
@@ -192,7 +197,8 @@ final class PurchaseOrderAuthorityTest extends TestCase
             'source_quote_configuration_hash' => $quote->configuration_snapshot_hash,
             'state' => 'paid',
             'state_version' => 1,
-            'total_amount_irr' => $settlementRow->amount_irr,
+            'total_amount_irr' => $intent->amount_irr,
+            'settled_amount_irr' => $settlementRow->amount_irr,
             'currency' => 'IRR',
             'paid_at' => $settlementRow->settled_at,
             'created_at' => $this->purchaseOrderTimestamp(),
@@ -208,8 +214,13 @@ final class PurchaseOrderAuthorityTest extends TestCase
         ])));
         $this->assertQueryRejected(fn (): bool => DB::table('orders')->insert(array_replace($baseOrder, [
             'public_id' => (string) Str::ulid(),
-            'total_amount_irr' => (int) $settlementRow->amount_irr + 1,
-            'creation_correlation_id' => $this->purchaseOrderCorrelation('wrong-amount'),
+            'total_amount_irr' => (int) $intent->amount_irr + 1,
+            'creation_correlation_id' => $this->purchaseOrderCorrelation('wrong-commercial-amount'),
+        ])));
+        $this->assertQueryRejected(fn (): bool => DB::table('orders')->insert(array_replace($baseOrder, [
+            'public_id' => (string) Str::ulid(),
+            'settled_amount_irr' => (int) $settlementRow->amount_irr + 1,
+            'creation_correlation_id' => $this->purchaseOrderCorrelation('wrong-settled-amount'),
         ])));
         $this->assertQueryRejected(fn (): bool => DB::table('orders')->insert(array_replace($baseOrder, [
             'public_id' => (string) Str::ulid(),
