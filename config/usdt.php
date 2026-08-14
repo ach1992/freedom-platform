@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 return [
     'rate' => [
-        'priority' => ['nobitex'],
+        'priority' => ['nobitex', 'wallex'],
         'side' => env('USDT_RATE_SIDE', 'buy'),
         'max_age_seconds' => (int) env('USDT_RATE_MAX_AGE_SECONDS', 120),
         'min_irr' => env('USDT_RATE_MIN_IRR', '100000'),

@@ -9,6 +9,7 @@ use App\Modules\Orders\Application\QuoteService;
 use App\Modules\Payments\Usdt\Application\UsdtAmountQuoteService;
 use App\Modules\Payments\Usdt\Application\UsdtCircuitBreaker;
 use App\Modules\Payments\Usdt\Application\UsdtDestinationWalletService;
+use App\Modules\Payments\Usdt\Application\UsdtManualRateSettingService;
 use App\Modules\Payments\Usdt\Application\UsdtRateResolver;
 use App\Modules\Payments\Usdt\Domain\UsdtRatePolicy;
 use App\Modules\Payments\Usdt\Domain\UsdtRateSide;
@@ -40,7 +41,7 @@ final readonly class UsdtRuntimeFactory
         }
 
         $priority = $this->stringList('usdt.rate.priority');
-        $manual = $this->config->get('usdt.rate.manual_irr');
+        $manual = $this->manualRateSettings()->current()?->rateIrr;
         $providers = [
             new NobitexUsdtRateProvider(
                 $this->http,
@@ -49,9 +50,15 @@ final readonly class UsdtRuntimeFactory
                 $this->integer('usdt.rate.http_connect_timeout_seconds'),
                 $this->integer('usdt.rate.http_max_response_bytes'),
             ),
-            new TetherlandUsdtRateProvider,
+            new WallexUsdtRateProvider(
+                $this->http,
+                $this->clock,
+                $this->integer('usdt.rate.http_timeout_seconds'),
+                $this->integer('usdt.rate.http_connect_timeout_seconds'),
+                $this->integer('usdt.rate.http_max_response_bytes'),
+            ),
         ];
-        if (is_string($manual) && $manual !== '') {
+        if ($manual !== null) {
             $providers[] = new ManualUsdtRateProvider($manual, $this->clock);
         }
 
@@ -74,6 +81,16 @@ final readonly class UsdtRuntimeFactory
         );
 
         return new UsdtRateResolver($providers, $policy, $circuit, $this->clock);
+    }
+
+    public function manualRateSettings(): UsdtManualRateSettingService
+    {
+        return new UsdtManualRateSettingService(
+            $this->database,
+            $this->authorizer,
+            $this->config,
+            $this->clock,
+        );
     }
 
     public function destinationWallets(): UsdtDestinationWalletService

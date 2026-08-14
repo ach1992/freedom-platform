@@ -32,6 +32,11 @@ final readonly class PromotionRuleDefinition
         public ?PromotionAction $action = null,
         public ?string $referralSourceCode = null,
         public bool $allowsFreeOrder = false,
+        public ?ReferralRewardRecipient $referralRewardRecipient = null,
+        public ?int $referralPendingHours = null,
+        public ?int $referralExpiryHours = null,
+        public ?bool $referralTransferable = null,
+        public ?int $perReferralUseLimit = null,
     ) {
         if ($priority < 0 || $priority > 65535) {
             throw new InvalidArgumentException('Promotion rule priority must be between 0 and 65535.');
@@ -85,6 +90,28 @@ final readonly class PromotionRuleDefinition
         if ($referralSourceCode !== null && preg_match('/\A[A-Za-z0-9_.:-]{1,128}\z/', $referralSourceCode) !== 1) {
             throw new InvalidArgumentException('Promotion referral source code is invalid.');
         }
+
+        if ($referralRewardRecipient === null) {
+            if ($referralPendingHours !== null
+                || $referralExpiryHours !== null
+                || $referralTransferable !== null
+                || $perReferralUseLimit !== null) {
+                throw new InvalidArgumentException('Referral reward policy fields require a reward recipient.');
+            }
+        } else {
+            if ($referralPendingHours !== null && $referralPendingHours < 1) {
+                throw new InvalidArgumentException('Referral pending period must be positive hours.');
+            }
+            if ($referralExpiryHours !== null && $referralExpiryHours < 1) {
+                throw new InvalidArgumentException('Referral reward expiry must be positive hours.');
+            }
+            if ($perReferralUseLimit !== null && $perReferralUseLimit < 1) {
+                throw new InvalidArgumentException('Referral per-referral use limit must be positive.');
+            }
+            if ($totalUseLimit !== null && $perReferralUseLimit !== null && $perReferralUseLimit > $totalUseLimit) {
+                throw new InvalidArgumentException('Referral per-referral use limit cannot exceed total use limit.');
+            }
+        }
     }
 
     /** @return array<string, bool|int|string|null> */
@@ -113,6 +140,21 @@ final readonly class PromotionRuleDefinition
             'tier_code' => $this->tierCode,
             'total_use_limit' => $this->totalUseLimit,
         ];
+
+        if ($this->referralRewardRecipient !== null) {
+            $snapshot['referral_reward_recipient'] = $this->referralRewardRecipient->value;
+            $snapshot['referral_transferable'] = $this->referralTransferable ?? false;
+            if ($this->referralPendingHours !== null) {
+                $snapshot['referral_pending_hours'] = $this->referralPendingHours;
+            }
+            if ($this->referralExpiryHours !== null) {
+                $snapshot['referral_expiry_hours'] = $this->referralExpiryHours;
+            }
+            if ($this->perReferralUseLimit !== null) {
+                $snapshot['per_referral_use_limit'] = $this->perReferralUseLimit;
+            }
+        }
+
         ksort($snapshot, SORT_STRING);
 
         return $snapshot;
