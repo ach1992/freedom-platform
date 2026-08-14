@@ -61,8 +61,8 @@ final readonly class UsdtBlockchainVerificationService
             (int) $authority->chain_id,
             (string) $authority->token_contract,
             (string) $authority->destination_address,
-            (int) $authority->expected_amount_base_units,
-            UsdtTokenAmount::DECIMALS,
+            UsdtTokenAmount::normalizeBaseUnits((string) $authority->expected_amount_base_units),
+            (int) $authority->token_decimals,
             (int) $authority->minimum_confirmations,
         );
 
@@ -195,16 +195,20 @@ final readonly class UsdtBlockchainVerificationService
         if ($evidence->destinationAddress === null || ! hash_equals((string) $authority->destination_address, strtolower($evidence->destinationAddress))) {
             return 'wrong_destination';
         }
-        if ($evidence->tokenDecimals !== UsdtTokenAmount::DECIMALS) {
+        if ($evidence->tokenDecimals !== (int) $authority->token_decimals || (int) $authority->token_decimals !== UsdtBep20Asset::TOKEN_DECIMALS) {
             return 'wrong_token_decimals';
         }
         if ($evidence->amountBaseUnits === null) {
             return 'missing_transfer_amount';
         }
-        if ($evidence->amountBaseUnits < (int) $authority->expected_amount_base_units) {
+        $comparison = UsdtTokenAmount::compareBaseUnits(
+            $evidence->amountBaseUnits,
+            (string) $authority->expected_amount_base_units,
+        );
+        if ($comparison < 0) {
             return 'underpaid';
         }
-        if ($evidence->amountBaseUnits > (int) $authority->expected_amount_base_units) {
+        if ($comparison > 0) {
             return 'overpaid';
         }
         if ($evidence->confirmations === null || $evidence->confirmations < (int) $authority->minimum_confirmations) {
@@ -250,7 +254,7 @@ final readonly class UsdtBlockchainVerificationService
                 'chain_id' => $evidence->chainId,
                 'token_contract' => $evidence->tokenContract === null ? null : strtolower($evidence->tokenContract),
                 'destination_address' => $evidence->destinationAddress === null ? null : strtolower($evidence->destinationAddress),
-                'amount_base_units' => $evidence->amountBaseUnits,
+                'amount_base_units' => $evidence->amountBaseUnits === null ? null : UsdtTokenAmount::normalizeBaseUnits($evidence->amountBaseUnits),
                 'token_decimals' => $evidence->tokenDecimals,
                 'confirmations' => $evidence->confirmations,
                 'block_number' => $evidence->blockNumber,
@@ -303,8 +307,10 @@ final readonly class UsdtBlockchainVerificationService
                 throw new DomainException('USDT blockchain verification address evidence is invalid.');
             }
         }
+        if ($evidence->amountBaseUnits !== null) {
+            UsdtTokenAmount::normalizeBaseUnits($evidence->amountBaseUnits);
+        }
         if (($evidence->chainId !== null && $evidence->chainId < 1)
-            || ($evidence->amountBaseUnits !== null && $evidence->amountBaseUnits < 1)
             || ($evidence->tokenDecimals !== null && ($evidence->tokenDecimals < 0 || $evidence->tokenDecimals > 36))
             || ($evidence->confirmations !== null && $evidence->confirmations < 0)
             || ($evidence->blockNumber !== null && $evidence->blockNumber < 0)) {
@@ -322,7 +328,7 @@ final readonly class UsdtBlockchainVerificationService
             ->first([
                 'submission.id as submission_id', 'submission.public_id as submission_public_id', 'submission.txid', 'submission.state as submission_state',
                 'submission.payment_intent_id', 'authority.public_id as authority_public_id', 'authority.network', 'authority.chain_id',
-                'authority.token_contract', 'authority.destination_address', 'authority.expected_amount_base_units', 'authority.minimum_confirmations',
+                'authority.token_contract', 'authority.token_decimals', 'authority.destination_address', 'authority.expected_amount_base_units', 'authority.minimum_confirmations',
                 'authority.created_at as authority_created_at', 'authority.quote_expires_at', 'intent.state as intent_state', 'intent.captured_at',
                 'transfer.public_id as transfer_public_id', 'transfer.purchase_settlement_id',
             ]);
