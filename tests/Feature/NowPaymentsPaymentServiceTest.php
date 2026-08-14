@@ -31,6 +31,7 @@ use Illuminate\Cache\ArrayStore;
 use Illuminate\Cache\Repository;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use RuntimeException;
 use Tests\TestCase;
 
@@ -162,6 +163,8 @@ final class NowPaymentsPaymentServiceTest extends TestCase
         config()->set('services.nowpayments.ipn_secret', 'nowpayments-test-secret');
         config()->set('services.nowpayments.ipn_callback_url', 'https://payments.example.test/api/payments/nowpayments/ipn');
         config()->set('services.nowpayments.pay_currency', 'usdtbsc');
+        config()->set('services.nowpayments.connect_timeout_seconds', 5);
+        config()->set('services.nowpayments.timeout_seconds', 15);
         config()->set('services.nowpayments.max_ipn_body_bytes', 262144);
     }
 
@@ -247,6 +250,72 @@ final class NowPaymentsPaymentServiceTest extends TestCase
         self::assertSame(0, $this->transport->statusCalls);
         self::assertSame(0, DB::table('purchase_settlements')->count());
         self::assertSame(1, DB::table('nowpayments_reconciliation_findings')->where('code', 'uncertain_create_requires_operator_reconciliation')->count());
+    }
+
+    public function test_stale_initiating_create_without_provider_id_fails_closed_without_recreating_provider_payment(): void
+    {
+        $service = $this->service();
+
+        $templateIntentPublicId = $this->purchaseIntent('stale-create-template', 10_000_000);
+        $template = $service->create(
+            $templateIntentPublicId,
+            'nowpayments.create.stale-template.000001',
+            $this->correlation('create-stale-template'),
+        );
+        $templateRow = DB::table('nowpayments_payment_authorities')->where('id', $template->authorityId)->first();
+        self::assertNotNull($templateRow);
+        $baselineCreateCalls = $this->transport->createCalls;
+
+        $intentPublicId = $this->purchaseIntent('stale-create', 10_000_000);
+        $intent = DB::table('payment_intents')->where('public_id', $intentPublicId)->first();
+        self::assertNotNull($intent);
+        $requestKey = 'nowpayments.create.stale-create.000001';
+
+        $staleAuthority = (array) $templateRow;
+        unset($staleAuthority['id']);
+        $staleAuthority['public_id'] = (string) Str::ulid();
+        $staleAuthority['request_key'] = $requestKey;
+        $staleAuthority['payment_intent_id'] = (int) $intent->id;
+        $staleAuthority['order_id'] = 'payment-intent:'.$intentPublicId;
+        $staleAuthority['state'] = NowPaymentsAuthorityState::Initiating->value;
+        $staleAuthority['amount_irr'] = (int) $intent->amount_irr;
+        $staleAuthority['request_payload_hash'] = hash('sha256', 'stale-create-fixture|'.$intentPublicId.'|'.$requestKey);
+        $staleAuthority['provider_payment_id'] = null;
+        $staleAuthority['provider_status'] = null;
+        $staleAuthority['provider_pay_amount'] = null;
+        $staleAuthority['provider_actually_paid'] = null;
+        $staleAuthority['provider_pay_address'] = null;
+        $staleAuthority['create_response_hash'] = null;
+        $staleAuthority['provider_created_at'] = null;
+        $staleAuthority['last_status_at'] = null;
+        DB::table('nowpayments_payment_authorities')->insert($staleAuthority);
+
+        $tooEarly = $service->create($intentPublicId, $requestKey, $this->correlation('stale-create-too-early'));
+        self::assertSame(NowPaymentsAuthorityState::Initiating, $tooEarly->state);
+        self::assertSame($baselineCreateCalls, $this->transport->createCalls);
+        self::assertSame('awaiting_user_action', DB::table('payment_intents')->where('public_id', $intentPublicId)->value('state'));
+
+        $this->clock->value = $this->clock->value->modify('+61 seconds');
+        $uncertain = $service->refresh($intentPublicId, $this->correlation('stale-create-recovery'));
+        self::assertSame(NowPaymentsAuthorityState::Uncertain, $uncertain->state);
+        self::assertNull($uncertain->providerPaymentId);
+        self::assertSame($baselineCreateCalls, $this->transport->createCalls);
+        self::assertSame(0, $this->transport->statusCalls);
+        self::assertSame('pending_manual_review', DB::table('payment_intents')->where('public_id', $intentPublicId)->value('state'));
+        self::assertSame(0, DB::table('purchase_settlements')->count());
+        self::assertSame(1, DB::table('nowpayments_reconciliation_findings')
+            ->where('nowpayments_payment_authority_id', $uncertain->authorityId)
+            ->where('code', 'create_outcome_unknown_without_provider_id')
+            ->where('severity', 'high')
+            ->count());
+
+        $replay = $service->create($intentPublicId, $requestKey, $this->correlation('stale-create-replay'));
+        self::assertSame(NowPaymentsAuthorityState::Uncertain, $replay->state);
+        self::assertSame($baselineCreateCalls, $this->transport->createCalls);
+        self::assertSame(1, DB::table('nowpayments_reconciliation_findings')
+            ->where('nowpayments_payment_authority_id', $uncertain->authorityId)
+            ->where('code', 'create_outcome_unknown_without_provider_id')
+            ->count());
     }
 
     public function test_finished_with_underpayment_never_captures(): void

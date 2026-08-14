@@ -66,6 +66,10 @@ final readonly class NowPaymentsPaymentService
             if (! hash_equals((string) $existing->request_key, $requestKey)) {
                 throw new DomainException('NOWPayments payment intent is already bound to another initiation request.');
             }
+            if ($this->authorityState((string) $existing->state) === NowPaymentsAuthorityState::Initiating
+                && $existing->provider_payment_id === null) {
+                return $this->recoverStaleInitiatingWithoutProviderId($existing, $configuration, $correlationId);
+            }
 
             return $this->receipt($existing, true);
         }
@@ -205,7 +209,7 @@ final readonly class NowPaymentsPaymentService
     {
         $this->assertUlid($intentPublicId, 'Payment intent public ID');
         $this->assertToken($correlationId, 'NOWPayments reconciliation correlation ID', 8, 64);
-        $this->configuration();
+        $configuration = $this->configuration();
 
         $authority = $this->authorityByIntentPublicId($this->database->connection(), $intentPublicId);
         if ($authority === null) {
@@ -213,6 +217,9 @@ final readonly class NowPaymentsPaymentService
         }
         $state = $this->authorityState((string) $authority->state);
         if ($authority->provider_payment_id === null) {
+            if ($state === NowPaymentsAuthorityState::Initiating) {
+                return $this->recoverStaleInitiatingWithoutProviderId($authority, $configuration, $correlationId);
+            }
             if ($state === NowPaymentsAuthorityState::Uncertain || $state === NowPaymentsAuthorityState::ManualReview) {
                 return $this->markManualReviewWithoutProviderId($authority, $correlationId);
             }
@@ -350,6 +357,49 @@ final readonly class NowPaymentsPaymentService
                     'nowpayments_create_rejected',
                 );
             }
+
+            return $this->receipt($fresh, false);
+        });
+    }
+
+    /** @param array{callback_url:string,pay_currency:string,ipn_secret:string,max_ipn_body_bytes:int,connect_timeout_seconds:int,timeout_seconds:int} $configuration */
+    private function recoverStaleInitiatingWithoutProviderId(
+        stdClass $authority,
+        array $configuration,
+        string $correlationId,
+    ): NowPaymentsPaymentReceipt {
+        return $this->database->connection()->transaction(function (Connection $connection) use ($authority, $configuration, $correlationId): NowPaymentsPaymentReceipt {
+            $current = $this->requiredAuthority($connection, (int) $authority->id, true);
+            if ($this->authorityState((string) $current->state) !== NowPaymentsAuthorityState::Initiating
+                || $current->provider_payment_id !== null) {
+                return $this->receipt($current, true);
+            }
+
+            $graceSeconds = max(60, 2 * ($configuration['connect_timeout_seconds'] + $configuration['timeout_seconds']));
+            $cutoff = $this->databaseDateTime($this->clock->now()->modify(sprintf('-%d seconds', $graceSeconds)));
+            $attemptedAt = $current->create_attempted_at;
+            if (is_string($attemptedAt) && trim($attemptedAt) !== '' && strcmp($attemptedAt, $cutoff) > 0) {
+                return $this->receipt($current, true);
+            }
+
+            $this->transitionAuthority($connection, $current, NowPaymentsAuthorityState::Uncertain);
+            $fresh = $this->requiredAuthority($connection, (int) $current->id, true);
+            $this->ensureIntentManualReview($connection, (int) $fresh->payment_intent_id, $correlationId);
+            $hash = hash('sha256', implode('|', [
+                'stale-create-outcome-unknown',
+                (string) $fresh->id,
+                is_scalar($attemptedAt) ? (string) $attemptedAt : '',
+            ]));
+            $this->observe($connection, $fresh, 'create_uncertain', null, $hash, $correlationId);
+            $this->finding(
+                $connection,
+                $fresh,
+                'create_outcome_unknown_without_provider_id',
+                'high',
+                null,
+                $hash,
+                $correlationId,
+            );
 
             return $this->receipt($fresh, false);
         });
@@ -954,7 +1004,7 @@ final readonly class NowPaymentsPaymentService
         ]);
     }
 
-    /** @return array{callback_url:string,pay_currency:string,ipn_secret:string,max_ipn_body_bytes:int} */
+    /** @return array{callback_url:string,pay_currency:string,ipn_secret:string,max_ipn_body_bytes:int,connect_timeout_seconds:int,timeout_seconds:int} */
     private function configuration(): array
     {
         if (! (bool) config('services.nowpayments.enabled', false)) {
@@ -993,12 +1043,27 @@ final readonly class NowPaymentsPaymentService
         if ($maxIpnBodyBytes === false) {
             throw new RuntimeException('NOWPayments IPN body limit configuration is invalid.');
         }
+        $connectTimeoutSeconds = filter_var(
+            config('services.nowpayments.connect_timeout_seconds', 5),
+            FILTER_VALIDATE_INT,
+            ['options' => ['min_range' => 1, 'max_range' => 30]],
+        );
+        $timeoutSeconds = filter_var(
+            config('services.nowpayments.timeout_seconds', 15),
+            FILTER_VALIDATE_INT,
+            ['options' => ['min_range' => 1, 'max_range' => 120]],
+        );
+        if ($connectTimeoutSeconds === false || $timeoutSeconds === false) {
+            throw new RuntimeException('NOWPayments timeout configuration is invalid.');
+        }
 
         return [
             'callback_url' => $callbackUrl,
             'pay_currency' => strtolower($payCurrency),
             'ipn_secret' => $secret,
             'max_ipn_body_bytes' => $maxIpnBodyBytes,
+            'connect_timeout_seconds' => $connectTimeoutSeconds,
+            'timeout_seconds' => $timeoutSeconds,
         ];
     }
 

@@ -15,6 +15,7 @@ return [
         'code_lookup_key_version' => env('GIFT_CARD_CODE_LOOKUP_KEY_VERSION', 1),
         'code_lookup_previous_key' => env('GIFT_CARD_CODE_LOOKUP_PREVIOUS_KEY'),
         'code_lookup_previous_key_version' => env('GIFT_CARD_CODE_LOOKUP_PREVIOUS_KEY_VERSION'),
+        'code_lookup_historical_keys' => env('GIFT_CARD_CODE_LOOKUP_HISTORICAL_KEYS_JSON'),
     ],
     'usdt_bep20' => [
         'chain_id' => env('USDT_BEP20_CHAIN_ID', 56),

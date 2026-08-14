@@ -60,14 +60,16 @@ final class GiftCardLookupKeyRotationTest extends TestCase
         );
     }
 
-    public function test_previous_lookup_key_prevents_historical_code_reuse_after_rotation(): void
+    public function test_historical_lookup_keyring_prevents_code_reuse_after_multiple_rotations(): void
     {
         $oldKey = str_repeat('o', 32);
         $newKey = str_repeat('n', 32);
+        $thirdKey = str_repeat('t', 32);
         config()->set('payments.gift_card.code_lookup_key', $oldKey);
         config()->set('payments.gift_card.code_lookup_key_version', 1);
         config()->set('payments.gift_card.code_lookup_previous_key', null);
         config()->set('payments.gift_card.code_lookup_previous_key_version', null);
+        config()->set('payments.gift_card.code_lookup_historical_keys', null);
 
         $first = $this->purchase('first');
         $code = 'ROTATION-CARD-0001';
@@ -83,11 +85,20 @@ final class GiftCardLookupKeyRotationTest extends TestCase
         $this->submit($first, 'first', $code);
         self::assertSame(1, DB::table('gift_card_submissions')->count());
 
+        config()->set('payments.gift_card.code_lookup_key', $thirdKey);
+        config()->set('payments.gift_card.code_lookup_key_version', 3);
+        config()->set('payments.gift_card.code_lookup_previous_key', $newKey);
+        config()->set('payments.gift_card.code_lookup_previous_key_version', 2);
+        config()->set('payments.gift_card.code_lookup_historical_keys', [1 => $oldKey]);
+
+        $this->submit($first, 'first', $code);
+        self::assertSame(1, DB::table('gift_card_submissions')->count());
+
         $second = $this->purchase('second');
 
         try {
             $this->submit($second, 'second', $code);
-            self::fail('Expected historical gift-card code reuse to be rejected after key rotation.');
+            self::fail('Expected historical gift-card code reuse to be rejected after multiple key rotations.');
         } catch (RuntimeException $exception) {
             self::assertStringContainsString('already bound to another purchase', $exception->getMessage());
         }

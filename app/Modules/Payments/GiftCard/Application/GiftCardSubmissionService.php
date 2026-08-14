@@ -78,9 +78,14 @@ final readonly class GiftCardSubmissionService
 
         $keyVersion = $normalizedCode === null ? null : $this->lookupKeyVersion();
         $codeHash = $normalizedCode === null ? null : hash_hmac('sha256', $normalizedCode, $this->lookupKey());
-        $previousLookup = $normalizedCode === null || $keyVersion === null ? null : $this->previousLookupKey($keyVersion);
-        $previousCodeHash = $previousLookup === null || $normalizedCode === null ? null : hash_hmac('sha256', $normalizedCode, $previousLookup['key']);
-        $previousKeyVersion = $previousLookup['version'] ?? null;
+        $historicalLookups = $normalizedCode === null || $keyVersion === null ? [] : $this->historicalLookupKeys($keyVersion);
+        /** @var array<int, string> $historicalCodeHashes */
+        $historicalCodeHashes = [];
+        if ($normalizedCode !== null) {
+            foreach ($historicalLookups as $lookup) {
+                $historicalCodeHashes[$lookup['version']] = hash_hmac('sha256', $normalizedCode, $lookup['key']);
+            }
+        }
         $maskedCode = $normalizedCode === null ? null : $this->maskCode($normalizedCode);
 
         try {
@@ -102,8 +107,7 @@ final readonly class GiftCardSubmissionService
                 $imageContentHash,
                 $keyVersion,
                 $codeHash,
-                $previousCodeHash,
-                $previousKeyVersion,
+                $historicalCodeHashes,
                 $maskedCode,
                 $correlationId,
             ): GiftCardSubmissionReceipt {
@@ -148,16 +152,16 @@ final readonly class GiftCardSubmissionService
                     $claimedRegion,
                 );
 
-                $previousPayloadHash = null;
-                if ($previousCodeHash !== null && $previousKeyVersion !== null) {
-                    $previousPayloadHash = $this->requestPayloadHash(
+                $acceptedPayloadHashes = [$payloadHash];
+                foreach ($historicalCodeHashes as $historicalKeyVersion => $historicalCodeHash) {
+                    $acceptedPayloadHashes[] = $this->requestPayloadHash(
                         (int) $intent->id,
                         (int) $type->id,
                         (int) $type->version,
                         (string) $type->configuration_hash,
                         $userId,
-                        $previousCodeHash,
-                        $previousKeyVersion,
+                        $historicalCodeHash,
+                        $historicalKeyVersion,
                         $privateImageReference,
                         $telegramFileId,
                         $telegramFileUniqueId,
@@ -171,22 +175,27 @@ final readonly class GiftCardSubmissionService
 
                 $existing = $connection->table('gift_card_submissions')->where('submission_key', $submissionKey)->lockForUpdate()->first();
                 if ($existing !== null) {
+                    $payloadMatches = false;
+                    foreach ($acceptedPayloadHashes as $acceptedPayloadHash) {
+                        if (hash_equals(strtolower((string) $existing->request_payload_hash), $acceptedPayloadHash)) {
+                            $payloadMatches = true;
+                            break;
+                        }
+                    }
                     if ((int) $existing->payment_intent_id !== (int) $intent->id
                         || (int) $existing->gift_card_type_id !== (int) $type->id
-                        || (! hash_equals(strtolower((string) $existing->request_payload_hash), $payloadHash)
-                            && ($previousPayloadHash === null
-                                || ! hash_equals(strtolower((string) $existing->request_payload_hash), $previousPayloadHash)))) {
+                        || ! $payloadMatches) {
                         throw new RuntimeException('Gift-card submission key conflicts with accepted evidence.');
                     }
 
                     return $this->receipt($connection, $existing, true);
                 }
 
-                if ($previousCodeHash !== null) {
+                if ($historicalCodeHashes !== []) {
                     $historicalDuplicate = $connection->table('gift_card_submissions')
-                        ->where('code_lookup_hash', $previousCodeHash)
+                        ->whereIn('code_lookup_hash', array_values($historicalCodeHashes))
                         ->lockForUpdate()
-                        ->first(['id', 'public_id']);
+                        ->first(['id', 'public_id', 'code_lookup_hash']);
                     if ($historicalDuplicate !== null) {
                         throw new RuntimeException('Gift-card evidence is already bound to another purchase.');
                     }
@@ -285,17 +294,17 @@ final readonly class GiftCardSubmissionService
 
             throw $exception;
         } catch (RuntimeException $exception) {
-            if ($previousCodeHash !== null
+            if ($historicalCodeHashes !== []
                 && $exception->getMessage() === 'Gift-card evidence is already bound to another purchase.') {
                 $connection = $this->database->connection();
                 $duplicate = $connection->table('gift_card_submissions')
-                    ->where('code_lookup_hash', $previousCodeHash)
-                    ->first(['id', 'public_id']);
+                    ->whereIn('code_lookup_hash', array_values($historicalCodeHashes))
+                    ->first(['id', 'public_id', 'code_lookup_hash']);
                 if ($duplicate !== null) {
                     $this->recordDuplicateFindingSafely(
                         (int) $duplicate->id,
                         (string) $duplicate->public_id,
-                        $previousCodeHash,
+                        (string) $duplicate->code_lookup_hash,
                         $correlationId,
                     );
                 }
@@ -496,6 +505,51 @@ final readonly class GiftCardSubmissionService
         }
 
         return ['key' => $key, 'version' => (int) $version];
+    }
+
+    /** @return list<array{key:string,version:int}> */
+    private function historicalLookupKeys(int $currentVersion): array
+    {
+        /** @var array<int, string> $keysByVersion */
+        $keysByVersion = [];
+        $previous = $this->previousLookupKey($currentVersion);
+        if ($previous !== null) {
+            $keysByVersion[$previous['version']] = $previous['key'];
+        }
+
+        $configured = config('payments.gift_card.code_lookup_historical_keys');
+        if ($configured !== null && (! is_string($configured) || trim($configured) !== '')) {
+            if (is_string($configured)) {
+                try {
+                    $configured = json_decode($configured, true, 32, JSON_THROW_ON_ERROR);
+                } catch (Throwable $exception) {
+                    throw new RuntimeException('Gift-card historical code lookup keyring is invalid.', 0, $exception);
+                }
+            }
+            if (! is_array($configured)) {
+                throw new RuntimeException('Gift-card historical code lookup keyring is invalid.');
+            }
+
+            foreach ($configured as $rawVersion => $key) {
+                $version = filter_var($rawVersion, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+                if ($version === false || (int) $version >= $currentVersion || ! is_string($key) || strlen($key) < 32) {
+                    throw new RuntimeException('Gift-card historical code lookup keyring is invalid.');
+                }
+                $version = (int) $version;
+                if (isset($keysByVersion[$version]) && ! hash_equals($keysByVersion[$version], $key)) {
+                    throw new RuntimeException('Gift-card historical code lookup keyring conflicts with the previous-key configuration.');
+                }
+                $keysByVersion[$version] = $key;
+            }
+        }
+        krsort($keysByVersion, SORT_NUMERIC);
+
+        $result = [];
+        foreach ($keysByVersion as $version => $key) {
+            $result[] = ['key' => $key, 'version' => $version];
+        }
+
+        return $result;
     }
 
     private function assertToken(string $value, string $label, int $minimum, int $maximum): void
