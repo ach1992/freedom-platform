@@ -31,7 +31,7 @@ CREATE TABLE service_subscriptions (
     CONSTRAINT service_subscriptions_order_item_id_foreign FOREIGN KEY (order_item_id) REFERENCES order_items (id) ON DELETE RESTRICT,
     CONSTRAINT service_subscriptions_user_id_foreign FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE RESTRICT,
     CONSTRAINT service_subscriptions_bootstrap_block_chk CHECK (0 = 1)
-) ENGINE=InnoDB
+) ENGINE=InnoDB DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin
 SQL);
         }
 
@@ -62,7 +62,7 @@ CREATE TABLE provisioning_operations (
     CONSTRAINT provisioning_operations_service_subscription_id_foreign FOREIGN KEY (service_subscription_id) REFERENCES service_subscriptions (id) ON DELETE RESTRICT,
     CONSTRAINT provisioning_operations_user_id_foreign FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE RESTRICT,
     CONSTRAINT provisioning_operations_bootstrap_block_chk CHECK (0 = 1)
-) ENGINE=InnoDB
+) ENGINE=InnoDB DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin
 SQL);
         }
 
@@ -85,7 +85,7 @@ CREATE TABLE provisioning_operation_histories (
     KEY provisioning_operation_history_created_idx (provisioning_operation_id, created_at),
     CONSTRAINT prov_op_hist_operation_fk FOREIGN KEY (provisioning_operation_id) REFERENCES provisioning_operations (id) ON DELETE RESTRICT,
     CONSTRAINT provisioning_operation_histories_bootstrap_block_chk CHECK (0 = 1)
-) ENGINE=InnoDB
+) ENGINE=InnoDB DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin
 SQL);
         }
     }
