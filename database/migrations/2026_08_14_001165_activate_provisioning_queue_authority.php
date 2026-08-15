@@ -11,6 +11,10 @@ return new class extends Migration
     /** @requirement BUY-001 PAY-002 PAY-003 PRV-002 PRV-003 DAT-002 DAT-003 DAT-004 SEC-002 SEC-008 QUA-004 */
     public function up(): void
     {
+        if (! $this->exactProvisioningTextAuthorityReady()) {
+            throw new RuntimeException('Provisioning queue activation requires binary-exact provisioning authority text columns.');
+        }
+
         $queueAuthority = require __DIR__.'/2026_08_14_001162_create_provisioning_queue_authority.php';
         if (! is_object($queueAuthority) || ! method_exists($queueAuthority, 'up')) {
             throw new RuntimeException('Provisioning queue authority migration cannot be re-entered safely.');
@@ -59,6 +63,28 @@ BEGIN
     SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Order mutation is not enabled by the current lifecycle authority.';
 END
 SQL);
+    }
+
+    private function exactProvisioningTextAuthorityReady(): bool
+    {
+        $row = DB::selectOne(<<<'SQL'
+SELECT COUNT(*) AS aggregate
+FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA = DATABASE()
+  AND COLLATION_NAME = 'utf8mb4_bin'
+  AND (
+      (TABLE_NAME = 'service_subscriptions'
+       AND COLUMN_NAME IN ('public_id', 'creation_correlation_id'))
+      OR
+      (TABLE_NAME = 'provisioning_operations'
+       AND COLUMN_NAME IN ('public_id', 'operation_key', 'operation_type', 'state', 'correlation_id'))
+      OR
+      (TABLE_NAME = 'provisioning_operation_histories'
+       AND COLUMN_NAME IN ('from_state', 'to_state', 'actor_type', 'reason_code', 'correlation_id'))
+  )
+SQL);
+
+        return $row !== null && (int) $row->aggregate === 12;
     }
 
     private function triggerContains(string $trigger, string $needle): bool
