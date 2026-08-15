@@ -203,7 +203,7 @@ SQL);
 
     private function activateQueueFenceGuards(): void
     {
-        // Order and Operation guards become active before Service creation is re-enabled.
+        // Order transition owns the Order row and is the queue/refund linearization point.
         DB::unprepared(<<<'SQL'
 CREATE OR REPLACE TRIGGER orders_provisioning_invalidation_guard
 BEFORE UPDATE ON orders
@@ -228,29 +228,20 @@ BEGIN
 END
 SQL);
 
+        // The primary Provisioning Operation authority trigger performs the current financial
+        // locking read in settlement -> intent -> Order order. This companion fence must not
+        // acquire Order/financial locks first; it only rejects a committed monotonic invalidation.
         DB::unprepared(<<<'SQL'
 CREATE OR REPLACE TRIGGER provisioning_operations_financial_invalidation_guard
 BEFORE INSERT ON provisioning_operations
 FOR EACH ROW
 BEGIN
-    DECLARE locked_order_id BIGINT UNSIGNED DEFAULT NULL;
     DECLARE invalidation_id BIGINT UNSIGNED DEFAULT NULL;
-
-    SELECT id INTO locked_order_id
-    FROM orders
-    WHERE id = NEW.order_id
-    LIMIT 1
-    FOR UPDATE;
-
-    IF locked_order_id IS NULL THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Initial Provisioning Operation requires a durable Order financial-authority fence.';
-    END IF;
 
     SELECT id INTO invalidation_id
     FROM provisioning_financial_invalidations
-    WHERE order_id = locked_order_id
-    LIMIT 1
-    FOR UPDATE;
+    WHERE order_id = NEW.order_id
+    LIMIT 1;
 
     IF invalidation_id IS NOT NULL THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Financially invalidated Order cannot create an initial Provisioning Operation.';
@@ -258,29 +249,20 @@ BEGIN
 END
 SQL);
 
+        // The primary Service Subscription authority trigger performs the current financial
+        // locking read in settlement -> intent -> Order order. Keep this fence lock-free so
+        // trigger action order cannot invert that financial lock order.
         DB::unprepared(<<<'SQL'
 CREATE OR REPLACE TRIGGER service_subscriptions_financial_invalidation_guard
 BEFORE INSERT ON service_subscriptions
 FOR EACH ROW
 BEGIN
-    DECLARE locked_order_id BIGINT UNSIGNED DEFAULT NULL;
     DECLARE invalidation_id BIGINT UNSIGNED DEFAULT NULL;
-
-    SELECT id INTO locked_order_id
-    FROM orders
-    WHERE id = NEW.order_id
-    LIMIT 1
-    FOR UPDATE;
-
-    IF locked_order_id IS NULL THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service Subscription requires a durable Order financial-authority fence.';
-    END IF;
 
     SELECT id INTO invalidation_id
     FROM provisioning_financial_invalidations
-    WHERE order_id = locked_order_id
-    LIMIT 1
-    FOR UPDATE;
+    WHERE order_id = NEW.order_id
+    LIMIT 1;
 
     IF invalidation_id IS NOT NULL THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Financially invalidated Order cannot create a Service Subscription.';
