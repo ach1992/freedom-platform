@@ -51,6 +51,9 @@ return new class extends Migration
         if (DB::table('orders')->where('state', 'provisioning_queued')->exists()) {
             throw new RuntimeException('Cannot roll back provisioning financial invalidation while queued Orders exist.');
         }
+        if (Schema::hasTable('provisioning_financial_invalidations') && DB::table('provisioning_financial_invalidations')->exists()) {
+            throw new RuntimeException('Cannot roll back provisioning financial invalidation while durable refund invalidations exist.');
+        }
 
         $this->createFailClosedQueueFenceGuards();
         DB::unprepared('DROP TRIGGER IF EXISTS payment_intents_provisioning_invalidation_guard');
@@ -103,7 +106,16 @@ CREATE OR REPLACE TRIGGER provisioning_financial_invalidations_update_guard
 BEFORE UPDATE ON provisioning_financial_invalidations
 FOR EACH ROW
 BEGIN
-    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Provisioning financial invalidation is immutable.';
+    -- Duplicate refund observations may perform an exact no-op update through ON DUPLICATE KEY.
+    -- Any material change remains forbidden so the first accepted refund is a permanent fence.
+    IF NOT (NEW.id <=> OLD.id)
+       OR NOT (NEW.order_id <=> OLD.order_id)
+       OR NOT (NEW.purchase_settlement_id <=> OLD.purchase_settlement_id)
+       OR NOT (NEW.payment_intent_id <=> OLD.payment_intent_id)
+       OR NOT (NEW.purchase_refund_id <=> OLD.purchase_refund_id)
+       OR NOT (NEW.created_at <=> OLD.created_at) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Provisioning financial invalidation is immutable.';
+    END IF;
 END
 SQL);
 
@@ -136,11 +148,12 @@ BEGIN
     LIMIT 1
     FOR UPDATE;
 
-    INSERT IGNORE INTO provisioning_financial_invalidations (
+    INSERT INTO provisioning_financial_invalidations (
         order_id, purchase_settlement_id, payment_intent_id, purchase_refund_id, created_at
     ) VALUES (
         locked_order_id, NEW.purchase_settlement_id, NEW.payment_intent_id, NEW.id, CURRENT_TIMESTAMP(6)
-    );
+    )
+    ON DUPLICATE KEY UPDATE id = id;
 END
 SQL);
     }
@@ -148,7 +161,7 @@ SQL);
     private function backfillExistingRefundInvalidations(): void
     {
         DB::statement(<<<'SQL'
-INSERT IGNORE INTO provisioning_financial_invalidations (
+INSERT INTO provisioning_financial_invalidations (
     order_id, purchase_settlement_id, payment_intent_id, purchase_refund_id, created_at
 )
 SELECT
@@ -168,6 +181,7 @@ FROM (
 LEFT JOIN orders order_row
     ON order_row.purchase_settlement_id = refund_chain.purchase_settlement_id
    AND order_row.payment_intent_id = refund_chain.payment_intent_id
+ON DUPLICATE KEY UPDATE id = id
 SQL);
     }
 
