@@ -93,7 +93,7 @@ final class InitialProvisioningDispatchAndReplayAuthorityTest extends TestCase
 
             public function handle(OutboxMessage $message): OutboxDispatchOutcome
             {
-                ++$this->handled;
+                $this->handled++;
 
                 return OutboxDispatchOutcome::Success;
             }
@@ -161,6 +161,130 @@ final class InitialProvisioningDispatchAndReplayAuthorityTest extends TestCase
         self::assertSame(1, $handler->handled);
         self::assertSame('processed', DB::table('outbox_messages')->where('id', $eventId)->value('dispatch_state'));
         self::assertSame('authority_pending', DB::table('outbox_messages')->where('id', $forgedEventId)->value('dispatch_state'));
+    }
+
+    public function test_failed_final_order_transition_leaves_command_unclaimable(): void
+    {
+        $order = $this->createPaidOrder('failed-transition');
+        $authority = $this->createDirectLocalAuthority($order, 'failed-transition');
+        $payload = new SafeOutboxPayload([
+            'order_public_id' => $order->orderPublicId,
+            'order_item_public_id' => $authority['order_item_public_id'],
+            'provisioning_operation_public_id' => $authority['operation_public_id'],
+            'service_subscription_public_id' => $authority['service_public_id'],
+        ]);
+        $eventId = (string) Str::uuid();
+        $timestamp = $this->purchaseOrderTimestamp();
+
+        DB::table('outbox_messages')->insert([
+            'id' => $eventId,
+            'event_key' => 'provisioning.initial.requested:'.$authority['operation_public_id'],
+            'event_type' => 'provisioning.initial.requested',
+            'aggregate_type' => 'provisioning_operation',
+            'aggregate_id' => $authority['operation_public_id'],
+            'payload' => $payload->json(),
+            'payload_hash' => $payload->hash(),
+            'correlation_id' => $this->purchaseOrderCorrelation('failed-transition-wrong-correlation'),
+            'available_at' => $timestamp,
+            'processed_at' => null,
+            'attempts' => 0,
+            'last_error_class' => null,
+            'last_error_code' => null,
+            'created_at' => $timestamp,
+            'updated_at' => $timestamp,
+        ]);
+        self::assertSame('authority_pending', DB::table('outbox_messages')->where('id', $eventId)->value('dispatch_state'));
+
+        try {
+            DB::table('orders')->where('id', $order->orderId)->update([
+                'state' => OrderState::ProvisioningQueued->value,
+                'state_version' => 2,
+                'updated_at' => $timestamp,
+            ]);
+            self::fail('Final Order transition must reject a command whose correlation is not the Operation correlation.');
+        } catch (QueryException) {
+            self::assertSame(OrderState::Paid->value, DB::table('orders')->where('id', $order->orderId)->value('state'));
+            self::assertSame(1, (int) DB::table('orders')->where('id', $order->orderId)->value('state_version'));
+        }
+
+        DB::table('outbox_messages')
+            ->where('id', '<>', $eventId)
+            ->update(['available_at' => '2999-01-01 00:00:00.000000']);
+
+        $handler = new class implements OutboxMessageHandler
+        {
+            public int $handled = 0;
+
+            public function handle(OutboxMessage $message): OutboxDispatchOutcome
+            {
+                $this->handled++;
+
+                return OutboxDispatchOutcome::Success;
+            }
+        };
+
+        self::assertNull($this->app->make(DatabaseOutboxDispatcher::class)->dispatchOne($handler));
+        self::assertSame(0, $handler->handled);
+        self::assertSame('authority_pending', DB::table('outbox_messages')->where('id', $eventId)->value('dispatch_state'));
+    }
+
+    public function test_processed_command_cannot_authorize_first_order_transition(): void
+    {
+        $order = $this->createPaidOrder('processed-before-authority');
+        $authority = $this->createDirectLocalAuthority($order, 'processed-before-authority');
+        $payload = new SafeOutboxPayload([
+            'order_public_id' => $order->orderPublicId,
+            'order_item_public_id' => $authority['order_item_public_id'],
+            'provisioning_operation_public_id' => $authority['operation_public_id'],
+            'service_subscription_public_id' => $authority['service_public_id'],
+        ]);
+        $eventId = (string) Str::uuid();
+        $timestamp = $this->purchaseOrderTimestamp();
+
+        DB::table('outbox_messages')->insert([
+            'id' => $eventId,
+            'event_key' => 'provisioning.initial.requested:'.$authority['operation_public_id'],
+            'event_type' => 'provisioning.initial.requested',
+            'aggregate_type' => 'provisioning_operation',
+            'aggregate_id' => $authority['operation_public_id'],
+            'payload' => $payload->json(),
+            'payload_hash' => $payload->hash(),
+            'correlation_id' => $authority['operation_correlation_id'],
+            'available_at' => $timestamp,
+            'processed_at' => null,
+            'attempts' => 0,
+            'last_error_class' => null,
+            'last_error_code' => null,
+            'created_at' => $timestamp,
+            'updated_at' => $timestamp,
+        ]);
+
+        /** @var Migration $outboxEnvelopeMigration */
+        $outboxEnvelopeMigration = require database_path('migrations/2026_08_14_001161_z_harden_initial_provisioning_outbox_envelope.php');
+        DB::unprepared('DROP TRIGGER IF EXISTS outbox_initial_provision_envelope_update_guard');
+        try {
+            $updated = DB::table('outbox_messages')->where('id', $eventId)->update([
+                'dispatch_state' => 'processed',
+                'processed_at' => $timestamp,
+                'updated_at' => $timestamp,
+            ]);
+            self::assertSame(1, $updated);
+        } finally {
+            $outboxEnvelopeMigration->up();
+        }
+        self::assertSame('processed', DB::table('outbox_messages')->where('id', $eventId)->value('dispatch_state'));
+
+        try {
+            DB::table('orders')->where('id', $order->orderId)->update([
+                'state' => OrderState::ProvisioningQueued->value,
+                'state_version' => 2,
+                'updated_at' => $timestamp,
+            ]);
+            self::fail('A processed initial provisioning command must not authorize the first Order queue transition.');
+        } catch (QueryException) {
+            self::assertSame(OrderState::Paid->value, DB::table('orders')->where('id', $order->orderId)->value('state'));
+            self::assertSame(1, (int) DB::table('orders')->where('id', $order->orderId)->value('state_version'));
+        }
     }
 
     public function test_application_queue_releases_exact_command_and_replay_rejects_correlation_only_corruption(): void
