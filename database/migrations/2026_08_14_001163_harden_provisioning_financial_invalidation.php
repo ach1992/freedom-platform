@@ -12,8 +12,8 @@ return new class extends Migration
     /** @requirement PAY-002 PAY-003 PRV-002 PRV-003 DAT-002 DAT-003 DAT-004 SEC-002 QUA-004 */
     public function up(): void
     {
-        // MariaDB DDL commits per statement. Freeze new queue creation first so a partial
-        // migration cannot expose an unfenced financial-authority window.
+        // Keep queue creation fail-closed until the complete monotonic invalidation chain exists.
+        // Every step is restart-safe because MariaDB may commit DDL statements independently.
         $this->createFailClosedQueueFenceGuards();
 
         if (! Schema::hasTable('provisioning_financial_invalidations')) {
@@ -37,15 +37,11 @@ return new class extends Migration
             });
         }
 
-        $this->createInvalidationTableGuards();
-        $this->createOrderFinancialLockGuard();
-        $this->createOrderRefundBackfillTrigger();
+        $this->createInvalidationImmutabilityGuards();
         $this->createRefundInvalidationTrigger();
         $this->backfillExistingRefundInvalidations();
         $this->createPaymentIntentInvalidationGuard();
-
-        // Re-enable queue creation only after the complete invalidation chain is durable.
-        $this->createActiveQueueFenceGuards();
+        $this->activateQueueFenceGuards();
     }
 
     public function down(): void
@@ -60,14 +56,7 @@ return new class extends Migration
         $this->createFailClosedQueueFenceGuards();
         DB::unprepared('DROP TRIGGER IF EXISTS payment_intents_provisioning_invalidation_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS purchase_refunds_provisioning_invalidation');
-        DB::unprepared('DROP TRIGGER IF EXISTS orders_provisioning_invalidation_after_insert');
-        DB::unprepared('DROP TRIGGER IF EXISTS orders_provisioning_financial_lock_guard');
-        DB::unprepared('DROP TRIGGER IF EXISTS provisioning_financial_invalidations_delete_guard');
-        DB::unprepared('DROP TRIGGER IF EXISTS provisioning_financial_invalidations_update_guard');
-        DB::unprepared('DROP TRIGGER IF EXISTS provisioning_financial_invalidations_insert_guard');
-
         Schema::dropIfExists('provisioning_financial_invalidations');
-
         DB::unprepared('DROP TRIGGER IF EXISTS orders_provisioning_invalidation_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS provisioning_operations_financial_invalidation_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS service_subscriptions_financial_invalidation_guard');
@@ -75,29 +64,26 @@ return new class extends Migration
 
     private function createFailClosedQueueFenceGuards(): void
     {
-        DB::unprepared('DROP TRIGGER IF EXISTS service_subscriptions_financial_invalidation_guard');
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER service_subscriptions_financial_invalidation_guard
+CREATE OR REPLACE TRIGGER service_subscriptions_financial_invalidation_guard
 BEFORE INSERT ON service_subscriptions
 FOR EACH ROW
 BEGIN
-    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Provisioning queue financial invalidation migration is incomplete.';
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Provisioning financial invalidation migration is incomplete.';
 END
 SQL);
 
-        DB::unprepared('DROP TRIGGER IF EXISTS provisioning_operations_financial_invalidation_guard');
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER provisioning_operations_financial_invalidation_guard
+CREATE OR REPLACE TRIGGER provisioning_operations_financial_invalidation_guard
 BEFORE INSERT ON provisioning_operations
 FOR EACH ROW
 BEGIN
-    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Provisioning queue financial invalidation migration is incomplete.';
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Provisioning financial invalidation migration is incomplete.';
 END
 SQL);
 
-        DB::unprepared('DROP TRIGGER IF EXISTS orders_provisioning_invalidation_guard');
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER orders_provisioning_invalidation_guard
+CREATE OR REPLACE TRIGGER orders_provisioning_invalidation_guard
 BEFORE UPDATE ON orders
 FOR EACH ROW
 BEGIN
@@ -105,42 +91,16 @@ BEGIN
        AND OLD.state_version = 1
        AND NEW.state = 'provisioning_queued'
        AND NEW.state_version = 2 THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Provisioning queue financial invalidation migration is incomplete.';
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Provisioning financial invalidation migration is incomplete.';
     END IF;
 END
 SQL);
     }
 
-    private function createInvalidationTableGuards(): void
+    private function createInvalidationImmutabilityGuards(): void
     {
-        DB::unprepared('DROP TRIGGER IF EXISTS provisioning_financial_invalidations_insert_guard');
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER provisioning_financial_invalidations_insert_guard
-BEFORE INSERT ON provisioning_financial_invalidations
-FOR EACH ROW
-BEGIN
-    DECLARE valid_authority_count INT DEFAULT 0;
-
-    SELECT COUNT(*) INTO valid_authority_count
-    FROM orders order_row
-    INNER JOIN purchase_refunds refund_row
-        ON refund_row.id = NEW.purchase_refund_id
-       AND refund_row.purchase_settlement_id = order_row.purchase_settlement_id
-       AND refund_row.payment_intent_id = order_row.payment_intent_id
-       AND refund_row.user_id = order_row.user_id
-    WHERE order_row.id = NEW.order_id
-      AND order_row.purchase_settlement_id = NEW.purchase_settlement_id
-      AND order_row.payment_intent_id = NEW.payment_intent_id;
-
-    IF valid_authority_count <> 1 THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Provisioning financial invalidation requires one matching authoritative purchase refund.';
-    END IF;
-END
-SQL);
-
-        DB::unprepared('DROP TRIGGER IF EXISTS provisioning_financial_invalidations_update_guard');
-        DB::unprepared(<<<'SQL'
-CREATE TRIGGER provisioning_financial_invalidations_update_guard
+CREATE OR REPLACE TRIGGER provisioning_financial_invalidations_update_guard
 BEFORE UPDATE ON provisioning_financial_invalidations
 FOR EACH ROW
 BEGIN
@@ -148,9 +108,8 @@ BEGIN
 END
 SQL);
 
-        DB::unprepared('DROP TRIGGER IF EXISTS provisioning_financial_invalidations_delete_guard');
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER provisioning_financial_invalidations_delete_guard
+CREATE OR REPLACE TRIGGER provisioning_financial_invalidations_delete_guard
 BEFORE DELETE ON provisioning_financial_invalidations
 FOR EACH ROW
 BEGIN
@@ -159,78 +118,10 @@ END
 SQL);
     }
 
-    private function createOrderFinancialLockGuard(): void
-    {
-        DB::unprepared('DROP TRIGGER IF EXISTS orders_provisioning_financial_lock_guard');
-        DB::unprepared(<<<'SQL'
-CREATE TRIGGER orders_provisioning_financial_lock_guard
-BEFORE INSERT ON orders
-FOR EACH ROW
-BEGIN
-    DECLARE locked_settlement_id BIGINT UNSIGNED DEFAULT NULL;
-    DECLARE locked_intent_id BIGINT UNSIGNED DEFAULT NULL;
-
-    IF NEW.source_type = 'purchase'
-       AND NEW.purchase_settlement_id IS NOT NULL
-       AND NEW.payment_intent_id IS NOT NULL THEN
-        SELECT id INTO locked_settlement_id
-        FROM purchase_settlements
-        WHERE id = NEW.purchase_settlement_id
-        LIMIT 1
-        FOR UPDATE;
-
-        IF locked_settlement_id IS NULL THEN
-            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Purchase Order requires authoritative settlement before financial invalidation coordination.';
-        END IF;
-
-        SELECT id INTO locked_intent_id
-        FROM payment_intents
-        WHERE id = NEW.payment_intent_id
-        LIMIT 1
-        FOR UPDATE;
-
-        IF locked_intent_id IS NULL THEN
-            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Purchase Order requires authoritative payment intent before financial invalidation coordination.';
-        END IF;
-    END IF;
-END
-SQL);
-    }
-
-    private function createOrderRefundBackfillTrigger(): void
-    {
-        DB::unprepared('DROP TRIGGER IF EXISTS orders_provisioning_invalidation_after_insert');
-        DB::unprepared(<<<'SQL'
-CREATE TRIGGER orders_provisioning_invalidation_after_insert
-AFTER INSERT ON orders
-FOR EACH ROW
-BEGIN
-    DECLARE refund_id BIGINT UNSIGNED DEFAULT NULL;
-
-    IF NEW.source_type = 'purchase' AND NEW.payment_intent_id IS NOT NULL THEN
-        SELECT latest_purchase_refund_id INTO refund_id
-        FROM payment_intents
-        WHERE id = NEW.payment_intent_id
-          AND state IN ('refund_pending','partially_refunded','refunded')
-        LIMIT 1;
-
-        IF refund_id IS NOT NULL THEN
-            INSERT IGNORE INTO provisioning_financial_invalidations (
-                order_id, purchase_settlement_id, payment_intent_id, purchase_refund_id, created_at
-            ) VALUES (
-                NEW.id, NEW.purchase_settlement_id, NEW.payment_intent_id, refund_id, CURRENT_TIMESTAMP(6)
-            );
-        END IF;
-    END IF;
-END
-SQL);
-    }
-
     private function createRefundInvalidationTrigger(): void
     {
-        DB::unprepared('DROP TRIGGER IF EXISTS purchase_refunds_provisioning_invalidation');
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER purchase_refunds_provisioning_invalidation
+CREATE OR REPLACE TRIGGER purchase_refunds_provisioning_invalidation
 AFTER INSERT ON purchase_refunds
 FOR EACH ROW
 BEGIN
@@ -277,9 +168,8 @@ SQL);
 
     private function createPaymentIntentInvalidationGuard(): void
     {
-        DB::unprepared('DROP TRIGGER IF EXISTS payment_intents_provisioning_invalidation_guard');
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER payment_intents_provisioning_invalidation_guard
+CREATE OR REPLACE TRIGGER payment_intents_provisioning_invalidation_guard
 BEFORE UPDATE ON payment_intents
 FOR EACH ROW
 BEGIN
@@ -299,6 +189,7 @@ BEGIN
             ON invalidation_row.order_id = order_row.id
            AND invalidation_row.purchase_settlement_id = order_row.purchase_settlement_id
            AND invalidation_row.payment_intent_id = order_row.payment_intent_id
+           AND invalidation_row.purchase_refund_id = NEW.latest_purchase_refund_id
         WHERE order_row.payment_intent_id = NEW.id;
 
         IF purchase_order_count <> invalidated_order_count THEN
@@ -309,45 +200,40 @@ END
 SQL);
     }
 
-    private function createActiveQueueFenceGuards(): void
+    private function activateQueueFenceGuards(): void
     {
-        DB::unprepared('DROP TRIGGER IF EXISTS service_subscriptions_financial_invalidation_guard');
+        // Order and Operation guards become active before Service creation is re-enabled.
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER service_subscriptions_financial_invalidation_guard
-BEFORE INSERT ON service_subscriptions
+CREATE OR REPLACE TRIGGER orders_provisioning_invalidation_guard
+BEFORE UPDATE ON orders
 FOR EACH ROW
 BEGIN
-    DECLARE locked_order_id BIGINT UNSIGNED DEFAULT NULL;
-    DECLARE invalidation_count INT DEFAULT 0;
+    DECLARE invalidation_id BIGINT UNSIGNED DEFAULT NULL;
 
-    SELECT id INTO locked_order_id
-    FROM orders
-    WHERE id = NEW.order_id
-    LIMIT 1
-    FOR UPDATE;
+    IF OLD.state = 'paid'
+       AND OLD.state_version = 1
+       AND NEW.state = 'provisioning_queued'
+       AND NEW.state_version = 2 THEN
+        SELECT id INTO invalidation_id
+        FROM provisioning_financial_invalidations
+        WHERE order_id = OLD.id
+        LIMIT 1
+        FOR UPDATE;
 
-    IF locked_order_id IS NULL THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service Subscription requires a durable Order financial-authority fence.';
-    END IF;
-
-    SELECT COUNT(*) INTO invalidation_count
-    FROM provisioning_financial_invalidations
-    WHERE order_id = locked_order_id;
-
-    IF invalidation_count <> 0 THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Financially invalidated Order cannot create a Service Subscription.';
+        IF invalidation_id IS NOT NULL THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Financially invalidated Order cannot transition to provisioning_queued.';
+        END IF;
     END IF;
 END
 SQL);
 
-        DB::unprepared('DROP TRIGGER IF EXISTS provisioning_operations_financial_invalidation_guard');
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER provisioning_operations_financial_invalidation_guard
+CREATE OR REPLACE TRIGGER provisioning_operations_financial_invalidation_guard
 BEFORE INSERT ON provisioning_operations
 FOR EACH ROW
 BEGIN
     DECLARE locked_order_id BIGINT UNSIGNED DEFAULT NULL;
-    DECLARE invalidation_count INT DEFAULT 0;
+    DECLARE invalidation_id BIGINT UNSIGNED DEFAULT NULL;
 
     SELECT id INTO locked_order_id
     FROM orders
@@ -359,35 +245,44 @@ BEGIN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Initial Provisioning Operation requires a durable Order financial-authority fence.';
     END IF;
 
-    SELECT COUNT(*) INTO invalidation_count
+    SELECT id INTO invalidation_id
     FROM provisioning_financial_invalidations
-    WHERE order_id = locked_order_id;
+    WHERE order_id = locked_order_id
+    LIMIT 1
+    FOR UPDATE;
 
-    IF invalidation_count <> 0 THEN
+    IF invalidation_id IS NOT NULL THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Financially invalidated Order cannot create an initial Provisioning Operation.';
     END IF;
 END
 SQL);
 
-        DB::unprepared('DROP TRIGGER IF EXISTS orders_provisioning_invalidation_guard');
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER orders_provisioning_invalidation_guard
-BEFORE UPDATE ON orders
+CREATE OR REPLACE TRIGGER service_subscriptions_financial_invalidation_guard
+BEFORE INSERT ON service_subscriptions
 FOR EACH ROW
 BEGIN
-    DECLARE invalidation_count INT DEFAULT 0;
+    DECLARE locked_order_id BIGINT UNSIGNED DEFAULT NULL;
+    DECLARE invalidation_id BIGINT UNSIGNED DEFAULT NULL;
 
-    IF OLD.state = 'paid'
-       AND OLD.state_version = 1
-       AND NEW.state = 'provisioning_queued'
-       AND NEW.state_version = 2 THEN
-        SELECT COUNT(*) INTO invalidation_count
-        FROM provisioning_financial_invalidations
-        WHERE order_id = OLD.id;
+    SELECT id INTO locked_order_id
+    FROM orders
+    WHERE id = NEW.order_id
+    LIMIT 1
+    FOR UPDATE;
 
-        IF invalidation_count <> 0 THEN
-            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Financially invalidated Order cannot transition to provisioning_queued.';
-        END IF;
+    IF locked_order_id IS NULL THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service Subscription requires a durable Order financial-authority fence.';
+    END IF;
+
+    SELECT id INTO invalidation_id
+    FROM provisioning_financial_invalidations
+    WHERE order_id = locked_order_id
+    LIMIT 1
+    FOR UPDATE;
+
+    IF invalidation_id IS NOT NULL THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Financially invalidated Order cannot create a Service Subscription.';
     END IF;
 END
 SQL);
