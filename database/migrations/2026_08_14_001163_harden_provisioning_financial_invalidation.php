@@ -183,13 +183,14 @@ BEGIN
         FROM orders
         WHERE payment_intent_id = NEW.id;
 
+        -- Provisioning invalidation is monotonic per Order. The first accepted refund permanently
+        -- revokes initial provisioning authority; later refund rows must reuse that durable fence.
         SELECT COUNT(*) INTO invalidated_order_count
         FROM orders order_row
         INNER JOIN provisioning_financial_invalidations invalidation_row
             ON invalidation_row.order_id = order_row.id
            AND invalidation_row.purchase_settlement_id = order_row.purchase_settlement_id
            AND invalidation_row.payment_intent_id = order_row.payment_intent_id
-           AND invalidation_row.purchase_refund_id = NEW.latest_purchase_refund_id
         WHERE order_row.payment_intent_id = NEW.id;
 
         IF purchase_order_count <> invalidated_order_count THEN
