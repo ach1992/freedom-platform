@@ -11,8 +11,8 @@ return new class extends Migration
     /** @requirement BUY-001 PAY-002 PAY-003 PRV-002 PRV-003 DAT-002 DAT-003 DAT-004 SEC-002 SEC-008 QUA-004 */
     public function up(): void
     {
-        if (! $this->exactProvisioningTextAuthorityReady()) {
-            throw new RuntimeException('Provisioning queue activation requires binary-exact provisioning authority text columns.');
+        if (! $this->exactProvisioningTextAuthorityReady() || ! $this->exactUpstreamAuthorityConstraintsReady()) {
+            throw new RuntimeException('Provisioning queue activation requires byte-exact provisioning authority text semantics.');
         }
 
         $queueAuthority = require __DIR__.'/2026_08_14_001162_create_provisioning_queue_authority.php';
@@ -85,6 +85,25 @@ WHERE TABLE_SCHEMA = DATABASE()
 SQL);
 
         return $row !== null && (int) $row->aggregate === 12;
+    }
+
+    private function exactUpstreamAuthorityConstraintsReady(): bool
+    {
+        $row = DB::selectOne(<<<'SQL'
+SELECT COUNT(*) AS aggregate
+FROM information_schema.TABLE_CONSTRAINTS
+WHERE CONSTRAINT_SCHEMA = DATABASE()
+  AND CONSTRAINT_TYPE = 'CHECK'
+  AND (
+      (TABLE_NAME = 'payment_intents' AND CONSTRAINT_NAME = 'payment_intents_provisioning_exact_authority_chk')
+      OR
+      (TABLE_NAME = 'orders' AND CONSTRAINT_NAME = 'orders_provisioning_exact_authority_chk')
+      OR
+      (TABLE_NAME = 'outbox_messages' AND CONSTRAINT_NAME = 'outbox_initial_provision_dispatch_exact_chk')
+  )
+SQL);
+
+        return $row !== null && (int) $row->aggregate === 3;
     }
 
     private function triggerContains(string $trigger, string $needle): bool
