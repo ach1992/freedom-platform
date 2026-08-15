@@ -21,7 +21,7 @@ use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\QueryException;
-use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use RuntimeException;
@@ -31,8 +31,8 @@ use Tests\TestCase;
 final class InitialProvisioningDispatchAndReplayAuthorityTest extends TestCase
 {
     use AgentPricingQuoteIntegrationTestSupport;
+    use DatabaseTruncation;
     use PurchaseOrderTestSupport;
-    use RefreshDatabase;
 
     protected function setUp(): void
     {
@@ -85,7 +85,7 @@ final class InitialProvisioningDispatchAndReplayAuthorityTest extends TestCase
 
         DB::table('outbox_messages')
             ->where('id', '<>', $eventId)
-            ->update(['available_at' => '2999-01-01 00:00:00.000000']);
+            ->update(['available_at' => '2037-01-01 00:00:00.000000']);
 
         $handler = new class implements OutboxMessageHandler
         {
@@ -209,7 +209,7 @@ final class InitialProvisioningDispatchAndReplayAuthorityTest extends TestCase
 
         DB::table('outbox_messages')
             ->where('id', '<>', $eventId)
-            ->update(['available_at' => '2999-01-01 00:00:00.000000']);
+            ->update(['available_at' => '2037-01-01 00:00:00.000000']);
 
         $handler = new class implements OutboxMessageHandler
         {

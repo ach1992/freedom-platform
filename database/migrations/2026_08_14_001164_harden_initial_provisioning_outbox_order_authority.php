@@ -10,9 +10,12 @@ return new class extends Migration
     /** @requirement PAY-003 PRV-002 PRV-003 DAT-002 DAT-003 DAT-004 SEC-002 SEC-008 QUA-004 */
     public function up(): void
     {
-        /** @var Migration $outboxEnvelopeMigration */
         $outboxEnvelopeMigration = require database_path('migrations/2026_08_14_001161_z_harden_initial_provisioning_outbox_envelope.php');
-        $outboxEnvelopeMigration->up();
+        $applyOutboxEnvelopeMigration = [$outboxEnvelopeMigration, 'up'];
+        if (! is_callable($applyOutboxEnvelopeMigration)) {
+            throw new RuntimeException('Initial provisioning Outbox envelope migration is not executable.');
+        }
+        $applyOutboxEnvelopeMigration();
 
         // This trigger is created last: 001162 uses its presence as the completion marker
         // before enabling queue authority on the 001165 re-entry.
