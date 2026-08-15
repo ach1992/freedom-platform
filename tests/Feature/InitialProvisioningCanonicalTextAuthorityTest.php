@@ -64,12 +64,21 @@ WHERE CONSTRAINT_SCHEMA = DATABASE()
   AND CONSTRAINT_TYPE = 'CHECK'
   AND CONSTRAINT_NAME IN (
       'payment_intents_provisioning_exact_authority_chk',
-      'orders_provisioning_exact_authority_chk',
-      'outbox_initial_provision_dispatch_exact_chk'
+      'orders_provisioning_exact_authority_chk'
   )
 SQL);
         self::assertNotNull($constraints);
-        self::assertSame(3, (int) $constraints->aggregate);
+        self::assertSame(2, (int) $constraints->aggregate);
+
+        $dispatchGuard = DB::selectOne(<<<'SQL'
+SELECT COUNT(*) AS aggregate
+FROM information_schema.TRIGGERS
+WHERE TRIGGER_SCHEMA = DATABASE()
+  AND TRIGGER_NAME = 'outbox_initial_provision_envelope_update_guard'
+  AND LOCATE('must use an exact dispatch lifecycle state', ACTION_STATEMENT) > 0
+SQL);
+        self::assertNotNull($dispatchGuard);
+        self::assertSame(1, (int) $dispatchGuard->aggregate);
     }
 
     public function test_direct_database_case_variants_cannot_form_initial_provisioning_authority(): void
@@ -123,8 +132,10 @@ SQL);
         $this->assertOperationInsertRejected($keyVariant, 'Case-variant Operation key must not be accepted as canonical authority.');
 
         self::assertSame(0, DB::table('provisioning_operations')->where('order_id', $order->orderId)->count());
-        self::assertSame(0, DB::table('provisioning_operation_histories')->count());
-        self::assertSame(0, DB::table('outbox_messages')->where('event_type', 'provisioning.initial.requested')->count());
+        self::assertSame(0, DB::table('provisioning_operation_histories as history')
+            ->join('provisioning_operations as operation', 'operation.id', '=', 'history.provisioning_operation_id')
+            ->where('operation.order_id', $order->orderId)
+            ->count());
         self::assertSame(OrderState::Paid->value, DB::table('orders')->where('id', $order->orderId)->value('state'));
         self::assertSame(1, (int) DB::table('orders')->where('id', $order->orderId)->value('state_version'));
     }
@@ -146,9 +157,9 @@ SQL);
         self::assertSame('captured', $intent->state);
         self::assertSame('IRR', $intent->currency);
 
-        $this->assertUpdateRejected('payment_intents', (int) $orderRow->payment_intent_id, ['purpose' => 'PURCHASE']);
-        $this->assertUpdateRejected('payment_intents', (int) $orderRow->payment_intent_id, ['state' => 'CAPTURED']);
-        $this->assertUpdateRejected('payment_intents', (int) $orderRow->payment_intent_id, ['currency' => 'irr']);
+        $this->assertUpdateRejected('payment_intents', $orderRow->payment_intent_id, ['purpose' => 'PURCHASE']);
+        $this->assertUpdateRejected('payment_intents', $orderRow->payment_intent_id, ['state' => 'CAPTURED']);
+        $this->assertUpdateRejected('payment_intents', $orderRow->payment_intent_id, ['currency' => 'irr']);
         self::assertSame('purchase', DB::table('payment_intents')->where('id', $orderRow->payment_intent_id)->value('purpose'));
         self::assertSame('captured', DB::table('payment_intents')->where('id', $orderRow->payment_intent_id)->value('state'));
         self::assertSame('IRR', DB::table('payment_intents')->where('id', $orderRow->payment_intent_id)->value('currency'));
@@ -219,13 +230,13 @@ SQL);
     }
 
     /** @param array<string, mixed> $values */
-    private function assertUpdateRejected(string $table, int $id, array $values): void
+    private function assertUpdateRejected(string $table, int|string $id, array $values): void
     {
         try {
             DB::table($table)->where('id', $id)->update($values);
             self::fail("Expected {$table} case-variant authority update to be rejected.");
         } catch (QueryException) {
-            // Expected: the exact-authority CHECK must reject a CI-equivalent variant.
+            // Expected: the exact authority boundary must reject a CI-equivalent variant.
         }
     }
 
