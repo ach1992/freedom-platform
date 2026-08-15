@@ -19,13 +19,61 @@ return new class extends Migration
         $this->installOperationInsertUpgradeFence();
 
         // A caller could have raced between the first and later fence statements, or the
-        // database could already contain authority admitted by the old CI collation. Never
-        // normalize such rows silently: keep the durable fences and require repair instead.
+        // database could already contain authority admitted by the old CI/PAD SPACE semantics.
+        // Never normalize such rows silently: keep the durable fences and require repair instead.
         $this->assertNoNonCanonicalAuthorityRows();
 
         DB::statement('ALTER TABLE service_subscriptions CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_bin');
         DB::statement('ALTER TABLE provisioning_operations CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_bin');
         DB::statement('ALTER TABLE provisioning_operation_histories CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_bin');
+
+        // utf8mb4_bin is case-sensitive but PAD SPACE. These constraints make the authority
+        // columns byte-sensitive where ordinary SQL equality is used by the steady-state guards.
+        $this->replaceConstraint(
+            'service_subscriptions',
+            'service_subscriptions_provisioning_exact_text_chk',
+            <<<'SQL'
+CHECK (
+    BINARY `creation_correlation_id` = BINARY RTRIM(`creation_correlation_id`)
+)
+SQL,
+        );
+
+        $this->replaceConstraint(
+            'provisioning_operations',
+            'provisioning_operations_provisioning_exact_text_chk',
+            <<<'SQL'
+CHECK (
+    BINARY `operation_type` = BINARY 'initial_provision'
+    AND BINARY `operation_key` = BINARY RTRIM(`operation_key`)
+    AND BINARY `state` IN (
+        BINARY 'queued', BINARY 'running', BINARY 'uncertain_remote_result', BINARY 'retry_scheduled',
+        BINARY 'succeeded', BINARY 'failed_final', BINARY 'needs_review', BINARY 'compensating', BINARY 'compensated'
+    )
+    AND BINARY `correlation_id` = BINARY RTRIM(`correlation_id`)
+)
+SQL,
+        );
+
+        $this->replaceConstraint(
+            'provisioning_operation_histories',
+            'provisioning_operation_histories_provisioning_exact_text_chk',
+            <<<'SQL'
+CHECK (
+    (`from_state` IS NULL OR BINARY `from_state` IN (
+        BINARY 'queued', BINARY 'running', BINARY 'uncertain_remote_result', BINARY 'retry_scheduled',
+        BINARY 'succeeded', BINARY 'failed_final', BINARY 'needs_review', BINARY 'compensating', BINARY 'compensated'
+    ))
+    AND BINARY `to_state` IN (
+        BINARY 'queued', BINARY 'running', BINARY 'uncertain_remote_result', BINARY 'retry_scheduled',
+        BINARY 'succeeded', BINARY 'failed_final', BINARY 'needs_review', BINARY 'compensating', BINARY 'compensated'
+    )
+    AND BINARY `actor_type` IN (BINARY 'system', BINARY 'customer', BINARY 'agent', BINARY 'administrator')
+    AND BINARY `reason_code` = BINARY RTRIM(`reason_code`)
+    AND BINARY `correlation_id` = BINARY RTRIM(`correlation_id`)
+)
+SQL,
+        );
 
         $this->replaceConstraint(
             'payment_intents',
@@ -85,7 +133,7 @@ SQL,
     {
         // Rollback must not recreate the prior active authority. Quarantine held command
         // release at the first durable cut, then deactivate the already-recorded 001165
-        // authority before removing only the additive upstream checks. Binary collations stay.
+        // authority before removing only the additive exact checks. Binary collations stay.
         $this->installOutboxReleaseUpgradeFence();
         $this->installOrderTransitionUpgradeFence();
         $this->installServiceInsertUpgradeFence();
@@ -100,6 +148,9 @@ SQL,
         foreach ([
             ['orders', 'orders_provisioning_exact_authority_chk'],
             ['payment_intents', 'payment_intents_provisioning_exact_authority_chk'],
+            ['provisioning_operation_histories', 'provisioning_operation_histories_provisioning_exact_text_chk'],
+            ['provisioning_operations', 'provisioning_operations_provisioning_exact_text_chk'],
+            ['service_subscriptions', 'service_subscriptions_provisioning_exact_text_chk'],
         ] as [$table, $constraint]) {
             if ($this->constraintExists($table, $constraint)) {
                 DB::statement("ALTER TABLE `{$table}` DROP CONSTRAINT `{$constraint}`");
@@ -195,6 +246,12 @@ SQL, 'Existing Order provisioning authority is not byte-canonical; exact-text up
 
         $this->assertZeroCount(<<<'SQL'
 SELECT COUNT(*) AS aggregate
+FROM service_subscriptions
+WHERE HEX(`creation_correlation_id`) <> HEX(RTRIM(`creation_correlation_id`))
+SQL, 'Existing Service Subscription provisioning authority is not byte-canonical; exact-text upgrade remains fenced.');
+
+        $this->assertZeroCount(<<<'SQL'
+SELECT COUNT(*) AS aggregate
 FROM provisioning_operations operation_row
 INNER JOIN order_items item_row ON item_row.id = operation_row.order_item_id
 WHERE HEX(operation_row.operation_type) <> HEX('initial_provision')
@@ -203,6 +260,7 @@ WHERE HEX(operation_row.operation_type) <> HEX('initial_provision')
        HEX('queued'), HEX('running'), HEX('uncertain_remote_result'), HEX('retry_scheduled'),
        HEX('succeeded'), HEX('failed_final'), HEX('needs_review'), HEX('compensating'), HEX('compensated')
    )
+   OR HEX(operation_row.correlation_id) <> HEX(RTRIM(operation_row.correlation_id))
 SQL, 'Existing Provisioning Operation authority is not byte-canonical; exact-text upgrade remains fenced.');
 
         $this->assertZeroCount(<<<'SQL'
@@ -217,6 +275,8 @@ WHERE (`from_state` IS NOT NULL AND HEX(`from_state`) NOT IN (
           HEX('succeeded'), HEX('failed_final'), HEX('needs_review'), HEX('compensating'), HEX('compensated')
       )
    OR HEX(`actor_type`) NOT IN (HEX('system'), HEX('customer'), HEX('agent'), HEX('administrator'))
+   OR HEX(`reason_code`) <> HEX(RTRIM(`reason_code`))
+   OR HEX(`correlation_id`) <> HEX(RTRIM(`correlation_id`))
 SQL, 'Existing Provisioning Operation history is not byte-canonical; exact-text upgrade remains fenced.');
 
         $this->assertZeroCount(<<<'SQL'
@@ -263,6 +323,9 @@ SQL);
         if ($row === null || (int) $row->aggregate !== 12
             || ! $this->constraintExists('payment_intents', 'payment_intents_provisioning_exact_authority_chk')
             || ! $this->constraintExists('orders', 'orders_provisioning_exact_authority_chk')
+            || ! $this->constraintExists('service_subscriptions', 'service_subscriptions_provisioning_exact_text_chk')
+            || ! $this->constraintExists('provisioning_operations', 'provisioning_operations_provisioning_exact_text_chk')
+            || ! $this->constraintExists('provisioning_operation_histories', 'provisioning_operation_histories_provisioning_exact_text_chk')
             || ! $this->triggerContains('service_subscriptions_insert_guard', 'currently captured authoritative purchase Order Item')
             || ! $this->triggerContains('provisioning_operations_insert_guard', 'matching captured purchase authority and Service identity')
             || ! $this->triggerContains('orders_update_guard', 'Only paid/v1 to provisioning_queued/v2')

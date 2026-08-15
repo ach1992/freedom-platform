@@ -11,7 +11,7 @@ return new class extends Migration
     /** @requirement BUY-001 PAY-002 PAY-003 PRV-002 PRV-003 DAT-002 DAT-003 DAT-004 SEC-002 SEC-008 QUA-004 */
     public function up(): void
     {
-        if (! $this->exactProvisioningTextAuthorityReady() || ! $this->exactUpstreamAuthorityConstraintsReady()) {
+        if (! $this->exactProvisioningTextAuthorityReady() || ! $this->exactAuthorityConstraintsReady()) {
             throw new RuntimeException('Provisioning queue activation requires byte-exact provisioning authority text semantics.');
         }
 
@@ -88,7 +88,7 @@ SQL);
         return $row !== null && (int) $row->aggregate === 12;
     }
 
-    private function exactUpstreamAuthorityConstraintsReady(): bool
+    private function exactAuthorityConstraintsReady(): bool
     {
         $row = DB::selectOne(<<<'SQL'
 SELECT COUNT(*) AS aggregate
@@ -99,10 +99,16 @@ WHERE CONSTRAINT_SCHEMA = DATABASE()
       (TABLE_NAME = 'payment_intents' AND CONSTRAINT_NAME = 'payment_intents_provisioning_exact_authority_chk')
       OR
       (TABLE_NAME = 'orders' AND CONSTRAINT_NAME = 'orders_provisioning_exact_authority_chk')
+      OR
+      (TABLE_NAME = 'service_subscriptions' AND CONSTRAINT_NAME = 'service_subscriptions_provisioning_exact_text_chk')
+      OR
+      (TABLE_NAME = 'provisioning_operations' AND CONSTRAINT_NAME = 'provisioning_operations_provisioning_exact_text_chk')
+      OR
+      (TABLE_NAME = 'provisioning_operation_histories' AND CONSTRAINT_NAME = 'provisioning_operation_histories_provisioning_exact_text_chk')
   )
 SQL);
 
-        return $row !== null && (int) $row->aggregate === 2;
+        return $row !== null && (int) $row->aggregate === 5;
     }
 
     private function triggerContains(string $trigger, string $needle): bool

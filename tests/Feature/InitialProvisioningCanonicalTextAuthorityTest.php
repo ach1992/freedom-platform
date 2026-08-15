@@ -64,11 +64,14 @@ WHERE CONSTRAINT_SCHEMA = DATABASE()
   AND CONSTRAINT_TYPE = 'CHECK'
   AND CONSTRAINT_NAME IN (
       'payment_intents_provisioning_exact_authority_chk',
-      'orders_provisioning_exact_authority_chk'
+      'orders_provisioning_exact_authority_chk',
+      'service_subscriptions_provisioning_exact_text_chk',
+      'provisioning_operations_provisioning_exact_text_chk',
+      'provisioning_operation_histories_provisioning_exact_text_chk'
   )
 SQL);
         self::assertNotNull($constraints);
-        self::assertSame(2, (int) $constraints->aggregate);
+        self::assertSame(5, (int) $constraints->aggregate);
 
         $dispatchGuard = DB::selectOne(<<<'SQL'
 SELECT COUNT(*) AS aggregate
@@ -81,7 +84,7 @@ SQL);
         self::assertSame(1, (int) $dispatchGuard->aggregate);
     }
 
-    public function test_direct_database_case_variants_cannot_form_initial_provisioning_authority(): void
+    public function test_direct_database_case_and_padding_variants_cannot_form_initial_provisioning_authority(): void
     {
         $order = $this->createPaidOrder('canonical-text-direct');
         $orderRow = DB::table('orders')->where('id', $order->orderId)->first(['id', 'user_id', 'state', 'state_version']);
@@ -131,11 +134,38 @@ SQL);
         $keyVariant['operation_key'] = 'INITIAL-PROVISION:'.$item->public_id;
         $this->assertOperationInsertRejected($keyVariant, 'Case-variant Operation key must not be accepted as canonical authority.');
 
+        $typePaddingVariant = $baseOperation;
+        $typePaddingVariant['public_id'] = (string) Str::ulid();
+        $typePaddingVariant['operation_type'] = 'initial_provision ';
+        $this->assertOperationInsertRejected($typePaddingVariant, 'PAD SPACE must not make a trailing-space Operation type authoritative.');
+
+        $statePaddingVariant = $baseOperation;
+        $statePaddingVariant['public_id'] = (string) Str::ulid();
+        $statePaddingVariant['state'] = 'queued ';
+        $this->assertOperationInsertRejected($statePaddingVariant, 'PAD SPACE must not make a trailing-space Operation state authoritative.');
+
+        $keyPaddingVariant = $baseOperation;
+        $keyPaddingVariant['public_id'] = (string) Str::ulid();
+        $keyPaddingVariant['operation_key'] = 'initial-provision:'.$item->public_id.' ';
+        $this->assertOperationInsertRejected($keyPaddingVariant, 'PAD SPACE must not make a trailing-space Operation key authoritative.');
+
+        $correlationPaddingVariant = $baseOperation;
+        $correlationPaddingVariant['public_id'] = (string) Str::ulid();
+        $correlationPaddingVariant['correlation_id'] = $correlationId.' ';
+        $this->assertOperationInsertRejected($correlationPaddingVariant, 'PAD SPACE must not weaken exact Operation correlation identity.');
+
         self::assertSame(0, DB::table('provisioning_operations')->where('order_id', $order->orderId)->count());
         self::assertSame(0, DB::table('provisioning_operation_histories as history')
             ->join('provisioning_operations as operation', 'operation.id', '=', 'history.provisioning_operation_id')
             ->where('operation.order_id', $order->orderId)
             ->count());
+        self::assertSame(
+            0,
+            DB::table('outbox_messages')
+                ->where('event_type', 'provisioning.initial.requested')
+                ->where('payload', 'like', '%'.$order->orderPublicId.'%')
+                ->count(),
+        );
         self::assertSame(OrderState::Paid->value, DB::table('orders')->where('id', $order->orderId)->value('state'));
         self::assertSame(1, (int) DB::table('orders')->where('id', $order->orderId)->value('state_version'));
     }
