@@ -109,6 +109,12 @@ BEGIN
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Initial provisioning Outbox command identity is immutable.';
         END IF;
 
+        IF HEX(NEW.dispatch_state) NOT IN (
+            HEX('authority_pending'), HEX('pending'), HEX('leased'), HEX('retry'), HEX('processed'), HEX('review_required')
+        ) THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Initial provisioning Outbox must use an exact dispatch lifecycle state.';
+        END IF;
+
         IF OLD.dispatch_state = 'authority_pending' AND NEW.dispatch_state <> 'authority_pending' THEN
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Initial provisioning Outbox dispatch remains quarantined until final queue authority is installed.';
         ELSEIF OLD.dispatch_state <> 'authority_pending' AND NEW.dispatch_state = 'authority_pending' THEN
@@ -142,8 +148,14 @@ BEGIN
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Initial provisioning Outbox command identity is immutable.';
         END IF;
 
+        IF HEX(NEW.dispatch_state) NOT IN (
+            HEX('authority_pending'), HEX('pending'), HEX('leased'), HEX('retry'), HEX('processed'), HEX('review_required')
+        ) THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Initial provisioning Outbox must use an exact dispatch lifecycle state.';
+        END IF;
+
         IF OLD.dispatch_state = 'authority_pending' AND NEW.dispatch_state <> 'authority_pending' THEN
-            IF NEW.dispatch_state <> 'pending'
+            IF HEX(NEW.dispatch_state) <> HEX('pending')
                OR NEW.processed_at IS NOT NULL
                OR NEW.lease_token IS NOT NULL
                OR NEW.leased_until IS NOT NULL
