@@ -11,8 +11,10 @@ return new class extends Migration
     /** @requirement BUY-001 PAY-002 PAY-003 PRV-002 PRV-003 DAT-002 DAT-003 DAT-004 SEC-002 SEC-008 QUA-004 */
     public function up(): void
     {
-        /** @var Migration $queueAuthority */
         $queueAuthority = require __DIR__.'/2026_08_14_001162_create_provisioning_queue_authority.php';
+        if (! is_object($queueAuthority) || ! method_exists($queueAuthority, 'up')) {
+            throw new RuntimeException('Provisioning queue authority migration cannot be re-entered safely.');
+        }
         $queueAuthority->up();
 
         if (! $this->triggerContains('service_subscriptions_insert_guard', 'currently captured authoritative purchase Order Item')
