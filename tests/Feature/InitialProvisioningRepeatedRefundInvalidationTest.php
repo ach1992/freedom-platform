@@ -23,7 +23,7 @@ use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
 use DomainException;
-use Illuminate\Foundation\Testing\DatabaseTruncation;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
 
@@ -31,8 +31,8 @@ use Tests\TestCase;
 final class InitialProvisioningRepeatedRefundInvalidationTest extends TestCase
 {
     use AgentPricingQuoteIntegrationTestSupport;
-    use DatabaseTruncation;
     use PurchaseOrderTestSupport;
+    use RefreshDatabase;
 
     protected function setUp(): void
     {
