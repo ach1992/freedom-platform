@@ -106,16 +106,7 @@ CREATE OR REPLACE TRIGGER provisioning_financial_invalidations_update_guard
 BEFORE UPDATE ON provisioning_financial_invalidations
 FOR EACH ROW
 BEGIN
-    -- Duplicate refund observations may perform an exact no-op update through ON DUPLICATE KEY.
-    -- Any material change remains forbidden so the first accepted refund is a permanent fence.
-    IF NOT (NEW.id <=> OLD.id)
-       OR NOT (NEW.order_id <=> OLD.order_id)
-       OR NOT (NEW.purchase_settlement_id <=> OLD.purchase_settlement_id)
-       OR NOT (NEW.payment_intent_id <=> OLD.payment_intent_id)
-       OR NOT (NEW.purchase_refund_id <=> OLD.purchase_refund_id)
-       OR NOT (NEW.created_at <=> OLD.created_at) THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Provisioning financial invalidation is immutable.';
-    END IF;
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Provisioning financial invalidation is immutable.';
 END
 SQL);
 
@@ -137,6 +128,7 @@ AFTER INSERT ON purchase_refunds
 FOR EACH ROW
 BEGIN
     DECLARE locked_order_id BIGINT UNSIGNED DEFAULT NULL;
+    DECLARE existing_invalidation_id BIGINT UNSIGNED DEFAULT NULL;
 
     -- A refund can precede historical Order materialization. Keep the optional Order binding for
     -- evidence when it already exists, but make the durable revocation authoritative by the
@@ -148,12 +140,23 @@ BEGIN
     LIMIT 1
     FOR UPDATE;
 
-    INSERT INTO provisioning_financial_invalidations (
-        order_id, purchase_settlement_id, payment_intent_id, purchase_refund_id, created_at
-    ) VALUES (
-        locked_order_id, NEW.purchase_settlement_id, NEW.payment_intent_id, NEW.id, CURRENT_TIMESTAMP(6)
-    )
-    ON DUPLICATE KEY UPDATE id = id;
+    -- The purchase-refund insert authority has already acquired settlement -> intent locks for this
+    -- financial identity. Under those locks, exact duplicate/later refunds can safely converge on
+    -- the first permanent invalidation without INSERT IGNORE or an UPDATE escape hatch.
+    SELECT id INTO existing_invalidation_id
+    FROM provisioning_financial_invalidations
+    WHERE purchase_settlement_id = NEW.purchase_settlement_id
+      AND payment_intent_id = NEW.payment_intent_id
+    LIMIT 1
+    FOR UPDATE;
+
+    IF existing_invalidation_id IS NULL THEN
+        INSERT INTO provisioning_financial_invalidations (
+            order_id, purchase_settlement_id, payment_intent_id, purchase_refund_id, created_at
+        ) VALUES (
+            locked_order_id, NEW.purchase_settlement_id, NEW.payment_intent_id, NEW.id, CURRENT_TIMESTAMP(6)
+        );
+    END IF;
 END
 SQL);
     }
@@ -181,7 +184,10 @@ FROM (
 LEFT JOIN orders order_row
     ON order_row.purchase_settlement_id = refund_chain.purchase_settlement_id
    AND order_row.payment_intent_id = refund_chain.payment_intent_id
-ON DUPLICATE KEY UPDATE id = id
+LEFT JOIN provisioning_financial_invalidations existing_invalidation
+    ON existing_invalidation.purchase_settlement_id = refund_chain.purchase_settlement_id
+   AND existing_invalidation.payment_intent_id = refund_chain.payment_intent_id
+WHERE existing_invalidation.id IS NULL
 SQL);
     }
 
