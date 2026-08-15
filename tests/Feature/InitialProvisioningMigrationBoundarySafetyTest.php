@@ -41,6 +41,17 @@ final class InitialProvisioningMigrationBoundarySafetyTest extends TestCase
         $this->bootPurchaseOrderClock();
     }
 
+    protected function tearDown(): void
+    {
+        try {
+            if (isset($this->app)) {
+                $this->truncateDatabaseTables();
+            }
+        } finally {
+            parent::tearDown();
+        }
+    }
+
     public function test_001162_boundary_stays_fail_closed_until_refund_invalidation_and_final_activation_complete(): void
     {
         /** @var Migration $queueMigration */
