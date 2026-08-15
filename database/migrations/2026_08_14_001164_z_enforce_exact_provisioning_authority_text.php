@@ -27,14 +27,17 @@ return new class extends Migration
         DB::statement('ALTER TABLE provisioning_operations CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_bin');
         DB::statement('ALTER TABLE provisioning_operation_histories CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_bin');
 
-        // utf8mb4_bin is case-sensitive but PAD SPACE. These constraints make the authority
-        // columns byte-sensitive where ordinary SQL equality is used by the steady-state guards.
+        // utf8mb4_bin is case-sensitive but PAD SPACE. The exact branch of each CHECK becomes
+        // authoritative only on the final utf8mb4_bin schema. This keeps predecessor-schema
+        // fault simulations faithful while 001165 separately refuses activation until every
+        // provisioning authority column is on the final collation and every exact CHECK exists.
         $this->replaceConstraint(
             'service_subscriptions',
             'service_subscriptions_provisioning_exact_text_chk',
             <<<'SQL'
 CHECK (
-    BINARY `creation_correlation_id` = BINARY RTRIM(`creation_correlation_id`)
+    COLLATION(`creation_correlation_id`) <> 'utf8mb4_bin'
+    OR BINARY `creation_correlation_id` = BINARY RTRIM(`creation_correlation_id`)
 )
 SQL,
         );
@@ -44,13 +47,16 @@ SQL,
             'provisioning_operations_provisioning_exact_text_chk',
             <<<'SQL'
 CHECK (
-    BINARY `operation_type` = BINARY 'initial_provision'
-    AND BINARY `operation_key` = BINARY RTRIM(`operation_key`)
-    AND BINARY `state` IN (
-        BINARY 'queued', BINARY 'running', BINARY 'uncertain_remote_result', BINARY 'retry_scheduled',
-        BINARY 'succeeded', BINARY 'failed_final', BINARY 'needs_review', BINARY 'compensating', BINARY 'compensated'
+    COLLATION(`operation_key`) <> 'utf8mb4_bin'
+    OR (
+        BINARY `operation_type` = BINARY 'initial_provision'
+        AND BINARY `operation_key` = BINARY RTRIM(`operation_key`)
+        AND BINARY `state` IN (
+            BINARY 'queued', BINARY 'running', BINARY 'uncertain_remote_result', BINARY 'retry_scheduled',
+            BINARY 'succeeded', BINARY 'failed_final', BINARY 'needs_review', BINARY 'compensating', BINARY 'compensated'
+        )
+        AND BINARY `correlation_id` = BINARY RTRIM(`correlation_id`)
     )
-    AND BINARY `correlation_id` = BINARY RTRIM(`correlation_id`)
 )
 SQL,
         );
@@ -60,17 +66,20 @@ SQL,
             'provisioning_operation_histories_provisioning_exact_text_chk',
             <<<'SQL'
 CHECK (
-    (`from_state` IS NULL OR BINARY `from_state` IN (
-        BINARY 'queued', BINARY 'running', BINARY 'uncertain_remote_result', BINARY 'retry_scheduled',
-        BINARY 'succeeded', BINARY 'failed_final', BINARY 'needs_review', BINARY 'compensating', BINARY 'compensated'
-    ))
-    AND BINARY `to_state` IN (
-        BINARY 'queued', BINARY 'running', BINARY 'uncertain_remote_result', BINARY 'retry_scheduled',
-        BINARY 'succeeded', BINARY 'failed_final', BINARY 'needs_review', BINARY 'compensating', BINARY 'compensated'
+    COLLATION(`to_state`) <> 'utf8mb4_bin'
+    OR (
+        (`from_state` IS NULL OR BINARY `from_state` IN (
+            BINARY 'queued', BINARY 'running', BINARY 'uncertain_remote_result', BINARY 'retry_scheduled',
+            BINARY 'succeeded', BINARY 'failed_final', BINARY 'needs_review', BINARY 'compensating', BINARY 'compensated'
+        ))
+        AND BINARY `to_state` IN (
+            BINARY 'queued', BINARY 'running', BINARY 'uncertain_remote_result', BINARY 'retry_scheduled',
+            BINARY 'succeeded', BINARY 'failed_final', BINARY 'needs_review', BINARY 'compensating', BINARY 'compensated'
+        )
+        AND BINARY `actor_type` IN (BINARY 'system', BINARY 'customer', BINARY 'agent', BINARY 'administrator')
+        AND BINARY `reason_code` = BINARY RTRIM(`reason_code`)
+        AND BINARY `correlation_id` = BINARY RTRIM(`correlation_id`)
     )
-    AND BINARY `actor_type` IN (BINARY 'system', BINARY 'customer', BINARY 'agent', BINARY 'administrator')
-    AND BINARY `reason_code` = BINARY RTRIM(`reason_code`)
-    AND BINARY `correlation_id` = BINARY RTRIM(`correlation_id`)
 )
 SQL,
         );
