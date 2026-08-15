@@ -46,32 +46,16 @@ CHECK (
 SQL,
         );
 
-        $this->addConstraintIfMissing(
-            'outbox_messages',
-            'outbox_initial_provision_dispatch_exact_chk',
-            <<<'SQL'
-CHECK (
-    `event_type` <> 'provisioning.initial.requested'
-    OR (
-        BINARY `event_type` = BINARY 'provisioning.initial.requested'
-        AND BINARY `dispatch_state` IN (
-            BINARY 'authority_pending',
-            BINARY 'pending',
-            BINARY 'leased',
-            BINARY 'retry',
-            BINARY 'processed',
-            BINARY 'review_required'
-        )
-    )
-)
-SQL,
-        );
+        $outboxEnvelope = require __DIR__.'/2026_08_14_001161_z_harden_initial_provisioning_outbox_envelope.php';
+        if (! is_object($outboxEnvelope) || ! method_exists($outboxEnvelope, 'up')) {
+            throw new RuntimeException('Exact provisioning Outbox authority guard cannot be installed safely.');
+        }
+        $outboxEnvelope->up();
     }
 
     public function down(): void
     {
         foreach ([
-            ['outbox_messages', 'outbox_initial_provision_dispatch_exact_chk'],
             ['orders', 'orders_provisioning_exact_authority_chk'],
             ['payment_intents', 'payment_intents_provisioning_exact_authority_chk'],
         ] as [$table, $constraint]) {
