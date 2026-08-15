@@ -12,8 +12,8 @@ return new class extends Migration
     /** @requirement BUY-001 PAY-002 PAY-003 PRV-002 PRV-003 ARCH-003 ARCH-004 DAT-002 DAT-003 DAT-004 SEC-002 SEC-008 QUA-001 QUA-004 */
     public function up(): void
     {
-        // MariaDB DDL commits per statement. Start every attempt from fail-closed Order guards,
-        // then make each schema/trigger step restart-safe before enabling queue creation last.
+        // MariaDB DDL commits per statement. Every successful/restartable boundary before the
+        // final activation migration must remain fail-closed for new provisioning authority.
         $this->restoreOriginalOrderHistoryGuard();
         $this->restoreOriginalOrderUpdateGuard();
 
@@ -84,11 +84,17 @@ return new class extends Migration
         $this->createProvisioningInitialHistoryTrigger();
         $this->replaceOrderHistoryGuard();
         $this->createProvisioningHistoryGuard();
-        $this->createProvisioningOperationInsertGuard();
-        $this->replaceOrderUpdateGuard();
 
-        // Queue creation becomes possible only after every downstream guard is installed.
-        $this->createServiceInsertGuard();
+        // The first migration run intentionally stops here. Queue creation is activated only when
+        // the durable refund-invalidation chain, exact Outbox envelope/immutability guards, and the
+        // final Order envelope guard are all already present and every historical refund is fenced.
+        // `001165` re-enters this migration after those prerequisites have completed.
+        if ($this->financialInvalidationAuthorityReady()) {
+            $this->createProvisioningOperationInsertGuard();
+            $this->replaceOrderUpdateGuard();
+            // Service creation is the last enabling statement so a crash before it remains closed.
+            $this->createServiceInsertGuard();
+        }
     }
 
     public function down(): void
@@ -135,6 +141,50 @@ return new class extends Migration
         );
 
         return $row !== null && (int) $row->aggregate === 1;
+    }
+
+    private function financialInvalidationAuthorityReady(): bool
+    {
+        if (! Schema::hasTable('provisioning_financial_invalidations')) {
+            return false;
+        }
+
+        $guardRow = DB::selectOne(<<<'SQL'
+SELECT COUNT(*) AS aggregate
+FROM information_schema.TRIGGERS
+WHERE TRIGGER_SCHEMA = DATABASE()
+  AND TRIGGER_NAME IN (
+      'provisioning_financial_invalidations_update_guard',
+      'provisioning_financial_invalidations_delete_guard',
+      'purchase_refunds_provisioning_invalidation',
+      'payment_intents_provisioning_invalidation_guard',
+      'orders_provisioning_invalidation_guard',
+      'provisioning_operations_financial_invalidation_guard',
+      'service_subscriptions_financial_invalidation_guard',
+      'orders_provisioning_outbox_envelope_guard',
+      'outbox_initial_provision_envelope_insert_guard',
+      'outbox_initial_provision_envelope_update_guard',
+      'outbox_initial_provision_envelope_delete_guard'
+  )
+SQL);
+        if ($guardRow === null || (int) $guardRow->aggregate !== 11) {
+            return false;
+        }
+
+        $missingInvalidations = DB::selectOne(<<<'SQL'
+SELECT COUNT(*) AS aggregate
+FROM purchase_refunds refund_row
+LEFT JOIN provisioning_financial_invalidations invalidation_row
+    ON invalidation_row.purchase_settlement_id = refund_row.purchase_settlement_id
+   AND invalidation_row.payment_intent_id = refund_row.payment_intent_id
+LEFT JOIN purchase_refunds invalidation_refund
+    ON invalidation_refund.id = invalidation_row.purchase_refund_id
+   AND invalidation_refund.purchase_settlement_id = invalidation_row.purchase_settlement_id
+   AND invalidation_refund.payment_intent_id = invalidation_row.payment_intent_id
+WHERE invalidation_row.id IS NULL OR invalidation_refund.id IS NULL
+SQL);
+
+        return $missingInvalidations !== null && (int) $missingInvalidations->aggregate === 0;
     }
 
     private function replaceOrderPurchaseShapeConstraint(bool $allowProvisioningQueued): void

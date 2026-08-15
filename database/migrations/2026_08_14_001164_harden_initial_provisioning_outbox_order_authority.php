@@ -41,6 +41,7 @@ BEGIN
            AND HEX(outbox_row.event_type) = HEX('provisioning.initial.requested')
            AND HEX(outbox_row.aggregate_type) = HEX('provisioning_operation')
            AND HEX(outbox_row.aggregate_id) = HEX(operation_row.public_id)
+           AND HEX(outbox_row.correlation_id) = HEX(operation_row.correlation_id)
         WHERE item_row.order_id = OLD.id
           AND item_row.line_number = 1
           AND HEX(CAST(outbox_row.payload AS CHAR)) = HEX(CONCAT(

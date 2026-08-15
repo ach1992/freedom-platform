@@ -300,9 +300,17 @@ namespace Tests\Feature {
                 $this->purchaseOrderCorrelation('payload-corruption-first'),
             );
 
-            DB::table('outbox_messages')->where('id', $first->outboxEventId)->update([
-                'payload' => json_encode(['tampered' => true], JSON_THROW_ON_ERROR),
-            ]);
+            /** @var Migration $outboxEnvelopeMigration */
+            $outboxEnvelopeMigration = require database_path('migrations/2026_08_14_001161_z_harden_initial_provisioning_outbox_envelope.php');
+            DB::unprepared('DROP TRIGGER IF EXISTS outbox_initial_provision_envelope_update_guard');
+            try {
+                $updated = DB::table('outbox_messages')->where('id', $first->outboxEventId)->update([
+                    'payload' => json_encode(['tampered' => true], JSON_THROW_ON_ERROR),
+                ]);
+                self::assertSame(1, $updated);
+            } finally {
+                $outboxEnvelopeMigration->up();
+            }
 
             try {
                 $service->queueInitial(
