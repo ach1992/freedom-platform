@@ -78,21 +78,24 @@ SQL,
 
         // Everything below is enabling DDL. Keep the Service fence until the final statement:
         // no new queue transaction can begin durably before every exact guard is verified.
-        DB::unprepared('DROP TRIGGER IF EXISTS provisioning_operations_exact_upgrade_fence');
-        DB::unprepared('DROP TRIGGER IF EXISTS outbox_initial_provision_exact_upgrade_fence');
-        DB::unprepared('DROP TRIGGER IF EXISTS orders_provisioning_exact_upgrade_fence');
-        DB::unprepared('DROP TRIGGER IF EXISTS service_subscriptions_exact_upgrade_fence');
+        $this->dropUpgradeFences();
     }
 
     public function down(): void
     {
-        // Exact-text hardening is intentionally not rolled back into an active fail-open queue.
-        // Fence first, then remove only the additive upstream checks. Binary provisioning
-        // collations remain in place; re-running up() deterministically repairs and reactivates.
+        // Rollback must not recreate the prior active CI-collation authority. Fence first,
+        // explicitly deactivate the already-recorded 001165 authority, then remove only the
+        // additive upstream checks. Binary provisioning collations intentionally remain.
         $this->installOrderTransitionUpgradeFence();
         $this->installOutboxReleaseUpgradeFence();
         $this->installServiceInsertUpgradeFence();
         $this->installOperationInsertUpgradeFence();
+
+        $activation = require __DIR__.'/2026_08_14_001165_activate_provisioning_queue_authority.php';
+        if (! is_object($activation) || ! method_exists($activation, 'down')) {
+            throw new RuntimeException('Provisioning queue activation cannot be deactivated safely during exact-text rollback.');
+        }
+        $activation->down();
 
         foreach ([
             ['orders', 'orders_provisioning_exact_authority_chk'],
@@ -102,6 +105,10 @@ SQL,
                 DB::statement("ALTER TABLE `{$table}` DROP CONSTRAINT `{$constraint}`");
             }
         }
+
+        // Base Service/Operation/Order guards are now explicitly fail-closed, so these temporary
+        // fences can be removed without leaving trigger dependencies that break deeper rollback.
+        $this->dropUpgradeFences();
     }
 
     private function installOrderTransitionUpgradeFence(): void
@@ -156,6 +163,14 @@ BEGIN
     SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Provisioning Operation creation is fenced during exact-text authority upgrade.';
 END
 SQL);
+    }
+
+    private function dropUpgradeFences(): void
+    {
+        DB::unprepared('DROP TRIGGER IF EXISTS provisioning_operations_exact_upgrade_fence');
+        DB::unprepared('DROP TRIGGER IF EXISTS outbox_initial_provision_exact_upgrade_fence');
+        DB::unprepared('DROP TRIGGER IF EXISTS orders_provisioning_exact_upgrade_fence');
+        DB::unprepared('DROP TRIGGER IF EXISTS service_subscriptions_exact_upgrade_fence');
     }
 
     private function assertNoNonCanonicalAuthorityRows(): void
