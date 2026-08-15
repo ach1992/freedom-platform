@@ -272,12 +272,9 @@ final readonly class InitialProvisioningQueueService
     private function serviceById(Connection $connection, int $id): object
     {
         /** @var ServiceRow|null $row */
-        $row = $connection->table('service_subscriptions')
-            ->where('id', $id)
-            ->lockForUpdate()
-            ->first([
-                'id', 'public_id', 'order_id', 'order_item_id', 'user_id', 'creation_correlation_id',
-            ]);
+        $row = $connection->table('service_subscriptions')->where('id', $id)->first([
+            'id', 'public_id', 'order_id', 'order_item_id', 'user_id', 'creation_correlation_id',
+        ]);
         if ($row === null) {
             throw new RuntimeException('Provisioning Operation Service Subscription is unavailable.');
         }
@@ -291,7 +288,6 @@ final readonly class InitialProvisioningQueueService
         /** @var OutboxRow|null $row */
         $row = $connection->table('outbox_messages')
             ->where('event_key', $this->eventKey($operationPublicId))
-            ->lockForUpdate()
             ->first(['id', 'event_key', 'event_type', 'aggregate_type', 'aggregate_id', 'payload', 'payload_hash', 'correlation_id']);
         if ($row === null) {
             throw new RuntimeException('Provisioning Operation durable Outbox command is unavailable.');
@@ -367,8 +363,6 @@ final readonly class InitialProvisioningQueueService
         $service = $this->serviceById($connection, $this->positiveDatabaseInt($operation->service_subscription_id, 'Service Subscription ID'));
         $outbox = $this->outboxByOperation($connection, $operation->public_id);
         $expectedPayload = $this->outboxPayload($order->public_id, $item->public_id, $service->public_id, $operation->public_id);
-        $expectedPayloadJson = $expectedPayload->json();
-        $storedPayloadHash = hash('sha256', $outbox->payload);
 
         if ($order->source_type !== self::SOURCE_TYPE
             || $order->purchase_settlement_id === null
@@ -394,8 +388,6 @@ final readonly class InitialProvisioningQueueService
             || $outbox->aggregate_type !== self::AGGREGATE_TYPE
             || ! hash_equals($outbox->aggregate_id, $operation->public_id)
             || ! hash_equals($outbox->event_key, $this->eventKey($operation->public_id))
-            || ! hash_equals($outbox->payload, $expectedPayloadJson)
-            || ! hash_equals($outbox->payload_hash, $storedPayloadHash)
             || ! hash_equals($outbox->payload_hash, $expectedPayload->hash())) {
             throw new RuntimeException('Stored initial provisioning queue authority is inconsistent.');
         }
