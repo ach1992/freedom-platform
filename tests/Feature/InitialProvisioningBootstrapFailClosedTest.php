@@ -48,11 +48,13 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
         $invalidationMigration = require database_path('migrations/2026_08_14_001163_harden_provisioning_financial_invalidation.php');
         /** @var Migration $outboxOrderMigration */
         $outboxOrderMigration = require database_path('migrations/2026_08_14_001164_harden_initial_provisioning_outbox_order_authority.php');
+        /** @var Migration $exactAuthorityMigration */
+        $exactAuthorityMigration = require database_path('migrations/2026_08_14_001164_z_enforce_exact_provisioning_authority_text.php');
         /** @var Migration $activationMigration */
         $activationMigration = require database_path('migrations/2026_08_14_001165_activate_provisioning_queue_authority.php');
 
         try {
-            $activationMigration->down();
+            $exactAuthorityMigration->down();
             $outboxOrderMigration->down();
             $invalidationMigration->down();
             $releaseMigration->down();
@@ -158,6 +160,7 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
 
             $invalidationMigration->up();
             $outboxOrderMigration->up();
+            $exactAuthorityMigration->up();
             $activationMigration->up();
 
             $happyOrder = $this->createPaidOrder('bootstrap-history');
@@ -188,6 +191,7 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
             $releaseMigration->up();
             $invalidationMigration->up();
             $outboxOrderMigration->up();
+            $exactAuthorityMigration->up();
             $activationMigration->up();
         }
     }
@@ -215,8 +219,8 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
     private function constraintCount(string $table, string $constraint): int
     {
         $row = DB::selectOne(
-            'SELECT COUNT(*) AS aggregate FROM information_schema.TABLE_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME = ? AND CONSTRAINT_NAME = ?',
-            [$table, $constraint],
+            'SELECT COUNT(*) AS aggregate FROM information_schema.TABLE_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME = ? AND CONSTRAINT_NAME = ? AND CONSTRAINT_TYPE = ?',
+            [$table, $constraint, 'CHECK'],
         );
 
         return $row === null ? 0 : (int) $row->aggregate;
