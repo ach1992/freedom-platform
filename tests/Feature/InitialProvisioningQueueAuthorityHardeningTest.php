@@ -419,7 +419,7 @@ namespace Tests\Feature {
         }
 
         /**
-         * @param array{process:resource,pipes:array{0:resource,1:resource,2:resource}} $worker
+         * @param  array{process:resource,pipes:array{0:resource,1:resource,2:resource}}  $worker
          * @return array<string, mixed>
          */
         private function readWorkerResult(array $worker): array
