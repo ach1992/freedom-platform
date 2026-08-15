@@ -142,11 +142,17 @@ BEGIN
 
     -- The purchase-refund insert authority has already acquired settlement -> intent locks for this
     -- financial identity. Under those locks, exact duplicate/later refunds can safely converge on
-    -- the first permanent invalidation without INSERT IGNORE or an UPDATE escape hatch.
-    SELECT id INTO existing_invalidation_id
-    FROM provisioning_financial_invalidations
-    WHERE purchase_settlement_id = NEW.purchase_settlement_id
-      AND payment_intent_id = NEW.payment_intent_id
+    -- the first permanent invalidation without INSERT IGNORE or an UPDATE escape hatch. Only a
+    -- structurally valid existing invalidation can satisfy the convergence check; a malformed row
+    -- instead causes the following INSERT to fail closed on the unique financial fence.
+    SELECT invalidation_row.id INTO existing_invalidation_id
+    FROM provisioning_financial_invalidations invalidation_row
+    INNER JOIN purchase_refunds refund_row
+        ON refund_row.id = invalidation_row.purchase_refund_id
+       AND refund_row.purchase_settlement_id = invalidation_row.purchase_settlement_id
+       AND refund_row.payment_intent_id = invalidation_row.payment_intent_id
+    WHERE invalidation_row.purchase_settlement_id = NEW.purchase_settlement_id
+      AND invalidation_row.payment_intent_id = NEW.payment_intent_id
     LIMIT 1
     FOR UPDATE;
 
@@ -187,7 +193,11 @@ LEFT JOIN orders order_row
 LEFT JOIN provisioning_financial_invalidations existing_invalidation
     ON existing_invalidation.purchase_settlement_id = refund_chain.purchase_settlement_id
    AND existing_invalidation.payment_intent_id = refund_chain.payment_intent_id
-WHERE existing_invalidation.id IS NULL
+LEFT JOIN purchase_refunds existing_refund
+    ON existing_refund.id = existing_invalidation.purchase_refund_id
+   AND existing_refund.purchase_settlement_id = existing_invalidation.purchase_settlement_id
+   AND existing_refund.payment_intent_id = existing_invalidation.payment_intent_id
+WHERE existing_refund.id IS NULL
 SQL);
     }
 
