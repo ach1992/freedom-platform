@@ -228,20 +228,60 @@ BEGIN
 END
 SQL);
 
-        // The primary Provisioning Operation authority trigger performs the current financial
-        // locking read in settlement -> intent -> Order order. This companion fence must not
-        // acquire Order/financial locks first; it only rejects a committed monotonic invalidation.
+        // Each companion guard independently acquires the canonical financial locks before its
+        // current invalidation read. This keeps correctness independent of same-event trigger order
+        // while preserving settlement -> intent -> Order -> invalidation lock ordering.
         DB::unprepared(<<<'SQL'
 CREATE OR REPLACE TRIGGER provisioning_operations_financial_invalidation_guard
 BEFORE INSERT ON provisioning_operations
 FOR EACH ROW
 BEGIN
+    DECLARE authority_settlement_id BIGINT UNSIGNED DEFAULT NULL;
+    DECLARE authority_intent_id BIGINT UNSIGNED DEFAULT NULL;
+    DECLARE locked_settlement_id BIGINT UNSIGNED DEFAULT NULL;
+    DECLARE locked_intent_id BIGINT UNSIGNED DEFAULT NULL;
+    DECLARE locked_order_id BIGINT UNSIGNED DEFAULT NULL;
     DECLARE invalidation_id BIGINT UNSIGNED DEFAULT NULL;
+
+    SELECT purchase_settlement_id, payment_intent_id
+    INTO authority_settlement_id, authority_intent_id
+    FROM orders
+    WHERE id = NEW.order_id
+    LIMIT 1;
+
+    IF authority_settlement_id IS NULL OR authority_intent_id IS NULL THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Initial Provisioning Operation requires authoritative purchase financial identity.';
+    END IF;
+
+    SELECT id INTO locked_settlement_id
+    FROM purchase_settlements
+    WHERE id = authority_settlement_id
+    LIMIT 1
+    FOR UPDATE;
+
+    SELECT id INTO locked_intent_id
+    FROM payment_intents
+    WHERE id = authority_intent_id
+    LIMIT 1
+    FOR UPDATE;
+
+    SELECT id INTO locked_order_id
+    FROM orders
+    WHERE id = NEW.order_id
+      AND purchase_settlement_id = locked_settlement_id
+      AND payment_intent_id = locked_intent_id
+    LIMIT 1
+    FOR UPDATE;
+
+    IF locked_settlement_id IS NULL OR locked_intent_id IS NULL OR locked_order_id IS NULL THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Initial Provisioning Operation financial authority is unavailable.';
+    END IF;
 
     SELECT id INTO invalidation_id
     FROM provisioning_financial_invalidations
     WHERE order_id = NEW.order_id
-    LIMIT 1;
+    LIMIT 1
+    FOR UPDATE;
 
     IF invalidation_id IS NOT NULL THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Financially invalidated Order cannot create an initial Provisioning Operation.';
@@ -249,20 +289,57 @@ BEGIN
 END
 SQL);
 
-        // The primary Service Subscription authority trigger performs the current financial
-        // locking read in settlement -> intent -> Order order. Keep this fence lock-free so
-        // trigger action order cannot invert that financial lock order.
         DB::unprepared(<<<'SQL'
 CREATE OR REPLACE TRIGGER service_subscriptions_financial_invalidation_guard
 BEFORE INSERT ON service_subscriptions
 FOR EACH ROW
 BEGIN
+    DECLARE authority_settlement_id BIGINT UNSIGNED DEFAULT NULL;
+    DECLARE authority_intent_id BIGINT UNSIGNED DEFAULT NULL;
+    DECLARE locked_settlement_id BIGINT UNSIGNED DEFAULT NULL;
+    DECLARE locked_intent_id BIGINT UNSIGNED DEFAULT NULL;
+    DECLARE locked_order_id BIGINT UNSIGNED DEFAULT NULL;
     DECLARE invalidation_id BIGINT UNSIGNED DEFAULT NULL;
+
+    SELECT purchase_settlement_id, payment_intent_id
+    INTO authority_settlement_id, authority_intent_id
+    FROM orders
+    WHERE id = NEW.order_id
+    LIMIT 1;
+
+    IF authority_settlement_id IS NULL OR authority_intent_id IS NULL THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service Subscription requires authoritative purchase financial identity.';
+    END IF;
+
+    SELECT id INTO locked_settlement_id
+    FROM purchase_settlements
+    WHERE id = authority_settlement_id
+    LIMIT 1
+    FOR UPDATE;
+
+    SELECT id INTO locked_intent_id
+    FROM payment_intents
+    WHERE id = authority_intent_id
+    LIMIT 1
+    FOR UPDATE;
+
+    SELECT id INTO locked_order_id
+    FROM orders
+    WHERE id = NEW.order_id
+      AND purchase_settlement_id = locked_settlement_id
+      AND payment_intent_id = locked_intent_id
+    LIMIT 1
+    FOR UPDATE;
+
+    IF locked_settlement_id IS NULL OR locked_intent_id IS NULL OR locked_order_id IS NULL THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service Subscription financial authority is unavailable.';
+    END IF;
 
     SELECT id INTO invalidation_id
     FROM provisioning_financial_invalidations
     WHERE order_id = NEW.order_id
-    LIMIT 1;
+    LIMIT 1
+    FOR UPDATE;
 
     IF invalidation_id IS NOT NULL THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Financially invalidated Order cannot create a Service Subscription.';
