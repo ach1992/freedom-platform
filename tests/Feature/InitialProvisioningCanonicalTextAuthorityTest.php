@@ -94,7 +94,7 @@ SQL);
 
         $timestamp = $this->purchaseOrderTimestamp();
         $correlationId = $this->purchaseOrderCorrelation('canonical-text-direct');
-        $serviceId = (int) DB::table('service_subscriptions')->insertGetId([
+        $serviceValues = [
             'public_id' => (string) Str::ulid(),
             'order_id' => (int) $orderRow->id,
             'order_item_id' => (int) $item->id,
@@ -102,7 +102,17 @@ SQL);
             'creation_correlation_id' => $correlationId,
             'created_at' => $timestamp,
             'updated_at' => $timestamp,
-        ]);
+        ];
+
+        $servicePaddingVariant = $serviceValues;
+        $servicePaddingVariant['public_id'] = (string) Str::ulid();
+        $servicePaddingVariant['creation_correlation_id'] = 'pad-service-correlation ';
+        $this->assertServiceInsertRejected(
+            $servicePaddingVariant,
+            'PAD SPACE must not weaken exact Service creation correlation identity.',
+        );
+
+        $serviceId = (int) DB::table('service_subscriptions')->insertGetId($serviceValues);
 
         $baseOperation = [
             'public_id' => (string) Str::ulid(),
@@ -151,7 +161,7 @@ SQL);
 
         $correlationPaddingVariant = $baseOperation;
         $correlationPaddingVariant['public_id'] = (string) Str::ulid();
-        $correlationPaddingVariant['correlation_id'] = $correlationId.' ';
+        $correlationPaddingVariant['correlation_id'] = 'pad-operation-correlation ';
         $this->assertOperationInsertRejected($correlationPaddingVariant, 'PAD SPACE must not weaken exact Operation correlation identity.');
 
         self::assertSame(0, DB::table('provisioning_operations')->where('order_id', $order->orderId)->count());
@@ -246,6 +256,17 @@ SQL);
         self::assertSame('pending', DB::table('outbox_messages')->where('id', $receipt->outboxEventId)->value('dispatch_state'));
         self::assertSame(OrderState::ProvisioningQueued->value, DB::table('orders')->where('id', $order->orderId)->value('state'));
         self::assertSame(2, (int) DB::table('orders')->where('id', $order->orderId)->value('state_version'));
+    }
+
+    /** @param array<string, mixed> $values */
+    private function assertServiceInsertRejected(array $values, string $message): void
+    {
+        try {
+            DB::table('service_subscriptions')->insert($values);
+            self::fail($message);
+        } catch (QueryException) {
+            // Expected: the MariaDB authority boundary must reject non-canonical bytes.
+        }
     }
 
     /** @param array<string, mixed> $values */
