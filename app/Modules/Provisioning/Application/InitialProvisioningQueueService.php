@@ -136,6 +136,18 @@ final readonly class InitialProvisioningQueueService
                 throw new RuntimeException('Purchase Order provisioning transition lost its authoritative state.');
             }
 
+            $released = $connection->table('outbox_messages')
+                ->where('id', $eventId)
+                ->where('event_type', self::EVENT_TYPE)
+                ->where('dispatch_state', 'authority_pending')
+                ->update([
+                    'dispatch_state' => 'pending',
+                    'updated_at' => $timestamp,
+                ]);
+            if ($released !== 1) {
+                throw new RuntimeException('Initial provisioning Outbox command did not release from final Order authority.');
+            }
+
             $this->recordAudit(
                 $connection,
                 $order->public_id,
@@ -394,6 +406,7 @@ final readonly class InitialProvisioningQueueService
             || $outbox->aggregate_type !== self::AGGREGATE_TYPE
             || ! hash_equals($outbox->aggregate_id, $operation->public_id)
             || ! hash_equals($outbox->event_key, $this->eventKey($operation->public_id))
+            || ! hash_equals($outbox->correlation_id, $operation->correlation_id)
             || ! hash_equals($outbox->payload, $expectedPayloadJson)
             || ! hash_equals($outbox->payload_hash, $storedPayloadHash)
             || ! hash_equals($outbox->payload_hash, $expectedPayload->hash())) {
