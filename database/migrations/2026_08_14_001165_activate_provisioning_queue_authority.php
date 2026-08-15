@@ -23,7 +23,8 @@ return new class extends Migration
 
         if (! $this->triggerContains('service_subscriptions_insert_guard', 'currently captured authoritative purchase Order Item')
             || ! $this->triggerContains('provisioning_operations_insert_guard', 'matching captured purchase authority and Service identity')
-            || ! $this->triggerContains('orders_update_guard', 'Only paid/v1 to provisioning_queued/v2')) {
+            || ! $this->triggerContains('orders_update_guard', 'Only paid/v1 to provisioning_queued/v2')
+            || ! $this->triggerContains('outbox_initial_provision_envelope_update_guard', 'must use an exact dispatch lifecycle state')) {
             throw new RuntimeException('Provisioning queue activation prerequisites are incomplete; queue authority remains fail-closed.');
         }
     }
@@ -98,12 +99,10 @@ WHERE CONSTRAINT_SCHEMA = DATABASE()
       (TABLE_NAME = 'payment_intents' AND CONSTRAINT_NAME = 'payment_intents_provisioning_exact_authority_chk')
       OR
       (TABLE_NAME = 'orders' AND CONSTRAINT_NAME = 'orders_provisioning_exact_authority_chk')
-      OR
-      (TABLE_NAME = 'outbox_messages' AND CONSTRAINT_NAME = 'outbox_initial_provision_dispatch_exact_chk')
   )
 SQL);
 
-        return $row !== null && (int) $row->aggregate === 3;
+        return $row !== null && (int) $row->aggregate === 2;
     }
 
     private function triggerContains(string $trigger, string $needle): bool
