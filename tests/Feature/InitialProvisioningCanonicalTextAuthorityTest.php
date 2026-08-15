@@ -36,9 +36,9 @@ final class InitialProvisioningCanonicalTextAuthorityTest extends TestCase
         $this->bootPurchaseOrderClock();
     }
 
-    public function test_provisioning_authority_text_columns_are_binary_exact(): void
+    public function test_provisioning_authority_text_boundaries_are_exact(): void
     {
-        $row = DB::selectOne(<<<'SQL'
+        $columns = DB::selectOne(<<<'SQL'
 SELECT COUNT(*) AS aggregate
 FROM information_schema.COLUMNS
 WHERE TABLE_SCHEMA = DATABASE()
@@ -54,9 +54,22 @@ WHERE TABLE_SCHEMA = DATABASE()
        AND COLUMN_NAME IN ('from_state', 'to_state', 'actor_type', 'reason_code', 'correlation_id'))
   )
 SQL);
+        self::assertNotNull($columns);
+        self::assertSame(12, (int) $columns->aggregate);
 
-        self::assertNotNull($row);
-        self::assertSame(12, (int) $row->aggregate);
+        $constraints = DB::selectOne(<<<'SQL'
+SELECT COUNT(*) AS aggregate
+FROM information_schema.TABLE_CONSTRAINTS
+WHERE CONSTRAINT_SCHEMA = DATABASE()
+  AND CONSTRAINT_TYPE = 'CHECK'
+  AND CONSTRAINT_NAME IN (
+      'payment_intents_provisioning_exact_authority_chk',
+      'orders_provisioning_exact_authority_chk',
+      'outbox_initial_provision_dispatch_exact_chk'
+  )
+SQL);
+        self::assertNotNull($constraints);
+        self::assertSame(3, (int) $constraints->aggregate);
     }
 
     public function test_direct_database_case_variants_cannot_form_initial_provisioning_authority(): void
@@ -116,6 +129,47 @@ SQL);
         self::assertSame(1, (int) DB::table('orders')->where('id', $order->orderId)->value('state_version'));
     }
 
+    public function test_case_variant_upstream_and_dispatch_authority_is_rejected(): void
+    {
+        $order = $this->createPaidOrder('canonical-text-upstream');
+        $orderRow = DB::table('orders')->where('id', $order->orderId)->first([
+            'id', 'payment_intent_id', 'source_type', 'state', 'currency',
+        ]);
+        self::assertNotNull($orderRow);
+        self::assertSame('purchase', $orderRow->source_type);
+        self::assertSame('paid', $orderRow->state);
+        self::assertSame('IRR', $orderRow->currency);
+
+        $intent = DB::table('payment_intents')->where('id', $orderRow->payment_intent_id)->first(['purpose', 'state', 'currency']);
+        self::assertNotNull($intent);
+        self::assertSame('purchase', $intent->purpose);
+        self::assertSame('captured', $intent->state);
+        self::assertSame('IRR', $intent->currency);
+
+        $this->assertUpdateRejected('payment_intents', (int) $orderRow->payment_intent_id, ['purpose' => 'PURCHASE']);
+        $this->assertUpdateRejected('payment_intents', (int) $orderRow->payment_intent_id, ['state' => 'CAPTURED']);
+        $this->assertUpdateRejected('payment_intents', (int) $orderRow->payment_intent_id, ['currency' => 'irr']);
+        self::assertSame('purchase', DB::table('payment_intents')->where('id', $orderRow->payment_intent_id)->value('purpose'));
+        self::assertSame('captured', DB::table('payment_intents')->where('id', $orderRow->payment_intent_id)->value('state'));
+        self::assertSame('IRR', DB::table('payment_intents')->where('id', $orderRow->payment_intent_id)->value('currency'));
+
+        $this->assertUpdateRejected('orders', $order->orderId, ['source_type' => 'PURCHASE']);
+        $this->assertUpdateRejected('orders', $order->orderId, ['state' => 'PAID']);
+        $this->assertUpdateRejected('orders', $order->orderId, ['currency' => 'irr']);
+        self::assertSame('purchase', DB::table('orders')->where('id', $order->orderId)->value('source_type'));
+        self::assertSame('paid', DB::table('orders')->where('id', $order->orderId)->value('state'));
+        self::assertSame('IRR', DB::table('orders')->where('id', $order->orderId)->value('currency'));
+
+        $receipt = $this->app->make(InitialProvisioningQueueService::class)->queueInitial(
+            $order->orderPublicId,
+            $this->purchaseOrderCorrelation('canonical-text-upstream-queue'),
+        );
+        self::assertSame('pending', DB::table('outbox_messages')->where('id', $receipt->outboxEventId)->value('dispatch_state'));
+
+        $this->assertUpdateRejected('outbox_messages', $receipt->outboxEventId, ['dispatch_state' => 'PENDING']);
+        self::assertSame('pending', DB::table('outbox_messages')->where('id', $receipt->outboxEventId)->value('dispatch_state'));
+    }
+
     public function test_canonical_application_queue_still_persists_exact_operation_history_and_dispatch_state(): void
     {
         $order = $this->createPaidOrder('canonical-text-application');
@@ -161,6 +215,17 @@ SQL);
             self::fail($message);
         } catch (QueryException) {
             // Expected: the MariaDB authority boundary must reject non-canonical bytes.
+        }
+    }
+
+    /** @param array<string, mixed> $values */
+    private function assertUpdateRejected(string $table, int $id, array $values): void
+    {
+        try {
+            DB::table($table)->where('id', $id)->update($values);
+            self::fail("Expected {$table} case-variant authority update to be rejected.");
+        } catch (QueryException) {
+            // Expected: the exact-authority CHECK must reject a CI-equivalent variant.
         }
     }
 
