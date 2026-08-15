@@ -129,6 +129,8 @@ FOR EACH ROW
 BEGIN
     DECLARE locked_order_id BIGINT UNSIGNED DEFAULT NULL;
     DECLARE existing_invalidation_id BIGINT UNSIGNED DEFAULT NULL;
+    DECLARE existing_purchase_refund_id BIGINT UNSIGNED DEFAULT NULL;
+    DECLARE valid_existing_refund_count INT DEFAULT 0;
 
     -- A refund can precede historical Order materialization. Keep the optional Order binding for
     -- evidence when it already exists, but make the durable revocation authoritative by the
@@ -141,22 +143,28 @@ BEGIN
     FOR UPDATE;
 
     -- The purchase-refund insert authority has already acquired settlement -> intent locks for this
-    -- financial identity. Under those locks, exact duplicate/later refunds can safely converge on
-    -- the first permanent invalidation without INSERT IGNORE or an UPDATE escape hatch. Only a
-    -- structurally valid existing invalidation can satisfy the convergence check; a malformed row
-    -- instead causes the following INSERT to fail closed on the unique financial fence.
-    SELECT invalidation_row.id INTO existing_invalidation_id
-    FROM provisioning_financial_invalidations invalidation_row
-    INNER JOIN purchase_refunds refund_row
-        ON refund_row.id = invalidation_row.purchase_refund_id
-       AND refund_row.purchase_settlement_id = invalidation_row.purchase_settlement_id
-       AND refund_row.payment_intent_id = invalidation_row.payment_intent_id
-    WHERE invalidation_row.purchase_settlement_id = NEW.purchase_settlement_id
-      AND invalidation_row.payment_intent_id = NEW.payment_intent_id
+    -- financial identity. Lock only the invalidation row here: MariaDB forbids a locking read of
+    -- purchase_refunds from its own INSERT trigger. A plain validation read of the prior immutable
+    -- refund is sufficient after the invalidation row is locked; malformed bindings fail closed.
+    SELECT id, purchase_refund_id
+    INTO existing_invalidation_id, existing_purchase_refund_id
+    FROM provisioning_financial_invalidations
+    WHERE purchase_settlement_id = NEW.purchase_settlement_id
+      AND payment_intent_id = NEW.payment_intent_id
     LIMIT 1
     FOR UPDATE;
 
-    IF existing_invalidation_id IS NULL THEN
+    IF existing_invalidation_id IS NOT NULL THEN
+        SELECT COUNT(*) INTO valid_existing_refund_count
+        FROM purchase_refunds
+        WHERE id = existing_purchase_refund_id
+          AND purchase_settlement_id = NEW.purchase_settlement_id
+          AND payment_intent_id = NEW.payment_intent_id;
+
+        IF valid_existing_refund_count <> 1 THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Existing provisioning financial invalidation binding is inconsistent.';
+        END IF;
+    ELSE
         INSERT INTO provisioning_financial_invalidations (
             order_id, purchase_settlement_id, payment_intent_id, purchase_refund_id, created_at
         ) VALUES (
