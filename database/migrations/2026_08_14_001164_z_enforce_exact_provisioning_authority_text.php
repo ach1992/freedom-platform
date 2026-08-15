@@ -10,11 +10,11 @@ return new class extends Migration
     /** @requirement BUY-001 PAY-002 PAY-003 PRV-002 PRV-003 DAT-002 DAT-003 DAT-004 SEC-002 SEC-008 QUA-004 */
     public function up(): void
     {
-        // MariaDB DDL commits per statement. The first durable statement fences the final
-        // Order transition, so every later interruption remains unable to create dispatch
-        // authority even on a database where 001165 was already recorded by an older deploy.
-        $this->installOrderTransitionUpgradeFence();
+        // MariaDB DDL commits per statement. The first durable statement quarantines release
+        // of every held initial-provisioning command, including authority that an older
+        // case-insensitive deployment already advanced to a queued Order before this upgrade.
         $this->installOutboxReleaseUpgradeFence();
+        $this->installOrderTransitionUpgradeFence();
         $this->installServiceInsertUpgradeFence();
         $this->installOperationInsertUpgradeFence();
 
@@ -83,11 +83,11 @@ SQL,
 
     public function down(): void
     {
-        // Rollback must not recreate the prior active CI-collation authority. Fence first,
-        // explicitly deactivate the already-recorded 001165 authority, then remove only the
-        // additive upstream checks. Binary provisioning collations intentionally remain.
-        $this->installOrderTransitionUpgradeFence();
+        // Rollback must not recreate the prior active authority. Quarantine held command
+        // release at the first durable cut, then deactivate the already-recorded 001165
+        // authority before removing only the additive upstream checks. Binary collations stay.
         $this->installOutboxReleaseUpgradeFence();
+        $this->installOrderTransitionUpgradeFence();
         $this->installServiceInsertUpgradeFence();
         $this->installOperationInsertUpgradeFence();
 
