@@ -21,9 +21,11 @@ final readonly class InitialProvisioningRecoveryService
 
     /**
      * Outbox leases are intentionally shorter than the conservative provider-call recovery window.
-     * A reclaimed message must never reinterpret a still-live remote attempt as interrupted.
+     * Provisioning sessions currently use a bounded 15-second request timeout, while a coordinator
+     * pass can perform several authenticated lookup/create/reconciliation requests. Keep a wide
+     * margin so a reclaimed message cannot reinterpret a still-live remote attempt as interrupted.
      */
-    private const RUNNING_STALE_AFTER_SECONDS = 120;
+    private const RUNNING_STALE_AFTER_SECONDS = 600;
 
     public function __construct(
         private DatabaseManager $database,
