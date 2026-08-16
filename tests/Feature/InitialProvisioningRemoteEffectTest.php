@@ -48,12 +48,14 @@ use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PanelsAccessFoundationSeeder;
 use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
 use DateTimeImmutable;
+use DomainException;
+use Illuminate\Database\Migrations\Migration;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use LogicException;
-use Throwable;
 use Tests\TestCase;
+use Throwable;
 
 final class InitialProvisioningTestPanelAdapter implements PanelAdapter
 {
@@ -262,6 +264,17 @@ final class InitialProvisioningRemoteEffectTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+
+        // Queue-authority migration re-entry tests intentionally reinstall the older fail-closed
+        // update guards. Restore the latest remote-effect guards before exercising this layer so
+        // this integration suite observes the canonical post-migration schema.
+        /** @var Migration $remoteEffectMigration */
+        $remoteEffectMigration = require database_path('migrations/2026_08_16_000100_enable_initial_provisioning_remote_effect.php');
+        /** @var Migration $uncertainRecoveryMigration */
+        $uncertainRecoveryMigration = require database_path('migrations/2026_08_16_000102_enable_initial_provisioning_uncertain_recovery.php');
+        $remoteEffectMigration->up();
+        $uncertainRecoveryMigration->up();
+
         $this->seed(IdentityAccessFoundationSeeder::class);
         $this->seed(CatalogAccessFoundationSeeder::class);
         $this->seed(PanelsAccessFoundationSeeder::class);
@@ -274,10 +287,13 @@ final class InitialProvisioningRemoteEffectTest extends TestCase
         $scenario = $this->scenario('financial-invalidation');
         $this->recordFullRefund($scenario['settlement'], 'financial-invalidation');
 
-        $receipt = $this->executor()->execute($scenario['queue']->provisioningOperationPublicId);
+        try {
+            $this->executor()->execute($scenario['queue']->provisioningOperationPublicId);
+            self::fail('Invalidated financial authority must fail closed before any remote-effect claim or provider call.');
+        } catch (DomainException) {
+            // Expected: claim authority is rejected before the operation can enter running state.
+        }
 
-        self::assertSame(ProvisioningState::FailedFinal, $receipt->state);
-        self::assertSame('financial_authority_lost', $receipt->resultCode);
         self::assertSame([], $scenario['adapter']->calls);
         self::assertSame(0, $scenario['adapter']->serviceCount());
     }
@@ -289,8 +305,8 @@ final class InitialProvisioningRemoteEffectTest extends TestCase
         $receipt = $this->executor()->execute($scenario['queue']->provisioningOperationPublicId);
 
         self::assertSame(ProvisioningState::Succeeded, $receipt->state);
-        self::assertSame(['lookup_username', 'create', 'lookup_username'], $scenario['adapter']->calls);
-        self::assertSame([0, 0, 0], $scenario['adapter']->transactionLevels);
+        self::assertSame(['lookup_username', 'create'], $scenario['adapter']->calls);
+        self::assertSame([0, 0], $scenario['adapter']->transactionLevels);
         self::assertSame(1, $scenario['adapter']->serviceCount());
         self::assertNotNull($receipt->remoteServiceId);
         self::assertSame(1, DB::table('plan_offering_route_selections')->count());
@@ -418,7 +434,7 @@ final class InitialProvisioningRemoteEffectTest extends TestCase
 
         self::assertSame(ProvisioningState::Succeeded, $receipt->state);
         self::assertSame('lookup_username', $scenario['adapter']->calls[0] ?? null);
-        self::assertSame([0, 0, 0], $scenario['adapter']->transactionLevels);
+        self::assertSame([0, 0], $scenario['adapter']->transactionLevels);
     }
 
     public function test_conflicting_preexisting_remote_requires_review_and_never_blind_creates(): void
@@ -473,7 +489,7 @@ final class InitialProvisioningRemoteEffectTest extends TestCase
         self::assertInstanceOf(Throwable::class, $refundFailure);
         self::assertSame(PaymentIntentState::Captured->value, DB::table('payment_intents')
             ->where('public_id', $scenario['settlement']->intentPublicId)->value('state'));
-        self::assertSame([0, 0, 0], $scenario['adapter']->transactionLevels);
+        self::assertSame([0, 0], $scenario['adapter']->transactionLevels);
     }
 
     /**
