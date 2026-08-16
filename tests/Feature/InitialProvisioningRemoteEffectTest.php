@@ -385,6 +385,69 @@ final class InitialProvisioningRemoteEffectTest extends TestCase
         self::assertSame(2, $retry->attemptCount);
     }
 
+    public function test_committed_capacity_recovery_reuses_route_and_adopts_exact_remote_without_create(): void
+    {
+        $scenario = $this->scenario('committed-capacity-recovery');
+        $scenario['adapter']->forcedCreateResult = new PanelOperationResult(
+            PanelOperationOutcome::RetryableFailure,
+            null,
+            'test_retryable',
+            'Temporary test failure.',
+        );
+
+        $first = $this->executor()->execute($scenario['queue']->provisioningOperationPublicId);
+        self::assertSame(ProvisioningState::RetryScheduled, $first->state);
+        self::assertNotNull($first->routeSelectionId);
+        $request = $scenario['adapter']->lastCreateRequest;
+        self::assertNotNull($request);
+
+        $operation = DB::table('provisioning_operations')
+            ->where('id', $scenario['queue']->provisioningOperationId)
+            ->first(['capacity_reservation_key', 'correlation_id']);
+        self::assertNotNull($operation);
+        self::assertNotNull($operation->capacity_reservation_key);
+        $reservation = DB::table('panel_capacity_reservations')
+            ->where('reservation_key', $operation->capacity_reservation_key)
+            ->first(['version']);
+        self::assertNotNull($reservation);
+        $this->app->make(TargetCapacityAllocator::class)->commit(
+            (string) $operation->capacity_reservation_key,
+            (int) $reservation->version,
+            new CapacityOperationContext(
+                'test-committed-capacity-recovery:'.$scenario['queue']->provisioningOperationPublicId,
+                (string) $operation->correlation_id,
+                'provisioning',
+                'initial_provision',
+                'simulate_post_provider_capacity_commit',
+            ),
+        );
+        self::assertSame('committed', DB::table('panel_capacity_reservations')->value('state'));
+
+        $expectedHash = $scenario['adapter']->createEquivalenceHash($request);
+        $scenario['adapter']->seed(new RemoteServiceSnapshot(
+            'committed-existing-'.$scenario['queue']->provisioningOperationId,
+            $request->username,
+            PanelServiceStatus::Active,
+            $request->dataLimitBytes,
+            0,
+            $request->expiresAt,
+            $expectedHash,
+            $expectedHash,
+        ));
+        $scenario['adapter']->forcedCreateResult = null;
+        $scenario['adapter']->resetCalls();
+
+        $retry = $this->executor()->execute($scenario['queue']->provisioningOperationPublicId);
+
+        self::assertSame(ProvisioningState::Succeeded, $retry->state);
+        self::assertSame($first->routeSelectionId, $retry->routeSelectionId);
+        self::assertSame(['lookup_username'], $scenario['adapter']->calls);
+        self::assertSame([0], $scenario['adapter']->transactionLevels);
+        self::assertSame('committed', DB::table('panel_capacity_reservations')->value('state'));
+        self::assertSame(1, DB::table('plan_offering_route_selections')->count());
+        self::assertSame(2, $retry->attemptCount);
+    }
+
     public function test_capacity_hold_near_expiry_fails_closed_before_retry_provider_effect(): void
     {
         $scenario = $this->scenario('capacity-expiry');
