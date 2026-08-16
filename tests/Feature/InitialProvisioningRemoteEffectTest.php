@@ -627,13 +627,6 @@ final class InitialProvisioningRemoteEffectTest extends TestCase
             'customer_selectable' => false,
             'updated_at' => $now,
         ]);
-        DB::table('plan_offerings')->where('id', $offeringId)->update([
-            'state' => 'active',
-            'visibility' => 'visible',
-            'server_selection_mode' => 'system_selects',
-            'protocol_selection_mode' => 'system_selects',
-            'updated_at' => $now,
-        ]);
 
         $tierId = (int) DB::table('customer_tiers')->where('code', 'normal')->value('id');
         if (! DB::table('customer_profiles')->where('user_id', $userId)->exists()) {
@@ -686,6 +679,13 @@ final class InitialProvisioningRemoteEffectTest extends TestCase
             ]),
             $this->catalogContext($ownerId, 'remote-effect-route-'.$suffix),
         );
+        DB::table('plan_offerings')->where('id', $offeringId)->update([
+            'state' => 'active',
+            'visibility' => 'visible',
+            'server_selection_mode' => 'system_selects',
+            'protocol_selection_mode' => 'system_selects',
+            'updated_at' => $now,
+        ]);
 
         return $targetId;
     }
