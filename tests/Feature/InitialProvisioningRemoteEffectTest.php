@@ -20,14 +20,13 @@ use App\Modules\Panels\Application\Contracts\PanelCapabilities;
 use App\Modules\Panels\Application\Contracts\PanelCreateServiceRequest;
 use App\Modules\Panels\Application\Contracts\PanelOperationOutcome;
 use App\Modules\Panels\Application\Contracts\PanelOperationResult;
+use App\Modules\Panels\Application\Contracts\PanelServiceStatus;
 use App\Modules\Panels\Application\Contracts\RemoteServiceSnapshot;
 use App\Modules\Panels\Application\Contracts\SensitiveDeliveryArtifacts;
 use App\Modules\Panels\Application\PanelAdapterRegistry;
 use App\Modules\Panels\Application\PanelAdapterSession;
 use App\Modules\Panels\Application\PanelCredentialPolicy;
 use App\Modules\Panels\Domain\PanelProviderType;
-use App\Modules\Panels\Domain\PanelServiceStatus;
-use App\Modules\Panels\Infrastructure\FakePanelAdapter;
 use App\Modules\Payments\Application\Contracts\PaymentEvidence;
 use App\Modules\Payments\Application\Contracts\PaymentEvidenceAuthority;
 use App\Modules\Payments\Application\Contracts\PaymentTransactionStatus;
@@ -38,9 +37,9 @@ use App\Modules\Payments\Application\PurchaseRefundService;
 use App\Modules\Payments\Application\PurchaseSettlementReceipt;
 use App\Modules\Payments\Domain\PaymentIntentState;
 use App\Modules\Provisioning\Application\InitialProvisioningExecutor;
-use App\Modules\Provisioning\Application\InitialProvisioningQueueReceipt;
 use App\Modules\Provisioning\Application\InitialProvisioningQueueService;
 use App\Modules\Provisioning\Application\InitialProvisioningRecoveryService;
+use App\Modules\Provisioning\Application\ProvisioningQueueReceipt;
 use App\Modules\Provisioning\Domain\ProvisioningState;
 use App\Shared\Domain\Money;
 use Closure;
@@ -52,10 +51,11 @@ use DateTimeImmutable;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
+use LogicException;
 use Throwable;
 use Tests\TestCase;
 
-final class InitialProvisioningRecordingPanelAdapter implements PanelAdapter
+final class InitialProvisioningTestPanelAdapter implements PanelAdapter
 {
     /** @var list<string> */
     public array $calls = [];
@@ -69,7 +69,8 @@ final class InitialProvisioningRecordingPanelAdapter implements PanelAdapter
 
     public ?Closure $beforeCreate = null;
 
-    public function __construct(public readonly FakePanelAdapter $inner) {}
+    /** @var array<string, RemoteServiceSnapshot> */
+    private array $servicesByUsername = [];
 
     public function resetCalls(): void
     {
@@ -78,33 +79,59 @@ final class InitialProvisioningRecordingPanelAdapter implements PanelAdapter
         $this->lastCreateRequest = null;
     }
 
+    public function serviceCount(): int
+    {
+        return count($this->servicesByUsername);
+    }
+
+    public function seed(RemoteServiceSnapshot $service): void
+    {
+        $this->servicesByUsername[$service->username] = $service;
+    }
+
     public function testConnection(): PanelOperationResult
     {
-        return $this->inner->testConnection();
+        return new PanelOperationResult(PanelOperationOutcome::Success, null, 'test_connection_ok', 'Test panel is healthy.');
     }
 
     public function capabilities(): PanelCapabilities
     {
-        return $this->inner->capabilities();
+        return new PanelCapabilities(
+            'fake',
+            '1.0.0',
+            ['authoritative_username_lookup', 'create_service'],
+            ['fake-default'],
+        );
     }
 
     public function findByRemoteId(string $remoteId): ?RemoteServiceSnapshot
     {
         $this->record('lookup_remote_id');
+        foreach ($this->servicesByUsername as $service) {
+            if (hash_equals($service->remoteId, $remoteId)) {
+                return $service;
+            }
+        }
 
-        return $this->inner->findByRemoteId($remoteId);
+        return null;
     }
 
     public function findByDeterministicUsername(string $username): ?RemoteServiceSnapshot
     {
         $this->record('lookup_username');
 
-        return $this->inner->findByDeterministicUsername($username);
+        return $this->servicesByUsername[$username] ?? null;
     }
 
     public function createEquivalenceHash(PanelCreateServiceRequest $request): string
     {
-        return $this->inner->createEquivalenceHash($request);
+        return hash('sha256', json_encode([
+            'username' => $request->username,
+            'target_reference' => $request->targetReference,
+            'data_limit_bytes' => $request->dataLimitBytes,
+            'expires_at' => $request->expiresAt?->format(DATE_ATOM),
+            'attributes' => $request->validatedAttributes,
+        ], JSON_THROW_ON_ERROR));
     }
 
     public function createService(PanelCreateServiceRequest $request): PanelOperationResult
@@ -114,18 +141,39 @@ final class InitialProvisioningRecordingPanelAdapter implements PanelAdapter
         if ($this->beforeCreate !== null) {
             ($this->beforeCreate)();
         }
+        if ($this->forcedCreateResult !== null) {
+            return $this->forcedCreateResult;
+        }
 
-        return $this->forcedCreateResult ?? $this->inner->createService($request);
+        $hash = $this->createEquivalenceHash($request);
+        $service = new RemoteServiceSnapshot(
+            'test-'.substr(hash('sha256', $request->idempotencyKey), 0, 24),
+            $request->username,
+            PanelServiceStatus::Active,
+            $request->dataLimitBytes,
+            0,
+            $request->expiresAt,
+            $hash,
+            $hash,
+        );
+        $this->seed($service);
+
+        return new PanelOperationResult(
+            PanelOperationOutcome::Success,
+            $service,
+            'test_service_created',
+            'Test service created.',
+        );
     }
 
     public function fetchStatus(string $remoteId): PanelOperationResult
     {
-        return $this->inner->fetchStatus($remoteId);
+        throw new LogicException('Not used by initial provisioning remote-effect tests.');
     }
 
     public function updateExpiry(string $idempotencyKey, string $remoteId, DateTimeImmutable $expiresAt): PanelOperationResult
     {
-        return $this->inner->updateExpiry($idempotencyKey, $remoteId, $expiresAt);
+        throw new LogicException('Not used by initial provisioning remote-effect tests.');
     }
 
     public function updateDataAllowance(
@@ -134,47 +182,52 @@ final class InitialProvisioningRecordingPanelAdapter implements PanelAdapter
         int $bytes,
         DataAllowanceMode $mode,
     ): PanelOperationResult {
-        return $this->inner->updateDataAllowance($idempotencyKey, $remoteId, $bytes, $mode);
+        throw new LogicException('Not used by initial provisioning remote-effect tests.');
     }
 
     public function resetUsage(string $idempotencyKey, string $remoteId): PanelOperationResult
     {
-        return $this->inner->resetUsage($idempotencyKey, $remoteId);
+        throw new LogicException('Not used by initial provisioning remote-effect tests.');
     }
 
     public function suspend(string $idempotencyKey, string $remoteId): PanelOperationResult
     {
-        return $this->inner->suspend($idempotencyKey, $remoteId);
+        throw new LogicException('Not used by initial provisioning remote-effect tests.');
     }
 
     public function activate(string $idempotencyKey, string $remoteId): PanelOperationResult
     {
-        return $this->inner->activate($idempotencyKey, $remoteId);
+        throw new LogicException('Not used by initial provisioning remote-effect tests.');
     }
 
     public function delete(string $idempotencyKey, string $remoteId): PanelOperationResult
     {
-        return $this->inner->delete($idempotencyKey, $remoteId);
+        throw new LogicException('Not used by initial provisioning remote-effect tests.');
     }
 
     public function rotateSubscriptionLink(string $idempotencyKey, string $remoteId): PanelOperationResult
     {
-        return $this->inner->rotateSubscriptionLink($idempotencyKey, $remoteId);
+        throw new LogicException('Not used by initial provisioning remote-effect tests.');
     }
 
     public function getDeliveryArtifacts(string $remoteId): SensitiveDeliveryArtifacts
     {
-        return $this->inner->getDeliveryArtifacts($remoteId);
+        throw new LogicException('Not used by initial provisioning remote-effect tests.');
     }
 
     public function synchronize(string $remoteId): PanelOperationResult
     {
-        return $this->inner->synchronize($remoteId);
+        throw new LogicException('Not used by initial provisioning remote-effect tests.');
     }
 
     public function listCompatibleTargets(): array
     {
-        return $this->inner->listCompatibleTargets();
+        return [[
+            'id' => 'fake-default',
+            'type' => 'inbound',
+            'name' => 'Test target',
+            'capabilities' => ['create_service'],
+        ]];
     }
 
     private function record(string $call): void
@@ -184,9 +237,9 @@ final class InitialProvisioningRecordingPanelAdapter implements PanelAdapter
     }
 }
 
-final readonly class InitialProvisioningRecordingPanelAdapterFactory implements PanelAdapterFactory
+final readonly class InitialProvisioningTestPanelAdapterFactory implements PanelAdapterFactory
 {
-    public function __construct(private InitialProvisioningRecordingPanelAdapter $adapter) {}
+    public function __construct(private InitialProvisioningTestPanelAdapter $adapter) {}
 
     public function providerType(): PanelProviderType
     {
@@ -224,9 +277,9 @@ final class InitialProvisioningRemoteEffectTest extends TestCase
         $receipt = $this->executor()->execute($scenario['queue']->provisioningOperationPublicId);
 
         self::assertSame(ProvisioningState::FailedFinal, $receipt->state);
-        self::assertSame('financial_authority_lost', $receipt->lastResultCode);
+        self::assertSame('financial_authority_lost', $receipt->resultCode);
         self::assertSame([], $scenario['adapter']->calls);
-        self::assertSame(0, $scenario['adapter']->inner->serviceCount());
+        self::assertSame(0, $scenario['adapter']->serviceCount());
     }
 
     public function test_successful_create_is_transaction_free_durable_and_terminal_replay_is_side_effect_free(): void
@@ -238,7 +291,7 @@ final class InitialProvisioningRemoteEffectTest extends TestCase
         self::assertSame(ProvisioningState::Succeeded, $receipt->state);
         self::assertSame(['lookup_username', 'create', 'lookup_username'], $scenario['adapter']->calls);
         self::assertSame([0, 0, 0], $scenario['adapter']->transactionLevels);
-        self::assertSame(1, $scenario['adapter']->inner->serviceCount());
+        self::assertSame(1, $scenario['adapter']->serviceCount());
         self::assertNotNull($receipt->remoteServiceId);
         self::assertSame(1, DB::table('plan_offering_route_selections')->count());
         self::assertSame('committed', DB::table('panel_capacity_reservations')->value('state'));
@@ -267,8 +320,8 @@ final class InitialProvisioningRemoteEffectTest extends TestCase
         $scenario['adapter']->forcedCreateResult = new PanelOperationResult(
             PanelOperationOutcome::RetryableFailure,
             null,
-            'fake_retryable',
-            'Temporary fake failure.',
+            'test_retryable',
+            'Temporary test failure.',
         );
 
         $first = $this->executor()->execute($scenario['queue']->provisioningOperationPublicId);
@@ -279,7 +332,7 @@ final class InitialProvisioningRemoteEffectTest extends TestCase
         $request = $scenario['adapter']->lastCreateRequest;
         self::assertNotNull($request);
         $expectedHash = $scenario['adapter']->createEquivalenceHash($request);
-        $scenario['adapter']->inner->seed(new RemoteServiceSnapshot(
+        $scenario['adapter']->seed(new RemoteServiceSnapshot(
             'existing-'.$scenario['queue']->provisioningOperationId,
             $request->username,
             PanelServiceStatus::Active,
@@ -308,8 +361,8 @@ final class InitialProvisioningRemoteEffectTest extends TestCase
         $scenario['adapter']->forcedCreateResult = new PanelOperationResult(
             PanelOperationOutcome::UncertainResult,
             null,
-            'fake_timeout',
-            'Fake result is uncertain.',
+            'test_timeout',
+            'Test result is uncertain.',
         );
 
         $uncertain = $this->executor()->execute($scenario['queue']->provisioningOperationPublicId);
@@ -317,7 +370,7 @@ final class InitialProvisioningRemoteEffectTest extends TestCase
         $request = $scenario['adapter']->lastCreateRequest;
         self::assertNotNull($request);
         $expectedHash = $scenario['adapter']->createEquivalenceHash($request);
-        $scenario['adapter']->inner->seed(new RemoteServiceSnapshot(
+        $scenario['adapter']->seed(new RemoteServiceSnapshot(
             'uncertain-existing-'.$scenario['queue']->provisioningOperationId,
             $request->username,
             PanelServiceStatus::Active,
@@ -374,15 +427,15 @@ final class InitialProvisioningRemoteEffectTest extends TestCase
         $scenario['adapter']->forcedCreateResult = new PanelOperationResult(
             PanelOperationOutcome::RetryableFailure,
             null,
-            'fake_retryable',
-            'Temporary fake failure.',
+            'test_retryable',
+            'Temporary test failure.',
         );
         $first = $this->executor()->execute($scenario['queue']->provisioningOperationPublicId);
         self::assertSame(ProvisioningState::RetryScheduled, $first->state);
         $request = $scenario['adapter']->lastCreateRequest;
         self::assertNotNull($request);
         $conflictingHash = hash('sha256', 'conflicting-remote-intent');
-        $scenario['adapter']->inner->seed(new RemoteServiceSnapshot(
+        $scenario['adapter']->seed(new RemoteServiceSnapshot(
             'conflict-'.$scenario['queue']->provisioningOperationId,
             $request->username,
             PanelServiceStatus::Active,
@@ -427,8 +480,8 @@ final class InitialProvisioningRemoteEffectTest extends TestCase
      * @return array{
      *     settlement:PurchaseSettlementReceipt,
      *     order:PurchaseOrderReceipt,
-     *     queue:InitialProvisioningQueueReceipt,
-     *     adapter:InitialProvisioningRecordingPanelAdapter,
+     *     queue:ProvisioningQueueReceipt,
+     *     adapter:InitialProvisioningTestPanelAdapter,
      *     target_id:int
      * }
      */
@@ -447,12 +500,11 @@ final class InitialProvisioningRemoteEffectTest extends TestCase
         $userId = (int) DB::table('orders')->where('id', $order->orderId)->value('user_id');
         $targetId = $this->makeOfferingOperational($offeringId, $userId, $suffix);
 
-        $fake = $this->app->make(FakePanelAdapter::class);
-        $adapter = new InitialProvisioningRecordingPanelAdapter($fake);
+        $adapter = new InitialProvisioningTestPanelAdapter;
         $this->app->instance(
             PanelAdapterRegistry::class,
             new PanelAdapterRegistry(
-                [new InitialProvisioningRecordingPanelAdapterFactory($adapter)],
+                [new InitialProvisioningTestPanelAdapterFactory($adapter)],
                 $this->app->make(PanelCredentialPolicy::class),
             ),
         );
@@ -478,8 +530,8 @@ final class InitialProvisioningRemoteEffectTest extends TestCase
         $targetId = (int) $offering->panel_service_target_id;
         $connectionId = (int) DB::table('panel_service_targets')->where('id', $targetId)->value('panel_connection_id');
         $connectionVersion = (int) DB::table('panel_connections')->where('id', $connectionId)->value('version') + 1;
-        $capabilityHash = hash('sha256', 'fake-capabilities-'.$suffix);
-        $targetEvidenceHash = hash('sha256', 'fake-target-evidence-'.$suffix);
+        $capabilityHash = hash('sha256', 'test-capabilities-'.$suffix);
+        $targetEvidenceHash = hash('sha256', 'test-target-evidence-'.$suffix);
 
         DB::table('panel_connections')->where('id', $connectionId)->update([
             'encrypted_credentials' => Crypt::encryptString(json_encode(['token' => 'remote-effect-test'], JSON_THROW_ON_ERROR)),
@@ -578,7 +630,7 @@ final class InitialProvisioningRemoteEffectTest extends TestCase
         return $this->app->make(InitialProvisioningExecutor::class);
     }
 
-    private function simulateInterruptedClaim(InitialProvisioningQueueReceipt $queue): void
+    private function simulateInterruptedClaim(ProvisioningQueueReceipt $queue): void
     {
         $operation = DB::table('provisioning_operations')->where('id', $queue->provisioningOperationId)->first([
             'operation_key', 'correlation_id', 'state_version', 'attempt_count',
