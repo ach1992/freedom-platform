@@ -30,6 +30,46 @@ use Illuminate\Database\Query\Builder;
 use RuntimeException;
 use Throwable;
 
+/**
+ * @phpstan-type OperationRow object{
+ *     id:int|string,
+ *     public_id:string,
+ *     operation_key:string,
+ *     operation_type:string,
+ *     order_id:int|string,
+ *     order_item_id:int|string,
+ *     service_subscription_id:int|string,
+ *     user_id:int|string,
+ *     state:string,
+ *     state_version:int|string,
+ *     correlation_id:string,
+ *     effect_fence_key:?string,
+ *     route_hold_expires_at:?string,
+ *     route_selection_id:int|string|null,
+ *     service_target_id:int|string|null,
+ *     capacity_reservation_id:int|string|null,
+ *     capacity_reservation_key:?string,
+ *     remote_username:?string,
+ *     target_reference:?string,
+ *     attempt_count:int|string,
+ *     last_result_code:?string,
+ *     last_result_message:?string,
+ *     remote_service_id:?string,
+ *     remote_effect_started_at:?string,
+ *     remote_effect_completed_at:?string,
+ *     purchase_settlement_id:int|string|null,
+ *     payment_intent_id:int|string|null,
+ *     order_state:string,
+ *     order_state_version:int|string,
+ *     plan_offering_id:int|string,
+ *     account_type_snapshot:string,
+ *     service_public_id:string
+ * }
+ * @phpstan-type SettlementRow object{id:int|string,payment_intent_id:int|string,user_id:int|string,source_quote_id:int|string}
+ * @phpstan-type IntentRow object{id:int|string,purpose:string,user_id:int|string,source_quote_id:int|string|null,state:string,captured_at:?string}
+ * @phpstan-type FinancialOrderRow object{id:int|string,purchase_settlement_id:int|string|null,payment_intent_id:int|string|null,user_id:int|string,source_quote_id:int|string|null,state:string,state_version:int|string}
+ * @phpstan-type FinancialAuthority array{operation:OperationRow,settlement:SettlementRow,intent:IntentRow,order:FinancialOrderRow}
+ */
 final readonly class InitialProvisioningExecutor
 {
     private const OPERATION_TYPE = 'initial_provision';
@@ -120,10 +160,15 @@ final readonly class InitialProvisioningExecutor
         return $this->applyPanelResult($operation, $result);
     }
 
+    /**
+     * @param  OperationRow  $locator
+     * @return OperationRow
+     */
     private function claim(object $locator): object
     {
         return $this->database->connection()->transaction(function (Connection $connection) use ($locator): object {
-            $locked = $this->lockedFinancialOperation($connection, $locator);
+            $authority = $this->lockedFinancialAuthority($connection, $locator);
+            $locked = $authority['operation'];
             $state = $this->storedState($locked->state);
             if ($state === ProvisioningState::Running) {
                 return $locked;
@@ -132,7 +177,13 @@ final readonly class InitialProvisioningExecutor
                 throw new DomainException('Initial provisioning operation cannot acquire remote-effect authority.');
             }
 
-            $this->assertCapturedFinancialAuthority($connection, $locked);
+            $this->assertCapturedFinancialAuthority(
+                $connection,
+                $locked,
+                $authority['settlement'],
+                $authority['intent'],
+                $authority['order'],
+            );
             $now = $this->nowString();
             $holdExpiry = $locked->route_selection_id === null
                 ? $this->clock->now()->add(new DateInterval(self::ROUTE_HOLD_INTERVAL))->format('Y-m-d H:i:s.u')
@@ -171,6 +222,7 @@ final readonly class InitialProvisioningExecutor
         }, 3);
     }
 
+    /** @param OperationRow $operation */
     private function ensureRouteBinding(object $operation): RouteSelectionReceipt
     {
         if ($operation->route_selection_id !== null) {
@@ -204,6 +256,7 @@ final readonly class InitialProvisioningExecutor
         return $this->bindRouteIntent($operation, $route);
     }
 
+    /** @param OperationRow $operation */
     private function bindRouteIntent(object $operation, RouteSelectionReceipt $route): RouteSelectionReceipt
     {
         return $this->database->connection()->transaction(function (Connection $connection) use ($operation, $route): RouteSelectionReceipt {
@@ -251,17 +304,26 @@ final readonly class InitialProvisioningExecutor
         }, 3);
     }
 
+    /** @param OperationRow $operation */
     private function revalidateFinancialAuthority(object $operation): void
     {
         $this->database->connection()->transaction(function (Connection $connection) use ($operation): void {
-            $locked = $this->lockedFinancialOperation($connection, $operation);
+            $authority = $this->lockedFinancialAuthority($connection, $operation);
+            $locked = $authority['operation'];
             if ($this->storedState($locked->state) !== ProvisioningState::Running) {
                 throw new DomainException('Initial provisioning operation lost its remote-effect fence.');
             }
-            $this->assertCapturedFinancialAuthority($connection, $locked);
+            $this->assertCapturedFinancialAuthority(
+                $connection,
+                $locked,
+                $authority['settlement'],
+                $authority['intent'],
+                $authority['order'],
+            );
         }, 3);
     }
 
+    /** @param OperationRow $operation */
     private function applyPanelResult(object $operation, PanelOperationResult $result): InitialProvisioningExecutionReceipt
     {
         $code = $result->providerCode ?? match ($result->outcome) {
@@ -292,6 +354,7 @@ final readonly class InitialProvisioningExecutor
         };
     }
 
+    /** @param OperationRow $operation */
     private function finalizeSuccess(
         object $operation,
         string $code,
@@ -319,6 +382,7 @@ final readonly class InitialProvisioningExecutor
         );
     }
 
+    /** @param OperationRow $operation */
     private function finalizeDefinitive(
         object $operation,
         string $code,
@@ -338,6 +402,7 @@ final readonly class InitialProvisioningExecutor
         );
     }
 
+    /** @param OperationRow $operation */
     private function finalize(
         object $operation,
         ProvisioningState $targetState,
@@ -413,17 +478,8 @@ final readonly class InitialProvisioningExecutor
         }, 3);
     }
 
+    /** @param OperationRow $operation */
     private function commitCapacity(object $operation): void
-    {
-        $this->transitionCapacity($operation, true);
-    }
-
-    private function releaseCapacity(object $operation): void
-    {
-        $this->transitionCapacity($operation, false);
-    }
-
-    private function transitionCapacity(object $operation, bool $commit): void
     {
         if ($operation->capacity_reservation_id === null || $operation->capacity_reservation_key === null) {
             throw new RuntimeException('Provisioning capacity reservation is unavailable.');
@@ -440,30 +496,27 @@ final readonly class InitialProvisioningExecutor
 
         $state = CapacityReservationState::tryFrom($row->state)
             ?? throw new RuntimeException('Stored provisioning capacity reservation state is invalid.');
-        if ($commit && $state === CapacityReservationState::Committed) {
-            return;
-        }
-        if (! $commit && $state === CapacityReservationState::Released) {
+        if ($state === CapacityReservationState::Committed) {
             return;
         }
         if ($state !== CapacityReservationState::Held) {
-            throw new RuntimeException('Provisioning capacity reservation cannot transition from its current state.');
+            throw new RuntimeException('Provisioning capacity reservation cannot be committed from its current state.');
         }
 
-        $context = new CapacityOperationContext(
-            ($commit ? 'initial-provision-commit:' : 'initial-provision-release:').$operation->public_id,
-            $operation->correlation_id,
-            'provisioning',
-            'initial_provision',
-            $commit ? 'remote_effect_succeeded' : 'remote_effect_failed',
+        $this->capacity->commit(
+            $operation->capacity_reservation_key,
+            (int) $row->version,
+            new CapacityOperationContext(
+                'initial-provision-commit:'.$operation->public_id,
+                $operation->correlation_id,
+                'provisioning',
+                'initial_provision',
+                'remote_effect_succeeded',
+            ),
         );
-        if ($commit) {
-            $this->capacity->commit($operation->capacity_reservation_key, (int) $row->version, $context);
-        } else {
-            $this->capacity->release($operation->capacity_reservation_key, (int) $row->version, $context);
-        }
     }
 
+    /** @param OperationRow $operation */
     private function remoteRequest(object $operation, RouteSelectionReceipt $route): PanelCreateServiceRequest
     {
         if ($operation->remote_username === null || $operation->target_reference === null) {
@@ -488,6 +541,7 @@ final readonly class InitialProvisioningExecutor
         );
     }
 
+    /** @param OperationRow $operation */
     private function storedRouteSelection(
         int $selectionId,
         object $operation,
@@ -543,13 +597,14 @@ final readonly class InitialProvisioningExecutor
         );
     }
 
+    /** @return OperationRow */
     private function operationByPublicId(string $publicId): object
     {
         if (preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/i', $publicId) !== 1) {
             throw new DomainException('Provisioning operation public ID is invalid.');
         }
 
-        /** @var object|null $row */
+        /** @var OperationRow|null $row */
         $row = $this->operationQuery($this->database->connection())
             ->where('operation.public_id', strtoupper($publicId))
             ->first($this->operationColumns());
@@ -560,13 +615,14 @@ final readonly class InitialProvisioningExecutor
         return $row;
     }
 
+    /** @return OperationRow */
     private function operationById(Connection $connection, int $operationId, bool $lock = false): object
     {
         $query = $this->operationQuery($connection)->where('operation.id', $operationId);
         if ($lock) {
             $query->lockForUpdate();
         }
-        /** @var object|null $row */
+        /** @var OperationRow|null $row */
         $row = $query->first($this->operationColumns());
         if ($row === null || $row->operation_type !== self::OPERATION_TYPE) {
             throw new RuntimeException('Initial provisioning operation disappeared.');
@@ -600,7 +656,11 @@ final readonly class InitialProvisioningExecutor
         ];
     }
 
-    private function lockedFinancialOperation(Connection $connection, object $locator): object
+    /**
+     * @param  OperationRow  $locator
+     * @return FinancialAuthority
+     */
+    private function lockedFinancialAuthority(Connection $connection, object $locator): array
     {
         /** @var object{purchase_settlement_id:int|string|null,payment_intent_id:int|string|null}|null $orderLocator */
         $orderLocator = $connection->table('orders')->where('id', (int) $locator->order_id)
@@ -609,6 +669,7 @@ final readonly class InitialProvisioningExecutor
             throw new RuntimeException('Provisioning financial identity is unavailable.');
         }
 
+        /** @var SettlementRow|null $settlement */
         $settlement = $connection->table('purchase_settlements')
             ->where('id', (int) $orderLocator->purchase_settlement_id)
             ->lockForUpdate()
@@ -616,6 +677,7 @@ final readonly class InitialProvisioningExecutor
         if ($settlement === null) {
             throw new RuntimeException('Provisioning purchase settlement is unavailable.');
         }
+        /** @var IntentRow|null $intent */
         $intent = $connection->table('payment_intents')
             ->where('id', (int) $settlement->payment_intent_id)
             ->lockForUpdate()
@@ -623,6 +685,7 @@ final readonly class InitialProvisioningExecutor
         if ($intent === null) {
             throw new RuntimeException('Provisioning payment intent is unavailable.');
         }
+        /** @var FinancialOrderRow|null $order */
         $order = $connection->table('orders')->where('id', (int) $locator->order_id)->lockForUpdate()->first([
             'id', 'purchase_settlement_id', 'payment_intent_id', 'user_id', 'source_quote_id', 'state', 'state_version',
         ]);
@@ -630,22 +693,29 @@ final readonly class InitialProvisioningExecutor
             throw new RuntimeException('Provisioning Order is unavailable.');
         }
         $connection->table('order_items')->where('id', (int) $locator->order_item_id)->lockForUpdate()->first(['id']);
-        $locked = $this->operationById($connection, (int) $locator->id, true);
 
-        $locked->_financial_settlement = $settlement;
-        $locked->_financial_intent = $intent;
-        $locked->_financial_order = $order;
-
-        return $locked;
+        return [
+            'operation' => $this->operationById($connection, (int) $locator->id, true),
+            'settlement' => $settlement,
+            'intent' => $intent,
+            'order' => $order,
+        ];
     }
 
-    private function assertCapturedFinancialAuthority(Connection $connection, object $operation): void
-    {
-        $settlement = $operation->_financial_settlement ?? null;
-        $intent = $operation->_financial_intent ?? null;
-        $order = $operation->_financial_order ?? null;
-        if (! is_object($settlement) || ! is_object($intent) || ! is_object($order)
-            || (int) $settlement->payment_intent_id !== (int) $intent->id
+    /**
+     * @param  OperationRow  $operation
+     * @param  SettlementRow  $settlement
+     * @param  IntentRow  $intent
+     * @param  FinancialOrderRow  $order
+     */
+    private function assertCapturedFinancialAuthority(
+        Connection $connection,
+        object $operation,
+        object $settlement,
+        object $intent,
+        object $order,
+    ): void {
+        if ((int) $settlement->payment_intent_id !== (int) $intent->id
             || (int) $order->purchase_settlement_id !== (int) $settlement->id
             || (int) $order->payment_intent_id !== (int) $intent->id
             || (int) $order->user_id !== (int) $operation->user_id
@@ -665,6 +735,7 @@ final readonly class InitialProvisioningExecutor
         }
     }
 
+    /** @param OperationRow $operation */
     private function recordEvent(Connection $connection, object $operation, string $eventType, ?string $resultCode): void
     {
         $connection->table('provisioning_remote_effect_events')->insert([
@@ -680,6 +751,7 @@ final readonly class InitialProvisioningExecutor
         ]);
     }
 
+    /** @param OperationRow $operation */
     private function setAuthority(Connection $connection, object $operation): void
     {
         $connection->statement('SET @app_provisioning_authority = ?, @app_provisioning_operation_key = ?, @app_provisioning_correlation_id = ?', [
@@ -711,6 +783,7 @@ final readonly class InitialProvisioningExecutor
         ], true);
     }
 
+    /** @param OperationRow $operation */
     private function receipt(object $operation, bool $replayed): InitialProvisioningExecutionReceipt
     {
         return new InitialProvisioningExecutionReceipt(
