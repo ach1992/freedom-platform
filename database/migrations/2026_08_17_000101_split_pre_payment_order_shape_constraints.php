@@ -13,6 +13,7 @@ return new class extends Migration
         $this->dropConstraintIfExists('orders', 'orders_purchase_shape_chk');
         $this->dropConstraintIfExists('orders', 'orders_purchase_quote_identity_chk');
         $this->dropConstraintIfExists('orders', 'orders_purchase_financial_shape_chk');
+        $this->dropConstraintIfExists('orders', 'orders_purchase_captured_shape_chk');
 
         DB::statement(<<<'SQL'
 ALTER TABLE orders ADD CONSTRAINT orders_purchase_quote_identity_chk CHECK (
