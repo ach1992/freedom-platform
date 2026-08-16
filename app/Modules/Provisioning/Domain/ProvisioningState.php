@@ -33,7 +33,7 @@ enum ProvisioningState: string
     {
         return match ($this) {
             self::Queued => [self::Running],
-            self::Running => [self::Succeeded, self::UncertainRemoteResult, self::RetryScheduled, self::FailedFinal],
+            self::Running => [self::Succeeded, self::UncertainRemoteResult, self::RetryScheduled, self::FailedFinal, self::NeedsReview],
             self::UncertainRemoteResult => [self::Succeeded, self::RetryScheduled, self::NeedsReview],
             self::RetryScheduled => [self::Running, self::FailedFinal],
             self::Succeeded => [self::Compensating],
