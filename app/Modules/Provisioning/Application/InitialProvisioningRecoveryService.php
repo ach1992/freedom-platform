@@ -20,14 +20,15 @@ final readonly class InitialProvisioningRecoveryService
     private const AUTHORITY = 'initial_remote_effect_v1';
 
     /**
-     * The shared Outbox lease is 60 seconds with five total delivery attempts. Its retry schedule
-     * reaches the fourth attempt after roughly 210 seconds, so interrupted running work must become
-     * uncertain before that attempt in order to leave one final lookup-first reconciliation attempt.
-     * Provisioning uses the default 15-second PanelAdapterSession timeout and the accepted #64
-     * source-contract lookup path performs only a small bounded number of HTTP requests; 180 seconds
-     * keeps a wide margin for live work without exhausting the unchanged Outbox delivery contract.
+     * The shared Outbox lease is 60 seconds with five total delivery attempts. A crashed worker can
+     * reach attempt four after about 210 seconds; a handled retryable failure can reach it after
+     * about 155 seconds. Running work therefore has to become uncertain before 155 seconds so one
+     * final delivery remains for lookup-first reconciliation. Provisioning uses the default
+     * 15-second PanelAdapterSession timeout and the accepted #64 source-contract lookup path is
+     * bounded to a small number of HTTP requests; 120 seconds preserves a conservative live-work
+     * margin without changing the shared Outbox delivery contract.
      */
-    private const RUNNING_STALE_AFTER_SECONDS = 180;
+    private const RUNNING_STALE_AFTER_SECONDS = 120;
 
     public function __construct(
         private DatabaseManager $database,
