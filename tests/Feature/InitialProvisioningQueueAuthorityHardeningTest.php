@@ -510,7 +510,7 @@ namespace Tests\Feature {
             return null;
         }
 
-        /** @param array{process:resource,pipes:array{0:resource,pipes:array{0:resource,1:resource,2:resource}}} $worker */
+        /** @param array{process:resource,pipes:array{0:resource,1:resource,2:resource}} $worker */
         private function terminateWorker(array $worker): void
         {
             foreach ($worker['pipes'] as $pipe) {
