@@ -6,6 +6,7 @@ namespace App\Modules\Provisioning\Application;
 
 use App\Modules\Provisioning\Domain\ProvisioningState;
 use App\Shared\Application\Clock;
+use DateTimeImmutable;
 use DateTimeZone;
 use DomainException;
 use Illuminate\Database\Connection;
@@ -17,6 +18,12 @@ final readonly class InitialProvisioningRecoveryService
     private const OPERATION_TYPE = 'initial_provision';
 
     private const AUTHORITY = 'initial_remote_effect_v1';
+
+    /**
+     * Outbox leases are intentionally shorter than the conservative provider-call recovery window.
+     * A reclaimed message must never reinterpret a still-live remote attempt as interrupted.
+     */
+    private const RUNNING_STALE_AFTER_SECONDS = 120;
 
     public function __construct(
         private DatabaseManager $database,
@@ -31,7 +38,7 @@ final readonly class InitialProvisioningRecoveryService
         }
 
         return $this->database->connection()->transaction(function (Connection $connection) use ($operationPublicId): ProvisioningState {
-            /** @var object{id:int|string,operation_key:string,operation_type:string,state:string,state_version:int|string,correlation_id:string,route_selection_id:int|string|null,service_target_id:int|string|null,remote_service_id:?string}|null $operation */
+            /** @var object{id:int|string,operation_key:string,operation_type:string,state:string,state_version:int|string,correlation_id:string,route_selection_id:int|string|null,service_target_id:int|string|null,remote_service_id:?string,remote_effect_started_at:?string}|null $operation */
             $operation = $connection->table('provisioning_operations')
                 ->where('public_id', strtoupper($operationPublicId))
                 ->lockForUpdate()
@@ -45,6 +52,7 @@ final readonly class InitialProvisioningRecoveryService
                     'route_selection_id',
                     'service_target_id',
                     'remote_service_id',
+                    'remote_effect_started_at',
                 ]);
             if ($operation === null || $operation->operation_type !== self::OPERATION_TYPE) {
                 throw new DomainException('Initial provisioning operation does not exist.');
@@ -53,6 +61,10 @@ final readonly class InitialProvisioningRecoveryService
             $state = ProvisioningState::tryFrom($operation->state)
                 ?? throw new RuntimeException('Stored provisioning state is invalid.');
             if ($state === ProvisioningState::Running) {
+                if (! $this->runningAttemptIsStale($operation->remote_effect_started_at)) {
+                    return ProvisioningState::Running;
+                }
+
                 return $this->markInterruptedUncertain($connection, $operation);
             }
             if ($state !== ProvisioningState::UncertainRemoteResult) {
@@ -139,6 +151,25 @@ final readonly class InitialProvisioningRecoveryService
         }
 
         return ProvisioningState::RetryScheduled;
+    }
+
+    private function runningAttemptIsStale(?string $remoteEffectStartedAt): bool
+    {
+        if ($remoteEffectStartedAt === null || $remoteEffectStartedAt === '') {
+            return true;
+        }
+
+        $utc = new DateTimeZone('UTC');
+        $startedAt = DateTimeImmutable::createFromFormat('Y-m-d H:i:s.u', $remoteEffectStartedAt, $utc);
+        if ($startedAt === false) {
+            return true;
+        }
+
+        $staleAtOrBefore = $this->clock->now()
+            ->setTimezone($utc)
+            ->modify('-'.self::RUNNING_STALE_AFTER_SECONDS.' seconds');
+
+        return $startedAt <= $staleAtOrBefore;
     }
 
     private function setAuthority(Connection $connection, string $operationKey, string $correlationId): void
