@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Support\Facades\DB;
+use RuntimeException;
 
 return new class extends Migration
 {
@@ -33,6 +34,14 @@ SQL);
 
     public function down(): void
     {
+        if (DB::table('provisioning_operations')
+            ->where('operation_type', 'initial_provision')
+            ->where('state', 'running')
+            ->whereNotNull('capacity_reservation_id')
+            ->exists()) {
+            throw new RuntimeException('Cannot remove the running provisioning capacity fence while a remote effect is in progress.');
+        }
+
         DB::unprepared('DROP TRIGGER IF EXISTS provisioning_running_capacity_release_guard');
     }
 };
