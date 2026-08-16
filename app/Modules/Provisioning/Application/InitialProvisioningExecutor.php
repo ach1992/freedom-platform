@@ -377,9 +377,14 @@ final readonly class InitialProvisioningExecutor
             if ($reservation === null
                 || ! hash_equals($reservation->reservation_key, $locked->capacity_reservation_key)
                 || (int) $reservation->units !== (int) $selection->units
-                || $reservation->state !== CapacityReservationState::Held->value
             ) {
-                throw new DomainException('Provisioning capacity reservation is no longer an authoritative hold.');
+                throw new DomainException('Provisioning capacity reservation binding is no longer authoritative.');
+            }
+
+            $reservationState = CapacityReservationState::tryFrom($reservation->state)
+                ?? throw new DomainException('Provisioning capacity reservation state is invalid.');
+            if (! in_array($reservationState, [CapacityReservationState::Held, CapacityReservationState::Committed], true)) {
+                throw new DomainException('Provisioning capacity reservation is no longer authoritative.');
             }
 
             /** @var object{panel_service_target_id:int|string,state:string}|null $capacity */
@@ -388,15 +393,24 @@ final readonly class InitialProvisioningExecutor
                 ->first(['panel_service_target_id', 'state']);
             if ($capacity === null
                 || (int) $capacity->panel_service_target_id !== (int) $locked->service_target_id
-                || $capacity->state !== 'enabled'
             ) {
-                throw new DomainException('Provisioning target capacity is no longer enabled for the selected route.');
+                throw new DomainException('Provisioning target capacity no longer matches the selected route.');
             }
 
             $reservationExpiresAt = $this->storedDateTime($reservation->expires_at, 'Provisioning capacity reservation expiry');
             $routeHoldExpiresAt = $this->storedDateTime($locked->route_hold_expires_at, 'Provisioning route hold expiry');
             if ($reservationExpiresAt->format('Y-m-d H:i:s.u') !== $routeHoldExpiresAt->format('Y-m-d H:i:s.u')) {
                 throw new DomainException('Provisioning capacity expiry does not match the durable route hold.');
+            }
+
+            // A committed reservation is stronger evidence than a live hold: it can legitimately
+            // survive a crash after provider success/capacity commit but before operation finalization.
+            // The coordinator still enters lookup-first, so recovery cannot blindly create.
+            if ($reservationState === CapacityReservationState::Committed) {
+                return;
+            }
+            if ($capacity->state !== 'enabled') {
+                throw new DomainException('Provisioning target capacity is no longer enabled for the selected route.');
             }
 
             $minimumValidUntil = $this->clock->now()
