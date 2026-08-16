@@ -11,11 +11,11 @@ use App\Modules\Catalog\Application\RouteSelectionRequest;
 use App\Modules\Catalog\Domain\RouteSelectionActor;
 use App\Modules\Orders\Domain\OrderState;
 use App\Modules\Panels\Application\CapacityOperationContext;
-use App\Modules\Panels\Application\PanelCreateCoordinator;
-use App\Modules\Panels\Application\TargetCapacityAllocator;
 use App\Modules\Panels\Application\Contracts\PanelCreateServiceRequest;
 use App\Modules\Panels\Application\Contracts\PanelOperationOutcome;
 use App\Modules\Panels\Application\Contracts\PanelOperationResult;
+use App\Modules\Panels\Application\PanelCreateCoordinator;
+use App\Modules\Panels\Application\TargetCapacityAllocator;
 use App\Modules\Panels\Domain\CapacityReservationState;
 use App\Modules\Payments\Domain\PaymentIntentState;
 use App\Modules\Provisioning\Domain\ProvisioningState;
@@ -26,6 +26,7 @@ use DateTimeZone;
 use DomainException;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
+use Illuminate\Database\Query\Builder;
 use RuntimeException;
 use Throwable;
 
@@ -119,7 +120,6 @@ final readonly class InitialProvisioningExecutor
         return $this->applyPanelResult($operation, $result);
     }
 
-    /** @return object */
     private function claim(object $locator): object
     {
         return $this->database->connection()->transaction(function (Connection $connection) use ($locator): object {
@@ -328,6 +328,7 @@ final readonly class InitialProvisioningExecutor
             || str_contains($code, 'conflict')
             || str_contains($code, 'ambiguous')
             || str_contains($code, 'equivalence');
+
         return $this->finalize(
             $operation,
             $manualReview ? ProvisioningState::NeedsReview : ProvisioningState::FailedFinal,
@@ -542,7 +543,6 @@ final readonly class InitialProvisioningExecutor
         );
     }
 
-    /** @return object */
     private function operationByPublicId(string $publicId): object
     {
         if (preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/i', $publicId) !== 1) {
@@ -560,7 +560,6 @@ final readonly class InitialProvisioningExecutor
         return $row;
     }
 
-    /** @return object */
     private function operationById(Connection $connection, int $operationId, bool $lock = false): object
     {
         $query = $this->operationQuery($connection)->where('operation.id', $operationId);
@@ -576,7 +575,7 @@ final readonly class InitialProvisioningExecutor
         return $row;
     }
 
-    private function operationQuery(Connection $connection): \Illuminate\Database\Query\Builder
+    private function operationQuery(Connection $connection): Builder
     {
         return $connection->table('provisioning_operations as operation')
             ->join('orders as order_row', 'order_row.id', '=', 'operation.order_id')
@@ -601,7 +600,6 @@ final readonly class InitialProvisioningExecutor
         ];
     }
 
-    /** @return object */
     private function lockedFinancialOperation(Connection $connection, object $locator): object
     {
         /** @var object{purchase_settlement_id:int|string|null,payment_intent_id:int|string|null}|null $orderLocator */
