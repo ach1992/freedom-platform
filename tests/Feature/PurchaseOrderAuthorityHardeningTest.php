@@ -88,7 +88,7 @@ final class PurchaseOrderAuthorityHardeningTest extends TestCase
         self::assertSame(0, DB::table('orders')->count());
     }
 
-    public function test_second_authoritative_settlement_for_same_quote_cannot_create_second_order_and_capture_stays_successful(): void
+    public function test_second_authoritative_capture_for_same_quote_fails_closed_before_second_settlement(): void
     {
         $firstSettlement = $this->createPurchaseOrderSettlement('quote_reuse');
         $orders = $this->app->make(PurchaseOrderService::class);
@@ -115,22 +115,15 @@ final class PurchaseOrderAuthorityHardeningTest extends TestCase
             'updated_at' => $this->purchaseOrderTimestamp(),
         ]);
 
-        $secondSettlement = $this->app->make(PurchaseSettlementService::class)->capture(
+        $this->assertQueryRejected(fn (): mixed => $this->app->make(PurchaseSettlementService::class)->capture(
             $secondIntent->intentPublicId,
             $firstSettlement->providerCode,
             $this->purchaseEvent('quote-reuse-second', $firstSettlement->amount->amount()),
             $this->purchaseOrderCorrelation('quote-reuse-second-settlement'),
-        );
-        self::assertSame('captured', DB::table('payment_intents')->where('public_id', $secondIntent->intentPublicId)->value('state'));
-        self::assertSame(2, DB::table('purchase_settlements')->count());
-
-        $this->assertQueryRejected(fn (): mixed => $orders->createFromSettlement(
-            $secondSettlement->settlementPublicId,
-            $this->purchaseOrderCorrelation('quote-reuse-second-order'),
         ));
 
-        self::assertSame('captured', DB::table('payment_intents')->where('public_id', $secondIntent->intentPublicId)->value('state'));
-        self::assertSame(2, DB::table('purchase_settlements')->count());
+        self::assertSame('submitted', DB::table('payment_intents')->where('public_id', $secondIntent->intentPublicId)->value('state'));
+        self::assertSame(1, DB::table('purchase_settlements')->count());
         self::assertSame(1, DB::table('orders')->count());
         self::assertSame($firstOrder->orderId, (int) DB::table('orders')->value('id'));
         self::assertSame(1, DB::table('order_items')->count());
