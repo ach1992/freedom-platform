@@ -39,10 +39,16 @@ final readonly class InitialProvisioningOutboxHandler implements OutboxEventHand
         }
 
         try {
-            // An uncertain previous provider attempt is converted to a retryable local state before
-            // entering the executor. The executor then reuses the persisted remote identity and the
-            // Panel coordinator performs authoritative lookup before any create attempt.
-            $this->recovery->prepare($operationPublicId);
+            // A live running attempt may outlast the shared Outbox lease. Never let a reclaimed
+            // message reinterpret that live provider call as interrupted or enter the executor.
+            // A stale running attempt first becomes durably uncertain and is retried on a later
+            // dispatch so the coordinator re-enters through authoritative lookup before create.
+            $preparedState = $this->recovery->prepare($operationPublicId);
+            if ($preparedState === ProvisioningState::Running
+                || $preparedState === ProvisioningState::UncertainRemoteResult) {
+                return OutboxDispatchOutcome::RetryableFailure;
+            }
+
             $receipt = $this->executor->execute($operationPublicId);
         } catch (DomainException) {
             // Financial/domain invalidity before any provider attempt is definitive for this command.
