@@ -269,7 +269,7 @@ final readonly class InitialProvisioningExecutor
             }
 
             /** @var object{code:string}|null $target */
-            $target = $connection->table('service_targets')->where('id', $route->serviceTargetId)->first(['code']);
+            $target = $connection->table('panel_service_targets')->where('id', $route->serviceTargetId)->first(['code']);
             if ($target === null) {
                 throw new RuntimeException('Selected provisioning service target disappeared.');
             }
