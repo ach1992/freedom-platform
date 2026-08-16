@@ -179,9 +179,9 @@ final readonly class PurchaseOrderService
     }
 
     /**
-     * @param SettlementRow $settlement
-     * @param IntentRow $intent
-     * @param QuoteRow $quote
+     * @param  SettlementRow  $settlement
+     * @param  IntentRow  $intent
+     * @param  QuoteRow  $quote
      */
     private function createPaidOrder(Connection $connection, object $settlement, object $intent, object $quote, string $correlationId): PurchaseOrderReceipt
     {
@@ -219,10 +219,10 @@ final readonly class PurchaseOrderService
     }
 
     /**
-     * @param OrderRow $order
-     * @param SettlementRow $settlement
-     * @param IntentRow $intent
-     * @param QuoteRow $quote
+     * @param  OrderRow  $order
+     * @param  SettlementRow  $settlement
+     * @param  IntentRow  $intent
+     * @param  QuoteRow  $quote
      */
     private function completePrePaymentOrder(
         Connection $connection,
@@ -420,9 +420,9 @@ final readonly class PurchaseOrderService
     }
 
     /**
-     * @param SettlementRow $settlement
-     * @param IntentRow $intent
-     * @param QuoteRow $quote
+     * @param  SettlementRow  $settlement
+     * @param  IntentRow  $intent
+     * @param  QuoteRow  $quote
      */
     private function assertSettlementAuthority(object $settlement, object $intent, object $quote): void
     {
@@ -512,8 +512,8 @@ final readonly class PurchaseOrderService
     }
 
     /**
-     * @param OrderRow $order
-     * @param QuoteRow $quote
+     * @param  OrderRow  $order
+     * @param  QuoteRow  $quote
      */
     private function openingReplayReceipt(Connection $connection, object $order, object $quote, int $actorUserId): PurchaseOrderOpeningReceipt
     {
@@ -555,8 +555,8 @@ final readonly class PurchaseOrderService
     }
 
     /**
-     * @param OrderRow $order
-     * @param SettlementRow $settlement
+     * @param  OrderRow  $order
+     * @param  SettlementRow  $settlement
      */
     private function replayReceipt(Connection $connection, object $order, object $settlement): PurchaseOrderReceipt
     {
@@ -604,9 +604,9 @@ final readonly class PurchaseOrderService
     }
 
     /**
-     * @param SettlementRow $settlement
-     * @param IntentRow $intent
-     * @param QuoteRow $quote
+     * @param  SettlementRow  $settlement
+     * @param  IntentRow  $intent
+     * @param  QuoteRow  $quote
      */
     private function paidReceipt(
         int $orderId,
@@ -635,8 +635,8 @@ final readonly class PurchaseOrderService
     }
 
     /**
-     * @param OrderItemRow $item
-     * @param QuoteRow $quote
+     * @param  OrderItemRow  $item
+     * @param  QuoteRow  $quote
      */
     private function assertItemMatchesQuote(object $item, object $quote): void
     {
@@ -690,8 +690,8 @@ final readonly class PurchaseOrderService
     }
 
     /**
-     * @param SettlementRow $settlement
-     * @param IntentRow $intent
+     * @param  SettlementRow  $settlement
+     * @param  IntentRow  $intent
      */
     private function recordPaidAudit(
         Connection $connection,
