@@ -17,8 +17,8 @@ use App\Modules\Panels\Domain\TlsConfiguration;
 use App\Modules\Panels\Domain\TlsPolicy;
 use Illuminate\Contracts\Encryption\StringEncrypter;
 use Illuminate\Database\DatabaseManager;
-use JsonException;
 use RuntimeException;
+use Throwable;
 
 final readonly class ProvisioningPanelAdapterResolver
 {
@@ -75,7 +75,7 @@ final readonly class ProvisioningPanelAdapterResolver
                 32,
                 JSON_THROW_ON_ERROR,
             );
-        } catch (JsonException $exception) {
+        } catch (Throwable $exception) {
             throw new RuntimeException('Stored panel credentials are invalid.', 0, $exception);
         }
         if (! is_array($decoded)) {
