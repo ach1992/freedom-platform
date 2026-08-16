@@ -82,7 +82,9 @@ return new class extends Migration
         $this->ensureConstraint('provisioning_operation_histories', 'provisioning_operation_history_actor_chk', "CHECK (`actor_type` IN ('system','customer','agent','administrator'))");
         $this->ensureConstraint('provisioning_operation_histories', 'provisioning_operation_history_version_chk', 'CHECK (`to_version` >= 1 AND (`from_version` IS NULL OR `from_version` >= 1))');
 
-        $this->replaceOrderPurchaseShapeConstraint(true);
+        if (! $restoreSuccessorOrderAuthority) {
+            $this->replaceOrderPurchaseShapeConstraint(true);
+        }
         $this->createProvisioningInitialHistoryTrigger();
         $this->replaceOrderHistoryGuard();
         $this->createProvisioningHistoryGuard();
@@ -422,7 +424,7 @@ BEGIN
     WHERE order_row.id = NEW.order_id
       AND settlement_row.id = locked_settlement_id
       AND intent_row.id = locked_intent_id
-      AND item_row.order_id = order_row.id
+      AND item_row.order_id = NEW.order_item_id
       AND service_row.order_id = order_row.id
       AND service_row.order_item_id = item_row.id
       AND service_row.user_id = order_row.user_id
