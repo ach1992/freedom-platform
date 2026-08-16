@@ -168,6 +168,13 @@ SQL);
 
     public function down(): void
     {
+        if (DB::table('provisioning_operations')
+            ->where('operation_type', 'initial_provision')
+            ->whereIn('state', ['queued', 'running', 'retry_scheduled', 'uncertain_remote_result'])
+            ->exists()) {
+            throw new RuntimeException('Cannot disable uncertain-result recovery while an initial provisioning operation can still require reconciliation.');
+        }
+
         $previous = require __DIR__.'/2026_08_16_000101_harden_initial_provisioning_remote_effect_transitions.php';
         if (! is_object($previous) || ! method_exists($previous, 'up')) {
             throw new RuntimeException('Previous provisioning remote-effect transition migration is unavailable.');
