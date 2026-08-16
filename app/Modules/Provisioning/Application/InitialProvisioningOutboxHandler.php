@@ -15,7 +15,10 @@ final readonly class InitialProvisioningOutboxHandler implements OutboxEventHand
 {
     private const EVENT_TYPE = 'provisioning.initial.requested';
 
-    public function __construct(private InitialProvisioningExecutor $executor) {}
+    public function __construct(
+        private InitialProvisioningExecutor $executor,
+        private InitialProvisioningRecoveryService $recovery,
+    ) {}
 
     public function eventType(): string
     {
@@ -36,6 +39,10 @@ final readonly class InitialProvisioningOutboxHandler implements OutboxEventHand
         }
 
         try {
+            // An uncertain previous provider attempt is converted to a retryable local state before
+            // entering the executor. The executor then reuses the persisted remote identity and the
+            // Panel coordinator performs authoritative lookup before any create attempt.
+            $this->recovery->prepare($operationPublicId);
             $receipt = $this->executor->execute($operationPublicId);
         } catch (DomainException) {
             // Financial/domain invalidity before any provider attempt is definitive for this command.
@@ -47,8 +54,7 @@ final readonly class InitialProvisioningOutboxHandler implements OutboxEventHand
 
         return match ($receipt->state) {
             ProvisioningState::Succeeded => OutboxDispatchOutcome::Success,
-            ProvisioningState::RetryScheduled, ProvisioningState::Running => OutboxDispatchOutcome::RetryableFailure,
-            ProvisioningState::UncertainRemoteResult => OutboxDispatchOutcome::UncertainResult,
+            ProvisioningState::RetryScheduled, ProvisioningState::Running, ProvisioningState::UncertainRemoteResult => OutboxDispatchOutcome::RetryableFailure,
             ProvisioningState::FailedFinal, ProvisioningState::NeedsReview, ProvisioningState::Compensated => OutboxDispatchOutcome::DefinitiveFailure,
             ProvisioningState::Queued, ProvisioningState::Compensating => OutboxDispatchOutcome::RetryableFailure,
         };
