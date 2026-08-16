@@ -38,7 +38,7 @@ final readonly class InitialProvisioningRecoveryService
         }
 
         return $this->database->connection()->transaction(function (Connection $connection) use ($operationPublicId): ProvisioningState {
-            /** @var object{id:int|string,operation_key:string,operation_type:string,state:string,state_version:int|string,correlation_id:string,route_selection_id:int|string|null,service_target_id:int|string|null,remote_service_id:?string,remote_effect_started_at:?string}|null $operation */
+            /** @var object{id:int|string,operation_key:string,operation_type:string,state:string,state_version:int|string,correlation_id:string,route_selection_id:int|string|null,service_target_id:int|string|null,remote_service_id:?string,attempt_count:int|string,remote_effect_started_at:?string,updated_at:string}|null $operation */
             $operation = $connection->table('provisioning_operations')
                 ->where('public_id', strtoupper($operationPublicId))
                 ->lockForUpdate()
@@ -52,7 +52,9 @@ final readonly class InitialProvisioningRecoveryService
                     'route_selection_id',
                     'service_target_id',
                     'remote_service_id',
+                    'attempt_count',
                     'remote_effect_started_at',
+                    'updated_at',
                 ]);
             if ($operation === null || $operation->operation_type !== self::OPERATION_TYPE) {
                 throw new DomainException('Initial provisioning operation does not exist.');
@@ -61,7 +63,11 @@ final readonly class InitialProvisioningRecoveryService
             $state = ProvisioningState::tryFrom($operation->state)
                 ?? throw new RuntimeException('Stored provisioning state is invalid.');
             if ($state === ProvisioningState::Running) {
-                if (! $this->runningAttemptIsStale($operation->remote_effect_started_at)) {
+                if (! $this->runningAttemptIsStale(
+                    (int) $operation->attempt_count,
+                    $operation->remote_effect_started_at,
+                    $operation->updated_at,
+                )) {
                     return ProvisioningState::Running;
                 }
 
@@ -153,14 +159,20 @@ final readonly class InitialProvisioningRecoveryService
         return ProvisioningState::RetryScheduled;
     }
 
-    private function runningAttemptIsStale(?string $remoteEffectStartedAt): bool
-    {
-        if ($remoteEffectStartedAt === null || $remoteEffectStartedAt === '') {
+    private function runningAttemptIsStale(
+        int $attemptCount,
+        ?string $remoteEffectStartedAt,
+        string $updatedAt,
+    ): bool {
+        // The executor intentionally preserves the first remote-effect timestamp across retries.
+        // For later attempts, the running claim's updated_at is the durable per-attempt freshness marker.
+        $referenceAt = $attemptCount > 1 ? $updatedAt : $remoteEffectStartedAt;
+        if ($referenceAt === null || $referenceAt === '') {
             return true;
         }
 
         $utc = new DateTimeZone('UTC');
-        $startedAt = DateTimeImmutable::createFromFormat('Y-m-d H:i:s.u', $remoteEffectStartedAt, $utc);
+        $startedAt = DateTimeImmutable::createFromFormat('Y-m-d H:i:s.u', $referenceAt, $utc);
         if ($startedAt === false) {
             return true;
         }
