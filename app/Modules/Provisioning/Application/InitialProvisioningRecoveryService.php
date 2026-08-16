@@ -20,12 +20,14 @@ final readonly class InitialProvisioningRecoveryService
     private const AUTHORITY = 'initial_remote_effect_v1';
 
     /**
-     * Outbox leases are intentionally shorter than the conservative provider-call recovery window.
-     * Provisioning sessions currently use a bounded 15-second request timeout, while a coordinator
-     * pass can perform several authenticated lookup/create/reconciliation requests. Keep a wide
-     * margin so a reclaimed message cannot reinterpret a still-live remote attempt as interrupted.
+     * The shared Outbox lease is 60 seconds with five total delivery attempts. Its retry schedule
+     * reaches the fourth attempt after roughly 210 seconds, so interrupted running work must become
+     * uncertain before that attempt in order to leave one final lookup-first reconciliation attempt.
+     * Provisioning uses the default 15-second PanelAdapterSession timeout and the accepted #64
+     * source-contract lookup path performs only a small bounded number of HTTP requests; 180 seconds
+     * keeps a wide margin for live work without exhausting the unchanged Outbox delivery contract.
      */
-    private const RUNNING_STALE_AFTER_SECONDS = 600;
+    private const RUNNING_STALE_AFTER_SECONDS = 180;
 
     public function __construct(
         private DatabaseManager $database,
