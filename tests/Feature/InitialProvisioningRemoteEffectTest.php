@@ -282,6 +282,15 @@ final class InitialProvisioningRemoteEffectTest extends TestCase
         $this->bootPurchaseOrderClock();
     }
 
+    protected function tearDown(): void
+    {
+        try {
+            $this->truncateTablesForAllConnections();
+        } finally {
+            parent::tearDown();
+        }
+    }
+
     public function test_financial_invalidation_prevents_every_provider_call(): void
     {
         $scenario = $this->scenario('financial-invalidation');
@@ -581,6 +590,8 @@ final class InitialProvisioningRemoteEffectTest extends TestCase
             'updated_at' => $now,
         ]);
         DB::table('plan_offerings')->where('id', $offeringId)->update([
+            'state' => 'active',
+            'visibility' => 'visible',
             'server_selection_mode' => 'system_selects',
             'protocol_selection_mode' => 'system_selects',
             'updated_at' => $now,
