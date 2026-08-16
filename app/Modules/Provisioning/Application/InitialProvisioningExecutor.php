@@ -78,6 +78,8 @@ final readonly class InitialProvisioningExecutor
 
     private const ROUTE_HOLD_INTERVAL = 'PT24H';
 
+    private const CAPACITY_EFFECT_MINIMUM_REMAINING_INTERVAL = 'PT10M';
+
     public function __construct(
         private DatabaseManager $database,
         private Clock $clock,
@@ -125,6 +127,21 @@ final readonly class InitialProvisioningExecutor
                 $operation,
                 ProvisioningState::FailedFinal,
                 'financial_authority_lost',
+                $this->safeMessage($exception->getMessage()),
+                null,
+            );
+        }
+
+        // Capacity is separately revalidated after financial authority and immediately before the
+        // provider boundary. The running-capacity DB fence prevents release/expiry transitions
+        // after this check while the remote effect remains in flight.
+        try {
+            $this->revalidateCapacityAuthority($operation);
+        } catch (Throwable $exception) {
+            return $this->finalize(
+                $operation,
+                ProvisioningState::NeedsReview,
+                'capacity_authority_lost',
                 $this->safeMessage($exception->getMessage()),
                 null,
             );
@@ -320,6 +337,74 @@ final readonly class InitialProvisioningExecutor
                 $authority['intent'],
                 $authority['order'],
             );
+        }, 3);
+    }
+
+    /** @param OperationRow $operation */
+    private function revalidateCapacityAuthority(object $operation): void
+    {
+        $this->database->connection()->transaction(function (Connection $connection) use ($operation): void {
+            $locked = $this->operationById($connection, (int) $operation->id, true);
+            if ($this->storedState($locked->state) !== ProvisioningState::Running) {
+                throw new DomainException('Initial provisioning operation lost its remote-effect fence.');
+            }
+            if ($locked->route_selection_id === null
+                || $locked->service_target_id === null
+                || $locked->capacity_reservation_id === null
+                || $locked->capacity_reservation_key === null
+                || $locked->route_hold_expires_at === null
+            ) {
+                throw new DomainException('Provisioning capacity authority is incomplete.');
+            }
+
+            /** @var object{capacity_reservation_id:int|string,selected_service_target_id:int|string,units:int|string}|null $selection */
+            $selection = $connection->table('plan_offering_route_selections')
+                ->where('id', (int) $locked->route_selection_id)
+                ->where('command_key', $this->routeCommandKey($locked->public_id))
+                ->first(['capacity_reservation_id', 'selected_service_target_id', 'units']);
+            if ($selection === null
+                || (int) $selection->capacity_reservation_id !== (int) $locked->capacity_reservation_id
+                || (int) $selection->selected_service_target_id !== (int) $locked->service_target_id
+            ) {
+                throw new DomainException('Provisioning route capacity binding is inconsistent.');
+            }
+
+            /** @var object{panel_target_capacity_id:int|string,reservation_key:string,units:int|string,state:string,expires_at:string}|null $reservation */
+            $reservation = $connection->table('panel_capacity_reservations')
+                ->where('id', (int) $locked->capacity_reservation_id)
+                ->lockForUpdate()
+                ->first(['panel_target_capacity_id', 'reservation_key', 'units', 'state', 'expires_at']);
+            if ($reservation === null
+                || ! hash_equals($reservation->reservation_key, $locked->capacity_reservation_key)
+                || (int) $reservation->units !== (int) $selection->units
+                || $reservation->state !== CapacityReservationState::Held->value
+            ) {
+                throw new DomainException('Provisioning capacity reservation is no longer an authoritative hold.');
+            }
+
+            /** @var object{panel_service_target_id:int|string,state:string}|null $capacity */
+            $capacity = $connection->table('panel_target_capacities')
+                ->where('id', (int) $reservation->panel_target_capacity_id)
+                ->first(['panel_service_target_id', 'state']);
+            if ($capacity === null
+                || (int) $capacity->panel_service_target_id !== (int) $locked->service_target_id
+                || $capacity->state !== 'enabled'
+            ) {
+                throw new DomainException('Provisioning target capacity is no longer enabled for the selected route.');
+            }
+
+            $reservationExpiresAt = $this->storedDateTime($reservation->expires_at, 'Provisioning capacity reservation expiry');
+            $routeHoldExpiresAt = $this->storedDateTime($locked->route_hold_expires_at, 'Provisioning route hold expiry');
+            if ($reservationExpiresAt->format('Y-m-d H:i:s.u') !== $routeHoldExpiresAt->format('Y-m-d H:i:s.u')) {
+                throw new DomainException('Provisioning capacity expiry does not match the durable route hold.');
+            }
+
+            $minimumValidUntil = $this->clock->now()
+                ->setTimezone(new DateTimeZone('UTC'))
+                ->add(new DateInterval(self::CAPACITY_EFFECT_MINIMUM_REMAINING_INTERVAL));
+            if ($reservationExpiresAt <= $minimumValidUntil) {
+                throw new DomainException('Provisioning capacity hold is too close to expiry for a remote effect.');
+            }
         }, 3);
     }
 
