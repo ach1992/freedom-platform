@@ -10,11 +10,8 @@ return new class extends Migration
     /** @requirement PRV-001 PRV-002 PRV-003 DAT-003 SEC-002 QUA-001 */
     public function up(): void
     {
-        DB::unprepared('DROP TRIGGER IF EXISTS panel_targets_insert_guard');
-        DB::unprepared('DROP TRIGGER IF EXISTS panel_targets_update_guard');
-
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER panel_targets_insert_guard
+CREATE OR REPLACE TRIGGER panel_targets_insert_guard
 BEFORE INSERT ON panel_service_targets
 FOR EACH ROW
 BEGIN
@@ -41,7 +38,7 @@ END
 SQL);
 
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER panel_targets_update_guard
+CREATE OR REPLACE TRIGGER panel_targets_update_guard
 BEFORE UPDATE ON panel_service_targets
 FOR EACH ROW
 BEGIN
@@ -80,11 +77,8 @@ SQL);
 
     public function down(): void
     {
-        DB::unprepared('DROP TRIGGER IF EXISTS panel_targets_insert_guard');
-        DB::unprepared('DROP TRIGGER IF EXISTS panel_targets_update_guard');
-
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER panel_targets_insert_guard
+CREATE OR REPLACE TRIGGER panel_targets_insert_guard
 BEFORE INSERT ON panel_service_targets
 FOR EACH ROW
 BEGIN
@@ -95,7 +89,7 @@ END
 SQL);
 
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER panel_targets_update_guard
+CREATE OR REPLACE TRIGGER panel_targets_update_guard
 BEFORE UPDATE ON panel_service_targets
 FOR EACH ROW
 BEGIN
