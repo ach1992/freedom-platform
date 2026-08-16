@@ -100,7 +100,7 @@ return new class extends Migration
             $this->createServiceInsertGuard();
         }
 
-        if ($restoreSuccessorOrderAuthority) {
+        if ($restoreSuccessorOrderAuthority && $this->financialInvalidationAuthorityReady()) {
             $this->restoreRecordedPrePaymentOrderAuthority();
         }
     }
