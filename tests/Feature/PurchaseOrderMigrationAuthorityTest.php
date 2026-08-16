@@ -19,6 +19,7 @@ final class PurchaseOrderMigrationAuthorityTest extends TestCase
             '2026_08_17_000099_preserve_unimplemented_order_source_fence',
             '2026_08_17_000100_reconcile_pre_payment_order_authority',
             '2026_08_17_000101_split_pre_payment_order_shape_constraints',
+            '2026_08_17_000102_harden_purchase_order_insert_lifecycle_authority',
         ] as $migration) {
             self::assertTrue(
                 DB::table('migrations')->where('migration', $migration)->exists(),
