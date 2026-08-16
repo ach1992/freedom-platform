@@ -23,6 +23,7 @@ final class WorkflowStateTest extends TestCase
     {
         yield 'order paid to provisioning queue' => [OrderState::Paid, OrderState::ProvisioningQueued];
         yield 'payment verified to captured' => [PaymentIntentState::Verifying, PaymentIntentState::Captured];
+        yield 'running provisioning conflict to review' => [ProvisioningState::Running, ProvisioningState::NeedsReview];
         yield 'uncertain provisioning to retry' => [ProvisioningState::UncertainRemoteResult, ProvisioningState::RetryScheduled];
         yield 'final provisioning failure to review' => [ProvisioningState::FailedFinal, ProvisioningState::NeedsReview];
     }

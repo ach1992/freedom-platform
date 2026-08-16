@@ -7,6 +7,7 @@ namespace Tests\Feature;
 use App\Modules\Orders\Application\QuotePricingInput;
 use App\Modules\Orders\Application\QuoteService;
 use App\Modules\Orders\Domain\QuoteOverrideSource;
+use App\Modules\Panels\Application\TargetCapacityAllocator;
 use App\Modules\Payments\Application\Contracts\PaymentEvidence;
 use App\Modules\Payments\Application\Contracts\PaymentEvidenceAuthority;
 use App\Modules\Payments\Application\Contracts\PaymentTransactionStatus;
@@ -39,6 +40,22 @@ trait PurchaseOrderTestSupport
     {
         $this->purchaseOrderClock = new PurchaseOrderTestClock(new DateTimeImmutable('2026-08-14T19:00:00+00:00'));
         $this->app->instance(Clock::class, $this->purchaseOrderClock);
+
+        // MariaDB safety triggers intentionally use CURRENT_TIMESTAMP as an authority the
+        // application cannot spoof. Tests that replace the application Clock must therefore pin
+        // the database session to the same deterministic instant rather than weakening those
+        // production guards or comparing two different clocks.
+        if (DB::connection()->getDriverName() === 'mysql') {
+            DB::statement('SET timestamp = '.$this->purchaseOrderClock->value->getTimestamp());
+            $this->beforeApplicationDestroyed(static function (): void {
+                DB::statement('SET timestamp = DEFAULT');
+            });
+        }
+
+        // TargetCapacityAllocator is a singleton and may already have captured SystemClock during
+        // seed/setup work. Re-resolve it after the test clock override so capacity expiry checks
+        // observe the same authoritative test time as route selection and provisioning.
+        $this->app->forgetInstance(TargetCapacityAllocator::class);
     }
 
     protected function createPurchaseOrderSettlement(string $suffix): PurchaseSettlementReceipt

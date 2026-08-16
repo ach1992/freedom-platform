@@ -14,7 +14,7 @@ return [
         'Panels' => ['AccessControl'],
         'Payments' => ['AccessControl', 'Orders', 'Wallet'],
         'Promotions' => ['AccessControl', 'Wallet'],
-        'Provisioning' => ['Orders', 'Payments'],
+        'Provisioning' => ['Catalog', 'Orders', 'Panels', 'Payments'],
         'Wallet' => ['AccessControl'],
     ],
 
