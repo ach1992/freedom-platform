@@ -82,7 +82,7 @@ final class PanelAdapterContractTest extends TestCase
 
         $result = $this->coordinator()->createOrAdopt($adapter, $request);
 
-        self::assertSame(PanelOperationOutcome::UncertainResult, $result->outcome);
+        self::assertSame(PanelOperationOutcome::DefinitiveFailure, $result->outcome);
         self::assertSame('remote_create_equivalence_unavailable', $result->providerCode);
         self::assertSame($snapshot, $result->service);
     }
@@ -397,7 +397,6 @@ final class PanelAdapterContractTest extends TestCase
         self::assertCount(1, $delivery->revealForAuthorizedDelivery());
         self::assertSame(PanelOperationOutcome::Success, $adapter->synchronize($remoteId)->outcome);
         self::assertSame('fake-default', $adapter->listCompatibleTargets()[0]['id']);
-
         self::assertSame(
             PanelOperationOutcome::Success,
             $adapter->delete('panel:delete:0001', $remoteId)->outcome,
