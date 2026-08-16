@@ -424,7 +424,7 @@ BEGIN
     WHERE order_row.id = NEW.order_id
       AND settlement_row.id = locked_settlement_id
       AND intent_row.id = locked_intent_id
-      AND item_row.order_id = NEW.order_item_id
+      AND item_row.order_id = order_row.id
       AND service_row.order_id = order_row.id
       AND service_row.order_item_id = item_row.id
       AND service_row.user_id = order_row.user_id
