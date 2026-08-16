@@ -44,15 +44,49 @@ The two explicit Owner-approved Version 1 provider clarifications below are also
 
 ## Cross-cutting requirement IDs
 
-These IDs make normative architecture, data, runtime, security, localization, integration, and quality requirements independently traceable without storing task progress here.
+These IDs make normative architecture, data, runtime, security, localization, integration, and quality requirements independently traceable without storing task progress here. The concise meanings and master-spec source sections below restore the stable semantics that existed before project-control cleanup; the master specification remains normative if wording here is incomplete or ambiguous.
 
-- Architecture: `ARCH-001`, `ARCH-002`, `ARCH-003`, `ARCH-004`
-- Data/integrity: `DAT-001`, `DAT-002`, `DAT-003`, `DAT-004`
-- Runtime/deployment: `RUN-001`, `RUN-002`, `RUN-003`, `RUN-004`, `RUN-005`, `RUN-006`
-- Security: `SEC-002`, `SEC-003`, `SEC-004`, `SEC-005`, `SEC-006`, `SEC-007`, `SEC-008`, `SEC-009`, `SEC-010`
-- Localization: `LOC-001`, `LOC-002`
-- Integration/provider discipline: `INT-001`, `INT-002`
-- Quality/testing: `QUA-002`, `QUA-003`, `QUA-004`, `QUA-005`, `QUA-006`, `QUA-007`, `QUA-008`, `QUA-009`, `QUA-010`, `QUA-011`, `QUA-012`, `QUA-013`
+| ID | Requirement | Master source |
+|---|---|---|
+| `ARCH-001` | Use Laravel `13.x`, PHP 8.4, PSR-4, `strict_types`, PSR-12, typed code, dependency injection, and locked maintained dependencies with acceptable licenses. | §§2.2, 4.4–4.5 |
+| `ARCH-002` | Enforce modular-monolith boundaries: Telegram/HTTP call Application Services; integrations use contracts/adapters; cross-module writes are explicit and transactional. | §§4.1–4.3 |
+| `ARCH-003` | Use typed state machines and a centralized error taxonomy; forbid arbitrary status writes and swallowed `Throwable`. | §§4.2, 9 |
+| `ARCH-004` | Use Transactional Outbox for committed external effects and injectable clock/random/HTTP dependencies. | §§4.2, 4.4, 24.3 |
+| `DAT-001` | Store timestamps in UTC and render business time in `Asia/Tehran`, supporting Jalali formatting without altering stored time. | §§2.1, 5.1 |
+| `DAT-002` | Store fiat as integer IRR, display explicit Toman conversion, and use fixed-precision decimal for crypto; monetary float is forbidden. | §5.1 |
+| `DAT-003` | Implement mandatory schema concepts, foreign keys, database uniqueness and replay-safety constraints, lookup indexes, and an enforced relational-integrity strategy. | §28 |
+| `DAT-004` | Financial and audit records are immutable/non-deletable; soft delete is used only for explicit business semantics. | §§14, 23.4, 28.12 |
+| `RUN-001` | Target Ubuntu 22.04/aaPanel/OpenLiteSpeed with two separately preflighted PHP runtimes, MariaDB, authenticated Redis, and documented ownership. | §§2.1–2.3 |
+| `RUN-002` | Use atomic versioned releases/shared storage; expose only `current/public`; never expose project root. | §2.4 |
+| `RUN-003` | Use the exact single Scheduler Cron and supervised workers rather than per-task Cron entries. | §§2.5, 24 |
+| `RUN-004` | Every scheduled task has locking, overlap prevention, timeout, idempotency, history, metrics, bounded retry, and dead-letter/manual review. | §24.2 |
+| `RUN-005` | Backup export never exposes a password in process arguments; plaintext temporaries are protected and reliably removed after verified compression/encryption. | §§25.2–25.3 |
+| `RUN-006` | Release packages include source, lockfile, migrations, manifest, compatibility metadata, checksums/signature, and release notes without secrets. | §§27.1, 34 |
+| `SEC-002` | Default-deny, least-privilege authorization binds Telegram actor/chat, invalidates permission cache, and uses signed/replay-safe sensitive actions. | §29.2 |
+| `SEC-003` | Encrypt secrets/sensitive identity/payment data; use keyed hashes for lookup; mask by default; audit narrowly scoped reveal. | §§5.6, 11–12, 29.2–29.3 |
+| `SEC-004` | All configurable outbound endpoints use HTTPS, DNS/IP/redirect revalidation, reserved-range blocking, allowlists where possible, and bounded response/time. | §§11.6, 12.4, 29.4 |
+| `SEC-005` | TLS certificate and hostname verification cannot be disabled; private systems require managed CA/pin and rotation. | §§8.3, 29.5 |
+| `SEC-006` | Uploaded media is private, MIME-inspected, allowlisted, size-bounded, randomly named, non-executable, retained by policy, and access-controlled. | §17.6 |
+| `SEC-007` | Browser installer/updater use HTTPS, CSRF/session protections, rate limits, restrictive filesystem permissions, security headers, and no arbitrary command execution. | §§26.3, 29.2 |
+| `SEC-008` | Secrets are accepted only via protected channels, never returned in full, support rotation, and are excluded/redacted from code, evidence, logs, backups, and reports. | §§23, 29.3, 32.1 |
+| `SEC-009` | Verify provider/Telegram webhook authenticity before business parsing, persist events idempotently, acknowledge quickly, and process asynchronously. | §§11.9, 13, 17.1 |
+| `SEC-010` | Signed packages and authenticated-encryption backups detect tampering; restore/update fail closed on integrity or compatibility failure. | §§25–27, 29 |
+| `LOC-001` | Ship complete Persian defaults and English fallback for every mandated namespace; all placeholders, parse modes, lengths, and contexts are documented/validated. | §18 |
+| `LOC-002` | Persian terminology is consistent with the glossary; amounts explicitly label `تومان` for display and never silently reinterpret IRR. | §§5.1, 17–18 |
+| `INT-001` | Re-verify official documentation and target versions before each integration; store a dated, redacted contract note and contract-test evidence. | §35 |
+| `INT-002` | Every provider exposes capabilities/health, timeouts, bounded retry, circuit breaking, normalized statuses, reconciliation, and a deterministic fake. | §§8, 10–13 |
+| `QUA-002` | Configure Pint, strict-practical PHPStan/Larastan, PHPUnit/Pest, Composer audit, license report, MariaDB migrations, secret scanning, and forbidden-pattern architecture gates. | §4.5 |
+| `QUA-003` | Unit tests cover all calculations, normalization, policy/state resolution, security transforms, and content validation listed in §30.2. | §30.2 |
+| `QUA-004` | Real MariaDB/Redis integration and concurrency tests cover schema, ledger, idempotency, races, Outbox, queues, encryption, and query plans. | §§30.1, 30.3 |
+| `QUA-005` | Apply the common provider matrix to every payment method, proving no provisioning before authoritative capture. | §30.4 |
+| `QUA-006` | Execute complete automatic/manual card and automatic/manual gift-card matrices, including race, uncertain-result, SSRF, and secret-redaction cases. | §§30.5–30.7 |
+| `QUA-007` | Execute provisioning, wallet/concurrency, Telegram E2E, and full functional workflow regression matrices. | §§30.8–30.10, 30.15 |
+| `QUA-008` | Execute security tests for authz/IDOR, forgery/replay, CSRF/session, injection, SSRF/rebinding, upload/path, TLS, secrets/logs, package/backup tamper, abuse, and cache invalidation. | §30.11 |
+| `QUA-009` | Establish Owner-approved load targets; before then run documented baseline performance, backlog recovery, and Redis/dependency degradation tests without claiming capacity certification. | §30.12 |
+| `QUA-010` | Execute failure/chaos tests for Telegram/Redis/worker/DB/panel/provider/disk/backup/deployment interruptions. | §30.13 |
+| `QUA-011` | Rehearse clean install, replay denial, update/failure/rollback, encrypted split backup, complete restore, smoke, and financial reconciliation in a target-like environment. | §30.14 |
+| `QUA-012` | Block release on any static gate listed in §30.16, unresolved Critical/High defect/security finding, or failed mandatory invariant. | §§0.1, 30.16, 37 |
+| `QUA-013` | Every test claim records command, environment, result, and evidence path; fake/contract/sandbox/live evidence types remain distinguishable. | §§0.1, 30.1, 34.3 |
 
 ## Global invariants
 
