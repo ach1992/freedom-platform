@@ -82,12 +82,16 @@ final readonly class PanelCreateCoordinator
                 $resolved->reasonCode,
                 'Created remote service conflicts with the expected service.',
             ),
-            RemoteIdentityDisposition::Absent, RemoteIdentityDisposition::ManualReview => new PanelOperationResult(
+            RemoteIdentityDisposition::ManualReview => new PanelOperationResult(
+                PanelOperationOutcome::DefinitiveFailure,
+                $result->service,
+                $resolved->reasonCode,
+                'Created remote service identity is ambiguous and requires manual review.',
+            ),
+            RemoteIdentityDisposition::Absent => new PanelOperationResult(
                 PanelOperationOutcome::UncertainResult,
                 $result->service,
-                $resolved->reasonCode === 'remote_create_equivalence_unavailable'
-                    ? $resolved->reasonCode
-                    : 'remote_create_snapshot_unverified',
+                'remote_create_snapshot_unverified',
                 'Created remote service could not be verified authoritatively.',
             ),
         };
@@ -104,12 +108,19 @@ final readonly class PanelCreateCoordinator
                 $resolution->reasonCode,
                 'Remote identity conflicts with the expected service.',
             ),
-            RemoteIdentityDisposition::ManualReview => new PanelOperationResult(
-                PanelOperationOutcome::UncertainResult,
-                $resolution->service,
-                $resolution->reasonCode,
-                'Remote identity could not be established authoritatively.',
-            ),
+            RemoteIdentityDisposition::ManualReview => $resolution->service === null
+                ? new PanelOperationResult(
+                    PanelOperationOutcome::UncertainResult,
+                    null,
+                    $resolution->reasonCode,
+                    'Remote identity could not be established authoritatively.',
+                )
+                : new PanelOperationResult(
+                    PanelOperationOutcome::DefinitiveFailure,
+                    $resolution->service,
+                    $resolution->reasonCode,
+                    'Existing remote service identity is ambiguous and requires manual review.',
+                ),
         };
     }
 
