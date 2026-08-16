@@ -4,18 +4,12 @@ declare(strict_types=1);
 
 namespace Tests\Unit\Modules\Panels;
 
-use App\Modules\Panels\Application\Contracts\DataAllowanceMode;
 use App\Modules\Panels\Application\Contracts\PanelAdapter;
 use App\Modules\Panels\Application\Contracts\PanelCapabilities;
 use App\Modules\Panels\Application\Contracts\PanelCreateServiceRequest;
 use App\Modules\Panels\Application\Contracts\PanelOperationOutcome;
-use App\Modules\Panels\Application\Contracts\PanelOperationResult;
-use App\Modules\Panels\Application\Contracts\RemoteServiceSnapshot;
-use App\Modules\Panels\Application\Contracts\SensitiveDeliveryArtifacts;
 use App\Modules\Panels\Application\PanelCreateCoordinator;
 use App\Modules\Panels\Application\RemoteIdentityResolver;
-use DateTimeImmutable;
-use LogicException;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 
@@ -25,107 +19,18 @@ final class PanelCreateCoordinatorSecurityTest extends TestCase
     public function test_unexpected_adapter_exception_never_exposes_provider_text(): void
     {
         $secret = 'provider-secret-token-should-never-persist';
-        $adapter = new class($secret) implements PanelAdapter
-        {
-            public function __construct(private readonly string $secret) {}
-
-            public function testConnection(): PanelOperationResult
-            {
-                throw new LogicException('Not used.');
-            }
-
-            public function capabilities(): PanelCapabilities
-            {
-                return new PanelCapabilities(
-                    'fake',
-                    '1.0.0',
-                    ['authoritative_username_lookup', 'create_service'],
-                    ['fake-default'],
-                );
-            }
-
-            public function findByRemoteId(string $remoteId): ?RemoteServiceSnapshot
-            {
-                return null;
-            }
-
-            public function findByDeterministicUsername(string $username): ?RemoteServiceSnapshot
-            {
-                return null;
-            }
-
-            public function createEquivalenceHash(PanelCreateServiceRequest $request): string
-            {
-                return hash('sha256', 'coordinator-security-test');
-            }
-
-            public function createService(PanelCreateServiceRequest $request): PanelOperationResult
-            {
-                throw new RuntimeException('Provider failed with credential '.$this->secret);
-            }
-
-            public function fetchStatus(string $remoteId): PanelOperationResult
-            {
-                throw new LogicException('Not used.');
-            }
-
-            public function updateExpiry(
-                string $idempotencyKey,
-                string $remoteId,
-                DateTimeImmutable $expiresAt,
-            ): PanelOperationResult {
-                throw new LogicException('Not used.');
-            }
-
-            public function updateDataAllowance(
-                string $idempotencyKey,
-                string $remoteId,
-                int $bytes,
-                DataAllowanceMode $mode,
-            ): PanelOperationResult {
-                throw new LogicException('Not used.');
-            }
-
-            public function resetUsage(string $idempotencyKey, string $remoteId): PanelOperationResult
-            {
-                throw new LogicException('Not used.');
-            }
-
-            public function suspend(string $idempotencyKey, string $remoteId): PanelOperationResult
-            {
-                throw new LogicException('Not used.');
-            }
-
-            public function activate(string $idempotencyKey, string $remoteId): PanelOperationResult
-            {
-                throw new LogicException('Not used.');
-            }
-
-            public function delete(string $idempotencyKey, string $remoteId): PanelOperationResult
-            {
-                throw new LogicException('Not used.');
-            }
-
-            public function rotateSubscriptionLink(string $idempotencyKey, string $remoteId): PanelOperationResult
-            {
-                throw new LogicException('Not used.');
-            }
-
-            public function getDeliveryArtifacts(string $remoteId): SensitiveDeliveryArtifacts
-            {
-                throw new LogicException('Not used.');
-            }
-
-            public function synchronize(string $remoteId): PanelOperationResult
-            {
-                throw new LogicException('Not used.');
-            }
-
-            public function listCompatibleTargets(): array
-            {
-                return [];
-            }
-        };
+        $adapter = $this->createMock(PanelAdapter::class);
+        $adapter->method('capabilities')->willReturn(new PanelCapabilities(
+            'fake',
+            '1.0.0',
+            ['authoritative_username_lookup', 'create_service'],
+            ['fake-default'],
+        ));
+        $adapter->method('findByDeterministicUsername')->willReturn(null);
+        $adapter->method('createEquivalenceHash')->willReturn(hash('sha256', 'coordinator-security-test'));
+        $adapter->method('createService')->willThrowException(
+            new RuntimeException('Provider failed with credential '.$secret),
+        );
         $request = new PanelCreateServiceRequest(
             'operation-security-0001',
             'panel:create:security-0001',
