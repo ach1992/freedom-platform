@@ -52,17 +52,31 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
         $exactAuthorityMigration = require database_path('migrations/2026_08_14_001164_z_enforce_exact_provisioning_authority_text.php');
         /** @var Migration $activationMigration */
         $activationMigration = require database_path('migrations/2026_08_14_001165_activate_provisioning_queue_authority.php');
+        /** @var Migration $remoteEffectBarrierMigration */
+        $remoteEffectBarrierMigration = require database_path('migrations/2026_08_16_000099_stage_initial_provisioning_remote_effect_barrier.php');
         /** @var Migration $remoteEffectMigration */
         $remoteEffectMigration = require database_path('migrations/2026_08_16_000100_enable_initial_provisioning_remote_effect.php');
         /** @var Migration $remoteEffectHardeningMigration */
         $remoteEffectHardeningMigration = require database_path('migrations/2026_08_16_000101_harden_initial_provisioning_remote_effect_transitions.php');
         /** @var Migration $uncertainRecoveryMigration */
         $uncertainRecoveryMigration = require database_path('migrations/2026_08_16_000102_enable_initial_provisioning_uncertain_recovery.php');
+        /** @var Migration $verifiedTargetActivationMigration */
+        $verifiedTargetActivationMigration = require database_path('migrations/2026_08_16_000103_allow_verified_panel_target_activation.php');
+        /** @var Migration $capacityFenceMigration */
+        $capacityFenceMigration = require database_path('migrations/2026_08_16_000104_fence_running_provisioning_capacity_release.php');
+        /** @var Migration $remoteEffectActivationMigration */
+        $remoteEffectActivationMigration = require database_path('migrations/2026_08_16_000105_activate_initial_provisioning_remote_effect.php');
 
         try {
+            // Reverse the complete remote-effect chain before rolling back its queue-era prerequisites.
+            // 000105 first reinstalls the bootstrap barrier so every subsequent rollback boundary is closed.
+            $remoteEffectActivationMigration->down();
+            $capacityFenceMigration->down();
+            $verifiedTargetActivationMigration->down();
             $uncertainRecoveryMigration->down();
             $remoteEffectHardeningMigration->down();
             $remoteEffectMigration->down();
+            $remoteEffectBarrierMigration->down();
             $exactAuthorityMigration->down();
             $outboxOrderMigration->down();
             $invalidationMigration->down();
@@ -171,9 +185,18 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
             $outboxOrderMigration->up();
             $exactAuthorityMigration->up();
             $activationMigration->up();
+
+            $remoteEffectBarrierMigration->up();
+            self::assertSame(1, $this->triggerCount('initial_provisioning_remote_effect_bootstrap_barrier'));
             $remoteEffectMigration->up();
             $remoteEffectHardeningMigration->up();
             $uncertainRecoveryMigration->up();
+            $verifiedTargetActivationMigration->up();
+            $capacityFenceMigration->up();
+            // Every intermediate DDL boundary remains blocked until the final activation migration.
+            self::assertSame(1, $this->triggerCount('initial_provisioning_remote_effect_bootstrap_barrier'));
+            $remoteEffectActivationMigration->up();
+            self::assertSame(0, $this->triggerCount('initial_provisioning_remote_effect_bootstrap_barrier'));
 
             $happyOrder = $this->createPaidOrder('bootstrap-history');
             $correlationId = $this->purchaseOrderCorrelation('bootstrap-history-queue');
@@ -205,9 +228,13 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
             $outboxOrderMigration->up();
             $exactAuthorityMigration->up();
             $activationMigration->up();
+            $remoteEffectBarrierMigration->up();
             $remoteEffectMigration->up();
             $remoteEffectHardeningMigration->up();
             $uncertainRecoveryMigration->up();
+            $verifiedTargetActivationMigration->up();
+            $capacityFenceMigration->up();
+            $remoteEffectActivationMigration->up();
         }
     }
 
