@@ -52,16 +52,26 @@ final readonly class InitialProvisioningRecoveryService
 
             $state = ProvisioningState::tryFrom($operation->state)
                 ?? throw new RuntimeException('Stored provisioning state is invalid.');
-            if ($state !== ProvisioningState::UncertainRemoteResult) {
+            if (! in_array($state, [ProvisioningState::Running, ProvisioningState::UncertainRemoteResult], true)) {
                 return $state;
             }
 
+            // A persisted Running state can be the residue of a worker crash at any point after the
+            // durable effect fence was acquired, including after an unobserved provider mutation.
+            // RetryScheduled is safe because the executor reuses the immutable route/remote identity
+            // and PanelCreateCoordinator performs authoritative lookup before any create attempt.
+            $eventType = $state === ProvisioningState::Running
+                ? 'interrupted_recovery_scheduled'
+                : 'reconciliation_scheduled';
+            $resultCode = $state === ProvisioningState::Running
+                ? 'interrupted_running_recovery'
+                : 'uncertain_recovery';
             $nextVersion = (int) $operation->state_version + 1;
             $this->setAuthority($connection, $operation->operation_key, $operation->correlation_id);
             try {
                 $updated = $connection->table('provisioning_operations')
                     ->where('id', (int) $operation->id)
-                    ->where('state', ProvisioningState::UncertainRemoteResult->value)
+                    ->where('state', $state->value)
                     ->where('state_version', (int) $operation->state_version)
                     ->update([
                         'state' => ProvisioningState::RetryScheduled->value,
@@ -69,17 +79,17 @@ final readonly class InitialProvisioningRecoveryService
                         'updated_at' => $this->timestamp(),
                     ]);
                 if ($updated !== 1) {
-                    throw new RuntimeException('Initial provisioning reconciliation scheduling lost its state.');
+                    throw new RuntimeException('Initial provisioning recovery scheduling lost its state.');
                 }
 
                 $connection->table('provisioning_remote_effect_events')->insert([
                     'provisioning_operation_id' => (int) $operation->id,
-                    'event_type' => 'reconciliation_scheduled',
+                    'event_type' => $eventType,
                     'state_version' => $nextVersion,
                     'route_selection_id' => $operation->route_selection_id === null ? null : (int) $operation->route_selection_id,
                     'service_target_id' => $operation->service_target_id === null ? null : (int) $operation->service_target_id,
                     'remote_service_id' => $operation->remote_service_id,
-                    'result_code' => 'uncertain_recovery',
+                    'result_code' => $resultCode,
                     'correlation_id' => $operation->correlation_id,
                     'created_at' => $this->timestamp(),
                 ]);
