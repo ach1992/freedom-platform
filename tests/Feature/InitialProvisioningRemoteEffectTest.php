@@ -37,10 +37,13 @@ use App\Modules\Payments\Application\PurchaseRefundService;
 use App\Modules\Payments\Application\PurchaseSettlementReceipt;
 use App\Modules\Payments\Domain\PaymentIntentState;
 use App\Modules\Provisioning\Application\InitialProvisioningExecutor;
+use App\Modules\Provisioning\Application\InitialProvisioningOutboxHandler;
 use App\Modules\Provisioning\Application\InitialProvisioningQueueService;
 use App\Modules\Provisioning\Application\InitialProvisioningRecoveryService;
 use App\Modules\Provisioning\Application\ProvisioningQueueReceipt;
 use App\Modules\Provisioning\Domain\ProvisioningState;
+use App\Shared\Application\OutboxDispatchOutcome;
+use App\Shared\Application\OutboxMessage;
 use App\Shared\Domain\Money;
 use Closure;
 use Database\Seeders\CatalogAccessFoundationSeeder;
@@ -422,10 +425,41 @@ final class InitialProvisioningRemoteEffectTest extends TestCase
             ->where('event_type', 'reconciliation_scheduled')->count());
     }
 
+    public function test_fresh_running_outbox_reclaim_is_retryable_without_second_provider_effect(): void
+    {
+        $scenario = $this->scenario('fresh-running-reclaim');
+        $this->simulateInterruptedClaim($scenario['queue']);
+        $event = DB::table('outbox_messages')->where('id', $scenario['queue']->outboxEventId)->first([
+            'id', 'event_key', 'event_type', 'aggregate_type', 'aggregate_id', 'payload', 'correlation_id',
+        ]);
+        self::assertNotNull($event);
+        $payload = json_decode((string) $event->payload, true, 512, JSON_THROW_ON_ERROR);
+        if (! is_array($payload)) {
+            self::fail('Provisioning Outbox payload must decode to an array.');
+        }
+
+        $outcome = $this->app->make(InitialProvisioningOutboxHandler::class)->handle(new OutboxMessage(
+            (string) $event->id,
+            (string) $event->event_key,
+            (string) $event->event_type,
+            (string) $event->aggregate_type,
+            (string) $event->aggregate_id,
+            $payload,
+            (string) $event->correlation_id,
+            2,
+        ));
+
+        self::assertSame(OutboxDispatchOutcome::RetryableFailure, $outcome);
+        self::assertSame(ProvisioningState::Running->value, DB::table('provisioning_operations')
+            ->where('id', $scenario['queue']->provisioningOperationId)->value('state'));
+        self::assertSame([], $scenario['adapter']->calls);
+        self::assertSame(0, $scenario['adapter']->serviceCount());
+    }
+
     public function test_interrupted_running_attempt_is_made_durably_uncertain_before_retry(): void
     {
         $scenario = $this->scenario('interrupted');
-        $this->simulateInterruptedClaim($scenario['queue']);
+        $this->simulateInterruptedClaim($scenario['queue'], true);
         $recovery = $this->app->make(InitialProvisioningRecoveryService::class);
 
         self::assertSame(
@@ -589,6 +623,10 @@ final class InitialProvisioningRemoteEffectTest extends TestCase
             'version' => DB::raw('version + 1'),
             'updated_at' => $now,
         ]);
+        DB::table('plan_offering_protocol_profiles')->where('plan_offering_id', $offeringId)->update([
+            'customer_selectable' => false,
+            'updated_at' => $now,
+        ]);
         DB::table('plan_offerings')->where('id', $offeringId)->update([
             'state' => 'active',
             'visibility' => 'visible',
@@ -657,7 +695,7 @@ final class InitialProvisioningRemoteEffectTest extends TestCase
         return $this->app->make(InitialProvisioningExecutor::class);
     }
 
-    private function simulateInterruptedClaim(ProvisioningQueueReceipt $queue): void
+    private function simulateInterruptedClaim(ProvisioningQueueReceipt $queue, bool $stale = false): void
     {
         $operation = DB::table('provisioning_operations')->where('id', $queue->provisioningOperationId)->first([
             'operation_key', 'correlation_id', 'state_version', 'attempt_count',
@@ -670,13 +708,16 @@ final class InitialProvisioningRemoteEffectTest extends TestCase
             $operation->correlation_id,
         ]);
         try {
+            $remoteEffectStartedAt = $stale
+                ? $this->purchaseOrderClock->value->modify('-121 seconds')->format('Y-m-d H:i:s.u')
+                : $this->purchaseOrderTimestamp();
             $updated = $connection->table('provisioning_operations')->where('id', $queue->provisioningOperationId)->update([
                 'state' => ProvisioningState::Running->value,
                 'state_version' => (int) $operation->state_version + 1,
                 'effect_fence_key' => 'test-interrupted-'.substr(hash('sha256', (string) $queue->provisioningOperationId), 0, 40),
                 'route_hold_expires_at' => $this->purchaseOrderClock->value->modify('+24 hours')->format('Y-m-d H:i:s.u'),
                 'attempt_count' => (int) $operation->attempt_count + 1,
-                'remote_effect_started_at' => $this->purchaseOrderTimestamp(),
+                'remote_effect_started_at' => $remoteEffectStartedAt,
                 'updated_at' => $this->purchaseOrderTimestamp(),
             ]);
             self::assertSame(1, $updated);
