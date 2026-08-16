@@ -627,6 +627,12 @@ final class InitialProvisioningRemoteEffectTest extends TestCase
             'customer_selectable' => false,
             'updated_at' => $now,
         ]);
+        // Route-policy compatibility is evaluated while the offering is still draft. Put the
+        // server-selection mode into its intended system-selected state before creating the policy.
+        DB::table('plan_offerings')->where('id', $offeringId)->update([
+            'server_selection_mode' => 'system_selects',
+            'updated_at' => $now,
+        ]);
 
         $tierId = (int) DB::table('customer_tiers')->where('code', 'normal')->value('id');
         if (! DB::table('customer_profiles')->where('user_id', $userId)->exists()) {
@@ -709,7 +715,7 @@ final class InitialProvisioningRemoteEffectTest extends TestCase
         ]);
         try {
             $remoteEffectStartedAt = $stale
-                ? $this->purchaseOrderClock->value->modify('-121 seconds')->format('Y-m-d H:i:s.u')
+                ? $this->purchaseOrderClock->value->modify('-601 seconds')->format('Y-m-d H:i:s.u')
                 : $this->purchaseOrderTimestamp();
             $updated = $connection->table('provisioning_operations')->where('id', $queue->provisioningOperationId)->update([
                 'state' => ProvisioningState::Running->value,
