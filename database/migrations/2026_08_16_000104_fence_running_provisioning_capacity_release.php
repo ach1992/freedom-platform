@@ -11,9 +11,8 @@ return new class extends Migration
     /** @requirement PRV-002 PRV-003 DAT-003 SEC-002 QUA-004 */
     public function up(): void
     {
-        DB::unprepared('DROP TRIGGER IF EXISTS provisioning_running_capacity_release_guard');
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER provisioning_running_capacity_release_guard
+CREATE OR REPLACE TRIGGER provisioning_running_capacity_release_guard
 BEFORE UPDATE ON panel_capacity_reservations
 FOR EACH ROW
 BEGIN
