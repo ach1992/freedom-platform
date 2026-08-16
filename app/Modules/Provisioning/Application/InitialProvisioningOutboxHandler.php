@@ -51,8 +51,21 @@ final readonly class InitialProvisioningOutboxHandler implements OutboxEventHand
 
             $receipt = $this->executor->execute($operationPublicId);
         } catch (DomainException) {
-            // Financial/domain invalidity before any provider attempt is definitive for this command.
-            return OutboxDispatchOutcome::DefinitiveFailure;
+            // Domain invalidity before a remote attempt is definitive, but a DomainException can
+            // also escape from local persistence after the provider has already returned. In that
+            // case the durable running/uncertain state owns recovery and the Outbox must retry.
+            try {
+                $stateAfterFailure = $this->recovery->prepare($operationPublicId);
+            } catch (Throwable) {
+                return OutboxDispatchOutcome::DefinitiveFailure;
+            }
+
+            return in_array($stateAfterFailure, [
+                ProvisioningState::Running,
+                ProvisioningState::UncertainRemoteResult,
+            ], true)
+                ? OutboxDispatchOutcome::RetryableFailure
+                : OutboxDispatchOutcome::DefinitiveFailure;
         } catch (Throwable) {
             // Escaping executor failures occur outside the guarded provider-call boundary and are safe to retry.
             return OutboxDispatchOutcome::RetryableFailure;
