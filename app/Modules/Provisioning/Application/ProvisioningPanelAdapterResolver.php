@@ -37,7 +37,7 @@ final readonly class ProvisioningPanelAdapterResolver
 
         /** @var object{target_state:string,panel_connection_id:int|string,provider_type:string,base_url:string,encrypted_credentials:string,tls_policy:string,custom_ca_disk:?string,custom_ca_path:?string,certificate_pin_sha256:?string,network_policy:string,connection_state:string}|null $row */
         $row = $this->database->connection()
-            ->table('service_targets as target')
+            ->table('panel_service_targets as target')
             ->join('panel_connections as connection', 'connection.id', '=', 'target.panel_connection_id')
             ->where('target.id', $serviceTargetId)
             ->first([
