@@ -52,8 +52,17 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
         $exactAuthorityMigration = require database_path('migrations/2026_08_14_001164_z_enforce_exact_provisioning_authority_text.php');
         /** @var Migration $activationMigration */
         $activationMigration = require database_path('migrations/2026_08_14_001165_activate_provisioning_queue_authority.php');
+        /** @var Migration $remoteEffectMigration */
+        $remoteEffectMigration = require database_path('migrations/2026_08_16_000100_enable_initial_provisioning_remote_effect.php');
+        /** @var Migration $remoteEffectHardeningMigration */
+        $remoteEffectHardeningMigration = require database_path('migrations/2026_08_16_000101_harden_initial_provisioning_remote_effect_transitions.php');
+        /** @var Migration $uncertainRecoveryMigration */
+        $uncertainRecoveryMigration = require database_path('migrations/2026_08_16_000102_enable_initial_provisioning_uncertain_recovery.php');
 
         try {
+            $uncertainRecoveryMigration->down();
+            $remoteEffectHardeningMigration->down();
+            $remoteEffectMigration->down();
             $exactAuthorityMigration->down();
             $outboxOrderMigration->down();
             $invalidationMigration->down();
@@ -162,6 +171,9 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
             $outboxOrderMigration->up();
             $exactAuthorityMigration->up();
             $activationMigration->up();
+            $remoteEffectMigration->up();
+            $remoteEffectHardeningMigration->up();
+            $uncertainRecoveryMigration->up();
 
             $happyOrder = $this->createPaidOrder('bootstrap-history');
             $correlationId = $this->purchaseOrderCorrelation('bootstrap-history-queue');
@@ -193,6 +205,9 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
             $outboxOrderMigration->up();
             $exactAuthorityMigration->up();
             $activationMigration->up();
+            $remoteEffectMigration->up();
+            $remoteEffectHardeningMigration->up();
+            $uncertainRecoveryMigration->up();
         }
     }
 
