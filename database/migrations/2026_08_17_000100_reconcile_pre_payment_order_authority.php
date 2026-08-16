@@ -377,7 +377,7 @@ BEGIN
            OR OLD.state_version <> 1
            OR NEW.state <> 'provisioning_queued'
            OR NEW.state_version <> 2 THEN
-            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Only pre-payment/v0 to paid/v1 or paid/v1 to provisioning_queued/v2 is enabled by current Order lifecycle authority.';
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Only pre-payment/v0 to paid/v1 or paid/v1 to provisioning_queued/v2 is enabled by current Order lifecycle authority. Only paid/v1 to provisioning_queued/v2 remains provisioning queue authority.';
         END IF;
 
         SELECT operation_row.id INTO valid_queue_operation_id
