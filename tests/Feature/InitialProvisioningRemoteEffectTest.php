@@ -13,6 +13,7 @@ use App\Modules\Catalog\Domain\PlanOfferingRoutePolicyDefinition;
 use App\Modules\Catalog\Domain\PlanOfferingRouteType;
 use App\Modules\Orders\Application\PurchaseOrderReceipt;
 use App\Modules\Orders\Application\PurchaseOrderService;
+use App\Modules\Panels\Application\CapacityOperationContext;
 use App\Modules\Panels\Application\Contracts\DataAllowanceMode;
 use App\Modules\Panels\Application\Contracts\PanelAdapter;
 use App\Modules\Panels\Application\Contracts\PanelAdapterFactory;
@@ -26,6 +27,7 @@ use App\Modules\Panels\Application\Contracts\SensitiveDeliveryArtifacts;
 use App\Modules\Panels\Application\PanelAdapterRegistry;
 use App\Modules\Panels\Application\PanelAdapterSession;
 use App\Modules\Panels\Application\PanelCredentialPolicy;
+use App\Modules\Panels\Application\TargetCapacityAllocator;
 use App\Modules\Panels\Domain\PanelProviderType;
 use App\Modules\Payments\Application\Contracts\PaymentEvidence;
 use App\Modules\Payments\Application\Contracts\PaymentEvidenceAuthority;
@@ -381,6 +383,75 @@ final class InitialProvisioningRemoteEffectTest extends TestCase
         self::assertSame([0], $scenario['adapter']->transactionLevels);
         self::assertSame(1, DB::table('plan_offering_route_selections')->count());
         self::assertSame(2, $retry->attemptCount);
+    }
+
+    public function test_capacity_hold_near_expiry_fails_closed_before_retry_provider_effect(): void
+    {
+        $scenario = $this->scenario('capacity-expiry');
+        $scenario['adapter']->forcedCreateResult = new PanelOperationResult(
+            PanelOperationOutcome::RetryableFailure,
+            null,
+            'test_retryable',
+            'Temporary test failure.',
+        );
+        $first = $this->executor()->execute($scenario['queue']->provisioningOperationPublicId);
+        self::assertSame(ProvisioningState::RetryScheduled, $first->state);
+        self::assertNotNull($first->routeSelectionId);
+        self::assertSame('held', DB::table('panel_capacity_reservations')->value('state'));
+        $remoteCount = $scenario['adapter']->serviceCount();
+
+        $scenario['adapter']->forcedCreateResult = null;
+        $scenario['adapter']->resetCalls();
+        $this->purchaseOrderClock->value = $this->purchaseOrderClock->value->modify('+23 hours 51 minutes');
+
+        $retry = $this->executor()->execute($scenario['queue']->provisioningOperationPublicId);
+
+        self::assertSame(ProvisioningState::NeedsReview, $retry->state);
+        self::assertSame('capacity_authority_lost', $retry->resultCode);
+        self::assertSame([], $scenario['adapter']->calls);
+        self::assertSame($remoteCount, $scenario['adapter']->serviceCount());
+        self::assertSame('held', DB::table('panel_capacity_reservations')->value('state'));
+    }
+
+    public function test_running_remote_effect_fences_capacity_release_until_finalization(): void
+    {
+        $scenario = $this->scenario('capacity-release-fence');
+        $releaseFailure = null;
+        $scenario['adapter']->beforeCreate = function () use ($scenario, &$releaseFailure): void {
+            $operation = DB::table('provisioning_operations')
+                ->where('id', $scenario['queue']->provisioningOperationId)
+                ->first(['capacity_reservation_key', 'correlation_id']);
+            self::assertNotNull($operation);
+            self::assertNotNull($operation->capacity_reservation_key);
+            $reservation = DB::table('panel_capacity_reservations')
+                ->where('reservation_key', $operation->capacity_reservation_key)
+                ->first(['version']);
+            self::assertNotNull($reservation);
+
+            try {
+                $this->app->make(TargetCapacityAllocator::class)->release(
+                    (string) $operation->capacity_reservation_key,
+                    (int) $reservation->version,
+                    new CapacityOperationContext(
+                        'test-running-capacity-release:'.$scenario['queue']->provisioningOperationPublicId,
+                        (string) $operation->correlation_id,
+                        'provisioning',
+                        'initial_provision',
+                        'running_effect_fence_test',
+                    ),
+                );
+            } catch (Throwable $exception) {
+                $releaseFailure = $exception;
+            }
+        };
+
+        $receipt = $this->executor()->execute($scenario['queue']->provisioningOperationPublicId);
+
+        self::assertSame(ProvisioningState::Succeeded, $receipt->state);
+        self::assertInstanceOf(Throwable::class, $releaseFailure);
+        self::assertSame('committed', DB::table('panel_capacity_reservations')->value('state'));
+        self::assertSame(['lookup_username', 'create'], $scenario['adapter']->calls);
+        self::assertSame([0, 0], $scenario['adapter']->transactionLevels);
     }
 
     public function test_uncertain_result_recovers_via_retry_and_lookup_before_create(): void
