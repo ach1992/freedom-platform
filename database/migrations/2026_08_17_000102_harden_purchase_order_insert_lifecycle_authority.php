@@ -10,26 +10,19 @@ return new class extends Migration
     /** @requirement BUY-001 BUY-002 PAY-002 DAT-002 DAT-003 DAT-004 SEC-002 QUA-004 */
     public function up(): void
     {
-        $this->replaceInsertGuard(true);
+        $this->replaceInsertGuard();
     }
 
     public function down(): void
     {
-        $this->replaceInsertGuard(false);
+        // Keep this correction fail-closed if rollback stops between this migration and 000100.
+        // The 000100 rollback restores the pre-task paid-only trigger when the full rollback continues.
+        $this->replaceInsertGuard();
     }
 
-    private function replaceInsertGuard(bool $strictLifecycle): void
+    private function replaceInsertGuard(): void
     {
-        $paidLifecycleGuard = $strictLifecycle
-            ? <<<'SQL'
-        IF NEW.state <> 'paid' OR NEW.state_version <> 1 THEN
-            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Settlement-backed Order insertion is restricted to paid/v1 authority.';
-        END IF;
-
-SQL
-            : '';
-
-        DB::unprepared(<<<SQL
+        DB::unprepared(<<<'SQL'
 CREATE OR REPLACE TRIGGER orders_insert_guard
 BEFORE INSERT ON orders
 FOR EACH ROW
@@ -61,7 +54,11 @@ BEGIN
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Pre-payment Order must match one immutable purchase Quote.';
         END IF;
     ELSEIF NEW.source_type = 'purchase' THEN
-{$paidLifecycleGuard}        SELECT COUNT(*) INTO valid_purchase_count
+        IF NEW.state <> 'paid' OR NEW.state_version <> 1 THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Settlement-backed Order insertion is restricted to paid/v1 authority.';
+        END IF;
+
+        SELECT COUNT(*) INTO valid_purchase_count
         FROM purchase_settlements settlement_row
         INNER JOIN payment_intents intent_row ON intent_row.id = settlement_row.payment_intent_id
         INNER JOIN quotes quote_row ON quote_row.id = settlement_row.source_quote_id
