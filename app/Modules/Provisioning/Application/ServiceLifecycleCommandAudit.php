@@ -25,8 +25,6 @@ final readonly class ServiceLifecycleCommandAudit
     ): ?ServiceLifecycleCommandReceipt {
         $query = $connection->table('audit_logs')
             ->where('action', self::ACTION)
-            ->where('target_type', 'service_subscription')
-            ->where('target_id', $servicePublicId)
             ->where('request_fingerprint', $context->requestHash());
         if ($lock) {
             $query->lockForUpdate();
