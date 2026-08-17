@@ -11,6 +11,7 @@ use App\Modules\Orders\Domain\OrderState;
 use App\Modules\Orders\Domain\QuoteOverrideSource;
 use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
+use DateTimeImmutable;
 use DomainException;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -36,9 +37,7 @@ final class PurchaseOrderPrePaymentSafetyRegressionTest extends TestCase
     public function test_first_open_rejects_expired_quote(): void
     {
         [$userId, $quotePublicId] = $this->createQuote('expired-first-open');
-        DB::table('quotes')->where('public_id', $quotePublicId)->update([
-            'expires_at' => $this->purchaseOrderTimestamp(),
-        ]);
+        $this->setPurchaseOrderNow($this->purchaseOrderClock->value->modify('+31 minutes'));
 
         $this->expectException(DomainException::class);
         $this->expectExceptionMessage('Purchase Quote is not current.');
@@ -52,10 +51,10 @@ final class PurchaseOrderPrePaymentSafetyRegressionTest extends TestCase
 
     public function test_first_open_rejects_quote_before_valid_from(): void
     {
+        $beforeValidFrom = $this->purchaseOrderClock->value;
+        $this->setPurchaseOrderNow($beforeValidFrom->modify('+5 minutes'));
         [$userId, $quotePublicId] = $this->createQuote('future-first-open');
-        DB::table('quotes')->where('public_id', $quotePublicId)->update([
-            'valid_from' => $this->purchaseOrderClock->value->modify('+5 minutes')->format('Y-m-d H:i:s.u'),
-        ]);
+        $this->setPurchaseOrderNow($beforeValidFrom);
 
         $this->expectException(DomainException::class);
         $this->expectExceptionMessage('Purchase Quote is not current.');
@@ -77,10 +76,7 @@ final class PurchaseOrderPrePaymentSafetyRegressionTest extends TestCase
             $this->purchaseOrderCorrelation('expired-replay-open'),
         );
 
-        DB::table('quotes')->where('public_id', $quotePublicId)->update([
-            'expires_at' => $this->purchaseOrderTimestamp(),
-        ]);
-
+        $this->setPurchaseOrderNow($this->purchaseOrderClock->value->modify('+31 minutes'));
         $replayed = $orders->openFromQuote(
             $quotePublicId,
             $userId,
@@ -100,11 +96,9 @@ final class PurchaseOrderPrePaymentSafetyRegressionTest extends TestCase
     public function test_direct_database_insert_rejects_expired_quote_for_pre_payment_order(): void
     {
         [$userId, $quotePublicId] = $this->createQuote('expired-db');
-        DB::table('quotes')->where('public_id', $quotePublicId)->update([
-            'expires_at' => $this->purchaseOrderTimestamp(),
-        ]);
         $quote = DB::table('quotes')->where('public_id', $quotePublicId)->first();
         self::assertNotNull($quote);
+        $this->setPurchaseOrderNow($this->purchaseOrderClock->value->modify('+31 minutes'));
 
         $this->assertQueryRejected(fn (): bool => DB::table('orders')->insert([
             'public_id' => (string) Str::ulid(),
@@ -188,6 +182,14 @@ final class PurchaseOrderPrePaymentSafetyRegressionTest extends TestCase
         );
 
         return [$userId, $quote->quotePublicId];
+    }
+
+    private function setPurchaseOrderNow(DateTimeImmutable $now): void
+    {
+        $this->purchaseOrderClock->value = $now;
+        if (DB::connection()->getDriverName() === 'mysql') {
+            DB::statement('SET timestamp = '.$now->getTimestamp());
+        }
     }
 
     private function assertQueryRejected(callable $callback): void
