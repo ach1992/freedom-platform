@@ -151,12 +151,21 @@ final class PurchaseOrderAuthorityHardeningTest extends TestCase
 
         /** @var \Illuminate\Database\Migrations\Migration $reconcile */
         $reconcile = require database_path('migrations/2026_08_17_000100_reconcile_pre_payment_order_authority.php');
-        $reconcile->up();
-        self::assertSame(2, DB::table('purchase_settlements')->count());
-        self::assertNull(DB::selectOne(
-            'SELECT CONSTRAINT_NAME FROM information_schema.TABLE_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME = ? AND CONSTRAINT_NAME = ?',
-            ['purchase_settlements', 'purchase_settlements_quote_unique'],
-        ));
+        /** @var \Illuminate\Database\Migrations\Migration $splitShape */
+        $splitShape = require database_path('migrations/2026_08_17_000101_split_pre_payment_order_shape_constraints.php');
+        /** @var \Illuminate\Database\Migrations\Migration $finalInsertGuard */
+        $finalInsertGuard = require database_path('migrations/2026_08_17_000102_harden_purchase_order_insert_lifecycle_authority.php');
+        try {
+            $reconcile->up();
+            self::assertSame(2, DB::table('purchase_settlements')->count());
+            self::assertNull(DB::selectOne(
+                'SELECT CONSTRAINT_NAME FROM information_schema.TABLE_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME = ? AND CONSTRAINT_NAME = ?',
+                ['purchase_settlements', 'purchase_settlements_quote_unique'],
+            ));
+        } finally {
+            $splitShape->up();
+            $finalInsertGuard->up();
+        }
     }
 
     public function test_real_wallet_top_up_intent_cannot_be_substituted_as_purchase_order_payment_authority(): void
