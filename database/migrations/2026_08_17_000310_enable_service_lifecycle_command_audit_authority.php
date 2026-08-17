@@ -11,7 +11,7 @@ return new class extends Migration
     /** @requirement SVC-006 ARCH-003 DAT-003 SEC-002 SEC-003 SEC-008 QUA-004 */
     public function up(): void
     {
-        foreach (['audit_logs', 'provisioning_operations', 'service_subscriptions'] as $table) {
+        foreach (['audit_logs', 'provisioning_operations', 'service_subscriptions', 'users', 'administrators'] as $table) {
             if (! Schema::hasTable($table)) {
                 throw new RuntimeException('Service lifecycle command audit prerequisites are incomplete.');
             }
@@ -57,14 +57,43 @@ BEGIN
             ON service_row.id = operation_row.service_subscription_id
         WHERE BINARY operation_row.public_id = BINARY COALESCE(@app_service_lifecycle_operation_public_id, '')
           AND operation_row.operation_type <> 'initial_provision'
+          AND operation_row.state = 'queued'
           AND BINARY operation_row.request_key_hash = BINARY NEW.request_fingerprint
           AND BINARY operation_row.correlation_id = BINARY NEW.correlation_id
           AND BINARY service_row.public_id = BINARY NEW.target_id
+          AND CAST(JSON_UNQUOTE(JSON_EXTRACT(NEW.before_safe_data, '$.lifecycle_version')) AS UNSIGNED) = operation_row.target_lifecycle_version
+          AND CAST(JSON_UNQUOTE(JSON_EXTRACT(NEW.before_safe_data, '$.remote_identity_generation')) AS UNSIGNED) = operation_row.target_remote_identity_generation
+          AND CAST(JSON_UNQUOTE(JSON_EXTRACT(NEW.before_safe_data, '$.mutation_generation')) AS UNSIGNED) + 1 = operation_row.operation_generation
+          AND (
+              (operation_row.operation_type = 'suspend'
+                  AND BINARY JSON_UNQUOTE(JSON_EXTRACT(NEW.before_safe_data, '$.lifecycle_state')) = BINARY 'active')
+              OR (operation_row.operation_type = 'activate'
+                  AND BINARY JSON_UNQUOTE(JSON_EXTRACT(NEW.before_safe_data, '$.lifecycle_state')) = BINARY 'suspended')
+              OR (operation_row.operation_type IN ('delete', 'reset_usage', 'rotate_subscription_link')
+                  AND BINARY JSON_UNQUOTE(JSON_EXTRACT(NEW.before_safe_data, '$.lifecycle_state')) IN (BINARY 'active', BINARY 'suspended'))
+          )
           AND BINARY JSON_UNQUOTE(JSON_EXTRACT(NEW.after_safe_data, '$.operation_public_id')) = BINARY operation_row.public_id
           AND BINARY JSON_UNQUOTE(JSON_EXTRACT(NEW.after_safe_data, '$.operation_type')) = BINARY operation_row.operation_type
           AND CAST(JSON_UNQUOTE(JSON_EXTRACT(NEW.after_safe_data, '$.operation_generation')) AS UNSIGNED) = operation_row.operation_generation
           AND CAST(JSON_UNQUOTE(JSON_EXTRACT(NEW.after_safe_data, '$.target_remote_identity_generation')) AS UNSIGNED) = operation_row.target_remote_identity_generation
-          AND CAST(JSON_UNQUOTE(JSON_EXTRACT(NEW.after_safe_data, '$.target_lifecycle_version')) AS UNSIGNED) = operation_row.target_lifecycle_version;
+          AND CAST(JSON_UNQUOTE(JSON_EXTRACT(NEW.after_safe_data, '$.target_lifecycle_version')) AS UNSIGNED) = operation_row.target_lifecycle_version
+          AND BINARY JSON_UNQUOTE(JSON_EXTRACT(NEW.after_safe_data, '$.accepted_state')) = BINARY 'queued'
+          AND (
+              (NEW.actor_type = 'user'
+                  AND CAST(NEW.actor_id AS UNSIGNED) = service_row.user_id
+                  AND EXISTS (
+                      SELECT 1 FROM users user_row
+                      WHERE user_row.id = service_row.user_id
+                        AND user_row.account_status = 'active'
+                        AND user_row.account_type IN ('customer', 'agent')
+                  ))
+              OR (NEW.actor_type = 'administrator'
+                  AND EXISTS (
+                      SELECT 1 FROM administrators administrator_row
+                      WHERE administrator_row.id = CAST(NEW.actor_id AS UNSIGNED)
+                        AND administrator_row.status = 'active'
+                  ))
+          );
 
         IF valid_operation_count <> 1 THEN
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service lifecycle caller audit is detached from mutation authority.';
