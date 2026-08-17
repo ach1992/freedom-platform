@@ -22,6 +22,9 @@ final readonly class ServiceDeliveryAttemptQueueService
 {
     private const QUEUE_AUTHORITY = 'service_delivery_queue_v1';
 
+    /** @var list<string> */
+    private const TERMINAL_MUTATION_STATES = ['succeeded', 'failed_final', 'compensated'];
+
     public const OUTBOX_EVENT_TYPE = 'provisioning.service_delivery.requested';
 
     public const OUTBOX_AGGREGATE_TYPE = 'service_delivery_attempt';
@@ -65,6 +68,16 @@ final readonly class ServiceDeliveryAttemptQueueService
             }
 
             $this->assertServiceDeliverable($service);
+            $activeMutation = $connection->table('provisioning_operations')
+                ->where('service_subscription_id', (int) $service->id)
+                ->where('operation_type', '<>', 'initial_provision')
+                ->whereNotIn('state', self::TERMINAL_MUTATION_STATES)
+                ->lockForUpdate()
+                ->first(['id']);
+            if ($activeMutation !== null) {
+                throw new DomainException('Service has an unresolved mutation operation and cannot accept delivery attempts.');
+            }
+
             $remoteIdentityGeneration = $this->positiveDatabaseInt(
                 $service->remote_identity_generation,
                 'Service remote identity generation',

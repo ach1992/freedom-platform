@@ -11,8 +11,10 @@ return new class extends Migration
     /** @requirement SVC-002 SVC-014 ARCH-003 ARCH-004 DAT-003 SEC-002 SEC-008 QUA-004 QUA-007 QUA-010 */
     public function up(): void
     {
-        if (! Schema::hasTable('service_subscriptions') || ! Schema::hasTable('outbox_messages')) {
-            throw new RuntimeException('Service Delivery Attempt authority requires Service Subscription and Transactional Outbox foundations.');
+        if (! Schema::hasTable('service_subscriptions')
+            || ! Schema::hasTable('provisioning_operations')
+            || ! Schema::hasTable('outbox_messages')) {
+            throw new RuntimeException('Service Delivery Attempt authority requires Service Subscription, mutation, and Transactional Outbox foundations.');
         }
 
         if (! Schema::hasTable('service_delivery_attempts')) {
@@ -129,6 +131,7 @@ FOR EACH ROW
 BEGIN
     DECLARE valid_service_id BIGINT UNSIGNED DEFAULT NULL;
     DECLARE valid_outbox_count INT DEFAULT 0;
+    DECLARE unresolved_mutation_count INT DEFAULT 0;
 
     IF COALESCE(@app_service_delivery_authority, '') <> 'service_delivery_queue_v1'
        OR NEW.service_subscription_id <> COALESCE(@app_service_delivery_service_id, 0)
@@ -155,6 +158,16 @@ BEGIN
 
     IF valid_service_id IS NULL THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service Delivery Attempt must match the current provisioned Service identity and lifecycle.';
+    END IF;
+
+    SELECT COUNT(*) INTO unresolved_mutation_count
+    FROM provisioning_operations operation_row
+    WHERE operation_row.service_subscription_id = NEW.service_subscription_id
+      AND operation_row.operation_type <> 'initial_provision'
+      AND operation_row.state NOT IN ('succeeded','failed_final','compensated');
+
+    IF unresolved_mutation_count <> 0 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service Delivery Attempt is blocked by an unresolved Service mutation.';
     END IF;
 
     SELECT COUNT(*) INTO valid_outbox_count
