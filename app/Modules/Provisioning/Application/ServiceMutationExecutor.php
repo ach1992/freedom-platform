@@ -43,13 +43,14 @@ final readonly class ServiceMutationExecutor
         if ($state === ProvisioningState::UncertainRemoteResult || $state === ProvisioningState::NeedsReview) {
             throw new DomainException('Service mutation requires reconciliation before automatic execution can continue.');
         }
-        if ($state !== ProvisioningState::Running) {
-            if (! in_array($state, [ProvisioningState::Queued, ProvisioningState::RetryScheduled], true)) {
-                throw new DomainException('Service mutation operation is not executable automatically.');
-            }
-            $operation = $this->claim($operation);
+        if ($state === ProvisioningState::Running) {
+            throw new DomainException('Service mutation is already running and requires reconciliation before another provider attempt.');
+        }
+        if (! in_array($state, [ProvisioningState::Queued, ProvisioningState::RetryScheduled], true)) {
+            throw new DomainException('Service mutation operation is not executable automatically.');
         }
 
+        $operation = $this->claim($operation);
         $service = $this->serviceById((int) $operation->service_subscription_id);
         if ($this->nonNegativeDatabaseInt($service->mutation_generation, 'Service mutation generation')
             !== $this->nonNegativeDatabaseInt($operation->operation_generation, 'Operation generation')) {
@@ -103,6 +104,11 @@ final readonly class ServiceMutationExecutor
             throw new RuntimeException('Service mutation provider boundary cannot run inside a database transaction.');
         }
 
+        $operation = $this->markProviderBoundary($operation);
+        if ($connection->transactionLevel() !== 0) {
+            throw new RuntimeException('Service mutation provider boundary cannot run inside a database transaction.');
+        }
+
         try {
             $result = $this->invoke(
                 $adapter,
@@ -131,7 +137,7 @@ final readonly class ServiceMutationExecutor
             $locked = $this->operationById($connection, (int) $locator->id, true);
             $state = $this->state($locked->state);
             if ($state === ProvisioningState::Running) {
-                return $locked;
+                throw new DomainException('Service mutation remote-effect authority is already claimed.');
             }
             if (! in_array($state, [ProvisioningState::Queued, ProvisioningState::RetryScheduled], true)) {
                 throw new DomainException('Service mutation cannot acquire remote-effect authority.');
@@ -157,12 +163,12 @@ final readonly class ServiceMutationExecutor
                     ->where('id', (int) $locked->id)
                     ->where('state', $state->value)
                     ->where('state_version', (int) $locked->state_version)
+                    ->whereNull('remote_effect_started_at')
                     ->update([
                         'state' => ProvisioningState::Running->value,
                         'state_version' => (int) $locked->state_version + 1,
                         'effect_fence_key' => $fence,
                         'attempt_count' => (int) $locked->attempt_count + 1,
-                        'remote_effect_started_at' => $locked->remote_effect_started_at ?? $now,
                         'remote_effect_completed_at' => null,
                         'updated_at' => $now,
                     ]);
@@ -179,28 +185,75 @@ final readonly class ServiceMutationExecutor
         }, 3);
     }
 
+    /** @param MutationOperation $locator @return MutationOperation */
+    private function markProviderBoundary(object $locator): object
+    {
+        return $this->database->connection()->transaction(function (Connection $connection) use ($locator): object {
+            $operation = $this->operationById($connection, (int) $locator->id, true);
+            if ($this->state($operation->state) !== ProvisioningState::Running
+                || $operation->remote_effect_started_at !== null
+                || $operation->remote_effect_completed_at !== null) {
+                throw new DomainException('Service mutation provider boundary cannot be entered from the current state.');
+            }
+
+            $service = $this->serviceByIdOn($connection, (int) $operation->service_subscription_id, true);
+            $generation = $this->nonNegativeDatabaseInt($operation->operation_generation, 'Operation generation');
+            if ($generation !== $this->nonNegativeDatabaseInt($service->mutation_generation, 'Service mutation generation')
+                || $service->remote_deleted_at !== null
+                || (int) $service->service_target_id !== (int) $operation->service_target_id
+                || ! is_string($service->remote_service_id)
+                || ! is_string($operation->remote_service_id)
+                || ! hash_equals($service->remote_service_id, $operation->remote_service_id)) {
+                throw new DomainException('Service mutation remote binding is no longer authoritative at provider boundary.');
+            }
+
+            $this->setEffectAuthority($connection, $operation);
+            try {
+                $updated = $connection->table('provisioning_operations')
+                    ->where('id', (int) $operation->id)
+                    ->where('state', ProvisioningState::Running->value)
+                    ->where('state_version', (int) $operation->state_version)
+                    ->whereNull('remote_effect_started_at')
+                    ->update([
+                        'state_version' => (int) $operation->state_version + 1,
+                        'remote_effect_started_at' => $this->timestamp(),
+                        'updated_at' => $this->timestamp(),
+                    ]);
+                if ($updated !== 1) {
+                    throw new RuntimeException('Service mutation provider boundary lost its authority.');
+                }
+
+                return $this->operationById($connection, (int) $operation->id, true);
+            } finally {
+                $this->clearEffectAuthority($connection);
+            }
+        }, 3);
+    }
+
     /** @param MutationOperation $operation */
     private function applyResult(object $operation, ServiceMutationType $type, PanelOperationResult $result): ServiceMutationReceipt
     {
         $state = match ($result->outcome) {
             PanelOperationOutcome::Success => ProvisioningState::Succeeded,
             PanelOperationOutcome::DefinitiveFailure => ProvisioningState::FailedFinal,
-            PanelOperationOutcome::RetryableFailure => ProvisioningState::RetryScheduled,
-            PanelOperationOutcome::UncertainResult => ProvisioningState::UncertainRemoteResult,
+            PanelOperationOutcome::RetryableFailure, PanelOperationOutcome::UncertainResult => ProvisioningState::UncertainRemoteResult,
         };
         $fallbackCode = match ($result->outcome) {
             PanelOperationOutcome::Success => 'panel_success',
             PanelOperationOutcome::DefinitiveFailure => 'panel_definitive_failure',
-            PanelOperationOutcome::RetryableFailure => 'panel_retryable_failure',
+            PanelOperationOutcome::RetryableFailure => 'panel_retryable_after_boundary',
             PanelOperationOutcome::UncertainResult => 'panel_uncertain_result',
         };
+        $fallbackMessage = $result->outcome === PanelOperationOutcome::RetryableFailure
+            ? 'Panel reported a retryable outcome after provider boundary; remote result is uncertain.'
+            : 'Panel Service mutation completed with a normalized result.';
 
         return $this->finalize(
             $operation,
             $type,
             $state,
             $result->providerCode ?? $fallbackCode,
-            $result->safeMessage ?? 'Panel Service mutation completed with a normalized result.',
+            $result->safeMessage ?? $fallbackMessage,
             $state === ProvisioningState::Succeeded && $type->isDelete(),
         );
     }
@@ -241,6 +294,7 @@ final readonly class ServiceMutationExecutor
             }
 
             $now = $this->timestamp();
+            $completedAt = $operation->remote_effect_started_at === null ? null : $now;
             $this->setEffectAuthority($connection, $operation);
             try {
                 if ($tombstoneService) {
@@ -266,7 +320,7 @@ final readonly class ServiceMutationExecutor
                         'state_version' => (int) $operation->state_version + 1,
                         'last_result_code' => $this->resultCode($resultCode),
                         'last_result_message' => $this->safeMessage($safeMessage),
-                        'remote_effect_completed_at' => $now,
+                        'remote_effect_completed_at' => $completedAt,
                         'updated_at' => $now,
                     ]);
                 if ($updated !== 1) {
