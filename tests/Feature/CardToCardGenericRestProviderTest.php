@@ -179,15 +179,23 @@ final class CardToCardGenericRestProviderTest extends TestCase
             ],
         ];
 
-        foreach ($cases as $case) {
-            Http::fake([
-                'https://bank.example.test/v1/transactions*' => Http::response([
-                    'transactions' => [$case['row']],
-                    'next_cursor' => null,
-                    'protected_payload_marker' => 'raw-provider-secret-envelope',
-                ], 200, ['Content-Type' => 'application/json']),
-            ]);
+        $responses = array_map(
+            static fn (array $case): array => [
+                'transactions' => [$case['row']],
+                'next_cursor' => null,
+                'protected_payload_marker' => 'raw-provider-secret-envelope',
+            ],
+            $cases,
+        );
+        Http::fake(function (Request $request) use (&$responses) {
+            self::assertSame('https://bank.example.test/v1/transactions', $request->url());
+            $response = array_shift($responses);
+            self::assertNotNull($response, 'Unexpected extra Generic REST provider request.');
 
+            return Http::response($response, 200, ['Content-Type' => 'application/json']);
+        });
+
+        foreach ($cases as $case) {
             $provider = $this->provider(
                 resolver: static fn (string $host): array => ['8.8.8.8'],
                 fieldMap: array_replace($this->directFieldMap(), ['transaction_id' => '$.nested.value']),
