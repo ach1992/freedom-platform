@@ -72,7 +72,6 @@ final readonly class ServiceDeliveryAttemptQueueService
                 ->where('service_subscription_id', (int) $service->id)
                 ->where('operation_type', '<>', 'initial_provision')
                 ->whereNotIn('state', self::TERMINAL_MUTATION_STATES)
-                ->lockForUpdate()
                 ->first(['id']);
             if ($activeMutation !== null) {
                 throw new DomainException('Service has an unresolved mutation operation and cannot accept delivery attempts.');
