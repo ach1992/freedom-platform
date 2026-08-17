@@ -267,10 +267,6 @@ final readonly class ServiceMutationExecutor
             $completedAt = $operation->remote_effect_started_at === null ? null : $now;
             $this->setEffectAuthority($connection, $operation);
             try {
-                if ($authoritative && $state === ProvisioningState::Succeeded) {
-                    $this->applySuccessfulLifecycleTransition($connection, $service, $operation, $type, $now);
-                }
-
                 $updated = $connection->table('provisioning_operations')
                     ->where('id', (int) $operation->id)
                     ->where('state', ProvisioningState::Running->value)
@@ -288,6 +284,9 @@ final readonly class ServiceMutationExecutor
                 }
 
                 $next = $this->operationById($connection, (int) $operation->id, true);
+                if ($authoritative && $state === ProvisioningState::Succeeded) {
+                    $this->applySuccessfulLifecycleTransition($connection, $service, $next, $type, $now);
+                }
                 $this->recordEvent($connection, $next, $state->value, $this->resultCode($resultCode));
 
                 return $this->receipt($next, $type, false);
