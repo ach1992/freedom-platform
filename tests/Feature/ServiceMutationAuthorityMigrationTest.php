@@ -46,6 +46,11 @@ final class ServiceMutationAuthorityMigrationTest extends TestCase
         $this->assertStringContainsString('service_mutation_queue_v1', $insertGuard);
         $this->assertStringContainsString('target_remote_identity_generation', $insertGuard);
         $this->assertStringContainsString('target_lifecycle_version', $insertGuard);
+        $this->assertStringContainsString('Initial Provisioning Operation cannot be created with remote-effect evidence.', $insertGuard);
+        $this->assertStringContainsString('BINARY NEW.correlation_id = BINARY service_row.creation_correlation_id', $insertGuard);
+        $this->assertStringContainsString('NEW.route_hold_expires_at IS NOT NULL', $insertGuard);
+        $this->assertStringContainsString('NEW.capacity_reservation_id IS NOT NULL', $insertGuard);
+        $this->assertStringContainsString('NEW.remote_username IS NOT NULL', $insertGuard);
         $this->assertStringContainsString('service_mutation_queue_v1', $serviceGuard);
         $this->assertStringContainsString('remote_deleted_at', $serviceGuard);
         $this->assertStringContainsString("operation_row.state = 'succeeded'", $serviceGuard);
