@@ -38,4 +38,27 @@ final class ServiceMutationExecutorNormalizationTest extends TestCase
         self::assertSame('normalized_panel_result', $method->invoke($executor, 'contains unsafe spaces'));
         self::assertSame('normalized_panel_result', $method->invoke($executor, str_repeat('x', 65)));
     }
+
+    public function test_provider_boundary_preflight_happens_before_remote_effect_claim(): void
+    {
+        $source = file_get_contents((new ReflectionClass(ServiceMutationExecutor::class))->getFileName());
+        self::assertIsString($source);
+
+        $preflight = strpos($source, '$connection = $this->database->connection();');
+        $claim = strpos($source, '$operation = $this->claim($operation);');
+        self::assertIsInt($preflight);
+        self::assertIsInt($claim);
+        self::assertLessThan($claim, $preflight);
+    }
+
+    public function test_stale_provider_boundary_is_fail_closed_without_entering_remote_effect(): void
+    {
+        $source = file_get_contents((new ReflectionClass(ServiceMutationExecutor::class))->getFileName());
+        self::assertIsString($source);
+
+        self::assertStringContainsString('private function markProviderBoundary(object $locator, ServiceMutationType $type): ?object', $source);
+        self::assertStringContainsString("'stale_service_at_provider_boundary'", $source);
+        self::assertStringContainsString('if ($boundaryOperation === null)', $source);
+        self::assertStringContainsString('if ($state !== ProvisioningState::NeedsReview)', $source);
+    }
 }
