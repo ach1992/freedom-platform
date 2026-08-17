@@ -4,6 +4,7 @@ FOR EACH ROW
 BEGIN
     DECLARE identity_unchanged BOOLEAN DEFAULT FALSE;
     DECLARE claim_transition BOOLEAN DEFAULT FALSE;
+    DECLARE boundary_transition BOOLEAN DEFAULT FALSE;
     DECLARE bind_transition BOOLEAN DEFAULT FALSE;
     DECLARE final_transition BOOLEAN DEFAULT FALSE;
     DECLARE recovery_transition BOOLEAN DEFAULT FALSE;
@@ -145,8 +146,29 @@ BEGIN
             AND (NEW.last_result_code <=> OLD.last_result_code)
             AND (NEW.last_result_message <=> OLD.last_result_message)
             AND BINARY NEW.remote_service_id = BINARY OLD.remote_service_id
+            AND OLD.remote_effect_started_at IS NULL
+            AND NEW.remote_effect_started_at IS NULL
+            AND OLD.remote_effect_completed_at IS NULL
+            AND NEW.remote_effect_completed_at IS NULL;
+
+        SET boundary_transition =
+            OLD.state = 'running' AND NEW.state = 'running'
+            AND NEW.state_version = OLD.state_version + 1
+            AND NEW.attempt_count = OLD.attempt_count
+            AND BINARY NEW.effect_fence_key = BINARY OLD.effect_fence_key
+            AND (NEW.route_hold_expires_at <=> OLD.route_hold_expires_at)
+            AND (NEW.route_selection_id <=> OLD.route_selection_id)
+            AND NEW.service_target_id = OLD.service_target_id
+            AND (NEW.capacity_reservation_id <=> OLD.capacity_reservation_id)
+            AND (NEW.capacity_reservation_key <=> OLD.capacity_reservation_key)
+            AND (NEW.remote_username <=> OLD.remote_username)
+            AND (NEW.target_reference <=> OLD.target_reference)
+            AND (NEW.last_result_code <=> OLD.last_result_code)
+            AND (NEW.last_result_message <=> OLD.last_result_message)
+            AND BINARY NEW.remote_service_id = BINARY OLD.remote_service_id
+            AND OLD.remote_effect_started_at IS NULL
             AND NEW.remote_effect_started_at IS NOT NULL
-            AND (OLD.remote_effect_started_at IS NULL OR NEW.remote_effect_started_at = OLD.remote_effect_started_at)
+            AND OLD.remote_effect_completed_at IS NULL
             AND NEW.remote_effect_completed_at IS NULL;
 
         SET final_transition =
@@ -164,11 +186,21 @@ BEGIN
             AND (NEW.target_reference <=> OLD.target_reference)
             AND NEW.last_result_code IS NOT NULL
             AND BINARY NEW.remote_service_id = BINARY OLD.remote_service_id
-            AND NEW.remote_effect_started_at = OLD.remote_effect_started_at
-            AND NEW.remote_effect_completed_at IS NOT NULL;
+            AND (
+                (OLD.remote_effect_started_at IS NULL
+                 AND NEW.remote_effect_started_at IS NULL
+                 AND NEW.remote_effect_completed_at IS NULL
+                 AND NEW.state IN ('retry_scheduled','needs_review','failed_final'))
+                OR
+                (OLD.remote_effect_started_at IS NOT NULL
+                 AND NEW.remote_effect_started_at = OLD.remote_effect_started_at
+                 AND NEW.remote_effect_completed_at IS NOT NULL
+                 AND NEW.state IN ('succeeded','uncertain_remote_result','needs_review','failed_final'))
+            );
     END IF;
 
     IF COALESCE(claim_transition, FALSE) = FALSE
+       AND COALESCE(boundary_transition, FALSE) = FALSE
        AND COALESCE(bind_transition, FALSE) = FALSE
        AND COALESCE(final_transition, FALSE) = FALSE
        AND COALESCE(recovery_transition, FALSE) = FALSE THEN
