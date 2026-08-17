@@ -6,6 +6,7 @@ BEGIN
     DECLARE identity_unchanged BOOLEAN DEFAULT FALSE;
     DECLARE claim_transition BOOLEAN DEFAULT FALSE;
     DECLARE boundary_transition BOOLEAN DEFAULT FALSE;
+    DECLARE stale_rejection_transition BOOLEAN DEFAULT FALSE;
     DECLARE bind_transition BOOLEAN DEFAULT FALSE;
     DECLARE final_transition BOOLEAN DEFAULT FALSE;
     DECLARE recovery_transition BOOLEAN DEFAULT FALSE;
@@ -150,6 +151,27 @@ BEGIN
           AND (OLD.operation_type <> 'activate' OR service_row.lifecycle_state = 'suspended')
         LIMIT 1 FOR UPDATE;
 
+        SET stale_rejection_transition =
+            authoritative_service_id IS NULL
+            AND OLD.state IN ('queued','retry_scheduled') AND NEW.state = 'needs_review'
+            AND NEW.state_version = OLD.state_version + 1
+            AND NEW.attempt_count = OLD.attempt_count
+            AND (NEW.effect_fence_key <=> OLD.effect_fence_key)
+            AND (NEW.route_hold_expires_at <=> OLD.route_hold_expires_at)
+            AND (NEW.route_selection_id <=> OLD.route_selection_id)
+            AND NEW.service_target_id = OLD.service_target_id
+            AND (NEW.capacity_reservation_id <=> OLD.capacity_reservation_id)
+            AND (NEW.capacity_reservation_key <=> OLD.capacity_reservation_key)
+            AND (NEW.remote_username <=> OLD.remote_username)
+            AND (NEW.target_reference <=> OLD.target_reference)
+            AND NEW.last_result_code IS NOT NULL
+            AND NEW.last_result_message IS NOT NULL
+            AND BINARY NEW.remote_service_id = BINARY OLD.remote_service_id
+            AND OLD.remote_effect_started_at IS NULL
+            AND NEW.remote_effect_started_at IS NULL
+            AND OLD.remote_effect_completed_at IS NULL
+            AND NEW.remote_effect_completed_at IS NULL;
+
         SET claim_transition =
             authoritative_service_id IS NOT NULL
             AND OLD.state IN ('queued','retry_scheduled') AND NEW.state = 'running'
@@ -224,6 +246,7 @@ BEGIN
 
     IF COALESCE(claim_transition, FALSE) = FALSE
        AND COALESCE(boundary_transition, FALSE) = FALSE
+       AND COALESCE(stale_rejection_transition, FALSE) = FALSE
        AND COALESCE(bind_transition, FALSE) = FALSE
        AND COALESCE(final_transition, FALSE) = FALSE
        AND COALESCE(recovery_transition, FALSE) = FALSE THEN

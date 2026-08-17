@@ -16,7 +16,8 @@ use Illuminate\Support\Str;
 use RuntimeException;
 
 /**
- * @phpstan-type MutationRecoveryOperation object{id:int|string,operation_key:string,operation_type:string,state:string,state_version:int|string,correlation_id:string,service_target_id:int|string|null,remote_service_id:?string,remote_effect_started_at:?string,updated_at:string,operation_generation:int|string}
+ * @phpstan-type MutationRecoveryOperation object{id:int|string,operation_key:string,operation_type:string,service_subscription_id:int|string,state:string,state_version:int|string,correlation_id:string,service_target_id:int|string|null,remote_service_id:?string,remote_effect_started_at:?string,updated_at:string,operation_generation:int|string,target_remote_identity_generation:int|string,target_lifecycle_version:int|string}
+ * @phpstan-type MutationRecoveryService object{id:int|string,service_target_id:int|string|null,remote_service_id:?string,lifecycle_state:string,lifecycle_version:int|string,remote_identity_generation:int|string,mutation_generation:int|string,remote_deleted_at:?string}
  */
 final readonly class ServiceMutationRecoveryService
 {
@@ -37,20 +38,19 @@ final readonly class ServiceMutationRecoveryService
         }
 
         return $this->database->connection()->transaction(function (Connection $connection) use ($operationPublicId): ProvisioningState {
-            /** @var MutationRecoveryOperation|null $operation */
-            $operation = $connection->table('provisioning_operations')
-                ->where('public_id', $operationPublicId)
-                ->lockForUpdate()
-                ->first([
-                    'id', 'operation_key', 'operation_type', 'state', 'state_version', 'correlation_id',
-                    'service_target_id', 'remote_service_id', 'remote_effect_started_at', 'updated_at', 'operation_generation',
-                ]);
-            if ($operation === null || ServiceMutationType::tryFrom($operation->operation_type) === null) {
-                throw new DomainException('Service mutation operation does not exist.');
-            }
-
+            $operation = $this->operationByPublicId($connection, $operationPublicId);
+            $type = ServiceMutationType::tryFrom($operation->operation_type)
+                ?? throw new DomainException('Service mutation operation does not exist.');
             $state = ProvisioningState::tryFrom($operation->state)
                 ?? throw new RuntimeException('Stored Service mutation state is invalid.');
+
+            if (in_array($state, [ProvisioningState::Queued, ProvisioningState::RetryScheduled], true)) {
+                $service = $this->serviceById($connection, (int) $operation->service_subscription_id);
+                if (! $this->serviceMatchesOperation($service, $operation, $type)) {
+                    return $this->transitionStaleQueued($connection, $operation);
+                }
+            }
+
             if ($state !== ProvisioningState::Running || ! $this->runningAttemptIsStale($operation->updated_at)) {
                 return $state;
             }
@@ -77,6 +77,39 @@ final readonly class ServiceMutationRecoveryService
                 $now,
             );
         }, 3);
+    }
+
+    /**
+     * @param  MutationRecoveryOperation  $operation
+     */
+    private function transitionStaleQueued(Connection $connection, object $operation): ProvisioningState
+    {
+        $nextVersion = (int) $operation->state_version + 1;
+        $now = $this->timestamp();
+        $this->setAuthority($connection, $operation);
+        try {
+            $updated = $connection->table('provisioning_operations')
+                ->where('id', (int) $operation->id)
+                ->whereIn('state', [ProvisioningState::Queued->value, ProvisioningState::RetryScheduled->value])
+                ->where('state_version', (int) $operation->state_version)
+                ->update([
+                    'state' => ProvisioningState::NeedsReview->value,
+                    'state_version' => $nextVersion,
+                    'last_result_code' => 'stale_service_before_claim',
+                    'last_result_message' => 'Service lifecycle or remote identity changed before remote-effect authority could be claimed.',
+                    'updated_at' => $now,
+                ]);
+            if ($updated !== 1) {
+                throw new RuntimeException('Stale Service mutation rejection lost its queued state.');
+            }
+
+            $next = $this->operationById($connection, (int) $operation->id);
+            $this->recordEvent($connection, $next, 'stale_service_before_claim', $now);
+        } finally {
+            $this->clearAuthority($connection);
+        }
+
+        return ProvisioningState::NeedsReview;
     }
 
     /**
@@ -110,33 +143,114 @@ final readonly class ServiceMutationRecoveryService
                 throw new RuntimeException('Interrupted Service mutation recovery lost its running state.');
             }
 
-            /** @var MutationRecoveryOperation|null $next */
-            $next = $connection->table('provisioning_operations')
-                ->where('id', (int) $operation->id)
-                ->first([
-                    'id', 'operation_key', 'operation_type', 'state', 'state_version', 'correlation_id',
-                    'service_target_id', 'remote_service_id', 'remote_effect_started_at', 'updated_at', 'operation_generation',
-                ]);
-            if ($next === null) {
-                throw new RuntimeException('Recovered Service mutation operation disappeared.');
-            }
-
-            $connection->table('provisioning_remote_effect_events')->insert([
-                'provisioning_operation_id' => (int) $next->id,
-                'event_type' => $nextState->value,
-                'state_version' => (int) $next->state_version,
-                'route_selection_id' => null,
-                'service_target_id' => $next->service_target_id === null ? null : (int) $next->service_target_id,
-                'remote_service_id' => $next->remote_service_id,
-                'result_code' => $resultCode,
-                'correlation_id' => $next->correlation_id,
-                'created_at' => $now,
-            ]);
+            $next = $this->operationById($connection, (int) $operation->id);
+            $this->recordEvent($connection, $next, $resultCode, $now);
         } finally {
             $this->clearAuthority($connection);
         }
 
         return $nextState;
+    }
+
+    /** @return MutationRecoveryOperation */
+    private function operationByPublicId(Connection $connection, string $publicId): object
+    {
+        /** @var MutationRecoveryOperation|null $operation */
+        $operation = $connection->table('provisioning_operations')
+            ->where('public_id', $publicId)
+            ->lockForUpdate()
+            ->first($this->operationColumns());
+        if ($operation === null) {
+            throw new DomainException('Service mutation operation does not exist.');
+        }
+
+        return $operation;
+    }
+
+    /** @return MutationRecoveryOperation */
+    private function operationById(Connection $connection, int $id): object
+    {
+        /** @var MutationRecoveryOperation|null $operation */
+        $operation = $connection->table('provisioning_operations')
+            ->where('id', $id)
+            ->lockForUpdate()
+            ->first($this->operationColumns());
+        if ($operation === null) {
+            throw new RuntimeException('Recovered Service mutation operation disappeared.');
+        }
+
+        return $operation;
+    }
+
+    /** @return MutationRecoveryService */
+    private function serviceById(Connection $connection, int $id): object
+    {
+        /** @var MutationRecoveryService|null $service */
+        $service = $connection->table('service_subscriptions')
+            ->where('id', $id)
+            ->lockForUpdate()
+            ->first([
+                'id', 'service_target_id', 'remote_service_id', 'lifecycle_state', 'lifecycle_version',
+                'remote_identity_generation', 'mutation_generation', 'remote_deleted_at',
+            ]);
+        if ($service === null) {
+            throw new RuntimeException('Service Subscription disappeared during mutation recovery.');
+        }
+
+        return $service;
+    }
+
+    /**
+     * @param  MutationRecoveryService  $service
+     * @param  MutationRecoveryOperation  $operation
+     */
+    private function serviceMatchesOperation(object $service, object $operation, ServiceMutationType $type): bool
+    {
+        if ((int) $service->mutation_generation !== (int) $operation->operation_generation
+            || (int) $service->remote_identity_generation !== (int) $operation->target_remote_identity_generation
+            || (int) $service->lifecycle_version !== (int) $operation->target_lifecycle_version
+            || $service->remote_deleted_at !== null
+            || $service->lifecycle_state === 'retired'
+            || (int) $service->service_target_id !== (int) $operation->service_target_id
+            || ! is_string($service->remote_service_id)
+            || ! is_string($operation->remote_service_id)
+            || ! hash_equals($service->remote_service_id, $operation->remote_service_id)) {
+            return false;
+        }
+
+        return match ($type) {
+            ServiceMutationType::Suspend => $service->lifecycle_state === 'active',
+            ServiceMutationType::Activate => $service->lifecycle_state === 'suspended',
+            ServiceMutationType::Delete,
+            ServiceMutationType::ResetUsage,
+            ServiceMutationType::RotateSubscriptionLink => in_array($service->lifecycle_state, ['active', 'suspended'], true),
+        };
+    }
+
+    /** @param MutationRecoveryOperation $operation */
+    private function recordEvent(Connection $connection, object $operation, string $resultCode, string $createdAt): void
+    {
+        $connection->table('provisioning_remote_effect_events')->insert([
+            'provisioning_operation_id' => (int) $operation->id,
+            'event_type' => $operation->state,
+            'state_version' => (int) $operation->state_version,
+            'route_selection_id' => null,
+            'service_target_id' => $operation->service_target_id === null ? null : (int) $operation->service_target_id,
+            'remote_service_id' => $operation->remote_service_id,
+            'result_code' => $resultCode,
+            'correlation_id' => $operation->correlation_id,
+            'created_at' => $createdAt,
+        ]);
+    }
+
+    /** @return list<string> */
+    private function operationColumns(): array
+    {
+        return [
+            'id', 'operation_key', 'operation_type', 'service_subscription_id', 'state', 'state_version', 'correlation_id',
+            'service_target_id', 'remote_service_id', 'remote_effect_started_at', 'updated_at', 'operation_generation',
+            'target_remote_identity_generation', 'target_lifecycle_version',
+        ];
     }
 
     private function runningAttemptIsStale(string $updatedAt): bool

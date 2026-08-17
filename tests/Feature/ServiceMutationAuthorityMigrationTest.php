@@ -37,6 +37,9 @@ final class ServiceMutationAuthorityMigrationTest extends TestCase
 
         $this->assertStringContainsString('initial_remote_effect_v1', $operationGuard);
         $this->assertStringContainsString('recovery_transition', $operationGuard);
+        $this->assertStringContainsString('stale_rejection_transition', $operationGuard);
+        $this->assertStringContainsString('authoritative_service_id IS NULL', $operationGuard);
+        $this->assertStringContainsString("OLD.state IN ('queued','retry_scheduled') AND NEW.state = 'needs_review'", $operationGuard);
         $this->assertStringContainsString('service_mutation_effect_v1', $operationGuard);
         $this->assertStringContainsString('BINARY NEW.operation_key = BINARY OLD.operation_key', $operationGuard);
         $this->assertStringContainsString('BINARY NEW.operation_type = BINARY OLD.operation_type', $operationGuard);

@@ -74,6 +74,16 @@ final class ServiceMutationOutboxContractTest extends TestCase
         self::assertStringNotContainsString('UncertainRemoteResult->value => ProvisioningState::RetryScheduled', $source);
     }
 
+    public function test_stale_queued_snapshot_is_rejected_to_review_before_claim(): void
+    {
+        $source = $this->classSource(ServiceMutationRecoveryService::class);
+
+        self::assertStringContainsString('transitionStaleQueued', $source);
+        self::assertStringContainsString('stale_service_before_claim', $source);
+        self::assertStringContainsString('ProvisioningState::NeedsReview', $source);
+        self::assertStringContainsString('$this->serviceMatchesOperation($service, $operation, $type)', $source);
+    }
+
     public function test_foundation_router_registers_service_mutation_handler(): void
     {
         $source = $this->classSource(FoundationServiceProvider::class);

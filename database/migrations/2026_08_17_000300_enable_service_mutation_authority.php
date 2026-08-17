@@ -65,20 +65,32 @@ return new class extends Migration
             'service_subscriptions_lifecycle_state_chk',
         ] as $constraint) {
             if ($this->constraintExists('service_subscriptions', $constraint)) {
-                DB::statement('ALTER TABLE service_subscriptions DROP CONSTRAINT '.$constraint);
+                DB::statement(match ($constraint) {
+                    'service_subscriptions_mutation_lifecycle_chk' => 'ALTER TABLE service_subscriptions DROP CONSTRAINT service_subscriptions_mutation_lifecycle_chk',
+                    'service_subscriptions_remote_identity_generation_chk' => 'ALTER TABLE service_subscriptions DROP CONSTRAINT service_subscriptions_remote_identity_generation_chk',
+                    'service_subscriptions_lifecycle_version_chk' => 'ALTER TABLE service_subscriptions DROP CONSTRAINT service_subscriptions_lifecycle_version_chk',
+                    'service_subscriptions_lifecycle_state_chk' => 'ALTER TABLE service_subscriptions DROP CONSTRAINT service_subscriptions_lifecycle_state_chk',
+                });
             }
         }
 
         foreach (['provisioning_operations_mutation_shape_chk', 'provisioning_operations_generation_chk', 'provisioning_operations_type_chk'] as $constraint) {
             if ($this->constraintExists('provisioning_operations', $constraint)) {
-                DB::statement('ALTER TABLE provisioning_operations DROP CONSTRAINT '.$constraint);
+                DB::statement(match ($constraint) {
+                    'provisioning_operations_mutation_shape_chk' => 'ALTER TABLE provisioning_operations DROP CONSTRAINT provisioning_operations_mutation_shape_chk',
+                    'provisioning_operations_generation_chk' => 'ALTER TABLE provisioning_operations DROP CONSTRAINT provisioning_operations_generation_chk',
+                    'provisioning_operations_type_chk' => 'ALTER TABLE provisioning_operations DROP CONSTRAINT provisioning_operations_type_chk',
+                });
             }
         }
         DB::statement("ALTER TABLE provisioning_operations ADD CONSTRAINT provisioning_operations_type_chk CHECK (`operation_type` = 'initial_provision')");
 
         foreach (['provisioning_operations_service_request_unique', 'provisioning_operations_service_generation_unique'] as $index) {
             if ($this->indexExists('provisioning_operations', $index)) {
-                DB::statement('ALTER TABLE provisioning_operations DROP INDEX '.$index);
+                DB::statement(match ($index) {
+                    'provisioning_operations_service_request_unique' => 'ALTER TABLE provisioning_operations DROP INDEX provisioning_operations_service_request_unique',
+                    'provisioning_operations_service_generation_unique' => 'ALTER TABLE provisioning_operations DROP INDEX provisioning_operations_service_generation_unique',
+                });
             }
         }
         if (! $this->indexExists('provisioning_operations', 'provisioning_operations_item_type_unique')) {
@@ -229,7 +241,10 @@ SQL);
     {
         foreach (['provisioning_operations_mutation_shape_chk', 'provisioning_operations_type_chk'] as $constraint) {
             if ($this->constraintExists('provisioning_operations', $constraint)) {
-                DB::statement('ALTER TABLE provisioning_operations DROP CONSTRAINT '.$constraint);
+                DB::statement(match ($constraint) {
+                    'provisioning_operations_mutation_shape_chk' => 'ALTER TABLE provisioning_operations DROP CONSTRAINT provisioning_operations_mutation_shape_chk',
+                    'provisioning_operations_type_chk' => 'ALTER TABLE provisioning_operations DROP CONSTRAINT provisioning_operations_type_chk',
+                });
             }
         }
         DB::statement("ALTER TABLE provisioning_operations ADD CONSTRAINT provisioning_operations_type_chk CHECK (`operation_type` IN ('initial_provision','reset_usage','suspend','activate','delete','rotate_subscription_link'))");
@@ -274,7 +289,12 @@ SQL);
             'service_subscriptions_lifecycle_state_chk',
         ] as $constraint) {
             if ($this->constraintExists('service_subscriptions', $constraint)) {
-                DB::statement('ALTER TABLE service_subscriptions DROP CONSTRAINT '.$constraint);
+                DB::statement(match ($constraint) {
+                    'service_subscriptions_mutation_lifecycle_chk' => 'ALTER TABLE service_subscriptions DROP CONSTRAINT service_subscriptions_mutation_lifecycle_chk',
+                    'service_subscriptions_remote_identity_generation_chk' => 'ALTER TABLE service_subscriptions DROP CONSTRAINT service_subscriptions_remote_identity_generation_chk',
+                    'service_subscriptions_lifecycle_version_chk' => 'ALTER TABLE service_subscriptions DROP CONSTRAINT service_subscriptions_lifecycle_version_chk',
+                    'service_subscriptions_lifecycle_state_chk' => 'ALTER TABLE service_subscriptions DROP CONSTRAINT service_subscriptions_lifecycle_state_chk',
+                });
             }
         }
 
