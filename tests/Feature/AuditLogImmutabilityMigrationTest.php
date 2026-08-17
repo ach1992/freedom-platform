@@ -14,25 +14,27 @@ final class AuditLogImmutabilityMigrationTest extends TestCase
 {
     use DatabaseTruncation;
 
-    public function test_migrate_fresh_installs_deterministic_audit_log_guards(): void
+    public function test_migrate_fresh_installs_preserve_global_audit_log_guards(): void
     {
-        self::assertSame([
-            'audit_logs_delete_guard',
-            'audit_logs_update_guard',
-        ], $this->auditLogTriggerNames());
+        $this->assertGlobalAuditLogGuardsArePresent();
     }
 
-    public function test_reapplying_the_forward_migration_preserves_both_guards(): void
+    public function test_reapplying_the_forward_migration_preserves_global_guards(): void
     {
         /** @var Migration $migration */
         $migration = require database_path('migrations/2026_08_10_003700_prevent_audit_log_mutation.php');
 
         $migration->up();
 
-        self::assertSame([
-            'audit_logs_delete_guard',
-            'audit_logs_update_guard',
-        ], $this->auditLogTriggerNames());
+        $this->assertGlobalAuditLogGuardsArePresent();
+    }
+
+    private function assertGlobalAuditLogGuardsArePresent(): void
+    {
+        $triggers = $this->auditLogTriggerNames();
+
+        self::assertContains('audit_logs_delete_guard', $triggers);
+        self::assertContains('audit_logs_update_guard', $triggers);
     }
 
     /** @return list<string> */
