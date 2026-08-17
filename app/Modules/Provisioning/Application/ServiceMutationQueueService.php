@@ -7,6 +7,8 @@ namespace App\Modules\Provisioning\Application;
 use App\Modules\Provisioning\Domain\ProvisioningState;
 use App\Modules\Provisioning\Domain\ServiceMutationType;
 use App\Shared\Application\Clock;
+use App\Shared\Application\OutboxPublisher;
+use App\Shared\Application\SafeOutboxPayload;
 use DomainException;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
@@ -21,15 +23,22 @@ final readonly class ServiceMutationQueueService
 {
     private const QUEUE_AUTHORITY = 'service_mutation_queue_v1';
 
+    public const OUTBOX_EVENT_TYPE = 'provisioning.service_mutation.requested';
+
+    public const OUTBOX_AGGREGATE_TYPE = 'provisioning_operation';
+
+    public const OUTBOX_EVENT_KEY_PREFIX = 'provisioning-service-mutation-requested:';
+
     /** @var list<string> */
     private const TERMINAL_STATES = ['succeeded', 'failed_final', 'compensated'];
 
     public function __construct(
         private DatabaseManager $database,
         private Clock $clock,
+        private OutboxPublisher $outbox,
     ) {}
 
-    /** @requirement SVC-004 PRV-002 PRV-003 DAT-003 SEC-002 SEC-008 QUA-004 */
+    /** @requirement SVC-004 PRV-002 PRV-003 ARCH-004 DAT-003 SEC-002 SEC-008 QUA-004 */
     public function queue(
         string $servicePublicId,
         ServiceMutationType $type,
@@ -121,6 +130,18 @@ final readonly class ServiceMutationQueueService
                 if ($operation === null) {
                     throw new RuntimeException('Service mutation operation disappeared after creation.');
                 }
+
+                $this->outbox->publish(
+                    (string) Str::uuid(),
+                    self::OUTBOX_EVENT_KEY_PREFIX.$operation->public_id,
+                    self::OUTBOX_EVENT_TYPE,
+                    self::OUTBOX_AGGREGATE_TYPE,
+                    $operation->public_id,
+                    new SafeOutboxPayload([
+                        'provisioning_operation_public_id' => $operation->public_id,
+                    ]),
+                    $correlationId,
+                );
 
                 return $this->receipt($service, $operation, false);
             } finally {
