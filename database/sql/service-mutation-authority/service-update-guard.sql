@@ -3,7 +3,8 @@ BEFORE UPDATE ON service_subscriptions
 FOR EACH ROW
 BEGIN
     DECLARE unresolved_mutations INT DEFAULT 0;
-    DECLARE delete_operation_count INT DEFAULT 0;
+    DECLARE effect_operation_count INT DEFAULT 0;
+    DECLARE effect_operation_type VARCHAR(64) DEFAULT NULL;
     DECLARE identity_unchanged BOOLEAN DEFAULT FALSE;
     DECLARE remote_binding_unchanged BOOLEAN DEFAULT FALSE;
 
@@ -30,6 +31,9 @@ BEGIN
            OR NEW.service_target_id IS NULL
            OR NEW.remote_service_id IS NULL
            OR NEW.provisioned_at IS NULL
+           OR NEW.lifecycle_state <> OLD.lifecycle_state
+           OR NEW.lifecycle_version <> OLD.lifecycle_version
+           OR NEW.remote_identity_generation <> OLD.remote_identity_generation
            OR NEW.mutation_generation <> OLD.mutation_generation
            OR NOT (NEW.remote_deleted_at <=> OLD.remote_deleted_at)
            OR (OLD.route_selection_id IS NOT NULL AND NEW.route_selection_id <> OLD.route_selection_id)
@@ -47,8 +51,12 @@ BEGIN
 
         IF COALESCE(identity_unchanged, FALSE) = FALSE
            OR COALESCE(remote_binding_unchanged, FALSE) = FALSE
+           OR NEW.lifecycle_state <> OLD.lifecycle_state
+           OR NEW.lifecycle_version <> OLD.lifecycle_version
+           OR NEW.remote_identity_generation <> OLD.remote_identity_generation
            OR NOT (NEW.remote_deleted_at <=> OLD.remote_deleted_at)
            OR OLD.remote_deleted_at IS NOT NULL
+           OR OLD.lifecycle_state = 'retired'
            OR NEW.mutation_generation <> OLD.mutation_generation + 1
            OR NEW.mutation_generation <> COALESCE(@app_service_mutation_generation, 0)
            OR COALESCE(@app_service_mutation_request_hash, '') = ''
@@ -57,23 +65,54 @@ BEGIN
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service mutation generation transition is not allowed.';
         END IF;
     ELSEIF COALESCE(@app_provisioning_authority, '') = 'service_mutation_effect_v1' THEN
-        SELECT COUNT(*) INTO delete_operation_count
+        SELECT COUNT(*), MAX(operation_row.operation_type)
+        INTO effect_operation_count, effect_operation_type
         FROM provisioning_operations operation_row
         WHERE operation_row.service_subscription_id = OLD.id
-          AND operation_row.operation_type = 'delete'
           AND operation_row.operation_generation = OLD.mutation_generation
+          AND operation_row.target_remote_identity_generation = OLD.remote_identity_generation
+          AND operation_row.target_lifecycle_version = OLD.lifecycle_version
           AND operation_row.state = 'running'
+          AND operation_row.service_target_id = OLD.service_target_id
+          AND BINARY operation_row.remote_service_id = BINARY OLD.remote_service_id
           AND BINARY operation_row.operation_key = BINARY COALESCE(@app_provisioning_operation_key, '')
           AND BINARY operation_row.correlation_id = BINARY COALESCE(@app_provisioning_correlation_id, '');
 
         IF COALESCE(identity_unchanged, FALSE) = FALSE
            OR COALESCE(remote_binding_unchanged, FALSE) = FALSE
+           OR NEW.remote_identity_generation <> OLD.remote_identity_generation
            OR NEW.mutation_generation <> OLD.mutation_generation
            OR NEW.mutation_generation <> COALESCE(@app_service_mutation_generation, 0)
-           OR OLD.remote_deleted_at IS NOT NULL
-           OR NEW.remote_deleted_at IS NULL
-           OR delete_operation_count <> 1 THEN
-            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service remote-delete tombstone transition is not allowed.';
+           OR effect_operation_count <> 1 THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service mutation lifecycle authority is invalid.';
+        END IF;
+
+        IF effect_operation_type = 'suspend' THEN
+            IF OLD.lifecycle_state <> 'active'
+               OR NEW.lifecycle_state <> 'suspended'
+               OR NEW.lifecycle_version <> OLD.lifecycle_version + 1
+               OR OLD.remote_deleted_at IS NOT NULL
+               OR NEW.remote_deleted_at IS NOT NULL THEN
+                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service suspend lifecycle transition is not allowed.';
+            END IF;
+        ELSEIF effect_operation_type = 'activate' THEN
+            IF OLD.lifecycle_state <> 'suspended'
+               OR NEW.lifecycle_state <> 'active'
+               OR NEW.lifecycle_version <> OLD.lifecycle_version + 1
+               OR OLD.remote_deleted_at IS NOT NULL
+               OR NEW.remote_deleted_at IS NOT NULL THEN
+                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service activate lifecycle transition is not allowed.';
+            END IF;
+        ELSEIF effect_operation_type = 'delete' THEN
+            IF OLD.lifecycle_state NOT IN ('active','suspended')
+               OR NEW.lifecycle_state <> 'retired'
+               OR NEW.lifecycle_version <> OLD.lifecycle_version + 1
+               OR OLD.remote_deleted_at IS NOT NULL
+               OR NEW.remote_deleted_at IS NULL THEN
+                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service delete retirement transition is not allowed.';
+            END IF;
+        ELSE
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'This Service mutation cannot change local lifecycle state.';
         END IF;
     ELSE
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service Subscription mutation authority is invalid.';
