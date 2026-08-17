@@ -16,8 +16,10 @@ return new class extends Migration
             throw new RuntimeException('Initial provisioning exact-text authority must exist before Service mutation exact-text authority is expanded.');
         }
 
-        $this->replaceConstraint(<<<'SQL'
-CHECK (
+        $this->dropConstraintIfPresent();
+        DB::statement(<<<'SQL'
+ALTER TABLE provisioning_operations
+ADD CONSTRAINT provisioning_operations_provisioning_exact_text_chk CHECK (
     COLLATION(`operation_key`) <> 'utf8mb4_bin'
     OR (
         BINARY `operation_type` IN (
@@ -37,8 +39,10 @@ SQL);
 
     public function down(): void
     {
-        $this->replaceConstraint(<<<'SQL'
-CHECK (
+        $this->dropConstraintIfPresent();
+        DB::statement(<<<'SQL'
+ALTER TABLE provisioning_operations
+ADD CONSTRAINT provisioning_operations_provisioning_exact_text_chk CHECK (
     COLLATION(`operation_key`) <> 'utf8mb4_bin'
     OR (
         BINARY `operation_type` = BINARY 'initial_provision'
@@ -53,13 +57,11 @@ CHECK (
 SQL);
     }
 
-    private function replaceConstraint(string $definition): void
+    private function dropConstraintIfPresent(): void
     {
         if ($this->constraintExists(self::CONSTRAINT)) {
             DB::statement('ALTER TABLE provisioning_operations DROP CONSTRAINT provisioning_operations_provisioning_exact_text_chk');
         }
-
-        DB::statement('ALTER TABLE provisioning_operations ADD CONSTRAINT provisioning_operations_provisioning_exact_text_chk '.$definition);
     }
 
     private function constraintExists(string $constraint): bool
