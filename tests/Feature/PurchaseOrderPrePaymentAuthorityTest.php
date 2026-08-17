@@ -122,9 +122,16 @@ final class PurchaseOrderPrePaymentAuthorityTest extends TestCase
         self::assertSame(1, DB::table('audit_logs')->where('action', 'order.purchase.paid')->count());
     }
 
-    public function test_one_quote_cannot_produce_two_authoritative_purchase_settlements(): void
+    public function test_one_quote_preserves_multiple_authoritative_settlement_facts_but_one_order_binding_wins(): void
     {
         [$userId, $quotePublicId, $methodCode, $eligibilityPublicId] = $this->preparePurchaseQuote('one-capture');
+        $orders = $this->app->make(PurchaseOrderService::class);
+        $opened = $orders->openFromQuote(
+            $quotePublicId,
+            $userId,
+            $this->purchaseOrderCorrelation('open-one-capture'),
+        );
+
         $payments = $this->app->make(PurchasePaymentIntentService::class);
         $first = $payments->create(
             'purchase.order.intent.one-capture.first',
@@ -147,18 +154,37 @@ final class PurchaseOrderPrePaymentAuthorityTest extends TestCase
             'updated_at' => $this->purchaseOrderTimestamp(),
         ]);
 
-        $this->captureIntent($first->intentPublicId, $methodCode, 'one-capture-first');
+        $firstSettlement = $this->captureIntent($first->intentPublicId, $methodCode, 'one-capture-first');
+        $secondSettlement = $this->captureIntent($second->intentPublicId, $methodCode, 'one-capture-second');
+
+        $paid = $orders->createFromSettlement(
+            $firstSettlement->settlementPublicId,
+            $this->purchaseOrderCorrelation('order-one-capture-first'),
+        );
+        self::assertSame($opened->orderId, $paid->orderId);
+        self::assertSame(OrderState::Paid, $paid->state);
 
         try {
-            $this->captureIntent($second->intentPublicId, $methodCode, 'one-capture-second');
-            self::fail('Expected the second captured settlement for one Quote to fail closed.');
-        } catch (QueryException) {
-            self::assertTrue(true);
+            $orders->createFromSettlement(
+                $secondSettlement->settlementPublicId,
+                $this->purchaseOrderCorrelation('order-one-capture-second'),
+            );
+            self::fail('A second settlement fact must not rebind the stable purchase Order.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('Purchase Order already has conflicting financial or lifecycle authority.', $exception->getMessage());
         }
 
         $quoteId = (int) DB::table('quotes')->where('public_id', $quotePublicId)->value('id');
-        self::assertSame(1, DB::table('purchase_settlements')->where('source_quote_id', $quoteId)->count());
-        self::assertNotSame('captured', DB::table('payment_intents')->where('public_id', $second->intentPublicId)->value('state'));
+        self::assertSame(2, DB::table('purchase_settlements')->where('source_quote_id', $quoteId)->count());
+        self::assertSame('captured', DB::table('payment_intents')->where('public_id', $first->intentPublicId)->value('state'));
+        self::assertSame('captured', DB::table('payment_intents')->where('public_id', $second->intentPublicId)->value('state'));
+        self::assertSame(1, DB::table('orders')->where('source_quote_id', $quoteId)->count());
+
+        $order = DB::table('orders')->where('id', $opened->orderId)->first();
+        self::assertNotNull($order);
+        self::assertSame(OrderState::Paid->value, $order->state);
+        self::assertSame(1, (int) $order->state_version);
+        self::assertSame($firstSettlement->settlementId, (int) $order->purchase_settlement_id);
     }
 
     public function test_database_rejects_forged_pre_payment_order_financial_authority_and_cross_user_quote_binding(): void
