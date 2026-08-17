@@ -26,17 +26,22 @@ final class ServiceLifecycleCommandContextTest extends TestCase
         self::assertSame(hash('sha256', 'request-service-command-0001'), $context->requestHash());
     }
 
-    public function test_context_rejects_control_characters_before_authority_creation(): void
+    public function test_context_rejects_all_ascii_control_characters_before_authority_creation(): void
     {
-        $this->expectException(InvalidArgumentException::class);
-
-        new ServiceLifecycleCommandContext(
-            'request-service-command-0002',
-            'correlation-service-command-0002',
-            'user_requested',
-            "unsafe\x00reason",
-            actorUserId: 42,
-        );
+        foreach ([...range(0, 31), 127] as $codePoint) {
+            try {
+                new ServiceLifecycleCommandContext(
+                    'request-service-command-0002',
+                    'correlation-service-command-0002',
+                    'user_requested',
+                    'unsafe'.chr($codePoint).'reason',
+                    actorUserId: 42,
+                );
+                self::fail('ASCII control character '.$codePoint.' must be rejected.');
+            } catch (InvalidArgumentException $exception) {
+                self::assertSame('Service lifecycle reason is invalid.', $exception->getMessage());
+            }
+        }
     }
 
     public function test_context_rejects_ambiguous_actor_identity(): void

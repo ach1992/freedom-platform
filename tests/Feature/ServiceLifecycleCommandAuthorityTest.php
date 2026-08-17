@@ -108,6 +108,61 @@ final class ServiceLifecycleCommandAuthorityTest extends TestCase
             ->count());
     }
 
+    public function test_request_fingerprint_replay_scope_is_per_service(): void
+    {
+        $firstScenario = $this->scenario('request-scope-first');
+        $secondScenario = $this->scenario('request-scope-second');
+        $requestKey = 'request-lifecycle-shared-scope-0001';
+
+        $firstContext = new ServiceLifecycleCommandContext(
+            $requestKey,
+            'correlation-lifecycle-shared-first-0001',
+            'user_requested',
+            'User requested this Service lifecycle action.',
+            actorUserId: $firstScenario['user_id'],
+        );
+        $secondContext = new ServiceLifecycleCommandContext(
+            $requestKey,
+            'correlation-lifecycle-shared-second-0001',
+            'user_requested',
+            'User requested this Service lifecycle action.',
+            actorUserId: $secondScenario['user_id'],
+        );
+
+        $first = $this->commands()->execute(
+            $firstScenario['service_public_id'],
+            ServiceMutationType::ResetUsage,
+            $firstContext,
+        );
+        $second = $this->commands()->execute(
+            $secondScenario['service_public_id'],
+            ServiceMutationType::ResetUsage,
+            $secondContext,
+        );
+
+        self::assertNotSame($first->mutation->operationPublicId, $second->mutation->operationPublicId);
+        self::assertNotSame($first->auditLogId, $second->auditLogId);
+        self::assertSame(2, DB::table('audit_logs')
+            ->where('action', ServiceLifecycleCommandAudit::ACTION)
+            ->where('request_fingerprint', hash('sha256', $requestKey))
+            ->count());
+        self::assertTrue(DB::table('audit_logs')
+            ->where('action', ServiceLifecycleCommandAudit::ACTION)
+            ->where('request_fingerprint', hash('sha256', $requestKey))
+            ->where('target_type', 'service_subscription')
+            ->where('target_id', $firstScenario['service_public_id'])
+            ->exists());
+        self::assertTrue(DB::table('audit_logs')
+            ->where('action', ServiceLifecycleCommandAudit::ACTION)
+            ->where('request_fingerprint', hash('sha256', $requestKey))
+            ->where('target_type', 'service_subscription')
+            ->where('target_id', $secondScenario['service_public_id'])
+            ->exists());
+        self::assertSame(2, DB::table('outbox_messages')
+            ->where('event_type', ServiceMutationQueueService::OUTBOX_EVENT_TYPE)
+            ->count());
+    }
+
     public function test_cross_user_command_is_rejected_before_mutation_or_audit_authority(): void
     {
         $scenario = $this->scenario('cross-user');

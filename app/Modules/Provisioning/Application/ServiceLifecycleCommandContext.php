@@ -31,7 +31,7 @@ final readonly class ServiceLifecycleCommandContext
         }
 
         if (trim($reason) === '' || mb_strlen($reason) > 1000
-            || preg_match('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/', $reason) === 1) {
+            || preg_match('/[\x00-\x1F\x7F]/', $reason) === 1) {
             throw new InvalidArgumentException('Service lifecycle reason is invalid.');
         }
 
