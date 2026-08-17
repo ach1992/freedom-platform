@@ -327,22 +327,32 @@ namespace Tests\Feature {
             self::assertSame(1, DB::table('outbox_messages')->where('event_type', 'provisioning.initial.requested')->count());
         }
 
-        public function test_migration_up_repairs_partial_guard_state_and_is_reentrant(): void
+        public function test_migration_up_repairs_partial_guard_state_and_preserves_successor_order_authority_on_reentry(): void
         {
             /** @var Migration $migration */
             $migration = require database_path('migrations/2026_08_14_001162_create_provisioning_queue_authority.php');
 
             try {
                 DB::unprepared('DROP TRIGGER IF EXISTS service_subscriptions_insert_guard');
-                DB::statement('ALTER TABLE orders DROP CONSTRAINT orders_purchase_shape_chk');
+                self::assertSame(0, $this->constraintCount('orders', 'orders_purchase_shape_chk'));
 
                 $migration->up();
                 $migration->up();
 
                 self::assertSame(1, $this->triggerCount('service_subscriptions_insert_guard'));
                 self::assertSame(1, $this->triggerCount('orders_update_guard'));
-                self::assertSame(1, $this->constraintCount('orders', 'orders_purchase_shape_chk'));
+                self::assertSame(0, $this->constraintCount('orders', 'orders_purchase_shape_chk'));
+                self::assertSame(1, $this->constraintCount('orders', 'orders_purchase_quote_identity_chk'));
+                self::assertSame(1, $this->constraintCount('orders', 'orders_purchase_financial_shape_chk'));
+                self::assertSame(1, $this->constraintCount('orders', 'orders_purchase_captured_shape_chk'));
                 self::assertSame(1, $this->constraintCount('provisioning_operations', 'provisioning_operations_state_chk'));
+
+                $prePaymentGuard = DB::selectOne(
+                    'SELECT COUNT(*) AS aggregate FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = DATABASE() AND TRIGGER_NAME = ? AND LOCATE(?, ACTION_STATEMENT) > 0',
+                    ['orders_update_guard', 'Only pre-payment/v0 to paid/v1 or paid/v1 to provisioning_queued/v2'],
+                );
+                self::assertNotNull($prePaymentGuard);
+                self::assertSame(1, (int) $prePaymentGuard->aggregate);
             } finally {
                 $migration->up();
             }

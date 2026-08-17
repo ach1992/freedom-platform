@@ -12,6 +12,8 @@ return new class extends Migration
     /** @requirement BUY-001 PAY-002 PAY-003 PRV-002 PRV-003 ARCH-003 ARCH-004 DAT-002 DAT-003 DAT-004 SEC-002 SEC-008 QUA-001 QUA-004 */
     public function up(): void
     {
+        $restoreSuccessorOrderAuthority = $this->splitPrePaymentOrderAuthorityReady();
+
         // MariaDB DDL commits per statement. Every successful/restartable boundary before the
         // final activation migration must remain fail-closed for new provisioning authority.
         $this->restoreOriginalOrderHistoryGuard();
@@ -80,7 +82,9 @@ return new class extends Migration
         $this->ensureConstraint('provisioning_operation_histories', 'provisioning_operation_history_actor_chk', "CHECK (`actor_type` IN ('system','customer','agent','administrator'))");
         $this->ensureConstraint('provisioning_operation_histories', 'provisioning_operation_history_version_chk', 'CHECK (`to_version` >= 1 AND (`from_version` IS NULL OR `from_version` >= 1))');
 
-        $this->replaceOrderPurchaseShapeConstraint(true);
+        if (! $restoreSuccessorOrderAuthority) {
+            $this->replaceOrderPurchaseShapeConstraint(true);
+        }
         $this->createProvisioningInitialHistoryTrigger();
         $this->replaceOrderHistoryGuard();
         $this->createProvisioningHistoryGuard();
@@ -94,6 +98,10 @@ return new class extends Migration
             $this->replaceOrderUpdateGuard();
             // Service creation is the last enabling statement so a crash before it remains closed.
             $this->createServiceInsertGuard();
+        }
+
+        if ($restoreSuccessorOrderAuthority && $this->financialInvalidationAuthorityReady()) {
+            $this->restoreRecordedPrePaymentOrderAuthority();
         }
     }
 
@@ -141,6 +149,38 @@ return new class extends Migration
         );
 
         return $row !== null && (int) $row->aggregate === 1;
+    }
+
+    private function splitPrePaymentOrderAuthorityReady(): bool
+    {
+        return $this->constraintExists('orders', 'orders_purchase_quote_identity_chk')
+            && $this->constraintExists('orders', 'orders_purchase_financial_shape_chk')
+            && $this->constraintExists('orders', 'orders_purchase_captured_shape_chk');
+    }
+
+    private function restoreRecordedPrePaymentOrderAuthority(): void
+    {
+        foreach ([
+            '2026_08_17_000100_reconcile_pre_payment_order_authority.php',
+            '2026_08_17_000101_split_pre_payment_order_shape_constraints.php',
+            '2026_08_17_000102_harden_purchase_order_insert_lifecycle_authority.php',
+        ] as $file) {
+            $migrationName = substr($file, 0, -4);
+            if (! DB::table('migrations')->where('migration', $migrationName)->exists()) {
+                continue;
+            }
+
+            $migration = require __DIR__.'/'.$file;
+            if (! is_object($migration) || ! method_exists($migration, 'up')) {
+                throw new RuntimeException('Recorded pre-payment Order authority cannot be restored after provisioning re-entry.');
+            }
+            $migration->up();
+        }
+
+        if (! $this->splitPrePaymentOrderAuthorityReady()
+            || $this->constraintExists('orders', 'orders_purchase_shape_chk')) {
+            throw new RuntimeException('Provisioning re-entry did not preserve successor pre-payment Order authority.');
+        }
     }
 
     private function financialInvalidationAuthorityReady(): bool
