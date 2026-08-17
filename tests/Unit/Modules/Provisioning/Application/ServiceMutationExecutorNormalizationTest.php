@@ -8,6 +8,7 @@ use App\Modules\Provisioning\Application\ServiceMutationExecutor;
 use App\Modules\Provisioning\Application\ServiceMutationQueueService;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
+use RuntimeException;
 
 final class ServiceMutationExecutorNormalizationTest extends TestCase
 {
@@ -42,8 +43,7 @@ final class ServiceMutationExecutorNormalizationTest extends TestCase
 
     public function test_provider_boundary_preflight_happens_before_remote_effect_claim(): void
     {
-        $source = file_get_contents((new ReflectionClass(ServiceMutationExecutor::class))->getFileName());
-        self::assertIsString($source);
+        $source = $this->classSource(ServiceMutationExecutor::class);
 
         $preflight = strpos($source, '$connection = $this->database->connection();');
         $claim = strpos($source, '$operation = $this->claim($operation);');
@@ -54,8 +54,7 @@ final class ServiceMutationExecutorNormalizationTest extends TestCase
 
     public function test_stale_provider_boundary_is_fail_closed_without_entering_remote_effect(): void
     {
-        $source = file_get_contents((new ReflectionClass(ServiceMutationExecutor::class))->getFileName());
-        self::assertIsString($source);
+        $source = $this->classSource(ServiceMutationExecutor::class);
 
         self::assertStringContainsString('private function markProviderBoundary(object $locator, ServiceMutationType $type): ?object', $source);
         self::assertStringContainsString("'stale_service_at_provider_boundary'", $source);
@@ -65,8 +64,7 @@ final class ServiceMutationExecutorNormalizationTest extends TestCase
 
     public function test_provider_outcome_mapping_is_explicit_for_terminal_and_uncertain_failures(): void
     {
-        $source = file_get_contents((new ReflectionClass(ServiceMutationExecutor::class))->getFileName());
-        self::assertIsString($source);
+        $source = $this->classSource(ServiceMutationExecutor::class);
 
         self::assertStringContainsString('PanelOperationOutcome::Success => ProvisioningState::Succeeded', $source);
         self::assertStringContainsString('PanelOperationOutcome::DefinitiveFailure => ProvisioningState::FailedFinal', $source);
@@ -78,8 +76,23 @@ final class ServiceMutationExecutorNormalizationTest extends TestCase
         $reflection = new ReflectionClass(ServiceMutationQueueService::class);
         self::assertSame(['succeeded', 'failed_final', 'compensated'], $reflection->getConstant('TERMINAL_STATES'));
 
-        $source = file_get_contents($reflection->getFileName());
-        self::assertIsString($source);
+        $source = $this->classSource(ServiceMutationQueueService::class);
         self::assertStringContainsString("->whereNotIn('state', self::TERMINAL_STATES)", $source);
+    }
+
+    /** @param class-string $class */
+    private function classSource(string $class): string
+    {
+        $file = (new ReflectionClass($class))->getFileName();
+        if (! is_string($file)) {
+            throw new RuntimeException('Reflected class source file is unavailable.');
+        }
+
+        $source = file_get_contents($file);
+        if (! is_string($source)) {
+            throw new RuntimeException('Reflected class source cannot be read.');
+        }
+
+        return $source;
     }
 }
