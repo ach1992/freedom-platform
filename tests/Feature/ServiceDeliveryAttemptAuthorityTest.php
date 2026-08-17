@@ -13,6 +13,8 @@ use App\Modules\Catalog\Domain\PlanOfferingRouteDefinition;
 use App\Modules\Catalog\Domain\PlanOfferingRoutePolicyDefinition;
 use App\Modules\Catalog\Domain\PlanOfferingRouteType;
 use App\Modules\Orders\Application\PurchaseOrderService;
+use App\Modules\Panels\Application\Contracts\PanelOperationOutcome;
+use App\Modules\Panels\Application\Contracts\PanelOperationResult;
 use App\Modules\Panels\Application\PanelAdapterRegistry;
 use App\Modules\Panels\Application\PanelCredentialPolicy;
 use App\Modules\Provisioning\Application\InitialProvisioningExecutor;
@@ -224,6 +226,54 @@ final class ServiceDeliveryAttemptAuthorityTest extends TestCase
         self::assertSame(['suspend'], $scenario['adapter']->calls);
         self::assertSame('suspended', DB::table('service_subscriptions')
             ->where('id', $scenario['service_id'])->value('lifecycle_state'));
+    }
+
+    public function test_unresolved_and_uncertain_service_mutations_block_new_delivery_authority(): void
+    {
+        $scenario = $this->scenario('mutation-fence');
+        $mutation = $this->mutationQueue()->queue(
+            $scenario['service_public_id'],
+            ServiceMutationType::RotateSubscriptionLink,
+            'request-delivery-mutation-fence-0001',
+            'correlation-delivery-mutation-fence-0001',
+        );
+
+        try {
+            $this->deliveryQueue()->queue(
+                $scenario['service_public_id'],
+                ServiceDeliveryPurpose::Resend,
+                'request-delivery-while-mutation-queued-0001',
+                'correlation-delivery-while-mutation-queued-0001',
+            );
+            self::fail('Queued Service mutation must block new Delivery Attempt authority.');
+        } catch (DomainException) {
+            // Expected.
+        }
+
+        $scenario['adapter']->forcedMutationResult = new PanelOperationResult(
+            PanelOperationOutcome::RetryableFailure,
+            null,
+            'provider_retryable',
+            'Provider reported an uncertain rotation result.',
+        );
+        $mutationResult = $this->mutationExecutor()->execute($mutation->operationPublicId);
+        self::assertSame(ProvisioningState::UncertainRemoteResult, $mutationResult->state);
+
+        try {
+            $this->deliveryQueue()->queue(
+                $scenario['service_public_id'],
+                ServiceDeliveryPurpose::Resend,
+                'request-delivery-while-mutation-uncertain-0001',
+                'correlation-delivery-while-mutation-uncertain-0001',
+            );
+            self::fail('Uncertain remote Service mutation must block new Delivery Attempt authority.');
+        } catch (DomainException) {
+            // Expected.
+        }
+
+        self::assertSame(0, DB::table('service_delivery_attempts')->count());
+        self::assertSame(0, DB::table('outbox_messages')
+            ->where('event_type', ServiceDeliveryAttemptQueueService::OUTBOX_EVENT_TYPE)->count());
     }
 
     public function test_unprovisioned_and_retired_services_cannot_create_new_delivery_authority(): void
