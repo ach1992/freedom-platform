@@ -14,8 +14,8 @@ use Illuminate\Support\Str;
 use RuntimeException;
 
 /**
- * @phpstan-type ServiceRow object{id:int|string,public_id:string,order_id:int|string,order_item_id:int|string,user_id:int|string,service_target_id:int|string|null,remote_service_id:?string,provisioned_at:?string,mutation_generation:int|string,remote_deleted_at:?string}
- * @phpstan-type OperationRow object{id:int|string,public_id:string,operation_type:string,service_subscription_id:int|string,state:string,state_version:int|string,operation_generation:int|string,request_key_hash:?string}
+ * @phpstan-type ServiceRow object{id:int|string,public_id:string,order_id:int|string,order_item_id:int|string,user_id:int|string,service_target_id:int|string|null,remote_service_id:?string,provisioned_at:?string,lifecycle_state:string,lifecycle_version:int|string,remote_identity_generation:int|string,mutation_generation:int|string,remote_deleted_at:?string}
+ * @phpstan-type OperationRow object{id:int|string,public_id:string,operation_type:string,service_subscription_id:int|string,state:string,state_version:int|string,operation_generation:int|string,target_remote_identity_generation:int|string,target_lifecycle_version:int|string,request_key_hash:?string}
  */
 final readonly class ServiceMutationQueueService
 {
@@ -59,7 +59,7 @@ final readonly class ServiceMutationQueueService
                 return $this->receipt($service, $replayed, true);
             }
 
-            $this->assertServiceMutable($service);
+            $this->assertServiceMutable($service, $type);
             $active = $connection->table('provisioning_operations')
                 ->where('service_subscription_id', (int) $service->id)
                 ->where('operation_type', '<>', 'initial_provision')
@@ -71,6 +71,8 @@ final readonly class ServiceMutationQueueService
             }
 
             $generation = $this->nonNegativeDatabaseInt($service->mutation_generation, 'Service mutation generation') + 1;
+            $remoteIdentityGeneration = $this->positiveDatabaseInt($service->remote_identity_generation, 'Remote identity generation');
+            $lifecycleVersion = $this->nonNegativeDatabaseInt($service->lifecycle_version, 'Service lifecycle version');
             $timestamp = $this->timestamp();
 
             $this->setQueueAuthority($connection, $generation, $requestKeyHash, $correlationId);
@@ -78,6 +80,8 @@ final readonly class ServiceMutationQueueService
                 $updated = $connection->table('service_subscriptions')
                     ->where('id', (int) $service->id)
                     ->where('mutation_generation', $generation - 1)
+                    ->where('remote_identity_generation', $remoteIdentityGeneration)
+                    ->where('lifecycle_version', $lifecycleVersion)
                     ->update([
                         'mutation_generation' => $generation,
                         'updated_at' => $timestamp,
@@ -102,6 +106,8 @@ final readonly class ServiceMutationQueueService
                     'service_target_id' => $this->positiveDatabaseInt($service->service_target_id, 'Service target ID'),
                     'remote_service_id' => $service->remote_service_id,
                     'operation_generation' => $generation,
+                    'target_remote_identity_generation' => $remoteIdentityGeneration,
+                    'target_lifecycle_version' => $lifecycleVersion,
                     'request_key_hash' => $requestKeyHash,
                     'created_at' => $timestamp,
                     'updated_at' => $timestamp,
@@ -110,7 +116,7 @@ final readonly class ServiceMutationQueueService
                 /** @var OperationRow|null $operation */
                 $operation = $connection->table('provisioning_operations')->where('id', $operationId)->first([
                     'id', 'public_id', 'operation_type', 'service_subscription_id', 'state', 'state_version',
-                    'operation_generation', 'request_key_hash',
+                    'operation_generation', 'target_remote_identity_generation', 'target_lifecycle_version', 'request_key_hash',
                 ]);
                 if ($operation === null) {
                     throw new RuntimeException('Service mutation operation disappeared after creation.');
@@ -134,7 +140,8 @@ final readonly class ServiceMutationQueueService
             ->lockForUpdate()
             ->first([
                 'id', 'public_id', 'order_id', 'order_item_id', 'user_id', 'service_target_id',
-                'remote_service_id', 'provisioned_at', 'mutation_generation', 'remote_deleted_at',
+                'remote_service_id', 'provisioned_at', 'lifecycle_state', 'lifecycle_version',
+                'remote_identity_generation', 'mutation_generation', 'remote_deleted_at',
             ]);
         if ($row === null) {
             throw new DomainException('Service Subscription does not exist.');
@@ -156,21 +163,31 @@ final readonly class ServiceMutationQueueService
         /** @var OperationRow|null $row */
         $row = $query->first([
             'id', 'public_id', 'operation_type', 'service_subscription_id', 'state', 'state_version',
-            'operation_generation', 'request_key_hash',
+            'operation_generation', 'target_remote_identity_generation', 'target_lifecycle_version', 'request_key_hash',
         ]);
 
         return $row;
     }
 
     /** @param ServiceRow $service */
-    private function assertServiceMutable(object $service): void
+    private function assertServiceMutable(object $service, ServiceMutationType $type): void
     {
-        if ($service->remote_deleted_at !== null) {
-            throw new DomainException('Deleted Service Subscription cannot accept new mutations.');
+        if ($service->remote_deleted_at !== null || $service->lifecycle_state === 'retired') {
+            throw new DomainException('Retired Service Subscription cannot accept new mutations.');
+        }
+        if (! in_array($service->lifecycle_state, ['active', 'suspended'], true)) {
+            throw new RuntimeException('Stored Service lifecycle state is invalid.');
+        }
+        if ($type === ServiceMutationType::Suspend && $service->lifecycle_state !== 'active') {
+            throw new DomainException('Only an active Service Subscription can be suspended.');
+        }
+        if ($type === ServiceMutationType::Activate && $service->lifecycle_state !== 'suspended') {
+            throw new DomainException('Only a suspended Service Subscription can be activated.');
         }
         if ($service->service_target_id === null || (int) $service->service_target_id < 1
             || ! is_string($service->remote_service_id) || $service->remote_service_id === ''
-            || $service->provisioned_at === null) {
+            || $service->provisioned_at === null
+            || $this->positiveDatabaseInt($service->remote_identity_generation, 'Remote identity generation') < 1) {
             throw new DomainException('Service Subscription is not fully provisioned for remote mutation.');
         }
     }
