@@ -88,7 +88,7 @@ final class PurchaseOrderAuthorityHardeningTest extends TestCase
         self::assertSame(0, DB::table('orders')->count());
     }
 
-    public function test_second_authoritative_capture_for_same_quote_fails_closed_before_second_settlement(): void
+    public function test_second_authoritative_capture_is_preserved_but_cannot_rebind_paid_order(): void
     {
         $firstSettlement = $this->createPurchaseOrderSettlement('quote_reuse');
         $orders = $this->app->make(PurchaseOrderService::class);
@@ -115,20 +115,48 @@ final class PurchaseOrderAuthorityHardeningTest extends TestCase
             'updated_at' => $this->purchaseOrderTimestamp(),
         ]);
 
-        $this->assertQueryRejected(fn (): mixed => $this->app->make(PurchaseSettlementService::class)->capture(
+        $secondSettlement = $this->app->make(PurchaseSettlementService::class)->capture(
             $secondIntent->intentPublicId,
             $firstSettlement->providerCode,
             $this->purchaseEvent('quote-reuse-second', $firstSettlement->amount->amount()),
             $this->purchaseOrderCorrelation('quote-reuse-second-settlement'),
-        ));
+        );
 
-        self::assertSame('submitted', DB::table('payment_intents')->where('public_id', $secondIntent->intentPublicId)->value('state'));
-        self::assertSame(1, DB::table('purchase_settlements')->count());
+        $secondIntentId = (int) DB::table('payment_intents')->where('public_id', $secondIntent->intentPublicId)->value('id');
+        self::assertSame('captured', DB::table('payment_intents')->where('id', $secondIntentId)->value('state'));
+        self::assertSame(2, DB::table('purchase_settlements')->count());
+        self::assertSame(1, DB::table('purchase_settlements')->where('id', $secondSettlement->settlementId)->count());
+        self::assertSame(1, DB::table('payment_provider_events')->where('payment_intent_id', $secondIntentId)->count());
+        self::assertSame(1, DB::table('payment_provider_transactions')->where('payment_intent_id', $secondIntentId)->count());
+
+        try {
+            $orders->createFromSettlement(
+                $secondSettlement->settlementPublicId,
+                $this->purchaseOrderCorrelation('quote-reuse-second-order'),
+            );
+            self::fail('A second settled financial fact must not rebind an already-paid purchase Order.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('Purchase Order already has conflicting financial or lifecycle authority.', $exception->getMessage());
+        }
+
+        $order = DB::table('orders')->first();
+        self::assertNotNull($order);
+        self::assertSame($firstOrder->orderId, (int) $order->id);
+        self::assertSame($firstSettlement->settlementId, (int) $order->purchase_settlement_id);
         self::assertSame(1, DB::table('orders')->count());
-        self::assertSame($firstOrder->orderId, (int) DB::table('orders')->value('id'));
         self::assertSame(1, DB::table('order_items')->count());
         self::assertSame(1, DB::table('order_state_histories')->count());
         self::assertSame(1, DB::table('audit_logs')->where('action', 'order.purchase.created')->count());
+        self::assertSame(2, DB::table('audit_logs')->where('action', 'payment.purchase.captured')->count());
+
+        /** @var \Illuminate\Database\Migrations\Migration $reconcile */
+        $reconcile = require database_path('migrations/2026_08_17_000100_reconcile_pre_payment_order_authority.php');
+        $reconcile->up();
+        self::assertSame(2, DB::table('purchase_settlements')->count());
+        self::assertNull(DB::selectOne(
+            'SELECT CONSTRAINT_NAME FROM information_schema.TABLE_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME = ? AND CONSTRAINT_NAME = ?',
+            ['purchase_settlements', 'purchase_settlements_quote_unique'],
+        ));
     }
 
     public function test_real_wallet_top_up_intent_cannot_be_substituted_as_purchase_order_payment_authority(): void
