@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+require_once dirname(__DIR__, 2).'/vendor/autoload.php';
 require_once __DIR__.'/AgentPricingQuoteIntegrationTestSupport.php';
 require_once __DIR__.'/PurchaseOrderTestSupport.php';
 
@@ -40,13 +41,65 @@ use Database\Seeders\PanelsAccessFoundationSeeder;
 use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
 use DateTimeImmutable;
 use DomainException;
+use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use LogicException;
+use RuntimeException;
 use Tests\TestCase;
+use Throwable;
+
+if (PHP_SAPI === 'cli' && ($argv[1] ?? null) === '--service-mutation-contention-worker') {
+    $app = require dirname(__DIR__, 2).'/bootstrap/app.php';
+    $app->make(Kernel::class)->bootstrap();
+    $decoded = base64_decode($argv[2] ?? '', true);
+    if ($decoded === false) {
+        fwrite(STDERR, "Invalid Service mutation worker payload encoding.\n");
+        exit(2);
+    }
+
+    try {
+        /** @var array<string, string> $payload */
+        $payload = json_decode($decoded, true, flags: JSON_THROW_ON_ERROR);
+    } catch (Throwable $exception) {
+        fwrite(STDERR, 'Invalid Service mutation worker payload: '.$exception->getMessage()."\n");
+        exit(2);
+    }
+
+    echo "READY\n";
+    flush();
+    if (fgets(STDIN) === false) {
+        fwrite(STDERR, "Service mutation worker barrier was not released.\n");
+        exit(2);
+    }
+
+    try {
+        $receipt = $app->make(ServiceMutationQueueService::class)->queue(
+            $payload['service_public_id'],
+            ServiceMutationType::from($payload['operation_type']),
+            $payload['request_key'],
+            $payload['correlation_id'],
+        );
+        echo json_encode([
+            'ok' => true,
+            'result' => [
+                'operation_public_id' => $receipt->operationPublicId,
+                'generation' => $receipt->generation,
+                'replayed' => $receipt->replayed,
+            ],
+        ], JSON_THROW_ON_ERROR)."\n";
+    } catch (Throwable $exception) {
+        echo json_encode([
+            'ok' => false,
+            'exception' => $exception::class,
+            'message' => $exception->getMessage(),
+        ], JSON_THROW_ON_ERROR)."\n";
+    }
+    exit(0);
+}
 
 final class ServiceMutationTestPanelAdapter implements PanelAdapter
 {
@@ -260,6 +313,8 @@ final class ServiceMutationAuthorityRuntimeTest extends TestCase
     use DatabaseTruncation;
     use PurchaseOrderTestSupport;
 
+    private const WORKER_TIMEOUT_SECONDS = 30;
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -322,6 +377,62 @@ final class ServiceMutationAuthorityRuntimeTest extends TestCase
             ->where('service_subscription_id', $scenario['service_id'])
             ->where('operation_type', '<>', 'initial_provision')
             ->count());
+    }
+
+    public function test_concurrent_distinct_commands_allocate_one_generation_then_advance_monotonically(): void
+    {
+        $scenario = $this->scenario('queue-contention');
+        $payloads = [
+            [
+                'service_public_id' => $scenario['service_public_id'],
+                'operation_type' => ServiceMutationType::Suspend->value,
+                'request_key' => 'request-contention-suspend-0001',
+                'correlation_id' => 'correlation-contention-suspend-0001',
+            ],
+            [
+                'service_public_id' => $scenario['service_public_id'],
+                'operation_type' => ServiceMutationType::ResetUsage->value,
+                'request_key' => 'request-contention-reset-0001',
+                'correlation_id' => 'correlation-contention-reset-0001',
+            ],
+        ];
+
+        $results = $this->runConcurrentMutationQueues($payloads);
+        $successfulIndexes = [];
+        foreach ($results as $index => $result) {
+            if (($result['ok'] ?? false) === true) {
+                $successfulIndexes[] = $index;
+            }
+        }
+
+        self::assertCount(1, $successfulIndexes, json_encode($results, JSON_THROW_ON_ERROR));
+        $winnerIndex = $successfulIndexes[0];
+        $loserIndex = $winnerIndex === 0 ? 1 : 0;
+        self::assertSame(1, $results[$winnerIndex]['result']['generation']);
+        self::assertFalse($results[$winnerIndex]['result']['replayed']);
+        self::assertFalse($results[$loserIndex]['ok']);
+        self::assertSame(DomainException::class, $results[$loserIndex]['exception']);
+        self::assertSame(1, (int) DB::table('service_subscriptions')
+            ->where('id', $scenario['service_id'])->value('mutation_generation'));
+        self::assertSame(1, DB::table('provisioning_operations')
+            ->where('service_subscription_id', $scenario['service_id'])
+            ->where('operation_type', '<>', 'initial_provision')
+            ->count());
+
+        $winnerReceipt = $this->mutationExecutor()->execute((string) $results[$winnerIndex]['result']['operation_public_id']);
+        self::assertSame(ProvisioningState::Succeeded, $winnerReceipt->state);
+
+        $loserPayload = $payloads[$loserIndex];
+        $second = $this->mutationQueue()->queue(
+            $loserPayload['service_public_id'],
+            ServiceMutationType::from($loserPayload['operation_type']),
+            $loserPayload['request_key'],
+            $loserPayload['correlation_id'],
+        );
+        self::assertSame(2, $second->generation);
+        self::assertFalse($second->replayed);
+        self::assertSame(2, (int) DB::table('service_subscriptions')
+            ->where('id', $scenario['service_id'])->value('mutation_generation'));
     }
 
     public function test_suspend_success_runs_outside_transaction_and_terminal_replay_has_no_second_effect(): void
@@ -617,6 +728,128 @@ final class ServiceMutationAuthorityRuntimeTest extends TestCase
     private function mutationExecutor(): ServiceMutationExecutor
     {
         return $this->app->make(ServiceMutationExecutor::class);
+    }
+
+    /**
+     * @param  list<array<string, string>>  $payloads
+     * @return list<array<string, mixed>>
+     */
+    private function runConcurrentMutationQueues(array $payloads): array
+    {
+        $workers = [];
+        try {
+            foreach ($payloads as $payload) {
+                $pipes = [];
+                $process = proc_open([
+                    PHP_BINARY,
+                    '-d',
+                    'pcov.enabled=0',
+                    __FILE__,
+                    '--service-mutation-contention-worker',
+                    base64_encode(json_encode($payload, JSON_THROW_ON_ERROR)),
+                ], [
+                    0 => ['pipe', 'r'],
+                    1 => ['pipe', 'w'],
+                    2 => ['pipe', 'w'],
+                ], $pipes, dirname(__DIR__, 2));
+                if (! is_resource($process)) {
+                    throw new RuntimeException('Unable to start Service mutation contention worker.');
+                }
+                /** @var array{0:resource,1:resource,2:resource} $pipes */
+                stream_set_blocking($pipes[1], false);
+                stream_set_blocking($pipes[2], false);
+                $workers[] = ['process' => $process, 'pipes' => $pipes];
+            }
+
+            foreach ($workers as $index => $worker) {
+                if ($this->readWorkerLine($worker, 'readiness', $index) !== "READY\n") {
+                    throw new RuntimeException('Service mutation contention worker returned an invalid readiness marker.');
+                }
+            }
+            foreach ($workers as $worker) {
+                fwrite($worker['pipes'][0], "GO\n");
+                fflush($worker['pipes'][0]);
+                fclose($worker['pipes'][0]);
+            }
+
+            $results = [];
+            foreach ($workers as $index => $worker) {
+                $line = $this->readWorkerLine($worker, 'result', $index);
+                $stderr = stream_get_contents($worker['pipes'][2]);
+                fclose($worker['pipes'][1]);
+                fclose($worker['pipes'][2]);
+                if (proc_close($worker['process']) !== 0) {
+                    throw new RuntimeException('Service mutation contention worker failed: '.$stderr);
+                }
+                /** @var array<string, mixed> $result */
+                $result = json_decode($line, true, flags: JSON_THROW_ON_ERROR);
+                $results[] = $result;
+            }
+
+            return $results;
+        } finally {
+            $this->terminateWorkers($workers);
+        }
+    }
+
+    /** @param array{process:resource,pipes:array{0:resource,1:resource,2:resource}} $worker */
+    private function readWorkerLine(array $worker, string $phase, int $index): string
+    {
+        $deadline = microtime(true) + self::WORKER_TIMEOUT_SECONDS;
+        $stderr = '';
+        while (microtime(true) < $deadline) {
+            $read = [$worker['pipes'][1], $worker['pipes'][2]];
+            $write = null;
+            $except = null;
+            $selected = stream_select($read, $write, $except, 0, 200_000);
+            if ($selected === false) {
+                throw new RuntimeException('Unable to wait for Service mutation contention worker output.');
+            }
+            foreach ($read as $stream) {
+                if ($stream === $worker['pipes'][2]) {
+                    $stderr .= stream_get_contents($stream);
+
+                    continue;
+                }
+                $line = fgets($stream);
+                if ($line !== false && trim($line) !== '') {
+                    return $line;
+                }
+            }
+            $status = proc_get_status($worker['process']);
+            if (! $status['running'] && feof($worker['pipes'][1])) {
+                $stderr .= stream_get_contents($worker['pipes'][2]);
+                throw new RuntimeException('Service mutation contention worker exited before '.$phase.' output: '.$stderr);
+            }
+        }
+
+        throw new RuntimeException(sprintf(
+            'Service mutation contention worker %d timed out during %s after %d seconds: %s',
+            $index,
+            $phase,
+            self::WORKER_TIMEOUT_SECONDS,
+            $stderr,
+        ));
+    }
+
+    /** @param list<array{process:resource,pipes:array{0:resource,1:resource,2:resource}}> $workers */
+    private function terminateWorkers(array $workers): void
+    {
+        foreach ($workers as $worker) {
+            if (! is_resource($worker['process'])) {
+                continue;
+            }
+            $status = proc_get_status($worker['process']);
+            if ($status['running']) {
+                proc_terminate($worker['process']);
+            }
+            foreach ($worker['pipes'] as $pipe) {
+                if (is_resource($pipe)) {
+                    fclose($pipe);
+                }
+            }
+            proc_close($worker['process']);
+        }
     }
 
     private function simulateClaim(ServiceMutationReceipt $queue): void
