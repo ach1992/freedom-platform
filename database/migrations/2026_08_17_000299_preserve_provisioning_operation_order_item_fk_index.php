@@ -57,10 +57,18 @@ return new class extends Migration
             return;
         }
 
-        DB::statement(match ($index) {
-            self::ORDER_ITEM_SUPPORT_INDEX => 'ALTER TABLE provisioning_operations DROP INDEX provisioning_operations_order_item_fk_idx',
-            self::SERVICE_SUBSCRIPTION_SUPPORT_INDEX => 'ALTER TABLE provisioning_operations DROP INDEX provisioning_operations_service_subscription_fk_idx',
-        });
+        if ($index === self::ORDER_ITEM_SUPPORT_INDEX) {
+            DB::statement('ALTER TABLE provisioning_operations DROP INDEX provisioning_operations_order_item_fk_idx');
+
+            return;
+        }
+        if ($index === self::SERVICE_SUBSCRIPTION_SUPPORT_INDEX) {
+            DB::statement('ALTER TABLE provisioning_operations DROP INDEX provisioning_operations_service_subscription_fk_idx');
+
+            return;
+        }
+
+        throw new LogicException('Unknown Provisioning Operation FK support index.');
     }
 
     private function indexExists(string $index): bool
