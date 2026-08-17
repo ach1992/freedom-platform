@@ -13,6 +13,7 @@ use DateTimeZone;
 use DomainException;
 use Illuminate\Support\Facades\Http;
 use RuntimeException;
+use stdClass;
 
 /**
  * Generic REST polling adapter with deliberately bounded configuration.
@@ -226,26 +227,31 @@ final class GenericRestBankTransactionVerificationProvider implements BankTransa
         }
 
         try {
-            $decoded = json_decode($body, true, 64, JSON_THROW_ON_ERROR);
+            $decoded = json_decode($body, false, 64, JSON_THROW_ON_ERROR);
         } catch (\JsonException $exception) {
             throw new RuntimeException('Generic bank provider response is malformed JSON.', previous: $exception);
         }
-        if (! is_array($decoded) || ! isset($decoded[$this->transactionsKey]) || ! is_array($decoded[$this->transactionsKey])) {
+        if (! $decoded instanceof stdClass
+            || ! property_exists($decoded, $this->transactionsKey)
+            || ! is_array($decoded->{$this->transactionsKey})) {
             throw new RuntimeException('Generic bank provider response does not contain a transaction list.');
         }
-        if (count($decoded[$this->transactionsKey]) > 1000) {
+        $transactions = $decoded->{$this->transactionsKey};
+        if (count($transactions) > 1000) {
             throw new RuntimeException('Generic bank provider returned too many transactions in one page.');
         }
 
         $observations = [];
-        foreach ($decoded[$this->transactionsKey] as $index => $item) {
-            if (! is_array($item)) {
+        foreach ($transactions as $index => $item) {
+            if (! $item instanceof stdClass) {
                 throw new RuntimeException('Generic bank transaction entry is not an object at index '.$index.'.');
             }
-            $observations[] = $this->normalizeTransaction($item);
+            $observations[] = $this->normalizeTransaction(get_object_vars($item));
         }
 
-        $nextCursor = $decoded[$this->nextCursorKey] ?? null;
+        $nextCursor = property_exists($decoded, $this->nextCursorKey)
+            ? $decoded->{$this->nextCursorKey}
+            : null;
         if ($nextCursor !== null && (! is_string($nextCursor) || strlen($nextCursor) > 191 || preg_match('/[\x00-\x1F\x7F]/', $nextCursor) === 1)) {
             throw new RuntimeException('Generic bank provider next cursor is invalid.');
         }
@@ -354,20 +360,27 @@ final class GenericRestBankTransactionVerificationProvider implements BankTransa
         }
 
         $value = $row;
+        $atRoot = true;
         foreach ($segments as $segment) {
             if (is_string($segment)) {
-                if (! is_array($value) || ! array_key_exists($segment, $value)) {
+                if ($atRoot) {
+                    if (! is_array($value) || ! array_key_exists($segment, $value)) {
+                        throw new RuntimeException('Generic bank mapped field '.$canonical.' path did not resolve.');
+                    }
+                    $value = $value[$segment];
+                } else {
+                    if (! $value instanceof stdClass || ! property_exists($value, $segment)) {
+                        throw new RuntimeException('Generic bank mapped field '.$canonical.' path did not resolve.');
+                    }
+                    $value = $value->{$segment};
+                }
+            } else {
+                if (! is_array($value) || ! array_is_list($value) || ! array_key_exists($segment, $value)) {
                     throw new RuntimeException('Generic bank mapped field '.$canonical.' path did not resolve.');
                 }
                 $value = $value[$segment];
-
-                continue;
             }
-
-            if (! is_array($value) || ! array_is_list($value) || ! array_key_exists($segment, $value)) {
-                throw new RuntimeException('Generic bank mapped field '.$canonical.' path did not resolve.');
-            }
-            $value = $value[$segment];
+            $atRoot = false;
         }
 
         if (! is_string($value) && ! is_int($value)) {
@@ -465,12 +478,15 @@ final class GenericRestBankTransactionVerificationProvider implements BankTransa
     }
 
     /**
-     * @param  array<string, mixed>  $value
-     * @return array<string, mixed>
+     * @param  array<string|int, mixed>  $value
+     * @return array<string|int, mixed>
      */
     private function canonicalize(array $value): array
     {
         foreach ($value as $key => $item) {
+            if ($item instanceof stdClass) {
+                $item = get_object_vars($item);
+            }
             if (is_array($item)) {
                 $value[$key] = $this->canonicalize($item);
             }
