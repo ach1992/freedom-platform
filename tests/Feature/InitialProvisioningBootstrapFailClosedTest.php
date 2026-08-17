@@ -66,15 +66,24 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
         $capacityFenceMigration = require database_path('migrations/2026_08_16_000104_fence_running_provisioning_capacity_release.php');
         /** @var Migration $remoteEffectActivationMigration */
         $remoteEffectActivationMigration = require database_path('migrations/2026_08_16_000105_activate_initial_provisioning_remote_effect.php');
+        /** @var Migration $mutationFkSupportMigration */
+        $mutationFkSupportMigration = require database_path('migrations/2026_08_17_000299_preserve_provisioning_operation_order_item_fk_index.php');
+        /** @var Migration $mutationExactTextMigration */
+        $mutationExactTextMigration = require database_path('migrations/2026_08_17_000299_z_expand_service_mutation_exact_text_authority.php');
         /** @var Migration $mutationMigration */
         $mutationMigration = require database_path('migrations/2026_08_17_000300_enable_service_mutation_authority.php');
+        /** @var Migration $lifecycleAuditMigration */
+        $lifecycleAuditMigration = require database_path('migrations/2026_08_17_000310_enable_service_lifecycle_command_audit_authority.php');
         /** @var Migration $deliveryAttemptMigration */
         $deliveryAttemptMigration = require database_path('migrations/2026_08_18_000100_create_service_delivery_attempt_authority.php');
 
         try {
             // Remove newer descendant authorities before replaying the historical provisioning bootstrap chain.
             $deliveryAttemptMigration->down();
+            $lifecycleAuditMigration->down();
             $mutationMigration->down();
+            $mutationExactTextMigration->down();
+            $mutationFkSupportMigration->down();
 
             // Reverse the complete remote-effect chain before rolling back its queue-era prerequisites.
             // 000105 first reinstalls the bootstrap barrier so every subsequent rollback boundary is closed.
@@ -205,7 +214,10 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
             self::assertSame(1, $this->triggerCount('initial_provisioning_remote_effect_bootstrap_barrier'));
             $remoteEffectActivationMigration->up();
             self::assertSame(0, $this->triggerCount('initial_provisioning_remote_effect_bootstrap_barrier'));
+            $mutationFkSupportMigration->up();
+            $mutationExactTextMigration->up();
             $mutationMigration->up();
+            $lifecycleAuditMigration->up();
             $deliveryAttemptMigration->up();
 
             $happyOrder = $this->createPaidOrder('bootstrap-history');
@@ -245,7 +257,10 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
             $verifiedTargetActivationMigration->up();
             $capacityFenceMigration->up();
             $remoteEffectActivationMigration->up();
+            $mutationFkSupportMigration->up();
+            $mutationExactTextMigration->up();
             $mutationMigration->up();
+            $lifecycleAuditMigration->up();
             $deliveryAttemptMigration->up();
         }
     }
