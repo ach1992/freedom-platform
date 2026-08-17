@@ -14,19 +14,19 @@ return [
         'Panels' => ['AccessControl'],
         'Payments' => ['AccessControl', 'Orders', 'Wallet'],
         'Promotions' => ['AccessControl', 'Wallet'],
-        'Provisioning' => ['Catalog', 'Orders', 'Panels', 'Payments'],
+        'Provisioning' => ['AccessControl', 'Catalog', 'Orders', 'Panels', 'Payments'],
         'Wallet' => ['AccessControl'],
     ],
 
     // Legacy Domain-to-Domain imports discovered while establishing the baseline. These are
     // exact path/target exceptions, not permission for new Domain coupling.
     'domain_dependency_exceptions' => [
-        'app/Modules/Catalog/Domain/CustomPlanPolicyDefinition.php|Customers\Domain',
-        'app/Modules/Catalog/Domain/OfferingOperationPolicy.php|Panels\Domain',
-        'app/Modules/Catalog/Domain/PlanOfferingDefinition.php|Customers\Domain',
-        'app/Modules/Catalog/Domain/PlanOfferingDefinition.php|Panels\Domain',
-        'app/Modules/Catalog/Domain/TrialPolicyDefinition.php|Customers\Domain',
-        'app/Modules/Catalog/Domain/TrialPolicyDefinition.php|Identity\Domain',
+        'app/Modules/Catalog/Domain/CustomPlanPolicyDefinition.php|Customers\\Domain',
+        'app/Modules/Catalog/Domain/OfferingOperationPolicy.php|Panels\\Domain',
+        'app/Modules/Catalog/Domain/PlanOfferingDefinition.php|Customers\\Domain',
+        'app/Modules/Catalog/Domain/PlanOfferingDefinition.php|Panels\\Domain',
+        'app/Modules/Catalog/Domain/TrialPolicyDefinition.php|Customers\\Domain',
+        'app/Modules/Catalog/Domain/TrialPolicyDefinition.php|Identity\\Domain',
     ],
 
     // Strongly connected module components are forbidden by default. No current cycle exists.
