@@ -25,6 +25,8 @@ final class ServiceMutationExistingInitialUpgradeTest extends TestCase
     use DatabaseTruncation;
     use PurchaseOrderTestSupport;
 
+    private const INITIAL_PROVISIONING_EVENT_TYPE = 'provisioning.initial.requested';
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -61,7 +63,7 @@ final class ServiceMutationExistingInitialUpgradeTest extends TestCase
             self::assertSame(1, DB::table('service_subscriptions')->count());
             self::assertSame(1, DB::table('provisioning_operations')->count());
             self::assertSame(1, DB::table('outbox_messages')
-                ->where('event_type', InitialProvisioningQueueService::EVENT_TYPE)->count());
+                ->where('event_type', self::INITIAL_PROVISIONING_EVENT_TYPE)->count());
 
             DB::unprepared(<<<'SQL'
 CREATE OR REPLACE TRIGGER provisioning_operations_update_guard
@@ -120,7 +122,7 @@ SQL);
             self::assertSame(1, DB::table('service_subscriptions')->count());
             self::assertSame(1, DB::table('provisioning_operations')->count());
             self::assertSame(1, DB::table('outbox_messages')
-                ->where('event_type', InitialProvisioningQueueService::EVENT_TYPE)->count());
+                ->where('event_type', self::INITIAL_PROVISIONING_EVENT_TYPE)->count());
         } finally {
             if (! $upgraded) {
                 $migration->up();
