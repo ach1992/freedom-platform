@@ -11,9 +11,11 @@ use App\Modules\Payments\Application\Contracts\PaymentTransactionStatus;
 use App\Modules\Payments\Application\Contracts\ProviderOperationOutcome;
 use App\Modules\Payments\Application\Contracts\VerifiedPaymentEvent;
 use App\Modules\Payments\Application\PurchasePaymentIntentService;
+use App\Modules\Payments\Application\PurchaseRefundService;
 use App\Modules\Payments\Application\PurchaseSettlementService;
 use App\Modules\Payments\Application\WalletTopUpPaymentService;
 use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
+use App\Modules\Payments\Domain\PaymentIntentState;
 use App\Shared\Domain\Money;
 use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
@@ -88,7 +90,7 @@ final class PurchaseOrderAuthorityHardeningTest extends TestCase
         self::assertSame(0, DB::table('orders')->count());
     }
 
-    public function test_second_authoritative_capture_is_preserved_but_cannot_rebind_paid_order(): void
+    public function test_second_authoritative_capture_is_preserved_refundable_and_cannot_rebind_paid_order(): void
     {
         $firstSettlement = $this->createPurchaseOrderSettlement('quote_reuse');
         $orders = $this->app->make(PurchaseOrderService::class);
@@ -148,6 +150,35 @@ final class PurchaseOrderAuthorityHardeningTest extends TestCase
         self::assertSame(1, DB::table('order_state_histories')->count());
         self::assertSame(1, DB::table('audit_logs')->where('action', 'order.purchase.created')->count());
         self::assertSame(2, DB::table('audit_logs')->where('action', 'payment.purchase.captured')->count());
+
+        $refundEventId = 'evt-order-quote-reuse-second-refund';
+        $refund = $this->app->make(PurchaseRefundService::class)->record(
+            'purchase.order.refund.quote-reuse.second',
+            $secondSettlement->settlementPublicId,
+            $firstSettlement->providerCode,
+            new VerifiedPaymentEvent(
+                $refundEventId,
+                hash('sha256', 'purchase-order-provider-refund-event:quote-reuse-second'),
+                new PaymentEvidence(
+                    ProviderOperationOutcome::Success,
+                    PaymentEvidenceAuthority::Authoritative,
+                    PaymentTransactionStatus::Refunded,
+                    'refund-order-quote-reuse-second',
+                    $refundEventId,
+                    Money::irr($firstSettlement->amount->amount()),
+                    $this->purchaseOrderClock->value->modify('+1 minute'),
+                    null,
+                    hash('sha256', 'purchase-order-provider-refund-evidence:quote-reuse-second'),
+                    ['provider_reference' => 'refund-order-quote-reuse-second'],
+                ),
+            ),
+            $this->purchaseOrderCorrelation('quote-reuse-second-refund'),
+        );
+        self::assertSame(PaymentIntentState::Refunded, $refund->state);
+        self::assertSame(1, DB::table('purchase_refunds')->where('purchase_settlement_id', $secondSettlement->settlementId)->count());
+        self::assertSame('refunded', DB::table('payment_intents')->where('id', $secondIntentId)->value('state'));
+        self::assertSame(2, DB::table('payment_provider_events')->where('payment_intent_id', $secondIntentId)->count());
+        self::assertSame($firstSettlement->settlementId, (int) DB::table('orders')->where('id', $firstOrder->orderId)->value('purchase_settlement_id'));
 
         /** @var \Illuminate\Database\Migrations\Migration $reconcile */
         $reconcile = require database_path('migrations/2026_08_17_000100_reconcile_pre_payment_order_authority.php');
