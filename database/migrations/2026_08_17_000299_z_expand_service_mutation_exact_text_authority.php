@@ -12,10 +12,12 @@ return new class extends Migration
     /** @requirement SVC-004 PRV-002 PRV-003 DAT-003 SEC-008 QUA-004 */
     public function up(): void
     {
-        if (! $this->constraintExists(self::CONSTRAINT)) {
-            throw new RuntimeException('Initial provisioning exact-text authority must exist before Service mutation exact-text authority is expanded.');
+        if (! $this->exactTextSchemaReady()) {
+            throw new RuntimeException('Initial provisioning exact-text schema must be active before Service mutation exact-text authority is expanded.');
         }
 
+        // MariaDB DDL commits per statement. Re-entry deliberately repairs a crash between
+        // DROP and ADD by treating a missing constraint as a safe state to converge from.
         $this->dropConstraintIfPresent();
         DB::statement(<<<'SQL'
 ALTER TABLE provisioning_operations
@@ -55,6 +57,20 @@ ADD CONSTRAINT provisioning_operations_provisioning_exact_text_chk CHECK (
     )
 )
 SQL);
+    }
+
+    private function exactTextSchemaReady(): bool
+    {
+        $row = DB::selectOne(<<<'SQL'
+SELECT COUNT(*) AS aggregate
+FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA = DATABASE()
+  AND TABLE_NAME = 'provisioning_operations'
+  AND COLLATION_NAME = 'utf8mb4_bin'
+  AND COLUMN_NAME IN ('operation_key', 'operation_type', 'state', 'correlation_id')
+SQL);
+
+        return $row !== null && (int) $row->aggregate === 4;
     }
 
     private function dropConstraintIfPresent(): void
