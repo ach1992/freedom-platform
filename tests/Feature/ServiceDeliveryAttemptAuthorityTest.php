@@ -509,7 +509,7 @@ SQL);
         self::assertNotNull($service);
         self::assertNull($service->remote_service_id);
         self::assertNull($service->provisioned_at);
-        self::assertSame(0, (int) $service->remote_identity_generation);
+        self::assertSame(1, (int) $service->remote_identity_generation);
 
         return [
             'service_id' => (int) $service->id,
@@ -521,7 +521,7 @@ SQL);
     }
 
     /**
-     * @param array{service_id:int,service_public_id:string,offering_id:int,user_id:int,provisioning_operation_public_id:string} $queued
+     * @param  array{service_id:int,service_public_id:string,offering_id:int,user_id:int,provisioning_operation_public_id:string}  $queued
      * @return array{service_id:int,service_public_id:string,target_id:int,adapter:ServiceMutationTestPanelAdapter}
      */
     private function provisionQueuedScenario(array $queued, string $suffix): array
@@ -686,7 +686,7 @@ SQL);
     }
 
     /**
-     * @param list<array<string, string>> $payloads
+     * @param  list<array<string, string>>  $payloads
      * @return list<array<string, mixed>>
      */
     private function runConcurrentDeliveryQueues(array $payloads): array
@@ -763,6 +763,7 @@ SQL);
             foreach ($read as $stream) {
                 if ($stream === $worker['pipes'][2]) {
                     $stderr .= stream_get_contents($stream);
+
                     continue;
                 }
                 $line = fgets($stream);

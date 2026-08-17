@@ -66,8 +66,13 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
         $capacityFenceMigration = require database_path('migrations/2026_08_16_000104_fence_running_provisioning_capacity_release.php');
         /** @var Migration $remoteEffectActivationMigration */
         $remoteEffectActivationMigration = require database_path('migrations/2026_08_16_000105_activate_initial_provisioning_remote_effect.php');
+        /** @var Migration $deliveryAttemptMigration */
+        $deliveryAttemptMigration = require database_path('migrations/2026_08_18_000100_create_service_delivery_attempt_authority.php');
 
         try {
+            // Remove the newer child authority before replaying the historical provisioning bootstrap chain.
+            $deliveryAttemptMigration->down();
+
             // Reverse the complete remote-effect chain before rolling back its queue-era prerequisites.
             // 000105 first reinstalls the bootstrap barrier so every subsequent rollback boundary is closed.
             $remoteEffectActivationMigration->down();
@@ -197,6 +202,7 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
             self::assertSame(1, $this->triggerCount('initial_provisioning_remote_effect_bootstrap_barrier'));
             $remoteEffectActivationMigration->up();
             self::assertSame(0, $this->triggerCount('initial_provisioning_remote_effect_bootstrap_barrier'));
+            $deliveryAttemptMigration->up();
 
             $happyOrder = $this->createPaidOrder('bootstrap-history');
             $correlationId = $this->purchaseOrderCorrelation('bootstrap-history-queue');
@@ -235,6 +241,7 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
             $verifiedTargetActivationMigration->up();
             $capacityFenceMigration->up();
             $remoteEffectActivationMigration->up();
+            $deliveryAttemptMigration->up();
         }
     }
 

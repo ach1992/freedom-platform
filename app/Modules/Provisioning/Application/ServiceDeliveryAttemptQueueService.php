@@ -221,8 +221,8 @@ final readonly class ServiceDeliveryAttemptQueueService
     }
 
     /**
-     * @param ServiceRow $service
-     * @param DeliveryAttemptRow $attempt
+     * @param  ServiceRow  $service
+     * @param  DeliveryAttemptRow  $attempt
      */
     private function receipt(object $service, object $attempt, bool $replayed): ServiceDeliveryAttemptReceipt
     {
