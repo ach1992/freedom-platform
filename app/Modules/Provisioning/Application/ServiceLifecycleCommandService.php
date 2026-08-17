@@ -26,6 +26,31 @@ final readonly class ServiceLifecycleCommandService
         private ServiceLifecycleCommandAudit $audit,
     ) {}
 
+    public function resetUsage(string $servicePublicId, ServiceLifecycleCommandContext $context): ServiceLifecycleCommandReceipt
+    {
+        return $this->execute($servicePublicId, ServiceMutationType::ResetUsage, $context);
+    }
+
+    public function suspend(string $servicePublicId, ServiceLifecycleCommandContext $context): ServiceLifecycleCommandReceipt
+    {
+        return $this->execute($servicePublicId, ServiceMutationType::Suspend, $context);
+    }
+
+    public function activate(string $servicePublicId, ServiceLifecycleCommandContext $context): ServiceLifecycleCommandReceipt
+    {
+        return $this->execute($servicePublicId, ServiceMutationType::Activate, $context);
+    }
+
+    public function rotateSubscriptionLink(string $servicePublicId, ServiceLifecycleCommandContext $context): ServiceLifecycleCommandReceipt
+    {
+        return $this->execute($servicePublicId, ServiceMutationType::RotateSubscriptionLink, $context);
+    }
+
+    public function retire(string $servicePublicId, ServiceLifecycleCommandContext $context): ServiceLifecycleCommandReceipt
+    {
+        return $this->execute($servicePublicId, ServiceMutationType::Delete, $context);
+    }
+
     /** @requirement SVC-004 SVC-006 ARCH-002 ARCH-003 ARCH-004 DAT-003 SEC-002 SEC-003 SEC-008 QUA-004 QUA-007 */
     public function execute(
         string $servicePublicId,
