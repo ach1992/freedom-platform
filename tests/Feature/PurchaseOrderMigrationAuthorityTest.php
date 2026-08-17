@@ -43,5 +43,14 @@ final class PurchaseOrderMigrationAuthorityTest extends TestCase
         self::assertContains('orders_purchase_quote_identity_chk', $constraints);
         self::assertContains('orders_purchase_financial_shape_chk', $constraints);
         self::assertContains('orders_purchase_captured_shape_chk', $constraints);
+
+        self::assertFalse(
+            DB::table('information_schema.TABLE_CONSTRAINTS')
+                ->whereRaw('CONSTRAINT_SCHEMA = DATABASE()')
+                ->where('TABLE_NAME', 'purchase_settlements')
+                ->where('CONSTRAINT_NAME', 'purchase_settlements_quote_unique')
+                ->exists(),
+            'Settlement facts must remain non-unique by Quote; the Order row owns the single authoritative settlement binding.',
+        );
     }
 }
