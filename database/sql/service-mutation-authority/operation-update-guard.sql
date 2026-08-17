@@ -196,6 +196,7 @@ BEGIN
         SET final_transition =
             OLD.state = 'running'
             AND NEW.state IN ('succeeded','retry_scheduled','uncertain_remote_result','needs_review','failed_final')
+            AND (NEW.state <> 'succeeded' OR authoritative_service_id IS NOT NULL)
             AND NEW.state_version = OLD.state_version + 1
             AND NEW.attempt_count = OLD.attempt_count
             AND BINARY NEW.effect_fence_key = BINARY OLD.effect_fence_key

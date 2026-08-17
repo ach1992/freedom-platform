@@ -39,6 +39,7 @@ final class ServiceMutationAuthorityMigrationTest extends TestCase
         $this->assertStringContainsString('service_mutation_effect_v1', $operationGuard);
         $this->assertStringContainsString('target_remote_identity_generation', $operationGuard);
         $this->assertStringContainsString('target_lifecycle_version', $operationGuard);
+        $this->assertStringContainsString("NEW.state <> 'succeeded' OR authoritative_service_id IS NOT NULL", $operationGuard);
         $this->assertStringContainsString('service_mutation_queue_v1', $insertGuard);
         $this->assertStringContainsString('target_remote_identity_generation', $insertGuard);
         $this->assertStringContainsString('target_lifecycle_version', $insertGuard);
