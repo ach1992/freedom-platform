@@ -118,6 +118,7 @@ namespace {
 }
 
 namespace Tests\Feature {
+    use App\Modules\Orders\Application\PurchaseOrderService;
     use App\Modules\Orders\Application\QuotePricingInput;
     use App\Modules\Orders\Application\QuoteService;
     use App\Modules\Orders\Domain\OrderState;
@@ -130,7 +131,6 @@ namespace Tests\Feature {
     use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
     use DateTimeImmutable;
     use DateTimeZone;
-    use Illuminate\Database\QueryException;
     use Illuminate\Foundation\Testing\DatabaseTruncation;
     use Illuminate\Support\Facades\DB;
     use RuntimeException;
@@ -243,9 +243,17 @@ namespace Tests\Feature {
             );
         }
 
-        public function test_two_intents_racing_authoritative_capture_produce_one_winner_and_fail_closed_loser(): void
+        public function test_two_intents_racing_authoritative_capture_preserve_both_facts_but_only_one_can_bind_order(): void
         {
             [$userId, $quotePublicId, $methodCode, $eligibilityPublicId] = $this->preparePurchaseQuote('capture-race');
+            $opened = $this->app->make(PurchaseOrderService::class)->openFromQuote(
+                $quotePublicId,
+                $userId,
+                $this->purchaseOrderCorrelation('capture-race-open'),
+            );
+            self::assertSame(OrderState::AwaitingPayment, $opened->state);
+            self::assertSame(0, $opened->stateVersion);
+
             $payments = $this->app->make(PurchasePaymentIntentService::class);
             $first = $payments->create(
                 'purchase.order.contention.intent.first',
@@ -268,26 +276,60 @@ namespace Tests\Feature {
                 'updated_at' => $this->purchaseOrderTimestamp(),
             ]);
 
-            $results = $this->runConcurrent([
+            $captureResults = $this->runConcurrent([
                 $this->capturePayload($first->intentPublicId, $methodCode, $first->amount->amount(), 'capture-race-first'),
                 $this->capturePayload($second->intentPublicId, $methodCode, $second->amount->amount(), 'capture-race-second'),
             ]);
 
-            $successes = array_values(array_filter($results, static fn (array $result): bool => $result['ok'] === true));
-            $failures = array_values(array_filter($results, static fn (array $result): bool => $result['ok'] === false));
-            self::assertCount(1, $successes, json_encode($results, JSON_THROW_ON_ERROR));
-            self::assertCount(1, $failures, json_encode($results, JSON_THROW_ON_ERROR));
-            self::assertTrue(
-                is_a((string) $failures[0]['exception'], QueryException::class, true),
-                json_encode($failures[0], JSON_THROW_ON_ERROR),
-            );
+            self::assertTrue($captureResults[0]['ok'], json_encode($captureResults[0], JSON_THROW_ON_ERROR));
+            self::assertTrue($captureResults[1]['ok'], json_encode($captureResults[1], JSON_THROW_ON_ERROR));
 
             $quoteId = (int) DB::table('quotes')->where('public_id', $quotePublicId)->value('id');
-            self::assertSame(1, DB::table('purchase_settlements')->where('source_quote_id', $quoteId)->count());
-            self::assertSame(1, DB::table('payment_intents')
+            $intentIds = DB::table('payment_intents')
                 ->whereIn('public_id', [$first->intentPublicId, $second->intentPublicId])
-                ->where('state', 'captured')
-                ->count());
+                ->pluck('id')
+                ->map(static fn (mixed $id): int => (int) $id)
+                ->all();
+            $settlementIds = array_map(static fn (array $result): int => (int) $result['result']['settlement_id'], $captureResults);
+            $settlementPublicIds = array_map(static fn (array $result): string => (string) $result['result']['settlement_public_id'], $captureResults);
+
+            self::assertSame(2, DB::table('purchase_settlements')->where('source_quote_id', $quoteId)->count());
+            self::assertSame(2, DB::table('payment_intents')->whereIn('id', $intentIds)->where('state', 'captured')->count());
+            self::assertSame(2, DB::table('payment_provider_events')->whereIn('payment_intent_id', $intentIds)->count());
+            self::assertSame(2, DB::table('payment_provider_transactions')->whereIn('payment_intent_id', $intentIds)->count());
+
+            $materializeResults = $this->runConcurrent([
+                [
+                    'operation' => 'materialize',
+                    'settlement_public_id' => $settlementPublicIds[0],
+                    'correlation_id' => $this->purchaseOrderCorrelation('capture-race-materialize-first'),
+                ],
+                [
+                    'operation' => 'materialize',
+                    'settlement_public_id' => $settlementPublicIds[1],
+                    'correlation_id' => $this->purchaseOrderCorrelation('capture-race-materialize-second'),
+                ],
+            ]);
+
+            $materializeSuccesses = array_values(array_filter($materializeResults, static fn (array $result): bool => $result['ok'] === true));
+            $materializeFailures = array_values(array_filter($materializeResults, static fn (array $result): bool => $result['ok'] === false));
+            self::assertCount(1, $materializeSuccesses, json_encode($materializeResults, JSON_THROW_ON_ERROR));
+            self::assertCount(1, $materializeFailures, json_encode($materializeResults, JSON_THROW_ON_ERROR));
+            self::assertTrue(
+                is_a((string) $materializeFailures[0]['exception'], RuntimeException::class, true),
+                json_encode($materializeFailures[0], JSON_THROW_ON_ERROR),
+            );
+
+            $order = DB::table('orders')->where('id', $opened->orderId)->first();
+            self::assertNotNull($order);
+            self::assertSame(OrderState::Paid->value, $order->state);
+            self::assertSame(1, (int) $order->state_version);
+            self::assertContains((int) $order->purchase_settlement_id, $settlementIds);
+            self::assertSame(1, DB::table('orders')->where('source_quote_id', $quoteId)->count());
+            self::assertSame(2, DB::table('purchase_settlements')->whereIn('id', $settlementIds)->count());
+            self::assertSame(2, DB::table('payment_intents')->whereIn('id', $intentIds)->where('state', 'captured')->count());
+            self::assertSame(2, DB::table('payment_provider_events')->whereIn('payment_intent_id', $intentIds)->count());
+            self::assertSame(2, DB::table('payment_provider_transactions')->whereIn('payment_intent_id', $intentIds)->count());
         }
 
         /** @return array{0:int,1:string,2:string,3:string} */
