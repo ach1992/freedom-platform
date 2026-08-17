@@ -16,6 +16,7 @@ return new class extends Migration
         $this->failClosedDuringUpgrade();
         $this->addColumns();
         $this->replaceOperationShapeAuthority();
+        $this->replaceServiceShapeAuthority();
         $this->createHistoryAuthority();
         $this->createRemoteEffectEventAuthority();
         $this->createOperationUpdateAuthority();
@@ -30,8 +31,11 @@ return new class extends Migration
             throw new RuntimeException('Cannot roll back Service mutation authority after mutation evidence exists.');
         }
         if (DB::table('service_subscriptions')->where('mutation_generation', '>', 0)->exists()
-            || DB::table('service_subscriptions')->whereNotNull('remote_deleted_at')->exists()) {
-            throw new RuntimeException('Cannot roll back Service mutation authority after Service mutation evidence exists.');
+            || DB::table('service_subscriptions')->whereNotNull('remote_deleted_at')->exists()
+            || DB::table('service_subscriptions')->where('lifecycle_version', '>', 0)->exists()
+            || DB::table('service_subscriptions')->where('lifecycle_state', '<>', 'active')->exists()
+            || DB::table('service_subscriptions')->where('remote_identity_generation', '<>', 1)->exists()) {
+            throw new RuntimeException('Cannot roll back Service mutation authority after Service mutation or identity evidence exists.');
         }
 
         $this->failClosedDuringUpgrade();
@@ -53,6 +57,17 @@ return new class extends Migration
 
     private function dropMutationShape(): void
     {
+        foreach ([
+            'service_subscriptions_mutation_lifecycle_chk',
+            'service_subscriptions_remote_identity_generation_chk',
+            'service_subscriptions_lifecycle_version_chk',
+            'service_subscriptions_lifecycle_state_chk',
+        ] as $constraint) {
+            if ($this->constraintExists('service_subscriptions', $constraint)) {
+                DB::statement('ALTER TABLE service_subscriptions DROP CONSTRAINT '.$constraint);
+            }
+        }
+
         foreach (['provisioning_operations_mutation_shape_chk', 'provisioning_operations_generation_chk', 'provisioning_operations_type_chk'] as $constraint) {
             if ($this->constraintExists('provisioning_operations', $constraint)) {
                 DB::statement('ALTER TABLE provisioning_operations DROP CONSTRAINT '.$constraint);
@@ -69,7 +84,17 @@ return new class extends Migration
             DB::statement('ALTER TABLE provisioning_operations ADD UNIQUE INDEX provisioning_operations_item_type_unique (order_item_id, operation_type)');
         }
 
-        foreach ([['provisioning_operations', 'request_key_hash'], ['provisioning_operations', 'operation_generation'], ['service_subscriptions', 'remote_deleted_at'], ['service_subscriptions', 'mutation_generation']] as [$table, $column]) {
+        foreach ([
+            ['provisioning_operations', 'request_key_hash'],
+            ['provisioning_operations', 'target_lifecycle_version'],
+            ['provisioning_operations', 'target_remote_identity_generation'],
+            ['provisioning_operations', 'operation_generation'],
+            ['service_subscriptions', 'remote_deleted_at'],
+            ['service_subscriptions', 'mutation_generation'],
+            ['service_subscriptions', 'remote_identity_generation'],
+            ['service_subscriptions', 'lifecycle_version'],
+            ['service_subscriptions', 'lifecycle_state'],
+        ] as [$table, $column]) {
             if (Schema::hasColumn($table, $column)) {
                 Schema::table($table, function (Blueprint $blueprint) use ($column): void {
                     $blueprint->dropColumn($column);
@@ -100,7 +125,12 @@ return new class extends Migration
         }
         $upgradeStarted = Schema::hasColumn('service_subscriptions', 'mutation_generation')
             || Schema::hasColumn('service_subscriptions', 'remote_deleted_at')
+            || Schema::hasColumn('service_subscriptions', 'lifecycle_state')
+            || Schema::hasColumn('service_subscriptions', 'lifecycle_version')
+            || Schema::hasColumn('service_subscriptions', 'remote_identity_generation')
             || Schema::hasColumn('provisioning_operations', 'operation_generation')
+            || Schema::hasColumn('provisioning_operations', 'target_remote_identity_generation')
+            || Schema::hasColumn('provisioning_operations', 'target_lifecycle_version')
             || Schema::hasColumn('provisioning_operations', 'request_key_hash');
         if (! $upgradeStarted
             && (! $this->triggerContains('provisioning_operations_update_guard', 'initial_remote_effect_v1')
@@ -139,9 +169,24 @@ SQL);
 
     private function addColumns(): void
     {
+        if (! Schema::hasColumn('service_subscriptions', 'lifecycle_state')) {
+            Schema::table('service_subscriptions', function (Blueprint $table): void {
+                $table->string('lifecycle_state', 16)->default('active')->after('provisioned_at');
+            });
+        }
+        if (! Schema::hasColumn('service_subscriptions', 'lifecycle_version')) {
+            Schema::table('service_subscriptions', function (Blueprint $table): void {
+                $table->unsignedBigInteger('lifecycle_version')->default(0)->after('lifecycle_state');
+            });
+        }
+        if (! Schema::hasColumn('service_subscriptions', 'remote_identity_generation')) {
+            Schema::table('service_subscriptions', function (Blueprint $table): void {
+                $table->unsignedBigInteger('remote_identity_generation')->default(1)->after('lifecycle_version');
+            });
+        }
         if (! Schema::hasColumn('service_subscriptions', 'mutation_generation')) {
             Schema::table('service_subscriptions', function (Blueprint $table): void {
-                $table->unsignedBigInteger('mutation_generation')->default(0)->after('provisioned_at');
+                $table->unsignedBigInteger('mutation_generation')->default(0)->after('remote_identity_generation');
             });
         }
         if (! Schema::hasColumn('service_subscriptions', 'remote_deleted_at')) {
@@ -154,32 +199,51 @@ SQL);
                 $table->unsignedBigInteger('operation_generation')->default(0)->after('operation_type');
             });
         }
+        if (! Schema::hasColumn('provisioning_operations', 'target_remote_identity_generation')) {
+            Schema::table('provisioning_operations', function (Blueprint $table): void {
+                $table->unsignedBigInteger('target_remote_identity_generation')->default(0)->after('operation_generation');
+            });
+        }
+        if (! Schema::hasColumn('provisioning_operations', 'target_lifecycle_version')) {
+            Schema::table('provisioning_operations', function (Blueprint $table): void {
+                $table->unsignedBigInteger('target_lifecycle_version')->default(0)->after('target_remote_identity_generation');
+            });
+        }
         if (! Schema::hasColumn('provisioning_operations', 'request_key_hash')) {
             Schema::table('provisioning_operations', function (Blueprint $table): void {
-                $table->char('request_key_hash', 64)->nullable()->after('operation_generation');
+                $table->char('request_key_hash', 64)->nullable()->after('target_lifecycle_version');
             });
         }
     }
 
     private function replaceOperationShapeAuthority(): void
     {
-        if ($this->constraintExists('provisioning_operations', 'provisioning_operations_type_chk')) {
-            DB::statement('ALTER TABLE provisioning_operations DROP CONSTRAINT provisioning_operations_type_chk');
+        foreach (['provisioning_operations_mutation_shape_chk', 'provisioning_operations_type_chk'] as $constraint) {
+            if ($this->constraintExists('provisioning_operations', $constraint)) {
+                DB::statement('ALTER TABLE provisioning_operations DROP CONSTRAINT '.$constraint);
+            }
         }
         DB::statement("ALTER TABLE provisioning_operations ADD CONSTRAINT provisioning_operations_type_chk CHECK (`operation_type` IN ('initial_provision','reset_usage','suspend','activate','delete','rotate_subscription_link'))");
 
         if (! $this->constraintExists('provisioning_operations', 'provisioning_operations_generation_chk')) {
             DB::statement('ALTER TABLE provisioning_operations ADD CONSTRAINT provisioning_operations_generation_chk CHECK (`operation_generation` >= 0)');
         }
-        if (! $this->constraintExists('provisioning_operations', 'provisioning_operations_mutation_shape_chk')) {
-            DB::statement(<<<'SQL'
+        DB::statement(<<<'SQL'
 ALTER TABLE provisioning_operations ADD CONSTRAINT provisioning_operations_mutation_shape_chk CHECK (
-    (`operation_type` = 'initial_provision' AND `operation_generation` = 0 AND `request_key_hash` IS NULL)
+    (`operation_type` = 'initial_provision'
+        AND `operation_generation` = 0
+        AND `target_remote_identity_generation` = 0
+        AND `target_lifecycle_version` = 0
+        AND `request_key_hash` IS NULL)
     OR
-    (`operation_type` <> 'initial_provision' AND `operation_generation` >= 1 AND `request_key_hash` IS NOT NULL AND CHAR_LENGTH(`request_key_hash`) = 64)
+    (`operation_type` <> 'initial_provision'
+        AND `operation_generation` >= 1
+        AND `target_remote_identity_generation` >= 1
+        AND `target_lifecycle_version` >= 0
+        AND `request_key_hash` IS NOT NULL
+        AND CHAR_LENGTH(`request_key_hash`) = 64)
 )
 SQL);
-        }
 
         if ($this->indexExists('provisioning_operations', 'provisioning_operations_item_type_unique')) {
             DB::statement('ALTER TABLE provisioning_operations DROP INDEX provisioning_operations_item_type_unique');
@@ -190,6 +254,31 @@ SQL);
         if (! $this->indexExists('provisioning_operations', 'provisioning_operations_service_request_unique')) {
             DB::statement('ALTER TABLE provisioning_operations ADD UNIQUE INDEX provisioning_operations_service_request_unique (service_subscription_id, request_key_hash)');
         }
+    }
+
+    private function replaceServiceShapeAuthority(): void
+    {
+        foreach ([
+            'service_subscriptions_mutation_lifecycle_chk',
+            'service_subscriptions_remote_identity_generation_chk',
+            'service_subscriptions_lifecycle_version_chk',
+            'service_subscriptions_lifecycle_state_chk',
+        ] as $constraint) {
+            if ($this->constraintExists('service_subscriptions', $constraint)) {
+                DB::statement('ALTER TABLE service_subscriptions DROP CONSTRAINT '.$constraint);
+            }
+        }
+
+        DB::statement("ALTER TABLE service_subscriptions ADD CONSTRAINT service_subscriptions_lifecycle_state_chk CHECK (`lifecycle_state` IN ('active','suspended','retired'))");
+        DB::statement('ALTER TABLE service_subscriptions ADD CONSTRAINT service_subscriptions_lifecycle_version_chk CHECK (`lifecycle_version` >= 0)');
+        DB::statement('ALTER TABLE service_subscriptions ADD CONSTRAINT service_subscriptions_remote_identity_generation_chk CHECK (`remote_identity_generation` >= 1)');
+        DB::statement(<<<'SQL'
+ALTER TABLE service_subscriptions ADD CONSTRAINT service_subscriptions_mutation_lifecycle_chk CHECK (
+    (`lifecycle_state` = 'retired' AND `remote_deleted_at` IS NOT NULL)
+    OR
+    (`lifecycle_state` IN ('active','suspended') AND `remote_deleted_at` IS NULL)
+)
+SQL);
     }
 
     private function createOperationInsertAuthority(): void
