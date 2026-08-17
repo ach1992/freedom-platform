@@ -309,7 +309,12 @@ final readonly class ServiceMutationExecutor
             return;
         }
 
-        $expectedState = $type === ServiceMutationType::Activate ? 'suspended' : 'active';
+        $expectedStates = match ($type) {
+            ServiceMutationType::Suspend => ['active'],
+            ServiceMutationType::Activate => ['suspended'],
+            ServiceMutationType::Delete => ['active', 'suspended'],
+            default => throw new RuntimeException('Unsupported Service lifecycle transition.'),
+        };
         $nextState = match ($type) {
             ServiceMutationType::Suspend => 'suspended',
             ServiceMutationType::Activate => 'active',
@@ -330,7 +335,7 @@ final readonly class ServiceMutationExecutor
             ->where('mutation_generation', $this->nonNegativeDatabaseInt($operation->operation_generation, 'Operation generation'))
             ->where('remote_identity_generation', $this->positiveDatabaseInt($operation->target_remote_identity_generation, 'Target remote identity generation'))
             ->where('lifecycle_version', $this->nonNegativeDatabaseInt($operation->target_lifecycle_version, 'Target lifecycle version'))
-            ->where('lifecycle_state', $expectedState)
+            ->whereIn('lifecycle_state', $expectedStates)
             ->where('service_target_id', $this->positiveDatabaseInt($operation->service_target_id, 'Service target ID'))
             ->where('remote_service_id', $this->requiredString($operation->remote_service_id, 'Remote Service ID'))
             ->whereNull('remote_deleted_at');
