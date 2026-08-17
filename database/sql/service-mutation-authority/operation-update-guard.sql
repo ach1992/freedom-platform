@@ -2,6 +2,7 @@ CREATE OR REPLACE TRIGGER provisioning_operations_update_guard
 BEFORE UPDATE ON provisioning_operations
 FOR EACH ROW
 BEGIN
+    DECLARE authoritative_service_id BIGINT UNSIGNED DEFAULT NULL;
     DECLARE identity_unchanged BOOLEAN DEFAULT FALSE;
     DECLARE claim_transition BOOLEAN DEFAULT FALSE;
     DECLARE boundary_transition BOOLEAN DEFAULT FALSE;
@@ -15,6 +16,8 @@ BEGIN
         AND BINARY NEW.operation_key = BINARY OLD.operation_key
         AND BINARY NEW.operation_type = BINARY OLD.operation_type
         AND NEW.operation_generation = OLD.operation_generation
+        AND NEW.target_remote_identity_generation = OLD.target_remote_identity_generation
+        AND NEW.target_lifecycle_version = OLD.target_lifecycle_version
         AND (NEW.request_key_hash <=> OLD.request_key_hash)
         AND NEW.order_id = OLD.order_id
         AND NEW.order_item_id = OLD.order_item_id
@@ -32,6 +35,8 @@ BEGIN
     IF OLD.operation_type = 'initial_provision' THEN
         IF COALESCE(@app_provisioning_authority, '') <> 'initial_remote_effect_v1'
            OR OLD.operation_generation <> 0
+           OR OLD.target_remote_identity_generation <> 0
+           OR OLD.target_lifecycle_version <> 0
            OR OLD.request_key_hash IS NOT NULL THEN
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Initial provisioning remote-effect mutation authority is invalid.';
         END IF;
@@ -126,12 +131,28 @@ BEGIN
            OR OLD.operation_type NOT IN ('reset_usage','suspend','activate','delete','rotate_subscription_link')
            OR OLD.operation_generation < 1
            OR OLD.operation_generation <> COALESCE(@app_service_mutation_generation, 0)
+           OR OLD.target_remote_identity_generation < 1
            OR OLD.request_key_hash IS NULL THEN
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service mutation remote-effect authority is invalid.';
         END IF;
 
+        SELECT service_row.id INTO authoritative_service_id
+        FROM service_subscriptions service_row
+        WHERE service_row.id = OLD.service_subscription_id
+          AND service_row.mutation_generation = OLD.operation_generation
+          AND service_row.remote_identity_generation = OLD.target_remote_identity_generation
+          AND service_row.lifecycle_version = OLD.target_lifecycle_version
+          AND service_row.lifecycle_state IN ('active','suspended')
+          AND service_row.remote_deleted_at IS NULL
+          AND service_row.service_target_id = OLD.service_target_id
+          AND BINARY service_row.remote_service_id = BINARY OLD.remote_service_id
+          AND (OLD.operation_type <> 'suspend' OR service_row.lifecycle_state = 'active')
+          AND (OLD.operation_type <> 'activate' OR service_row.lifecycle_state = 'suspended')
+        LIMIT 1 FOR UPDATE;
+
         SET claim_transition =
-            OLD.state IN ('queued','retry_scheduled') AND NEW.state = 'running'
+            authoritative_service_id IS NOT NULL
+            AND OLD.state IN ('queued','retry_scheduled') AND NEW.state = 'running'
             AND NEW.state_version = OLD.state_version + 1
             AND NEW.attempt_count = OLD.attempt_count + 1
             AND NEW.effect_fence_key IS NOT NULL
@@ -152,7 +173,8 @@ BEGIN
             AND NEW.remote_effect_completed_at IS NULL;
 
         SET boundary_transition =
-            OLD.state = 'running' AND NEW.state = 'running'
+            authoritative_service_id IS NOT NULL
+            AND OLD.state = 'running' AND NEW.state = 'running'
             AND NEW.state_version = OLD.state_version + 1
             AND NEW.attempt_count = OLD.attempt_count
             AND BINARY NEW.effect_fence_key = BINARY OLD.effect_fence_key
