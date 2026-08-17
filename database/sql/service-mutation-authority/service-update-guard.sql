@@ -73,6 +73,8 @@ BEGIN
           AND operation_row.target_remote_identity_generation = OLD.remote_identity_generation
           AND operation_row.target_lifecycle_version = OLD.lifecycle_version
           AND operation_row.state = 'running'
+          AND operation_row.remote_effect_started_at IS NOT NULL
+          AND operation_row.remote_effect_completed_at IS NULL
           AND operation_row.service_target_id = OLD.service_target_id
           AND BINARY operation_row.remote_service_id = BINARY OLD.remote_service_id
           AND BINARY operation_row.operation_key = BINARY COALESCE(@app_provisioning_operation_key, '')
