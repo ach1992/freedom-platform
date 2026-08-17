@@ -10,18 +10,12 @@ return new class extends Migration
     /** @requirement BUY-001 BUY-002 PAY-001 PAY-002 PAY-003 DAT-002 DAT-003 DAT-004 QUA-001 QUA-004 */
     public function up(): void
     {
-        $duplicateQuote = DB::table('purchase_settlements')
-            ->select('source_quote_id')
-            ->whereNotNull('source_quote_id')
-            ->groupBy('source_quote_id')
-            ->havingRaw('COUNT(*) > 1')
-            ->first();
-        if ($duplicateQuote !== null) {
-            throw new RuntimeException('Cannot activate pre-payment Order authority while one Quote has multiple purchase settlements.');
-        }
-
-        if (! $this->constraintExists('purchase_settlements', 'purchase_settlements_quote_unique')) {
-            DB::statement('ALTER TABLE purchase_settlements ADD CONSTRAINT purchase_settlements_quote_unique UNIQUE (`source_quote_id`)');
+        // A Quote may already have more than one immutable settlement fact from the
+        // accepted settlement-first history. Order authority, not financial fact
+        // persistence, owns the single-winner binding. Remove the superseded
+        // quote-level settlement uniqueness if an interrupted prior revision left it behind.
+        if ($this->constraintExists('purchase_settlements', 'purchase_settlements_quote_unique')) {
+            DB::statement('ALTER TABLE purchase_settlements DROP CONSTRAINT purchase_settlements_quote_unique');
         }
 
         $this->replaceConstraint('orders', 'orders_state_version_chk', 'CHECK (`state_version` >= 0)');
