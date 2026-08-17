@@ -34,10 +34,11 @@ final class ServiceMutationExistingInitialUpgradeTest extends TestCase
         $this->bootPurchaseOrderClock();
     }
 
-    public function test_upgrade_preserves_existing_initial_operation_and_assigns_only_canonical_generation_defaults(): void
+    public function test_upgrade_repairs_interrupted_rollback_and_preserves_existing_initial_authority(): void
     {
         /** @var Migration $migration */
         $migration = require database_path('migrations/2026_08_17_000300_enable_service_mutation_authority.php');
+        $migration->down();
         $migration->down();
         $upgraded = false;
 
@@ -62,6 +63,22 @@ final class ServiceMutationExistingInitialUpgradeTest extends TestCase
             self::assertSame(1, DB::table('outbox_messages')
                 ->where('event_type', InitialProvisioningQueueService::EVENT_TYPE)->count());
 
+            DB::unprepared(<<<'SQL'
+CREATE OR REPLACE TRIGGER provisioning_operations_update_guard
+BEFORE UPDATE ON provisioning_operations
+FOR EACH ROW
+BEGIN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Provisioning operation mutation is disabled during Service mutation authority upgrade.';
+END
+SQL);
+            $brokenGuard = DB::selectOne(
+                'SELECT ACTION_STATEMENT AS statement FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = DATABASE() AND TRIGGER_NAME = ?',
+                ['provisioning_operations_update_guard'],
+            );
+            self::assertNotNull($brokenGuard);
+            self::assertStringContainsString('disabled during Service mutation authority upgrade', (string) $brokenGuard->statement);
+            self::assertStringNotContainsString('initial_remote_effect_v1', (string) $brokenGuard->statement);
+
             $migration->up();
             $upgraded = true;
 
@@ -85,6 +102,13 @@ final class ServiceMutationExistingInitialUpgradeTest extends TestCase
             self::assertSame(0, (int) $operation->target_remote_identity_generation);
             self::assertSame(0, (int) $operation->target_lifecycle_version);
             self::assertNull($operation->request_key_hash);
+
+            $restoredGuard = DB::selectOne(
+                'SELECT ACTION_STATEMENT AS statement FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = DATABASE() AND TRIGGER_NAME = ?',
+                ['provisioning_operations_update_guard'],
+            );
+            self::assertNotNull($restoredGuard);
+            self::assertStringContainsString('service_mutation_effect_v1', (string) $restoredGuard->statement);
 
             $replay = $this->app->make(InitialProvisioningQueueService::class)->queueInitial(
                 $order->orderPublicId,

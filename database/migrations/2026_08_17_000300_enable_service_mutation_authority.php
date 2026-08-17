@@ -9,9 +9,18 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
+    /** @var list<string> */
+    private const PREVIOUS_AUTHORITY_MIGRATIONS = [
+        '2026_08_14_001162_create_provisioning_queue_authority.php',
+        '2026_08_16_000100_enable_initial_provisioning_remote_effect.php',
+        '2026_08_16_000102_enable_initial_provisioning_uncertain_recovery.php',
+        '2026_08_16_000105_activate_initial_provisioning_remote_effect.php',
+    ];
+
     /** @requirement SVC-004 PRV-001 PRV-002 PRV-003 DAT-003 SEC-002 SEC-008 QUA-004 */
     public function up(): void
     {
+        $this->repairInterruptedRollbackIfNeeded();
         $this->assertPrerequisites();
         $this->failClosedDuringUpgrade();
         $this->addColumns();
@@ -28,26 +37,98 @@ return new class extends Migration
 
     public function down(): void
     {
+        if (DB::table('provisioning_operations')->where('state', 'running')->exists()) {
+            throw new RuntimeException('Cannot roll back Service mutation authority while a provisioning remote effect is running.');
+        }
         if (DB::table('provisioning_operations')->where('operation_type', '<>', 'initial_provision')->exists()) {
             throw new RuntimeException('Cannot roll back Service mutation authority after mutation evidence exists.');
         }
-        if (DB::table('service_subscriptions')->where('mutation_generation', '>', 0)->exists()
-            || DB::table('service_subscriptions')->whereNotNull('remote_deleted_at')->exists()
-            || DB::table('service_subscriptions')->where('lifecycle_version', '>', 0)->exists()
-            || DB::table('service_subscriptions')->where('lifecycle_state', '<>', 'active')->exists()
-            || DB::table('service_subscriptions')->where('remote_identity_generation', '<>', 1)->exists()) {
+        if ($this->hasServiceMutationEvidence()) {
             throw new RuntimeException('Cannot roll back Service mutation authority after Service mutation or identity evidence exists.');
         }
 
         $this->failClosedDuringUpgrade();
         $this->dropMutationShape();
+        $this->restorePreviousInitialAuthority();
+    }
 
-        foreach ([
-            '2026_08_14_001162_create_provisioning_queue_authority.php',
-            '2026_08_16_000100_enable_initial_provisioning_remote_effect.php',
-            '2026_08_16_000102_enable_initial_provisioning_uncertain_recovery.php',
-            '2026_08_16_000105_activate_initial_provisioning_remote_effect.php',
-        ] as $file) {
+    private function repairInterruptedRollbackIfNeeded(): void
+    {
+        if ($this->mutationShapeStarted()
+            || $this->initialAuthorityIsExact()
+            || ! $this->baseRemoteEffectSchemaAvailable()) {
+            return;
+        }
+
+        $this->restorePreviousInitialAuthority();
+    }
+
+    private function hasServiceMutationEvidence(): bool
+    {
+        if (Schema::hasColumn('service_subscriptions', 'mutation_generation')
+            && DB::table('service_subscriptions')->where('mutation_generation', '>', 0)->exists()) {
+            return true;
+        }
+        if (Schema::hasColumn('service_subscriptions', 'remote_deleted_at')
+            && DB::table('service_subscriptions')->whereNotNull('remote_deleted_at')->exists()) {
+            return true;
+        }
+        if (Schema::hasColumn('service_subscriptions', 'lifecycle_version')
+            && DB::table('service_subscriptions')->where('lifecycle_version', '>', 0)->exists()) {
+            return true;
+        }
+        if (Schema::hasColumn('service_subscriptions', 'lifecycle_state')
+            && DB::table('service_subscriptions')->where('lifecycle_state', '<>', 'active')->exists()) {
+            return true;
+        }
+
+        return Schema::hasColumn('service_subscriptions', 'remote_identity_generation')
+            && DB::table('service_subscriptions')->where('remote_identity_generation', '<>', 1)->exists();
+    }
+
+    private function mutationShapeStarted(): bool
+    {
+        return Schema::hasColumn('service_subscriptions', 'mutation_generation')
+            || Schema::hasColumn('service_subscriptions', 'remote_deleted_at')
+            || Schema::hasColumn('service_subscriptions', 'lifecycle_state')
+            || Schema::hasColumn('service_subscriptions', 'lifecycle_version')
+            || Schema::hasColumn('service_subscriptions', 'remote_identity_generation')
+            || Schema::hasColumn('provisioning_operations', 'operation_generation')
+            || Schema::hasColumn('provisioning_operations', 'target_remote_identity_generation')
+            || Schema::hasColumn('provisioning_operations', 'target_lifecycle_version')
+            || Schema::hasColumn('provisioning_operations', 'request_key_hash');
+    }
+
+    private function baseRemoteEffectSchemaAvailable(): bool
+    {
+        foreach (['provisioning_operations', 'service_subscriptions', 'provisioning_operation_histories', 'provisioning_remote_effect_events'] as $table) {
+            if (! Schema::hasTable($table)) {
+                return false;
+            }
+        }
+        foreach (['effect_fence_key', 'service_target_id', 'remote_service_id', 'remote_effect_started_at', 'remote_effect_completed_at'] as $column) {
+            if (! Schema::hasColumn('provisioning_operations', $column)) {
+                return false;
+            }
+        }
+        foreach (['service_target_id', 'remote_service_id', 'provisioned_at'] as $column) {
+            if (! Schema::hasColumn('service_subscriptions', $column)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function initialAuthorityIsExact(): bool
+    {
+        return $this->triggerContains('provisioning_operations_update_guard', 'initial_remote_effect_v1')
+            && $this->triggerContains('provisioning_operations_update_guard', 'recovery_transition');
+    }
+
+    private function restorePreviousInitialAuthority(): void
+    {
+        foreach (self::PREVIOUS_AUTHORITY_MIGRATIONS as $file) {
             $migration = require __DIR__.'/'.$file;
             if (! is_object($migration) || ! method_exists($migration, 'up')) {
                 throw new RuntimeException('Previous initial provisioning authority migration is unavailable.');
@@ -118,36 +199,13 @@ return new class extends Migration
 
     private function assertPrerequisites(): void
     {
-        foreach (['provisioning_operations', 'service_subscriptions', 'provisioning_operation_histories', 'provisioning_remote_effect_events'] as $table) {
-            if (! Schema::hasTable($table)) {
-                throw new RuntimeException('Service mutation authority prerequisites are incomplete.');
-            }
-        }
-        foreach (['effect_fence_key', 'service_target_id', 'remote_service_id', 'remote_effect_started_at', 'remote_effect_completed_at'] as $column) {
-            if (! Schema::hasColumn('provisioning_operations', $column)) {
-                throw new RuntimeException('Initial provisioning remote-effect authority must be active before Service mutations.');
-            }
-        }
-        foreach (['service_target_id', 'remote_service_id', 'provisioned_at'] as $column) {
-            if (! Schema::hasColumn('service_subscriptions', $column)) {
-                throw new RuntimeException('Provisioned Service remote binding is incomplete.');
-            }
+        if (! $this->baseRemoteEffectSchemaAvailable()) {
+            throw new RuntimeException('Service mutation authority prerequisites are incomplete.');
         }
         if (DB::table('provisioning_operations')->where('state', 'running')->exists()) {
             throw new RuntimeException('Cannot upgrade Service mutation authority while a provisioning remote effect is running.');
         }
-        $upgradeStarted = Schema::hasColumn('service_subscriptions', 'mutation_generation')
-            || Schema::hasColumn('service_subscriptions', 'remote_deleted_at')
-            || Schema::hasColumn('service_subscriptions', 'lifecycle_state')
-            || Schema::hasColumn('service_subscriptions', 'lifecycle_version')
-            || Schema::hasColumn('service_subscriptions', 'remote_identity_generation')
-            || Schema::hasColumn('provisioning_operations', 'operation_generation')
-            || Schema::hasColumn('provisioning_operations', 'target_remote_identity_generation')
-            || Schema::hasColumn('provisioning_operations', 'target_lifecycle_version')
-            || Schema::hasColumn('provisioning_operations', 'request_key_hash');
-        if (! $upgradeStarted
-            && (! $this->triggerContains('provisioning_operations_update_guard', 'initial_remote_effect_v1')
-                || ! $this->triggerContains('provisioning_operations_update_guard', 'recovery_transition'))) {
+        if (! $this->mutationShapeStarted() && ! $this->initialAuthorityIsExact()) {
             throw new RuntimeException('Initial provisioning exact remote-effect authority is not active.');
         }
     }
