@@ -37,7 +37,7 @@ enum PaymentIntentState: string
     {
         return match ($this) {
             self::Created => [self::AwaitingUserAction, self::Canceled],
-            self::AwaitingUserAction => [self::Submitted, self::Expired],
+            self::AwaitingUserAction => [self::Submitted, self::Expired, self::Canceled],
             self::Submitted => [self::Verifying, self::Failed],
             self::Verifying => [self::PendingManualReview, self::Authorized, self::Captured, self::Failed],
             self::PendingManualReview => [self::Verifying, self::Captured, self::Failed],
