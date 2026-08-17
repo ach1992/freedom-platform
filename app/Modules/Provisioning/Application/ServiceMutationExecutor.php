@@ -51,6 +51,11 @@ final readonly class ServiceMutationExecutor
             throw new DomainException('Service mutation operation is not executable automatically.');
         }
 
+        $connection = $this->database->connection();
+        if ($connection->transactionLevel() !== 0) {
+            throw new RuntimeException('Service mutation provider boundary cannot run inside a database transaction.');
+        }
+
         $operation = $this->claim($operation);
         $service = $this->serviceById((int) $operation->service_subscription_id);
         if (! $this->serviceMatchesOperation($service, $operation, $type)) {
@@ -66,6 +71,7 @@ final readonly class ServiceMutationExecutor
         try {
             $targetId = $this->positiveDatabaseInt($operation->service_target_id, 'Service target ID');
             $adapter = $this->adapters->resolve($targetId);
+            $supportsMutation = $adapter->capabilities()->supports($type->panelCapability());
         } catch (Throwable) {
             return $this->finalize(
                 $operation,
@@ -76,7 +82,7 @@ final readonly class ServiceMutationExecutor
             );
         }
 
-        if (! $adapter->capabilities()->supports($type->panelCapability())) {
+        if (! $supportsMutation) {
             return $this->finalize(
                 $operation,
                 $type,
@@ -86,12 +92,22 @@ final readonly class ServiceMutationExecutor
             );
         }
 
-        $connection = $this->database->connection();
         if ($connection->transactionLevel() !== 0) {
             throw new RuntimeException('Service mutation provider boundary cannot run inside a database transaction.');
         }
 
-        $operation = $this->markProviderBoundary($operation, $type);
+        $boundaryOperation = $this->markProviderBoundary($operation, $type);
+        if ($boundaryOperation === null) {
+            return $this->finalize(
+                $operation,
+                $type,
+                ProvisioningState::NeedsReview,
+                'stale_service_at_provider_boundary',
+                'Service lifecycle or remote identity changed before the provider boundary.',
+            );
+        }
+        $operation = $boundaryOperation;
+
         if ($connection->transactionLevel() !== 0) {
             throw new RuntimeException('Service mutation provider boundary cannot run inside a database transaction.');
         }
@@ -165,10 +181,10 @@ final readonly class ServiceMutationExecutor
         }, 3);
     }
 
-    /** @param MutationOperation $locator @return MutationOperation */
-    private function markProviderBoundary(object $locator, ServiceMutationType $type): object
+    /** @param MutationOperation $locator @return MutationOperation|null */
+    private function markProviderBoundary(object $locator, ServiceMutationType $type): ?object
     {
-        return $this->database->connection()->transaction(function (Connection $connection) use ($locator, $type): object {
+        return $this->database->connection()->transaction(function (Connection $connection) use ($locator, $type): ?object {
             $operation = $this->operationById($connection, (int) $locator->id, true);
             if ($this->state($operation->state) !== ProvisioningState::Running
                 || $operation->remote_effect_started_at !== null
@@ -178,7 +194,7 @@ final readonly class ServiceMutationExecutor
 
             $service = $this->serviceByIdOn($connection, (int) $operation->service_subscription_id, true);
             if (! $this->serviceMatchesOperation($service, $operation, $type)) {
-                throw new DomainException('Service mutation lifecycle or remote identity is no longer authoritative at provider boundary.');
+                return null;
             }
 
             $now = $this->timestamp();
@@ -259,9 +275,11 @@ final readonly class ServiceMutationExecutor
             $service = $this->serviceByIdOn($connection, (int) $operation->service_subscription_id, true);
             $authoritative = $this->serviceMatchesOperation($service, $operation, $type);
             if (! $authoritative) {
+                if ($state !== ProvisioningState::NeedsReview) {
+                    $resultCode = 'stale_service_at_finalize';
+                    $safeMessage = 'Service lifecycle or remote identity changed before finalization.';
+                }
                 $state = ProvisioningState::NeedsReview;
-                $resultCode = 'stale_service_at_finalize';
-                $safeMessage = 'Service lifecycle or remote identity changed before finalization.';
             }
 
             $now = $this->timestamp();
