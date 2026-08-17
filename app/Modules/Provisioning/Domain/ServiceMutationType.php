@@ -16,9 +16,4 @@ enum ServiceMutationType: string
     {
         return $this->value;
     }
-
-    public function isDelete(): bool
-    {
-        return $this === self::Delete;
-    }
 }
