@@ -35,6 +35,8 @@ BEGIN
           AND service_row.user_id = order_row.user_id
           AND NEW.user_id = order_row.user_id
           AND NEW.operation_generation = 0
+          AND NEW.target_remote_identity_generation = 0
+          AND NEW.target_lifecycle_version = 0
           AND NEW.request_key_hash IS NULL
           AND NEW.operation_key = CONCAT('initial-provision:', item_row.public_id)
           AND NEW.state = 'queued'
@@ -57,6 +59,7 @@ BEGIN
            OR NEW.operation_type NOT IN ('reset_usage','suspend','activate','delete','rotate_subscription_link')
            OR NEW.operation_generation < 1
            OR NEW.operation_generation <> COALESCE(@app_service_mutation_generation, 0)
+           OR NEW.target_remote_identity_generation < 1
            OR NEW.request_key_hash IS NULL
            OR BINARY NEW.request_key_hash <> BINARY COALESCE(@app_service_mutation_request_hash, '')
            OR BINARY NEW.correlation_id <> BINARY COALESCE(@app_service_mutation_correlation_id, '')
@@ -81,16 +84,21 @@ BEGIN
           AND service_row.user_id = NEW.user_id
           AND service_row.mutation_generation = NEW.operation_generation
           AND service_row.remote_deleted_at IS NULL
+          AND service_row.lifecycle_state IN ('active','suspended')
+          AND (NEW.operation_type <> 'suspend' OR service_row.lifecycle_state = 'active')
+          AND (NEW.operation_type <> 'activate' OR service_row.lifecycle_state = 'suspended')
           AND service_row.provisioned_at IS NOT NULL
           AND service_row.service_target_id IS NOT NULL
           AND service_row.remote_service_id IS NOT NULL
           AND NEW.service_target_id = service_row.service_target_id
           AND BINARY NEW.remote_service_id = BINARY service_row.remote_service_id
+          AND NEW.target_remote_identity_generation = service_row.remote_identity_generation
+          AND NEW.target_lifecycle_version = service_row.lifecycle_version
           AND BINARY NEW.operation_key = BINARY CONCAT('service-mutation:', service_row.public_id, ':', NEW.operation_generation, ':', NEW.operation_type)
         LIMIT 1 FOR UPDATE;
 
         IF valid_mutation_service_id IS NULL THEN
-            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service mutation operation does not match current Service generation and remote binding.';
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service mutation operation does not match current Service generation, lifecycle, and remote binding.';
         END IF;
     END IF;
 END
