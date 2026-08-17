@@ -21,6 +21,7 @@ use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
 use Database\Seeders\WalletFinancialFoundationSeeder;
+use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -180,11 +181,11 @@ final class PurchaseOrderAuthorityHardeningTest extends TestCase
         self::assertSame(2, DB::table('payment_provider_events')->where('payment_intent_id', $secondIntentId)->count());
         self::assertSame($firstSettlement->settlementId, (int) DB::table('orders')->where('id', $firstOrder->orderId)->value('purchase_settlement_id'));
 
-        /** @var \Illuminate\Database\Migrations\Migration $reconcile */
+        /** @var Migration $reconcile */
         $reconcile = require database_path('migrations/2026_08_17_000100_reconcile_pre_payment_order_authority.php');
-        /** @var \Illuminate\Database\Migrations\Migration $splitShape */
+        /** @var Migration $splitShape */
         $splitShape = require database_path('migrations/2026_08_17_000101_split_pre_payment_order_shape_constraints.php');
-        /** @var \Illuminate\Database\Migrations\Migration $finalInsertGuard */
+        /** @var Migration $finalInsertGuard */
         $finalInsertGuard = require database_path('migrations/2026_08_17_000102_harden_purchase_order_insert_lifecycle_authority.php');
         try {
             $reconcile->up();
