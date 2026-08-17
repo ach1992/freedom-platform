@@ -17,6 +17,7 @@ return new class extends Migration
         $this->addColumns();
         $this->replaceOperationShapeAuthority();
         $this->replaceServiceShapeAuthority();
+        $this->createServiceInsertAuthority();
         $this->createHistoryAuthority();
         $this->createRemoteEffectEventAuthority();
         $this->createOperationUpdateAuthority();
@@ -158,6 +159,14 @@ BEGIN
 END
 SQL);
         DB::unprepared(<<<'SQL'
+CREATE OR REPLACE TRIGGER service_subscriptions_insert_guard
+BEFORE INSERT ON service_subscriptions
+FOR EACH ROW
+BEGIN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service creation is disabled during Service mutation authority upgrade.';
+END
+SQL);
+        DB::unprepared(<<<'SQL'
 CREATE OR REPLACE TRIGGER service_subscriptions_update_guard
 BEFORE UPDATE ON service_subscriptions
 FOR EACH ROW
@@ -286,6 +295,11 @@ SQL);
         $this->installSql('operation-insert-guard.sql');
     }
 
+    private function createServiceInsertAuthority(): void
+    {
+        $this->installSql('service-insert-guard.sql');
+    }
+
     private function createServiceUpdateAuthority(): void
     {
         $this->installSql('service-update-guard.sql');
@@ -314,7 +328,7 @@ SQL);
         if (! is_string($sql) || trim($sql) === '') {
             throw new RuntimeException('Service mutation authority SQL asset is unavailable: '.$file);
         }
-        DB::unprepared($sql);
+        DB::connection()->getPdo()->exec($sql);
     }
 
     private function constraintExists(string $table, string $constraint): bool

@@ -45,11 +45,12 @@ final class ServiceMutationExecutorNormalizationTest extends TestCase
     {
         $source = $this->classSource(ServiceMutationExecutor::class);
 
-        $preflight = strpos($source, '$connection = $this->database->connection();');
+        $preflight = strpos($source, '$this->assertProviderCallOutsideTransaction();');
         $claim = strpos($source, '$operation = $this->claim($operation);');
         self::assertIsInt($preflight);
         self::assertIsInt($claim);
         self::assertLessThan($claim, $preflight);
+        self::assertSame(3, substr_count($source, '$this->assertProviderCallOutsideTransaction();'));
     }
 
     public function test_stale_provider_boundary_is_fail_closed_without_entering_remote_effect(): void

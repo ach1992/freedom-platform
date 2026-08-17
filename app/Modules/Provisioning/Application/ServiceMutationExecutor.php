@@ -51,10 +51,7 @@ final readonly class ServiceMutationExecutor
             throw new DomainException('Service mutation operation is not executable automatically.');
         }
 
-        $connection = $this->database->connection();
-        if ($connection->transactionLevel() !== 0) {
-            throw new RuntimeException('Service mutation provider boundary cannot run inside a database transaction.');
-        }
+        $this->assertProviderCallOutsideTransaction();
 
         $operation = $this->claim($operation);
         $service = $this->serviceById((int) $operation->service_subscription_id);
@@ -92,9 +89,7 @@ final readonly class ServiceMutationExecutor
             );
         }
 
-        if ($connection->transactionLevel() !== 0) {
-            throw new RuntimeException('Service mutation provider boundary cannot run inside a database transaction.');
-        }
+        $this->assertProviderCallOutsideTransaction();
 
         $boundaryOperation = $this->markProviderBoundary($operation, $type);
         if ($boundaryOperation === null) {
@@ -108,9 +103,7 @@ final readonly class ServiceMutationExecutor
         }
         $operation = $boundaryOperation;
 
-        if ($connection->transactionLevel() !== 0) {
-            throw new RuntimeException('Service mutation provider boundary cannot run inside a database transaction.');
-        }
+        $this->assertProviderCallOutsideTransaction();
 
         try {
             $result = $this->invoke(
@@ -132,7 +125,10 @@ final readonly class ServiceMutationExecutor
         return $this->applyResult($operation, $type, $result);
     }
 
-    /** @param MutationOperation $locator @return MutationOperation */
+    /**
+     * @param  MutationOperation  $locator
+     * @return MutationOperation
+     */
     private function claim(object $locator): object
     {
         return $this->database->connection()->transaction(function (Connection $connection) use ($locator): object {
@@ -181,7 +177,10 @@ final readonly class ServiceMutationExecutor
         }, 3);
     }
 
-    /** @param MutationOperation $locator @return MutationOperation|null */
+    /**
+     * @param  MutationOperation  $locator
+     * @return MutationOperation|null
+     */
     private function markProviderBoundary(object $locator, ServiceMutationType $type): ?object
     {
         return $this->database->connection()->transaction(function (Connection $connection) use ($locator, $type): ?object {
@@ -315,7 +314,10 @@ final readonly class ServiceMutationExecutor
         }, 3);
     }
 
-    /** @param MutationService $service @param MutationOperation $operation */
+    /**
+     * @param  MutationService  $service
+     * @param  MutationOperation  $operation
+     */
     private function applySuccessfulLifecycleTransition(
         Connection $connection,
         object $service,
@@ -331,13 +333,11 @@ final readonly class ServiceMutationExecutor
             ServiceMutationType::Suspend => ['active'],
             ServiceMutationType::Activate => ['suspended'],
             ServiceMutationType::Delete => ['active', 'suspended'],
-            default => throw new RuntimeException('Unsupported Service lifecycle transition.'),
         };
         $nextState = match ($type) {
             ServiceMutationType::Suspend => 'suspended',
             ServiceMutationType::Activate => 'active',
             ServiceMutationType::Delete => 'retired',
-            default => throw new RuntimeException('Unsupported Service lifecycle transition.'),
         };
         $updates = [
             'lifecycle_state' => $nextState,
@@ -363,7 +363,10 @@ final readonly class ServiceMutationExecutor
         }
     }
 
-    /** @param MutationService $service @param MutationOperation $operation */
+    /**
+     * @param  MutationService  $service
+     * @param  MutationOperation  $operation
+     */
     private function serviceMatchesOperation(object $service, object $operation, ServiceMutationType $type): bool
     {
         if ($this->nonNegativeDatabaseInt($service->mutation_generation, 'Service mutation generation')
@@ -519,6 +522,13 @@ final readonly class ServiceMutationExecutor
     private function isTerminal(ProvisioningState $state): bool
     {
         return in_array($state, [ProvisioningState::Succeeded, ProvisioningState::FailedFinal, ProvisioningState::Compensated], true);
+    }
+
+    private function assertProviderCallOutsideTransaction(): void
+    {
+        if ($this->database->connection()->transactionLevel() !== 0) {
+            throw new RuntimeException('Service mutation provider boundary cannot run inside a database transaction.');
+        }
     }
 
     /** @param MutationOperation $operation */

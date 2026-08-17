@@ -31,6 +31,7 @@ final class ServiceMutationAuthorityMigrationTest extends TestCase
 
         $operationGuard = $this->triggerStatement('provisioning_operations_update_guard');
         $insertGuard = $this->triggerStatement('provisioning_operations_insert_guard');
+        $serviceInsertGuard = $this->triggerStatement('service_subscriptions_insert_guard');
         $serviceGuard = $this->triggerStatement('service_subscriptions_update_guard');
         $eventGuard = $this->triggerStatement('provisioning_remote_effect_events_insert_guard');
 
@@ -51,6 +52,12 @@ final class ServiceMutationAuthorityMigrationTest extends TestCase
         $this->assertStringContainsString('NEW.route_hold_expires_at IS NOT NULL', $insertGuard);
         $this->assertStringContainsString('NEW.capacity_reservation_id IS NOT NULL', $insertGuard);
         $this->assertStringContainsString('NEW.remote_username IS NOT NULL', $insertGuard);
+        $this->assertStringContainsString('Service Subscription must start with a clean local lifecycle and no remote binding.', $serviceInsertGuard);
+        $this->assertStringContainsString("NEW.lifecycle_state <> 'active'", $serviceInsertGuard);
+        $this->assertStringContainsString('NEW.lifecycle_version <> 0', $serviceInsertGuard);
+        $this->assertStringContainsString('NEW.remote_identity_generation <> 1', $serviceInsertGuard);
+        $this->assertStringContainsString('NEW.mutation_generation <> 0', $serviceInsertGuard);
+        $this->assertStringContainsString('NEW.remote_service_id IS NOT NULL', $serviceInsertGuard);
         $this->assertStringContainsString('service_mutation_queue_v1', $serviceGuard);
         $this->assertStringContainsString('remote_deleted_at', $serviceGuard);
         $this->assertStringContainsString("operation_row.state = 'succeeded'", $serviceGuard);
@@ -111,6 +118,7 @@ final class ServiceMutationAuthorityMigrationTest extends TestCase
         $this->assertTrue(Schema::hasColumn('provisioning_operations', 'operation_generation'));
         $this->assertStringContainsString('initial_remote_effect_v1', $this->triggerStatement('provisioning_operations_update_guard'));
         $this->assertStringContainsString('service_mutation_effect_v1', $this->triggerStatement('provisioning_operations_update_guard'));
+        $this->assertStringContainsString('clean local lifecycle', $this->triggerStatement('service_subscriptions_insert_guard'));
     }
 
     public function test_rollback_guard_covers_all_mutation_and_identity_evidence_classes(): void
@@ -125,6 +133,8 @@ final class ServiceMutationAuthorityMigrationTest extends TestCase
             "where('lifecycle_version', '>', 0)",
             "where('lifecycle_state', '<>', 'active')",
             "where('remote_identity_generation', '<>', 1)",
+            "createServiceInsertAuthority()",
+            "service-insert-guard.sql",
         ] as $requiredGuard) {
             self::assertStringContainsString($requiredGuard, $source);
         }

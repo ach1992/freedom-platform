@@ -122,8 +122,6 @@ final readonly class ServiceMutationQueueService
                     throw new RuntimeException('Service mutation operation disappeared after creation.');
                 }
 
-                $service->mutation_generation = $generation;
-
                 return $this->receipt($service, $operation, false);
             } finally {
                 $this->clearQueueAuthority($connection);
