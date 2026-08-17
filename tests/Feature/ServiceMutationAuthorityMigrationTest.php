@@ -18,9 +18,14 @@ final class ServiceMutationAuthorityMigrationTest extends TestCase
 
     public function test_schema_extends_existing_provisioning_authority_without_parallel_state_machine(): void
     {
+        $this->assertTrue(Schema::hasColumn('service_subscriptions', 'lifecycle_state'));
+        $this->assertTrue(Schema::hasColumn('service_subscriptions', 'lifecycle_version'));
+        $this->assertTrue(Schema::hasColumn('service_subscriptions', 'remote_identity_generation'));
         $this->assertTrue(Schema::hasColumn('service_subscriptions', 'mutation_generation'));
         $this->assertTrue(Schema::hasColumn('service_subscriptions', 'remote_deleted_at'));
         $this->assertTrue(Schema::hasColumn('provisioning_operations', 'operation_generation'));
+        $this->assertTrue(Schema::hasColumn('provisioning_operations', 'target_remote_identity_generation'));
+        $this->assertTrue(Schema::hasColumn('provisioning_operations', 'target_lifecycle_version'));
         $this->assertTrue(Schema::hasColumn('provisioning_operations', 'request_key_hash'));
         $this->assertFalse(Schema::hasTable('service_mutation_operations'));
 
@@ -32,9 +37,16 @@ final class ServiceMutationAuthorityMigrationTest extends TestCase
         $this->assertStringContainsString('initial_remote_effect_v1', $operationGuard);
         $this->assertStringContainsString('recovery_transition', $operationGuard);
         $this->assertStringContainsString('service_mutation_effect_v1', $operationGuard);
+        $this->assertStringContainsString('target_remote_identity_generation', $operationGuard);
+        $this->assertStringContainsString('target_lifecycle_version', $operationGuard);
         $this->assertStringContainsString('service_mutation_queue_v1', $insertGuard);
+        $this->assertStringContainsString('target_remote_identity_generation', $insertGuard);
+        $this->assertStringContainsString('target_lifecycle_version', $insertGuard);
         $this->assertStringContainsString('service_mutation_queue_v1', $serviceGuard);
         $this->assertStringContainsString('remote_deleted_at', $serviceGuard);
+        $this->assertStringContainsString("operation_row.state = 'succeeded'", $serviceGuard);
+        $this->assertStringContainsString('operation_row.remote_effect_started_at IS NOT NULL', $serviceGuard);
+        $this->assertStringContainsString('operation_row.remote_effect_completed_at IS NOT NULL', $serviceGuard);
         $this->assertStringContainsString('service_mutation_effect_v1', $eventGuard);
     }
 
@@ -47,6 +59,8 @@ final class ServiceMutationAuthorityMigrationTest extends TestCase
             'operation_key' => 'service-mutation:'.Str::ulid().':1:suspend',
             'operation_type' => 'suspend',
             'operation_generation' => 1,
+            'target_remote_identity_generation' => 1,
+            'target_lifecycle_version' => 0,
             'request_key_hash' => hash('sha256', 'unauthorized-request'),
             'order_id' => 1,
             'order_item_id' => 1,
@@ -68,6 +82,9 @@ final class ServiceMutationAuthorityMigrationTest extends TestCase
 
         $migration->down();
 
+        $this->assertFalse(Schema::hasColumn('service_subscriptions', 'lifecycle_state'));
+        $this->assertFalse(Schema::hasColumn('service_subscriptions', 'lifecycle_version'));
+        $this->assertFalse(Schema::hasColumn('service_subscriptions', 'remote_identity_generation'));
         $this->assertFalse(Schema::hasColumn('service_subscriptions', 'mutation_generation'));
         $this->assertFalse(Schema::hasColumn('provisioning_operations', 'operation_generation'));
         $this->assertStringContainsString('initial_remote_effect_v1', $this->triggerStatement('provisioning_operations_update_guard'));
@@ -75,6 +92,8 @@ final class ServiceMutationAuthorityMigrationTest extends TestCase
 
         $migration->up();
 
+        $this->assertTrue(Schema::hasColumn('service_subscriptions', 'lifecycle_state'));
+        $this->assertTrue(Schema::hasColumn('service_subscriptions', 'remote_identity_generation'));
         $this->assertTrue(Schema::hasColumn('service_subscriptions', 'mutation_generation'));
         $this->assertTrue(Schema::hasColumn('provisioning_operations', 'operation_generation'));
         $this->assertStringContainsString('initial_remote_effect_v1', $this->triggerStatement('provisioning_operations_update_guard'));
