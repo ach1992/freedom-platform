@@ -19,8 +19,6 @@ use RuntimeException;
  */
 final readonly class ServiceLifecycleCommandService
 {
-    private const ADMIN_PERMISSION = 'services.lifecycle.manage';
-
     public function __construct(
         private DatabaseManager $database,
         private AdministratorPermissionAuthorizer $administratorAuthorizer,
@@ -55,7 +53,7 @@ final readonly class ServiceLifecycleCommandService
                 throw new DomainException('Service Subscription does not exist.');
             }
 
-            $this->authorize($connection, $service, $context);
+            $this->authorize($connection, $service, $type, $context);
 
             $mutation = $this->mutations->queue(
                 $servicePublicId,
@@ -109,10 +107,17 @@ final readonly class ServiceLifecycleCommandService
     }
 
     /** @param CommandServiceRow $service */
-    private function authorize(Connection $connection, object $service, ServiceLifecycleCommandContext $context): void
-    {
+    private function authorize(
+        Connection $connection,
+        object $service,
+        ServiceMutationType $type,
+        ServiceLifecycleCommandContext $context,
+    ): void {
         if ($context->actorAdministratorId !== null) {
-            $this->administratorAuthorizer->authorize($context->actorAdministratorId, self::ADMIN_PERMISSION);
+            $this->administratorAuthorizer->authorize(
+                $context->actorAdministratorId,
+                $this->administratorPermission($type),
+            );
 
             return;
         }
@@ -129,6 +134,15 @@ final readonly class ServiceLifecycleCommandService
             || ! in_array($user->account_type, ['customer', 'agent'], true)) {
             throw new AuthorizationException('Service lifecycle authorization failed.');
         }
+    }
+
+    private function administratorPermission(ServiceMutationType $type): string
+    {
+        return match ($type) {
+            ServiceMutationType::ResetUsage, ServiceMutationType::Suspend, ServiceMutationType::Activate => 'services.operate',
+            ServiceMutationType::RotateSubscriptionLink => 'services.rotate_link',
+            ServiceMutationType::Delete => 'services.retire',
+        };
     }
 
     private function positiveInt(int|string $value, string $label): int
