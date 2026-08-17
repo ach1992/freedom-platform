@@ -1,0 +1,95 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Tests\Feature;
+
+use Illuminate\Database\QueryException;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Str;
+use Tests\TestCase;
+
+/** @requirement SVC-004 PRV-002 PRV-003 DAT-003 SEC-008 QUA-004 */
+final class ServiceMutationAuthorityMigrationTest extends TestCase
+{
+    use RefreshDatabase;
+
+    public function test_schema_extends_existing_provisioning_authority_without_parallel_state_machine(): void
+    {
+        $this->assertTrue(Schema::hasColumn('service_subscriptions', 'mutation_generation'));
+        $this->assertTrue(Schema::hasColumn('service_subscriptions', 'remote_deleted_at'));
+        $this->assertTrue(Schema::hasColumn('provisioning_operations', 'operation_generation'));
+        $this->assertTrue(Schema::hasColumn('provisioning_operations', 'request_key_hash'));
+        $this->assertFalse(Schema::hasTable('service_mutation_operations'));
+
+        $operationGuard = $this->triggerStatement('provisioning_operations_update_guard');
+        $insertGuard = $this->triggerStatement('provisioning_operations_insert_guard');
+        $serviceGuard = $this->triggerStatement('service_subscriptions_update_guard');
+        $eventGuard = $this->triggerStatement('provisioning_remote_effect_events_insert_guard');
+
+        $this->assertStringContainsString('initial_remote_effect_v1', $operationGuard);
+        $this->assertStringContainsString('recovery_transition', $operationGuard);
+        $this->assertStringContainsString('service_mutation_effect_v1', $operationGuard);
+        $this->assertStringContainsString('service_mutation_queue_v1', $insertGuard);
+        $this->assertStringContainsString('service_mutation_queue_v1', $serviceGuard);
+        $this->assertStringContainsString('remote_deleted_at', $serviceGuard);
+        $this->assertStringContainsString('service_mutation_effect_v1', $eventGuard);
+    }
+
+    public function test_mutation_operation_insert_fails_closed_without_queue_authority(): void
+    {
+        $this->expectException(QueryException::class);
+
+        DB::table('provisioning_operations')->insert([
+            'public_id' => (string) Str::ulid(),
+            'operation_key' => 'service-mutation:'.Str::ulid().':1:suspend',
+            'operation_type' => 'suspend',
+            'operation_generation' => 1,
+            'request_key_hash' => hash('sha256', 'unauthorized-request'),
+            'order_id' => 1,
+            'order_item_id' => 1,
+            'service_subscription_id' => 1,
+            'user_id' => 1,
+            'state' => 'queued',
+            'state_version' => 1,
+            'correlation_id' => 'unauthorized-correlation',
+            'service_target_id' => 1,
+            'remote_service_id' => 'remote-1',
+            'created_at' => '2026-08-17 00:00:00.000000',
+            'updated_at' => '2026-08-17 00:00:00.000000',
+        ]);
+    }
+
+    public function test_clean_rollback_and_reentry_restore_initial_authority_before_reenabling_mutations(): void
+    {
+        $migration = require database_path('migrations/2026_08_17_000300_enable_service_mutation_authority.php');
+
+        $migration->down();
+
+        $this->assertFalse(Schema::hasColumn('service_subscriptions', 'mutation_generation'));
+        $this->assertFalse(Schema::hasColumn('provisioning_operations', 'operation_generation'));
+        $this->assertStringContainsString('initial_remote_effect_v1', $this->triggerStatement('provisioning_operations_update_guard'));
+        $this->assertStringNotContainsString('service_mutation_effect_v1', $this->triggerStatement('provisioning_operations_update_guard'));
+
+        $migration->up();
+
+        $this->assertTrue(Schema::hasColumn('service_subscriptions', 'mutation_generation'));
+        $this->assertTrue(Schema::hasColumn('provisioning_operations', 'operation_generation'));
+        $this->assertStringContainsString('initial_remote_effect_v1', $this->triggerStatement('provisioning_operations_update_guard'));
+        $this->assertStringContainsString('service_mutation_effect_v1', $this->triggerStatement('provisioning_operations_update_guard'));
+    }
+
+    private function triggerStatement(string $trigger): string
+    {
+        $row = DB::selectOne(
+            'SELECT ACTION_STATEMENT AS statement FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = DATABASE() AND TRIGGER_NAME = ?',
+            [$trigger],
+        );
+
+        $this->assertNotNull($row, $trigger.' must exist.');
+
+        return (string) $row->statement;
+    }
+}
