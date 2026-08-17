@@ -13,6 +13,7 @@ use App\Shared\Application\Clock;
 use DomainException;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
+use Illuminate\Support\Str;
 use RuntimeException;
 use Throwable;
 
@@ -385,7 +386,7 @@ final readonly class ServiceMutationExecutor
     /** @return MutationOperation */
     private function operationByPublicId(string $publicId): object
     {
-        if (! \Illuminate\Support\Str::isUlid($publicId)) {
+        if (! Str::isUlid($publicId)) {
             throw new DomainException('Service mutation operation public ID is invalid.');
         }
         /** @var MutationOperation|null $row */

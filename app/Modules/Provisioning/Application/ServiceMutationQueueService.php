@@ -193,8 +193,8 @@ final readonly class ServiceMutationQueueService
     }
 
     /**
-     * @param ServiceRow $service
-     * @param OperationRow $operation
+     * @param  ServiceRow  $service
+     * @param  OperationRow  $operation
      */
     private function receipt(object $service, object $operation, bool $replayed): ServiceMutationReceipt
     {
