@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Modules\Provisioning\Application;
 
-use App\Modules\Provisioning\Domain\ServiceMutationType;
 use App\Shared\Application\Clock;
 use Illuminate\Database\Connection;
 use RuntimeException;
