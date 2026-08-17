@@ -16,12 +16,23 @@ use RuntimeException;
 
 /**
  * Generic REST polling adapter with deliberately bounded configuration.
- * Field mappings are direct object keys only; no JSONPath, templates, code, SQL, or shell evaluation is supported.
+ * Field mappings are direct object keys or a tiny data-only JSON-path subset; templates, code, SQL, and shell evaluation are unsupported.
  */
 final class GenericRestBankTransactionVerificationProvider implements BankTransactionVerificationProvider
 {
+    private const MAX_MAPPING_PATH_LENGTH = 256;
+
+    private const MAX_MAPPING_PATH_DEPTH = 12;
+
+    private const MAX_MAPPING_ARRAY_INDEX = 255;
+
+    private const MAX_MAPPING_SCALAR_BYTES = 4096;
+
     /** @var array<string, string> */
     private array $fieldMap;
+
+    /** @var array<string, list<int|string>|null> */
+    private array $fieldPaths;
 
     /** @var array<string, string> */
     private array $statusMap;
@@ -110,13 +121,20 @@ final class GenericRestBankTransactionVerificationProvider implements BankTransa
             }
         }
         $supported = ['transaction_id', 'event_id', 'destination_card', 'amount', 'status', 'occurred_at', 'sender_card', 'sender_name', 'reference'];
+        $fieldPaths = [];
         foreach ($fieldMap as $canonical => $providerField) {
             if (! in_array($canonical, $supported, true)) {
                 throw new DomainException('Generic bank field mapping contains an unsupported canonical field.');
             }
-            $this->assertDirectKey($providerField, 'Generic bank provider field');
+            if (! is_string($providerField)) {
+                throw new DomainException('Generic bank provider field mapping must be a string.');
+            }
+            $fieldPaths[$canonical] = $this->isDirectKey($providerField)
+                ? null
+                : $this->parseFieldPath($providerField);
         }
         $this->fieldMap = $fieldMap;
+        $this->fieldPaths = $fieldPaths;
 
         if ($statusMap === []) {
             throw new DomainException('Generic bank status map cannot be empty.');
@@ -244,7 +262,8 @@ final class GenericRestBankTransactionVerificationProvider implements BankTransa
             throw new RuntimeException('Generic bank destination card is invalid.');
         }
 
-        $amount = $this->amountIrr($row[$this->fieldMap['amount']] ?? null);
+        [, $amountValue] = $this->mappedValue($row, 'amount');
+        $amount = $this->amountIrr($amountValue);
         $providerStatus = $this->requiredScalarString($row, 'status', 1, 64);
         $status = $this->statusMap[$providerStatus] ?? null;
         if ($status === null) {
@@ -283,11 +302,11 @@ final class GenericRestBankTransactionVerificationProvider implements BankTransa
     /** @param array<string, mixed> $row */
     private function requiredScalarString(array $row, string $canonical, int $min, int $max): string
     {
-        $field = $this->fieldMap[$canonical] ?? null;
-        if ($field === null || ! array_key_exists($field, $row) || (! is_string($row[$field]) && ! is_int($row[$field]))) {
+        [$found, $rawValue] = $this->mappedValue($row, $canonical);
+        if (! $found || (! is_string($rawValue) && ! is_int($rawValue))) {
             throw new RuntimeException('Generic bank required field '.$canonical.' is missing or invalid.');
         }
-        $value = trim((string) $row[$field]);
+        $value = trim((string) $rawValue);
         if (strlen($value) < $min || strlen($value) > $max || preg_match('/[\x00-\x1F\x7F]/', $value) === 1) {
             throw new RuntimeException('Generic bank required field '.$canonical.' is invalid.');
         }
@@ -298,19 +317,116 @@ final class GenericRestBankTransactionVerificationProvider implements BankTransa
     /** @param array<string, mixed> $row */
     private function optionalScalarString(array $row, string $canonical, int $min, int $max): ?string
     {
-        $field = $this->fieldMap[$canonical] ?? null;
-        if ($field === null || ! array_key_exists($field, $row) || $row[$field] === null || $row[$field] === '') {
+        if (! isset($this->fieldMap[$canonical])) {
             return null;
         }
-        if (! is_string($row[$field]) && ! is_int($row[$field])) {
+        [$found, $rawValue, $isPath] = $this->mappedValue($row, $canonical);
+        if (! $found || (! $isPath && ($rawValue === null || $rawValue === ''))) {
+            return null;
+        }
+        if (! is_string($rawValue) && ! is_int($rawValue)) {
             throw new RuntimeException('Generic bank optional field '.$canonical.' is invalid.');
         }
-        $value = trim((string) $row[$field]);
+        $value = trim((string) $rawValue);
         if (strlen($value) < $min || strlen($value) > $max || preg_match('/[\x00-\x1F\x7F]/', $value) === 1) {
             throw new RuntimeException('Generic bank optional field '.$canonical.' is invalid.');
         }
 
         return $value;
+    }
+
+    /**
+     * @param  array<string, mixed>  $row
+     * @return array{bool, mixed, bool}
+     */
+    private function mappedValue(array $row, string $canonical): array
+    {
+        $mapping = $this->fieldMap[$canonical] ?? null;
+        if ($mapping === null) {
+            return [false, null, false];
+        }
+
+        $segments = $this->fieldPaths[$canonical] ?? null;
+        if ($segments === null) {
+            return array_key_exists($mapping, $row)
+                ? [true, $row[$mapping], false]
+                : [false, null, false];
+        }
+
+        $value = $row;
+        foreach ($segments as $segment) {
+            if (is_string($segment)) {
+                if (! is_array($value) || ! array_key_exists($segment, $value)) {
+                    throw new RuntimeException('Generic bank mapped field '.$canonical.' path did not resolve.');
+                }
+                $value = $value[$segment];
+
+                continue;
+            }
+
+            if (! is_array($value) || ! array_is_list($value) || ! array_key_exists($segment, $value)) {
+                throw new RuntimeException('Generic bank mapped field '.$canonical.' path did not resolve.');
+            }
+            $value = $value[$segment];
+        }
+
+        if (! is_string($value) && ! is_int($value)) {
+            throw new RuntimeException('Generic bank mapped field '.$canonical.' terminal value is not a supported scalar.');
+        }
+        if (is_string($value) && strlen($value) > self::MAX_MAPPING_SCALAR_BYTES) {
+            throw new RuntimeException('Generic bank mapped field '.$canonical.' terminal value exceeds the size limit.');
+        }
+
+        return [true, $value, true];
+    }
+
+    /** @return list<int|string> */
+    private function parseFieldPath(string $path): array
+    {
+        $length = strlen($path);
+        if ($length > self::MAX_MAPPING_PATH_LENGTH) {
+            throw new DomainException('Generic bank provider field mapping path exceeds the maximum length.');
+        }
+        if ($length < 3 || ! str_starts_with($path, '$.')) {
+            throw new DomainException('Generic bank provider field mapping path syntax is invalid.');
+        }
+
+        $segments = [];
+        $offset = 1;
+        while ($offset < $length) {
+            if ($path[$offset] === '.') {
+                $offset++;
+                if (preg_match('/\A([A-Za-z_][A-Za-z0-9_-]{0,63})/', substr($path, $offset), $matches) !== 1) {
+                    throw new DomainException('Generic bank provider field mapping path syntax is invalid.');
+                }
+                $key = $matches[1];
+                $segments[] = $key;
+                $offset += strlen($key);
+            } elseif ($path[$offset] === '[') {
+                $closing = strpos($path, ']', $offset + 1);
+                if ($closing === false) {
+                    throw new DomainException('Generic bank provider field mapping path syntax is invalid.');
+                }
+                $rawIndex = substr($path, $offset + 1, $closing - $offset - 1);
+                if (preg_match('/\A(?:0|[1-9][0-9]{0,5})\z/', $rawIndex) !== 1) {
+                    throw new DomainException('Generic bank provider field mapping path syntax is invalid.');
+                }
+                $index = (int) $rawIndex;
+                if ($index > self::MAX_MAPPING_ARRAY_INDEX) {
+                    throw new DomainException('Generic bank provider field mapping array index is out of bounds.');
+                }
+                $segments[] = $index;
+                $offset = $closing + 1;
+            } else {
+                throw new DomainException('Generic bank provider field mapping path syntax is invalid.');
+            }
+
+            if (count($segments) > self::MAX_MAPPING_PATH_DEPTH) {
+                throw new DomainException('Generic bank provider field mapping path exceeds the maximum depth.');
+            }
+        }
+
+        return $segments;
     }
 
     private function amountIrr(mixed $value): int
@@ -391,9 +507,14 @@ final class GenericRestBankTransactionVerificationProvider implements BankTransa
         ) !== false;
     }
 
+    private function isDirectKey(string $value): bool
+    {
+        return preg_match('/\A[A-Za-z_][A-Za-z0-9_-]{0,63}\z/', $value) === 1;
+    }
+
     private function assertDirectKey(string $value, string $label): void
     {
-        if (preg_match('/\A[A-Za-z_][A-Za-z0-9_-]{0,63}\z/', $value) !== 1) {
+        if (! $this->isDirectKey($value)) {
             throw new DomainException($label.' must be a direct JSON object key.');
         }
     }
