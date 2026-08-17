@@ -13,6 +13,8 @@ return new class extends Migration
     /** @requirement PAY-003 PRV-001 PRV-002 PRV-003 DAT-003 SEC-002 SEC-008 QUA-004 */
     public function up(): void
     {
+        $this->restoreActivationSafetyPrerequisites();
+
         if (! Schema::hasTable('provisioning_remote_effect_events')
             || ! Schema::hasColumn('provisioning_operations', 'effect_fence_key')
             || ! Schema::hasColumn('provisioning_operations', 'route_selection_id')
@@ -51,6 +53,21 @@ BEGIN
     SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Initial provisioning remote-effect migration is incomplete.';
 END
 SQL);
+    }
+
+    private function restoreActivationSafetyPrerequisites(): void
+    {
+        foreach ([
+            '2026_08_16_000099_stage_initial_provisioning_remote_effect_barrier.php',
+            '2026_08_16_000103_allow_verified_panel_target_activation.php',
+            '2026_08_16_000104_fence_running_provisioning_capacity_release.php',
+        ] as $file) {
+            $migration = require __DIR__.'/'.$file;
+            if (! is_object($migration) || ! method_exists($migration, 'up')) {
+                throw new RuntimeException('Initial provisioning activation safety prerequisite is unavailable.');
+            }
+            $migration->up();
+        }
     }
 
     private function triggerExists(string $trigger): bool
