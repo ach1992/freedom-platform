@@ -19,7 +19,7 @@ use RuntimeException;
 /**
  * @phpstan-type SettlementRow object{id:int|string,public_id:string,payment_intent_id:int|string,user_id:int|string,source_quote_id:int|string,source_quote_public_id:string,amount_irr:int|string,currency:string,settled_at:string}
  * @phpstan-type IntentRow object{id:int|string,public_id:string,purpose:string,user_id:int|string,wallet_account_id:int|string|null,source_quote_id:int|string|null,source_quote_public_id:string|null,source_quote_configuration_hash:string|null,amount_irr:int|string,currency:string,state:string,captured_at:string|null}
- * @phpstan-type QuoteRow object{id:int|string,public_id:string,user_id:int|string,account_type_snapshot:string,plan_offering_id:int|string,offering_code_snapshot:string,offering_version:int|string,offering_configuration_hash:string,base_price_irr:int|string,override_source:string,override_reference_code:string|null,override_price_irr:int|string|null,effective_price_irr:int|string,discount_reference_code:string|null,discount_irr:int|string,final_price_irr:int|string,currency:string,configuration_snapshot:string,configuration_snapshot_hash:string}
+ * @phpstan-type QuoteRow object{id:int|string,public_id:string,user_id:int|string,account_type_snapshot:string,plan_offering_id:int|string,offering_code_snapshot:string,offering_version:int|string,offering_configuration_hash:string,base_price_irr:int|string,override_source:string,override_reference_code:string|null,override_price_irr:int|string|null,effective_price_irr:int|string,discount_reference_code:string|null,discount_irr:int|string,final_price_irr:int|string,currency:string,configuration_snapshot:string,configuration_snapshot_hash:string,valid_from:string,expires_at:string}
  * @phpstan-type OrderRow object{id:int|string,public_id:string,source_type:string,purchase_settlement_id:int|string|null,purchase_settlement_public_id:string|null,payment_intent_id:int|string|null,payment_intent_public_id:string|null,user_id:int|string,source_quote_id:int|string|null,source_quote_public_id:string|null,source_quote_configuration_hash:string|null,state:string,state_version:int|string,total_amount_irr:int|string,settled_amount_irr:int|string|null,currency:string,paid_at:string|null}
  * @phpstan-type OrderItemRow object{id:int|string,public_id:string,order_id:int|string,line_number:int|string,source_quote_id:int|string,source_quote_public_id:string,account_type_snapshot:string,plan_offering_id:int|string,offering_code_snapshot:string,offering_version:int|string,offering_configuration_hash:string,base_price_irr:int|string,override_source:string,override_reference_code:string|null,override_price_irr:int|string|null,effective_price_irr:int|string,discount_reference_code:string|null,discount_irr:int|string,final_price_irr:int|string,currency:string,configuration_snapshot:string,configuration_snapshot_hash:string}
  */
@@ -56,6 +56,8 @@ final readonly class PurchaseOrderService
                 if ($existing !== null) {
                     return $this->openingReplayReceipt($connection, $existing, $quote, $actorUserId);
                 }
+
+                $this->assertOpenQuoteIsCurrent($quote);
 
                 $timestamp = $this->timestamp();
                 $orderPublicId = (string) Str::ulid();
@@ -402,6 +404,7 @@ final readonly class PurchaseOrderService
             'offering_version', 'offering_configuration_hash', 'base_price_irr', 'override_source',
             'override_reference_code', 'override_price_irr', 'effective_price_irr', 'discount_reference_code',
             'discount_irr', 'final_price_irr', 'currency', 'configuration_snapshot', 'configuration_snapshot_hash',
+            'valid_from', 'expires_at',
         ];
     }
 
@@ -417,6 +420,18 @@ final readonly class PurchaseOrderService
         $this->positiveDatabaseInt($quote->final_price_irr, 'Quote final price');
         $this->assertSha256($quote->configuration_snapshot_hash, 'Quote configuration hash');
         $this->assertSha256($quote->offering_configuration_hash, 'Offering configuration hash');
+    }
+
+    /** @param QuoteRow $quote */
+    private function assertOpenQuoteIsCurrent(object $quote): void
+    {
+        $now = $this->clock->now()->setTimezone(new DateTimeZone('UTC'));
+        $validFrom = $this->storedDateTime($quote->valid_from, 'Quote valid-from timestamp');
+        $expiresAt = $this->storedDateTime($quote->expires_at, 'Quote expiry timestamp');
+
+        if ($validFrom > $now || $expiresAt <= $now) {
+            throw new DomainException('Purchase Quote is not current.');
+        }
     }
 
     /**
