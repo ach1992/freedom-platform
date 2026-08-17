@@ -542,7 +542,7 @@ final readonly class ServiceMutationExecutor
             return 'Service mutation completed without a provider message.';
         }
 
-        return mb_substr($normalized, 0, 1024);
+        return mb_substr($normalized, 0, 512);
     }
 
     private function requiredString(?string $value, string $label): string
