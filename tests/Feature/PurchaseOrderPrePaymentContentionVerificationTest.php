@@ -246,6 +246,7 @@ namespace Tests\Feature {
         public function test_two_intents_racing_authoritative_capture_preserve_both_facts_but_only_one_can_bind_order(): void
         {
             [$userId, $quotePublicId, $methodCode, $eligibilityPublicId] = $this->preparePurchaseQuote('capture-race');
+            DB::statement('SET timestamp = '.$this->purchaseOrderClock->value->modify('+1 second')->getTimestamp());
             $opened = $this->app->make(PurchaseOrderService::class)->openFromQuote(
                 $quotePublicId,
                 $userId,
