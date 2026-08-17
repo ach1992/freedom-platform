@@ -72,8 +72,9 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
         $deliveryAttemptMigration = require database_path('migrations/2026_08_18_000100_create_service_delivery_attempt_authority.php');
 
         try {
-            // Remove the newer child authority before replaying the historical provisioning bootstrap chain.
+            // Remove newer descendant authorities before replaying the historical provisioning bootstrap chain.
             $deliveryAttemptMigration->down();
+            $mutationMigration->down();
 
             // Reverse the complete remote-effect chain before rolling back its queue-era prerequisites.
             // 000105 first reinstalls the bootstrap barrier so every subsequent rollback boundary is closed.
