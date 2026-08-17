@@ -133,8 +133,8 @@ final class ServiceMutationAuthorityMigrationTest extends TestCase
             "where('lifecycle_version', '>', 0)",
             "where('lifecycle_state', '<>', 'active')",
             "where('remote_identity_generation', '<>', 1)",
-            "createServiceInsertAuthority()",
-            "service-insert-guard.sql",
+            'createServiceInsertAuthority()',
+            'service-insert-guard.sql',
         ] as $requiredGuard) {
             self::assertStringContainsString($requiredGuard, $source);
         }
