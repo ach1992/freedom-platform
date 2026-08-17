@@ -105,6 +105,23 @@ final class ServiceMutationAuthorityMigrationTest extends TestCase
         $this->assertStringContainsString('service_mutation_effect_v1', $this->triggerStatement('provisioning_operations_update_guard'));
     }
 
+    public function test_rollback_guard_covers_all_mutation_and_identity_evidence_classes(): void
+    {
+        $source = file_get_contents(database_path('migrations/2026_08_17_000300_enable_service_mutation_authority.php'));
+        self::assertIsString($source);
+
+        foreach ([
+            "where('operation_type', '<>', 'initial_provision')",
+            "where('mutation_generation', '>', 0)",
+            "whereNotNull('remote_deleted_at')",
+            "where('lifecycle_version', '>', 0)",
+            "where('lifecycle_state', '<>', 'active')",
+            "where('remote_identity_generation', '<>', 1)",
+        ] as $requiredGuard) {
+            self::assertStringContainsString($requiredGuard, $source);
+        }
+    }
+
     private function triggerStatement(string $trigger): string
     {
         $row = DB::selectOne(
