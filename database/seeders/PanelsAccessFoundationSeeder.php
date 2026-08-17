@@ -10,7 +10,7 @@ use RuntimeException;
 
 final class PanelsAccessFoundationSeeder extends Seeder
 {
-    /** @requirement PRV-001 ACL-001 ACL-002 ACL-003 */
+    /** @requirement PRV-001 SVC-006 ACL-001 ACL-002 ACL-003 */
     public function run(): void
     {
         $now = now('UTC');
@@ -48,13 +48,38 @@ final class PanelsAccessFoundationSeeder extends Seeder
                 'created_at' => $now,
                 'updated_at' => $now,
             ],
+            [
+                'code' => 'services.operate',
+                'module' => 'provisioning',
+                'risk_level' => 'high',
+                'requires_approval' => false,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
+            [
+                'code' => 'services.rotate_link',
+                'module' => 'provisioning',
+                'risk_level' => 'high',
+                'requires_approval' => false,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
+            [
+                'code' => 'services.retire',
+                'module' => 'provisioning',
+                'risk_level' => 'high',
+                'requires_approval' => false,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
         ], ['code'], ['module', 'risk_level', 'requires_approval', 'updated_at']);
 
         foreach (['support', 'technical', 'sales_content'] as $roleCode) {
             $this->grant($roleCode, 'servers.view', $now);
         }
-        $this->grant('technical', 'panels.manage', $now);
-        $this->grant('technical', 'panels.test', $now);
+        foreach (['panels.manage', 'panels.test', 'services.operate', 'services.rotate_link', 'services.retire'] as $permissionCode) {
+            $this->grant('technical', $permissionCode, $now);
+        }
     }
 
     private function grant(string $roleCode, string $permissionCode, mixed $now): void
