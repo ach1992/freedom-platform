@@ -10,6 +10,23 @@ BEGIN
     DECLARE valid_mutation_service_id BIGINT UNSIGNED DEFAULT NULL;
 
     IF NEW.operation_type = 'initial_provision' THEN
+        IF NEW.attempt_count <> 0
+           OR NEW.effect_fence_key IS NOT NULL
+           OR NEW.route_hold_expires_at IS NOT NULL
+           OR NEW.route_selection_id IS NOT NULL
+           OR NEW.service_target_id IS NOT NULL
+           OR NEW.capacity_reservation_id IS NOT NULL
+           OR NEW.capacity_reservation_key IS NOT NULL
+           OR NEW.remote_username IS NOT NULL
+           OR NEW.target_reference IS NOT NULL
+           OR NEW.last_result_code IS NOT NULL
+           OR NEW.last_result_message IS NOT NULL
+           OR NEW.remote_service_id IS NOT NULL
+           OR NEW.remote_effect_started_at IS NOT NULL
+           OR NEW.remote_effect_completed_at IS NOT NULL THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Initial Provisioning Operation cannot be created with remote-effect evidence.';
+        END IF;
+
         SELECT purchase_settlement_id, payment_intent_id INTO authority_settlement_id, authority_intent_id
         FROM orders WHERE id = NEW.order_id LIMIT 1;
 
@@ -34,6 +51,7 @@ BEGIN
           AND service_row.order_item_id = item_row.id
           AND service_row.user_id = order_row.user_id
           AND NEW.user_id = order_row.user_id
+          AND BINARY NEW.correlation_id = BINARY service_row.creation_correlation_id
           AND NEW.operation_generation = 0
           AND NEW.target_remote_identity_generation = 0
           AND NEW.target_lifecycle_version = 0
@@ -67,6 +85,12 @@ BEGIN
            OR NEW.state_version <> 1
            OR NEW.attempt_count <> 0
            OR NEW.effect_fence_key IS NOT NULL
+           OR NEW.route_hold_expires_at IS NOT NULL
+           OR NEW.route_selection_id IS NOT NULL
+           OR NEW.capacity_reservation_id IS NOT NULL
+           OR NEW.capacity_reservation_key IS NOT NULL
+           OR NEW.remote_username IS NOT NULL
+           OR NEW.target_reference IS NOT NULL
            OR NEW.remote_effect_started_at IS NOT NULL
            OR NEW.remote_effect_completed_at IS NOT NULL
            OR NEW.last_result_code IS NOT NULL
