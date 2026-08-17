@@ -122,14 +122,15 @@ namespace Tests\Feature {
     use App\Modules\Orders\Application\QuoteService;
     use App\Modules\Orders\Domain\OrderState;
     use App\Modules\Orders\Domain\QuoteOverrideSource;
+    use App\Modules\Panels\Application\TargetCapacityAllocator;
     use App\Modules\Payments\Application\PurchasePaymentIntentService;
     use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
-    use App\Modules\Panels\Application\TargetCapacityAllocator;
     use Database\Seeders\CatalogAccessFoundationSeeder;
     use Database\Seeders\IdentityAccessFoundationSeeder;
     use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
     use DateTimeImmutable;
     use DateTimeZone;
+    use Illuminate\Database\QueryException;
     use Illuminate\Foundation\Testing\DatabaseTruncation;
     use Illuminate\Support\Facades\DB;
     use RuntimeException;
@@ -276,7 +277,10 @@ namespace Tests\Feature {
             $failures = array_values(array_filter($results, static fn (array $result): bool => $result['ok'] === false));
             self::assertCount(1, $successes, json_encode($results, JSON_THROW_ON_ERROR));
             self::assertCount(1, $failures, json_encode($results, JSON_THROW_ON_ERROR));
-            self::assertSame('Illuminate\\Database\\QueryException', $failures[0]['exception']);
+            self::assertTrue(
+                is_a((string) $failures[0]['exception'], QueryException::class, true),
+                json_encode($failures[0], JSON_THROW_ON_ERROR),
+            );
 
             $quoteId = (int) DB::table('quotes')->where('public_id', $quotePublicId)->value('id');
             self::assertSame(1, DB::table('purchase_settlements')->where('source_quote_id', $quoteId)->count());
