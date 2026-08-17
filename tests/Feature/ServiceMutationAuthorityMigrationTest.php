@@ -49,6 +49,10 @@ final class ServiceMutationAuthorityMigrationTest extends TestCase
         $this->assertStringContainsString('operation_row.remote_effect_started_at IS NOT NULL', $serviceGuard);
         $this->assertStringContainsString('operation_row.remote_effect_completed_at IS NOT NULL', $serviceGuard);
         $this->assertStringContainsString('service_mutation_effect_v1', $eventGuard);
+        $this->assertStringContainsString('NEW.state_version = operation_row.state_version', $eventGuard);
+        $this->assertStringContainsString('BINARY NEW.correlation_id = BINARY operation_row.correlation_id', $eventGuard);
+        $this->assertStringContainsString('(NEW.remote_service_id <=> operation_row.remote_service_id)', $eventGuard);
+        $this->assertStringContainsString('BINARY NEW.event_type = BINARY operation_row.state', $eventGuard);
     }
 
     public function test_mutation_operation_insert_fails_closed_without_queue_authority(): void
