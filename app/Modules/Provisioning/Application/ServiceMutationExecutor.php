@@ -17,8 +17,8 @@ use RuntimeException;
 use Throwable;
 
 /**
- * @phpstan-type MutationOperation object{id:int|string,public_id:string,operation_key:string,operation_type:string,service_subscription_id:int|string,state:string,state_version:int|string,correlation_id:string,effect_fence_key:?string,service_target_id:int|string|null,attempt_count:int|string,last_result_code:?string,last_result_message:?string,remote_service_id:?string,remote_effect_started_at:?string,remote_effect_completed_at:?string,operation_generation:int|string,request_key_hash:?string}
- * @phpstan-type MutationService object{id:int|string,public_id:string,service_target_id:int|string|null,remote_service_id:?string,mutation_generation:int|string,remote_deleted_at:?string}
+ * @phpstan-type MutationOperation object{id:int|string,public_id:string,operation_key:string,operation_type:string,service_subscription_id:int|string,state:string,state_version:int|string,correlation_id:string,effect_fence_key:?string,service_target_id:int|string|null,attempt_count:int|string,last_result_code:?string,last_result_message:?string,remote_service_id:?string,remote_effect_started_at:?string,remote_effect_completed_at:?string,operation_generation:int|string,target_remote_identity_generation:int|string,target_lifecycle_version:int|string,request_key_hash:?string}
+ * @phpstan-type MutationService object{id:int|string,public_id:string,service_target_id:int|string|null,remote_service_id:?string,lifecycle_state:string,lifecycle_version:int|string,remote_identity_generation:int|string,mutation_generation:int|string,remote_deleted_at:?string}
  */
 final readonly class ServiceMutationExecutor
 {
@@ -52,25 +52,13 @@ final readonly class ServiceMutationExecutor
 
         $operation = $this->claim($operation);
         $service = $this->serviceById((int) $operation->service_subscription_id);
-        if ($this->nonNegativeDatabaseInt($service->mutation_generation, 'Service mutation generation')
-            !== $this->nonNegativeDatabaseInt($operation->operation_generation, 'Operation generation')) {
+        if (! $this->serviceMatchesOperation($service, $operation, $type)) {
             return $this->finalize(
                 $operation,
                 $type,
                 ProvisioningState::NeedsReview,
-                'stale_generation_after_claim',
-                'Service mutation generation changed after the effect claim.',
-                false,
-            );
-        }
-        if ($service->remote_deleted_at !== null && ! $type->isDelete()) {
-            return $this->finalize(
-                $operation,
-                $type,
-                ProvisioningState::FailedFinal,
-                'service_deleted',
-                'Deleted Service Subscription cannot accept remote mutations.',
-                false,
+                'stale_service_after_claim',
+                'Service lifecycle or remote identity changed after the effect claim.',
             );
         }
 
@@ -84,7 +72,6 @@ final readonly class ServiceMutationExecutor
                 ProvisioningState::RetryScheduled,
                 'panel_runtime_unavailable',
                 'Panel runtime is unavailable for Service mutation.',
-                false,
             );
         }
 
@@ -95,7 +82,6 @@ final readonly class ServiceMutationExecutor
                 ProvisioningState::FailedFinal,
                 'panel_capability_missing',
                 'Panel does not support the requested Service mutation.',
-                false,
             );
         }
 
@@ -104,7 +90,7 @@ final readonly class ServiceMutationExecutor
             throw new RuntimeException('Service mutation provider boundary cannot run inside a database transaction.');
         }
 
-        $operation = $this->markProviderBoundary($operation);
+        $operation = $this->markProviderBoundary($operation, $type);
         if ($connection->transactionLevel() !== 0) {
             throw new RuntimeException('Service mutation provider boundary cannot run inside a database transaction.');
         }
@@ -123,7 +109,6 @@ final readonly class ServiceMutationExecutor
                 ProvisioningState::UncertainRemoteResult,
                 'remote_effect_exception',
                 'Panel mutation result is uncertain after a provider exception.',
-                false,
             );
         }
 
@@ -143,16 +128,10 @@ final readonly class ServiceMutationExecutor
                 throw new DomainException('Service mutation cannot acquire remote-effect authority.');
             }
 
+            $type = $this->mutationType($locked->operation_type);
             $service = $this->serviceByIdOn($connection, (int) $locked->service_subscription_id, true);
-            $generation = $this->nonNegativeDatabaseInt($locked->operation_generation, 'Operation generation');
-            if ($generation < 1
-                || $generation !== $this->nonNegativeDatabaseInt($service->mutation_generation, 'Service mutation generation')
-                || $service->remote_deleted_at !== null
-                || (int) $service->service_target_id !== (int) $locked->service_target_id
-                || ! is_string($service->remote_service_id)
-                || ! is_string($locked->remote_service_id)
-                || ! hash_equals($service->remote_service_id, $locked->remote_service_id)) {
-                throw new DomainException('Service mutation generation or remote binding is no longer authoritative.');
+            if (! $this->serviceMatchesOperation($service, $locked, $type)) {
+                throw new DomainException('Service mutation lifecycle or remote identity is no longer authoritative.');
             }
 
             $now = $this->timestamp();
@@ -186,9 +165,9 @@ final readonly class ServiceMutationExecutor
     }
 
     /** @param MutationOperation $locator @return MutationOperation */
-    private function markProviderBoundary(object $locator): object
+    private function markProviderBoundary(object $locator, ServiceMutationType $type): object
     {
-        return $this->database->connection()->transaction(function (Connection $connection) use ($locator): object {
+        return $this->database->connection()->transaction(function (Connection $connection) use ($locator, $type): object {
             $operation = $this->operationById($connection, (int) $locator->id, true);
             if ($this->state($operation->state) !== ProvisioningState::Running
                 || $operation->remote_effect_started_at !== null
@@ -197,16 +176,11 @@ final readonly class ServiceMutationExecutor
             }
 
             $service = $this->serviceByIdOn($connection, (int) $operation->service_subscription_id, true);
-            $generation = $this->nonNegativeDatabaseInt($operation->operation_generation, 'Operation generation');
-            if ($generation !== $this->nonNegativeDatabaseInt($service->mutation_generation, 'Service mutation generation')
-                || $service->remote_deleted_at !== null
-                || (int) $service->service_target_id !== (int) $operation->service_target_id
-                || ! is_string($service->remote_service_id)
-                || ! is_string($operation->remote_service_id)
-                || ! hash_equals($service->remote_service_id, $operation->remote_service_id)) {
-                throw new DomainException('Service mutation remote binding is no longer authoritative at provider boundary.');
+            if (! $this->serviceMatchesOperation($service, $operation, $type)) {
+                throw new DomainException('Service mutation lifecycle or remote identity is no longer authoritative at provider boundary.');
             }
 
+            $now = $this->timestamp();
             $this->setEffectAuthority($connection, $operation);
             try {
                 $updated = $connection->table('provisioning_operations')
@@ -216,8 +190,8 @@ final readonly class ServiceMutationExecutor
                     ->whereNull('remote_effect_started_at')
                     ->update([
                         'state_version' => (int) $operation->state_version + 1,
-                        'remote_effect_started_at' => $this->timestamp(),
-                        'updated_at' => $this->timestamp(),
+                        'remote_effect_started_at' => $now,
+                        'updated_at' => $now,
                     ]);
                 if ($updated !== 1) {
                     throw new RuntimeException('Service mutation provider boundary lost its authority.');
@@ -254,7 +228,6 @@ final readonly class ServiceMutationExecutor
             $state,
             $result->providerCode ?? $fallbackCode,
             $result->safeMessage ?? $fallbackMessage,
-            $state === ProvisioningState::Succeeded && $type->isDelete(),
         );
     }
 
@@ -265,7 +238,6 @@ final readonly class ServiceMutationExecutor
         ProvisioningState $state,
         string $resultCode,
         string $safeMessage,
-        bool $tombstoneService,
     ): ServiceMutationReceipt {
         return $this->database->connection()->transaction(function (Connection $connection) use (
             $locator,
@@ -273,7 +245,6 @@ final readonly class ServiceMutationExecutor
             $state,
             $resultCode,
             $safeMessage,
-            $tombstoneService,
         ): ServiceMutationReceipt {
             $operation = $this->operationById($connection, (int) $locator->id, true);
             $stored = $this->state($operation->state);
@@ -285,30 +256,19 @@ final readonly class ServiceMutationExecutor
             }
 
             $service = $this->serviceByIdOn($connection, (int) $operation->service_subscription_id, true);
-            $generation = $this->nonNegativeDatabaseInt($operation->operation_generation, 'Operation generation');
-            if ($generation !== $this->nonNegativeDatabaseInt($service->mutation_generation, 'Service mutation generation')) {
+            $authoritative = $this->serviceMatchesOperation($service, $operation, $type);
+            if (! $authoritative) {
                 $state = ProvisioningState::NeedsReview;
-                $resultCode = 'stale_generation_at_finalize';
-                $safeMessage = 'Service mutation generation changed before finalization.';
-                $tombstoneService = false;
+                $resultCode = 'stale_service_at_finalize';
+                $safeMessage = 'Service lifecycle or remote identity changed before finalization.';
             }
 
             $now = $this->timestamp();
             $completedAt = $operation->remote_effect_started_at === null ? null : $now;
             $this->setEffectAuthority($connection, $operation);
             try {
-                if ($tombstoneService) {
-                    $updatedService = $connection->table('service_subscriptions')
-                        ->where('id', (int) $service->id)
-                        ->whereNull('remote_deleted_at')
-                        ->where('mutation_generation', $generation)
-                        ->update([
-                            'remote_deleted_at' => $now,
-                            'updated_at' => $now,
-                        ]);
-                    if ($updatedService !== 1) {
-                        throw new RuntimeException('Service mutation delete tombstone lost its authority.');
-                    }
+                if ($authoritative && $state === ProvisioningState::Succeeded) {
+                    $this->applySuccessfulLifecycleTransition($connection, $service, $operation, $type, $now);
                 }
 
                 $updated = $connection->table('provisioning_operations')
@@ -335,6 +295,76 @@ final readonly class ServiceMutationExecutor
                 $this->clearEffectAuthority($connection);
             }
         }, 3);
+    }
+
+    /** @param MutationService $service @param MutationOperation $operation */
+    private function applySuccessfulLifecycleTransition(
+        Connection $connection,
+        object $service,
+        object $operation,
+        ServiceMutationType $type,
+        string $now,
+    ): void {
+        if (in_array($type, [ServiceMutationType::ResetUsage, ServiceMutationType::RotateSubscriptionLink], true)) {
+            return;
+        }
+
+        $expectedState = $type === ServiceMutationType::Activate ? 'suspended' : 'active';
+        $nextState = match ($type) {
+            ServiceMutationType::Suspend => 'suspended',
+            ServiceMutationType::Activate => 'active',
+            ServiceMutationType::Delete => 'retired',
+            default => throw new RuntimeException('Unsupported Service lifecycle transition.'),
+        };
+        $updates = [
+            'lifecycle_state' => $nextState,
+            'lifecycle_version' => $this->nonNegativeDatabaseInt($service->lifecycle_version, 'Service lifecycle version') + 1,
+            'updated_at' => $now,
+        ];
+        if ($type === ServiceMutationType::Delete) {
+            $updates['remote_deleted_at'] = $now;
+        }
+
+        $query = $connection->table('service_subscriptions')
+            ->where('id', (int) $service->id)
+            ->where('mutation_generation', $this->nonNegativeDatabaseInt($operation->operation_generation, 'Operation generation'))
+            ->where('remote_identity_generation', $this->positiveDatabaseInt($operation->target_remote_identity_generation, 'Target remote identity generation'))
+            ->where('lifecycle_version', $this->nonNegativeDatabaseInt($operation->target_lifecycle_version, 'Target lifecycle version'))
+            ->where('lifecycle_state', $expectedState)
+            ->where('service_target_id', $this->positiveDatabaseInt($operation->service_target_id, 'Service target ID'))
+            ->where('remote_service_id', $this->requiredString($operation->remote_service_id, 'Remote Service ID'))
+            ->whereNull('remote_deleted_at');
+        $updated = $query->update($updates);
+        if ($updated !== 1) {
+            throw new RuntimeException('Service lifecycle transition lost its authoritative generation.');
+        }
+    }
+
+    /** @param MutationService $service @param MutationOperation $operation */
+    private function serviceMatchesOperation(object $service, object $operation, ServiceMutationType $type): bool
+    {
+        if ($this->nonNegativeDatabaseInt($service->mutation_generation, 'Service mutation generation')
+                !== $this->nonNegativeDatabaseInt($operation->operation_generation, 'Operation generation')
+            || $this->positiveDatabaseInt($service->remote_identity_generation, 'Remote identity generation')
+                !== $this->positiveDatabaseInt($operation->target_remote_identity_generation, 'Target remote identity generation')
+            || $this->nonNegativeDatabaseInt($service->lifecycle_version, 'Service lifecycle version')
+                !== $this->nonNegativeDatabaseInt($operation->target_lifecycle_version, 'Target lifecycle version')
+            || $service->remote_deleted_at !== null
+            || $service->lifecycle_state === 'retired'
+            || (int) $service->service_target_id !== (int) $operation->service_target_id
+            || ! is_string($service->remote_service_id)
+            || ! is_string($operation->remote_service_id)
+            || ! hash_equals($service->remote_service_id, $operation->remote_service_id)) {
+            return false;
+        }
+
+        return match ($type) {
+            ServiceMutationType::Suspend => $service->lifecycle_state === 'active',
+            ServiceMutationType::Activate => $service->lifecycle_state === 'suspended',
+            ServiceMutationType::Delete,
+            ServiceMutationType::ResetUsage,
+            ServiceMutationType::RotateSubscriptionLink => in_array($service->lifecycle_state, ['active', 'suspended'], true),
+        };
     }
 
     private function invoke(PanelAdapter $adapter, ServiceMutationType $type, string $idempotencyKey, string $remoteId): PanelOperationResult
@@ -398,7 +428,8 @@ final readonly class ServiceMutationExecutor
         }
         /** @var MutationService|null $row */
         $row = $query->first([
-            'id', 'public_id', 'service_target_id', 'remote_service_id', 'mutation_generation', 'remote_deleted_at',
+            'id', 'public_id', 'service_target_id', 'remote_service_id', 'lifecycle_state', 'lifecycle_version',
+            'remote_identity_generation', 'mutation_generation', 'remote_deleted_at',
         ]);
         if ($row === null) {
             throw new RuntimeException('Service Subscription disappeared during mutation execution.');
@@ -446,7 +477,7 @@ final readonly class ServiceMutationExecutor
             'id', 'public_id', 'operation_key', 'operation_type', 'service_subscription_id', 'state', 'state_version',
             'correlation_id', 'effect_fence_key', 'service_target_id', 'attempt_count', 'last_result_code',
             'last_result_message', 'remote_service_id', 'remote_effect_started_at', 'remote_effect_completed_at',
-            'operation_generation', 'request_key_hash',
+            'operation_generation', 'target_remote_identity_generation', 'target_lifecycle_version', 'request_key_hash',
         ];
     }
 
