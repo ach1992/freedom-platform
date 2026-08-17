@@ -530,10 +530,9 @@ final class ServiceMutationAuthorityRuntimeTest extends TestCase
     {
         $scenario = $this->scenario('runtime-retry');
         $queue = $this->queueMutation($scenario, ServiceMutationType::ResetUsage, 'runtime-retry');
-        DB::table('panel_service_targets')->where('id', $scenario['target_id'])->update([
-            'state' => 'disabled',
-            'updated_at' => $this->purchaseOrderTimestamp(),
-        ]);
+        $credentialPolicy = $this->app->make(PanelCredentialPolicy::class);
+        $this->app->instance(PanelAdapterRegistry::class, new PanelAdapterRegistry([], $credentialPolicy));
+        $this->app->forgetInstance(ServiceMutationExecutor::class);
 
         $retryable = $this->mutationExecutor()->execute($queue->operationPublicId);
         self::assertSame(ProvisioningState::RetryScheduled, $retryable->state);
@@ -541,10 +540,14 @@ final class ServiceMutationAuthorityRuntimeTest extends TestCase
         self::assertNull(DB::table('provisioning_operations')
             ->where('public_id', $queue->operationPublicId)->value('remote_effect_started_at'));
 
-        DB::table('panel_service_targets')->where('id', $scenario['target_id'])->update([
-            'state' => 'active',
-            'updated_at' => $this->purchaseOrderTimestamp(),
-        ]);
+        $this->app->instance(
+            PanelAdapterRegistry::class,
+            new PanelAdapterRegistry(
+                [new ServiceMutationTestPanelAdapterFactory($scenario['adapter'])],
+                $credentialPolicy,
+            ),
+        );
+        $this->app->forgetInstance(ServiceMutationExecutor::class);
         $success = $this->mutationExecutor()->execute($queue->operationPublicId);
 
         self::assertSame(ProvisioningState::Succeeded, $success->state);
