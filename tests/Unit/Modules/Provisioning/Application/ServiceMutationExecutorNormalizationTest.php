@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Unit\Modules\Provisioning\Application;
 
 use App\Modules\Provisioning\Application\ServiceMutationExecutor;
+use App\Modules\Provisioning\Application\ServiceMutationQueueService;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
 
@@ -60,5 +61,25 @@ final class ServiceMutationExecutorNormalizationTest extends TestCase
         self::assertStringContainsString("'stale_service_at_provider_boundary'", $source);
         self::assertStringContainsString('if ($boundaryOperation === null)', $source);
         self::assertStringContainsString('if ($state !== ProvisioningState::NeedsReview)', $source);
+    }
+
+    public function test_provider_outcome_mapping_is_explicit_for_terminal_and_uncertain_failures(): void
+    {
+        $source = file_get_contents((new ReflectionClass(ServiceMutationExecutor::class))->getFileName());
+        self::assertIsString($source);
+
+        self::assertStringContainsString('PanelOperationOutcome::Success => ProvisioningState::Succeeded', $source);
+        self::assertStringContainsString('PanelOperationOutcome::DefinitiveFailure => ProvisioningState::FailedFinal', $source);
+        self::assertStringContainsString('PanelOperationOutcome::RetryableFailure, PanelOperationOutcome::UncertainResult => ProvisioningState::UncertainRemoteResult', $source);
+    }
+
+    public function test_uncertain_and_review_states_remain_unresolved_queue_blockers(): void
+    {
+        $reflection = new ReflectionClass(ServiceMutationQueueService::class);
+        self::assertSame(['succeeded', 'failed_final', 'compensated'], $reflection->getConstant('TERMINAL_STATES'));
+
+        $source = file_get_contents($reflection->getFileName());
+        self::assertIsString($source);
+        self::assertStringContainsString("->whereNotIn('state', self::TERMINAL_STATES)", $source);
     }
 }
