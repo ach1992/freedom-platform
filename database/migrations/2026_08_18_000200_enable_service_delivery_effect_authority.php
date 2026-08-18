@@ -112,10 +112,34 @@ CREATE OR REPLACE TRIGGER service_initial_delivery_fences_delete_guard
 BEFORE DELETE ON service_initial_delivery_fences
 FOR EACH ROW
 BEGIN
+    DECLARE operation_state VARCHAR(32) DEFAULT NULL;
+    DECLARE initial_attempt_count INT DEFAULT 0;
+
     IF COALESCE(@app_initial_delivery_fence_authority, '') <> 'initial_delivery_fence_v1'
        OR OLD.service_subscription_id <> COALESCE(@app_initial_delivery_fence_service_id, 0)
        OR OLD.provisioning_operation_id <> COALESCE(@app_initial_delivery_fence_operation_id, 0) THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Initial delivery scheduling fence release authority is invalid.';
+    END IF;
+
+    SELECT operation_row.state INTO operation_state
+    FROM provisioning_operations operation_row
+    WHERE operation_row.id = OLD.provisioning_operation_id
+      AND operation_row.service_subscription_id = OLD.service_subscription_id
+      AND operation_row.operation_type = 'initial_provision'
+    LIMIT 1;
+
+    IF operation_state IS NULL THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Initial delivery scheduling fence lost its provisioning authority.';
+    END IF;
+
+    SELECT COUNT(*) INTO initial_attempt_count
+    FROM service_delivery_attempts attempt_row
+    WHERE attempt_row.service_subscription_id = OLD.service_subscription_id
+      AND attempt_row.purpose = 'initial';
+
+    IF initial_attempt_count = 0
+       AND operation_state NOT IN ('failed_final','needs_review','compensated') THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Initial delivery scheduling fence cannot be released before deterministic initial delivery authority or terminal provisioning failure.';
     END IF;
 END
 SQL);

@@ -118,6 +118,12 @@ final class InitialProvisioningDeliverySchedulingRaceTest extends TestCase
         } catch (QueryException) {
             // Expected.
         }
+        try {
+            $scheduler->releaseFence($scenario['provisioning_operation_public_id']);
+            self::fail('Authorized application code must not release the initial-delivery fence while provisioning is nonterminal.');
+        } catch (QueryException) {
+            // Expected from the state-aware DB release guard.
+        }
 
         $receipt = $this->app->make(InitialProvisioningExecutor::class)
             ->execute($scenario['provisioning_operation_public_id']);
@@ -126,6 +132,12 @@ final class InitialProvisioningDeliverySchedulingRaceTest extends TestCase
         self::assertSame(0, DB::table('service_delivery_attempts')
             ->where('service_subscription_id', $scenario['service_id'])
             ->count());
+        try {
+            $scheduler->releaseFence($scenario['provisioning_operation_public_id']);
+            self::fail('Successful provisioning must not release its fence before deterministic initial delivery authority exists.');
+        } catch (QueryException) {
+            // Expected.
+        }
 
         try {
             $this->app->make(ServiceDeliveryAttemptQueueService::class)->queue(
