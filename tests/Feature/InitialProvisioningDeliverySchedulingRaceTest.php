@@ -79,6 +79,13 @@ final class InitialProvisioningDeliverySchedulingRaceTest extends TestCase
     public function test_second_connection_mutation_cannot_enter_post_provisioning_pre_delivery_gap(): void
     {
         $scenario = $this->queuedScenario('initial-delivery-race');
+        $scheduler = $this->app->make(InitialProvisioningDeliveryScheduler::class);
+        $scheduler->establishFence($scenario['provisioning_operation_public_id']);
+
+        self::assertSame(1, DB::table('service_initial_delivery_fences')
+            ->where('service_subscription_id', $scenario['service_id'])
+            ->count());
+
         $receipt = $this->app->make(InitialProvisioningExecutor::class)
             ->execute($scenario['provisioning_operation_public_id']);
 
@@ -109,7 +116,7 @@ final class InitialProvisioningDeliverySchedulingRaceTest extends TestCase
                 );
                 self::fail('A Service mutation must not enter after provisioning succeeds but before the initial Delivery Attempt exists.');
             } catch (QueryException) {
-                // The MariaDB trigger is the final cross-connection integrity barrier.
+                // The explicit initial-delivery fence is visible to another MariaDB connection.
             }
         } finally {
             config(['database.default' => $originalConnection]);
@@ -125,11 +132,14 @@ final class InitialProvisioningDeliverySchedulingRaceTest extends TestCase
             ->where('id', $scenario['service_id'])
             ->value('mutation_generation'));
 
-        $this->app->make(InitialProvisioningDeliveryScheduler::class)->schedule(
+        $scheduler->schedule(
             $scenario['provisioning_operation_public_id'],
             $scenario['correlation_id'],
         );
 
+        self::assertSame(0, DB::table('service_initial_delivery_fences')
+            ->where('service_subscription_id', $scenario['service_id'])
+            ->count());
         self::assertSame(1, DB::table('service_delivery_attempts')
             ->where('service_subscription_id', $scenario['service_id'])
             ->where('purpose', ServiceDeliveryPurpose::Initial->value)

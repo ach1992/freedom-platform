@@ -15,16 +15,8 @@ BEGIN
         END IF;
 
         SELECT COUNT(*) INTO pending_initial_delivery_count
-        FROM service_subscriptions service
-        WHERE service.id = NEW.service_subscription_id
-          AND service.provisioned_at IS NOT NULL
-          AND service.remote_service_id IS NOT NULL
-          AND NOT EXISTS (
-              SELECT 1
-              FROM service_delivery_attempts attempt
-              WHERE attempt.service_subscription_id = service.id
-                AND attempt.purpose = 'initial'
-          );
+        FROM service_initial_delivery_fences fence_row
+        WHERE fence_row.service_subscription_id = NEW.service_subscription_id;
 
         IF pending_initial_delivery_count <> 0 THEN
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service mutation is blocked until the initial delivery attempt is durably scheduled.';
