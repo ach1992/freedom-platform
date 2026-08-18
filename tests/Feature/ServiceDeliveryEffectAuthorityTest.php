@@ -45,6 +45,7 @@ use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Str;
 use ReflectionMethod;
 use Tests\TestCase;
 
@@ -170,7 +171,7 @@ final class ServiceDeliveryEffectAuthorityTest extends TestCase
         $attemptId = (int) DB::table('service_delivery_attempts')->where('public_id', $attempt->attemptPublicId)->value('id');
         try {
             DB::table('service_delivery_effects')->insert([
-                'public_id' => (string) \Illuminate\Support\Str::ulid(),
+                'public_id' => (string) Str::ulid(),
                 'service_delivery_attempt_id' => $attemptId,
                 'service_subscription_id' => $scenario['service_id'],
                 'telegram_account_id' => $telegramAccountId,
