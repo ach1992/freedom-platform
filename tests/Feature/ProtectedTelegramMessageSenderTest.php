@@ -124,6 +124,24 @@ final class ProtectedTelegramMessageSenderTest extends TestCase
         Http::assertSentCount(1);
     }
 
+    public function test_float_json_rate_limit_code_is_quarantined_without_http_429(): void
+    {
+        Http::fake([
+            '*' => Http::response(
+                '{"ok":false,"error_code":429.0}',
+                400,
+                ['Content-Type' => 'application/json'],
+            ),
+        ]);
+
+        $result = $this->sender()->send(self::TELEGRAM_USER_ID, 'protected-test-message');
+
+        self::assertSame(ProtectedTelegramSendOutcome::UncertainResult, $result->outcome);
+        self::assertSame('telegram_error_code_malformed', $result->resultCode);
+        self::assertNull($result->retryAfterSeconds);
+        Http::assertSentCount(1);
+    }
+
     public function test_unparseable_http_rate_limit_is_uncertain_with_one_http_attempt(): void
     {
         Http::fake([
@@ -169,16 +187,23 @@ final class ProtectedTelegramMessageSenderTest extends TestCase
         self::assertSame(1, $attempts);
     }
 
-    public function test_redirect_response_is_not_followed_and_is_uncertain_after_one_http_attempt(): void
+    public function test_parseable_redirect_response_is_not_followed_and_is_uncertain_after_one_http_attempt(): void
     {
         Http::fake([
-            '*' => Http::response('', 307, ['Location' => 'https://redirect.example.test/sendMessage']),
+            '*' => Http::response(
+                [
+                    'ok' => false,
+                    'error_code' => 403,
+                ],
+                307,
+                ['Location' => 'https://redirect.example.test/sendMessage'],
+            ),
         ]);
 
         $result = $this->sender()->send(self::TELEGRAM_USER_ID, 'protected-test-message');
 
         self::assertSame(ProtectedTelegramSendOutcome::UncertainResult, $result->outcome);
-        self::assertSame('telegram_response_unparseable', $result->resultCode);
+        self::assertSame('telegram_redirect_ambiguous', $result->resultCode);
         Http::assertSentCount(1);
     }
 
@@ -192,6 +217,22 @@ final class ProtectedTelegramMessageSenderTest extends TestCase
 
         self::assertSame(ProtectedTelegramSendOutcome::UncertainResult, $result->outcome);
         self::assertSame('telegram_response_unparseable', $result->resultCode);
+        Http::assertSentCount(1);
+    }
+
+    public function test_ok_true_on_non_success_http_status_is_ambiguous_with_one_http_attempt(): void
+    {
+        Http::fake([
+            '*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 778899],
+            ], 500),
+        ]);
+
+        $result = $this->sender()->send(self::TELEGRAM_USER_ID, 'protected-test-message');
+
+        self::assertSame(ProtectedTelegramSendOutcome::UncertainResult, $result->outcome);
+        self::assertSame('telegram_response_ambiguous', $result->resultCode);
         Http::assertSentCount(1);
     }
 
