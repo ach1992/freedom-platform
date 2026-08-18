@@ -20,9 +20,9 @@ return new class extends Migration
             $table->foreignId('plan_offering_id')->constrained('plan_offerings')->restrictOnDelete();
 
             $table->foreignId('trial_reservation_id')->nullable()->unique()->constrained('trial_reservations')->restrictOnDelete();
-            $table->ulid('trial_reservation_public_id')->nullable();
+            $table->string('trial_reservation_command_key', 128)->nullable()->unique();
             $table->foreignId('benefit_entitlement_id')->nullable()->unique()->constrained('benefit_code_free_service_entitlements')->restrictOnDelete();
-            $table->ulid('benefit_entitlement_public_id')->nullable();
+            $table->ulid('benefit_entitlement_public_id')->nullable()->unique();
 
             $table->string('authorization_key', 128)->unique();
             $table->char('request_payload_hash', 64);
@@ -39,11 +39,12 @@ return new class extends Migration
             $table->index(['source_type', 'created_at'], 'order_source_auth_type_created_idx');
         });
 
-        DB::statement("ALTER TABLE order_source_authorizations ADD CONSTRAINT order_source_auth_type_chk CHECK (`source_type` IN ('trial','gift','service_code','benefit_code','admin_grant'))");
+        DB::statement("ALTER TABLE order_source_authorizations ADD CONSTRAINT order_source_auth_type_chk CHECK (`source_type` IN ('trial','benefit_code','admin_grant'))");
         DB::statement("ALTER TABLE order_source_authorizations ADD CONSTRAINT order_source_auth_actor_chk CHECK (`actor_type` IN ('system','administrator') AND ((`source_type` = 'admin_grant' AND `actor_type` = 'administrator' AND `actor_id` IS NOT NULL) OR (`source_type` <> 'admin_grant' AND `actor_type` = 'system' AND `actor_id` IS NULL)))");
-        DB::statement("ALTER TABLE order_source_authorizations ADD CONSTRAINT order_source_auth_upstream_shape_chk CHECK ((`source_type` = 'trial' AND `trial_reservation_id` IS NOT NULL AND `trial_reservation_public_id` IS NOT NULL AND `benefit_entitlement_id` IS NULL AND `benefit_entitlement_public_id` IS NULL) OR (`source_type` IN ('gift','service_code','benefit_code') AND `trial_reservation_id` IS NULL AND `trial_reservation_public_id` IS NULL AND `benefit_entitlement_id` IS NOT NULL AND `benefit_entitlement_public_id` IS NOT NULL) OR (`source_type` = 'admin_grant' AND `trial_reservation_id` IS NULL AND `trial_reservation_public_id` IS NULL AND `benefit_entitlement_id` IS NULL AND `benefit_entitlement_public_id` IS NULL))");
+        DB::statement("ALTER TABLE order_source_authorizations ADD CONSTRAINT order_source_auth_upstream_shape_chk CHECK ((`source_type` = 'trial' AND `trial_reservation_id` IS NOT NULL AND `trial_reservation_command_key` IS NOT NULL AND `benefit_entitlement_id` IS NULL AND `benefit_entitlement_public_id` IS NULL) OR (`source_type` = 'benefit_code' AND `trial_reservation_id` IS NULL AND `trial_reservation_command_key` IS NULL AND `benefit_entitlement_id` IS NOT NULL AND `benefit_entitlement_public_id` IS NOT NULL) OR (`source_type` = 'admin_grant' AND `trial_reservation_id` IS NULL AND `trial_reservation_command_key` IS NULL AND `benefit_entitlement_id` IS NULL AND `benefit_entitlement_public_id` IS NULL))");
         DB::statement("ALTER TABLE order_source_authorizations ADD CONSTRAINT order_source_auth_hash_chk CHECK (`request_payload_hash` REGEXP '^[0-9a-f]{64}$' AND `configuration_snapshot_hash` REGEXP '^[0-9a-f]{64}$')");
         DB::statement("ALTER TABLE order_source_authorizations ADD CONSTRAINT order_source_auth_snapshot_chk CHECK (JSON_VALID(`configuration_snapshot`) AND JSON_TYPE(`configuration_snapshot`) = 'OBJECT' AND JSON_LENGTH(`configuration_snapshot`) <= 32 AND OCTET_LENGTH(`configuration_snapshot`) <= 8192)");
+        DB::statement("ALTER TABLE order_source_authorizations ADD CONSTRAINT order_source_auth_reason_chk CHECK (CHAR_LENGTH(TRIM(`reason_code`)) BETWEEN 3 AND 64 AND CHAR_LENGTH(TRIM(`correlation_id`)) BETWEEN 8 AND 64)");
 
         $this->createInsertGuard();
         $this->createImmutabilityGuards();
@@ -70,23 +71,19 @@ FOR EACH ROW
 BEGIN
     DECLARE valid_upstream_count INT DEFAULT 0;
 
-    IF LOWER(SHA2(CAST(NEW.configuration_snapshot AS CHAR), 256)) <> LOWER(NEW.configuration_snapshot_hash) THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Order source authorization snapshot hash is invalid.';
-    END IF;
-
     IF NEW.source_type = 'trial' THEN
         SELECT COUNT(*) INTO valid_upstream_count
         FROM trial_reservations reservation_row
         WHERE reservation_row.id = NEW.trial_reservation_id
-          AND reservation_row.public_id = NEW.trial_reservation_public_id
+          AND reservation_row.command_key = NEW.trial_reservation_command_key
           AND reservation_row.user_id = NEW.user_id
           AND reservation_row.plan_offering_id = NEW.plan_offering_id
           AND reservation_row.state = 'committed';
 
         IF valid_upstream_count <> 1 THEN
-            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial Order authorization requires one committed Trial reservation.';
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial Order authorization requires one matching committed Trial reservation.';
         END IF;
-    ELSEIF NEW.source_type IN ('gift','service_code','benefit_code') THEN
+    ELSEIF NEW.source_type = 'benefit_code' THEN
         SELECT COUNT(*) INTO valid_upstream_count
         FROM benefit_code_free_service_entitlements entitlement_row
         WHERE entitlement_row.id = NEW.benefit_entitlement_id
@@ -99,8 +96,13 @@ BEGIN
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Benefit-code Order authorization requires one matching free-service entitlement.';
         END IF;
     ELSEIF NEW.source_type = 'admin_grant' THEN
-        IF CHAR_LENGTH(TRIM(NEW.reason_code)) < 3 THEN
-            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Administrator grant requires an explicit reason.';
+        SELECT COUNT(*) INTO valid_upstream_count
+        FROM administrators administrator_row
+        WHERE administrator_row.id = NEW.actor_id
+          AND administrator_row.status = 'active';
+
+        IF valid_upstream_count <> 1 THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Administrator grant requires one active administrator actor.';
         END IF;
     ELSE
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Unsupported non-paid Order authorization source.';
