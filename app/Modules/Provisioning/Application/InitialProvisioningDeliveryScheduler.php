@@ -10,6 +10,7 @@ use App\Shared\Application\Clock;
 use DomainException;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 use RuntimeException;
 
@@ -32,7 +33,7 @@ final readonly class InitialProvisioningDeliveryScheduler
             function (Connection $connection) use ($operationPublicId): bool {
                 $row = $this->operationService($connection, $operationPublicId, true);
                 $expectedRequestHash = hash('sha256', 'initial-delivery:'.$operationPublicId);
-                /** @var \Illuminate\Support\Collection<int, object{request_key_hash:string,correlation_id:string}> $initialAttempts */
+                /** @var Collection<int, object{request_key_hash:string,correlation_id:string}> $initialAttempts */
                 $initialAttempts = $connection->table('service_delivery_attempts')
                     ->where('service_subscription_id', (int) $row->service_id)
                     ->where('purpose', ServiceDeliveryPurpose::Initial->value)
