@@ -39,22 +39,27 @@ final readonly class InitialProvisioningDeliveryScheduler
                 return;
             }
 
+            $existing = $connection->table('service_initial_delivery_fences')
+                ->where('service_subscription_id', (int) $row->service_id)
+                ->lockForUpdate()
+                ->first(['provisioning_operation_id']);
+            if ($existing !== null) {
+                if ((int) $existing->provisioning_operation_id !== (int) $row->operation_id) {
+                    throw new RuntimeException('Initial delivery scheduling fence is bound to another provisioning operation.');
+                }
+
+                return;
+            }
+
             $this->setFenceAuthority($connection, $row);
             try {
-                $connection->table('service_initial_delivery_fences')->insertOrIgnore([
+                $connection->table('service_initial_delivery_fences')->insert([
                     'service_subscription_id' => (int) $row->service_id,
                     'provisioning_operation_id' => (int) $row->operation_id,
                     'created_at' => $this->timestamp(),
                 ]);
             } finally {
                 $this->clearFenceAuthority($connection);
-            }
-
-            $fence = $connection->table('service_initial_delivery_fences')
-                ->where('service_subscription_id', (int) $row->service_id)
-                ->first(['provisioning_operation_id']);
-            if ($fence === null || (int) $fence->provisioning_operation_id !== (int) $row->operation_id) {
-                throw new RuntimeException('Initial delivery scheduling fence identity is inconsistent.');
             }
         }, 3);
     }

@@ -63,7 +63,9 @@ final readonly class InitialProvisioningOutboxHandler implements OutboxEventHand
             try {
                 $stateAfterFailure = $this->recovery->prepare($operationPublicId);
             } catch (Throwable) {
-                return OutboxDispatchOutcome::DefinitiveFailure;
+                // The fence may already exist and current provisioning state is unknown. Preserve
+                // retry/review so the control cannot become orphaned behind a definitive Outbox result.
+                return OutboxDispatchOutcome::RetryableFailure;
             }
 
             if (in_array($stateAfterFailure, [
