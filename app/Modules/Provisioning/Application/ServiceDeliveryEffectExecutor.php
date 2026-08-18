@@ -162,8 +162,15 @@ final readonly class ServiceDeliveryEffectExecutor
     private function prepare(string $attemptPublicId): array
     {
         return $this->database->connection()->transaction(function (Connection $connection) use ($attemptPublicId): array {
-            $attempt = $this->attemptByPublicId($connection, $attemptPublicId, true);
-            $service = $this->serviceById($connection, (int) $attempt->service_subscription_id, true);
+            // Delivery Attempt queue authority locks Service -> Attempt. Preserve that order here
+            // so an Outbox execution cannot deadlock with a concurrent idempotent replay.
+            $attemptLocator = $this->attemptByPublicId($connection, $attemptPublicId, false);
+            $service = $this->serviceById($connection, (int) $attemptLocator->service_subscription_id, true);
+            $attempt = $this->attemptById($connection, (int) $attemptLocator->id, true);
+            if ((int) $attempt->service_subscription_id !== (int) $service->id) {
+                throw new RuntimeException('Service Delivery Attempt changed Service authority unexpectedly.');
+            }
+
             $this->assertCurrentAuthority($connection, $attempt, $service);
             $account = $this->telegramAccount($connection, $service);
 
@@ -207,13 +214,22 @@ final readonly class ServiceDeliveryEffectExecutor
     private function enterProviderBoundary(object $locator): object
     {
         return $this->database->connection()->transaction(function (Connection $connection) use ($locator): object {
-            $effect = $this->effectById($connection, (int) $locator->id, true);
+            // Resolve immutable identities without locks, then acquire Service -> Attempt -> Effect.
+            // This matches queue authority and prevents service/attempt lock-order inversion.
+            $effectLocator = $this->effectById($connection, (int) $locator->id, false);
+            $attemptLocator = $this->attemptById($connection, (int) $effectLocator->service_delivery_attempt_id, false);
+            $service = $this->serviceById($connection, (int) $attemptLocator->service_subscription_id, true);
+            $attempt = $this->attemptById($connection, (int) $attemptLocator->id, true);
+            $effect = $this->effectById($connection, (int) $effectLocator->id, true);
+            if ((int) $attempt->service_subscription_id !== (int) $service->id
+                || (int) $effect->service_delivery_attempt_id !== (int) $attempt->id
+                || (int) $effect->service_subscription_id !== (int) $service->id) {
+                throw new RuntimeException('Service delivery provider boundary authority linkage changed unexpectedly.');
+            }
             if ($this->effectState($effect->state) !== ServiceDeliveryEffectState::Prepared) {
                 throw new DomainException('Service delivery provider boundary cannot be entered from the current state.');
             }
 
-            $attempt = $this->attemptById($connection, (int) $effect->service_delivery_attempt_id, true);
-            $service = $this->serviceById($connection, (int) $attempt->service_subscription_id, true);
             $this->assertCurrentAuthority($connection, $attempt, $service);
             $account = $this->telegramAccount($connection, $service);
             $this->assertEffectRecipient($effect, $account);
