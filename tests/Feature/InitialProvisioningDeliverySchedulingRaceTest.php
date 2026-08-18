@@ -34,6 +34,7 @@ use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
+use RuntimeException;
 use Tests\TestCase;
 
 /** @requirement SVC-002 SVC-014 PRV-002 PRV-003 ARCH-004 DAT-003 SEC-002 SEC-008 QUA-004 QUA-007 QUA-010 */
@@ -223,6 +224,102 @@ final class InitialProvisioningDeliverySchedulingRaceTest extends TestCase
             ->count());
     }
 
+    public function test_pre_fence_alternate_initial_attempt_cannot_substitute_for_deterministic_authority(): void
+    {
+        $scenario = $this->queuedScenario('initial-delivery-pre-fence');
+        $receipt = $this->app->make(InitialProvisioningExecutor::class)
+            ->execute($scenario['provisioning_operation_public_id']);
+
+        self::assertSame(ProvisioningState::Succeeded, $receipt->state);
+        self::assertSame(0, DB::table('service_initial_delivery_fences')
+            ->where('service_subscription_id', $scenario['service_id'])
+            ->count());
+
+        try {
+            $this->app->make(ServiceDeliveryAttemptQueueService::class)->queue(
+                $scenario['service_public_id'],
+                ServiceDeliveryPurpose::Initial,
+                'request-pre-fence-substitute-initial-0001',
+                $scenario['correlation_id'],
+            );
+            self::fail('A pre-fence Initial Delivery Attempt with the wrong deterministic key must fail closed.');
+        } catch (QueryException) {
+            // The DB admission guard binds Initial purpose to the provisioning operation even before a fence exists.
+        }
+
+        self::assertSame(0, DB::table('service_delivery_attempts')
+            ->where('service_subscription_id', $scenario['service_id'])
+            ->count());
+        self::assertSame(0, DB::table('outbox_messages')
+            ->where('event_type', ServiceDeliveryAttemptQueueService::OUTBOX_EVENT_TYPE)
+            ->count());
+
+        $scheduler = $this->app->make(InitialProvisioningDeliveryScheduler::class);
+        $scheduler->establishFence($scenario['provisioning_operation_public_id']);
+        self::assertSame(1, DB::table('service_initial_delivery_fences')
+            ->where('service_subscription_id', $scenario['service_id'])
+            ->count());
+
+        $scheduled = $scheduler->schedule(
+            $scenario['provisioning_operation_public_id'],
+            $scenario['correlation_id'],
+        );
+        self::assertFalse($scheduled->replayed);
+
+        $attempt = DB::table('service_delivery_attempts')
+            ->where('service_subscription_id', $scenario['service_id'])
+            ->where('purpose', ServiceDeliveryPurpose::Initial->value)
+            ->first(['request_key_hash', 'correlation_id']);
+        self::assertNotNull($attempt);
+        self::assertSame(
+            hash('sha256', 'initial-delivery:'.$scenario['provisioning_operation_public_id']),
+            (string) $attempt->request_key_hash,
+        );
+        self::assertSame($scenario['correlation_id'], (string) $attempt->correlation_id);
+        self::assertSame(0, DB::table('service_initial_delivery_fences')
+            ->where('service_subscription_id', $scenario['service_id'])
+            ->count());
+        self::assertSame(1, DB::table('outbox_messages')
+            ->where('event_type', ServiceDeliveryAttemptQueueService::OUTBOX_EVENT_TYPE)
+            ->count());
+    }
+
+    public function test_exact_pre_fence_initial_attempt_replays_without_a_second_attempt(): void
+    {
+        $scenario = $this->queuedScenario('initial-delivery-pre-fence-exact');
+        $receipt = $this->app->make(InitialProvisioningExecutor::class)
+            ->execute($scenario['provisioning_operation_public_id']);
+        self::assertSame(ProvisioningState::Succeeded, $receipt->state);
+
+        $initial = $this->app->make(ServiceDeliveryAttemptQueueService::class)->queue(
+            $scenario['service_public_id'],
+            ServiceDeliveryPurpose::Initial,
+            'initial-delivery:'.$scenario['provisioning_operation_public_id'],
+            $scenario['correlation_id'],
+        );
+        self::assertFalse($initial->replayed);
+
+        $scheduler = $this->app->make(InitialProvisioningDeliveryScheduler::class);
+        $scheduler->establishFence($scenario['provisioning_operation_public_id']);
+        self::assertSame(0, DB::table('service_initial_delivery_fences')
+            ->where('service_subscription_id', $scenario['service_id'])
+            ->count());
+
+        $replayed = $scheduler->schedule(
+            $scenario['provisioning_operation_public_id'],
+            $scenario['correlation_id'],
+        );
+        self::assertTrue($replayed->replayed);
+        self::assertSame($initial->attemptPublicId, $replayed->attemptPublicId);
+        self::assertSame(1, DB::table('service_delivery_attempts')
+            ->where('service_subscription_id', $scenario['service_id'])
+            ->where('purpose', ServiceDeliveryPurpose::Initial->value)
+            ->count());
+        self::assertSame(1, DB::table('outbox_messages')
+            ->where('event_type', ServiceDeliveryAttemptQueueService::OUTBOX_EVENT_TYPE)
+            ->count());
+    }
+
     /**
      * @return array{service_id:int,service_public_id:string,provisioning_operation_public_id:string,correlation_id:string}
      */
@@ -265,6 +362,45 @@ final class InitialProvisioningDeliverySchedulingRaceTest extends TestCase
             'provisioning_operation_public_id' => $queue->provisioningOperationPublicId,
             'correlation_id' => $correlationId,
         ];
+    }
+
+    public function test_migration_rejects_historical_nondeterministic_initial_attempt(): void
+    {
+        $scenario = $this->queuedScenario('initial-delivery-historical-conflict');
+        $receipt = $this->app->make(InitialProvisioningExecutor::class)
+            ->execute($scenario['provisioning_operation_public_id']);
+        self::assertSame(ProvisioningState::Succeeded, $receipt->state);
+
+        DB::unprepared('DROP TRIGGER IF EXISTS service_delivery_attempts_effect_fence_insert_guard');
+        try {
+            $historical = $this->app->make(ServiceDeliveryAttemptQueueService::class)->queue(
+                $scenario['service_public_id'],
+                ServiceDeliveryPurpose::Initial,
+                'request-historical-conflicting-initial-0001',
+                $scenario['correlation_id'],
+            );
+            self::assertFalse($historical->replayed);
+
+            /** @var Migration $deliveryEffectMigration */
+            $deliveryEffectMigration = require database_path('migrations/2026_08_18_000200_enable_service_delivery_effect_authority.php');
+            try {
+                $deliveryEffectMigration->up();
+                self::fail('Migration must fail closed when historical Initial evidence is not bound to the exact provisioning operation.');
+            } catch (RuntimeException) {
+                // Expected: unsafe historical Initial evidence requires operator review before authority enablement.
+            }
+        } finally {
+            $sql = file_get_contents(database_path(
+                'migrations/support/service_delivery_effect_authority/06_delivery_attempt_insert_fence.sql',
+            ));
+            self::assertIsString($sql);
+            DB::unprepared($sql);
+        }
+
+        self::assertSame(1, DB::table('service_delivery_attempts')
+            ->where('service_subscription_id', $scenario['service_id'])
+            ->where('purpose', ServiceDeliveryPurpose::Initial->value)
+            ->count());
     }
 
     private function makeOfferingOperational(int $offeringId, int $userId, string $suffix): void

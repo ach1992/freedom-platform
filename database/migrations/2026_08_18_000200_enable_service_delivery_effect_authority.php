@@ -20,6 +20,8 @@ return new class extends Migration
             throw new RuntimeException('Service delivery effect authority requires Delivery Attempt, Service, mutation, and Telegram identity foundations.');
         }
 
+        $this->assertHistoricalInitialDeliveryAuthority();
+
         if (! Schema::hasTable('service_delivery_effects')) {
             $this->executeRepositorySql('01_create_table.sql');
         }
@@ -54,6 +56,34 @@ return new class extends Migration
         DB::unprepared('DROP TRIGGER IF EXISTS service_delivery_effects_insert_guard');
         Schema::dropIfExists('service_initial_delivery_fences');
         Schema::dropIfExists('service_delivery_effects');
+    }
+
+    private function assertHistoricalInitialDeliveryAuthority(): void
+    {
+        /** @var object{invalid_count:int|string}|null $row */
+        $row = DB::selectOne(<<<'SQL'
+SELECT COUNT(*) AS invalid_count
+FROM service_delivery_attempts attempt_row
+WHERE attempt_row.purpose = 'initial'
+  AND EXISTS (
+      SELECT 1
+      FROM provisioning_operations operation_row
+      WHERE operation_row.service_subscription_id = attempt_row.service_subscription_id
+        AND operation_row.operation_type = 'initial_provision'
+  )
+  AND NOT EXISTS (
+      SELECT 1
+      FROM provisioning_operations operation_row
+      WHERE operation_row.service_subscription_id = attempt_row.service_subscription_id
+        AND operation_row.operation_type = 'initial_provision'
+        AND BINARY attempt_row.request_key_hash = BINARY LOWER(SHA2(CONCAT('initial-delivery:', operation_row.public_id), 256))
+        AND BINARY attempt_row.correlation_id = BINARY operation_row.correlation_id
+  )
+SQL);
+
+        if ($row === null || (int) $row->invalid_count !== 0) {
+            throw new RuntimeException('Cannot enable Service delivery effect authority while nondeterministic historical Initial Delivery Attempts require review.');
+        }
     }
 
     private function createInitialDeliveryFenceTable(): void
@@ -113,7 +143,7 @@ BEFORE DELETE ON service_initial_delivery_fences
 FOR EACH ROW
 BEGIN
     DECLARE operation_state VARCHAR(32) DEFAULT NULL;
-    DECLARE initial_attempt_count INT DEFAULT 0;
+    DECLARE deterministic_initial_attempt_count INT DEFAULT 0;
 
     IF COALESCE(@app_initial_delivery_fence_authority, '') <> 'initial_delivery_fence_v1'
        OR OLD.service_subscription_id <> COALESCE(@app_initial_delivery_fence_service_id, 0)
@@ -132,12 +162,18 @@ BEGIN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Initial delivery scheduling fence lost its provisioning authority.';
     END IF;
 
-    SELECT COUNT(*) INTO initial_attempt_count
+    SELECT COUNT(*) INTO deterministic_initial_attempt_count
     FROM service_delivery_attempts attempt_row
-    WHERE attempt_row.service_subscription_id = OLD.service_subscription_id
-      AND attempt_row.purpose = 'initial';
+    INNER JOIN provisioning_operations operation_row
+        ON operation_row.id = OLD.provisioning_operation_id
+    WHERE operation_row.service_subscription_id = OLD.service_subscription_id
+      AND operation_row.operation_type = 'initial_provision'
+      AND attempt_row.service_subscription_id = OLD.service_subscription_id
+      AND attempt_row.purpose = 'initial'
+      AND BINARY attempt_row.request_key_hash = BINARY LOWER(SHA2(CONCAT('initial-delivery:', operation_row.public_id), 256))
+      AND BINARY attempt_row.correlation_id = BINARY operation_row.correlation_id;
 
-    IF initial_attempt_count = 0
+    IF deterministic_initial_attempt_count = 0
        AND operation_state NOT IN ('failed_final','needs_review','compensated') THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Initial delivery scheduling fence cannot be released before deterministic initial delivery authority or terminal provisioning failure.';
     END IF;

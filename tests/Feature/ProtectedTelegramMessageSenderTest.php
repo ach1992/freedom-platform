@@ -72,14 +72,31 @@ final class ProtectedTelegramMessageSenderTest extends TestCase
         Http::assertSentCount(1);
     }
 
-    public function test_rate_limit_with_malformed_retry_after_is_quarantined_with_one_http_attempt(): void
+    public function test_malformed_retry_after_is_quarantined_even_without_http_or_json_429(): void
+    {
+        Http::fake([
+            '*' => Http::response([
+                'ok' => false,
+                'error_code' => 400,
+                'parameters' => ['retry_after' => '60'],
+            ], 400),
+        ]);
+
+        $result = $this->sender()->send(self::TELEGRAM_USER_ID, 'protected-test-message');
+
+        self::assertSame(ProtectedTelegramSendOutcome::UncertainResult, $result->outcome);
+        self::assertSame('telegram_retry_after_malformed', $result->resultCode);
+        self::assertNull($result->retryAfterSeconds);
+        Http::assertSentCount(1);
+    }
+
+    public function test_string_json_rate_limit_code_is_quarantined_without_http_429(): void
     {
         Http::fake([
             '*' => Http::response([
                 'ok' => false,
                 'error_code' => '429',
-                'parameters' => ['retry_after' => '60'],
-            ], 429),
+            ], 400),
         ]);
 
         $result = $this->sender()->send(self::TELEGRAM_USER_ID, 'protected-test-message');
@@ -87,6 +104,36 @@ final class ProtectedTelegramMessageSenderTest extends TestCase
         self::assertSame(ProtectedTelegramSendOutcome::UncertainResult, $result->outcome);
         self::assertSame('telegram_retry_after_missing', $result->resultCode);
         self::assertNull($result->retryAfterSeconds);
+        Http::assertSentCount(1);
+    }
+
+    public function test_integer_json_rate_limit_code_is_quarantined_without_http_429(): void
+    {
+        Http::fake([
+            '*' => Http::response([
+                'ok' => false,
+                'error_code' => 429,
+            ], 400),
+        ]);
+
+        $result = $this->sender()->send(self::TELEGRAM_USER_ID, 'protected-test-message');
+
+        self::assertSame(ProtectedTelegramSendOutcome::UncertainResult, $result->outcome);
+        self::assertSame('telegram_retry_after_missing', $result->resultCode);
+        self::assertNull($result->retryAfterSeconds);
+        Http::assertSentCount(1);
+    }
+
+    public function test_unparseable_http_rate_limit_is_uncertain_with_one_http_attempt(): void
+    {
+        Http::fake([
+            '*' => Http::response('not-json', 429, ['Content-Type' => 'text/plain']),
+        ]);
+
+        $result = $this->sender()->send(self::TELEGRAM_USER_ID, 'protected-test-message');
+
+        self::assertSame(ProtectedTelegramSendOutcome::UncertainResult, $result->outcome);
+        self::assertSame('telegram_response_unparseable', $result->resultCode);
         Http::assertSentCount(1);
     }
 

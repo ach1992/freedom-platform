@@ -5,6 +5,7 @@ BEGIN
     DECLARE blocked_delivery_count INT DEFAULT 0;
     DECLARE pending_initial_delivery_count INT DEFAULT 0;
     DECLARE matching_initial_delivery_count INT DEFAULT 0;
+    DECLARE initial_provision_operation_count INT DEFAULT 0;
 
     SELECT COUNT(*) INTO blocked_delivery_count
     FROM service_delivery_effects effect_row
@@ -12,6 +13,30 @@ BEGIN
 
     IF blocked_delivery_count <> 0 THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'New Service delivery is blocked by an in-flight, uncertain, or provider-directed retry boundary.';
+    END IF;
+
+    IF NEW.purpose = 'initial' THEN
+        SELECT COUNT(*) INTO initial_provision_operation_count
+        FROM provisioning_operations operation_row
+        WHERE operation_row.service_subscription_id = NEW.service_subscription_id
+          AND operation_row.operation_type = 'initial_provision';
+
+        IF initial_provision_operation_count > 1 THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Initial Delivery Attempt authority is ambiguous across provisioning operations.';
+        END IF;
+
+        IF initial_provision_operation_count = 1 THEN
+            SELECT COUNT(*) INTO matching_initial_delivery_count
+            FROM provisioning_operations operation_row
+            WHERE operation_row.service_subscription_id = NEW.service_subscription_id
+              AND operation_row.operation_type = 'initial_provision'
+              AND BINARY NEW.request_key_hash = BINARY LOWER(SHA2(CONCAT('initial-delivery:', operation_row.public_id), 256))
+              AND BINARY NEW.correlation_id = BINARY operation_row.correlation_id;
+
+            IF matching_initial_delivery_count <> 1 THEN
+                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Initial Delivery Attempt must match deterministic initial provisioning authority.';
+            END IF;
+        END IF;
     END IF;
 
     SELECT COUNT(*) INTO pending_initial_delivery_count

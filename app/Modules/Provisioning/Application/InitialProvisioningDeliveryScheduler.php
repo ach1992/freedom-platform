@@ -28,40 +28,65 @@ final readonly class InitialProvisioningDeliveryScheduler
     {
         $this->assertOperationPublicId($operationPublicId);
 
-        $this->database->connection()->transaction(function (Connection $connection) use ($operationPublicId): void {
-            $row = $this->operationService($connection, $operationPublicId, true);
-            if ($connection->table('service_delivery_attempts')
-                ->where('service_subscription_id', (int) $row->service_id)
-                ->where('purpose', ServiceDeliveryPurpose::Initial->value)
-                ->exists()) {
-                $this->releaseFenceRow($connection, $row);
+        $conflictingInitialAttempt = $this->database->connection()->transaction(
+            function (Connection $connection) use ($operationPublicId): bool {
+                $row = $this->operationService($connection, $operationPublicId, true);
+                $expectedRequestHash = hash('sha256', 'initial-delivery:'.$operationPublicId);
+                /** @var \Illuminate\Support\Collection<int, object{request_key_hash:string,correlation_id:string}> $initialAttempts */
+                $initialAttempts = $connection->table('service_delivery_attempts')
+                    ->where('service_subscription_id', (int) $row->service_id)
+                    ->where('purpose', ServiceDeliveryPurpose::Initial->value)
+                    ->lockForUpdate()
+                    ->get(['request_key_hash', 'correlation_id']);
 
-                return;
-            }
-
-            $existing = $connection->table('service_initial_delivery_fences')
-                ->where('service_subscription_id', (int) $row->service_id)
-                ->lockForUpdate()
-                ->first(['provisioning_operation_id']);
-            if ($existing !== null) {
-                if ((int) $existing->provisioning_operation_id !== (int) $row->operation_id) {
-                    throw new RuntimeException('Initial delivery scheduling fence is bound to another provisioning operation.');
+                $deterministicAttemptExists = false;
+                $conflictingAttemptExists = false;
+                foreach ($initialAttempts as $attempt) {
+                    if (hash_equals($expectedRequestHash, (string) $attempt->request_key_hash)
+                        && hash_equals((string) $row->correlation_id, (string) $attempt->correlation_id)) {
+                        $deterministicAttemptExists = true;
+                    } else {
+                        $conflictingAttemptExists = true;
+                    }
                 }
 
-                return;
-            }
+                if ($deterministicAttemptExists && ! $conflictingAttemptExists) {
+                    $this->releaseFenceRow($connection, $row);
 
-            $this->setFenceAuthority($connection, $row);
-            try {
-                $connection->table('service_initial_delivery_fences')->insert([
-                    'service_subscription_id' => (int) $row->service_id,
-                    'provisioning_operation_id' => (int) $row->operation_id,
-                    'created_at' => $this->timestamp(),
-                ]);
-            } finally {
-                $this->clearFenceAuthority($connection);
-            }
-        }, 3);
+                    return false;
+                }
+
+                $existing = $connection->table('service_initial_delivery_fences')
+                    ->where('service_subscription_id', (int) $row->service_id)
+                    ->lockForUpdate()
+                    ->first(['provisioning_operation_id']);
+                if ($existing !== null) {
+                    if ((int) $existing->provisioning_operation_id !== (int) $row->operation_id) {
+                        throw new RuntimeException('Initial delivery scheduling fence is bound to another provisioning operation.');
+                    }
+
+                    return $conflictingAttemptExists;
+                }
+
+                $this->setFenceAuthority($connection, $row);
+                try {
+                    $connection->table('service_initial_delivery_fences')->insert([
+                        'service_subscription_id' => (int) $row->service_id,
+                        'provisioning_operation_id' => (int) $row->operation_id,
+                        'created_at' => $this->timestamp(),
+                    ]);
+                } finally {
+                    $this->clearFenceAuthority($connection);
+                }
+
+                return $conflictingAttemptExists;
+            },
+            3,
+        );
+
+        if ($conflictingInitialAttempt) {
+            throw new RuntimeException('Existing initial Delivery Attempt conflicts with deterministic initial provisioning authority.');
+        }
     }
 
     public function releaseFence(string $operationPublicId): void
@@ -76,6 +101,7 @@ final readonly class InitialProvisioningDeliveryScheduler
     public function schedule(string $operationPublicId, string $correlationId): ServiceDeliveryAttemptReceipt
     {
         $this->assertOperationPublicId($operationPublicId);
+        $this->establishFence($operationPublicId);
 
         /** @var object{service_public_id:string}|null $row */
         $row = $this->database->connection()->table('provisioning_operations as operation')
@@ -99,7 +125,7 @@ final readonly class InitialProvisioningDeliveryScheduler
         return $receipt;
     }
 
-    /** @return object{operation_id:int|string,service_id:int|string,service_public_id:string} */
+    /** @return object{operation_id:int|string,service_id:int|string,service_public_id:string,correlation_id:string} */
     private function operationService(Connection $connection, string $operationPublicId, bool $lock): object
     {
         $query = $connection->table('provisioning_operations as operation')
@@ -110,9 +136,10 @@ final readonly class InitialProvisioningDeliveryScheduler
             $query->lockForUpdate();
         }
 
-        /** @var object{operation_id:int|string,service_id:int|string,service_public_id:string}|null $row */
+        /** @var object{operation_id:int|string,service_id:int|string,service_public_id:string,correlation_id:string}|null $row */
         $row = $query->first([
             'operation.id as operation_id',
+            'operation.correlation_id as correlation_id',
             'service.id as service_id',
             'service.public_id as service_public_id',
         ]);
@@ -123,7 +150,7 @@ final readonly class InitialProvisioningDeliveryScheduler
         return $row;
     }
 
-    /** @param object{operation_id:int|string,service_id:int|string,service_public_id:string} $row */
+    /** @param object{operation_id:int|string,service_id:int|string,service_public_id:string,correlation_id:string} $row */
     private function releaseFenceRow(Connection $connection, object $row): void
     {
         $fence = $connection->table('service_initial_delivery_fences')
@@ -151,7 +178,7 @@ final readonly class InitialProvisioningDeliveryScheduler
         }
     }
 
-    /** @param object{operation_id:int|string,service_id:int|string,service_public_id:string} $row */
+    /** @param object{operation_id:int|string,service_id:int|string,service_public_id:string,correlation_id:string} $row */
     private function setFenceAuthority(Connection $connection, object $row): void
     {
         $connection->statement('SET @app_initial_delivery_fence_authority = ?', [self::FENCE_AUTHORITY]);
