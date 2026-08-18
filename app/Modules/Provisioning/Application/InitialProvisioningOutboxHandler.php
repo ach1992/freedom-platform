@@ -88,7 +88,6 @@ final readonly class InitialProvisioningOutboxHandler implements OutboxEventHand
             ProvisioningState::RetryScheduled, ProvisioningState::Running, ProvisioningState::UncertainRemoteResult => OutboxDispatchOutcome::RetryableFailure,
             ProvisioningState::FailedFinal, ProvisioningState::NeedsReview, ProvisioningState::Compensated => OutboxDispatchOutcome::DefinitiveFailure,
             ProvisioningState::Queued, ProvisioningState::Compensating => OutboxDispatchOutcome::RetryableFailure,
-            ProvisioningState::Succeeded => OutboxDispatchOutcome::Success,
         };
     }
 }
