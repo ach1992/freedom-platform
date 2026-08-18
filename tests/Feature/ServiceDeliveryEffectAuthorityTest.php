@@ -109,7 +109,7 @@ final class ServiceDeliveryEffectAuthorityTest extends TestCase
 
         $attempt = $this->deliveryQueue()->queue(
             $scenario['service_public_id'],
-            ServiceDeliveryPurpose::Initial,
+            ServiceDeliveryPurpose::Resend,
             'request-effect-success-0001',
             'correlation-effect-success-0001',
         );
@@ -170,7 +170,7 @@ final class ServiceDeliveryEffectAuthorityTest extends TestCase
         );
         $attempt = $this->deliveryQueue()->queue(
             $scenario['service_public_id'],
-            ServiceDeliveryPurpose::Initial,
+            ServiceDeliveryPurpose::Resend,
             'request-effect-missing-recipient-0001',
             'correlation-effect-missing-recipient-0001',
         );
@@ -330,7 +330,7 @@ final class ServiceDeliveryEffectAuthorityTest extends TestCase
         $panelFailure['doubles']->throwOnDeliveryArtifacts = true;
         $panelAttempt = $this->deliveryQueue()->queue(
             $panelFailure['service_public_id'],
-            ServiceDeliveryPurpose::Initial,
+            ServiceDeliveryPurpose::Resend,
             'request-effect-panel-failure-0001',
             'correlation-effect-panel-failure-0001',
         );
@@ -360,7 +360,7 @@ final class ServiceDeliveryEffectAuthorityTest extends TestCase
         $this->insertTelegramAccount($rejected['user_id']);
         $rejectedAttempt = $this->deliveryQueue()->queue(
             $rejected['service_public_id'],
-            ServiceDeliveryPurpose::Initial,
+            ServiceDeliveryPurpose::Resend,
             'request-effect-permanent-rejection-0001',
             'correlation-effect-permanent-rejection-0001',
         );
@@ -386,7 +386,7 @@ final class ServiceDeliveryEffectAuthorityTest extends TestCase
         $this->insertTelegramAccount($uncertain['user_id']);
         $uncertainAttempt = $this->deliveryQueue()->queue(
             $uncertain['service_public_id'],
-            ServiceDeliveryPurpose::Initial,
+            ServiceDeliveryPurpose::Resend,
             'request-effect-uncertain-0001',
             'correlation-effect-uncertain-0001',
         );
@@ -417,7 +417,7 @@ final class ServiceDeliveryEffectAuthorityTest extends TestCase
         $this->insertTelegramAccount($retry['user_id']);
         $retryAttempt = $this->deliveryQueue()->queue(
             $retry['service_public_id'],
-            ServiceDeliveryPurpose::Initial,
+            ServiceDeliveryPurpose::Resend,
             'request-effect-retry-after-0001',
             'correlation-effect-retry-after-0001',
         );
@@ -456,7 +456,7 @@ final class ServiceDeliveryEffectAuthorityTest extends TestCase
         $this->insertTelegramAccount($scenario['user_id']);
         $attempt = $this->deliveryQueue()->queue(
             $scenario['service_public_id'],
-            ServiceDeliveryPurpose::Initial,
+            ServiceDeliveryPurpose::Resend,
             'request-effect-interrupted-0001',
             'correlation-effect-interrupted-0001',
         );
