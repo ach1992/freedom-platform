@@ -68,6 +68,13 @@ final readonly class ServiceDeliveryAttemptQueueService
             }
 
             $this->assertServiceDeliverable($service);
+            $blockingDelivery = $connection->table('service_delivery_effects')
+                ->where('blocking_service_subscription_id', (int) $service->id)
+                ->first(['id']);
+            if ($blockingDelivery !== null) {
+                throw new DomainException('Service delivery is blocked by an in-flight, uncertain, or provider-directed retry boundary.');
+            }
+
             $activeMutation = $connection->table('provisioning_operations')
                 ->where('service_subscription_id', (int) $service->id)
                 ->where('operation_type', '<>', 'initial_provision')

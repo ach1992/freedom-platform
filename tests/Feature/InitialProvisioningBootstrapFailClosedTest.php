@@ -76,9 +76,12 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
         $lifecycleAuditMigration = require database_path('migrations/2026_08_17_000310_enable_service_lifecycle_command_audit_authority.php');
         /** @var Migration $deliveryAttemptMigration */
         $deliveryAttemptMigration = require database_path('migrations/2026_08_18_000100_create_service_delivery_attempt_authority.php');
+        /** @var Migration $deliveryEffectMigration */
+        $deliveryEffectMigration = require database_path('migrations/2026_08_18_000200_enable_service_delivery_effect_authority.php');
 
         try {
             // Remove newer descendant authorities before replaying the historical provisioning bootstrap chain.
+            $deliveryEffectMigration->down();
             $deliveryAttemptMigration->down();
             $lifecycleAuditMigration->down();
             $mutationMigration->down();
@@ -219,6 +222,7 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
             $mutationMigration->up();
             $lifecycleAuditMigration->up();
             $deliveryAttemptMigration->up();
+            $deliveryEffectMigration->up();
 
             $happyOrder = $this->createPaidOrder('bootstrap-history');
             $correlationId = $this->purchaseOrderCorrelation('bootstrap-history-queue');
@@ -262,6 +266,7 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
             $mutationMigration->up();
             $lifecycleAuditMigration->up();
             $deliveryAttemptMigration->up();
+            $deliveryEffectMigration->up();
         }
     }
 

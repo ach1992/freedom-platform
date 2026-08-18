@@ -4,9 +4,10 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Infrastructure;
 
+use App\Modules\Telegram\Application\Contracts\ProtectedTelegramDeliveryRuntime;
 use InvalidArgumentException;
 
-final readonly class TelegramRuntimeConfiguration
+final readonly class TelegramRuntimeConfiguration implements ProtectedTelegramDeliveryRuntime
 {
     /** @requirement ONB-001 SEC-001 SEC-009 OPS-003 */
     public function __construct(
@@ -55,6 +56,11 @@ final readonly class TelegramRuntimeConfiguration
         if ($apiTimeoutSeconds < 1 || $apiTimeoutSeconds > 60) {
             throw new InvalidArgumentException('Telegram API timeout must be between 1 and 60 seconds.');
         }
+    }
+
+    public function botId(): string
+    {
+        return $this->botId;
     }
 
     /** @param array<string, mixed> $configuration */
