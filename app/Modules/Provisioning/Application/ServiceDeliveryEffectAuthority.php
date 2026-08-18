@@ -100,5 +100,4 @@ trait ServiceDeliveryEffectAuthority
 
         return implode("\n\n", $parts);
     }
-
 }
