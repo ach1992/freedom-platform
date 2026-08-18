@@ -79,12 +79,44 @@ final class InitialProvisioningDeliverySchedulingRaceTest extends TestCase
     public function test_second_connection_mutation_cannot_enter_post_provisioning_pre_delivery_gap(): void
     {
         $scenario = $this->queuedScenario('initial-delivery-race');
+        $operationId = (int) DB::table('provisioning_operations')
+            ->where('public_id', $scenario['provisioning_operation_public_id'])
+            ->value('id');
+        self::assertGreaterThan(0, $operationId);
+
+        try {
+            DB::table('service_initial_delivery_fences')->insert([
+                'service_subscription_id' => $scenario['service_id'],
+                'provisioning_operation_id' => $operationId,
+                'created_at' => $this->purchaseOrderTimestamp(),
+            ]);
+            self::fail('Direct DB initial-delivery fence forgery must fail closed.');
+        } catch (QueryException) {
+            // Expected.
+        }
+
         $scheduler = $this->app->make(InitialProvisioningDeliveryScheduler::class);
         $scheduler->establishFence($scenario['provisioning_operation_public_id']);
 
         self::assertSame(1, DB::table('service_initial_delivery_fences')
             ->where('service_subscription_id', $scenario['service_id'])
             ->count());
+        try {
+            DB::table('service_initial_delivery_fences')
+                ->where('service_subscription_id', $scenario['service_id'])
+                ->update(['created_at' => $this->purchaseOrderTimestamp()]);
+            self::fail('Direct DB initial-delivery fence mutation must fail closed.');
+        } catch (QueryException) {
+            // Expected.
+        }
+        try {
+            DB::table('service_initial_delivery_fences')
+                ->where('service_subscription_id', $scenario['service_id'])
+                ->delete();
+            self::fail('Direct DB initial-delivery fence deletion must fail closed.');
+        } catch (QueryException) {
+            // Expected.
+        }
 
         $receipt = $this->app->make(InitialProvisioningExecutor::class)
             ->execute($scenario['provisioning_operation_public_id']);
