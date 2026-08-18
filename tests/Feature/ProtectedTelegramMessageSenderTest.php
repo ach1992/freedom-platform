@@ -56,7 +56,24 @@ final class ProtectedTelegramMessageSenderTest extends TestCase
         Http::assertSentCount(1);
     }
 
-    public function test_rate_limit_without_usable_retry_after_is_quarantined_with_one_http_attempt(): void
+    public function test_rate_limit_without_retry_after_is_quarantined_with_one_http_attempt(): void
+    {
+        Http::fake([
+            '*' => Http::response([
+                'ok' => false,
+                'error_code' => 429,
+            ], 429),
+        ]);
+
+        $result = $this->sender()->send(self::TELEGRAM_USER_ID, 'protected-test-message');
+
+        self::assertSame(ProtectedTelegramSendOutcome::UncertainResult, $result->outcome);
+        self::assertSame('telegram_retry_after_missing', $result->resultCode);
+        self::assertNull($result->retryAfterSeconds);
+        Http::assertSentCount(1);
+    }
+
+    public function test_rate_limit_with_malformed_retry_after_is_quarantined_with_one_http_attempt(): void
     {
         Http::fake([
             '*' => Http::response([
