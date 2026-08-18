@@ -87,6 +87,10 @@ BEGIN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Order source authorization requires one active customer or agent subject.';
     END IF;
 
+    IF LOWER(SHA2(NEW.configuration_snapshot, 256)) <> NEW.configuration_snapshot_hash THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Order source authorization snapshot hash is invalid.';
+    END IF;
+
     IF NEW.source_type = 'trial' THEN
         SELECT COUNT(*) INTO valid_upstream_count
         FROM trial_reservations reservation_row
@@ -94,10 +98,21 @@ BEGIN
           AND reservation_row.command_key = NEW.trial_reservation_command_key
           AND reservation_row.user_id = NEW.user_id
           AND reservation_row.plan_offering_id = NEW.plan_offering_id
-          AND reservation_row.state = 'committed';
+          AND reservation_row.state = 'committed'
+          AND JSON_LENGTH(NEW.configuration_snapshot) = 10
+          AND CAST(JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.data_bytes')) AS UNSIGNED) = reservation_row.data_bytes
+          AND JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.delivery_template_key')) = reservation_row.delivery_template_key_snapshot
+          AND CAST(JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.duration_days')) AS UNSIGNED) = reservation_row.duration_days
+          AND JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.eligibility_snapshot_hash')) = LOWER(reservation_row.eligibility_snapshot_hash)
+          AND JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.fallback_used')) = IF(reservation_row.fallback_used_snapshot = 1, 'true', 'false')
+          AND CAST(JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.plan_offering_route_selection_id')) AS UNSIGNED) = reservation_row.plan_offering_route_selection_id
+          AND JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.policy_configuration_hash')) = LOWER(reservation_row.policy_configuration_hash)
+          AND CAST(JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.trial_policy_id')) AS UNSIGNED) = reservation_row.trial_policy_id
+          AND CAST(JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.trial_policy_version')) AS UNSIGNED) = reservation_row.trial_policy_version
+          AND CAST(JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.trial_reservation_version')) AS UNSIGNED) = reservation_row.version;
 
         IF valid_upstream_count <> 1 THEN
-            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial Order authorization requires one matching committed Trial reservation.';
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Trial Order authorization requires one exact committed Trial reservation snapshot.';
         END IF;
     ELSEIF NEW.source_type = 'benefit_code' THEN
         SELECT COUNT(*) INTO valid_upstream_count
@@ -106,10 +121,11 @@ BEGIN
           AND entitlement_row.public_id = NEW.benefit_entitlement_public_id
           AND entitlement_row.user_id = NEW.user_id
           AND entitlement_row.plan_offering_id = NEW.plan_offering_id
-          AND entitlement_row.configuration_hash = NEW.configuration_snapshot_hash;
+          AND entitlement_row.configuration_hash = NEW.configuration_snapshot_hash
+          AND entitlement_row.configuration_snapshot = NEW.configuration_snapshot;
 
         IF valid_upstream_count <> 1 THEN
-            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Benefit-code Order authorization requires one matching free-service entitlement.';
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Benefit-code Order authorization requires one exact free-service entitlement snapshot.';
         END IF;
     ELSEIF NEW.source_type = 'admin_grant' THEN
         SELECT COUNT(*), COALESCE(MAX(administrator_row.is_owner), 0)
@@ -125,10 +141,27 @@ BEGIN
         SELECT COUNT(*) INTO valid_upstream_count
         FROM plan_offerings offering_row
         WHERE offering_row.id = NEW.plan_offering_id
-          AND offering_row.state = 'active';
+          AND offering_row.state = 'active'
+          AND JSON_LENGTH(NEW.configuration_snapshot) = 10
+          AND (
+              (offering_row.data_allowance_bytes IS NULL AND JSON_EXTRACT(NEW.configuration_snapshot, '$.data_allowance_bytes') = 'null')
+              OR CAST(JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.data_allowance_bytes')) AS UNSIGNED) = offering_row.data_allowance_bytes
+          )
+          AND (
+              (offering_row.device_limit IS NULL AND JSON_EXTRACT(NEW.configuration_snapshot, '$.device_limit') = 'null')
+              OR CAST(JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.device_limit')) AS UNSIGNED) = offering_row.device_limit
+          )
+          AND CAST(JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.duration_days')) AS UNSIGNED) = offering_row.duration_days
+          AND JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.offering_code')) = offering_row.code
+          AND CAST(JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.offering_version')) AS UNSIGNED) = offering_row.version
+          AND JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.protocol_selection_mode')) = offering_row.protocol_selection_mode
+          AND CAST(JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.sales_server_id')) AS UNSIGNED) = offering_row.sales_server_id
+          AND JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.server_selection_mode')) = offering_row.server_selection_mode
+          AND JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.service_mode_code')) = offering_row.service_mode_code
+          AND CAST(JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.service_target_id')) AS UNSIGNED) = offering_row.panel_service_target_id;
 
         IF valid_upstream_count <> 1 THEN
-            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Administrator grant requires one active Plan Offering.';
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Administrator grant requires one exact active Plan Offering snapshot.';
         END IF;
 
         IF administrator_is_owner = 0 THEN
