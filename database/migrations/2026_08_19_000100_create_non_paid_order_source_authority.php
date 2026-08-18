@@ -9,7 +9,7 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
-    /** @requirement BUY-001 BUY-002 DAT-002 DAT-003 DAT-004 SEC-002 QUA-004 */
+    /** @requirement BUY-001 BUY-002 ADM-002 ACL-001 ACL-002 DAT-002 DAT-003 DAT-004 SEC-002 QUA-004 */
     public function up(): void
     {
         Schema::create('order_source_authorizations', function (Blueprint $table): void {
@@ -70,6 +70,22 @@ BEFORE INSERT ON order_source_authorizations
 FOR EACH ROW
 BEGIN
     DECLARE valid_upstream_count INT DEFAULT 0;
+    DECLARE valid_subject_count INT DEFAULT 0;
+    DECLARE administrator_is_owner INT DEFAULT 0;
+    DECLARE grant_permission_id BIGINT DEFAULT NULL;
+    DECLARE explicit_deny_count INT DEFAULT 0;
+    DECLARE explicit_allow_count INT DEFAULT 0;
+    DECLARE role_grant_count INT DEFAULT 0;
+
+    SELECT COUNT(*) INTO valid_subject_count
+    FROM users user_row
+    WHERE user_row.id = NEW.user_id
+      AND user_row.account_status = 'active'
+      AND user_row.account_type IN ('customer', 'agent');
+
+    IF valid_subject_count <> 1 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Order source authorization requires one active customer or agent subject.';
+    END IF;
 
     IF NEW.source_type = 'trial' THEN
         SELECT COUNT(*) INTO valid_upstream_count
@@ -96,13 +112,62 @@ BEGIN
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Benefit-code Order authorization requires one matching free-service entitlement.';
         END IF;
     ELSEIF NEW.source_type = 'admin_grant' THEN
-        SELECT COUNT(*) INTO valid_upstream_count
+        SELECT COUNT(*), COALESCE(MAX(administrator_row.is_owner), 0)
+          INTO valid_upstream_count, administrator_is_owner
         FROM administrators administrator_row
         WHERE administrator_row.id = NEW.actor_id
           AND administrator_row.status = 'active';
 
         IF valid_upstream_count <> 1 THEN
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Administrator grant requires one active administrator actor.';
+        END IF;
+
+        SELECT COUNT(*) INTO valid_upstream_count
+        FROM plan_offerings offering_row
+        WHERE offering_row.id = NEW.plan_offering_id
+          AND offering_row.state = 'active';
+
+        IF valid_upstream_count <> 1 THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Administrator grant requires one active Plan Offering.';
+        END IF;
+
+        IF administrator_is_owner = 0 THEN
+            SELECT MAX(permission_row.id) INTO grant_permission_id
+            FROM permissions permission_row
+            WHERE permission_row.code = 'services.grant_single';
+
+            IF grant_permission_id IS NULL THEN
+                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Administrator grant permission is not registered.';
+            END IF;
+
+            SELECT COUNT(*) INTO explicit_deny_count
+            FROM administrator_permission_overrides override_row
+            WHERE override_row.administrator_id = NEW.actor_id
+              AND override_row.permission_id = grant_permission_id
+              AND override_row.effect = 'deny';
+
+            IF explicit_deny_count > 0 THEN
+                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Administrator grant is denied by an explicit permission override.';
+            END IF;
+
+            SELECT COUNT(*) INTO explicit_allow_count
+            FROM administrator_permission_overrides override_row
+            WHERE override_row.administrator_id = NEW.actor_id
+              AND override_row.permission_id = grant_permission_id
+              AND override_row.effect = 'allow';
+
+            SELECT COUNT(*) INTO role_grant_count
+            FROM administrator_role_assignments assignment_row
+            INNER JOIN roles role_row ON role_row.id = assignment_row.role_id
+            INNER JOIN role_permissions role_permission_row ON role_permission_row.role_id = role_row.id
+            WHERE assignment_row.administrator_id = NEW.actor_id
+              AND assignment_row.revoked_at IS NULL
+              AND role_row.is_active = 1
+              AND role_permission_row.permission_id = grant_permission_id;
+
+            IF explicit_allow_count = 0 AND role_grant_count = 0 THEN
+                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Administrator grant requires services.grant_single permission.';
+            END IF;
         END IF;
     ELSE
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Unsupported non-paid Order authorization source.';
