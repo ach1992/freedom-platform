@@ -18,6 +18,7 @@ use App\Modules\Panels\Application\PanelCredentialPolicy;
 use App\Modules\Provisioning\Application\InitialProvisioningDeliveryScheduler;
 use App\Modules\Provisioning\Application\InitialProvisioningExecutor;
 use App\Modules\Provisioning\Application\InitialProvisioningQueueService;
+use App\Modules\Provisioning\Application\ServiceDeliveryAttemptQueueService;
 use App\Modules\Provisioning\Application\ServiceMutationQueueService;
 use App\Modules\Provisioning\Domain\ProvisioningState;
 use App\Modules\Provisioning\Domain\ServiceDeliveryPurpose;
@@ -124,6 +125,35 @@ final class InitialProvisioningDeliverySchedulingRaceTest extends TestCase
         self::assertSame(ProvisioningState::Succeeded, $receipt->state);
         self::assertSame(0, DB::table('service_delivery_attempts')
             ->where('service_subscription_id', $scenario['service_id'])
+            ->count());
+
+        try {
+            $this->app->make(ServiceDeliveryAttemptQueueService::class)->queue(
+                $scenario['service_public_id'],
+                ServiceDeliveryPurpose::Initial,
+                'request-nondeterministic-initial-delivery-0001',
+                $scenario['correlation_id'],
+            );
+            self::fail('A pending initial-delivery fence must reject a non-deterministic initial Delivery Attempt key.');
+        } catch (QueryException) {
+            // Expected from the DB authority guard; the surrounding queue transaction rolls back its Outbox command.
+        }
+        try {
+            $this->app->make(ServiceDeliveryAttemptQueueService::class)->queue(
+                $scenario['service_public_id'],
+                ServiceDeliveryPurpose::Resend,
+                'request-resend-before-initial-delivery-0001',
+                $scenario['correlation_id'],
+            );
+            self::fail('A pending initial-delivery fence must reject resend admission before the deterministic initial attempt.');
+        } catch (QueryException) {
+            // Expected.
+        }
+        self::assertSame(0, DB::table('service_delivery_attempts')
+            ->where('service_subscription_id', $scenario['service_id'])
+            ->count());
+        self::assertSame(0, DB::table('outbox_messages')
+            ->where('event_type', ServiceDeliveryAttemptQueueService::OUTBOX_EVENT_TYPE)
             ->count());
 
         $originalConnection = (string) config('database.default');
