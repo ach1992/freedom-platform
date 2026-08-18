@@ -20,6 +20,7 @@ use App\Modules\Provisioning\Application\InitialProvisioningQueueService;
 use App\Modules\Provisioning\Application\ServiceDeliveryAttemptQueueService;
 use App\Modules\Provisioning\Application\ServiceDeliveryEffectExecutor;
 use App\Modules\Provisioning\Application\ServiceDeliveryOutboxHandler;
+use App\Modules\Provisioning\Application\ServiceMutationExecutor;
 use App\Modules\Provisioning\Application\ServiceMutationQueueService;
 use App\Modules\Provisioning\Domain\ProvisioningState;
 use App\Modules\Provisioning\Domain\ServiceDeliveryEffectState;
@@ -242,6 +243,136 @@ final class ServiceDeliveryEffectAuthorityTest extends TestCase
         self::assertSame('delivery_authority_stale', DB::table('service_delivery_effects')->value('result_code'));
     }
 
+    public function test_stale_lifecycle_and_recipient_mismatch_fail_before_send(): void
+    {
+        $stale = $this->provisionedScenario(
+            'effect-stale-lifecycle',
+            'https://subscription.example.test/stale-lifecycle',
+            new ProtectedTelegramSendResult(
+                ProtectedTelegramSendOutcome::Success,
+                'telegram_success',
+                messageId: 5101,
+            ),
+        );
+        $this->insertTelegramAccount($stale['user_id']);
+        $staleAttempt = $this->deliveryQueue()->queue(
+            $stale['service_public_id'],
+            ServiceDeliveryPurpose::Resend,
+            'request-effect-stale-lifecycle-0001',
+            'correlation-effect-stale-lifecycle-0001',
+        );
+        $suspend = $this->app->make(ServiceMutationQueueService::class)->queue(
+            $stale['service_public_id'],
+            ServiceMutationType::Suspend,
+            'request-effect-stale-lifecycle-suspend-0001',
+            'correlation-effect-stale-lifecycle-suspend-0001',
+        );
+        self::assertSame(
+            ProvisioningState::Succeeded,
+            $this->app->make(ServiceMutationExecutor::class)->execute($suspend->operationPublicId)->state,
+        );
+        self::assertSame(
+            OutboxDispatchOutcome::DefinitiveFailure,
+            $this->deliveryHandler()->handle($this->outboxMessage($staleAttempt->outboxEventId)),
+        );
+        self::assertSame([], $stale['doubles']->panelCalls);
+        self::assertSame([], $stale['doubles']->sendCalls);
+
+        $this->truncateTablesForAllConnections();
+        $this->seed(IdentityAccessFoundationSeeder::class);
+        $this->seed(CatalogAccessFoundationSeeder::class);
+        $this->seed(PanelsAccessFoundationSeeder::class);
+        $this->seed(PaymentEligibilityAccessFoundationSeeder::class);
+
+        $mismatch = $this->provisionedScenario(
+            'effect-recipient-mismatch',
+            'https://subscription.example.test/recipient-mismatch',
+            new ProtectedTelegramSendResult(
+                ProtectedTelegramSendOutcome::Success,
+                'telegram_success',
+                messageId: 5102,
+            ),
+        );
+        $accountId = $this->insertTelegramAccount($mismatch['user_id']);
+        $mismatch['doubles']->beforeDeliveryArtifacts = static function () use ($accountId): void {
+            DB::table('telegram_accounts')->where('id', $accountId)->update([
+                'telegram_user_id' => self::TELEGRAM_USER_ID + 1,
+            ]);
+        };
+        $mismatchAttempt = $this->deliveryQueue()->queue(
+            $mismatch['service_public_id'],
+            ServiceDeliveryPurpose::Resend,
+            'request-effect-recipient-mismatch-0001',
+            'correlation-effect-recipient-mismatch-0001',
+        );
+        self::assertSame(
+            OutboxDispatchOutcome::DefinitiveFailure,
+            $this->deliveryHandler()->handle($this->outboxMessage($mismatchAttempt->outboxEventId)),
+        );
+        self::assertSame(['delivery_artifacts'], $mismatch['doubles']->panelCalls);
+        self::assertSame([], $mismatch['doubles']->sendCalls);
+        self::assertSame('failed_final', DB::table('service_delivery_effects')->value('state'));
+        self::assertSame('delivery_authority_stale', DB::table('service_delivery_effects')->value('result_code'));
+    }
+
+    public function test_panel_failure_before_boundary_is_retryable_and_permanent_rejection_is_not_resent(): void
+    {
+        $panelFailure = $this->provisionedScenario(
+            'effect-panel-failure',
+            'https://subscription.example.test/panel-failure',
+            new ProtectedTelegramSendResult(
+                ProtectedTelegramSendOutcome::Success,
+                'telegram_success',
+                messageId: 5201,
+            ),
+        );
+        $this->insertTelegramAccount($panelFailure['user_id']);
+        $panelFailure['doubles']->throwOnDeliveryArtifacts = true;
+        $panelAttempt = $this->deliveryQueue()->queue(
+            $panelFailure['service_public_id'],
+            ServiceDeliveryPurpose::Initial,
+            'request-effect-panel-failure-0001',
+            'correlation-effect-panel-failure-0001',
+        );
+        self::assertSame(
+            OutboxDispatchOutcome::RetryableFailure,
+            $this->deliveryHandler()->handle($this->outboxMessage($panelAttempt->outboxEventId)),
+        );
+        self::assertSame(['delivery_artifacts'], $panelFailure['doubles']->panelCalls);
+        self::assertSame([], $panelFailure['doubles']->sendCalls);
+        self::assertSame(ServiceDeliveryEffectState::Prepared->value, DB::table('service_delivery_effects')->value('state'));
+        self::assertNull(DB::table('service_delivery_effects')->value('provider_boundary_started_at'));
+
+        $this->truncateTablesForAllConnections();
+        $this->seed(IdentityAccessFoundationSeeder::class);
+        $this->seed(CatalogAccessFoundationSeeder::class);
+        $this->seed(PanelsAccessFoundationSeeder::class);
+        $this->seed(PaymentEligibilityAccessFoundationSeeder::class);
+
+        $rejected = $this->provisionedScenario(
+            'effect-permanent-rejection',
+            'https://subscription.example.test/permanent-rejection',
+            new ProtectedTelegramSendResult(
+                ProtectedTelegramSendOutcome::DefinitiveFailure,
+                'telegram_permanent_rejection',
+            ),
+        );
+        $this->insertTelegramAccount($rejected['user_id']);
+        $rejectedAttempt = $this->deliveryQueue()->queue(
+            $rejected['service_public_id'],
+            ServiceDeliveryPurpose::Initial,
+            'request-effect-permanent-rejection-0001',
+            'correlation-effect-permanent-rejection-0001',
+        );
+        $rejectedMessage = $this->outboxMessage($rejectedAttempt->outboxEventId);
+        $handler = $this->deliveryHandler();
+        self::assertSame(OutboxDispatchOutcome::DefinitiveFailure, $handler->handle($rejectedMessage));
+        self::assertSame(OutboxDispatchOutcome::DefinitiveFailure, $handler->handle($rejectedMessage));
+        self::assertCount(1, $rejected['doubles']->sendCalls);
+        self::assertSame(ServiceDeliveryEffectState::FailedFinal->value, DB::table('service_delivery_effects')->value('state'));
+        self::assertSame('telegram_permanent_rejection', DB::table('service_delivery_effects')->value('result_code'));
+    }
+
     public function test_uncertain_and_retry_after_results_quarantine_without_second_send(): void
     {
         $uncertain = $this->provisionedScenario(
@@ -353,7 +484,11 @@ final class ServiceDeliveryEffectAuthorityTest extends TestCase
             ->where('service_subscription_id', $scenario['service_id'])
             ->where('operation_type', '<>', 'initial_provision')
             ->count());
-        self::assertSame(ServiceDeliveryEffectState::Uncertain, $executor->recover($attempt->attemptPublicId));
+
+        $message = $this->outboxMessage($attempt->outboxEventId);
+        $handler = $this->deliveryHandler();
+        self::assertSame(OutboxDispatchOutcome::UncertainResult, $handler->handle($message));
+        self::assertSame(OutboxDispatchOutcome::UncertainResult, $handler->handle($message));
         self::assertSame([], $scenario['doubles']->sendCalls);
         self::assertSame(ServiceDeliveryEffectState::Uncertain->value, DB::table('service_delivery_effects')->value('state'));
         self::assertSame('interrupted_delivery_effect', DB::table('service_delivery_effects')->value('result_code'));
