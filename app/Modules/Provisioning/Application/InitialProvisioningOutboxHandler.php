@@ -18,6 +18,7 @@ final readonly class InitialProvisioningOutboxHandler implements OutboxEventHand
     public function __construct(
         private InitialProvisioningExecutor $executor,
         private InitialProvisioningRecoveryService $recovery,
+        private InitialProvisioningDeliveryScheduler $delivery,
     ) {}
 
     public function eventType(): string
@@ -25,7 +26,7 @@ final readonly class InitialProvisioningOutboxHandler implements OutboxEventHand
         return self::EVENT_TYPE;
     }
 
-    /** @requirement PAY-003 PRV-002 PRV-003 ARCH-004 SEC-002 QUA-001 */
+    /** @requirement PAY-003 PRV-002 PRV-003 SVC-002 ARCH-004 SEC-002 QUA-001 */
     public function handle(OutboxMessage $message): OutboxDispatchOutcome
     {
         $operationPublicId = $message->payload['provisioning_operation_public_id'] ?? null;
@@ -71,11 +72,23 @@ final readonly class InitialProvisioningOutboxHandler implements OutboxEventHand
             return OutboxDispatchOutcome::RetryableFailure;
         }
 
+        if ($receipt->state === ProvisioningState::Succeeded) {
+            try {
+                $this->delivery->schedule($operationPublicId, $message->correlationId);
+            } catch (DomainException) {
+                return OutboxDispatchOutcome::DefinitiveFailure;
+            } catch (Throwable) {
+                return OutboxDispatchOutcome::RetryableFailure;
+            }
+
+            return OutboxDispatchOutcome::Success;
+        }
+
         return match ($receipt->state) {
-            ProvisioningState::Succeeded => OutboxDispatchOutcome::Success,
             ProvisioningState::RetryScheduled, ProvisioningState::Running, ProvisioningState::UncertainRemoteResult => OutboxDispatchOutcome::RetryableFailure,
             ProvisioningState::FailedFinal, ProvisioningState::NeedsReview, ProvisioningState::Compensated => OutboxDispatchOutcome::DefinitiveFailure,
             ProvisioningState::Queued, ProvisioningState::Compensating => OutboxDispatchOutcome::RetryableFailure,
+            ProvisioningState::Succeeded => OutboxDispatchOutcome::Success,
         };
     }
 }
