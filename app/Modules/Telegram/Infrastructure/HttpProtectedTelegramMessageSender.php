@@ -61,6 +61,13 @@ final readonly class HttpProtectedTelegramMessageSender implements ProtectedTele
             );
         }
 
+        if ($response->status() >= 300 && $response->status() <= 399) {
+            return new ProtectedTelegramSendResult(
+                ProtectedTelegramSendOutcome::UncertainResult,
+                'telegram_redirect_ambiguous',
+            );
+        }
+
         if (($decoded['ok'] ?? null) === true) {
             if (! $response->successful()) {
                 return new ProtectedTelegramSendResult(
@@ -129,13 +136,16 @@ final readonly class HttpProtectedTelegramMessageSender implements ProtectedTele
             );
         }
 
-        $resultCode = is_int($errorCode) && $errorCode >= 100 && $errorCode <= 599
-            ? 'telegram_api_error_'.$errorCode
-            : 'telegram_api_rejected';
+        if (! is_int($errorCode) || $errorCode < 100 || $errorCode > 599) {
+            return new ProtectedTelegramSendResult(
+                ProtectedTelegramSendOutcome::UncertainResult,
+                'telegram_error_code_malformed',
+            );
+        }
 
         return new ProtectedTelegramSendResult(
             ProtectedTelegramSendOutcome::DefinitiveFailure,
-            $resultCode,
+            'telegram_api_error_'.$errorCode,
         );
     }
 }
