@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Infrastructure;
 
+use App\Modules\Telegram\Application\Contracts\ProtectedTelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\ProtectedTelegramMessageSender;
 use App\Modules\Telegram\Application\Contracts\TelegramBotApi;
 use Illuminate\Contracts\Config\Repository;
@@ -28,7 +29,10 @@ final class TelegramServiceProvider extends ServiceProvider
                 );
             },
         );
-
+        $this->app->singleton(
+            ProtectedTelegramDeliveryRuntime::class,
+            fn (Application $application): ProtectedTelegramDeliveryRuntime => $application->make(TelegramRuntimeConfiguration::class),
+        );
         $this->app->singleton(
             TelegramBotApi::class,
             fn (Application $application): TelegramBotApi => new HttpTelegramBotApi(
