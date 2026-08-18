@@ -62,6 +62,13 @@ final readonly class HttpProtectedTelegramMessageSender implements ProtectedTele
         }
 
         if (($decoded['ok'] ?? null) === true) {
+            if (! $response->successful()) {
+                return new ProtectedTelegramSendResult(
+                    ProtectedTelegramSendOutcome::UncertainResult,
+                    'telegram_response_ambiguous',
+                );
+            }
+
             $result = $decoded['result'] ?? null;
             $messageId = is_array($result) ? ($result['message_id'] ?? null) : null;
             if (! is_int($messageId) || $messageId < 1) {
@@ -105,7 +112,7 @@ final readonly class HttpProtectedTelegramMessageSender implements ProtectedTele
         }
 
         $errorCode = $decoded['error_code'] ?? null;
-        if ($errorCode === 429) {
+        if ($response->status() === 429 || $errorCode === 429) {
             // Flood-control rejection without a usable exact delay is not safe to treat as
             // definitive: doing so could admit another restricted delivery too early.
             return new ProtectedTelegramSendResult(

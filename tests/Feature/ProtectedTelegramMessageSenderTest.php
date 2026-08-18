@@ -56,12 +56,11 @@ final class ProtectedTelegramMessageSenderTest extends TestCase
         Http::assertSentCount(1);
     }
 
-    public function test_rate_limit_without_retry_after_is_quarantined_with_one_http_attempt(): void
+    public function test_http_rate_limit_without_error_code_or_retry_after_is_quarantined_with_one_http_attempt(): void
     {
         Http::fake([
             '*' => Http::response([
                 'ok' => false,
-                'error_code' => 429,
             ], 429),
         ]);
 
@@ -78,7 +77,7 @@ final class ProtectedTelegramMessageSenderTest extends TestCase
         Http::fake([
             '*' => Http::response([
                 'ok' => false,
-                'error_code' => 429,
+                'error_code' => '429',
                 'parameters' => ['retry_after' => '60'],
             ], 429),
         ]);
