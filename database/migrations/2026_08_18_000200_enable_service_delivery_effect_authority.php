@@ -24,11 +24,11 @@ return new class extends Migration
             DB::statement($this->sql('01_create_table.sql'));
         }
 
-        DB::unprepared($this->sql('02_insert_guard.sql'));
-        DB::unprepared($this->sql('03_update_guard.sql'));
-        DB::unprepared($this->sql('04_delete_guard.sql'));
-        DB::unprepared($this->sql('05_mutation_insert_fence.sql'));
-        DB::unprepared($this->sql('06_delivery_attempt_insert_fence.sql'));
+        $this->executeRepositorySql('02_insert_guard.sql');
+        $this->executeRepositorySql('03_update_guard.sql');
+        $this->executeRepositorySql('04_delete_guard.sql');
+        $this->executeRepositorySql('05_mutation_insert_fence.sql');
+        $this->executeRepositorySql('06_delivery_attempt_insert_fence.sql');
     }
 
     public function down(): void
@@ -43,6 +43,13 @@ return new class extends Migration
         DB::unprepared('DROP TRIGGER IF EXISTS service_delivery_effects_update_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS service_delivery_effects_insert_guard');
         Schema::dropIfExists('service_delivery_effects');
+    }
+
+    private function executeRepositorySql(string $filename): void
+    {
+        if (DB::connection()->getPdo()->exec($this->sql($filename)) === false) {
+            throw new RuntimeException('Service delivery effect migration SQL execution failed: '.$filename);
+        }
     }
 
     private function sql(string $filename): string
