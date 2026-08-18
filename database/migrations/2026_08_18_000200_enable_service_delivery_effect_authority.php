@@ -21,7 +21,7 @@ return new class extends Migration
         }
 
         if (! Schema::hasTable('service_delivery_effects')) {
-            DB::statement($this->sql('01_create_table.sql'));
+            $this->executeRepositorySql('01_create_table.sql');
         }
 
         $this->executeRepositorySql('02_insert_guard.sql');
