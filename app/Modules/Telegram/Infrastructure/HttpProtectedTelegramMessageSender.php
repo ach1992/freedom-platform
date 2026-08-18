@@ -86,15 +86,33 @@ final readonly class HttpProtectedTelegramMessageSender implements ProtectedTele
 
         $parameters = $decoded['parameters'] ?? null;
         $retryAfter = is_array($parameters) ? ($parameters['retry_after'] ?? null) : null;
-        if (is_int($retryAfter) && $retryAfter >= 1 && $retryAfter <= 86_400) {
+        if (is_int($retryAfter) && $retryAfter >= 1) {
+            if ($retryAfter <= 86_400) {
+                return new ProtectedTelegramSendResult(
+                    ProtectedTelegramSendOutcome::RetryAfter,
+                    'telegram_retry_after',
+                    retryAfterSeconds: $retryAfter,
+                );
+            }
+
+            // The bounded durable representation cannot encode this exact provider delay.
+            // Quarantine instead of silently converting it into a non-blocking rejection.
             return new ProtectedTelegramSendResult(
-                ProtectedTelegramSendOutcome::RetryAfter,
-                'telegram_retry_after',
-                retryAfterSeconds: $retryAfter,
+                ProtectedTelegramSendOutcome::UncertainResult,
+                'telegram_retry_after_unrepresentable',
             );
         }
 
         $errorCode = $decoded['error_code'] ?? null;
+        if ($errorCode === 429) {
+            // Flood-control rejection without a usable exact delay is not safe to treat as
+            // definitive: doing so could admit another restricted delivery too early.
+            return new ProtectedTelegramSendResult(
+                ProtectedTelegramSendOutcome::UncertainResult,
+                'telegram_retry_after_missing',
+            );
+        }
+
         $resultCode = is_int($errorCode) && $errorCode >= 100 && $errorCode <= 599
             ? 'telegram_api_error_'.$errorCode
             : 'telegram_api_rejected';
