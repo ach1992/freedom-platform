@@ -360,18 +360,18 @@ final class InitialProvisioningDispatchAndReplayAuthorityTest extends TestCase
 
         $timestamp = $this->purchaseOrderTimestamp();
         $servicePublicId = (string) Str::ulid();
+        $operationCorrelationId = $this->purchaseOrderCorrelation('operation-'.$suffix);
         $serviceId = (int) DB::table('service_subscriptions')->insertGetId([
             'public_id' => $servicePublicId,
             'order_id' => (int) $orderRow->id,
             'order_item_id' => (int) $item->id,
             'user_id' => (int) $orderRow->user_id,
-            'creation_correlation_id' => $this->purchaseOrderCorrelation('service-'.$suffix),
+            'creation_correlation_id' => $operationCorrelationId,
             'created_at' => $timestamp,
             'updated_at' => $timestamp,
         ]);
 
         $operationPublicId = (string) Str::ulid();
-        $operationCorrelationId = $this->purchaseOrderCorrelation('operation-'.$suffix);
         DB::table('provisioning_operations')->insert([
             'public_id' => $operationPublicId,
             'operation_key' => 'initial-provision:'.$item->public_id,
