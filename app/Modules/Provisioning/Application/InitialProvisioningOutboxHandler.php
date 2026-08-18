@@ -58,8 +58,8 @@ final readonly class InitialProvisioningOutboxHandler implements OutboxEventHand
             $receipt = $this->executor->execute($operationPublicId);
         } catch (DomainException) {
             // Domain invalidity before a remote attempt is definitive, but a DomainException can
-            // also escape from local persistence after the provider has already returned. In that
-            // case the durable running/uncertain state owns recovery and the Outbox must retry.
+            // also escape from local persistence after the provider has already returned. Re-read
+            // durable state before deciding whether the delivery fence can be released.
             try {
                 $stateAfterFailure = $this->recovery->prepare($operationPublicId);
             } catch (Throwable) {
@@ -68,9 +68,22 @@ final readonly class InitialProvisioningOutboxHandler implements OutboxEventHand
                 return OutboxDispatchOutcome::RetryableFailure;
             }
 
+            if ($stateAfterFailure === ProvisioningState::Succeeded) {
+                try {
+                    $this->delivery->schedule($operationPublicId, $message->correlationId);
+                } catch (Throwable) {
+                    return OutboxDispatchOutcome::RetryableFailure;
+                }
+
+                return OutboxDispatchOutcome::Success;
+            }
+
             if (in_array($stateAfterFailure, [
+                ProvisioningState::Queued,
                 ProvisioningState::Running,
+                ProvisioningState::RetryScheduled,
                 ProvisioningState::UncertainRemoteResult,
+                ProvisioningState::Compensating,
             ], true)) {
                 return OutboxDispatchOutcome::RetryableFailure;
             }
