@@ -57,7 +57,7 @@ trait ServiceDeliveryEffectAuthority
      */
     private function telegramAccount(Connection $connection, object $service): object
     {
-        $botId = $this->positiveDatabaseInt($this->telegram->botId, 'Telegram runtime bot ID');
+        $botId = $this->positiveDatabaseInt($this->telegram->botId(), 'Telegram runtime bot ID');
         /** @var TelegramAccount|null $account */
         $account = $connection->table('telegram_accounts')
             ->where('user_id', (int) $service->user_id)
