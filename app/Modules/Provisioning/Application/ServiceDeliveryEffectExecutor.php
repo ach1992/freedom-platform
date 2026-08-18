@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Modules\Provisioning\Application;
 
-use App\Modules\Panels\Application\Contracts\SensitiveDeliveryArtifacts;
 use App\Modules\Provisioning\Domain\ServiceDeliveryEffectState;
 use App\Modules\Telegram\Application\Contracts\ProtectedTelegramMessageSender;
 use App\Modules\Telegram\Application\ProtectedTelegramSendOutcome;
@@ -27,9 +26,10 @@ use Throwable;
  */
 final readonly class ServiceDeliveryEffectExecutor
 {
-    use ServiceDeliveryEffectFinalization;
     use ServiceDeliveryEffectAuthority;
+    use ServiceDeliveryEffectFinalization;
     use ServiceDeliveryEffectPersistence;
+
     private const EFFECT_AUTHORITY = 'service_delivery_effect_v1';
 
     /** @var list<string> */
@@ -242,6 +242,4 @@ final readonly class ServiceDeliveryEffectExecutor
             return $this->effectById($connection, (int) $effect->id, true);
         }, 3);
     }
-
-    /** @param DeliveryEffect $locator */
 }
