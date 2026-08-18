@@ -62,6 +62,13 @@ final readonly class HttpProtectedTelegramMessageSender implements ProtectedTele
         }
 
         if (($decoded['ok'] ?? null) === true) {
+            if (! $response->successful()) {
+                return new ProtectedTelegramSendResult(
+                    ProtectedTelegramSendOutcome::UncertainResult,
+                    'telegram_response_ambiguous',
+                );
+            }
+
             $result = $decoded['result'] ?? null;
             $messageId = is_array($result) ? ($result['message_id'] ?? null) : null;
             if (! is_int($messageId) || $messageId < 1) {
