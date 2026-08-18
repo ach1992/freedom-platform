@@ -29,11 +29,12 @@ final readonly class HttpProtectedTelegramMessageSender implements ProtectedTele
         }
 
         try {
-            // Deliberately one attempt: transport retry after an ambiguous timeout can
-            // duplicate restricted subscription material.
+            // Deliberately one network attempt: no retry and no redirect follow after the
+            // provider boundary, because either can duplicate or disclose restricted material.
             $response = $this->http
                 ->asJson()
                 ->acceptJson()
+                ->withoutRedirecting()
                 ->timeout($this->configuration->apiTimeoutSeconds)
                 ->connectTimeout(min(5, $this->configuration->apiTimeoutSeconds))
                 ->post(

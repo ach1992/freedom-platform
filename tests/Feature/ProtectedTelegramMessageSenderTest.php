@@ -123,6 +123,19 @@ final class ProtectedTelegramMessageSenderTest extends TestCase
         self::assertSame(1, $attempts);
     }
 
+    public function test_redirect_response_is_not_followed_and_is_uncertain_after_one_http_attempt(): void
+    {
+        Http::fake([
+            '*' => Http::response('', 307, ['Location' => 'https://redirect.example.test/sendMessage']),
+        ]);
+
+        $result = $this->sender()->send(self::TELEGRAM_USER_ID, 'protected-test-message');
+
+        self::assertSame(ProtectedTelegramSendOutcome::UncertainResult, $result->outcome);
+        self::assertSame('telegram_response_unparseable', $result->resultCode);
+        Http::assertSentCount(1);
+    }
+
     public function test_unparseable_response_is_uncertain_with_one_http_attempt(): void
     {
         Http::fake([
