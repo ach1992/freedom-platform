@@ -135,13 +135,13 @@ final class ServiceDeliveryAttemptAuthorityTest extends TestCase
         $scenario = $this->scenario('replay');
         $first = $this->deliveryQueue()->queue(
             $scenario['service_public_id'],
-            ServiceDeliveryPurpose::Initial,
+            ServiceDeliveryPurpose::Resend,
             'request-delivery-replay-0001',
             'correlation-delivery-replay-0001',
         );
         $replay = $this->deliveryQueue()->queue(
             $scenario['service_public_id'],
-            ServiceDeliveryPurpose::Initial,
+            ServiceDeliveryPurpose::Resend,
             'request-delivery-replay-0001',
             'correlation-delivery-replay-0002',
         );
@@ -156,7 +156,7 @@ final class ServiceDeliveryAttemptAuthorityTest extends TestCase
         try {
             $this->deliveryQueue()->queue(
                 $scenario['service_public_id'],
-                ServiceDeliveryPurpose::Resend,
+                ServiceDeliveryPurpose::Initial,
                 'request-delivery-replay-0001',
                 'correlation-delivery-replay-0003',
             );
@@ -174,7 +174,7 @@ final class ServiceDeliveryAttemptAuthorityTest extends TestCase
         self::assertNotNull($attempt);
         self::assertSame(hash('sha256', 'request-delivery-replay-0001'), $attempt->request_key_hash);
         self::assertSame('correlation-delivery-replay-0001', $attempt->correlation_id);
-        self::assertSame(ServiceDeliveryPurpose::Initial->value, $attempt->purpose);
+        self::assertSame(ServiceDeliveryPurpose::Resend->value, $attempt->purpose);
 
         $outbox = DB::table('outbox_messages')->where('id', $first->outboxEventId)->first([
             'event_key', 'event_type', 'aggregate_type', 'aggregate_id', 'payload', 'payload_hash',
@@ -343,7 +343,7 @@ SQL);
             try {
                 $this->deliveryQueue()->queue(
                     $scenario['service_public_id'],
-                    ServiceDeliveryPurpose::Initial,
+                    ServiceDeliveryPurpose::Resend,
                     'request-delivery-rollback-0001',
                     'correlation-delivery-rollback-0001',
                 );
@@ -365,7 +365,7 @@ SQL);
         $scenario = $this->scenario('db-guards');
         $receipt = $this->deliveryQueue()->queue(
             $scenario['service_public_id'],
-            ServiceDeliveryPurpose::Initial,
+            ServiceDeliveryPurpose::Resend,
             'request-delivery-db-guard-0001',
             'correlation-delivery-db-guard-0001',
         );
@@ -389,7 +389,7 @@ SQL);
 
         try {
             DB::table('service_delivery_attempts')->where('public_id', $receipt->attemptPublicId)
-                ->update(['purpose' => ServiceDeliveryPurpose::Resend->value]);
+                ->update(['purpose' => ServiceDeliveryPurpose::Initial->value]);
             self::fail('Delivery Attempt intent evidence must be immutable.');
         } catch (QueryException) {
             // Expected.
@@ -445,13 +445,13 @@ SQL);
         $payloads = [
             [
                 'service_public_id' => $scenario['service_public_id'],
-                'purpose' => ServiceDeliveryPurpose::Initial->value,
+                'purpose' => ServiceDeliveryPurpose::Resend->value,
                 'request_key' => 'request-delivery-contention-0001',
                 'correlation_id' => 'correlation-delivery-contention-a-0001',
             ],
             [
                 'service_public_id' => $scenario['service_public_id'],
-                'purpose' => ServiceDeliveryPurpose::Initial->value,
+                'purpose' => ServiceDeliveryPurpose::Resend->value,
                 'request_key' => 'request-delivery-contention-0001',
                 'correlation_id' => 'correlation-delivery-contention-b-0001',
             ],
