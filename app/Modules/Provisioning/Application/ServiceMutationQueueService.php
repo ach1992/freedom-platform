@@ -69,6 +69,13 @@ final readonly class ServiceMutationQueueService
             }
 
             $this->assertServiceMutable($service, $type);
+            $blockingDelivery = $connection->table('service_delivery_effects')
+                ->where('blocking_service_subscription_id', (int) $service->id)
+                ->first(['id']);
+            if ($blockingDelivery !== null) {
+                throw new DomainException('Service mutation is blocked by an in-flight, uncertain, or provider-directed delivery boundary.');
+            }
+
             $active = $connection->table('provisioning_operations')
                 ->where('service_subscription_id', (int) $service->id)
                 ->where('operation_type', '<>', 'initial_provision')

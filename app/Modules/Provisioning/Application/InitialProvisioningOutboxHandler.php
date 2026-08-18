@@ -18,6 +18,7 @@ final readonly class InitialProvisioningOutboxHandler implements OutboxEventHand
     public function __construct(
         private InitialProvisioningExecutor $executor,
         private InitialProvisioningRecoveryService $recovery,
+        private InitialProvisioningDeliveryScheduler $delivery,
     ) {}
 
     public function eventType(): string
@@ -25,7 +26,7 @@ final readonly class InitialProvisioningOutboxHandler implements OutboxEventHand
         return self::EVENT_TYPE;
     }
 
-    /** @requirement PAY-003 PRV-002 PRV-003 ARCH-004 SEC-002 QUA-001 */
+    /** @requirement PAY-003 PRV-002 PRV-003 SVC-002 ARCH-004 SEC-002 QUA-001 */
     public function handle(OutboxMessage $message): OutboxDispatchOutcome
     {
         $operationPublicId = $message->payload['provisioning_operation_public_id'] ?? null;
@@ -39,6 +40,11 @@ final readonly class InitialProvisioningOutboxHandler implements OutboxEventHand
         }
 
         try {
+            // Establish the durable initial-delivery admission fence before provisioning can
+            // become externally visible as succeeded. The fence survives worker interruption
+            // until the deterministic initial Delivery Attempt has been materialized.
+            $this->delivery->establishFence($operationPublicId);
+
             // A live running attempt may outlast the shared Outbox lease. Never let a reclaimed
             // message reinterpret that live provider call as interrupted or enter the executor.
             // A stale running attempt first becomes durably uncertain and is retried on a later
@@ -52,30 +58,74 @@ final readonly class InitialProvisioningOutboxHandler implements OutboxEventHand
             $receipt = $this->executor->execute($operationPublicId);
         } catch (DomainException) {
             // Domain invalidity before a remote attempt is definitive, but a DomainException can
-            // also escape from local persistence after the provider has already returned. In that
-            // case the durable running/uncertain state owns recovery and the Outbox must retry.
+            // also escape from local persistence after the provider has already returned. Re-read
+            // durable state before deciding whether the delivery fence can be released.
             try {
                 $stateAfterFailure = $this->recovery->prepare($operationPublicId);
             } catch (Throwable) {
-                return OutboxDispatchOutcome::DefinitiveFailure;
+                // The fence may already exist and current provisioning state is unknown. Preserve
+                // retry/review so the control cannot become orphaned behind a definitive Outbox result.
+                return OutboxDispatchOutcome::RetryableFailure;
             }
 
-            return in_array($stateAfterFailure, [
+            if ($stateAfterFailure === ProvisioningState::Succeeded) {
+                try {
+                    $this->delivery->schedule($operationPublicId, $message->correlationId);
+                } catch (Throwable) {
+                    return OutboxDispatchOutcome::RetryableFailure;
+                }
+
+                return OutboxDispatchOutcome::Success;
+            }
+
+            if (in_array($stateAfterFailure, [
+                ProvisioningState::Queued,
                 ProvisioningState::Running,
+                ProvisioningState::RetryScheduled,
                 ProvisioningState::UncertainRemoteResult,
-            ], true)
-                ? OutboxDispatchOutcome::RetryableFailure
-                : OutboxDispatchOutcome::DefinitiveFailure;
+                ProvisioningState::Compensating,
+            ], true)) {
+                return OutboxDispatchOutcome::RetryableFailure;
+            }
+
+            try {
+                $this->delivery->releaseFence($operationPublicId);
+            } catch (Throwable) {
+                return OutboxDispatchOutcome::RetryableFailure;
+            }
+
+            return OutboxDispatchOutcome::DefinitiveFailure;
         } catch (Throwable) {
             // Escaping executor failures occur outside the guarded provider-call boundary and are safe to retry.
             return OutboxDispatchOutcome::RetryableFailure;
         }
 
-        return match ($receipt->state) {
-            ProvisioningState::Succeeded => OutboxDispatchOutcome::Success,
-            ProvisioningState::RetryScheduled, ProvisioningState::Running, ProvisioningState::UncertainRemoteResult => OutboxDispatchOutcome::RetryableFailure,
-            ProvisioningState::FailedFinal, ProvisioningState::NeedsReview, ProvisioningState::Compensated => OutboxDispatchOutcome::DefinitiveFailure,
-            ProvisioningState::Queued, ProvisioningState::Compensating => OutboxDispatchOutcome::RetryableFailure,
-        };
+        if ($receipt->state === ProvisioningState::Succeeded) {
+            try {
+                $this->delivery->schedule($operationPublicId, $message->correlationId);
+            } catch (Throwable) {
+                // A succeeded Service must not lose its deterministic initial delivery intent.
+                // Keep the durable fence and retry/review rather than finalizing the Outbox early.
+                return OutboxDispatchOutcome::RetryableFailure;
+            }
+
+            return OutboxDispatchOutcome::Success;
+        }
+
+        if (in_array($receipt->state, [
+            ProvisioningState::FailedFinal,
+            ProvisioningState::NeedsReview,
+            ProvisioningState::Compensated,
+        ], true)) {
+            try {
+                $this->delivery->releaseFence($operationPublicId);
+            } catch (Throwable) {
+                return OutboxDispatchOutcome::RetryableFailure;
+            }
+
+            return OutboxDispatchOutcome::DefinitiveFailure;
+        }
+
+        return OutboxDispatchOutcome::RetryableFailure;
     }
 }
