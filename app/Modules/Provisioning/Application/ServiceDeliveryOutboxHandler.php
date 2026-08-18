@@ -8,13 +8,16 @@ use App\Modules\Provisioning\Domain\ServiceDeliveryEffectState;
 use App\Shared\Application\OutboxDispatchOutcome;
 use App\Shared\Application\OutboxEventHandler;
 use App\Shared\Application\OutboxMessage;
+use Closure;
 use DomainException;
+use RuntimeException;
 use Throwable;
 
 final readonly class ServiceDeliveryOutboxHandler implements OutboxEventHandler
 {
+    /** @param Closure():ServiceDeliveryEffectExecutor $executorResolver */
     public function __construct(
-        private ServiceDeliveryEffectExecutor $executor,
+        private Closure $executorResolver,
     ) {}
 
     public function eventType(): string
@@ -38,7 +41,8 @@ final readonly class ServiceDeliveryOutboxHandler implements OutboxEventHandler
         }
 
         try {
-            $preparedState = $this->executor->recover($attemptPublicId);
+            $executor = $this->executor();
+            $preparedState = $executor->recover($attemptPublicId);
         } catch (DomainException) {
             return OutboxDispatchOutcome::DefinitiveFailure;
         } catch (Throwable) {
@@ -51,14 +55,24 @@ final readonly class ServiceDeliveryOutboxHandler implements OutboxEventHandler
         }
 
         try {
-            $receipt = $this->executor->execute($attemptPublicId);
+            $receipt = $executor->execute($attemptPublicId);
         } catch (DomainException) {
-            return $this->outcomeAfterFailure($attemptPublicId, true);
+            return $this->outcomeAfterFailure($executor, $attemptPublicId, true);
         } catch (Throwable) {
-            return $this->outcomeAfterFailure($attemptPublicId, false);
+            return $this->outcomeAfterFailure($executor, $attemptPublicId, false);
         }
 
         return $this->outcomeForState($receipt->state);
+    }
+
+    private function executor(): ServiceDeliveryEffectExecutor
+    {
+        $executor = ($this->executorResolver)();
+        if (! $executor instanceof ServiceDeliveryEffectExecutor) {
+            throw new RuntimeException('Service delivery executor resolver returned an invalid instance.');
+        }
+
+        return $executor;
     }
 
     private function outcomeForPreparedState(?ServiceDeliveryEffectState $state): ?OutboxDispatchOutcome
@@ -81,10 +95,13 @@ final readonly class ServiceDeliveryOutboxHandler implements OutboxEventHandler
         };
     }
 
-    private function outcomeAfterFailure(string $attemptPublicId, bool $domainFailure): OutboxDispatchOutcome
-    {
+    private function outcomeAfterFailure(
+        ServiceDeliveryEffectExecutor $executor,
+        string $attemptPublicId,
+        bool $domainFailure,
+    ): OutboxDispatchOutcome {
         try {
-            $state = $this->executor->recover($attemptPublicId);
+            $state = $executor->recover($attemptPublicId);
         } catch (Throwable) {
             return $domainFailure
                 ? OutboxDispatchOutcome::DefinitiveFailure
