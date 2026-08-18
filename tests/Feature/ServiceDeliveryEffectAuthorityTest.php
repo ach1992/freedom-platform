@@ -131,6 +131,21 @@ final class ServiceDeliveryEffectAuthorityTest extends TestCase
         self::assertNotNull($effect->provider_boundary_started_at);
         self::assertNotNull($effect->completed_at);
 
+        try {
+            DB::table('service_delivery_effects')->where('id', (int) $effect->id)->update([
+                'telegram_user_id' => self::TELEGRAM_USER_ID + 1,
+            ]);
+            self::fail('Direct DB Service delivery effect retargeting must fail closed.');
+        } catch (QueryException) {
+            // Expected.
+        }
+        try {
+            DB::table('service_delivery_effects')->where('id', (int) $effect->id)->delete();
+            self::fail('Direct DB Service delivery effect deletion must fail closed.');
+        } catch (QueryException) {
+            // Expected.
+        }
+
         self::assertSame(OutboxDispatchOutcome::Success, $handler->handle($message));
         self::assertSame(['delivery_artifacts'], $scenario['doubles']->panelCalls);
         self::assertCount(1, $scenario['doubles']->sendCalls);
@@ -323,6 +338,21 @@ final class ServiceDeliveryEffectAuthorityTest extends TestCase
         $boundary->invoke($executor, $context['effect']);
 
         self::assertSame(ServiceDeliveryEffectState::Sending->value, DB::table('service_delivery_effects')->value('state'));
+        try {
+            $this->app->make(ServiceMutationQueueService::class)->queue(
+                $scenario['service_public_id'],
+                ServiceMutationType::Suspend,
+                'request-effect-sending-mutation-0001',
+                'correlation-effect-sending-mutation-0001',
+            );
+            self::fail('A Service mutation must be rejected after the protected Telegram boundary starts.');
+        } catch (DomainException) {
+            // Expected.
+        }
+        self::assertSame(0, DB::table('provisioning_operations')
+            ->where('service_subscription_id', $scenario['service_id'])
+            ->where('operation_type', '<>', 'initial_provision')
+            ->count());
         self::assertSame(ServiceDeliveryEffectState::Uncertain, $executor->recover($attempt->attemptPublicId));
         self::assertSame([], $scenario['doubles']->sendCalls);
         self::assertSame(ServiceDeliveryEffectState::Uncertain->value, DB::table('service_delivery_effects')->value('state'));
