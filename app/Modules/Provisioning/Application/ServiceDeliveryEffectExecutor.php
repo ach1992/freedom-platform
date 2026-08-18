@@ -5,10 +5,10 @@ declare(strict_types=1);
 namespace App\Modules\Provisioning\Application;
 
 use App\Modules\Provisioning\Domain\ServiceDeliveryEffectState;
+use App\Modules\Telegram\Application\Contracts\ProtectedTelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\ProtectedTelegramMessageSender;
 use App\Modules\Telegram\Application\ProtectedTelegramSendOutcome;
 use App\Modules\Telegram\Application\ProtectedTelegramSendResult;
-use App\Modules\Telegram\Infrastructure\TelegramRuntimeConfiguration;
 use App\Shared\Application\Clock;
 use DomainException;
 use Illuminate\Database\Connection;
@@ -39,7 +39,7 @@ final readonly class ServiceDeliveryEffectExecutor
         private DatabaseManager $database,
         private Clock $clock,
         private ProvisioningPanelAdapterResolver $adapters,
-        private TelegramRuntimeConfiguration $telegram,
+        private ProtectedTelegramDeliveryRuntime $telegram,
         private ProtectedTelegramMessageSender $sender,
     ) {}
 
