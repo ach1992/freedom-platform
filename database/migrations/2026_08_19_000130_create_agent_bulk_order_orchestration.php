@@ -221,43 +221,72 @@ return new class extends Migration
 
     private function installParentBootstrapMutationBarriers(): void
     {
-        $this->installBootstrapMutationBarriers('agent_bulk_orders', 'agent_bulk_orders');
-    }
-
-    private function installItemBootstrapMutationBarriers(): void
-    {
-        $this->installBootstrapMutationBarriers('agent_bulk_order_items', 'agent_bulk_items');
-    }
-
-    private function installBootstrapMutationBarriers(string $table, string $prefix): void
-    {
-        foreach (['insert' => 'INSERT', 'update' => 'UPDATE', 'delete' => 'DELETE'] as $suffix => $event) {
-            DB::unprepared(sprintf(<<<'SQL'
-CREATE OR REPLACE TRIGGER %s_bootstrap_%s_barrier
-BEFORE %s ON %s
+        DB::unprepared(<<<'SQL'
+CREATE OR REPLACE TRIGGER agent_bulk_orders_bootstrap_insert_barrier
+BEFORE INSERT ON agent_bulk_orders
 FOR EACH ROW
 BEGIN
     SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Agent bulk Order migration bootstrap is incomplete.';
 END
-SQL, $prefix, $suffix, $event, $table));
-        }
+SQL);
+        DB::unprepared(<<<'SQL'
+CREATE OR REPLACE TRIGGER agent_bulk_orders_bootstrap_update_barrier
+BEFORE UPDATE ON agent_bulk_orders
+FOR EACH ROW
+BEGIN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Agent bulk Order migration bootstrap is incomplete.';
+END
+SQL);
+        DB::unprepared(<<<'SQL'
+CREATE OR REPLACE TRIGGER agent_bulk_orders_bootstrap_delete_barrier
+BEFORE DELETE ON agent_bulk_orders
+FOR EACH ROW
+BEGIN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Agent bulk Order migration bootstrap is incomplete.';
+END
+SQL);
+    }
+
+    private function installItemBootstrapMutationBarriers(): void
+    {
+        DB::unprepared(<<<'SQL'
+CREATE OR REPLACE TRIGGER agent_bulk_items_bootstrap_insert_barrier
+BEFORE INSERT ON agent_bulk_order_items
+FOR EACH ROW
+BEGIN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Agent bulk Order migration bootstrap is incomplete.';
+END
+SQL);
+        DB::unprepared(<<<'SQL'
+CREATE OR REPLACE TRIGGER agent_bulk_items_bootstrap_update_barrier
+BEFORE UPDATE ON agent_bulk_order_items
+FOR EACH ROW
+BEGIN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Agent bulk Order migration bootstrap is incomplete.';
+END
+SQL);
+        DB::unprepared(<<<'SQL'
+CREATE OR REPLACE TRIGGER agent_bulk_items_bootstrap_delete_barrier
+BEFORE DELETE ON agent_bulk_order_items
+FOR EACH ROW
+BEGIN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Agent bulk Order migration bootstrap is incomplete.';
+END
+SQL);
     }
 
     private function dropParentBootstrapMutationBarriers(): void
     {
-        $this->dropBootstrapMutationBarriers('agent_bulk_orders');
+        DB::unprepared('DROP TRIGGER IF EXISTS agent_bulk_orders_bootstrap_delete_barrier');
+        DB::unprepared('DROP TRIGGER IF EXISTS agent_bulk_orders_bootstrap_update_barrier');
+        DB::unprepared('DROP TRIGGER IF EXISTS agent_bulk_orders_bootstrap_insert_barrier');
     }
 
     private function dropItemBootstrapMutationBarriers(): void
     {
-        $this->dropBootstrapMutationBarriers('agent_bulk_items');
-    }
-
-    private function dropBootstrapMutationBarriers(string $prefix): void
-    {
-        foreach (['delete', 'update', 'insert'] as $suffix) {
-            DB::unprepared('DROP TRIGGER IF EXISTS `'.$prefix.'_bootstrap_'.$suffix.'_barrier`');
-        }
+        DB::unprepared('DROP TRIGGER IF EXISTS agent_bulk_items_bootstrap_delete_barrier');
+        DB::unprepared('DROP TRIGGER IF EXISTS agent_bulk_items_bootstrap_update_barrier');
+        DB::unprepared('DROP TRIGGER IF EXISTS agent_bulk_items_bootstrap_insert_barrier');
     }
 
     private function bootstrapBarrierExists(): bool
