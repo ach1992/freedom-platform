@@ -40,7 +40,7 @@ return new class extends Migration
                 $table->index(['source_type', 'created_at'], 'order_source_auth_type_created_idx');
             });
         } else {
-            $this->assertTableFoundation();
+            $this->ensureTableFoundation();
         }
 
         $this->replaceConstraint('order_source_auth_type_chk', "CHECK (`source_type` IN ('trial','benefit_code','admin_grant'))");
@@ -70,7 +70,7 @@ return new class extends Migration
         Schema::dropIfExists('order_source_authorizations');
     }
 
-    private function assertTableFoundation(): void
+    private function ensureTableFoundation(): void
     {
         foreach ([
             ['id', 'bigint', false, null, true],
@@ -97,8 +97,8 @@ return new class extends Migration
             throw new RuntimeException('Existing Order source authorization table has an incomplete configuration snapshot column.');
         }
 
+        $this->ensurePrimaryIndex(['id']);
         foreach ([
-            ['PRIMARY', ['id'], true],
             ['order_source_authorizations_public_id_unique', ['public_id'], true],
             ['order_source_authorizations_trial_reservation_id_unique', ['trial_reservation_id'], true],
             ['order_source_authorizations_trial_reservation_command_key_unique', ['trial_reservation_command_key'], true],
@@ -108,7 +108,7 @@ return new class extends Migration
             ['order_source_auth_user_created_idx', ['user_id', 'created_at'], false],
             ['order_source_auth_type_created_idx', ['source_type', 'created_at'], false],
         ] as [$index, $columns, $unique]) {
-            $this->assertIndexShape($index, $columns, $unique);
+            $this->ensureIndexShape($index, $columns, $unique);
         }
 
         foreach ([
@@ -117,7 +117,7 @@ return new class extends Migration
             ['order_source_authorizations_trial_reservation_id_foreign', 'trial_reservation_id', 'trial_reservations', 'id'],
             ['order_source_authorizations_benefit_entitlement_id_foreign', 'benefit_entitlement_id', 'benefit_code_free_service_entitlements', 'id'],
         ] as [$constraint, $column, $referencedTable, $referencedColumn]) {
-            $this->assertForeignKeyShape($constraint, $column, $referencedTable, $referencedColumn);
+            $this->ensureForeignKeyShape($constraint, $column, $referencedTable, $referencedColumn);
         }
     }
 
@@ -132,7 +132,7 @@ return new class extends Migration
 
     private function assertAuthorityReady(): void
     {
-        $this->assertTableFoundation();
+        $this->ensureTableFoundation();
         foreach ([
             'order_source_auth_type_chk',
             'order_source_auth_actor_chk',
@@ -172,23 +172,123 @@ return new class extends Migration
     }
 
     /** @param list<string> $columns */
-    private function assertIndexShape(string $index, array $columns, bool $unique): void
+    private function ensurePrimaryIndex(array $columns): void
     {
-        /** @var list<object{column_name:string,non_unique:int|string}> $rows */
+        $rows = $this->indexRows('PRIMARY');
+        if ($rows === []) {
+            DB::statement('ALTER TABLE `order_source_authorizations` ADD PRIMARY KEY (`id`)');
+            $rows = $this->indexRows('PRIMARY');
+        }
+        $this->assertIndexRows('PRIMARY', $rows, $columns, true);
+    }
+
+    /** @param list<string> $columns */
+    private function ensureIndexShape(string $index, array $columns, bool $unique): void
+    {
+        $rows = $this->indexRows($index);
+        if ($rows !== []) {
+            $this->assertIndexRows($index, $rows, $columns, $unique);
+
+            return;
+        }
+
+        if ($this->equivalentIndexExists($columns, $unique)) {
+            return;
+        }
+
+        DB::statement(sprintf(
+            'ALTER TABLE `order_source_authorizations` ADD %sINDEX `%s` (%s)',
+            $unique ? 'UNIQUE ' : '',
+            $index,
+            implode(', ', array_map(static fn (string $column): string => '`'.$column.'`', $columns)),
+        ));
+        $this->assertIndexRows($index, $this->indexRows($index), $columns, $unique);
+    }
+
+    /** @return list<object{column_name:string,non_unique:int|string,sub_part:int|string|null}> */
+    private function indexRows(string $index): array
+    {
+        /** @var list<object{column_name:string,non_unique:int|string,sub_part:int|string|null}> $rows */
         $rows = DB::select(
-            'SELECT COLUMN_NAME AS column_name, NON_UNIQUE AS non_unique FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ? ORDER BY SEQ_IN_INDEX',
+            'SELECT COLUMN_NAME AS column_name, NON_UNIQUE AS non_unique, SUB_PART AS sub_part FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ? ORDER BY SEQ_IN_INDEX',
             ['order_source_authorizations', $index],
         );
+
+        return $rows;
+    }
+
+    /**
+     * @param  list<object{column_name:string,non_unique:int|string,sub_part:int|string|null}>  $rows
+     * @param  list<string>  $columns
+     */
+    private function assertIndexRows(string $index, array $rows, array $columns, bool $unique): void
+    {
         $actual = array_map(static fn ($row): string => (string) $row->column_name, $rows);
         $isUnique = $rows !== [] && (int) $rows[0]->non_unique === 0;
-        if ($actual !== $columns || $isUnique !== $unique) {
+        $fullColumns = $rows !== [] && array_reduce(
+            $rows,
+            static fn (bool $carry, $row): bool => $carry && $row->sub_part === null,
+            true,
+        );
+        if ($actual !== $columns || $isUnique !== $unique || ! $fullColumns) {
             throw new RuntimeException('Existing Order source authorization table has incompatible index shape: '.$index);
         }
     }
 
-    private function assertForeignKeyShape(string $constraint, string $column, string $referencedTable, string $referencedColumn): void
+    /** @param list<string> $columns */
+    private function equivalentIndexExists(array $columns, bool $unique): bool
     {
-        $row = DB::selectOne(<<<'SQL'
+        /** @var list<object{index_name:string,column_name:string,non_unique:int|string,sub_part:int|string|null}> $rows */
+        $rows = DB::select(
+            'SELECT INDEX_NAME AS index_name, COLUMN_NAME AS column_name, NON_UNIQUE AS non_unique, SUB_PART AS sub_part FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? ORDER BY INDEX_NAME, SEQ_IN_INDEX',
+            ['order_source_authorizations'],
+        );
+        /** @var array<string, list<object{index_name:string,column_name:string,non_unique:int|string,sub_part:int|string|null}>> $groups */
+        $groups = [];
+        foreach ($rows as $row) {
+            $groups[$row->index_name][] = $row;
+        }
+        foreach ($groups as $group) {
+            $actual = array_map(static fn ($row): string => (string) $row->column_name, $group);
+            $isUnique = $group !== [] && (int) $group[0]->non_unique === 0;
+            $fullColumns = $group !== [] && array_reduce(
+                $group,
+                static fn (bool $carry, $row): bool => $carry && $row->sub_part === null,
+                true,
+            );
+            if ($actual === $columns && $isUnique === $unique && $fullColumns) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function ensureForeignKeyShape(string $constraint, string $column, string $referencedTable, string $referencedColumn): void
+    {
+        $row = $this->foreignKeyRow($constraint);
+        if ($row !== null) {
+            $this->assertForeignKeyRow($constraint, $row, $column, $referencedTable, $referencedColumn);
+
+            return;
+        }
+
+        if ($this->equivalentForeignKeyExists($column, $referencedTable, $referencedColumn)) {
+            return;
+        }
+
+        DB::statement("ALTER TABLE `order_source_authorizations` ADD CONSTRAINT `{$constraint}` FOREIGN KEY (`{$column}`) REFERENCES `{$referencedTable}` (`{$referencedColumn}`) ON DELETE RESTRICT");
+        $row = $this->foreignKeyRow($constraint);
+        if ($row === null) {
+            throw new RuntimeException('Order source authorization foreign key did not converge: '.$constraint);
+        }
+        $this->assertForeignKeyRow($constraint, $row, $column, $referencedTable, $referencedColumn);
+    }
+
+    /** @return object{column_name:string,referenced_table:string,referenced_column:string,delete_rule:string}|null */
+    private function foreignKeyRow(string $constraint): ?object
+    {
+        return DB::selectOne(<<<'SQL'
 SELECT k.COLUMN_NAME AS column_name,
        k.REFERENCED_TABLE_NAME AS referenced_table,
        k.REFERENCED_COLUMN_NAME AS referenced_column,
@@ -202,13 +302,37 @@ WHERE k.CONSTRAINT_SCHEMA = DATABASE()
   AND k.TABLE_NAME = 'order_source_authorizations'
   AND k.CONSTRAINT_NAME = ?
 SQL, [$constraint]);
-        if ($row === null
-            || (string) $row->column_name !== $column
+    }
+
+    /** @param object{column_name:string,referenced_table:string,referenced_column:string,delete_rule:string} $row */
+    private function assertForeignKeyRow(string $constraint, object $row, string $column, string $referencedTable, string $referencedColumn): void
+    {
+        if ((string) $row->column_name !== $column
             || (string) $row->referenced_table !== $referencedTable
             || (string) $row->referenced_column !== $referencedColumn
             || (string) $row->delete_rule !== 'RESTRICT') {
             throw new RuntimeException('Existing Order source authorization table has incompatible foreign-key shape: '.$constraint);
         }
+    }
+
+    private function equivalentForeignKeyExists(string $column, string $referencedTable, string $referencedColumn): bool
+    {
+        $row = DB::selectOne(<<<'SQL'
+SELECT COUNT(*) AS aggregate
+FROM information_schema.KEY_COLUMN_USAGE k
+INNER JOIN information_schema.REFERENTIAL_CONSTRAINTS r
+    ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA
+   AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME
+   AND r.TABLE_NAME = k.TABLE_NAME
+WHERE k.CONSTRAINT_SCHEMA = DATABASE()
+  AND k.TABLE_NAME = 'order_source_authorizations'
+  AND k.COLUMN_NAME = ?
+  AND k.REFERENCED_TABLE_NAME = ?
+  AND k.REFERENCED_COLUMN_NAME = ?
+  AND r.DELETE_RULE = 'RESTRICT'
+SQL, [$column, $referencedTable, $referencedColumn]);
+
+        return $row !== null && (int) $row->aggregate === 1;
     }
 
     private function constraintExists(string $constraint): bool

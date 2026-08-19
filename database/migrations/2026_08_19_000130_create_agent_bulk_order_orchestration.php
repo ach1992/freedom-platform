@@ -25,7 +25,7 @@ return new class extends Migration
                 $table->index(['user_id', 'created_at'], 'agent_bulk_orders_user_created_idx');
             });
         } else {
-            $this->assertParentTableFoundation();
+            $this->ensureParentTableFoundation();
         }
 
         if (! Schema::hasTable('agent_bulk_order_items')) {
@@ -51,7 +51,7 @@ return new class extends Migration
                 $table->index(['agent_bulk_order_id', 'state'], 'agent_bulk_items_order_state_idx');
             });
         } else {
-            $this->assertItemTableFoundation();
+            $this->ensureItemTableFoundation();
         }
 
         $this->replaceConstraint('agent_bulk_orders', 'agent_bulk_orders_hash_chk', "CHECK (`request_payload_hash` REGEXP '^[0-9a-f]{64}$')");
@@ -83,7 +83,7 @@ return new class extends Migration
         Schema::dropIfExists('agent_bulk_orders');
     }
 
-    private function assertParentTableFoundation(): void
+    private function ensureParentTableFoundation(): void
     {
         foreach ([
             ['id', 'bigint', false, null, true],
@@ -97,18 +97,18 @@ return new class extends Migration
         ] as [$column, $type, $nullable, $length, $unsigned]) {
             $this->assertColumnShape('agent_bulk_orders', $column, $type, $nullable, $length, $unsigned);
         }
+        $this->ensurePrimaryIndex('agent_bulk_orders', ['id']);
         foreach ([
-            ['PRIMARY', ['id'], true],
             ['agent_bulk_orders_public_id_unique', ['public_id'], true],
             ['agent_bulk_orders_batch_key_unique', ['batch_key'], true],
             ['agent_bulk_orders_user_created_idx', ['user_id', 'created_at'], false],
         ] as [$index, $columns, $unique]) {
-            $this->assertIndexShape('agent_bulk_orders', $index, $columns, $unique);
+            $this->ensureIndexShape('agent_bulk_orders', $index, $columns, $unique);
         }
-        $this->assertForeignKeyShape('agent_bulk_orders', 'agent_bulk_orders_user_id_foreign', 'user_id', 'users', 'id');
+        $this->ensureForeignKeyShape('agent_bulk_orders', 'agent_bulk_orders_user_id_foreign', 'user_id', 'users', 'id');
     }
 
-    private function assertItemTableFoundation(): void
+    private function ensureItemTableFoundation(): void
     {
         foreach ([
             ['id', 'bigint', false, null, true],
@@ -130,8 +130,8 @@ return new class extends Migration
         ] as [$column, $type, $nullable, $length, $unsigned]) {
             $this->assertColumnShape('agent_bulk_order_items', $column, $type, $nullable, $length, $unsigned);
         }
+        $this->ensurePrimaryIndex('agent_bulk_order_items', ['id']);
         foreach ([
-            ['PRIMARY', ['id'], true],
             ['agent_bulk_order_items_public_id_unique', ['public_id'], true],
             ['agent_bulk_order_items_purchase_settlement_id_unique', ['purchase_settlement_id'], true],
             ['agent_bulk_order_items_order_id_unique', ['order_id'], true],
@@ -140,7 +140,7 @@ return new class extends Migration
             ['agent_bulk_items_order_child_unique', ['agent_bulk_order_id', 'child_key'], true],
             ['agent_bulk_items_order_state_idx', ['agent_bulk_order_id', 'state'], false],
         ] as [$index, $columns, $unique]) {
-            $this->assertIndexShape('agent_bulk_order_items', $index, $columns, $unique);
+            $this->ensureIndexShape('agent_bulk_order_items', $index, $columns, $unique);
         }
         foreach ([
             ['agent_bulk_order_items_agent_bulk_order_id_foreign', 'agent_bulk_order_id', 'agent_bulk_orders', 'id'],
@@ -149,7 +149,7 @@ return new class extends Migration
             ['agent_bulk_order_items_order_id_foreign', 'order_id', 'orders', 'id'],
             ['agent_bulk_order_items_order_item_id_foreign', 'order_item_id', 'order_items', 'id'],
         ] as [$constraint, $column, $referencedTable, $referencedColumn]) {
-            $this->assertForeignKeyShape('agent_bulk_order_items', $constraint, $column, $referencedTable, $referencedColumn);
+            $this->ensureForeignKeyShape('agent_bulk_order_items', $constraint, $column, $referencedTable, $referencedColumn);
         }
     }
 
@@ -163,8 +163,8 @@ return new class extends Migration
 
     private function assertAuthorityReady(): void
     {
-        $this->assertParentTableFoundation();
-        $this->assertItemTableFoundation();
+        $this->ensureParentTableFoundation();
+        $this->ensureItemTableFoundation();
         foreach ([
             ['agent_bulk_orders', 'agent_bulk_orders_hash_chk'],
             ['agent_bulk_orders', 'agent_bulk_orders_count_chk'],
@@ -206,23 +206,124 @@ return new class extends Migration
     }
 
     /** @param list<string> $columns */
-    private function assertIndexShape(string $table, string $index, array $columns, bool $unique): void
+    private function ensurePrimaryIndex(string $table, array $columns): void
     {
-        /** @var list<object{column_name:string,non_unique:int|string}> $rows */
+        $rows = $this->indexRows($table, 'PRIMARY');
+        if ($rows === []) {
+            DB::statement("ALTER TABLE `{$table}` ADD PRIMARY KEY (`id`)");
+            $rows = $this->indexRows($table, 'PRIMARY');
+        }
+        $this->assertIndexRows($table, 'PRIMARY', $rows, $columns, true);
+    }
+
+    /** @param list<string> $columns */
+    private function ensureIndexShape(string $table, string $index, array $columns, bool $unique): void
+    {
+        $rows = $this->indexRows($table, $index);
+        if ($rows !== []) {
+            $this->assertIndexRows($table, $index, $rows, $columns, $unique);
+
+            return;
+        }
+
+        if ($this->equivalentIndexExists($table, $columns, $unique)) {
+            return;
+        }
+
+        DB::statement(sprintf(
+            'ALTER TABLE `%s` ADD %sINDEX `%s` (%s)',
+            $table,
+            $unique ? 'UNIQUE ' : '',
+            $index,
+            implode(', ', array_map(static fn (string $column): string => '`'.$column.'`', $columns)),
+        ));
+        $this->assertIndexRows($table, $index, $this->indexRows($table, $index), $columns, $unique);
+    }
+
+    /** @return list<object{column_name:string,non_unique:int|string,sub_part:int|string|null}> */
+    private function indexRows(string $table, string $index): array
+    {
+        /** @var list<object{column_name:string,non_unique:int|string,sub_part:int|string|null}> $rows */
         $rows = DB::select(
-            'SELECT COLUMN_NAME AS column_name, NON_UNIQUE AS non_unique FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ? ORDER BY SEQ_IN_INDEX',
+            'SELECT COLUMN_NAME AS column_name, NON_UNIQUE AS non_unique, SUB_PART AS sub_part FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ? ORDER BY SEQ_IN_INDEX',
             [$table, $index],
         );
+
+        return $rows;
+    }
+
+    /**
+     * @param  list<object{column_name:string,non_unique:int|string,sub_part:int|string|null}>  $rows
+     * @param  list<string>  $columns
+     */
+    private function assertIndexRows(string $table, string $index, array $rows, array $columns, bool $unique): void
+    {
         $actual = array_map(static fn ($row): string => (string) $row->column_name, $rows);
         $isUnique = $rows !== [] && (int) $rows[0]->non_unique === 0;
-        if ($actual !== $columns || $isUnique !== $unique) {
+        $fullColumns = $rows !== [] && array_reduce(
+            $rows,
+            static fn (bool $carry, $row): bool => $carry && $row->sub_part === null,
+            true,
+        );
+        if ($actual !== $columns || $isUnique !== $unique || ! $fullColumns) {
             throw new RuntimeException("Agent bulk Order table has incompatible index shape: {$table}.{$index}");
         }
     }
 
-    private function assertForeignKeyShape(string $table, string $constraint, string $column, string $referencedTable, string $referencedColumn): void
+    /** @param list<string> $columns */
+    private function equivalentIndexExists(string $table, array $columns, bool $unique): bool
     {
-        $row = DB::selectOne(<<<'SQL'
+        /** @var list<object{index_name:string,column_name:string,non_unique:int|string,sub_part:int|string|null}> $rows */
+        $rows = DB::select(
+            'SELECT INDEX_NAME AS index_name, COLUMN_NAME AS column_name, NON_UNIQUE AS non_unique, SUB_PART AS sub_part FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? ORDER BY INDEX_NAME, SEQ_IN_INDEX',
+            [$table],
+        );
+        /** @var array<string, list<object{index_name:string,column_name:string,non_unique:int|string,sub_part:int|string|null}>> $groups */
+        $groups = [];
+        foreach ($rows as $row) {
+            $groups[$row->index_name][] = $row;
+        }
+        foreach ($groups as $group) {
+            $actual = array_map(static fn ($row): string => (string) $row->column_name, $group);
+            $isUnique = $group !== [] && (int) $group[0]->non_unique === 0;
+            $fullColumns = $group !== [] && array_reduce(
+                $group,
+                static fn (bool $carry, $row): bool => $carry && $row->sub_part === null,
+                true,
+            );
+            if ($actual === $columns && $isUnique === $unique && $fullColumns) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function ensureForeignKeyShape(string $table, string $constraint, string $column, string $referencedTable, string $referencedColumn): void
+    {
+        $row = $this->foreignKeyRow($table, $constraint);
+        if ($row !== null) {
+            $this->assertForeignKeyRow($table, $constraint, $row, $column, $referencedTable, $referencedColumn);
+
+            return;
+        }
+
+        if ($this->equivalentForeignKeyExists($table, $column, $referencedTable, $referencedColumn)) {
+            return;
+        }
+
+        DB::statement("ALTER TABLE `{$table}` ADD CONSTRAINT `{$constraint}` FOREIGN KEY (`{$column}`) REFERENCES `{$referencedTable}` (`{$referencedColumn}`) ON DELETE RESTRICT");
+        $row = $this->foreignKeyRow($table, $constraint);
+        if ($row === null) {
+            throw new RuntimeException("Agent bulk Order foreign key did not converge: {$table}.{$constraint}");
+        }
+        $this->assertForeignKeyRow($table, $constraint, $row, $column, $referencedTable, $referencedColumn);
+    }
+
+    /** @return object{column_name:string,referenced_table:string,referenced_column:string,delete_rule:string}|null */
+    private function foreignKeyRow(string $table, string $constraint): ?object
+    {
+        return DB::selectOne(<<<'SQL'
 SELECT k.COLUMN_NAME AS column_name,
        k.REFERENCED_TABLE_NAME AS referenced_table,
        k.REFERENCED_COLUMN_NAME AS referenced_column,
@@ -236,13 +337,37 @@ WHERE k.CONSTRAINT_SCHEMA = DATABASE()
   AND k.TABLE_NAME = ?
   AND k.CONSTRAINT_NAME = ?
 SQL, [$table, $constraint]);
-        if ($row === null
-            || (string) $row->column_name !== $column
+    }
+
+    /** @param object{column_name:string,referenced_table:string,referenced_column:string,delete_rule:string} $row */
+    private function assertForeignKeyRow(string $table, string $constraint, object $row, string $column, string $referencedTable, string $referencedColumn): void
+    {
+        if ((string) $row->column_name !== $column
             || (string) $row->referenced_table !== $referencedTable
             || (string) $row->referenced_column !== $referencedColumn
             || (string) $row->delete_rule !== 'RESTRICT') {
             throw new RuntimeException("Agent bulk Order table has incompatible foreign-key shape: {$table}.{$constraint}");
         }
+    }
+
+    private function equivalentForeignKeyExists(string $table, string $column, string $referencedTable, string $referencedColumn): bool
+    {
+        $row = DB::selectOne(<<<'SQL'
+SELECT COUNT(*) AS aggregate
+FROM information_schema.KEY_COLUMN_USAGE k
+INNER JOIN information_schema.REFERENTIAL_CONSTRAINTS r
+    ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA
+   AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME
+   AND r.TABLE_NAME = k.TABLE_NAME
+WHERE k.CONSTRAINT_SCHEMA = DATABASE()
+  AND k.TABLE_NAME = ?
+  AND k.COLUMN_NAME = ?
+  AND k.REFERENCED_TABLE_NAME = ?
+  AND k.REFERENCED_COLUMN_NAME = ?
+  AND r.DELETE_RULE = 'RESTRICT'
+SQL, [$table, $column, $referencedTable, $referencedColumn]);
+
+        return $row !== null && (int) $row->aggregate === 1;
     }
 
     private function constraintExists(string $table, string $constraint): bool

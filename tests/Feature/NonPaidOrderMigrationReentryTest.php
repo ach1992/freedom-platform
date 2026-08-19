@@ -188,6 +188,18 @@ final class NonPaidOrderMigrationReentryTest extends TestCase
         ] as $constraint) {
             self::assertTrue($this->constraintExists('order_source_authorizations', $constraint), $constraint.' must exist.');
         }
+        self::assertTrue($this->indexMatches('order_source_authorizations', ['public_id'], true));
+        self::assertTrue($this->indexMatches('order_source_authorizations', ['trial_reservation_id'], true));
+        self::assertTrue($this->indexMatches('order_source_authorizations', ['trial_reservation_command_key'], true));
+        self::assertTrue($this->indexMatches('order_source_authorizations', ['benefit_entitlement_id'], true));
+        self::assertTrue($this->indexMatches('order_source_authorizations', ['benefit_entitlement_public_id'], true));
+        self::assertTrue($this->indexMatches('order_source_authorizations', ['authorization_key'], true));
+        self::assertTrue($this->indexMatches('order_source_authorizations', ['user_id', 'created_at'], false));
+        self::assertTrue($this->indexMatches('order_source_authorizations', ['source_type', 'created_at'], false));
+        self::assertTrue($this->foreignKeyEquivalent('order_source_authorizations', 'user_id', 'users', 'id'));
+        self::assertTrue($this->foreignKeyEquivalent('order_source_authorizations', 'plan_offering_id', 'plan_offerings', 'id'));
+        self::assertTrue($this->foreignKeyEquivalent('order_source_authorizations', 'trial_reservation_id', 'trial_reservations', 'id'));
+        self::assertTrue($this->foreignKeyEquivalent('order_source_authorizations', 'benefit_entitlement_id', 'benefit_code_free_service_entitlements', 'id'));
         self::assertTrue($this->triggerContains('order_source_authorizations_insert_guard', 'Unsupported non-paid Order authorization source.'));
         self::assertTrue($this->triggerContains('order_source_authorizations_update_guard', 'Order source authorizations are immutable.'));
         self::assertTrue($this->triggerContains('order_source_authorizations_delete_guard', 'Order source authorizations are non-deletable.'));
@@ -199,10 +211,10 @@ final class NonPaidOrderMigrationReentryTest extends TestCase
             self::assertTrue(Schema::hasColumn($table, 'order_source_authorization_id'));
             self::assertTrue(Schema::hasColumn($table, 'order_source_authorization_public_id'));
         }
-        self::assertTrue($this->indexMatches('orders', 'orders_source_authorization_unique', ['order_source_authorization_id'], true));
-        self::assertTrue($this->indexMatches('orders', 'orders_source_authorization_public_unique', ['order_source_authorization_public_id'], true));
-        self::assertTrue($this->indexMatches('order_items', 'order_items_source_authorization_unique', ['order_source_authorization_id'], true));
-        self::assertTrue($this->indexMatches('order_items', 'order_items_source_authorization_public_unique', ['order_source_authorization_public_id'], true));
+        self::assertTrue($this->namedIndexMatches('orders', 'orders_source_authorization_unique', ['order_source_authorization_id'], true));
+        self::assertTrue($this->namedIndexMatches('orders', 'orders_source_authorization_public_unique', ['order_source_authorization_public_id'], true));
+        self::assertTrue($this->namedIndexMatches('order_items', 'order_items_source_authorization_unique', ['order_source_authorization_id'], true));
+        self::assertTrue($this->namedIndexMatches('order_items', 'order_items_source_authorization_public_unique', ['order_source_authorization_public_id'], true));
         self::assertTrue($this->foreignKeyMatches('orders', 'orders_order_source_authorization_id_foreign', 'order_source_authorization_id', 'order_source_authorizations', 'id'));
         self::assertTrue($this->foreignKeyMatches('order_items', 'order_items_order_source_authorization_id_foreign', 'order_source_authorization_id', 'order_source_authorizations', 'id'));
         foreach ([
@@ -232,6 +244,22 @@ final class NonPaidOrderMigrationReentryTest extends TestCase
         ] as [$table, $constraint]) {
             self::assertTrue($this->constraintExists($table, $constraint), $constraint.' must exist.');
         }
+        self::assertTrue($this->indexMatches('agent_bulk_orders', ['public_id'], true));
+        self::assertTrue($this->indexMatches('agent_bulk_orders', ['batch_key'], true));
+        self::assertTrue($this->indexMatches('agent_bulk_orders', ['user_id', 'created_at'], false));
+        self::assertTrue($this->foreignKeyEquivalent('agent_bulk_orders', 'user_id', 'users', 'id'));
+        self::assertTrue($this->indexMatches('agent_bulk_order_items', ['public_id'], true));
+        self::assertTrue($this->indexMatches('agent_bulk_order_items', ['purchase_settlement_id'], true));
+        self::assertTrue($this->indexMatches('agent_bulk_order_items', ['order_id'], true));
+        self::assertTrue($this->indexMatches('agent_bulk_order_items', ['order_item_id'], true));
+        self::assertTrue($this->indexMatches('agent_bulk_order_items', ['agent_bulk_order_id', 'line_number'], true));
+        self::assertTrue($this->indexMatches('agent_bulk_order_items', ['agent_bulk_order_id', 'child_key'], true));
+        self::assertTrue($this->indexMatches('agent_bulk_order_items', ['agent_bulk_order_id', 'state'], false));
+        self::assertTrue($this->foreignKeyEquivalent('agent_bulk_order_items', 'agent_bulk_order_id', 'agent_bulk_orders', 'id'));
+        self::assertTrue($this->foreignKeyEquivalent('agent_bulk_order_items', 'purchase_settlement_id', 'purchase_settlements', 'id'));
+        self::assertTrue($this->foreignKeyEquivalent('agent_bulk_order_items', 'source_quote_id', 'quotes', 'id'));
+        self::assertTrue($this->foreignKeyEquivalent('agent_bulk_order_items', 'order_id', 'orders', 'id'));
+        self::assertTrue($this->foreignKeyEquivalent('agent_bulk_order_items', 'order_item_id', 'order_items', 'id'));
         self::assertTrue($this->triggerContains('agent_bulk_orders_insert_guard', 'bounded immutable request authority'));
         self::assertTrue($this->triggerContains('agent_bulk_items_insert_guard', 'accepted agent purchase settlement authority'));
         self::assertTrue($this->triggerContains('agent_bulk_items_update_guard', 'exact canonical purchase Order and Item'));
@@ -286,7 +314,7 @@ final class NonPaidOrderMigrationReentryTest extends TestCase
     }
 
     /** @param list<string> $columns */
-    private function indexMatches(string $table, string $index, array $columns, bool $unique): bool
+    private function namedIndexMatches(string $table, string $index, array $columns, bool $unique): bool
     {
         $rows = DB::select(
             'SELECT COLUMN_NAME AS column_name, NON_UNIQUE AS non_unique FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ? ORDER BY SEQ_IN_INDEX',
@@ -298,6 +326,55 @@ final class NonPaidOrderMigrationReentryTest extends TestCase
         $actual = array_map(static fn (object $row): string => (string) $row->column_name, $rows);
 
         return $actual === $columns && ((int) $rows[0]->non_unique === 0) === $unique;
+    }
+
+    /** @param list<string> $columns */
+    private function indexMatches(string $table, array $columns, bool $unique): bool
+    {
+        /** @var list<object{index_name:string,column_name:string,non_unique:int|string,sub_part:int|string|null}> $rows */
+        $rows = DB::select(
+            'SELECT INDEX_NAME AS index_name, COLUMN_NAME AS column_name, NON_UNIQUE AS non_unique, SUB_PART AS sub_part FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? ORDER BY INDEX_NAME, SEQ_IN_INDEX',
+            [$table],
+        );
+        /** @var array<string, list<object{index_name:string,column_name:string,non_unique:int|string,sub_part:int|string|null}>> $groups */
+        $groups = [];
+        foreach ($rows as $row) {
+            $groups[$row->index_name][] = $row;
+        }
+        foreach ($groups as $group) {
+            $actual = array_map(static fn ($row): string => (string) $row->column_name, $group);
+            $isUnique = $group !== [] && (int) $group[0]->non_unique === 0;
+            $fullColumns = $group !== [] && array_reduce(
+                $group,
+                static fn (bool $carry, $row): bool => $carry && $row->sub_part === null,
+                true,
+            );
+            if ($actual === $columns && $isUnique === $unique && $fullColumns) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function foreignKeyEquivalent(string $table, string $column, string $referencedTable, string $referencedColumn): bool
+    {
+        $row = DB::selectOne(<<<'SQL'
+SELECT COUNT(*) AS aggregate
+FROM information_schema.KEY_COLUMN_USAGE k
+INNER JOIN information_schema.REFERENTIAL_CONSTRAINTS r
+    ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA
+   AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME
+   AND r.TABLE_NAME = k.TABLE_NAME
+WHERE k.CONSTRAINT_SCHEMA = DATABASE()
+  AND k.TABLE_NAME = ?
+  AND k.COLUMN_NAME = ?
+  AND k.REFERENCED_TABLE_NAME = ?
+  AND k.REFERENCED_COLUMN_NAME = ?
+  AND r.DELETE_RULE = 'RESTRICT'
+SQL, [$table, $column, $referencedTable, $referencedColumn]);
+
+        return $row !== null && (int) $row->aggregate === 1;
     }
 
     private function foreignKeyMatches(string $table, string $constraint, string $column, string $referencedTable, string $referencedColumn): bool
