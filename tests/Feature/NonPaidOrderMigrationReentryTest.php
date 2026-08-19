@@ -335,6 +335,7 @@ final class NonPaidOrderMigrationReentryTest extends TestCase
             } catch (RuntimeException $exception) {
                 self::assertSame('Cannot repair unverified Agent bulk child rows from a partial migration.', $exception->getMessage());
             }
+            self::assertTrue($this->triggerExists('agent_bulk_orders_bootstrap_insert_barrier'));
             self::assertTrue($this->triggerExists('agent_bulk_items_bootstrap_insert_barrier'));
             self::assertFalse($this->constraintExists('agent_bulk_orders', 'agent_bulk_orders_authority_ready_v2_chk'));
             self::assertFalse($this->constraintExists('agent_bulk_order_items', 'agent_bulk_items_authority_ready_v2_chk'));

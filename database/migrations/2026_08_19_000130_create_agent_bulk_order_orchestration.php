@@ -27,14 +27,23 @@ return new class extends Migration
 
         $parentExists = Schema::hasTable('agent_bulk_orders');
         $itemsExist = Schema::hasTable('agent_bulk_order_items');
+
+        // Close every pre-existing authority table before inspecting any durable row. This matters
+        // for legacy partial states where both parent and child tables existed before final guards:
+        // a failure on one table must never leave the other table writable.
+        if ($parentExists) {
+            $this->installParentBootstrapMutationBarriers();
+        }
+        if ($itemsExist) {
+            $this->installItemBootstrapMutationBarriers();
+        }
+        $this->dropReadyMarkersIfPresent();
+
         if ($itemsExist && ! $parentExists) {
             throw new RuntimeException('Agent bulk child table cannot exist without its parent authority table.');
         }
 
         if ($parentExists) {
-            // First repair DDL closes parent writes before touching any partially committed shape.
-            $this->installParentBootstrapMutationBarriers();
-            $this->dropReadyMarkersIfPresent();
             if (DB::table('agent_bulk_orders')->exists()) {
                 throw new RuntimeException('Cannot repair unverified Agent bulk parent rows from a partial migration.');
             }
@@ -46,10 +55,6 @@ return new class extends Migration
         }
 
         if ($itemsExist) {
-            // Marker-less child rows are never revalidated prospectively: close mutation first,
-            // reject any durable unverified evidence, then converge only an empty blocked table.
-            $this->installItemBootstrapMutationBarriers();
-            $this->dropReadyMarkersIfPresent();
             if (DB::table('agent_bulk_order_items')->exists()) {
                 throw new RuntimeException('Cannot repair unverified Agent bulk child rows from a partial migration.');
             }
