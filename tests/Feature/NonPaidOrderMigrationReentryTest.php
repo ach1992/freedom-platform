@@ -27,9 +27,12 @@ final class NonPaidOrderMigrationReentryTest extends TestCase
         $invalidation = require database_path('migrations/2026_08_19_000115_extend_provisioning_invalidation_to_non_paid_sources.php');
         /** @var Migration $activation */
         $activation = require database_path('migrations/2026_08_19_000120_activate_non_paid_order_authority.php');
+        /** @var Migration $bulk */
+        $bulk = require database_path('migrations/2026_08_19_000130_create_agent_bulk_order_orchestration.php');
         $injected = false;
 
         try {
+            $bulk->down();
             $activation->down();
             $invalidation->down();
             $shape->down();
@@ -66,10 +69,12 @@ final class NonPaidOrderMigrationReentryTest extends TestCase
             $source->up();
             $shape->up();
             $invalidation->up();
-            $activation->up();
+            $this->activateNonPaidAuthority($activation);
+            $bulk->up();
         }
 
         $this->assertSupportedSourceFence();
+        $this->assertAgentBulkAuthorityReady();
     }
 
     public function test_order_shape_migration_converges_after_one_table_alter_and_drop_before_add_cut(): void
@@ -80,9 +85,12 @@ final class NonPaidOrderMigrationReentryTest extends TestCase
         $invalidation = require database_path('migrations/2026_08_19_000115_extend_provisioning_invalidation_to_non_paid_sources.php');
         /** @var Migration $activation */
         $activation = require database_path('migrations/2026_08_19_000120_activate_non_paid_order_authority.php');
+        /** @var Migration $bulk */
+        $bulk = require database_path('migrations/2026_08_19_000130_create_agent_bulk_order_orchestration.php');
         $injected = false;
 
         try {
+            $bulk->down();
             $activation->down();
             $invalidation->down();
             $shape->down();
@@ -129,10 +137,12 @@ final class NonPaidOrderMigrationReentryTest extends TestCase
             $injected = true;
             $shape->up();
             $invalidation->up();
-            $activation->up();
+            $this->activateNonPaidAuthority($activation);
+            $bulk->up();
         }
 
         $this->assertSupportedSourceFence();
+        $this->assertAgentBulkAuthorityReady();
     }
 
     public function test_agent_bulk_migration_converges_after_parent_table_create_commits_without_migration_record(): void
@@ -173,6 +183,64 @@ final class NonPaidOrderMigrationReentryTest extends TestCase
         } finally {
             $injected = true;
             $bulk->up();
+        }
+    }
+
+    private function activateNonPaidAuthority(Migration $activation): void
+    {
+        try {
+            $activation->up();
+        } catch (RuntimeException $exception) {
+            $this->assertNonPaidActivationReadinessSurface();
+            throw $exception;
+        }
+
+        $this->assertNonPaidActivationReadinessSurface();
+    }
+
+    private function assertNonPaidActivationReadinessSurface(): void
+    {
+        foreach ([
+            'orders_insert_guard',
+            'order_items_insert_guard',
+            'orders_initial_history',
+            'order_state_histories_insert_guard',
+            'service_subscriptions_insert_guard',
+            'service_subscriptions_update_guard',
+            'provisioning_operations_insert_guard',
+            'provisioning_operations_update_guard',
+            'provisioning_operation_histories_insert_guard',
+            'provisioning_operation_initial_history',
+            'provisioning_remote_effect_events_insert_guard',
+            'orders_update_guard',
+            'orders_provisioning_history',
+            'orders_provisioning_outbox_envelope_guard',
+            'outbox_initial_provision_envelope_update_guard',
+            'orders_unimplemented_source_insert_guard',
+        ] as $trigger) {
+            self::assertTrue($this->triggerExists($trigger), $trigger.' must exist at non-paid activation readiness.');
+        }
+        foreach ([
+            ['orders', 'orders_source_type_chk'],
+            ['orders', 'orders_provisioning_exact_authority_chk'],
+        ] as [$table, $constraint]) {
+            self::assertTrue($this->constraintExists($table, $constraint), $constraint.' must exist at non-paid activation readiness.');
+        }
+        foreach ([
+            ['service_subscriptions_insert_guard', 'zero-cost source authority shape is invalid'],
+            ['service_subscriptions_insert_guard', 'clean local lifecycle and no remote binding'],
+            ['service_subscriptions_update_guard', 'service_mutation_queue_v1'],
+            ['service_subscriptions_update_guard', 'service_mutation_effect_v1'],
+            ['provisioning_operations_insert_guard', 'Initial Provisioning Operation zero-cost authority shape is invalid'],
+            ['provisioning_operations_insert_guard', 'service_mutation_queue_v1'],
+            ['provisioning_operations_update_guard', 'initial_remote_effect_v1'],
+            ['provisioning_operations_update_guard', 'service_mutation_effect_v1'],
+            ['provisioning_operations_update_guard', 'recovery_transition'],
+            ['provisioning_operation_histories_insert_guard', 'service_mutation_requested'],
+            ['provisioning_operation_initial_history', 'service_mutation_requested'],
+            ['provisioning_remote_effect_events_insert_guard', 'service_mutation_effect_v1'],
+        ] as [$trigger, $needle]) {
+            self::assertTrue($this->triggerContains($trigger, $needle), $trigger.' must contain readiness marker '.$needle.'.');
         }
     }
 
