@@ -21,7 +21,7 @@ use RuntimeException;
 final readonly class InitialProvisioningAuthorityGuard
 {
     /**
-     * @param object{order_id:int|string,order_item_id:int|string,user_id:int|string} $operation
+     * @param  object{order_id:int|string,order_item_id:int|string,user_id:int|string}  $operation
      */
     public function lockAndAssert(Connection $connection, object $operation): void
     {
@@ -55,8 +55,8 @@ final readonly class InitialProvisioningAuthorityGuard
     }
 
     /**
-     * @param object{order_id:int|string,order_item_id:int|string,user_id:int|string} $operation
-     * @param object{purchase_settlement_id:int|string|null,payment_intent_id:int|string|null} $locator
+     * @param  object{order_id:int|string,order_item_id:int|string,user_id:int|string}  $operation
+     * @param  object{purchase_settlement_id:int|string|null,payment_intent_id:int|string|null}  $locator
      */
     private function lockAndAssertPurchase(Connection $connection, object $operation, object $locator): void
     {
@@ -141,8 +141,8 @@ final readonly class InitialProvisioningAuthorityGuard
     }
 
     /**
-     * @param object{order_id:int|string,order_item_id:int|string,user_id:int|string} $operation
-     * @param object{purchase_settlement_id:int|string|null,payment_intent_id:int|string|null,order_source_authorization_id:int|string|null} $locator
+     * @param  object{order_id:int|string,order_item_id:int|string,user_id:int|string}  $operation
+     * @param  object{purchase_settlement_id:int|string|null,payment_intent_id:int|string|null,order_source_authorization_id:int|string|null}  $locator
      */
     private function lockAndAssertZeroCost(
         Connection $connection,
