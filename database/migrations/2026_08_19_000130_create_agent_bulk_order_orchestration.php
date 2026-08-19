@@ -9,11 +9,137 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
+    private const PARENT_BOOTSTRAP_CHECK = 'agent_bulk_orders_bootstrap_block_chk';
+
+    private const ITEM_BOOTSTRAP_CHECK = 'agent_bulk_items_bootstrap_block_chk';
+
+    private const PARENT_READY_CHECK = 'agent_bulk_orders_authority_ready_v2_chk';
+
+    private const ITEM_READY_CHECK = 'agent_bulk_items_authority_ready_v2_chk';
+
     /** @requirement AGT-003 AGT-004 BUY-001 BUY-002 PAY-002 DAT-002 DAT-003 DAT-004 SEC-002 QUA-001 QUA-004 */
     public function up(): void
     {
-        if (! Schema::hasTable('agent_bulk_orders')) {
-            Schema::create('agent_bulk_orders', function (Blueprint $table): void {
+        if ($this->authorityFinalized()) {
+            return;
+        }
+
+        $parentExists = Schema::hasTable('agent_bulk_orders');
+        $itemsExist = Schema::hasTable('agent_bulk_order_items');
+        if ($itemsExist && ! $parentExists) {
+            throw new RuntimeException('Agent bulk child table cannot exist without its parent authority table.');
+        }
+
+        if ($parentExists) {
+            // First repair DDL closes parent writes before touching any partially committed shape.
+            $this->installParentBootstrapMutationBarriers();
+            $this->dropReadyMarkersIfPresent();
+            if (DB::table('agent_bulk_orders')->exists()) {
+                throw new RuntimeException('Cannot repair unverified Agent bulk parent rows from a partial migration.');
+            }
+            $this->ensureBootstrapCheck('agent_bulk_orders', self::PARENT_BOOTSTRAP_CHECK);
+            $this->ensureParentTableFoundation();
+        } else {
+            $this->createIntrinsicallyFailClosedParentTable();
+            $this->installParentBootstrapMutationBarriers();
+        }
+
+        if ($itemsExist) {
+            // Marker-less child rows are never revalidated prospectively: close mutation first,
+            // reject any durable unverified evidence, then converge only an empty blocked table.
+            $this->installItemBootstrapMutationBarriers();
+            $this->dropReadyMarkersIfPresent();
+            if (DB::table('agent_bulk_order_items')->exists()) {
+                throw new RuntimeException('Cannot repair unverified Agent bulk child rows from a partial migration.');
+            }
+            $this->ensureBootstrapCheck('agent_bulk_order_items', self::ITEM_BOOTSTRAP_CHECK);
+            $this->ensureItemTableFoundation();
+        } else {
+            $this->createIntrinsicallyFailClosedItemTable();
+            $this->installItemBootstrapMutationBarriers();
+        }
+
+        $this->dropReadyMarkersIfPresent();
+        if (DB::table('agent_bulk_orders')->exists() || DB::table('agent_bulk_order_items')->exists()) {
+            throw new RuntimeException('Cannot activate Agent bulk authority with unverified migration rows.');
+        }
+        $this->ensureBootstrapCheck('agent_bulk_orders', self::PARENT_BOOTSTRAP_CHECK);
+        $this->ensureBootstrapCheck('agent_bulk_order_items', self::ITEM_BOOTSTRAP_CHECK);
+        $this->ensureParentTableFoundation();
+        $this->ensureItemTableFoundation();
+
+        $this->replaceConstraint('agent_bulk_orders', 'agent_bulk_orders_hash_chk', "CHECK (`request_payload_hash` REGEXP '^[0-9a-f]{64}$')");
+        $this->replaceConstraint('agent_bulk_orders', 'agent_bulk_orders_count_chk', 'CHECK (`item_count` BETWEEN 1 AND 50)');
+        $this->replaceConstraint('agent_bulk_order_items', 'agent_bulk_items_state_chk', "CHECK (`state` IN ('pending','failed','succeeded'))");
+        $this->replaceConstraint('agent_bulk_order_items', 'agent_bulk_items_attempt_chk', 'CHECK (`attempt_count` <= 100)');
+        $this->replaceConstraint('agent_bulk_order_items', 'agent_bulk_items_result_shape_chk', "CHECK ((`state` = 'succeeded' AND `order_id` IS NOT NULL AND `order_item_id` IS NOT NULL AND `last_error_code` IS NULL) OR (`state` IN ('pending','failed') AND `order_id` IS NULL AND `order_item_id` IS NULL AND (`state` = 'pending' OR `last_error_code` IS NOT NULL)))");
+
+        $this->createGuards();
+        $this->assertAuthorityReady(blocked: true);
+
+        // Both markers are issued only after full parent/child authority is ready while both tables
+        // are still empty and blocked. Application consumption requires both durable markers.
+        $this->ensureReadyMarker('agent_bulk_orders', self::PARENT_READY_CHECK);
+        $this->ensureReadyMarker('agent_bulk_order_items', self::ITEM_READY_CHECK);
+        $this->dropItemBootstrapMutationBarriers();
+        $this->dropParentBootstrapMutationBarriers();
+
+        // Release child first and parent last. Until the final parent CHECK drops, no durable bulk
+        // parent can exist, so a crash between releases cannot create consumable partial authority.
+        $this->dropBootstrapCheck('agent_bulk_order_items', self::ITEM_BOOTSTRAP_CHECK);
+        $this->dropBootstrapCheck('agent_bulk_orders', self::PARENT_BOOTSTRAP_CHECK);
+        $this->assertAuthorityReady(blocked: false);
+    }
+
+    public function down(): void
+    {
+        if (! Schema::hasTable('agent_bulk_orders') && ! Schema::hasTable('agent_bulk_order_items')) {
+            return;
+        }
+        if (Schema::hasTable('agent_bulk_orders') && DB::table('agent_bulk_orders')->exists()) {
+            throw new RuntimeException('Cannot roll back agent bulk Order orchestration while parent Orders exist.');
+        }
+        if (Schema::hasTable('agent_bulk_order_items') && DB::table('agent_bulk_order_items')->exists()) {
+            throw new RuntimeException('Cannot roll back agent bulk Order orchestration while child authority evidence exists.');
+        }
+
+        DB::unprepared('DROP TRIGGER IF EXISTS agent_bulk_items_delete_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS agent_bulk_items_update_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS agent_bulk_items_insert_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS agent_bulk_orders_delete_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS agent_bulk_orders_update_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS agent_bulk_orders_insert_guard');
+        Schema::dropIfExists('agent_bulk_order_items');
+        Schema::dropIfExists('agent_bulk_orders');
+    }
+
+    private function authorityFinalized(): bool
+    {
+        if (! Schema::hasTable('agent_bulk_orders')
+            || ! Schema::hasTable('agent_bulk_order_items')
+            || ! $this->constraintExists('agent_bulk_orders', self::PARENT_READY_CHECK)
+            || ! $this->constraintExists('agent_bulk_order_items', self::ITEM_READY_CHECK)
+            || $this->constraintExists('agent_bulk_orders', self::PARENT_BOOTSTRAP_CHECK)
+            || $this->constraintExists('agent_bulk_order_items', self::ITEM_BOOTSTRAP_CHECK)
+            || $this->bootstrapBarrierExists()) {
+            return false;
+        }
+
+        try {
+            $this->assertAuthorityReady(blocked: false);
+        } catch (RuntimeException) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private function createIntrinsicallyFailClosedParentTable(): void
+    {
+        $this->createIntrinsicallyFailClosedTable(
+            'agent_bulk_orders',
+            self::PARENT_BOOTSTRAP_CHECK,
+            function (Blueprint $table): void {
                 $table->bigIncrements('id');
                 $table->ulid('public_id')->unique();
                 $table->string('batch_key', 128)->unique();
@@ -23,13 +149,16 @@ return new class extends Migration
                 $table->string('creation_correlation_id', 64);
                 $table->dateTime('created_at', 6);
                 $table->index(['user_id', 'created_at'], 'agent_bulk_orders_user_created_idx');
-            });
-        } else {
-            $this->ensureParentTableFoundation();
-        }
+            },
+        );
+    }
 
-        if (! Schema::hasTable('agent_bulk_order_items')) {
-            Schema::create('agent_bulk_order_items', function (Blueprint $table): void {
+    private function createIntrinsicallyFailClosedItemTable(): void
+    {
+        $this->createIntrinsicallyFailClosedTable(
+            'agent_bulk_order_items',
+            self::ITEM_BOOTSTRAP_CHECK,
+            function (Blueprint $table): void {
                 $table->bigIncrements('id');
                 $table->ulid('public_id')->unique();
                 $table->foreignId('agent_bulk_order_id')->constrained('agent_bulk_orders')->restrictOnDelete();
@@ -49,38 +178,135 @@ return new class extends Migration
                 $table->unique(['agent_bulk_order_id', 'line_number'], 'agent_bulk_items_order_line_unique');
                 $table->unique(['agent_bulk_order_id', 'child_key'], 'agent_bulk_items_order_child_unique');
                 $table->index(['agent_bulk_order_id', 'state'], 'agent_bulk_items_order_state_idx');
-            });
-        } else {
-            $this->ensureItemTableFoundation();
-        }
-
-        $this->replaceConstraint('agent_bulk_orders', 'agent_bulk_orders_hash_chk', "CHECK (`request_payload_hash` REGEXP '^[0-9a-f]{64}$')");
-        $this->replaceConstraint('agent_bulk_orders', 'agent_bulk_orders_count_chk', 'CHECK (`item_count` BETWEEN 1 AND 50)');
-        $this->replaceConstraint('agent_bulk_order_items', 'agent_bulk_items_state_chk', "CHECK (`state` IN ('pending','failed','succeeded'))");
-        $this->replaceConstraint('agent_bulk_order_items', 'agent_bulk_items_attempt_chk', 'CHECK (`attempt_count` <= 100)');
-        $this->replaceConstraint('agent_bulk_order_items', 'agent_bulk_items_result_shape_chk', "CHECK ((`state` = 'succeeded' AND `order_id` IS NOT NULL AND `order_item_id` IS NOT NULL AND `last_error_code` IS NULL) OR (`state` IN ('pending','failed') AND `order_id` IS NULL AND `order_item_id` IS NULL AND (`state` = 'pending' OR `last_error_code` IS NOT NULL)))");
-
-        $this->createGuards();
-        $this->assertAuthorityReady();
+            },
+        );
     }
 
-    public function down(): void
+    /** @param callable(Blueprint): void $definition */
+    private function createIntrinsicallyFailClosedTable(string $table, string $bootstrapCheck, callable $definition): void
     {
-        if (! Schema::hasTable('agent_bulk_orders') && ! Schema::hasTable('agent_bulk_order_items')) {
-            return;
-        }
-        if (Schema::hasTable('agent_bulk_orders') && DB::table('agent_bulk_orders')->exists()) {
-            throw new RuntimeException('Cannot roll back agent bulk Order orchestration while parent Orders exist.');
+        /** @var \Illuminate\Database\Connection $connection */
+        $connection = DB::connection();
+        $blueprint = new Blueprint($connection, $table);
+        $blueprint->create();
+        $definition($blueprint);
+        $statements = $blueprint->toSql();
+        if ($statements === []) {
+            throw new RuntimeException('Agent bulk Order CREATE SQL is unavailable: '.$table);
         }
 
-        DB::unprepared('DROP TRIGGER IF EXISTS agent_bulk_items_delete_guard');
-        DB::unprepared('DROP TRIGGER IF EXISTS agent_bulk_items_update_guard');
-        DB::unprepared('DROP TRIGGER IF EXISTS agent_bulk_items_insert_guard');
-        DB::unprepared('DROP TRIGGER IF EXISTS agent_bulk_orders_delete_guard');
-        DB::unprepared('DROP TRIGGER IF EXISTS agent_bulk_orders_update_guard');
-        DB::unprepared('DROP TRIGGER IF EXISTS agent_bulk_orders_insert_guard');
-        Schema::dropIfExists('agent_bulk_order_items');
-        Schema::dropIfExists('agent_bulk_orders');
+        $create = array_shift($statements);
+        if (! is_string($create) || ! str_starts_with(strtolower(ltrim($create)), 'create table')) {
+            throw new RuntimeException('Agent bulk Order CREATE SQL is not the expected first schema statement: '.$table);
+        }
+        $closing = strrpos($create, ')');
+        if ($closing === false) {
+            throw new RuntimeException('Agent bulk Order CREATE SQL cannot accept the intrinsic bootstrap barrier: '.$table);
+        }
+        $create = substr($create, 0, $closing)
+            .', constraint `'.$bootstrapCheck.'` check (0 = 1)'
+            .substr($create, $closing);
+
+        $connection->statement($create);
+        foreach ($statements as $statement) {
+            $connection->statement($statement);
+        }
+    }
+
+    private function installParentBootstrapMutationBarriers(): void
+    {
+        $this->installBootstrapMutationBarriers('agent_bulk_orders', 'agent_bulk_orders');
+    }
+
+    private function installItemBootstrapMutationBarriers(): void
+    {
+        $this->installBootstrapMutationBarriers('agent_bulk_order_items', 'agent_bulk_items');
+    }
+
+    private function installBootstrapMutationBarriers(string $table, string $prefix): void
+    {
+        foreach (['insert' => 'INSERT', 'update' => 'UPDATE', 'delete' => 'DELETE'] as $suffix => $event) {
+            DB::unprepared(sprintf(<<<'SQL'
+CREATE OR REPLACE TRIGGER %s_bootstrap_%s_barrier
+BEFORE %s ON %s
+FOR EACH ROW
+BEGIN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Agent bulk Order migration bootstrap is incomplete.';
+END
+SQL, $prefix, $suffix, $event, $table));
+        }
+    }
+
+    private function dropParentBootstrapMutationBarriers(): void
+    {
+        $this->dropBootstrapMutationBarriers('agent_bulk_orders');
+    }
+
+    private function dropItemBootstrapMutationBarriers(): void
+    {
+        $this->dropBootstrapMutationBarriers('agent_bulk_items');
+    }
+
+    private function dropBootstrapMutationBarriers(string $prefix): void
+    {
+        foreach (['delete', 'update', 'insert'] as $suffix) {
+            DB::unprepared('DROP TRIGGER IF EXISTS `'.$prefix.'_bootstrap_'.$suffix.'_barrier`');
+        }
+    }
+
+    private function bootstrapBarrierExists(): bool
+    {
+        foreach (['agent_bulk_orders', 'agent_bulk_items'] as $prefix) {
+            foreach (['insert', 'update', 'delete'] as $suffix) {
+                if ($this->triggerExists($prefix.'_bootstrap_'.$suffix.'_barrier')) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private function ensureBootstrapCheck(string $table, string $constraint): void
+    {
+        if ($this->constraintExists($table, $constraint)) {
+            if (! $this->constraintContains($table, $constraint, '0 = 1')) {
+                throw new RuntimeException('Agent bulk bootstrap barrier has incompatible semantics: '.$constraint);
+            }
+
+            return;
+        }
+        if (DB::table($table)->exists()) {
+            throw new RuntimeException('Cannot install Agent bulk bootstrap barrier while unverified rows exist: '.$table);
+        }
+
+        DB::statement("ALTER TABLE `{$table}` ADD CONSTRAINT `{$constraint}` CHECK (0 = 1)");
+    }
+
+    private function dropBootstrapCheck(string $table, string $constraint): void
+    {
+        if ($this->constraintExists($table, $constraint)) {
+            DB::statement("ALTER TABLE `{$table}` DROP CONSTRAINT `{$constraint}`");
+        }
+    }
+
+    private function ensureReadyMarker(string $table, string $constraint): void
+    {
+        if (! $this->constraintExists($table, $constraint)) {
+            DB::statement("ALTER TABLE `{$table}` ADD CONSTRAINT `{$constraint}` CHECK (1 = 1)");
+        }
+    }
+
+    private function dropReadyMarkersIfPresent(): void
+    {
+        foreach ([
+            ['agent_bulk_order_items', self::ITEM_READY_CHECK],
+            ['agent_bulk_orders', self::PARENT_READY_CHECK],
+        ] as [$table, $constraint]) {
+            if (Schema::hasTable($table) && $this->constraintExists($table, $constraint)) {
+                DB::statement("ALTER TABLE `{$table}` DROP CONSTRAINT `{$constraint}`");
+            }
+        }
     }
 
     private function ensureParentTableFoundation(): void
@@ -161,10 +387,10 @@ return new class extends Migration
         DB::statement("ALTER TABLE `{$table}` ADD CONSTRAINT `{$constraint}` {$definition}");
     }
 
-    private function assertAuthorityReady(): void
+    private function assertAuthorityReady(bool $blocked): void
     {
-        $this->ensureParentTableFoundation();
-        $this->ensureItemTableFoundation();
+        $this->assertParentTableFoundation();
+        $this->assertItemTableFoundation();
         foreach ([
             ['agent_bulk_orders', 'agent_bulk_orders_hash_chk'],
             ['agent_bulk_orders', 'agent_bulk_orders_count_chk'],
@@ -187,6 +413,113 @@ return new class extends Migration
             if (! $this->triggerContains($trigger, $needle)) {
                 throw new RuntimeException('Agent bulk Order trigger authority did not converge: '.$trigger);
             }
+        }
+        if (! $blocked
+            && (! $this->constraintExists('agent_bulk_orders', self::PARENT_READY_CHECK)
+                || ! $this->constraintExists('agent_bulk_order_items', self::ITEM_READY_CHECK))) {
+            throw new RuntimeException('Agent bulk Order readiness markers are incomplete.');
+        }
+        $parentBlocked = $this->constraintExists('agent_bulk_orders', self::PARENT_BOOTSTRAP_CHECK);
+        $itemBlocked = $this->constraintExists('agent_bulk_order_items', self::ITEM_BOOTSTRAP_CHECK);
+        if ($parentBlocked !== $blocked || $itemBlocked !== $blocked) {
+            throw new RuntimeException('Agent bulk Order bootstrap barrier state is inconsistent.');
+        }
+    }
+
+    private function assertParentTableFoundation(): void
+    {
+        foreach ([
+            ['id', 'bigint', false, null, true],
+            ['public_id', 'char', false, 26, false],
+            ['batch_key', 'varchar', false, 128, false],
+            ['request_payload_hash', 'char', false, 64, false],
+            ['user_id', 'bigint', false, null, true],
+            ['item_count', 'smallint', false, null, true],
+            ['creation_correlation_id', 'varchar', false, 64, false],
+            ['created_at', 'datetime', false, null, false],
+        ] as [$column, $type, $nullable, $length, $unsigned]) {
+            $this->assertColumnShape('agent_bulk_orders', $column, $type, $nullable, $length, $unsigned);
+        }
+        $this->assertIndexAvailable('agent_bulk_orders', 'PRIMARY', ['id'], true);
+        foreach ([
+            ['agent_bulk_orders_public_id_unique', ['public_id'], true],
+            ['agent_bulk_orders_batch_key_unique', ['batch_key'], true],
+            ['agent_bulk_orders_user_created_idx', ['user_id', 'created_at'], false],
+        ] as [$index, $columns, $unique]) {
+            $this->assertIndexAvailable('agent_bulk_orders', $index, $columns, $unique);
+        }
+        $this->assertForeignKeyAvailable('agent_bulk_orders', 'agent_bulk_orders_user_id_foreign', 'user_id', 'users', 'id');
+    }
+
+    private function assertItemTableFoundation(): void
+    {
+        foreach ([
+            ['id', 'bigint', false, null, true],
+            ['public_id', 'char', false, 26, false],
+            ['agent_bulk_order_id', 'bigint', false, null, true],
+            ['line_number', 'smallint', false, null, true],
+            ['child_key', 'varchar', false, 128, false],
+            ['purchase_settlement_id', 'bigint', false, null, true],
+            ['purchase_settlement_public_id', 'char', false, 26, false],
+            ['source_quote_id', 'bigint', false, null, true],
+            ['source_quote_public_id', 'char', false, 26, false],
+            ['state', 'varchar', false, 16, false],
+            ['attempt_count', 'smallint', false, null, true],
+            ['order_id', 'bigint', true, null, true],
+            ['order_item_id', 'bigint', true, null, true],
+            ['last_error_code', 'varchar', true, 64, false],
+            ['created_at', 'datetime', false, null, false],
+            ['updated_at', 'datetime', false, null, false],
+        ] as [$column, $type, $nullable, $length, $unsigned]) {
+            $this->assertColumnShape('agent_bulk_order_items', $column, $type, $nullable, $length, $unsigned);
+        }
+        $this->assertIndexAvailable('agent_bulk_order_items', 'PRIMARY', ['id'], true);
+        foreach ([
+            ['agent_bulk_order_items_public_id_unique', ['public_id'], true],
+            ['agent_bulk_order_items_purchase_settlement_id_unique', ['purchase_settlement_id'], true],
+            ['agent_bulk_order_items_order_id_unique', ['order_id'], true],
+            ['agent_bulk_order_items_order_item_id_unique', ['order_item_id'], true],
+            ['agent_bulk_items_order_line_unique', ['agent_bulk_order_id', 'line_number'], true],
+            ['agent_bulk_items_order_child_unique', ['agent_bulk_order_id', 'child_key'], true],
+            ['agent_bulk_items_order_state_idx', ['agent_bulk_order_id', 'state'], false],
+        ] as [$index, $columns, $unique]) {
+            $this->assertIndexAvailable('agent_bulk_order_items', $index, $columns, $unique);
+        }
+        foreach ([
+            ['agent_bulk_order_items_agent_bulk_order_id_foreign', 'agent_bulk_order_id', 'agent_bulk_orders', 'id'],
+            ['agent_bulk_order_items_purchase_settlement_id_foreign', 'purchase_settlement_id', 'purchase_settlements', 'id'],
+            ['agent_bulk_order_items_source_quote_id_foreign', 'source_quote_id', 'quotes', 'id'],
+            ['agent_bulk_order_items_order_id_foreign', 'order_id', 'orders', 'id'],
+            ['agent_bulk_order_items_order_item_id_foreign', 'order_item_id', 'order_items', 'id'],
+        ] as [$constraint, $column, $referencedTable, $referencedColumn]) {
+            $this->assertForeignKeyAvailable('agent_bulk_order_items', $constraint, $column, $referencedTable, $referencedColumn);
+        }
+    }
+
+    /** @param list<string> $columns */
+    private function assertIndexAvailable(string $table, string $index, array $columns, bool $unique): void
+    {
+        $rows = $this->indexRows($table, $index);
+        if ($rows !== []) {
+            $this->assertIndexRows($table, $index, $rows, $columns, $unique);
+
+            return;
+        }
+        if ($index === 'PRIMARY' || ! $this->equivalentIndexExists($table, $columns, $unique)) {
+            throw new RuntimeException("Agent bulk Order index is unavailable: {$table}.{$index}");
+        }
+    }
+
+    private function assertForeignKeyAvailable(string $table, string $constraint, string $column, string $referencedTable, string $referencedColumn): void
+    {
+        $row = $this->foreignKeyRow($table, $constraint);
+        if ($row !== null) {
+            $this->assertForeignKeyRow($table, $constraint, $row, $column, $referencedTable, $referencedColumn);
+
+            return;
+        }
+        if (! $this->equivalentForeignKeyExists($table, $column, $referencedTable, $referencedColumn)) {
+            throw new RuntimeException("Agent bulk Order foreign key is unavailable: {$table}.{$constraint}");
         }
     }
 
@@ -370,11 +703,31 @@ SQL, [$table, $column, $referencedTable, $referencedColumn]);
         return $row !== null && (int) $row->aggregate === 1;
     }
 
+    private function constraintContains(string $table, string $constraint, string $needle): bool
+    {
+        $row = DB::selectOne(
+            'SELECT COUNT(*) AS aggregate FROM information_schema.CHECK_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME = ? AND CONSTRAINT_NAME = ? AND LOCATE(?, CHECK_CLAUSE) > 0',
+            [$table, $constraint, $needle],
+        );
+
+        return $row !== null && (int) $row->aggregate === 1;
+    }
+
     private function constraintExists(string $table, string $constraint): bool
     {
         $row = DB::selectOne(
             'SELECT COUNT(*) AS aggregate FROM information_schema.TABLE_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME = ? AND CONSTRAINT_NAME = ? AND CONSTRAINT_TYPE = ?',
             [$table, $constraint, 'CHECK'],
+        );
+
+        return $row !== null && (int) $row->aggregate === 1;
+    }
+
+    private function triggerExists(string $trigger): bool
+    {
+        $row = DB::selectOne(
+            'SELECT COUNT(*) AS aggregate FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = DATABASE() AND TRIGGER_NAME = ?',
+            [$trigger],
         );
 
         return $row !== null && (int) $row->aggregate === 1;

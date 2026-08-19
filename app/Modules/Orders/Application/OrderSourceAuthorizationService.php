@@ -39,6 +39,7 @@ final readonly class OrderSourceAuthorizationService
     public function authorizeTrial(string $trialCommandKey, string $correlationId): OrderSourceAuthorizationReceipt
     {
         $this->assertToken($trialCommandKey, 'Trial reservation command key', 8, 128);
+        $this->assertSourceAuthorityFinalized();
         $this->assertToken($correlationId, 'Order source authorization correlation ID', 8, 64);
         $authorizationKey = 'trial:'.hash('sha256', $trialCommandKey);
 
@@ -114,6 +115,7 @@ final readonly class OrderSourceAuthorizationService
     public function authorizeBenefitCode(string $entitlementPublicId, string $correlationId): OrderSourceAuthorizationReceipt
     {
         $this->assertUlid($entitlementPublicId, 'Benefit entitlement public ID');
+        $this->assertSourceAuthorityFinalized();
         $this->assertToken($correlationId, 'Order source authorization correlation ID', 8, 64);
         $authorizationKey = 'benefit_code:'.$entitlementPublicId;
 
@@ -196,6 +198,7 @@ final readonly class OrderSourceAuthorizationService
         string $correlationId,
     ): OrderSourceAuthorizationReceipt {
         $this->assertToken($authorizationKey, 'Administrator grant authorization key', 8, 128);
+        $this->assertSourceAuthorityFinalized();
         if ($administratorId < 1 || $userId < 1 || $planOfferingId < 1) {
             throw new DomainException('Administrator grant identity is invalid.');
         }
@@ -289,6 +292,27 @@ final readonly class OrderSourceAuthorizationService
             }
 
             throw $exception;
+        }
+    }
+
+    private function assertSourceAuthorityFinalized(): void
+    {
+        /** @var object{ready_count:int|string|null,blocked_count:int|string|null}|null $row */
+        $row = $this->database->connection()->selectOne(<<<'SQL'
+SELECT
+    SUM(CONSTRAINT_NAME = 'order_source_authorizations_authority_ready_v2_chk') AS ready_count,
+    SUM(CONSTRAINT_NAME = 'order_source_authorizations_bootstrap_block_chk') AS blocked_count
+FROM information_schema.TABLE_CONSTRAINTS
+WHERE CONSTRAINT_SCHEMA = DATABASE()
+  AND TABLE_NAME = 'order_source_authorizations'
+  AND CONSTRAINT_TYPE = 'CHECK'
+  AND CONSTRAINT_NAME IN (
+      'order_source_authorizations_authority_ready_v2_chk',
+      'order_source_authorizations_bootstrap_block_chk'
+  )
+SQL);
+        if ($row === null || (int) $row->ready_count !== 1 || (int) $row->blocked_count !== 0) {
+            throw new RuntimeException('Order source authorization authority is not finalized.');
         }
     }
 

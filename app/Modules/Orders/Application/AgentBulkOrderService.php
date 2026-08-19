@@ -55,6 +55,7 @@ final readonly class AgentBulkOrderService
         }
         $this->assertToken($correlationId, 'Agent bulk Order correlation ID', 8, 64);
         $normalizedItems = $this->normalizedItems($items);
+        $this->assertBulkAuthorityFinalized();
         $requestHash = $this->requestHash($agentUserId, $normalizedItems);
 
         [$parent, $replayed] = $this->ensureParent(
@@ -84,6 +85,30 @@ final readonly class AgentBulkOrderService
         }
 
         return $this->receipt($parent, $replayed);
+    }
+
+    private function assertBulkAuthorityFinalized(): void
+    {
+        /** @var object{parent_ready_count:int|string|null,item_ready_count:int|string|null,blocked_count:int|string|null}|null $row */
+        $row = $this->database->connection()->selectOne(<<<'SQL'
+SELECT
+    SUM(TABLE_NAME = 'agent_bulk_orders' AND CONSTRAINT_NAME = 'agent_bulk_orders_authority_ready_v2_chk') AS parent_ready_count,
+    SUM(TABLE_NAME = 'agent_bulk_order_items' AND CONSTRAINT_NAME = 'agent_bulk_items_authority_ready_v2_chk') AS item_ready_count,
+    SUM(CONSTRAINT_NAME IN ('agent_bulk_orders_bootstrap_block_chk', 'agent_bulk_items_bootstrap_block_chk')) AS blocked_count
+FROM information_schema.TABLE_CONSTRAINTS
+WHERE CONSTRAINT_SCHEMA = DATABASE()
+  AND CONSTRAINT_TYPE = 'CHECK'
+  AND (
+      (TABLE_NAME = 'agent_bulk_orders' AND CONSTRAINT_NAME IN ('agent_bulk_orders_authority_ready_v2_chk', 'agent_bulk_orders_bootstrap_block_chk'))
+      OR (TABLE_NAME = 'agent_bulk_order_items' AND CONSTRAINT_NAME IN ('agent_bulk_items_authority_ready_v2_chk', 'agent_bulk_items_bootstrap_block_chk'))
+  )
+SQL);
+        if ($row === null
+            || (int) $row->parent_ready_count !== 1
+            || (int) $row->item_ready_count !== 1
+            || (int) $row->blocked_count !== 0) {
+            throw new RuntimeException('Agent bulk Order authority is not finalized.');
+        }
     }
 
     /**

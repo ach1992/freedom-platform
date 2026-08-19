@@ -1312,6 +1312,7 @@ WHERE TRIGGER_SCHEMA = DATABASE()
 SQL);
 
         if ($triggerRow === null || (int) $triggerRow->aggregate !== 16
+            || ! $this->sourceAuthorizationAuthorityFinalized()
             || ! $this->constraintExists('orders', 'orders_source_type_chk')
             || ! $this->constraintExists('orders', 'orders_provisioning_exact_authority_chk')
             || ! $this->triggerContains('service_subscriptions_insert_guard', 'zero-cost source authority shape is invalid')
@@ -1328,6 +1329,26 @@ SQL);
             || ! $this->triggerContains('provisioning_remote_effect_events_insert_guard', 'service_mutation_effect_v1')) {
             throw new RuntimeException('Non-paid Order authority activation prerequisites are incomplete.');
         }
+    }
+
+    private function sourceAuthorizationAuthorityFinalized(): bool
+    {
+        /** @var object{ready_count:int|string|null,blocked_count:int|string|null}|null $row */
+        $row = DB::selectOne(<<<'SQL'
+SELECT
+    SUM(CONSTRAINT_NAME = 'order_source_authorizations_authority_ready_v2_chk') AS ready_count,
+    SUM(CONSTRAINT_NAME = 'order_source_authorizations_bootstrap_block_chk') AS blocked_count
+FROM information_schema.TABLE_CONSTRAINTS
+WHERE CONSTRAINT_SCHEMA = DATABASE()
+  AND TABLE_NAME = 'order_source_authorizations'
+  AND CONSTRAINT_TYPE = 'CHECK'
+  AND CONSTRAINT_NAME IN (
+      'order_source_authorizations_authority_ready_v2_chk',
+      'order_source_authorizations_bootstrap_block_chk'
+  )
+SQL);
+
+        return $row !== null && (int) $row->ready_count === 1 && (int) $row->blocked_count === 0;
     }
 
     private function replaceConstraint(string $table, string $constraint, string $definition): void

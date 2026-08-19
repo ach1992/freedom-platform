@@ -38,6 +38,7 @@ final readonly class NonPaidOrderService
     {
         $this->assertUlid($sourceAuthorizationPublicId, 'Order source authorization public ID');
         $this->assertToken($correlationId, 'Order creation correlation ID', 8, 64);
+        $this->assertSourceAuthorityFinalized();
 
         try {
             return $this->database->connection()->transaction(
@@ -55,6 +56,27 @@ final readonly class NonPaidOrderService
             }
 
             throw $exception;
+        }
+    }
+
+    private function assertSourceAuthorityFinalized(): void
+    {
+        /** @var object{ready_count:int|string|null,blocked_count:int|string|null}|null $row */
+        $row = $this->database->connection()->selectOne(<<<'SQL'
+SELECT
+    SUM(CONSTRAINT_NAME = 'order_source_authorizations_authority_ready_v2_chk') AS ready_count,
+    SUM(CONSTRAINT_NAME = 'order_source_authorizations_bootstrap_block_chk') AS blocked_count
+FROM information_schema.TABLE_CONSTRAINTS
+WHERE CONSTRAINT_SCHEMA = DATABASE()
+  AND TABLE_NAME = 'order_source_authorizations'
+  AND CONSTRAINT_TYPE = 'CHECK'
+  AND CONSTRAINT_NAME IN (
+      'order_source_authorizations_authority_ready_v2_chk',
+      'order_source_authorizations_bootstrap_block_chk'
+  )
+SQL);
+        if ($row === null || (int) $row->ready_count !== 1 || (int) $row->blocked_count !== 0) {
+            throw new RuntimeException('Order source authorization authority is not finalized.');
         }
     }
 

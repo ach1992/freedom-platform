@@ -9,39 +9,45 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
+    private const BOOTSTRAP_CHECK = 'order_source_authorizations_bootstrap_block_chk';
+
+    private const READY_CHECK = 'order_source_authorizations_authority_ready_v2_chk';
+
+    private const BOOTSTRAP_INSERT_TRIGGER = 'order_source_authorizations_bootstrap_insert_barrier';
+
+    private const BOOTSTRAP_UPDATE_TRIGGER = 'order_source_authorizations_bootstrap_update_barrier';
+
+    private const BOOTSTRAP_DELETE_TRIGGER = 'order_source_authorizations_bootstrap_delete_barrier';
+
     /** @requirement BUY-001 BUY-002 ADM-002 ACL-001 ACL-002 DAT-002 DAT-003 DAT-004 SEC-002 QUA-004 */
     public function up(): void
     {
-        if (! Schema::hasTable('order_source_authorizations')) {
-            Schema::create('order_source_authorizations', function (Blueprint $table): void {
-                $table->bigIncrements('id');
-                $table->ulid('public_id')->unique();
-                $table->string('source_type', 32);
-                $table->foreignId('user_id')->constrained('users')->restrictOnDelete();
-                $table->foreignId('plan_offering_id')->constrained('plan_offerings')->restrictOnDelete();
-
-                $table->foreignId('trial_reservation_id')->nullable()->unique()->constrained('trial_reservations')->restrictOnDelete();
-                $table->string('trial_reservation_command_key', 128)->nullable()->unique();
-                $table->foreignId('benefit_entitlement_id')->nullable()->unique()->constrained('benefit_code_free_service_entitlements')->restrictOnDelete();
-                $table->ulid('benefit_entitlement_public_id')->nullable()->unique();
-
-                $table->string('authorization_key', 128)->unique();
-                $table->char('request_payload_hash', 64);
-                $table->json('configuration_snapshot');
-                $table->char('configuration_snapshot_hash', 64);
-
-                $table->string('actor_type', 16);
-                $table->unsignedBigInteger('actor_id')->nullable();
-                $table->string('reason_code', 64);
-                $table->string('correlation_id', 64);
-                $table->dateTime('created_at', 6);
-
-                $table->index(['user_id', 'created_at'], 'order_source_auth_user_created_idx');
-                $table->index(['source_type', 'created_at'], 'order_source_auth_type_created_idx');
-            });
-        } else {
-            $this->ensureTableFoundation();
+        if ($this->authorityFinalized()) {
+            return;
         }
+
+        if (! Schema::hasTable('order_source_authorizations')) {
+            $this->createIntrinsicallyFailClosedTable();
+        } else {
+            // A legacy/interrupted table may predate intrinsic bootstrap protection. The first
+            // repair DDL closes new authority creation before any schema normalization occurs.
+            $this->installBootstrapMutationBarriers();
+            $this->dropReadyMarkerIfExists();
+            if (DB::table('order_source_authorizations')->exists()) {
+                throw new RuntimeException('Cannot repair unverified Order source authorization rows from a partial migration.');
+            }
+            $this->ensureBootstrapCheck();
+        }
+
+        // Fresh CREATE is intrinsically blocked. Install mutation barriers as defense in depth so
+        // every later restart remains fail-closed even if a legacy/manual state lacks the CHECK.
+        $this->installBootstrapMutationBarriers();
+        $this->dropReadyMarkerIfExists();
+        if (DB::table('order_source_authorizations')->exists()) {
+            throw new RuntimeException('Cannot activate Order source authority with unverified migration rows.');
+        }
+        $this->ensureBootstrapCheck();
+        $this->ensureTableFoundation();
 
         $this->replaceConstraint('order_source_auth_type_chk', "CHECK (`source_type` IN ('trial','benefit_code','admin_grant'))");
         $this->replaceConstraint('order_source_auth_actor_chk', "CHECK (`actor_type` IN ('system','administrator') AND ((`source_type` = 'admin_grant' AND `actor_type` = 'administrator' AND `actor_id` IS NOT NULL) OR (`source_type` <> 'admin_grant' AND `actor_type` = 'system' AND `actor_id` IS NULL)))");
@@ -52,7 +58,17 @@ return new class extends Migration
 
         $this->createInsertGuard();
         $this->createImmutabilityGuards();
-        $this->assertAuthorityReady();
+        $this->assertAuthorityReady(blocked: true);
+
+        // Marker is durable proof that this migration reached full authority readiness from an
+        // empty, blocked table. Consumers reject marker-less legacy partial states.
+        $this->ensureReadyMarker();
+        $this->dropBootstrapMutationBarriers();
+
+        // Sole final enabling DDL. A crash before this statement leaves CHECK (0 = 1) active;
+        // a crash after it leaves a fully guarded, marker-backed table safe for no-op re-entry.
+        $this->dropBootstrapCheck();
+        $this->assertAuthorityReady(blocked: false);
     }
 
     public function down(): void
@@ -68,6 +84,165 @@ return new class extends Migration
         DB::unprepared('DROP TRIGGER IF EXISTS order_source_authorizations_update_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS order_source_authorizations_insert_guard');
         Schema::dropIfExists('order_source_authorizations');
+    }
+
+    private function authorityFinalized(): bool
+    {
+        if (! Schema::hasTable('order_source_authorizations')
+            || ! $this->constraintExists(self::READY_CHECK)
+            || $this->constraintExists(self::BOOTSTRAP_CHECK)
+            || $this->bootstrapBarrierExists()) {
+            return false;
+        }
+
+        try {
+            $this->assertAuthorityReady(blocked: false);
+        } catch (RuntimeException) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private function createIntrinsicallyFailClosedTable(): void
+    {
+        /** @var \Illuminate\Database\Connection $connection */
+        $connection = DB::connection();
+        $blueprint = new Blueprint($connection, 'order_source_authorizations');
+        $blueprint->create();
+        $this->defineTable($blueprint);
+        $statements = $blueprint->toSql();
+        if ($statements === []) {
+            throw new RuntimeException('Order source authorization CREATE SQL is unavailable.');
+        }
+
+        $create = array_shift($statements);
+        if (! is_string($create) || ! str_starts_with(strtolower(ltrim($create)), 'create table')) {
+            throw new RuntimeException('Order source authorization CREATE SQL is not the expected first schema statement.');
+        }
+        $closing = strrpos($create, ')');
+        if ($closing === false) {
+            throw new RuntimeException('Order source authorization CREATE SQL cannot accept the intrinsic bootstrap barrier.');
+        }
+        $create = substr($create, 0, $closing)
+            .', constraint `'.self::BOOTSTRAP_CHECK.'` check (0 = 1)'
+            .substr($create, $closing);
+
+        $connection->statement($create);
+        foreach ($statements as $statement) {
+            $connection->statement($statement);
+        }
+    }
+
+    private function defineTable(Blueprint $table): void
+    {
+        $table->bigIncrements('id');
+        $table->ulid('public_id')->unique();
+        $table->string('source_type', 32);
+        $table->foreignId('user_id')->constrained('users')->restrictOnDelete();
+        $table->foreignId('plan_offering_id')->constrained('plan_offerings')->restrictOnDelete();
+
+        $table->foreignId('trial_reservation_id')->nullable()->unique()->constrained('trial_reservations')->restrictOnDelete();
+        $table->string('trial_reservation_command_key', 128)->nullable()->unique();
+        $table->foreignId('benefit_entitlement_id')->nullable()->unique()->constrained('benefit_code_free_service_entitlements')->restrictOnDelete();
+        $table->ulid('benefit_entitlement_public_id')->nullable()->unique();
+
+        $table->string('authorization_key', 128)->unique();
+        $table->char('request_payload_hash', 64);
+        $table->json('configuration_snapshot');
+        $table->char('configuration_snapshot_hash', 64);
+
+        $table->string('actor_type', 16);
+        $table->unsignedBigInteger('actor_id')->nullable();
+        $table->string('reason_code', 64);
+        $table->string('correlation_id', 64);
+        $table->dateTime('created_at', 6);
+
+        $table->index(['user_id', 'created_at'], 'order_source_auth_user_created_idx');
+        $table->index(['source_type', 'created_at'], 'order_source_auth_type_created_idx');
+    }
+
+    private function installBootstrapMutationBarriers(): void
+    {
+        DB::unprepared(<<<'SQL'
+CREATE OR REPLACE TRIGGER order_source_authorizations_bootstrap_insert_barrier
+BEFORE INSERT ON order_source_authorizations
+FOR EACH ROW
+BEGIN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Order source authorization migration bootstrap is incomplete.';
+END
+SQL);
+        DB::unprepared(<<<'SQL'
+CREATE OR REPLACE TRIGGER order_source_authorizations_bootstrap_update_barrier
+BEFORE UPDATE ON order_source_authorizations
+FOR EACH ROW
+BEGIN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Order source authorization migration bootstrap is incomplete.';
+END
+SQL);
+        DB::unprepared(<<<'SQL'
+CREATE OR REPLACE TRIGGER order_source_authorizations_bootstrap_delete_barrier
+BEFORE DELETE ON order_source_authorizations
+FOR EACH ROW
+BEGIN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Order source authorization migration bootstrap is incomplete.';
+END
+SQL);
+    }
+
+    private function dropBootstrapMutationBarriers(): void
+    {
+        foreach ([self::BOOTSTRAP_DELETE_TRIGGER, self::BOOTSTRAP_UPDATE_TRIGGER, self::BOOTSTRAP_INSERT_TRIGGER] as $trigger) {
+            DB::unprepared('DROP TRIGGER IF EXISTS `'.$trigger.'`');
+        }
+    }
+
+    private function bootstrapBarrierExists(): bool
+    {
+        foreach ([self::BOOTSTRAP_INSERT_TRIGGER, self::BOOTSTRAP_UPDATE_TRIGGER, self::BOOTSTRAP_DELETE_TRIGGER] as $trigger) {
+            if ($this->triggerExists($trigger)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function ensureBootstrapCheck(): void
+    {
+        if ($this->constraintExists(self::BOOTSTRAP_CHECK)) {
+            if (! $this->constraintContains(self::BOOTSTRAP_CHECK, '0 = 1')) {
+                throw new RuntimeException('Order source authorization bootstrap barrier has incompatible semantics.');
+            }
+
+            return;
+        }
+        if (DB::table('order_source_authorizations')->exists()) {
+            throw new RuntimeException('Cannot install Order source bootstrap barrier while unverified rows exist.');
+        }
+
+        DB::statement('ALTER TABLE `order_source_authorizations` ADD CONSTRAINT `'.self::BOOTSTRAP_CHECK.'` CHECK (0 = 1)');
+    }
+
+    private function dropBootstrapCheck(): void
+    {
+        if ($this->constraintExists(self::BOOTSTRAP_CHECK)) {
+            DB::statement('ALTER TABLE `order_source_authorizations` DROP CONSTRAINT `'.self::BOOTSTRAP_CHECK.'`');
+        }
+    }
+
+    private function ensureReadyMarker(): void
+    {
+        if (! $this->constraintExists(self::READY_CHECK)) {
+            DB::statement('ALTER TABLE `order_source_authorizations` ADD CONSTRAINT `'.self::READY_CHECK.'` CHECK (1 = 1)');
+        }
+    }
+
+    private function dropReadyMarkerIfExists(): void
+    {
+        if ($this->constraintExists(self::READY_CHECK)) {
+            DB::statement('ALTER TABLE `order_source_authorizations` DROP CONSTRAINT `'.self::READY_CHECK.'`');
+        }
     }
 
     private function ensureTableFoundation(): void
@@ -130,9 +305,9 @@ return new class extends Migration
         DB::statement("ALTER TABLE `order_source_authorizations` ADD CONSTRAINT `{$constraint}` {$definition}");
     }
 
-    private function assertAuthorityReady(): void
+    private function assertAuthorityReady(bool $blocked): void
     {
-        $this->ensureTableFoundation();
+        $this->assertTableFoundation();
         foreach ([
             'order_source_auth_type_chk',
             'order_source_auth_actor_chk',
@@ -153,6 +328,81 @@ return new class extends Migration
             if (! $this->triggerContains($trigger, $needle)) {
                 throw new RuntimeException('Order source authorization trigger authority did not converge: '.$trigger);
             }
+        }
+        if (! $blocked && ! $this->constraintExists(self::READY_CHECK)) {
+            throw new RuntimeException('Order source authorization readiness marker is missing.');
+        }
+        if ($blocked !== $this->constraintExists(self::BOOTSTRAP_CHECK)) {
+            throw new RuntimeException('Order source authorization bootstrap barrier state is inconsistent.');
+        }
+    }
+
+    private function assertTableFoundation(): void
+    {
+        foreach ([
+            ['id', 'bigint', false, null, true],
+            ['public_id', 'char', false, 26, false],
+            ['source_type', 'varchar', false, 32, false],
+            ['user_id', 'bigint', false, null, true],
+            ['plan_offering_id', 'bigint', false, null, true],
+            ['trial_reservation_id', 'bigint', true, null, true],
+            ['trial_reservation_command_key', 'varchar', true, 128, false],
+            ['benefit_entitlement_id', 'bigint', true, null, true],
+            ['benefit_entitlement_public_id', 'char', true, 26, false],
+            ['authorization_key', 'varchar', false, 128, false],
+            ['request_payload_hash', 'char', false, 64, false],
+            ['configuration_snapshot_hash', 'char', false, 64, false],
+            ['actor_type', 'varchar', false, 16, false],
+            ['actor_id', 'bigint', true, null, true],
+            ['reason_code', 'varchar', false, 64, false],
+            ['correlation_id', 'varchar', false, 64, false],
+            ['created_at', 'datetime', false, null, false],
+        ] as [$column, $type, $nullable, $length, $unsigned]) {
+            $this->assertColumnShape($column, $type, $nullable, $length, $unsigned);
+        }
+        if (! Schema::hasColumn('order_source_authorizations', 'configuration_snapshot')) {
+            throw new RuntimeException('Existing Order source authorization table has an incomplete configuration snapshot column.');
+        }
+
+        $this->assertIndexAvailable('PRIMARY', ['id'], true);
+        foreach ([
+            ['order_source_authorizations_public_id_unique', ['public_id'], true],
+            ['order_source_authorizations_trial_reservation_id_unique', ['trial_reservation_id'], true],
+            ['order_source_authorizations_trial_reservation_command_key_unique', ['trial_reservation_command_key'], true],
+            ['order_source_authorizations_benefit_entitlement_id_unique', ['benefit_entitlement_id'], true],
+            ['order_source_authorizations_benefit_entitlement_public_id_unique', ['benefit_entitlement_public_id'], true],
+            ['order_source_authorizations_authorization_key_unique', ['authorization_key'], true],
+            ['order_source_auth_user_created_idx', ['user_id', 'created_at'], false],
+            ['order_source_auth_type_created_idx', ['source_type', 'created_at'], false],
+        ] as [$index, $columns, $unique]) {
+            $this->assertIndexAvailable($index, $columns, $unique);
+        }
+        foreach ([
+            ['order_source_authorizations_user_id_foreign', 'user_id', 'users', 'id'],
+            ['order_source_authorizations_plan_offering_id_foreign', 'plan_offering_id', 'plan_offerings', 'id'],
+            ['order_source_authorizations_trial_reservation_id_foreign', 'trial_reservation_id', 'trial_reservations', 'id'],
+            ['order_source_authorizations_benefit_entitlement_id_foreign', 'benefit_entitlement_id', 'benefit_code_free_service_entitlements', 'id'],
+        ] as [$constraint, $column, $referencedTable, $referencedColumn]) {
+            $row = $this->foreignKeyRow($constraint);
+            if ($row !== null) {
+                $this->assertForeignKeyRow($constraint, $row, $column, $referencedTable, $referencedColumn);
+            } elseif (! $this->equivalentForeignKeyExists($column, $referencedTable, $referencedColumn)) {
+                throw new RuntimeException('Order source authorization foreign key is unavailable: '.$constraint);
+            }
+        }
+    }
+
+    /** @param list<string> $columns */
+    private function assertIndexAvailable(string $index, array $columns, bool $unique): void
+    {
+        $rows = $this->indexRows($index);
+        if ($rows !== []) {
+            $this->assertIndexRows($index, $rows, $columns, $unique);
+
+            return;
+        }
+        if ($index === 'PRIMARY' || ! $this->equivalentIndexExists($columns, $unique)) {
+            throw new RuntimeException('Order source authorization index is unavailable: '.$index);
         }
     }
 
@@ -335,11 +585,31 @@ SQL, [$column, $referencedTable, $referencedColumn]);
         return $row !== null && (int) $row->aggregate === 1;
     }
 
+    private function constraintContains(string $constraint, string $needle): bool
+    {
+        $row = DB::selectOne(
+            'SELECT COUNT(*) AS aggregate FROM information_schema.CHECK_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME = ? AND CONSTRAINT_NAME = ? AND LOCATE(?, CHECK_CLAUSE) > 0',
+            ['order_source_authorizations', $constraint, $needle],
+        );
+
+        return $row !== null && (int) $row->aggregate === 1;
+    }
+
     private function constraintExists(string $constraint): bool
     {
         $row = DB::selectOne(
             'SELECT COUNT(*) AS aggregate FROM information_schema.TABLE_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME = ? AND CONSTRAINT_NAME = ? AND CONSTRAINT_TYPE = ?',
             ['order_source_authorizations', $constraint, 'CHECK'],
+        );
+
+        return $row !== null && (int) $row->aggregate === 1;
+    }
+
+    private function triggerExists(string $trigger): bool
+    {
+        $row = DB::selectOne(
+            'SELECT COUNT(*) AS aggregate FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = DATABASE() AND TRIGGER_NAME = ?',
+            [$trigger],
         );
 
         return $row !== null && (int) $row->aggregate === 1;

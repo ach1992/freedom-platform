@@ -4,18 +4,31 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Modules\Orders\Application\AgentBulkOrderService;
+use App\Modules\Orders\Application\NonPaidOrderService;
+use App\Modules\Orders\Application\OrderSourceAuthorizationService;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Str;
 use RuntimeException;
+use Tests\Support\CreatesBenefitCodeFixtures;
 use Tests\TestCase;
 
 /** @requirement BUY-001 BUY-002 AGT-003 AGT-004 DAT-002 DAT-003 DAT-004 SEC-002 QUA-004 */
 final class NonPaidOrderMigrationReentryTest extends TestCase
 {
+    use CreatesBenefitCodeFixtures;
     use RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        $this->seed();
+    }
 
     public function test_source_authority_migration_converges_after_table_create_commits_without_migration_record(): void
     {
@@ -32,6 +45,7 @@ final class NonPaidOrderMigrationReentryTest extends TestCase
         /** @var Migration $bulk */
         $bulk = require database_path('migrations/2026_08_19_000130_create_agent_bulk_order_orchestration.php');
         $injected = false;
+        $unauthorized = $this->unauthorizedAdministratorGrantRow('source-create-cut');
 
         $serviceMutation->up();
         $activation->up();
@@ -65,15 +79,68 @@ final class NonPaidOrderMigrationReentryTest extends TestCase
             }
 
             self::assertTrue(Schema::hasTable('order_source_authorizations'));
+            self::assertTrue($this->constraintExists('order_source_authorizations', 'order_source_authorizations_bootstrap_block_chk'));
             self::assertFalse($this->constraintExists('order_source_authorizations', 'order_source_auth_type_chk'));
             self::assertFalse($this->triggerExists('order_source_authorizations_insert_guard'));
+            self::assertFalse($this->constraintExists('order_source_authorizations', 'order_source_authorizations_authority_ready_v2_chk'));
+            $this->assertQueryRejected(fn (): bool => DB::table('order_source_authorizations')->insert($unauthorized));
+            self::assertSame(0, DB::table('order_source_authorizations')->count());
             $this->assertPurchaseOnlySourceFence();
 
+            // Model a real legacy partial table created before this remediation: the table exists,
+            // its final relational guard is absent, and no intrinsic bootstrap CHECK protects it.
+            DB::statement('ALTER TABLE `order_source_authorizations` DROP CONSTRAINT `order_source_authorizations_bootstrap_block_chk`');
+            self::assertTrue(DB::table('order_source_authorizations')->insert($unauthorized));
+            self::assertSame(1, DB::table('order_source_authorizations')->count());
+
+            try {
+                $source->up();
+                self::fail('Re-entry must not bless unverified Order source rows from a legacy partial migration.');
+            } catch (RuntimeException $exception) {
+                self::assertSame('Cannot repair unverified Order source authorization rows from a partial migration.', $exception->getMessage());
+            }
+            self::assertFalse($this->constraintExists('order_source_authorizations', 'order_source_authorizations_authority_ready_v2_chk'));
+            self::assertTrue($this->triggerExists('order_source_authorizations_bootstrap_insert_barrier'));
+            $this->assertPurchaseOnlySourceFence();
+
+            try {
+                $this->app->make(OrderSourceAuthorizationService::class)->authorizeAdministratorGrant(
+                    (string) $unauthorized['authorization_key'],
+                    (int) $unauthorized['actor_id'],
+                    (int) $unauthorized['user_id'],
+                    (int) $unauthorized['plan_offering_id'],
+                    (string) $unauthorized['reason_code'],
+                    'partial-source-replay-correlation-01',
+                );
+                self::fail('Marker-less legacy source authority must not replay through the application service.');
+            } catch (RuntimeException $exception) {
+                self::assertSame('Order source authorization authority is not finalized.', $exception->getMessage());
+            }
+            try {
+                $this->app->make(NonPaidOrderService::class)->materialize(
+                    (string) $unauthorized['public_id'],
+                    'partial-source-order-correlation-01',
+                );
+                self::fail('Marker-less legacy source authority must not materialize an Order.');
+            } catch (RuntimeException $exception) {
+                self::assertSame('Order source authorization authority is not finalized.', $exception->getMessage());
+            }
+            self::assertSame(0, DB::table('orders')->count());
+
+            // Manual cleanup is test-only evidence construction. Normal migration re-entry refuses
+            // this state; after removal, a clean empty blocked migration must converge normally.
+            Schema::dropIfExists('order_source_authorizations');
             $source->up();
             $this->assertSourceAuthorityReady();
             $this->assertPurchaseOnlySourceFence();
+            $this->assertQueryRejected(fn (): bool => DB::table('order_source_authorizations')->insert($unauthorized));
+            self::assertSame(0, DB::table('order_source_authorizations')->count());
         } finally {
             $injected = true;
+            if (Schema::hasTable('order_source_authorizations')
+                && ! $this->constraintExists('order_source_authorizations', 'order_source_authorizations_authority_ready_v2_chk')) {
+                Schema::dropIfExists('order_source_authorizations');
+            }
             $source->up();
             $shape->up();
             $invalidation->up();
@@ -83,6 +150,7 @@ final class NonPaidOrderMigrationReentryTest extends TestCase
         }
 
         $this->assertSupportedSourceFence();
+        $this->assertSourceAuthorityReady();
         $this->assertAgentBulkAuthorityReady();
     }
 
@@ -168,6 +236,8 @@ final class NonPaidOrderMigrationReentryTest extends TestCase
         /** @var Migration $bulk */
         $bulk = require database_path('migrations/2026_08_19_000130_create_agent_bulk_order_orchestration.php');
         $injected = false;
+        $customerId = $this->benefitUser();
+        $unauthorizedParent = $this->unauthorizedBulkParentRow($customerId, 'bulk-parent-create-cut');
 
         try {
             $bulk->down();
@@ -192,15 +262,213 @@ final class NonPaidOrderMigrationReentryTest extends TestCase
 
             self::assertTrue(Schema::hasTable('agent_bulk_orders'));
             self::assertFalse(Schema::hasTable('agent_bulk_order_items'));
+            self::assertTrue($this->constraintExists('agent_bulk_orders', 'agent_bulk_orders_bootstrap_block_chk'));
             self::assertFalse($this->constraintExists('agent_bulk_orders', 'agent_bulk_orders_count_chk'));
+            self::assertFalse($this->constraintExists('agent_bulk_orders', 'agent_bulk_orders_authority_ready_v2_chk'));
+            $this->assertQueryRejected(fn (): bool => DB::table('agent_bulk_orders')->insert($unauthorizedParent));
+            self::assertSame(0, DB::table('agent_bulk_orders')->count());
             $this->assertSupportedSourceFence();
 
             $bulk->up();
             $this->assertAgentBulkAuthorityReady();
             $this->assertSupportedSourceFence();
+            $this->assertQueryRejected(fn (): bool => DB::table('agent_bulk_orders')->insert($unauthorizedParent));
         } finally {
             $injected = true;
             $bulk->up();
+        }
+    }
+
+    public function test_agent_bulk_child_create_cut_is_intrinsically_blocked_and_legacy_rows_are_not_blessed(): void
+    {
+        /** @var Migration $bulk */
+        $bulk = require database_path('migrations/2026_08_19_000130_create_agent_bulk_order_orchestration.php');
+        $injected = false;
+        $customerId = $this->benefitUser();
+        $unauthorizedParent = $this->unauthorizedBulkParentRow($customerId, 'bulk-child-create-cut');
+        $forgedChild = $this->forgedBulkChildRow('bulk-child-create-cut');
+
+        try {
+            $bulk->down();
+
+            DB::listen(function (QueryExecuted $query) use (&$injected): void {
+                if ($injected || ! str_contains(strtolower($query->sql), 'create table `agent_bulk_order_items`')) {
+                    return;
+                }
+
+                $injected = true;
+                throw new RuntimeException('Injected after committed Agent bulk child table creation.');
+            });
+
+            try {
+                $bulk->up();
+                self::fail('The fault injector must interrupt after the Agent bulk child CREATE commits.');
+            } catch (RuntimeException $exception) {
+                self::assertTrue($injected);
+                self::assertSame('Injected after committed Agent bulk child table creation.', $exception->getMessage());
+            }
+
+            self::assertTrue(Schema::hasTable('agent_bulk_orders'));
+            self::assertTrue(Schema::hasTable('agent_bulk_order_items'));
+            self::assertTrue($this->constraintExists('agent_bulk_orders', 'agent_bulk_orders_bootstrap_block_chk'));
+            self::assertTrue($this->constraintExists('agent_bulk_order_items', 'agent_bulk_items_bootstrap_block_chk'));
+            self::assertFalse($this->triggerExists('agent_bulk_orders_insert_guard'));
+            self::assertFalse($this->triggerExists('agent_bulk_items_insert_guard'));
+            self::assertFalse($this->constraintExists('agent_bulk_orders', 'agent_bulk_orders_authority_ready_v2_chk'));
+            self::assertFalse($this->constraintExists('agent_bulk_order_items', 'agent_bulk_items_authority_ready_v2_chk'));
+
+            $this->assertQueryRejected(fn (): bool => DB::table('agent_bulk_orders')->insert($unauthorizedParent));
+            $this->assertQueryRejected(fn (): bool => DB::table('agent_bulk_order_items')->insert($forgedChild));
+            self::assertSame(0, DB::table('agent_bulk_orders')->count());
+            self::assertSame(0, DB::table('agent_bulk_order_items')->count());
+
+            // Simulate the older vulnerable child-created/guards-absent state. A forged pending child
+            // can exist only after deliberately removing the new intrinsic barrier; re-entry must
+            // close mutation first and refuse to mark that state ready rather than bless the row.
+            DB::statement('ALTER TABLE `agent_bulk_order_items` DROP CONSTRAINT `agent_bulk_items_bootstrap_block_chk`');
+            self::assertTrue(DB::table('agent_bulk_order_items')->insert($forgedChild));
+            self::assertSame(1, DB::table('agent_bulk_order_items')->count());
+
+            try {
+                $bulk->up();
+                self::fail('Agent bulk re-entry must not bless unverified child rows from a legacy partial migration.');
+            } catch (RuntimeException $exception) {
+                self::assertSame('Cannot repair unverified Agent bulk child rows from a partial migration.', $exception->getMessage());
+            }
+            self::assertTrue($this->triggerExists('agent_bulk_items_bootstrap_insert_barrier'));
+            self::assertFalse($this->constraintExists('agent_bulk_orders', 'agent_bulk_orders_authority_ready_v2_chk'));
+            self::assertFalse($this->constraintExists('agent_bulk_order_items', 'agent_bulk_items_authority_ready_v2_chk'));
+
+            try {
+                $this->app->make(AgentBulkOrderService::class)->execute(
+                    'partial-agent-bulk-parent-01',
+                    1,
+                    [['child_key' => 'partial-agent-bulk-child-01', 'purchase_settlement_public_id' => (string) Str::ulid()]],
+                    'partial-agent-bulk-correlation-01',
+                );
+                self::fail('Marker-less Agent bulk authority must not reach existing-parent or child processing.');
+            } catch (RuntimeException $exception) {
+                self::assertSame('Agent bulk Order authority is not finalized.', $exception->getMessage());
+            }
+            self::assertSame(0, DB::table('orders')->count());
+
+            Schema::dropIfExists('agent_bulk_order_items');
+            Schema::dropIfExists('agent_bulk_orders');
+            $bulk->up();
+            $this->assertAgentBulkAuthorityReady();
+        } finally {
+            $injected = true;
+            if (Schema::hasTable('agent_bulk_order_items')
+                && ! $this->constraintExists('agent_bulk_order_items', 'agent_bulk_items_authority_ready_v2_chk')) {
+                Schema::dropIfExists('agent_bulk_order_items');
+            }
+            if (Schema::hasTable('agent_bulk_orders')
+                && ! $this->constraintExists('agent_bulk_orders', 'agent_bulk_orders_authority_ready_v2_chk')) {
+                Schema::dropIfExists('agent_bulk_orders');
+            }
+            $bulk->up();
+        }
+    }
+
+    /** @return array<string,mixed> */
+    private function unauthorizedAdministratorGrantRow(string $suffix): array
+    {
+        $administratorId = $this->nonOwnerAdministrator();
+        $userId = $this->benefitUser();
+        $offering = $this->activeBenefitOffering('migration-'.$suffix);
+        /** @var object{code:string,sales_server_id:int|string,panel_service_target_id:int|string,service_mode_code:string,server_selection_mode:string,protocol_selection_mode:string,duration_days:int|string,data_allowance_bytes:int|string|null,device_limit:int|string|null,version:int|string}|null $offeringRow */
+        $offeringRow = DB::table('plan_offerings')->where('id', $offering['id'])->first([
+            'code', 'sales_server_id', 'panel_service_target_id', 'service_mode_code', 'server_selection_mode',
+            'protocol_selection_mode', 'duration_days', 'data_allowance_bytes', 'device_limit', 'version',
+        ]);
+        self::assertNotNull($offeringRow);
+        $configuration = [
+            'data_allowance_bytes' => $offeringRow->data_allowance_bytes === null ? null : (int) $offeringRow->data_allowance_bytes,
+            'device_limit' => $offeringRow->device_limit === null ? null : (int) $offeringRow->device_limit,
+            'duration_days' => (int) $offeringRow->duration_days,
+            'offering_code' => $offeringRow->code,
+            'offering_version' => (int) $offeringRow->version,
+            'protocol_selection_mode' => $offeringRow->protocol_selection_mode,
+            'sales_server_id' => (int) $offeringRow->sales_server_id,
+            'server_selection_mode' => $offeringRow->server_selection_mode,
+            'service_mode_code' => $offeringRow->service_mode_code,
+            'service_target_id' => (int) $offeringRow->panel_service_target_id,
+        ];
+        ksort($configuration, SORT_STRING);
+        $configurationJson = json_encode($configuration, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        $request = [
+            'actor_administrator_id' => $administratorId,
+            'plan_offering_id' => $offering['id'],
+            'reason_code' => 'manual_service_grant',
+            'user_id' => $userId,
+        ];
+        ksort($request, SORT_STRING);
+        $requestJson = json_encode($request, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+
+        return [
+            'public_id' => (string) Str::ulid(),
+            'source_type' => 'admin_grant',
+            'user_id' => $userId,
+            'plan_offering_id' => $offering['id'],
+            'trial_reservation_id' => null,
+            'trial_reservation_command_key' => null,
+            'benefit_entitlement_id' => null,
+            'benefit_entitlement_public_id' => null,
+            'authorization_key' => 'partial-admin-grant-'.substr(hash('sha256', $suffix), 0, 32),
+            'request_payload_hash' => hash('sha256', $requestJson),
+            'configuration_snapshot' => $configurationJson,
+            'configuration_snapshot_hash' => hash('sha256', $configurationJson),
+            'actor_type' => 'administrator',
+            'actor_id' => $administratorId,
+            'reason_code' => 'manual_service_grant',
+            'correlation_id' => 'partial-admin-'.substr(hash('sha256', $suffix), 0, 32),
+            'created_at' => now('UTC'),
+        ];
+    }
+
+    /** @return array<string,mixed> */
+    private function unauthorizedBulkParentRow(int $customerId, string $suffix): array
+    {
+        return [
+            'public_id' => (string) Str::ulid(),
+            'batch_key' => 'partial-bulk-'.substr(hash('sha256', $suffix), 0, 32),
+            'request_payload_hash' => hash('sha256', 'partial-bulk-request-'.$suffix),
+            'user_id' => $customerId,
+            'item_count' => 1,
+            'creation_correlation_id' => 'partial-bulk-'.substr(hash('sha256', 'correlation-'.$suffix), 0, 32),
+            'created_at' => now('UTC'),
+        ];
+    }
+
+    /** @return array<string,mixed> */
+    private function forgedBulkChildRow(string $suffix): array
+    {
+        return [
+            'public_id' => (string) Str::ulid(),
+            'agent_bulk_order_id' => 1,
+            'line_number' => 1,
+            'child_key' => 'partial-child-'.substr(hash('sha256', $suffix), 0, 32),
+            'purchase_settlement_id' => 1,
+            'purchase_settlement_public_id' => (string) Str::ulid(),
+            'source_quote_id' => 1,
+            'source_quote_public_id' => (string) Str::ulid(),
+            'state' => 'pending',
+            'attempt_count' => 0,
+            'order_id' => null,
+            'order_item_id' => null,
+            'last_error_code' => null,
+            'created_at' => now('UTC'),
+            'updated_at' => now('UTC'),
+        ];
+    }
+
+    private function assertQueryRejected(callable $operation): void
+    {
+        try {
+            $operation();
+            self::fail('Expected database authority rejection.');
+        } catch (QueryException) {
+            self::assertTrue(true);
         }
     }
 
@@ -272,6 +540,9 @@ final class NonPaidOrderMigrationReentryTest extends TestCase
 
     private function assertSourceAuthorityReady(): void
     {
+        self::assertTrue($this->constraintExists('order_source_authorizations', 'order_source_authorizations_authority_ready_v2_chk'));
+        self::assertFalse($this->constraintExists('order_source_authorizations', 'order_source_authorizations_bootstrap_block_chk'));
+        self::assertFalse($this->triggerExists('order_source_authorizations_bootstrap_insert_barrier'));
         foreach ([
             'order_source_auth_type_chk',
             'order_source_auth_actor_chk',
@@ -329,6 +600,12 @@ final class NonPaidOrderMigrationReentryTest extends TestCase
     {
         self::assertTrue(Schema::hasTable('agent_bulk_orders'));
         self::assertTrue(Schema::hasTable('agent_bulk_order_items'));
+        self::assertTrue($this->constraintExists('agent_bulk_orders', 'agent_bulk_orders_authority_ready_v2_chk'));
+        self::assertTrue($this->constraintExists('agent_bulk_order_items', 'agent_bulk_items_authority_ready_v2_chk'));
+        self::assertFalse($this->constraintExists('agent_bulk_orders', 'agent_bulk_orders_bootstrap_block_chk'));
+        self::assertFalse($this->constraintExists('agent_bulk_order_items', 'agent_bulk_items_bootstrap_block_chk'));
+        self::assertFalse($this->triggerExists('agent_bulk_orders_bootstrap_insert_barrier'));
+        self::assertFalse($this->triggerExists('agent_bulk_items_bootstrap_insert_barrier'));
         foreach ([
             ['agent_bulk_orders', 'agent_bulk_orders_hash_chk'],
             ['agent_bulk_orders', 'agent_bulk_orders_count_chk'],
