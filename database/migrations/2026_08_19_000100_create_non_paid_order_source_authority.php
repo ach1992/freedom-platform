@@ -88,7 +88,8 @@ return new class extends Migration
         $this->ensureBootstrapCheck();
         $this->dropReadyMarkerIfExists();
         $this->installBootstrapMutationBarriers();
-        if (DB::table('order_source_authorizations')->exists()) {
+        $row = DB::selectOne('SELECT COUNT(*) AS aggregate FROM order_source_authorizations');
+        if ($row !== null && (int) $row->aggregate > 0) {
             throw new RuntimeException('Cannot roll back non-paid Order source authority after the rollback barrier closed with authorization records present.');
         }
 

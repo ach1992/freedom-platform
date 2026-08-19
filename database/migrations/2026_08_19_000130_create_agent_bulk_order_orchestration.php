@@ -127,10 +127,12 @@ return new class extends Migration
         if ($itemsExist) {
             $this->installItemBootstrapMutationBarriers();
         }
-        if ($parentExists && DB::table('agent_bulk_orders')->exists()) {
+        $parentRow = $parentExists ? DB::selectOne('SELECT COUNT(*) AS aggregate FROM agent_bulk_orders') : null;
+        if ($parentRow !== null && (int) $parentRow->aggregate > 0) {
             throw new RuntimeException('Cannot roll back agent bulk Order orchestration after the rollback barrier closed with parent authority present.');
         }
-        if ($itemsExist && DB::table('agent_bulk_order_items')->exists()) {
+        $itemRow = $itemsExist ? DB::selectOne('SELECT COUNT(*) AS aggregate FROM agent_bulk_order_items') : null;
+        if ($itemRow !== null && (int) $itemRow->aggregate > 0) {
             throw new RuntimeException('Cannot roll back agent bulk Order orchestration after the rollback barrier closed with child authority evidence present.');
         }
 
