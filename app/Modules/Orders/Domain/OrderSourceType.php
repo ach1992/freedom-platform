@@ -13,6 +13,9 @@ enum OrderSourceType: string
     case BenefitCode = 'benefit_code';
     case AdminGrant = 'admin_grant';
 
+    /** Compatibility name used by provisioning orchestration. */
+    public const AdministratorGrant = self::AdminGrant;
+
     public function requiresFinancialSettlement(): bool
     {
         return $this === self::Purchase;
