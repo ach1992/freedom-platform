@@ -7,7 +7,6 @@ use Illuminate\Support\Facades\DB;
 
 return new class extends Migration
 {
-
     /** @requirement BUY-001 BUY-002 CAT-006 ADM-002 PAY-002 PAY-003 PRV-002 PRV-003 DAT-002 DAT-003 DAT-004 SEC-002 SEC-008 QUA-001 QUA-004 */
     public function up(): void
     {
@@ -84,7 +83,7 @@ SQL,
         $this->replaceConstraint(
             'orders',
             'orders_source_type_chk',
-            "CHECK (`source_type` IN ('purchase','trial','benefit_code','admin_grant'))",
+            "CHECK (`source_type` IN ('purchase','trial','gift','service_code','benefit_code','admin_grant'))",
         );
         $this->replaceConstraint(
             'orders',
@@ -92,9 +91,10 @@ SQL,
             <<<'SQL'
 CHECK (
     (
-        `source_type` NOT IN ('purchase','trial','benefit_code','admin_grant')
+        `source_type` NOT IN ('purchase','trial','gift','service_code','benefit_code','admin_grant')
         OR BINARY `source_type` IN (
-            BINARY 'purchase', BINARY 'trial', BINARY 'benefit_code', BINARY 'admin_grant'
+            BINARY 'purchase', BINARY 'trial', BINARY 'gift', BINARY 'service_code',
+            BINARY 'benefit_code', BINARY 'admin_grant'
         )
     )
     AND (
