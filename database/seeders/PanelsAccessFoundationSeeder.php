@@ -72,6 +72,38 @@ final class PanelsAccessFoundationSeeder extends Seeder
                 'created_at' => $now,
                 'updated_at' => $now,
             ],
+            [
+                'code' => 'services.import',
+                'module' => 'provisioning',
+                'risk_level' => 'high',
+                'requires_approval' => false,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
+            [
+                'code' => 'services.transfer_ownership',
+                'module' => 'provisioning',
+                'risk_level' => 'high',
+                'requires_approval' => false,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
+            [
+                'code' => 'services.repair',
+                'module' => 'provisioning',
+                'risk_level' => 'high',
+                'requires_approval' => false,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
+            [
+                'code' => 'services.grant_batch',
+                'module' => 'provisioning',
+                'risk_level' => 'high',
+                'requires_approval' => false,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
         ], ['code'], ['module', 'risk_level', 'requires_approval', 'updated_at']);
 
         foreach (['support', 'technical', 'sales_content'] as $roleCode) {

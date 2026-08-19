@@ -102,7 +102,6 @@ SQL,
             'history-insert-guard.sql',
             'history-after-insert.sql',
             'operation-update-guard.sql',
-            'service-update-guard.sql',
             'operation-insert-guard.sql',
         ] as $file) {
             $path = database_path('sql/service-mutation-authority/'.$file);
@@ -113,6 +112,35 @@ SQL,
 
             DB::connection()->getPdo()->exec($sql);
         }
+
+        $serviceUpdatePath = $this->serviceOperationalAuthorityFinalized()
+            ? database_path('sql/service-operational-authority/service-update-guard.sql')
+            : database_path('sql/service-mutation-authority/service-update-guard.sql');
+        $serviceUpdateSql = file_get_contents($serviceUpdatePath);
+        if (! is_string($serviceUpdateSql) || trim($serviceUpdateSql) === '') {
+            throw new RuntimeException('Service update predecessor authority SQL asset is unavailable.');
+        }
+        DB::connection()->getPdo()->exec($serviceUpdateSql);
+    }
+
+    private function serviceOperationalAuthorityFinalized(): bool
+    {
+        foreach ([
+            'service_imports' => ['service_imports_authority_ready_v1_chk', 'service_imports_bootstrap_block_chk'],
+            'service_ownership_transfers' => ['service_transfers_authority_ready_v1_chk', 'service_transfers_bootstrap_block_chk'],
+            'service_reconciliation_cases' => ['service_reconciliation_authority_ready_v1_chk', 'service_reconciliation_bootstrap_block_chk'],
+            'service_reconciliation_changes' => ['service_reconciliation_changes_authority_ready_v1_chk', 'service_reconciliation_changes_bootstrap_block_chk'],
+            'service_batch_grants' => ['service_batch_grants_authority_ready_v1_chk', 'service_batch_grants_bootstrap_block_chk'],
+            'service_batch_grant_items' => ['service_batch_items_authority_ready_v1_chk', 'service_batch_items_bootstrap_block_chk'],
+        ] as $table => [$ready, $bootstrap]) {
+            if (! Schema::hasTable($table)
+                || ! $this->constraintExists($table, $ready)
+                || $this->constraintExists($table, $bootstrap)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private function replaceOrderSourceConstraints(): void
