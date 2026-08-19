@@ -193,9 +193,9 @@ SQL);
 
     private function dropBootstrapMutationBarriers(): void
     {
-        foreach ([self::BOOTSTRAP_DELETE_TRIGGER, self::BOOTSTRAP_UPDATE_TRIGGER, self::BOOTSTRAP_INSERT_TRIGGER] as $trigger) {
-            DB::unprepared('DROP TRIGGER IF EXISTS `'.$trigger.'`');
-        }
+        DB::unprepared('DROP TRIGGER IF EXISTS order_source_authorizations_bootstrap_delete_barrier');
+        DB::unprepared('DROP TRIGGER IF EXISTS order_source_authorizations_bootstrap_update_barrier');
+        DB::unprepared('DROP TRIGGER IF EXISTS order_source_authorizations_bootstrap_insert_barrier');
     }
 
     private function bootstrapBarrierExists(): bool
