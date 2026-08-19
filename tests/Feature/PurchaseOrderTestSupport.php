@@ -49,6 +49,16 @@ trait PurchaseOrderTestSupport
         // production guards or comparing two different clocks.
         if (DB::connection()->getDriverName() === 'mysql') {
             DB::statement('SET timestamp = '.$this->purchaseOrderClock->value->getTimestamp());
+
+            // Exact-authority upgrade tests intentionally exercise the historical 001165 schema.
+            // Install that baseline explicitly because the final migrated database now contains
+            // the successor source-aware #150 guards instead of relying on leaked DDL from another test.
+            if (str_starts_with(static::class, __NAMESPACE__.'\\InitialProvisioningExactAuthorityUpgrade')) {
+                /** @var \Illuminate\Database\Migrations\Migration $legacyProvisioningAuthority */
+                $legacyProvisioningAuthority = require database_path('migrations/2026_08_14_001165_activate_provisioning_queue_authority.php');
+                $legacyProvisioningAuthority->up();
+            }
+
             $this->beforeApplicationDestroyed(static function (): void {
                 DB::statement('SET timestamp = DEFAULT');
 
@@ -171,6 +181,14 @@ SQL);
 
     protected function purchaseOrderCorrelation(string $suffix): string
     {
+        // Service creation and its initial provisioning operation are one immutable authority
+        // envelope under the current schema and therefore share one correlation identity.
+        if (str_starts_with($suffix, 'service-')) {
+            $suffix = 'provisioning-'.substr($suffix, 8);
+        } elseif (str_starts_with($suffix, 'operation-')) {
+            $suffix = 'provisioning-'.substr($suffix, 10);
+        }
+
         return hash('sha256', 'purchase-order:'.$suffix);
     }
 
