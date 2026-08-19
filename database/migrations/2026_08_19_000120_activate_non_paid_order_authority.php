@@ -73,9 +73,27 @@ SQL,
             $migration->up();
         }
 
+        // 001165 predates Service-mutation authority and therefore replaces both insert guards
+        // while rebuilding the purchase-only Order chain above. Restore exactly the later accepted
+        // insert authorities without replaying 000300 and disturbing its update/effect descendants.
+        $this->restoreServiceMutationInsertAuthorities();
+
         // The source fence remains purchase-only even if a predecessor re-entry changes another
         // Order trigger. This is the rollback fail-closed boundary.
         $this->restorePurchaseOnlySourceFence();
+    }
+
+    private function restoreServiceMutationInsertAuthorities(): void
+    {
+        foreach (['service-insert-guard.sql', 'operation-insert-guard.sql'] as $file) {
+            $path = database_path('sql/service-mutation-authority/'.$file);
+            $sql = file_get_contents($path);
+            if (! is_string($sql) || trim($sql) === '') {
+                throw new RuntimeException('Service mutation insert authority SQL asset is unavailable: '.$file);
+            }
+
+            DB::connection()->getPdo()->exec($sql);
+        }
     }
 
     private function replaceOrderSourceConstraints(): void

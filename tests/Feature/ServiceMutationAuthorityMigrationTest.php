@@ -126,6 +126,30 @@ final class ServiceMutationAuthorityMigrationTest extends TestCase
         $this->assertStringContainsString('clean local lifecycle', $this->triggerStatement('service_subscriptions_insert_guard'));
     }
 
+    public function test_non_paid_authority_rollback_restores_predecessor_service_mutation_insert_guards(): void
+    {
+        $migration = require database_path('migrations/2026_08_19_000120_activate_non_paid_order_authority.php');
+
+        try {
+            $migration->down();
+
+            $operationInsertGuard = $this->triggerStatement('provisioning_operations_insert_guard');
+            $serviceInsertGuard = $this->triggerStatement('service_subscriptions_insert_guard');
+
+            $this->assertStringContainsString('service_mutation_queue_v1', $operationInsertGuard);
+            $this->assertStringContainsString('Initial Provisioning Operation cannot be created with remote-effect evidence.', $operationInsertGuard);
+            $this->assertStringNotContainsString('Initial Provisioning Operation zero-cost authority shape is invalid.', $operationInsertGuard);
+            $this->assertStringContainsString('Service Subscription must start with a clean local lifecycle and no remote binding.', $serviceInsertGuard);
+            $this->assertStringNotContainsString('Service Subscription zero-cost source authority shape is invalid.', $serviceInsertGuard);
+        } finally {
+            $migration->up();
+        }
+
+        $this->assertStringContainsString('service_mutation_queue_v1', $this->triggerStatement('provisioning_operations_insert_guard'));
+        $this->assertStringContainsString('Initial Provisioning Operation zero-cost authority shape is invalid.', $this->triggerStatement('provisioning_operations_insert_guard'));
+        $this->assertStringContainsString('Service Subscription zero-cost source authority shape is invalid.', $this->triggerStatement('service_subscriptions_insert_guard'));
+    }
+
     public function test_rollback_guard_covers_all_mutation_and_identity_evidence_classes(): void
     {
         $source = file_get_contents(database_path('migrations/2026_08_17_000300_enable_service_mutation_authority.php'));
