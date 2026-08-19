@@ -104,26 +104,34 @@ final class ServiceMutationAuthorityMigrationTest extends TestCase
     public function test_clean_rollback_and_reentry_restore_initial_authority_before_reenabling_mutations(): void
     {
         $migration = require database_path('migrations/2026_08_17_000300_enable_service_mutation_authority.php');
+        $nonPaidAuthorityMigration = require database_path('migrations/2026_08_19_000120_activate_non_paid_order_authority.php');
 
-        $migration->down();
+        try {
+            $migration->down();
 
-        $this->assertFalse(Schema::hasColumn('service_subscriptions', 'lifecycle_state'));
-        $this->assertFalse(Schema::hasColumn('service_subscriptions', 'lifecycle_version'));
-        $this->assertFalse(Schema::hasColumn('service_subscriptions', 'remote_identity_generation'));
-        $this->assertFalse(Schema::hasColumn('service_subscriptions', 'mutation_generation'));
-        $this->assertFalse(Schema::hasColumn('provisioning_operations', 'operation_generation'));
-        $this->assertStringContainsString('initial_remote_effect_v1', $this->triggerStatement('provisioning_operations_update_guard'));
-        $this->assertStringNotContainsString('service_mutation_effect_v1', $this->triggerStatement('provisioning_operations_update_guard'));
+            $this->assertFalse(Schema::hasColumn('service_subscriptions', 'lifecycle_state'));
+            $this->assertFalse(Schema::hasColumn('service_subscriptions', 'lifecycle_version'));
+            $this->assertFalse(Schema::hasColumn('service_subscriptions', 'remote_identity_generation'));
+            $this->assertFalse(Schema::hasColumn('service_subscriptions', 'mutation_generation'));
+            $this->assertFalse(Schema::hasColumn('provisioning_operations', 'operation_generation'));
+            $this->assertStringContainsString('initial_remote_effect_v1', $this->triggerStatement('provisioning_operations_update_guard'));
+            $this->assertStringNotContainsString('service_mutation_effect_v1', $this->triggerStatement('provisioning_operations_update_guard'));
 
-        $migration->up();
+            $migration->up();
 
-        $this->assertTrue(Schema::hasColumn('service_subscriptions', 'lifecycle_state'));
-        $this->assertTrue(Schema::hasColumn('service_subscriptions', 'remote_identity_generation'));
-        $this->assertTrue(Schema::hasColumn('service_subscriptions', 'mutation_generation'));
-        $this->assertTrue(Schema::hasColumn('provisioning_operations', 'operation_generation'));
-        $this->assertStringContainsString('initial_remote_effect_v1', $this->triggerStatement('provisioning_operations_update_guard'));
-        $this->assertStringContainsString('service_mutation_effect_v1', $this->triggerStatement('provisioning_operations_update_guard'));
-        $this->assertStringContainsString('clean local lifecycle', $this->triggerStatement('service_subscriptions_insert_guard'));
+            $this->assertTrue(Schema::hasColumn('service_subscriptions', 'lifecycle_state'));
+            $this->assertTrue(Schema::hasColumn('service_subscriptions', 'remote_identity_generation'));
+            $this->assertTrue(Schema::hasColumn('service_subscriptions', 'mutation_generation'));
+            $this->assertTrue(Schema::hasColumn('provisioning_operations', 'operation_generation'));
+            $this->assertStringContainsString('initial_remote_effect_v1', $this->triggerStatement('provisioning_operations_update_guard'));
+            $this->assertStringContainsString('service_mutation_effect_v1', $this->triggerStatement('provisioning_operations_update_guard'));
+            $this->assertStringContainsString('clean local lifecycle', $this->triggerStatement('service_subscriptions_insert_guard'));
+        } finally {
+            // MariaDB DDL commits outside Laravel's per-test transaction. Restore the current final
+            // authority explicitly so this historical rollback test cannot leak predecessor guards.
+            $migration->up();
+            $nonPaidAuthorityMigration->up();
+        }
     }
 
     public function test_non_paid_authority_rollback_restores_predecessor_service_mutation_insert_guards(): void
