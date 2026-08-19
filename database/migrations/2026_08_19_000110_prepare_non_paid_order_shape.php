@@ -352,8 +352,8 @@ SQL,
     }
 
     /**
-     * @param list<object{column_name:string,non_unique:int|string}> $rows
-     * @param list<string> $columns
+     * @param  list<object{column_name:string,non_unique:int|string}>  $rows
+     * @param  list<string>  $columns
      */
     private function assertIndexRows(string $table, string $index, array $rows, array $columns, bool $unique): void
     {
