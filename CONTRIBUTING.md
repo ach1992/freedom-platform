@@ -65,6 +65,20 @@ Sensitive paths are assigned in `.github/CODEOWNERS`. CODEOWNERS identifies inte
 
 High/Critical work involving financial integrity, authorization, security controls, provider semantics, schema, deployment/release behavior, secrets, or irreversible operations requires independent review and explicit Owner approval before merge unless that exact merge/action was already authorized. This gate does not by itself block reversible implementation, testing, review preparation, or continuation to another dependency-safe READY task.
 
+### Independent review relay
+
+When independent review is required, the only permitted project dispatch mechanism is an **Owner-relayed fresh ChatGPT chat**.
+
+1. The authoring Master completes the applicable exact-head validation and effective-diff self-review, then gives the Owner one ready-to-paste `INDEPENDENT REVIEW CHAT` prompt.
+2. The prompt must identify the repository/PR or change, exact integration target/base SHA, exact candidate HEAD SHA, owning Issue/contract and acceptance criteria, risk level, material review boundaries/invariants, and current validation evidence tied to that exact candidate.
+3. The Owner opens a new ChatGPT chat and pastes that prompt. That fresh chat is the independent reviewer context. It should review read-only and return the exact candidate SHA reviewed, a verdict of `APPROVE` or `CHANGES_REQUIRED`, and evidence-backed findings classified as `BLOCKER`, `REQUIRED`, or `OPTIONAL`.
+4. The Owner relays the complete review result back to the authoring Master. The Master reconciles every finding and refreshes candidate/target/CI/review freshness before relying on the review or performing integration.
+5. Candidate, target, contract, or material effective-diff drift invalidates the affected independent review. The Master must give the Owner a new prompt for another fresh ChatGPT chat; do not reuse a stale verdict.
+
+The Master must **not** request or add reviewers through GitHub, invoke GitHub Copilot PR review, dispatch an external review agent/tool/service, or request independent review through any other platform. Do not treat an earlier platform-native review request as precedent for future work. Self-review remains required where applicable but never counts as independent review.
+
+If repository or platform protection ever independently requires a native approval object, treat that as a separate integration gate. Do not fabricate, bypass, or automatically request that approval; surface the exact gate to the Owner while preserving the Owner-relayed fresh-ChatGPT independent review rule above.
+
 ## Merge method
 
 Merge style never substitutes for review or the applicable green CI tier.

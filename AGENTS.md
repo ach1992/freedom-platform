@@ -64,6 +64,8 @@ PRs use `.github/pull_request_template.md`. Sensitive paths are assigned in `.gi
 
 High/Critical financial, authorization, security, provider, schema, deployment/release, secret, or irreversible work requires independent review and explicit Owner approval before merge unless that exact action was explicitly pre-authorized. The applicable CI tier must pass on the final candidate; merge style never substitutes for review or validation.
 
+For this repository, required independent review is dispatched only by giving the Owner a ready-to-paste prompt for a fresh ChatGPT chat. Do not request GitHub/Copilot reviewers or dispatch independent review through any other tool, agent, service, or platform. The canonical relay contract is in `CONTRIBUTING.md`.
+
 ## Continuous execution
 
 When the current objective is authorized and a dependency-safe Task Contract is `READY`, the Master should self-execute normal reversible engineering steps without asking for another Owner confirmation merely because the task is High/Critical risk or because one bounded slice finished. This includes task/branch/PR maintenance, implementation, targeted validation, CI preparation, self-review, corrections, and selecting or creating the next just-in-time READY task under the active phase.
