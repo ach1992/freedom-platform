@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Tests\Support;
 
 use App\Modules\AccessControl\Application\AccessChangeContext;
+use App\Modules\Catalog\Application\CatalogChangeContext;
+use App\Modules\Catalog\Application\PlanOfferingService;
 use App\Modules\Promotions\BenefitCodes\Application\BenefitCodeCampaignVersionReceipt;
 use App\Modules\Promotions\BenefitCodes\Application\BenefitCodeIssueReceipt;
 use App\Modules\Promotions\BenefitCodes\Application\BenefitCodeIssueRequest;
@@ -42,14 +44,71 @@ trait CreatesBenefitCodeFixtures
     protected function activeBenefitOffering(string $suffix = 'benefit'): array
     {
         $offering = $this->benefitOffering($suffix);
-        $updated = DB::table('plan_offerings')
+        $now = now('UTC');
+
+        /** @var object{panel_service_target_id:int|string,version:int|string}|null $offeringRow */
+        $offeringRow = DB::table('plan_offerings')
             ->where('id', $offering['id'])
-            ->where('state', 'draft')
+            ->first(['panel_service_target_id', 'version']);
+        if ($offeringRow === null) {
+            throw new RuntimeException('Benefit test Plan Offering disappeared.');
+        }
+
+        /** @var object{panel_connection_id:int|string}|null $target */
+        $target = DB::table('panel_service_targets')
+            ->where('id', (int) $offeringRow->panel_service_target_id)
+            ->first(['panel_connection_id']);
+        if ($target === null) {
+            throw new RuntimeException('Benefit test service target disappeared.');
+        }
+
+        $connectionId = (int) $target->panel_connection_id;
+        $targetId = (int) $offeringRow->panel_service_target_id;
+        $capabilitiesHash = hash('sha256', 'benefit-test-capabilities:'.$suffix);
+        $evidenceHash = hash('sha256', 'benefit-test-target-evidence:'.$suffix);
+
+        DB::table('panel_connections')->where('id', $connectionId)->update([
+            'state' => 'active',
+            'last_test_status' => 'success',
+            'last_panel_version' => 'benefit-test-1.0.0',
+            'last_capabilities_hash' => $capabilitiesHash,
+            'last_tested_at' => $now,
+            'updated_at' => $now,
+        ]);
+        DB::table('panel_target_capabilities')
+            ->where('panel_service_target_id', $targetId)
             ->update([
-                'state' => 'active',
-                'updated_at' => now('UTC'),
+                'verification_status' => 'verified',
+                'evidence_hash' => $evidenceHash,
+                'verified_at' => $now,
+                'updated_at' => $now,
             ]);
-        if ($updated !== 1) {
+        DB::table('panel_service_targets')->where('id', $targetId)->update([
+            'state' => 'active',
+            'capability_status' => 'verified',
+            'capability_evidence_hash' => $evidenceHash,
+            'capability_verified_at' => $now,
+            'verified_connection_version' => 1,
+            'updated_at' => $now,
+        ]);
+        DB::table('sales_servers')->where('id', $offering['server_id'])->update([
+            'state' => 'active',
+            'visibility' => 'listed',
+            'updated_at' => $now,
+        ]);
+
+        $activated = $this->app->make(PlanOfferingService::class)->activate(
+            $offering['id'],
+            (int) $offeringRow->version,
+            new CatalogChangeContext(
+                'benefit-offering-activate-'.substr(hash('sha256', $suffix), 0, 24),
+                'benefit-offering-correlation-'.substr(hash('sha256', $suffix), 0, 20),
+                'benefit_code_test',
+                'Activate verified Plan Offering dependencies for benefit-code tests.',
+                $this->benefitOwner(),
+            ),
+        );
+        if (! $activated->changed) {
             throw new RuntimeException('Benefit test Plan Offering could not be activated.');
         }
 
