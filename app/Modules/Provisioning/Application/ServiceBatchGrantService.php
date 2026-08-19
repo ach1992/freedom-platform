@@ -635,7 +635,7 @@ final readonly class ServiceBatchGrantService
         $this->databaseCapability->apply($connection);
         try {
             $connection->statement('SET @app_service_batch_authority = ?', [self::BATCH_AUTHORITY]);
-        } catch (\Throwable $exception) {
+        } catch (Throwable $exception) {
             $this->databaseCapability->clear($connection);
             throw $exception;
         }

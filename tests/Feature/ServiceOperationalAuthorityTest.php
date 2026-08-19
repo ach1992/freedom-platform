@@ -1139,6 +1139,8 @@ SQL);
         self::assertStringContainsString('service_import_attach_v1', $body);
         self::assertStringContainsString('service_ownership_transfer_v1', $body);
         self::assertStringContainsString('service_repair_v1', $body);
+        self::assertStringContainsString('operational_capability_count', $body);
+        self::assertStringContainsString('service_operational_authority_capability', $body);
         self::assertStringContainsString('initial_remote_effect_v1', $body);
         self::assertStringContainsString('service_mutation_queue_v1', $body);
         self::assertStringContainsString('service_mutation_effect_v1', $body);

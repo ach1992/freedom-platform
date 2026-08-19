@@ -385,7 +385,7 @@ final readonly class ServiceRepairService
         $this->databaseCapability->apply($connection);
         try {
             $connection->statement('SET @app_service_operational_evidence_authority = ?', [self::EVIDENCE_AUTHORITY]);
-        } catch (\Throwable $exception) {
+        } catch (Throwable $exception) {
             $this->databaseCapability->clear($connection);
             throw $exception;
         }
@@ -408,7 +408,7 @@ final readonly class ServiceRepairService
             $connection->statement('SET @app_service_operational_evidence_id = ?', [$evidenceId]);
             $connection->statement('SET @app_service_operational_request_hash = ?', [$context->requestHash()]);
             $connection->statement('SET @app_service_operational_correlation_id = ?', [$context->correlationId]);
-        } catch (\Throwable $exception) {
+        } catch (Throwable $exception) {
             $this->databaseCapability->clear($connection);
             throw $exception;
         }

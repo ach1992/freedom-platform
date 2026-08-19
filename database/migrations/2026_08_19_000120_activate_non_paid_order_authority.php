@@ -140,9 +140,11 @@ SQL,
             }
         }
 
+        // The historical migration can temporarily replace the Service update trigger
+        // earlier in this same fail-closed re-entry. Select the operational asset from
+        // durable #152 authority state, then restore the composed trigger below.
         return $this->serviceOperationalCapabilityReady()
             && $this->serviceOperationalEvidenceGuardsReady()
-            && $this->serviceOperationalServiceGuardReady()
             && $this->serviceOperationalRemoteIndexReady();
     }
 
@@ -214,26 +216,6 @@ WHERE TRIGGER_SCHEMA = DATABASE()
 SQL);
 
         return $guards !== null && (int) $guards->guard_count === 3;
-    }
-
-    private function serviceOperationalServiceGuardReady(): bool
-    {
-        /** @var object{action_statement:string}|null $trigger */
-        $trigger = DB::selectOne(
-            'SELECT ACTION_STATEMENT AS action_statement FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = DATABASE() AND TRIGGER_NAME = ?',
-            ['service_subscriptions_update_guard'],
-        );
-        if ($trigger === null || ! is_string($trigger->action_statement)) {
-            return false;
-        }
-
-        foreach (['service_import_attach_v1', 'service_ownership_transfer_v1', 'service_repair_v1', 'operational_capability_count', 'case_row.before_remote_service_id'] as $required) {
-            if (! str_contains($trigger->action_statement, $required)) {
-                return false;
-            }
-        }
-
-        return true;
     }
 
     private function serviceOperationalRemoteIndexReady(): bool
