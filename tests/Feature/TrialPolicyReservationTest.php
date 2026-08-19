@@ -143,6 +143,11 @@ final class TrialPolicyReservationTest extends TestCase
         );
         self::assertSame('committed', $committed->state);
 
+        // Trial reservation/commit authority may be established while the offering is still a
+        // draft. Order materialization is a separate boundary and intentionally requires the
+        // canonical active Offering plus its immutable activation history.
+        $this->activateScenarioOffering($scenario);
+
         $paymentIntentCount = DB::table('payment_intents')->count();
         $settlementCount = DB::table('purchase_settlements')->count();
         $source = $this->app->make(OrderSourceAuthorizationService::class);

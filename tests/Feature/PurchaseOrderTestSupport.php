@@ -22,6 +22,7 @@ use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService
 use App\Shared\Application\Clock;
 use App\Shared\Domain\Money;
 use DateTimeImmutable;
+use Illuminate\Database\Migrations\Migration;
 use Illuminate\Support\Facades\DB;
 
 final class PurchaseOrderTestClock implements Clock
@@ -54,7 +55,7 @@ trait PurchaseOrderTestSupport
             // Install that baseline explicitly because the final migrated database now contains
             // the successor source-aware #150 guards instead of relying on leaked DDL from another test.
             if (str_starts_with(static::class, __NAMESPACE__.'\\InitialProvisioningExactAuthorityUpgrade')) {
-                /** @var \Illuminate\Database\Migrations\Migration $legacyProvisioningAuthority */
+                /** @var Migration $legacyProvisioningAuthority */
                 $legacyProvisioningAuthority = require database_path('migrations/2026_08_14_001165_activate_provisioning_queue_authority.php');
                 $legacyProvisioningAuthority->up();
             }
@@ -64,26 +65,39 @@ trait PurchaseOrderTestSupport
 
                 // MariaDB DDL implicitly commits. Historical migration fault-harness tests in this
                 // support family may therefore replace the final source-aware provisioning guards
-                // outside Laravel's row-level test isolation. Repair only when the live guard is
-                // no longer the final #150 form so later tests always start from migrated schema.
-                $guard = DB::selectOne(<<<'SQL'
+                // outside Laravel's row-level test isolation. Repair only when the live guards are
+                // no longer the final composed form so later tests always start from migrated schema.
+                $serviceGuard = DB::selectOne(<<<'SQL'
 SELECT ACTION_STATEMENT AS action_statement
 FROM information_schema.TRIGGERS
 WHERE TRIGGER_SCHEMA = DATABASE()
   AND TRIGGER_NAME = 'service_subscriptions_insert_guard'
 LIMIT 1
 SQL);
-                if ($guard !== null
-                    && isset($guard->action_statement)
-                    && is_string($guard->action_statement)
-                    && str_contains($guard->action_statement, 'zero-cost source authority shape is invalid')
+                $operationGuard = DB::selectOne(<<<'SQL'
+SELECT ACTION_STATEMENT AS action_statement
+FROM information_schema.TRIGGERS
+WHERE TRIGGER_SCHEMA = DATABASE()
+  AND TRIGGER_NAME = 'provisioning_operations_insert_guard'
+LIMIT 1
+SQL);
+                if ($serviceGuard !== null
+                    && isset($serviceGuard->action_statement)
+                    && is_string($serviceGuard->action_statement)
+                    && str_contains($serviceGuard->action_statement, 'zero-cost source authority shape is invalid')
+                    && str_contains($serviceGuard->action_statement, 'clean local lifecycle and no remote binding')
+                    && $operationGuard !== null
+                    && isset($operationGuard->action_statement)
+                    && is_string($operationGuard->action_statement)
+                    && str_contains($operationGuard->action_statement, 'Initial Provisioning Operation zero-cost authority shape is invalid')
+                    && str_contains($operationGuard->action_statement, 'service_mutation_queue_v1')
                 ) {
                     return;
                 }
 
-                /** @var \Illuminate\Database\Migrations\Migration $nonPaidInvalidationMigration */
+                /** @var Migration $nonPaidInvalidationMigration */
                 $nonPaidInvalidationMigration = require database_path('migrations/2026_08_19_000115_extend_provisioning_invalidation_to_non_paid_sources.php');
-                /** @var \Illuminate\Database\Migrations\Migration $nonPaidAuthorityMigration */
+                /** @var Migration $nonPaidAuthorityMigration */
                 $nonPaidAuthorityMigration = require database_path('migrations/2026_08_19_000120_activate_non_paid_order_authority.php');
                 $nonPaidInvalidationMigration->up();
                 $nonPaidAuthorityMigration->up();

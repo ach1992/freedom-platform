@@ -48,6 +48,7 @@ final class ServiceMutationAuthorityMigrationTest extends TestCase
         $this->assertStringContainsString('NEW.target_lifecycle_version = OLD.target_lifecycle_version', $operationGuard);
         $this->assertStringContainsString("NEW.state <> 'succeeded' OR authoritative_service_id IS NOT NULL", $operationGuard);
         $this->assertStringContainsString('service_mutation_queue_v1', $insertGuard);
+        $this->assertStringContainsString('Initial Provisioning Operation zero-cost authority shape is invalid.', $insertGuard);
         $this->assertStringContainsString('target_remote_identity_generation', $insertGuard);
         $this->assertStringContainsString('target_lifecycle_version', $insertGuard);
         $this->assertStringContainsString('Initial Provisioning Operation cannot be created with remote-effect evidence.', $insertGuard);
@@ -56,6 +57,7 @@ final class ServiceMutationAuthorityMigrationTest extends TestCase
         $this->assertStringContainsString('NEW.capacity_reservation_id IS NOT NULL', $insertGuard);
         $this->assertStringContainsString('NEW.remote_username IS NOT NULL', $insertGuard);
         $this->assertStringContainsString('Service Subscription must start with a clean local lifecycle and no remote binding.', $serviceInsertGuard);
+        $this->assertStringContainsString('Service Subscription zero-cost source authority shape is invalid.', $serviceInsertGuard);
         $this->assertStringContainsString("NEW.lifecycle_state <> 'active'", $serviceInsertGuard);
         $this->assertStringContainsString('NEW.lifecycle_version <> 0', $serviceInsertGuard);
         $this->assertStringContainsString('NEW.remote_identity_generation <> 1', $serviceInsertGuard);
