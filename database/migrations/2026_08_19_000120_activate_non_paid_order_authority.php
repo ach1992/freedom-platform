@@ -10,6 +10,11 @@ return new class extends Migration
     /** @requirement BUY-001 BUY-002 CAT-006 ADM-002 PAY-002 PAY-003 PRV-002 PRV-003 DAT-002 DAT-003 DAT-004 SEC-002 SEC-008 QUA-001 QUA-004 */
     public function up(): void
     {
+        // Re-entry can start from the already-enabled #150 fence. Close non-purchase creation as
+        // the first durable DDL statement so every restart/repair remains fail-closed until the
+        // complete predecessor + source-aware graph passes readiness below.
+        $this->restorePurchaseOnlySourceFence();
+
         // Historical provisioning-authority re-entry can replace trigger surfaces installed by
         // the already-recorded Service-mutation migration. Re-establish that accepted predecessor
         // authority before composing #150 so restart/re-entry cannot enable non-paid sources on
