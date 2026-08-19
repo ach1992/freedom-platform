@@ -12,52 +12,64 @@ return new class extends Migration
     /** @requirement AGT-003 AGT-004 BUY-001 BUY-002 PAY-002 DAT-002 DAT-003 DAT-004 SEC-002 QUA-001 QUA-004 */
     public function up(): void
     {
-        Schema::create('agent_bulk_orders', function (Blueprint $table): void {
-            $table->bigIncrements('id');
-            $table->ulid('public_id')->unique();
-            $table->string('batch_key', 128)->unique();
-            $table->char('request_payload_hash', 64);
-            $table->foreignId('user_id')->constrained('users')->restrictOnDelete();
-            $table->unsignedSmallInteger('item_count');
-            $table->string('creation_correlation_id', 64);
-            $table->dateTime('created_at', 6);
-            $table->index(['user_id', 'created_at'], 'agent_bulk_orders_user_created_idx');
-        });
+        if (! Schema::hasTable('agent_bulk_orders')) {
+            Schema::create('agent_bulk_orders', function (Blueprint $table): void {
+                $table->bigIncrements('id');
+                $table->ulid('public_id')->unique();
+                $table->string('batch_key', 128)->unique();
+                $table->char('request_payload_hash', 64);
+                $table->foreignId('user_id')->constrained('users')->restrictOnDelete();
+                $table->unsignedSmallInteger('item_count');
+                $table->string('creation_correlation_id', 64);
+                $table->dateTime('created_at', 6);
+                $table->index(['user_id', 'created_at'], 'agent_bulk_orders_user_created_idx');
+            });
+        } else {
+            $this->assertParentTableFoundation();
+        }
 
-        Schema::create('agent_bulk_order_items', function (Blueprint $table): void {
-            $table->bigIncrements('id');
-            $table->ulid('public_id')->unique();
-            $table->foreignId('agent_bulk_order_id')->constrained('agent_bulk_orders')->restrictOnDelete();
-            $table->unsignedSmallInteger('line_number');
-            $table->string('child_key', 128);
-            $table->foreignId('purchase_settlement_id')->unique()->constrained('purchase_settlements')->restrictOnDelete();
-            $table->ulid('purchase_settlement_public_id');
-            $table->foreignId('source_quote_id')->constrained('quotes')->restrictOnDelete();
-            $table->ulid('source_quote_public_id');
-            $table->string('state', 16);
-            $table->unsignedSmallInteger('attempt_count');
-            $table->foreignId('order_id')->nullable()->unique()->constrained('orders')->restrictOnDelete();
-            $table->foreignId('order_item_id')->nullable()->unique()->constrained('order_items')->restrictOnDelete();
-            $table->string('last_error_code', 64)->nullable();
-            $table->dateTime('created_at', 6);
-            $table->dateTime('updated_at', 6);
-            $table->unique(['agent_bulk_order_id', 'line_number'], 'agent_bulk_items_order_line_unique');
-            $table->unique(['agent_bulk_order_id', 'child_key'], 'agent_bulk_items_order_child_unique');
-            $table->index(['agent_bulk_order_id', 'state'], 'agent_bulk_items_order_state_idx');
-        });
+        if (! Schema::hasTable('agent_bulk_order_items')) {
+            Schema::create('agent_bulk_order_items', function (Blueprint $table): void {
+                $table->bigIncrements('id');
+                $table->ulid('public_id')->unique();
+                $table->foreignId('agent_bulk_order_id')->constrained('agent_bulk_orders')->restrictOnDelete();
+                $table->unsignedSmallInteger('line_number');
+                $table->string('child_key', 128);
+                $table->foreignId('purchase_settlement_id')->unique()->constrained('purchase_settlements')->restrictOnDelete();
+                $table->ulid('purchase_settlement_public_id');
+                $table->foreignId('source_quote_id')->constrained('quotes')->restrictOnDelete();
+                $table->ulid('source_quote_public_id');
+                $table->string('state', 16);
+                $table->unsignedSmallInteger('attempt_count');
+                $table->foreignId('order_id')->nullable()->unique()->constrained('orders')->restrictOnDelete();
+                $table->foreignId('order_item_id')->nullable()->unique()->constrained('order_items')->restrictOnDelete();
+                $table->string('last_error_code', 64)->nullable();
+                $table->dateTime('created_at', 6);
+                $table->dateTime('updated_at', 6);
+                $table->unique(['agent_bulk_order_id', 'line_number'], 'agent_bulk_items_order_line_unique');
+                $table->unique(['agent_bulk_order_id', 'child_key'], 'agent_bulk_items_order_child_unique');
+                $table->index(['agent_bulk_order_id', 'state'], 'agent_bulk_items_order_state_idx');
+            });
+        } else {
+            $this->assertItemTableFoundation();
+        }
 
-        DB::statement("ALTER TABLE agent_bulk_orders ADD CONSTRAINT agent_bulk_orders_hash_chk CHECK (`request_payload_hash` REGEXP '^[0-9a-f]{64}$')");
-        DB::statement('ALTER TABLE agent_bulk_orders ADD CONSTRAINT agent_bulk_orders_count_chk CHECK (`item_count` BETWEEN 1 AND 50)');
-        DB::statement("ALTER TABLE agent_bulk_order_items ADD CONSTRAINT agent_bulk_items_state_chk CHECK (`state` IN ('pending','failed','succeeded'))");
-        DB::statement('ALTER TABLE agent_bulk_order_items ADD CONSTRAINT agent_bulk_items_attempt_chk CHECK (`attempt_count` <= 100)');
-        DB::statement("ALTER TABLE agent_bulk_order_items ADD CONSTRAINT agent_bulk_items_result_shape_chk CHECK ((`state` = 'succeeded' AND `order_id` IS NOT NULL AND `order_item_id` IS NOT NULL AND `last_error_code` IS NULL) OR (`state` IN ('pending','failed') AND `order_id` IS NULL AND `order_item_id` IS NULL AND (`state` = 'pending' OR `last_error_code` IS NOT NULL)))");
+        $this->replaceConstraint('agent_bulk_orders', 'agent_bulk_orders_hash_chk', "CHECK (`request_payload_hash` REGEXP '^[0-9a-f]{64}$')");
+        $this->replaceConstraint('agent_bulk_orders', 'agent_bulk_orders_count_chk', 'CHECK (`item_count` BETWEEN 1 AND 50)');
+        $this->replaceConstraint('agent_bulk_order_items', 'agent_bulk_items_state_chk', "CHECK (`state` IN ('pending','failed','succeeded'))");
+        $this->replaceConstraint('agent_bulk_order_items', 'agent_bulk_items_attempt_chk', 'CHECK (`attempt_count` <= 100)');
+        $this->replaceConstraint('agent_bulk_order_items', 'agent_bulk_items_result_shape_chk', "CHECK ((`state` = 'succeeded' AND `order_id` IS NOT NULL AND `order_item_id` IS NOT NULL AND `last_error_code` IS NULL) OR (`state` IN ('pending','failed') AND `order_id` IS NULL AND `order_item_id` IS NULL AND (`state` = 'pending' OR `last_error_code` IS NOT NULL)))");
 
         $this->createGuards();
+        $this->assertAuthorityReady();
     }
 
     public function down(): void
     {
-        if (DB::table('agent_bulk_orders')->exists()) {
+        if (! Schema::hasTable('agent_bulk_orders') && ! Schema::hasTable('agent_bulk_order_items')) {
+            return;
+        }
+        if (Schema::hasTable('agent_bulk_orders') && DB::table('agent_bulk_orders')->exists()) {
             throw new RuntimeException('Cannot roll back agent bulk Order orchestration while parent Orders exist.');
         }
 
@@ -71,10 +83,191 @@ return new class extends Migration
         Schema::dropIfExists('agent_bulk_orders');
     }
 
+    private function assertParentTableFoundation(): void
+    {
+        foreach ([
+            ['id', 'bigint', false, null, true],
+            ['public_id', 'char', false, 26, false],
+            ['batch_key', 'varchar', false, 128, false],
+            ['request_payload_hash', 'char', false, 64, false],
+            ['user_id', 'bigint', false, null, true],
+            ['item_count', 'smallint', false, null, true],
+            ['creation_correlation_id', 'varchar', false, 64, false],
+            ['created_at', 'datetime', false, null, false],
+        ] as [$column, $type, $nullable, $length, $unsigned]) {
+            $this->assertColumnShape('agent_bulk_orders', $column, $type, $nullable, $length, $unsigned);
+        }
+        foreach ([
+            ['PRIMARY', ['id'], true],
+            ['agent_bulk_orders_public_id_unique', ['public_id'], true],
+            ['agent_bulk_orders_batch_key_unique', ['batch_key'], true],
+            ['agent_bulk_orders_user_created_idx', ['user_id', 'created_at'], false],
+        ] as [$index, $columns, $unique]) {
+            $this->assertIndexShape('agent_bulk_orders', $index, $columns, $unique);
+        }
+        $this->assertForeignKeyShape('agent_bulk_orders', 'agent_bulk_orders_user_id_foreign', 'user_id', 'users', 'id');
+    }
+
+    private function assertItemTableFoundation(): void
+    {
+        foreach ([
+            ['id', 'bigint', false, null, true],
+            ['public_id', 'char', false, 26, false],
+            ['agent_bulk_order_id', 'bigint', false, null, true],
+            ['line_number', 'smallint', false, null, true],
+            ['child_key', 'varchar', false, 128, false],
+            ['purchase_settlement_id', 'bigint', false, null, true],
+            ['purchase_settlement_public_id', 'char', false, 26, false],
+            ['source_quote_id', 'bigint', false, null, true],
+            ['source_quote_public_id', 'char', false, 26, false],
+            ['state', 'varchar', false, 16, false],
+            ['attempt_count', 'smallint', false, null, true],
+            ['order_id', 'bigint', true, null, true],
+            ['order_item_id', 'bigint', true, null, true],
+            ['last_error_code', 'varchar', true, 64, false],
+            ['created_at', 'datetime', false, null, false],
+            ['updated_at', 'datetime', false, null, false],
+        ] as [$column, $type, $nullable, $length, $unsigned]) {
+            $this->assertColumnShape('agent_bulk_order_items', $column, $type, $nullable, $length, $unsigned);
+        }
+        foreach ([
+            ['PRIMARY', ['id'], true],
+            ['agent_bulk_order_items_public_id_unique', ['public_id'], true],
+            ['agent_bulk_order_items_purchase_settlement_id_unique', ['purchase_settlement_id'], true],
+            ['agent_bulk_order_items_order_id_unique', ['order_id'], true],
+            ['agent_bulk_order_items_order_item_id_unique', ['order_item_id'], true],
+            ['agent_bulk_items_order_line_unique', ['agent_bulk_order_id', 'line_number'], true],
+            ['agent_bulk_items_order_child_unique', ['agent_bulk_order_id', 'child_key'], true],
+            ['agent_bulk_items_order_state_idx', ['agent_bulk_order_id', 'state'], false],
+        ] as [$index, $columns, $unique]) {
+            $this->assertIndexShape('agent_bulk_order_items', $index, $columns, $unique);
+        }
+        foreach ([
+            ['agent_bulk_order_items_agent_bulk_order_id_foreign', 'agent_bulk_order_id', 'agent_bulk_orders', 'id'],
+            ['agent_bulk_order_items_purchase_settlement_id_foreign', 'purchase_settlement_id', 'purchase_settlements', 'id'],
+            ['agent_bulk_order_items_source_quote_id_foreign', 'source_quote_id', 'quotes', 'id'],
+            ['agent_bulk_order_items_order_id_foreign', 'order_id', 'orders', 'id'],
+            ['agent_bulk_order_items_order_item_id_foreign', 'order_item_id', 'order_items', 'id'],
+        ] as [$constraint, $column, $referencedTable, $referencedColumn]) {
+            $this->assertForeignKeyShape('agent_bulk_order_items', $constraint, $column, $referencedTable, $referencedColumn);
+        }
+    }
+
+    private function replaceConstraint(string $table, string $constraint, string $definition): void
+    {
+        if ($this->constraintExists($table, $constraint)) {
+            DB::statement("ALTER TABLE `{$table}` DROP CONSTRAINT `{$constraint}`");
+        }
+        DB::statement("ALTER TABLE `{$table}` ADD CONSTRAINT `{$constraint}` {$definition}");
+    }
+
+    private function assertAuthorityReady(): void
+    {
+        $this->assertParentTableFoundation();
+        $this->assertItemTableFoundation();
+        foreach ([
+            ['agent_bulk_orders', 'agent_bulk_orders_hash_chk'],
+            ['agent_bulk_orders', 'agent_bulk_orders_count_chk'],
+            ['agent_bulk_order_items', 'agent_bulk_items_state_chk'],
+            ['agent_bulk_order_items', 'agent_bulk_items_attempt_chk'],
+            ['agent_bulk_order_items', 'agent_bulk_items_result_shape_chk'],
+        ] as [$table, $constraint]) {
+            if (! $this->constraintExists($table, $constraint)) {
+                throw new RuntimeException('Agent bulk Order schema constraint did not converge: '.$constraint);
+            }
+        }
+        foreach ([
+            ['agent_bulk_orders_insert_guard', 'bounded immutable request authority'],
+            ['agent_bulk_orders_update_guard', 'Agent bulk parent Orders are immutable.'],
+            ['agent_bulk_orders_delete_guard', 'Agent bulk parent Orders are non-deletable.'],
+            ['agent_bulk_items_insert_guard', 'clean bounded pending item'],
+            ['agent_bulk_items_update_guard', 'Agent bulk child mutation requires application authority.'],
+            ['agent_bulk_items_delete_guard', 'Agent bulk child items are non-deletable.'],
+        ] as [$trigger, $needle]) {
+            if (! $this->triggerContains($trigger, $needle)) {
+                throw new RuntimeException('Agent bulk Order trigger authority did not converge: '.$trigger);
+            }
+        }
+    }
+
+    private function assertColumnShape(string $table, string $column, string $dataType, bool $nullable, ?int $length, bool $unsigned): void
+    {
+        $row = DB::selectOne(
+            'SELECT DATA_TYPE AS data_type, COLUMN_TYPE AS column_type, IS_NULLABLE AS is_nullable, CHARACTER_MAXIMUM_LENGTH AS character_length FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?',
+            [$table, $column],
+        );
+        if ($row === null
+            || strtolower((string) $row->data_type) !== $dataType
+            || ((string) $row->is_nullable === 'YES') !== $nullable
+            || ($length !== null && (int) $row->character_length !== $length)
+            || ($unsigned && ! str_contains(strtolower((string) $row->column_type), 'unsigned'))) {
+            throw new RuntimeException("Agent bulk Order table has incompatible column shape: {$table}.{$column}");
+        }
+    }
+
+    /** @param list<string> $columns */
+    private function assertIndexShape(string $table, string $index, array $columns, bool $unique): void
+    {
+        $rows = DB::select(
+            'SELECT COLUMN_NAME AS column_name, NON_UNIQUE AS non_unique FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ? ORDER BY SEQ_IN_INDEX',
+            [$table, $index],
+        );
+        $actual = array_map(static fn (object $row): string => (string) $row->column_name, $rows);
+        $isUnique = $rows !== [] && (int) $rows[0]->non_unique === 0;
+        if ($actual !== $columns || $isUnique !== $unique) {
+            throw new RuntimeException("Agent bulk Order table has incompatible index shape: {$table}.{$index}");
+        }
+    }
+
+    private function assertForeignKeyShape(string $table, string $constraint, string $column, string $referencedTable, string $referencedColumn): void
+    {
+        $row = DB::selectOne(<<<'SQL'
+SELECT k.COLUMN_NAME AS column_name,
+       k.REFERENCED_TABLE_NAME AS referenced_table,
+       k.REFERENCED_COLUMN_NAME AS referenced_column,
+       r.DELETE_RULE AS delete_rule
+FROM information_schema.KEY_COLUMN_USAGE k
+INNER JOIN information_schema.REFERENTIAL_CONSTRAINTS r
+    ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA
+   AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME
+   AND r.TABLE_NAME = k.TABLE_NAME
+WHERE k.CONSTRAINT_SCHEMA = DATABASE()
+  AND k.TABLE_NAME = ?
+  AND k.CONSTRAINT_NAME = ?
+SQL, [$table, $constraint]);
+        if ($row === null
+            || (string) $row->column_name !== $column
+            || (string) $row->referenced_table !== $referencedTable
+            || (string) $row->referenced_column !== $referencedColumn
+            || (string) $row->delete_rule !== 'RESTRICT') {
+            throw new RuntimeException("Agent bulk Order table has incompatible foreign-key shape: {$table}.{$constraint}");
+        }
+    }
+
+    private function constraintExists(string $table, string $constraint): bool
+    {
+        $row = DB::selectOne(
+            'SELECT COUNT(*) AS aggregate FROM information_schema.TABLE_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME = ? AND CONSTRAINT_NAME = ? AND CONSTRAINT_TYPE = ?',
+            [$table, $constraint, 'CHECK'],
+        );
+
+        return $row !== null && (int) $row->aggregate === 1;
+    }
+
+    private function triggerContains(string $trigger, string $needle): bool
+    {
+        $row = DB::selectOne(
+            'SELECT COUNT(*) AS aggregate FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = DATABASE() AND TRIGGER_NAME = ? AND LOCATE(?, ACTION_STATEMENT) > 0',
+            [$trigger, $needle],
+        );
+
+        return $row !== null && (int) $row->aggregate === 1;
+    }
+
     private function createGuards(): void
     {
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER agent_bulk_orders_insert_guard
+CREATE OR REPLACE TRIGGER agent_bulk_orders_insert_guard
 BEFORE INSERT ON agent_bulk_orders
 FOR EACH ROW
 BEGIN
@@ -99,7 +292,7 @@ END
 SQL);
 
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER agent_bulk_orders_update_guard
+CREATE OR REPLACE TRIGGER agent_bulk_orders_update_guard
 BEFORE UPDATE ON agent_bulk_orders
 FOR EACH ROW
 BEGIN
@@ -108,7 +301,7 @@ END
 SQL);
 
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER agent_bulk_orders_delete_guard
+CREATE OR REPLACE TRIGGER agent_bulk_orders_delete_guard
 BEFORE DELETE ON agent_bulk_orders
 FOR EACH ROW
 BEGIN
@@ -117,7 +310,7 @@ END
 SQL);
 
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER agent_bulk_items_insert_guard
+CREATE OR REPLACE TRIGGER agent_bulk_items_insert_guard
 BEFORE INSERT ON agent_bulk_order_items
 FOR EACH ROW
 BEGIN
@@ -167,7 +360,7 @@ END
 SQL);
 
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER agent_bulk_items_update_guard
+CREATE OR REPLACE TRIGGER agent_bulk_items_update_guard
 BEFORE UPDATE ON agent_bulk_order_items
 FOR EACH ROW
 BEGIN
@@ -233,7 +426,7 @@ END
 SQL);
 
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER agent_bulk_items_delete_guard
+CREATE OR REPLACE TRIGGER agent_bulk_items_delete_guard
 BEFORE DELETE ON agent_bulk_order_items
 FOR EACH ROW
 BEGIN
