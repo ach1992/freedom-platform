@@ -604,6 +604,8 @@ BEGIN
           AND source_row.plan_offering_id = NEW.plan_offering_id
           AND source_row.actor_type = 'administrator'
           AND source_row.actor_id = batch_row.actor_administrator_id
+          AND BINARY source_row.authorization_key = BINARY CONCAT('service-batch:', batch_row.public_id, ':', NEW.public_id)
+          AND BINARY source_row.correlation_id = BINARY NEW.correlation_id
           AND order_row.source_type = 'admin_grant'
           AND order_row.user_id = NEW.user_id
           AND order_row.total_amount_irr = 0
@@ -720,6 +722,7 @@ SQL);
         if (! $this->triggerContains('service_subscriptions_update_guard', 'service_ownership_transfer_v1')
             || ! $this->triggerContains('service_subscriptions_update_guard', 'service_repair_v1')
             || ! $this->triggerContains('service_subscriptions_update_guard', 'service_import_attach_v1')
+            || ! $this->triggerContains('service_batch_grant_items_update_guard', 'source_row.authorization_key')
             || ! $this->triggerExists('audit_logs_service_operational_insert_guard')) {
             return false;
         }
@@ -750,6 +753,7 @@ SQL);
             || ! $this->triggerContains('service_subscriptions_update_guard', 'service_ownership_transfer_v1')
             || ! $this->triggerContains('service_subscriptions_update_guard', 'service_repair_v1')
             || ! $this->triggerContains('service_subscriptions_update_guard', 'service_import_attach_v1')
+            || ! $this->triggerContains('service_batch_grant_items_update_guard', 'source_row.authorization_key')
             || ! $this->triggerExists('audit_logs_service_operational_insert_guard')) {
             throw new RuntimeException('Service operational authority is incomplete before release.');
         }
@@ -775,6 +779,7 @@ SQL);
             || ! $this->triggerContains('service_subscriptions_update_guard', 'service_ownership_transfer_v1')
             || ! $this->triggerContains('service_subscriptions_update_guard', 'service_repair_v1')
             || ! $this->triggerContains('service_subscriptions_update_guard', 'service_import_attach_v1')
+            || ! $this->triggerContains('service_batch_grant_items_update_guard', 'source_row.authorization_key')
             || ! $this->triggerExists('audit_logs_service_operational_insert_guard')) {
             throw new RuntimeException('Service operational authority is incomplete.');
         }

@@ -421,16 +421,15 @@ final class ServiceOperationalAuthorityTest extends TestCase
         self::assertSame(0, DB::table('service_subscriptions')->count());
     }
 
-    public function test_batch_result_guard_rejects_cross_item_result_forgery_even_with_internal_session_flag(): void
+    public function test_batch_result_guard_rejects_cross_batch_same_subject_result_forgery_even_with_internal_session_flag(): void
     {
         $offering = $this->activeBenefitOffering('batch-result-forgery');
         $ownerId = $this->benefitOwner();
-        $firstUserId = $this->benefitUser();
-        $secondUserId = $this->benefitUser();
+        $userId = $this->benefitUser();
         $service = $this->app->make(ServiceBatchGrantService::class);
         $firstContext = $this->context('batch-result-source', $ownerId);
         $first = $service->create($firstContext, [[
-            'user_id' => $firstUserId,
+            'user_id' => $userId,
             'plan_offering_id' => $offering['id'],
         ]]);
         $service->resume($first->batchPublicId, $firstContext);
@@ -440,7 +439,7 @@ final class ServiceOperationalAuthorityTest extends TestCase
 
         $secondContext = $this->context('batch-result-target', $ownerId);
         $second = $service->create($secondContext, [[
-            'user_id' => $secondUserId,
+            'user_id' => $userId,
             'plan_offering_id' => $offering['id'],
         ]]);
         $targetItem = DB::table('service_batch_grant_items')->where('service_batch_grant_id', $second->batchId)->first();
@@ -467,7 +466,7 @@ final class ServiceOperationalAuthorityTest extends TestCase
                     'provisioning_operation_id' => $sourceItem->provisioning_operation_id,
                     'updated_at' => now('UTC'),
                 ]);
-                self::fail('Batch item result guard must reject authority copied from another subject.');
+                self::fail('Batch item result guard must reject authority copied from another batch item.');
             } catch (QueryException $exception) {
                 self::assertStringContainsString('Service batch grant item update authority is invalid.', $exception->getMessage());
             }
