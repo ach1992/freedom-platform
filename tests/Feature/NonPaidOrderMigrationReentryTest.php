@@ -27,13 +27,21 @@ final class NonPaidOrderMigrationReentryTest extends TestCase
         $invalidation = require database_path('migrations/2026_08_19_000115_extend_provisioning_invalidation_to_non_paid_sources.php');
         /** @var Migration $activation */
         $activation = require database_path('migrations/2026_08_19_000120_activate_non_paid_order_authority.php');
+        /** @var Migration $serviceMutation */
+        $serviceMutation = require database_path('migrations/2026_08_17_000300_enable_service_mutation_authority.php');
         /** @var Migration $bulk */
         $bulk = require database_path('migrations/2026_08_19_000130_create_agent_bulk_order_orchestration.php');
         $injected = false;
 
+        $serviceMutation->up();
+        $activation->up();
+        $bulk->up();
+        $this->assertServiceMutationRemoteEffectAuthority();
+
         try {
             $bulk->down();
             $activation->down();
+            $this->assertServiceMutationRemoteEffectAuthority();
             $invalidation->down();
             $shape->down();
             $source->down();
@@ -69,6 +77,7 @@ final class NonPaidOrderMigrationReentryTest extends TestCase
             $source->up();
             $shape->up();
             $invalidation->up();
+            $serviceMutation->up();
             $this->activateNonPaidAuthority($activation);
             $bulk->up();
         }
@@ -85,13 +94,21 @@ final class NonPaidOrderMigrationReentryTest extends TestCase
         $invalidation = require database_path('migrations/2026_08_19_000115_extend_provisioning_invalidation_to_non_paid_sources.php');
         /** @var Migration $activation */
         $activation = require database_path('migrations/2026_08_19_000120_activate_non_paid_order_authority.php');
+        /** @var Migration $serviceMutation */
+        $serviceMutation = require database_path('migrations/2026_08_17_000300_enable_service_mutation_authority.php');
         /** @var Migration $bulk */
         $bulk = require database_path('migrations/2026_08_19_000130_create_agent_bulk_order_orchestration.php');
         $injected = false;
 
+        $serviceMutation->up();
+        $activation->up();
+        $bulk->up();
+        $this->assertServiceMutationRemoteEffectAuthority();
+
         try {
             $bulk->down();
             $activation->down();
+            $this->assertServiceMutationRemoteEffectAuthority();
             $invalidation->down();
             $shape->down();
             $this->assertPurchaseOnlySourceFence();
@@ -137,6 +154,7 @@ final class NonPaidOrderMigrationReentryTest extends TestCase
             $injected = true;
             $shape->up();
             $invalidation->up();
+            $serviceMutation->up();
             $this->activateNonPaidAuthority($activation);
             $bulk->up();
         }
@@ -184,6 +202,14 @@ final class NonPaidOrderMigrationReentryTest extends TestCase
             $injected = true;
             $bulk->up();
         }
+    }
+
+    private function assertServiceMutationRemoteEffectAuthority(): void
+    {
+        self::assertTrue(
+            $this->triggerContains('provisioning_remote_effect_events_insert_guard', 'service_mutation_effect_v1'),
+            'The exact pre-#150 predecessor must retain Service-mutation remote-effect event authority.',
+        );
     }
 
     private function activateNonPaidAuthority(Migration $activation): void
