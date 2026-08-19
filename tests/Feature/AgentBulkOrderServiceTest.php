@@ -30,6 +30,7 @@ use DomainException;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use RuntimeException;
 use Tests\TestCase;
 
@@ -48,6 +49,73 @@ final class AgentBulkOrderServiceTest extends TestCase
         $this->seed(PaymentEligibilityAccessFoundationSeeder::class);
         $this->seed(WalletFinancialFoundationSeeder::class);
         $this->bootPurchaseOrderClock();
+    }
+
+    public function test_empty_bulk_request_fails_before_creating_any_authority(): void
+    {
+        [$agent] = $this->agentAuthority('bulk-empty');
+        $service = $this->app->make(AgentBulkOrderService::class);
+
+        try {
+            $service->execute(
+                'bulk-empty-parent-0001',
+                $agent,
+                [],
+                $this->purchaseOrderCorrelation('bulk-empty-rejected'),
+            );
+            self::fail('Empty agent bulk Order requests must fail closed.');
+        } catch (DomainException $exception) {
+            self::assertSame('Agent bulk Order requires between 1 and 50 child purchases.', $exception->getMessage());
+        }
+
+        $this->assertNoBulkOrderAuthority();
+    }
+
+    public function test_over_limit_bulk_request_fails_before_creating_any_authority(): void
+    {
+        [$agent] = $this->agentAuthority('bulk-over-limit');
+        $service = $this->app->make(AgentBulkOrderService::class);
+        $items = [];
+        for ($index = 1; $index <= 51; $index++) {
+            $items[] = [
+                'child_key' => sprintf('bulk-over-limit-child-%02d', $index),
+                'purchase_settlement_public_id' => (string) Str::ulid(),
+            ];
+        }
+
+        try {
+            $service->execute(
+                'bulk-over-limit-parent-01',
+                $agent,
+                $items,
+                $this->purchaseOrderCorrelation('bulk-over-limit-rejected'),
+            );
+            self::fail('Oversized agent bulk Order requests must fail closed.');
+        } catch (DomainException $exception) {
+            self::assertSame('Agent bulk Order requires between 1 and 50 child purchases.', $exception->getMessage());
+        }
+
+        $this->assertNoBulkOrderAuthority();
+    }
+
+    public function test_database_rejects_out_of_range_bulk_parent_counts_independent_of_application_validation(): void
+    {
+        [$agent] = $this->agentAuthority('bulk-db-bounds');
+
+        foreach ([0, 51] as $itemCount) {
+            $this->assertQueryRejected(fn (): bool => DB::table('agent_bulk_orders')->insert([
+                'public_id' => (string) Str::ulid(),
+                'batch_key' => 'bulk-db-bound-'.str_pad((string) $itemCount, 2, '0', STR_PAD_LEFT),
+                'request_payload_hash' => hash('sha256', 'bulk-db-bound-'.$itemCount),
+                'user_id' => $agent,
+                'item_count' => $itemCount,
+                'creation_correlation_id' => $this->purchaseOrderCorrelation('bulk-db-bound-'.$itemCount),
+                'created_at' => $this->purchaseOrderTimestamp(),
+            ]));
+            self::assertSame(0, DB::table('agent_bulk_orders')->count());
+        }
+
+        $this->assertNoBulkOrderAuthority();
     }
 
     public function test_bulk_success_replays_without_duplicate_order_or_payment_authority(): void
@@ -320,6 +388,16 @@ final class AgentBulkOrderServiceTest extends TestCase
                 ['provider_reference' => $transactionId],
             ),
         );
+    }
+
+    private function assertNoBulkOrderAuthority(): void
+    {
+        self::assertSame(0, DB::table('agent_bulk_orders')->count());
+        self::assertSame(0, DB::table('agent_bulk_order_items')->count());
+        self::assertSame(0, DB::table('orders')->count());
+        self::assertSame(0, DB::table('order_items')->count());
+        self::assertSame(0, DB::table('payment_intents')->count());
+        self::assertSame(0, DB::table('purchase_settlements')->count());
     }
 
     private function assertQueryRejected(callable $operation): void

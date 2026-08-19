@@ -73,23 +73,31 @@ SQL,
             $migration->up();
         }
 
-        // 001165 predates Service-mutation authority and therefore replaces both insert guards
-        // while rebuilding the purchase-only Order chain above. Restore exactly the later accepted
-        // insert authorities without replaying 000300 and disturbing its update/effect descendants.
-        $this->restoreServiceMutationInsertAuthorities();
+        // 001165 re-enters 001162, which predates Service-mutation authority and replaces
+        // Service/Operation insert + update guards and provisioning history authority. Restore the
+        // complete later accepted predecessor surface without replaying 000300 and disturbing its
+        // shape/constraint descendants or unrelated later delivery authority.
+        $this->restoreServiceMutationPredecessorAuthorities();
 
         // The source fence remains purchase-only even if a predecessor re-entry changes another
         // Order trigger. This is the rollback fail-closed boundary.
         $this->restorePurchaseOnlySourceFence();
     }
 
-    private function restoreServiceMutationInsertAuthorities(): void
+    private function restoreServiceMutationPredecessorAuthorities(): void
     {
-        foreach (['service-insert-guard.sql', 'operation-insert-guard.sql'] as $file) {
+        foreach ([
+            'service-insert-guard.sql',
+            'history-insert-guard.sql',
+            'history-after-insert.sql',
+            'operation-update-guard.sql',
+            'service-update-guard.sql',
+            'operation-insert-guard.sql',
+        ] as $file) {
             $path = database_path('sql/service-mutation-authority/'.$file);
             $sql = file_get_contents($path);
             if (! is_string($sql) || trim($sql) === '') {
-                throw new RuntimeException('Service mutation insert authority SQL asset is unavailable: '.$file);
+                throw new RuntimeException('Service mutation predecessor authority SQL asset is unavailable: '.$file);
             }
 
             DB::connection()->getPdo()->exec($sql);
@@ -1278,7 +1286,12 @@ WHERE TRIGGER_SCHEMA = DATABASE()
       'orders_initial_history',
       'order_state_histories_insert_guard',
       'service_subscriptions_insert_guard',
+      'service_subscriptions_update_guard',
       'provisioning_operations_insert_guard',
+      'provisioning_operations_update_guard',
+      'provisioning_operation_histories_insert_guard',
+      'provisioning_operation_initial_history',
+      'provisioning_remote_effect_events_insert_guard',
       'orders_update_guard',
       'orders_provisioning_history',
       'orders_provisioning_outbox_envelope_guard',
@@ -1287,13 +1300,21 @@ WHERE TRIGGER_SCHEMA = DATABASE()
   )
 SQL);
 
-        if ($triggerRow === null || (int) $triggerRow->aggregate !== 11
+        if ($triggerRow === null || (int) $triggerRow->aggregate !== 16
             || ! $this->constraintExists('orders', 'orders_source_type_chk')
             || ! $this->constraintExists('orders', 'orders_provisioning_exact_authority_chk')
             || ! $this->triggerContains('service_subscriptions_insert_guard', 'zero-cost source authority shape is invalid')
             || ! $this->triggerContains('service_subscriptions_insert_guard', 'clean local lifecycle and no remote binding')
+            || ! $this->triggerContains('service_subscriptions_update_guard', 'service_mutation_queue_v1')
+            || ! $this->triggerContains('service_subscriptions_update_guard', 'service_mutation_effect_v1')
             || ! $this->triggerContains('provisioning_operations_insert_guard', 'Initial Provisioning Operation zero-cost authority shape is invalid')
-            || ! $this->triggerContains('provisioning_operations_insert_guard', 'service_mutation_queue_v1')) {
+            || ! $this->triggerContains('provisioning_operations_insert_guard', 'service_mutation_queue_v1')
+            || ! $this->triggerContains('provisioning_operations_update_guard', 'initial_remote_effect_v1')
+            || ! $this->triggerContains('provisioning_operations_update_guard', 'service_mutation_effect_v1')
+            || ! $this->triggerContains('provisioning_operations_update_guard', 'recovery_transition')
+            || ! $this->triggerContains('provisioning_operation_histories_insert_guard', 'service_mutation_requested')
+            || ! $this->triggerContains('provisioning_operation_initial_history', 'service_mutation_requested')
+            || ! $this->triggerContains('provisioning_remote_effect_events_insert_guard', 'service_mutation_effect_v1')) {
             throw new RuntimeException('Non-paid Order authority activation prerequisites are incomplete.');
         }
     }
