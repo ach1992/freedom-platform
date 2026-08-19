@@ -293,7 +293,7 @@ final readonly class OrderSourceAuthorizationService
     }
 
     /**
-     * @param TrialReservationRow $reservation
+     * @param  TrialReservationRow  $reservation
      * @return TrialConfiguration
      */
     private function trialConfiguration(object $reservation): array
@@ -313,7 +313,7 @@ final readonly class OrderSourceAuthorizationService
     }
 
     /**
-     * @param object{code:string,sales_server_id:int|string,panel_service_target_id:int|string,service_mode_code:string,server_selection_mode:string,protocol_selection_mode:string,duration_days:int|string,data_allowance_bytes:int|string|null,device_limit:int|string|null,version:int|string} $offering
+     * @param  object{code:string,sales_server_id:int|string,panel_service_target_id:int|string,service_mode_code:string,server_selection_mode:string,protocol_selection_mode:string,duration_days:int|string,data_allowance_bytes:int|string|null,device_limit:int|string|null,version:int|string}  $offering
      * @return AdministratorGrantConfiguration
      */
     private function administratorGrantConfiguration(object $offering): array
