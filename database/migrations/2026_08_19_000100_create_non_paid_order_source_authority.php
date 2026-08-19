@@ -174,11 +174,12 @@ return new class extends Migration
     /** @param list<string> $columns */
     private function assertIndexShape(string $index, array $columns, bool $unique): void
     {
+        /** @var list<object{column_name:string,non_unique:int|string}> $rows */
         $rows = DB::select(
             'SELECT COLUMN_NAME AS column_name, NON_UNIQUE AS non_unique FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ? ORDER BY SEQ_IN_INDEX',
             ['order_source_authorizations', $index],
         );
-        $actual = array_map(static fn (object $row): string => (string) $row->column_name, $rows);
+        $actual = array_map(static fn ($row): string => (string) $row->column_name, $rows);
         $isUnique = $rows !== [] && (int) $rows[0]->non_unique === 0;
         if ($actual !== $columns || $isUnique !== $unique) {
             throw new RuntimeException('Existing Order source authorization table has incompatible index shape: '.$index);

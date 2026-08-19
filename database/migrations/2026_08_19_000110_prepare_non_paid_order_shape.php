@@ -229,6 +229,7 @@ SQL,
         }
     }
 
+    /** @param list<string> $columns */
     private function ensureUniqueIndex(string $table, string $index, array $columns): void
     {
         $rows = $this->indexRows($table, $index);
@@ -314,6 +315,7 @@ SQL,
         }
     }
 
+    /** @return object{data_type:string,column_type:string,is_nullable:string,character_length:int|string|null} */
     private function columnMetadata(string $table, string $column): object
     {
         $row = DB::selectOne(
@@ -327,6 +329,7 @@ SQL,
         return $row;
     }
 
+    /** @param object{data_type:string,column_type:string,is_nullable:string,character_length:int|string|null} $row */
     private function assertColumnMetadata(string $table, string $column, object $row, string $dataType, ?int $length, bool $unsigned): void
     {
         if (strtolower((string) $row->data_type) !== $dataType
@@ -348,16 +351,20 @@ SQL,
         return $rows;
     }
 
-    /** @param list<object{column_name:string,non_unique:int|string}> $rows @param list<string> $columns */
+    /**
+     * @param list<object{column_name:string,non_unique:int|string}> $rows
+     * @param list<string> $columns
+     */
     private function assertIndexRows(string $table, string $index, array $rows, array $columns, bool $unique): void
     {
-        $actual = array_map(static fn (object $row): string => (string) $row->column_name, $rows);
+        $actual = array_map(static fn ($row): string => (string) $row->column_name, $rows);
         $isUnique = $rows !== [] && (int) $rows[0]->non_unique === 0;
         if ($actual !== $columns || $isUnique !== $unique) {
             throw new RuntimeException("Non-paid Order shape has incompatible index: {$table}.{$index}");
         }
     }
 
+    /** @return object{column_name:string,referenced_table:string,referenced_column:string,delete_rule:string}|null */
     private function foreignKeyMetadata(string $table, string $constraint): ?object
     {
         return DB::selectOne(<<<'SQL'
@@ -376,6 +383,7 @@ WHERE k.CONSTRAINT_SCHEMA = DATABASE()
 SQL, [$table, $constraint]);
     }
 
+    /** @param object{column_name:string,referenced_table:string,referenced_column:string,delete_rule:string} $row */
     private function assertForeignKeyMetadata(string $table, string $constraint, object $row, string $column, string $referencedTable, string $referencedColumn): void
     {
         if ((string) $row->column_name !== $column
