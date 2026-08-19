@@ -22,6 +22,7 @@ use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService
 use App\Shared\Application\Clock;
 use App\Shared\Domain\Money;
 use DateTimeImmutable;
+use Illuminate\Database\Migrations\Migration;
 use Illuminate\Support\Facades\DB;
 
 final class PurchaseOrderTestClock implements Clock
@@ -49,8 +50,57 @@ trait PurchaseOrderTestSupport
         // production guards or comparing two different clocks.
         if (DB::connection()->getDriverName() === 'mysql') {
             DB::statement('SET timestamp = '.$this->purchaseOrderClock->value->getTimestamp());
+
+            // Exact-authority upgrade tests intentionally exercise the historical 001165 schema.
+            // Install that baseline explicitly because the final migrated database now contains
+            // the successor source-aware #150 guards instead of relying on leaked DDL from another test.
+            if (str_starts_with(static::class, __NAMESPACE__.'\\InitialProvisioningExactAuthorityUpgrade')) {
+                /** @var Migration $legacyProvisioningAuthority */
+                $legacyProvisioningAuthority = require database_path('migrations/2026_08_14_001165_activate_provisioning_queue_authority.php');
+                $legacyProvisioningAuthority->up();
+            }
+
             $this->beforeApplicationDestroyed(static function (): void {
                 DB::statement('SET timestamp = DEFAULT');
+
+                // MariaDB DDL implicitly commits. Historical migration fault-harness tests in this
+                // support family may therefore replace the final source-aware provisioning guards
+                // outside Laravel's row-level test isolation. Repair only when the live guards are
+                // no longer the final composed form so later tests always start from migrated schema.
+                $serviceGuard = DB::selectOne(<<<'SQL'
+SELECT ACTION_STATEMENT AS action_statement
+FROM information_schema.TRIGGERS
+WHERE TRIGGER_SCHEMA = DATABASE()
+  AND TRIGGER_NAME = 'service_subscriptions_insert_guard'
+LIMIT 1
+SQL);
+                $operationGuard = DB::selectOne(<<<'SQL'
+SELECT ACTION_STATEMENT AS action_statement
+FROM information_schema.TRIGGERS
+WHERE TRIGGER_SCHEMA = DATABASE()
+  AND TRIGGER_NAME = 'provisioning_operations_insert_guard'
+LIMIT 1
+SQL);
+                if ($serviceGuard !== null
+                    && isset($serviceGuard->action_statement)
+                    && is_string($serviceGuard->action_statement)
+                    && str_contains($serviceGuard->action_statement, 'zero-cost source authority shape is invalid')
+                    && str_contains($serviceGuard->action_statement, 'clean local lifecycle and no remote binding')
+                    && $operationGuard !== null
+                    && isset($operationGuard->action_statement)
+                    && is_string($operationGuard->action_statement)
+                    && str_contains($operationGuard->action_statement, 'Initial Provisioning Operation zero-cost authority shape is invalid')
+                    && str_contains($operationGuard->action_statement, 'service_mutation_queue_v1')
+                ) {
+                    return;
+                }
+
+                /** @var Migration $nonPaidInvalidationMigration */
+                $nonPaidInvalidationMigration = require database_path('migrations/2026_08_19_000115_extend_provisioning_invalidation_to_non_paid_sources.php');
+                /** @var Migration $nonPaidAuthorityMigration */
+                $nonPaidAuthorityMigration = require database_path('migrations/2026_08_19_000120_activate_non_paid_order_authority.php');
+                $nonPaidInvalidationMigration->up();
+                $nonPaidAuthorityMigration->up();
             });
         }
 
@@ -145,6 +195,14 @@ trait PurchaseOrderTestSupport
 
     protected function purchaseOrderCorrelation(string $suffix): string
     {
+        // Service creation and its initial provisioning operation are one immutable authority
+        // envelope under the current schema and therefore share one correlation identity.
+        if (str_starts_with($suffix, 'service-')) {
+            $suffix = 'provisioning-'.substr($suffix, 8);
+        } elseif (str_starts_with($suffix, 'operation-')) {
+            $suffix = 'provisioning-'.substr($suffix, 10);
+        }
+
         return hash('sha256', 'purchase-order:'.$suffix);
     }
 

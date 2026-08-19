@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Modules\Catalog\Application\CatalogChangeContext;
+use App\Modules\Catalog\Application\PlanOfferingService;
 use App\Modules\Catalog\Application\RouteOperationalVerifier;
 use App\Modules\Catalog\Application\TrialContext;
 use App\Modules\Catalog\Application\TrialMembershipVerifier;
@@ -12,10 +13,22 @@ use App\Modules\Catalog\Application\TrialPolicyService;
 use App\Modules\Catalog\Application\TrialReservationRequest;
 use App\Modules\Catalog\Application\TrialReservationService;
 use App\Modules\Catalog\Application\TrialRouteSelector;
+use App\Modules\Catalog\Domain\OfferingProtocolAssignment;
+use App\Modules\Catalog\Domain\PlanOfferingAudience;
+use App\Modules\Catalog\Domain\PlanOfferingDefinition;
+use App\Modules\Catalog\Domain\PlanOfferingProtocolSelectionMode;
+use App\Modules\Catalog\Domain\PlanOfferingServerSelectionMode;
+use App\Modules\Catalog\Domain\PlanOfferingServiceMode;
 use App\Modules\Catalog\Domain\PlanOfferingTagMatchMode;
 use App\Modules\Catalog\Domain\RouteCandidateUnavailable;
 use App\Modules\Catalog\Domain\TrialPolicyDefinition;
 use App\Modules\Identity\Domain\PhoneVerificationPolicy;
+use App\Modules\Orders\Application\NonPaidOrderService;
+use App\Modules\Orders\Application\OrderSourceAuthorizationService;
+use App\Modules\Orders\Domain\OrderSourceType;
+use App\Modules\Orders\Domain\OrderState;
+use App\Modules\Provisioning\Application\InitialProvisioningQueueService;
+use App\Modules\Provisioning\Domain\ProvisioningState;
 use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PanelsAccessFoundationSeeder;
@@ -112,6 +125,83 @@ final class TrialPolicyReservationTest extends TestCase
                 ->where('id', $second->reservationId)
                 ->value('data_bytes'));
         }
+    }
+
+    public function test_committed_trial_materializes_and_queues_one_zero_cost_order_with_replay(): void
+    {
+        $scenario = $this->scenario(dailyCapacity: 2);
+        $this->app->make(TrialPolicyService::class)->create(
+            $scenario['offering_id'],
+            $this->policyDefinition($scenario['tag_id']),
+            $this->catalogContext($scenario['owner_id'], 'trial-order-policy-create-0001'),
+        );
+
+        $trial = $this->serviceWithMembershipAllowed();
+        $reservationCommandKey = 'trial-order-reservation-command-000001';
+        $reservation = $trial->reserve(
+            $this->request($scenario['offering_id'], $scenario['user_id']),
+            $this->trialContext($reservationCommandKey, 'trial-order-reserve-correlation-01'),
+        );
+        $committed = $trial->commit(
+            $reservation->reservationId,
+            1,
+            $this->trialContext('trial-order-commit-command-00000001', 'trial-order-commit-correlation-01'),
+        );
+        self::assertSame('committed', $committed->state);
+
+        // Trial reservation/commit authority may be established while the offering is still a
+        // draft. Order materialization is a separate boundary and intentionally requires the
+        // canonical active Offering plus its immutable activation history.
+        $this->activateScenarioOffering($scenario);
+
+        $paymentIntentCount = DB::table('payment_intents')->count();
+        $settlementCount = DB::table('purchase_settlements')->count();
+        $source = $this->app->make(OrderSourceAuthorizationService::class);
+        $authorization = $source->authorizeTrial($reservationCommandKey, 'trial-order-source-correlation-01');
+        $authorizationReplay = $source->authorizeTrial($reservationCommandKey, 'trial-order-source-correlation-02');
+        self::assertFalse($authorization->replayed);
+        self::assertTrue($authorizationReplay->replayed);
+        self::assertSame($authorization->authorizationId, $authorizationReplay->authorizationId);
+        self::assertSame(OrderSourceType::Trial, $authorization->sourceType);
+
+        $authorizationRow = DB::table('order_source_authorizations')->where('id', $authorization->authorizationId)->first();
+        self::assertNotNull($authorizationRow);
+        self::assertSame($reservation->reservationId, (int) $authorizationRow->trial_reservation_id);
+        self::assertSame($reservationCommandKey, $authorizationRow->trial_reservation_command_key);
+        self::assertSame('trial', $authorizationRow->source_type);
+
+        $orders = $this->app->make(NonPaidOrderService::class);
+        $order = $orders->materialize($authorization->publicId, 'trial-order-materialize-correlation-01');
+        $orderReplay = $orders->materialize($authorization->publicId, 'trial-order-materialize-correlation-02');
+        self::assertFalse($order->replayed);
+        self::assertTrue($orderReplay->replayed);
+        self::assertSame($order->orderId, $orderReplay->orderId);
+        self::assertSame(OrderSourceType::Trial, $order->sourceType);
+        self::assertSame(0, $order->commercialAmount->amount());
+
+        $queue = $this->app->make(InitialProvisioningQueueService::class);
+        $queued = $queue->queueInitial($order->orderPublicId, 'trial-order-queue-correlation-01');
+        $queueReplay = $queue->queueInitial($order->orderPublicId, 'trial-order-queue-correlation-02');
+        self::assertFalse($queued->replayed);
+        self::assertTrue($queueReplay->replayed);
+        self::assertSame($queued->serviceSubscriptionId, $queueReplay->serviceSubscriptionId);
+        self::assertSame($queued->provisioningOperationId, $queueReplay->provisioningOperationId);
+        self::assertSame($queued->outboxEventId, $queueReplay->outboxEventId);
+        self::assertSame(OrderState::ProvisioningQueued, $queued->orderState);
+        self::assertSame(ProvisioningState::Queued, $queued->provisioningState);
+
+        $orderRow = DB::table('orders')->where('id', $order->orderId)->first();
+        self::assertNotNull($orderRow);
+        self::assertSame('trial', $orderRow->source_type);
+        self::assertSame($authorization->authorizationId, (int) $orderRow->order_source_authorization_id);
+        self::assertNull($orderRow->purchase_settlement_id);
+        self::assertNull($orderRow->payment_intent_id);
+        self::assertSame(0, (int) $orderRow->total_amount_irr);
+        self::assertSame(1, DB::table('service_subscriptions')->where('order_id', $order->orderId)->count());
+        self::assertSame(1, DB::table('provisioning_operations')->where('order_id', $order->orderId)->count());
+        self::assertSame(1, DB::table('outbox_messages')->where('id', $queued->outboxEventId)->count());
+        self::assertSame($paymentIntentCount, DB::table('payment_intents')->count());
+        self::assertSame($settlementCount, DB::table('purchase_settlements')->count());
     }
 
     public function test_fallback_policy_controls_route_substitution_and_disclosure_snapshot(): void
@@ -334,59 +424,40 @@ final class TrialPolicyReservationTest extends TestCase
             ]);
         }
 
-        $offeringId = (int) DB::table('plan_offerings')->insertGetId([
-            'code' => 'trial-offering-'.Str::lower(Str::random(8)),
-            'product_id' => $productId,
-            'variant_id' => null,
-            'sales_server_id' => $primaryServerId,
-            'panel_service_target_id' => $primaryTargetId,
-            'service_mode_code' => 'shared',
-            'service_mode_label_fa' => 'اشتراکی',
-            'service_mode_label_en' => 'Shared',
-            'audience' => 'customers',
-            'server_selection_mode' => 'system_selects',
-            'protocol_selection_mode' => 'fixed',
-            'tag_match_mode' => 'all',
-            'base_price_irr' => 0,
-            'duration_days' => 1,
-            'data_allowance_bytes' => 1_073_741_824,
-            'device_limit' => 1,
-            'sort_order' => 0,
-            'min_purchase_quantity' => 1,
-            'max_purchase_quantity' => 1,
-            'discount_eligible' => false,
-            'auto_renew_allowed' => false,
-            'custom_plan_allowed' => false,
-            'trial_allowed' => true,
-            'state' => 'draft',
-            'visibility' => 'hidden',
-            'version' => 1,
-            'created_at' => $now,
-            'updated_at' => $now,
-        ]);
-        DB::table('plan_offering_tiers')->insert([
-            'plan_offering_id' => $offeringId,
-            'tier_code' => 'normal',
-            'created_at' => $now,
-        ]);
-        DB::table('plan_offering_tags')->insert([
-            'plan_offering_id' => $offeringId,
-            'customer_tag_id' => $tagId,
-            'created_at' => $now,
-        ]);
-        DB::table('plan_offering_protocol_profiles')->insert([
-            'plan_offering_id' => $offeringId,
-            'panel_protocol_profile_id' => $profileId,
-            'customer_selectable' => false,
-            'is_default' => true,
-            'created_at' => $now,
-            'updated_at' => $now,
-        ]);
-        DB::table('plan_offering_required_capabilities')->insert([
-            'plan_offering_id' => $offeringId,
-            'capability_code' => 'create_service',
-            'created_at' => $now,
-        ]);
+        $offeringCode = 'trial-offering-'.Str::lower(Str::random(8));
+        $createdOffering = $this->app->make(PlanOfferingService::class)->create(
+            new PlanOfferingDefinition(
+                $offeringCode,
+                $productId,
+                null,
+                $primaryServerId,
+                $primaryTargetId,
+                new PlanOfferingServiceMode('shared', 'اشتراکی', 'Shared'),
+                PlanOfferingAudience::Customers,
+                PlanOfferingServerSelectionMode::System,
+                PlanOfferingProtocolSelectionMode::Fixed,
+                PlanOfferingTagMatchMode::All,
+                0,
+                1,
+                1_073_741_824,
+                1,
+                0,
+                1,
+                1,
+                false,
+                false,
+                false,
+                true,
+                ['normal'],
+                [$tagId],
+                [new OfferingProtocolAssignment($profileId, false, true)],
+                ['create_service'],
+                [],
+                [],
+            ),
+            $this->catalogContext($ownerId, 'create-'.$offeringCode),
+        );
+        $offeringId = $createdOffering->targetId;
         $routePolicyId = (int) DB::table('plan_offering_route_policies')->insertGetId([
             'plan_offering_id' => $offeringId,
             'configuration_hash' => hash('sha256', 'trial-routes-'.$offeringId),
@@ -462,6 +533,59 @@ final class TrialPolicyReservationTest extends TestCase
             ['normal'],
             [$tagId],
         );
+    }
+
+    /** @param array<string,int> $scenario */
+    private function activateScenarioOffering(array $scenario): void
+    {
+        /** @var object{sales_server_id:int|string,panel_service_target_id:int|string,version:int|string}|null $offering */
+        $offering = DB::table('plan_offerings')->where('id', $scenario['offering_id'])->first([
+            'sales_server_id', 'panel_service_target_id', 'version',
+        ]);
+        self::assertNotNull($offering);
+
+        /** @var object{panel_connection_id:int|string}|null $target */
+        $target = DB::table('panel_service_targets')->where('id', (int) $offering->panel_service_target_id)->first(['panel_connection_id']);
+        self::assertNotNull($target);
+
+        $now = now('UTC');
+        $connectionId = (int) $target->panel_connection_id;
+        $targetId = (int) $offering->panel_service_target_id;
+        $evidenceHash = hash('sha256', 'trial-order-target-evidence:'.$scenario['offering_id']);
+        DB::table('panel_connections')->where('id', $connectionId)->update([
+            'state' => 'active',
+            'last_test_status' => 'success',
+            'last_panel_version' => 'trial-order-test-1.0.0',
+            'last_capabilities_hash' => hash('sha256', 'trial-order-capabilities:'.$scenario['offering_id']),
+            'last_tested_at' => $now,
+            'updated_at' => $now,
+        ]);
+        DB::table('panel_target_capabilities')->where('panel_service_target_id', $targetId)->update([
+            'verification_status' => 'verified',
+            'evidence_hash' => $evidenceHash,
+            'verified_at' => $now,
+            'updated_at' => $now,
+        ]);
+        DB::table('panel_service_targets')->where('id', $targetId)->update([
+            'state' => 'active',
+            'capability_status' => 'verified',
+            'capability_evidence_hash' => $evidenceHash,
+            'capability_verified_at' => $now,
+            'verified_connection_version' => 1,
+            'updated_at' => $now,
+        ]);
+        DB::table('sales_servers')->where('id', (int) $offering->sales_server_id)->update([
+            'state' => 'active',
+            'visibility' => 'listed',
+            'updated_at' => $now,
+        ]);
+
+        $activated = $this->app->make(PlanOfferingService::class)->activate(
+            $scenario['offering_id'],
+            (int) $offering->version,
+            $this->catalogContext($scenario['owner_id'], 'trial-order-offering-activate-0001'),
+        );
+        self::assertTrue($activated->changed);
     }
 
     private int $scenarioDailyCapacity = 2;

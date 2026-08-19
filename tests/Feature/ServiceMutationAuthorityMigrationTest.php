@@ -9,6 +9,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
+use RuntimeException;
 use Tests\TestCase;
 
 /** @requirement SVC-004 PRV-002 PRV-003 DAT-003 SEC-008 QUA-004 */
@@ -48,6 +49,7 @@ final class ServiceMutationAuthorityMigrationTest extends TestCase
         $this->assertStringContainsString('NEW.target_lifecycle_version = OLD.target_lifecycle_version', $operationGuard);
         $this->assertStringContainsString("NEW.state <> 'succeeded' OR authoritative_service_id IS NOT NULL", $operationGuard);
         $this->assertStringContainsString('service_mutation_queue_v1', $insertGuard);
+        $this->assertStringContainsString('Initial Provisioning Operation zero-cost authority shape is invalid.', $insertGuard);
         $this->assertStringContainsString('target_remote_identity_generation', $insertGuard);
         $this->assertStringContainsString('target_lifecycle_version', $insertGuard);
         $this->assertStringContainsString('Initial Provisioning Operation cannot be created with remote-effect evidence.', $insertGuard);
@@ -56,6 +58,7 @@ final class ServiceMutationAuthorityMigrationTest extends TestCase
         $this->assertStringContainsString('NEW.capacity_reservation_id IS NOT NULL', $insertGuard);
         $this->assertStringContainsString('NEW.remote_username IS NOT NULL', $insertGuard);
         $this->assertStringContainsString('Service Subscription must start with a clean local lifecycle and no remote binding.', $serviceInsertGuard);
+        $this->assertStringContainsString('Service Subscription zero-cost source authority shape is invalid.', $serviceInsertGuard);
         $this->assertStringContainsString("NEW.lifecycle_state <> 'active'", $serviceInsertGuard);
         $this->assertStringContainsString('NEW.lifecycle_version <> 0', $serviceInsertGuard);
         $this->assertStringContainsString('NEW.remote_identity_generation <> 1', $serviceInsertGuard);
@@ -102,26 +105,127 @@ final class ServiceMutationAuthorityMigrationTest extends TestCase
     public function test_clean_rollback_and_reentry_restore_initial_authority_before_reenabling_mutations(): void
     {
         $migration = require database_path('migrations/2026_08_17_000300_enable_service_mutation_authority.php');
+        $nonPaidAuthorityMigration = require database_path('migrations/2026_08_19_000120_activate_non_paid_order_authority.php');
 
-        $migration->down();
+        try {
+            $migration->down();
 
-        $this->assertFalse(Schema::hasColumn('service_subscriptions', 'lifecycle_state'));
-        $this->assertFalse(Schema::hasColumn('service_subscriptions', 'lifecycle_version'));
-        $this->assertFalse(Schema::hasColumn('service_subscriptions', 'remote_identity_generation'));
-        $this->assertFalse(Schema::hasColumn('service_subscriptions', 'mutation_generation'));
-        $this->assertFalse(Schema::hasColumn('provisioning_operations', 'operation_generation'));
-        $this->assertStringContainsString('initial_remote_effect_v1', $this->triggerStatement('provisioning_operations_update_guard'));
-        $this->assertStringNotContainsString('service_mutation_effect_v1', $this->triggerStatement('provisioning_operations_update_guard'));
+            $this->assertFalse(Schema::hasColumn('service_subscriptions', 'lifecycle_state'));
+            $this->assertFalse(Schema::hasColumn('service_subscriptions', 'lifecycle_version'));
+            $this->assertFalse(Schema::hasColumn('service_subscriptions', 'remote_identity_generation'));
+            $this->assertFalse(Schema::hasColumn('service_subscriptions', 'mutation_generation'));
+            $this->assertFalse(Schema::hasColumn('provisioning_operations', 'operation_generation'));
+            $this->assertStringContainsString('initial_remote_effect_v1', $this->triggerStatement('provisioning_operations_update_guard'));
+            $this->assertStringNotContainsString('service_mutation_effect_v1', $this->triggerStatement('provisioning_operations_update_guard'));
 
-        $migration->up();
+            $migration->up();
 
-        $this->assertTrue(Schema::hasColumn('service_subscriptions', 'lifecycle_state'));
-        $this->assertTrue(Schema::hasColumn('service_subscriptions', 'remote_identity_generation'));
-        $this->assertTrue(Schema::hasColumn('service_subscriptions', 'mutation_generation'));
-        $this->assertTrue(Schema::hasColumn('provisioning_operations', 'operation_generation'));
-        $this->assertStringContainsString('initial_remote_effect_v1', $this->triggerStatement('provisioning_operations_update_guard'));
-        $this->assertStringContainsString('service_mutation_effect_v1', $this->triggerStatement('provisioning_operations_update_guard'));
-        $this->assertStringContainsString('clean local lifecycle', $this->triggerStatement('service_subscriptions_insert_guard'));
+            $this->assertTrue(Schema::hasColumn('service_subscriptions', 'lifecycle_state'));
+            $this->assertTrue(Schema::hasColumn('service_subscriptions', 'remote_identity_generation'));
+            $this->assertTrue(Schema::hasColumn('service_subscriptions', 'mutation_generation'));
+            $this->assertTrue(Schema::hasColumn('provisioning_operations', 'operation_generation'));
+            $this->assertStringContainsString('initial_remote_effect_v1', $this->triggerStatement('provisioning_operations_update_guard'));
+            $this->assertStringContainsString('service_mutation_effect_v1', $this->triggerStatement('provisioning_operations_update_guard'));
+            $this->assertStringContainsString('clean local lifecycle', $this->triggerStatement('service_subscriptions_insert_guard'));
+        } finally {
+            // MariaDB DDL commits outside Laravel's per-test transaction. Restore the current final
+            // authority explicitly so this historical rollback test cannot leak predecessor guards.
+            $migration->up();
+            $nonPaidAuthorityMigration->up();
+        }
+
+        $this->assertServiceMutationAuthoritySurface();
+        $this->assertStringContainsString('Initial Provisioning Operation zero-cost authority shape is invalid.', $this->triggerStatement('provisioning_operations_insert_guard'));
+        $this->assertStringContainsString('Service Subscription zero-cost source authority shape is invalid.', $this->triggerStatement('service_subscriptions_insert_guard'));
+    }
+
+    public function test_non_paid_authority_rollback_restores_complete_predecessor_service_mutation_authority(): void
+    {
+        $migration = require database_path('migrations/2026_08_19_000120_activate_non_paid_order_authority.php');
+
+        try {
+            $migration->down();
+
+            $operationInsertGuard = $this->triggerStatement('provisioning_operations_insert_guard');
+            $serviceInsertGuard = $this->triggerStatement('service_subscriptions_insert_guard');
+
+            $this->assertServiceMutationAuthoritySurface();
+            $this->assertStringContainsString('Initial Provisioning Operation cannot be created with remote-effect evidence.', $operationInsertGuard);
+            $this->assertStringNotContainsString('Initial Provisioning Operation zero-cost authority shape is invalid.', $operationInsertGuard);
+            $this->assertStringContainsString('Service Subscription must start with a clean local lifecycle and no remote binding.', $serviceInsertGuard);
+            $this->assertStringNotContainsString('Service Subscription zero-cost source authority shape is invalid.', $serviceInsertGuard);
+        } finally {
+            $migration->up();
+        }
+
+        $this->assertServiceMutationAuthoritySurface();
+        $this->assertStringContainsString('Initial Provisioning Operation zero-cost authority shape is invalid.', $this->triggerStatement('provisioning_operations_insert_guard'));
+        $this->assertStringContainsString('Service Subscription zero-cost source authority shape is invalid.', $this->triggerStatement('service_subscriptions_insert_guard'));
+    }
+
+    public function test_non_paid_authority_reentry_closes_source_fence_before_readiness_and_reopens_only_after_success(): void
+    {
+        $migration = require database_path('migrations/2026_08_19_000120_activate_non_paid_order_authority.php');
+        $openFence = $this->triggerStatement('orders_unimplemented_source_insert_guard');
+        foreach (['purchase', 'trial', 'benefit_code', 'admin_grant'] as $sourceType) {
+            $this->assertStringContainsString("HEX('{$sourceType}')", $openFence);
+        }
+
+        $this->installFailClosedRemoteEffectReadinessFault();
+
+        try {
+            try {
+                $migration->up();
+                self::fail('Re-entry must stop before final source activation when readiness is incomplete.');
+            } catch (RuntimeException $exception) {
+                self::assertSame('Non-paid Order authority activation prerequisites are incomplete.', $exception->getMessage());
+            }
+
+            $closedFence = $this->triggerStatement('orders_unimplemented_source_insert_guard');
+            $this->assertStringContainsString("IF NEW.source_type <> 'purchase' THEN", $closedFence);
+            foreach (['trial', 'benefit_code', 'admin_grant'] as $sourceType) {
+                $this->assertStringNotContainsString("HEX('{$sourceType}')", $closedFence);
+            }
+
+            // Isolate the independent source fence from the composed Order-shape guard. The
+            // purchase lifecycle fence is a no-op for non-purchase rows, so each rejected INSERT
+            // below is evidence that the first durable re-entry fence itself remained closed.
+            DB::unprepared('DROP TRIGGER IF EXISTS orders_insert_guard');
+            foreach (['trial', 'benefit_code', 'admin_grant'] as $sourceType) {
+                try {
+                    DB::table('orders')->insert([
+                        'public_id' => (string) Str::ulid(),
+                        'source_type' => $sourceType,
+                        'user_id' => 1,
+                        'state' => 'authorized',
+                        'state_version' => 0,
+                        'total_amount_irr' => 0,
+                        'currency' => 'IRR',
+                        'creation_correlation_id' => 'reentry-fence-'.$sourceType,
+                        'created_at' => '2026-08-19 00:00:00.000000',
+                        'updated_at' => '2026-08-19 00:00:00.000000',
+                    ]);
+                    self::fail($sourceType.' must remain fenced while non-paid authority readiness is incomplete.');
+                } catch (QueryException $exception) {
+                    self::assertStringContainsString('Order source type has no active creation authority.', $exception->getMessage());
+                }
+            }
+            self::assertSame(0, DB::table('orders')->count());
+        } finally {
+            $this->restoreRemoteEffectEventGuard();
+            $migration->up();
+        }
+
+        $reopenedFence = $this->triggerStatement('orders_unimplemented_source_insert_guard');
+        foreach (['purchase', 'trial', 'benefit_code', 'admin_grant'] as $sourceType) {
+            $this->assertStringContainsString("HEX('{$sourceType}')", $reopenedFence);
+        }
+        foreach (['gift', 'service_code'] as $sourceType) {
+            $this->assertStringNotContainsString("HEX('{$sourceType}')", $reopenedFence);
+        }
+        $this->assertServiceMutationAuthoritySurface();
+        $this->assertStringContainsString('Initial Provisioning Operation zero-cost authority shape is invalid.', $this->triggerStatement('provisioning_operations_insert_guard'));
+        $this->assertStringContainsString('Service Subscription zero-cost source authority shape is invalid.', $this->triggerStatement('service_subscriptions_insert_guard'));
     }
 
     public function test_rollback_guard_covers_all_mutation_and_identity_evidence_classes(): void
@@ -141,6 +245,50 @@ final class ServiceMutationAuthorityMigrationTest extends TestCase
         ] as $requiredGuard) {
             self::assertStringContainsString($requiredGuard, $source);
         }
+    }
+
+    private function installFailClosedRemoteEffectReadinessFault(): void
+    {
+        DB::unprepared(<<<'SQL'
+CREATE OR REPLACE TRIGGER provisioning_remote_effect_events_insert_guard
+BEFORE INSERT ON provisioning_remote_effect_events
+FOR EACH ROW
+BEGIN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Forced fail-closed readiness fault.';
+END
+SQL);
+    }
+
+    private function restoreRemoteEffectEventGuard(): void
+    {
+        $path = database_path('sql/service-mutation-authority/remote-effect-event-insert-guard.sql');
+        $sql = file_get_contents($path);
+        self::assertIsString($sql);
+        self::assertNotSame('', trim($sql));
+
+        DB::connection()->getPdo()->exec($sql);
+    }
+
+    private function assertServiceMutationAuthoritySurface(): void
+    {
+        $operationInsertGuard = $this->triggerStatement('provisioning_operations_insert_guard');
+        $operationUpdateGuard = $this->triggerStatement('provisioning_operations_update_guard');
+        $serviceInsertGuard = $this->triggerStatement('service_subscriptions_insert_guard');
+        $serviceUpdateGuard = $this->triggerStatement('service_subscriptions_update_guard');
+        $historyInsertGuard = $this->triggerStatement('provisioning_operation_histories_insert_guard');
+        $initialHistory = $this->triggerStatement('provisioning_operation_initial_history');
+        $remoteEffectEventGuard = $this->triggerStatement('provisioning_remote_effect_events_insert_guard');
+
+        $this->assertStringContainsString('service_mutation_queue_v1', $operationInsertGuard);
+        $this->assertStringContainsString('initial_remote_effect_v1', $operationUpdateGuard);
+        $this->assertStringContainsString('service_mutation_effect_v1', $operationUpdateGuard);
+        $this->assertStringContainsString('recovery_transition', $operationUpdateGuard);
+        $this->assertStringContainsString('clean local lifecycle and no remote binding', $serviceInsertGuard);
+        $this->assertStringContainsString('service_mutation_queue_v1', $serviceUpdateGuard);
+        $this->assertStringContainsString('service_mutation_effect_v1', $serviceUpdateGuard);
+        $this->assertStringContainsString('service_mutation_requested', $historyInsertGuard);
+        $this->assertStringContainsString('service_mutation_requested', $initialHistory);
+        $this->assertStringContainsString('service_mutation_effect_v1', $remoteEffectEventGuard);
     }
 
     private function triggerStatement(string $trigger): string

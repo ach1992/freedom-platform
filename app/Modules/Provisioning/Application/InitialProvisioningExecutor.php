@@ -9,7 +9,6 @@ use App\Modules\Catalog\Application\RouteSelectionContext;
 use App\Modules\Catalog\Application\RouteSelectionReceipt;
 use App\Modules\Catalog\Application\RouteSelectionRequest;
 use App\Modules\Catalog\Domain\RouteSelectionActor;
-use App\Modules\Orders\Domain\OrderState;
 use App\Modules\Panels\Application\CapacityOperationContext;
 use App\Modules\Panels\Application\Contracts\PanelCreateServiceRequest;
 use App\Modules\Panels\Application\Contracts\PanelOperationOutcome;
@@ -17,7 +16,6 @@ use App\Modules\Panels\Application\Contracts\PanelOperationResult;
 use App\Modules\Panels\Application\PanelCreateCoordinator;
 use App\Modules\Panels\Application\TargetCapacityAllocator;
 use App\Modules\Panels\Domain\CapacityReservationState;
-use App\Modules\Payments\Domain\PaymentIntentState;
 use App\Modules\Provisioning\Domain\ProvisioningState;
 use App\Shared\Application\Clock;
 use DateInterval;
@@ -65,10 +63,6 @@ use Throwable;
  *     account_type_snapshot:string,
  *     service_public_id:string
  * }
- * @phpstan-type SettlementRow object{id:int|string,payment_intent_id:int|string,user_id:int|string,source_quote_id:int|string}
- * @phpstan-type IntentRow object{id:int|string,purpose:string,user_id:int|string,source_quote_id:int|string|null,state:string,captured_at:?string}
- * @phpstan-type FinancialOrderRow object{id:int|string,purchase_settlement_id:int|string|null,payment_intent_id:int|string|null,user_id:int|string,source_quote_id:int|string|null,state:string,state_version:int|string}
- * @phpstan-type FinancialAuthority array{operation:OperationRow,settlement:SettlementRow,intent:IntentRow,order:FinancialOrderRow}
  */
 final readonly class InitialProvisioningExecutor
 {
@@ -82,6 +76,7 @@ final readonly class InitialProvisioningExecutor
 
     public function __construct(
         private DatabaseManager $database,
+        private InitialProvisioningAuthorityGuard $authority,
         private Clock $clock,
         private PlanOfferingRouteSelector $routes,
         private ProvisioningPanelAdapterResolver $adapters,
@@ -89,7 +84,7 @@ final readonly class InitialProvisioningExecutor
         private TargetCapacityAllocator $capacity,
     ) {}
 
-    /** @requirement PAY-003 PRV-001 PRV-002 PRV-003 DAT-002 DAT-003 DAT-004 SEC-002 SEC-008 QUA-001 QUA-004 */
+    /** @requirement PAY-003 PRV-001 PRV-002 PRV-003 CAT-006 ADM-002 DAT-002 DAT-003 DAT-004 SEC-002 SEC-008 QUA-001 QUA-004 */
     public function execute(string $operationPublicId): InitialProvisioningExecutionReceipt
     {
         $operation = $this->operationByPublicId($operationPublicId);
@@ -118,8 +113,9 @@ final readonly class InitialProvisioningExecutor
             );
         }
 
-        // The financial check is deliberately its own short transaction. The running effect fence
-        // makes a concurrent refund fail closed until this remote attempt reaches a durable outcome.
+        // Revalidate the exact purchase or zero-cost source authority in its own short transaction
+        // immediately before the provider boundary. Purchase refunds remain fenced by the accepted
+        // running-effect invalidation guard; zero-cost sources never fabricate payment evidence.
         try {
             $this->revalidateFinancialAuthority($operation);
         } catch (Throwable $exception) {
@@ -132,7 +128,7 @@ final readonly class InitialProvisioningExecutor
             );
         }
 
-        // Capacity is separately revalidated after financial authority and immediately before the
+        // Capacity is separately revalidated after Order authority and immediately before the
         // provider boundary. The running-capacity DB fence prevents release/expiry transitions
         // after this check while the remote effect remains in flight.
         try {
@@ -184,8 +180,8 @@ final readonly class InitialProvisioningExecutor
     private function claim(object $locator): object
     {
         return $this->database->connection()->transaction(function (Connection $connection) use ($locator): object {
-            $authority = $this->lockedFinancialAuthority($connection, $locator);
-            $locked = $authority['operation'];
+            $this->authority->lockAndAssert($connection, $locator);
+            $locked = $this->operationById($connection, (int) $locator->id, true);
             $state = $this->storedState($locked->state);
             if ($state === ProvisioningState::Running) {
                 return $locked;
@@ -194,13 +190,6 @@ final readonly class InitialProvisioningExecutor
                 throw new DomainException('Initial provisioning operation cannot acquire remote-effect authority.');
             }
 
-            $this->assertCapturedFinancialAuthority(
-                $connection,
-                $locked,
-                $authority['settlement'],
-                $authority['intent'],
-                $authority['order'],
-            );
             $now = $this->nowString();
             $holdExpiry = $locked->route_selection_id === null
                 ? $this->clock->now()->add(new DateInterval(self::ROUTE_HOLD_INTERVAL))->format('Y-m-d H:i:s.u')
@@ -325,18 +314,11 @@ final readonly class InitialProvisioningExecutor
     private function revalidateFinancialAuthority(object $operation): void
     {
         $this->database->connection()->transaction(function (Connection $connection) use ($operation): void {
-            $authority = $this->lockedFinancialAuthority($connection, $operation);
-            $locked = $authority['operation'];
+            $this->authority->lockAndAssert($connection, $operation);
+            $locked = $this->operationById($connection, (int) $operation->id, true);
             if ($this->storedState($locked->state) !== ProvisioningState::Running) {
                 throw new DomainException('Initial provisioning operation lost its remote-effect fence.');
             }
-            $this->assertCapturedFinancialAuthority(
-                $connection,
-                $locked,
-                $authority['settlement'],
-                $authority['intent'],
-                $authority['order'],
-            );
         }, 3);
     }
 
@@ -753,85 +735,6 @@ final readonly class InitialProvisioningExecutor
             'order_row.state as order_state', 'order_row.state_version as order_state_version',
             'item.plan_offering_id', 'item.account_type_snapshot', 'service.public_id as service_public_id',
         ];
-    }
-
-    /**
-     * @param  OperationRow  $locator
-     * @return FinancialAuthority
-     */
-    private function lockedFinancialAuthority(Connection $connection, object $locator): array
-    {
-        /** @var object{purchase_settlement_id:int|string|null,payment_intent_id:int|string|null}|null $orderLocator */
-        $orderLocator = $connection->table('orders')->where('id', (int) $locator->order_id)
-            ->first(['purchase_settlement_id', 'payment_intent_id']);
-        if ($orderLocator === null || $orderLocator->purchase_settlement_id === null || $orderLocator->payment_intent_id === null) {
-            throw new RuntimeException('Provisioning financial identity is unavailable.');
-        }
-
-        /** @var SettlementRow|null $settlement */
-        $settlement = $connection->table('purchase_settlements')
-            ->where('id', (int) $orderLocator->purchase_settlement_id)
-            ->lockForUpdate()
-            ->first(['id', 'payment_intent_id', 'user_id', 'source_quote_id']);
-        if ($settlement === null) {
-            throw new RuntimeException('Provisioning purchase settlement is unavailable.');
-        }
-        /** @var IntentRow|null $intent */
-        $intent = $connection->table('payment_intents')
-            ->where('id', (int) $settlement->payment_intent_id)
-            ->lockForUpdate()
-            ->first(['id', 'purpose', 'user_id', 'source_quote_id', 'state', 'captured_at']);
-        if ($intent === null) {
-            throw new RuntimeException('Provisioning payment intent is unavailable.');
-        }
-        /** @var FinancialOrderRow|null $order */
-        $order = $connection->table('orders')->where('id', (int) $locator->order_id)->lockForUpdate()->first([
-            'id', 'purchase_settlement_id', 'payment_intent_id', 'user_id', 'source_quote_id', 'state', 'state_version',
-        ]);
-        if ($order === null) {
-            throw new RuntimeException('Provisioning Order is unavailable.');
-        }
-        $connection->table('order_items')->where('id', (int) $locator->order_item_id)->lockForUpdate()->first(['id']);
-
-        return [
-            'operation' => $this->operationById($connection, (int) $locator->id, true),
-            'settlement' => $settlement,
-            'intent' => $intent,
-            'order' => $order,
-        ];
-    }
-
-    /**
-     * @param  OperationRow  $operation
-     * @param  SettlementRow  $settlement
-     * @param  IntentRow  $intent
-     * @param  FinancialOrderRow  $order
-     */
-    private function assertCapturedFinancialAuthority(
-        Connection $connection,
-        object $operation,
-        object $settlement,
-        object $intent,
-        object $order,
-    ): void {
-        if ((int) $settlement->payment_intent_id !== (int) $intent->id
-            || (int) $order->purchase_settlement_id !== (int) $settlement->id
-            || (int) $order->payment_intent_id !== (int) $intent->id
-            || (int) $order->user_id !== (int) $operation->user_id
-            || (int) $settlement->user_id !== (int) $operation->user_id
-            || (int) $intent->user_id !== (int) $operation->user_id
-            || $intent->purpose !== 'purchase'
-            || $intent->state !== PaymentIntentState::Captured->value
-            || $intent->captured_at === null
-            || $order->state !== OrderState::ProvisioningQueued->value
-            || (int) $order->state_version !== 2
-            || $connection->table('provisioning_financial_invalidations')
-                ->where('purchase_settlement_id', (int) $settlement->id)
-                ->where('payment_intent_id', (int) $intent->id)
-                ->exists()
-        ) {
-            throw new DomainException('Initial provisioning financial authority is not currently captured and valid.');
-        }
     }
 
     /** @param OperationRow $operation */

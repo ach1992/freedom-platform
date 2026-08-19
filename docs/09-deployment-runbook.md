@@ -6,12 +6,15 @@ This document is a safety contract, not proof that every described capability cu
 
 ## Source and execution topology
 
-GitHub is the only project/source-of-truth location assumed by the repository. No Owner-managed local or server checkout is required for development continuity.
+GitHub is the only project/source-of-truth location assumed by the repository. A persistent execution checkout may exist for the Master, but it is never a second source of project authority and is not required for recovery.
 
-- **ChatGPT Master + connected GitHub integration** is the normal project-control and self-execution path for repository state and supported GitHub mutations.
-- **GitHub Actions** is the authoritative reviewed shell/runtime path on `freedom-staging-runner` using `[self-hosted, Linux, X64, freedom-staging, php84]`. Workflow checkouts are transient and are not another source repository.
+- **ChatGPT Master + connected GitHub integration** is the normal project-control path for repository state and supported GitHub mutations.
+- **Dedicated AI Server MCP workspace (when connected)** is the preferred persistent checkout for repository editing, Git operations, diagnostics, and local commands that its installed toolchain can safely support. The connector is `AI_Server_Agent`; the normal unprivileged workspace is `/srv/ai-workspace/freedom-platform` owned/used by `aiworker`. Its repository remote uses the repo-scoped SSH alias `github-freedom-platform` for `ach1992/freedom-platform`. Future Masters should discover and reuse this connector/workspace before asking the Owner to recreate repository shell access. The SSH private key and other credential values remain server-side operational state: never read, print, copy into Chat, or commit them.
+- **GitHub Actions** remains the authoritative reviewed CI/runtime validation path on `freedom-staging-runner` using `[self-hosted, Linux, X64, freedom-staging, php84]`, including the required PHP/Composer/MariaDB/Redis validation unless an exact task explicitly establishes equivalent evidence elsewhere. Workflow checkouts are transient and are not another source repository.
 - **External Workers** are optional. Use one only when isolation, safe parallelism, specialist review, or a missing Master capability materially justifies delegation. Codex Cloud is not a required/default workspace. Durable results must return to GitHub.
 - **Deployment/staging targets** are runtime infrastructure, not developer checkouts and not project recovery sources.
+
+The MCP workspace is execution/cache state only. Durable changes must be committed and pushed to GitHub; PRs, Issues, refs, reviews, and exact-revision CI remain authoritative. Use `AI_Server_Agent.run_command` for ordinary unprivileged project work when available. Do not use MCP/root operations to change host packages, services, firewall/networking, users, deployment state, or production/provider state merely for development convenience; those operations keep their normal task/release/approval gates.
 
 Use `CONTRIBUTING.md` for capability routing and `docs/06-test-strategy.md` for CI/runtime validation.
 

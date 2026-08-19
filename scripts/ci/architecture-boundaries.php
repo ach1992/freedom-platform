@@ -10,7 +10,7 @@ return [
         'Customers' => ['AccessControl', 'Identity'],
         'Identity' => ['AccessControl'],
         'Installer' => ['Operations'],
-        'Orders' => ['Agents'],
+        'Orders' => ['AccessControl', 'Agents'],
         'Panels' => ['AccessControl'],
         'Payments' => ['AccessControl', 'Orders', 'Wallet'],
         'Promotions' => ['AccessControl', 'Wallet'],
