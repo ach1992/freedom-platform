@@ -89,12 +89,25 @@ final readonly class AgentBulkOrderService
 
     private function assertBulkAuthorityFinalized(): void
     {
-        /** @var object{parent_ready_count:int|string|null,item_ready_count:int|string|null,blocked_count:int|string|null}|null $row */
+        /** @var object{parent_ready_count:int|string|null,item_ready_count:int|string|null,blocked_count:int|string|null,bootstrap_trigger_count:int|string}|null $row */
         $row = $this->database->connection()->selectOne(<<<'SQL'
 SELECT
     SUM(TABLE_NAME = 'agent_bulk_orders' AND CONSTRAINT_NAME = 'agent_bulk_orders_authority_ready_v2_chk') AS parent_ready_count,
     SUM(TABLE_NAME = 'agent_bulk_order_items' AND CONSTRAINT_NAME = 'agent_bulk_items_authority_ready_v2_chk') AS item_ready_count,
-    SUM(CONSTRAINT_NAME IN ('agent_bulk_orders_bootstrap_block_chk', 'agent_bulk_items_bootstrap_block_chk')) AS blocked_count
+    SUM(CONSTRAINT_NAME IN ('agent_bulk_orders_bootstrap_block_chk', 'agent_bulk_items_bootstrap_block_chk')) AS blocked_count,
+    (
+        SELECT COUNT(*)
+        FROM information_schema.TRIGGERS
+        WHERE TRIGGER_SCHEMA = DATABASE()
+          AND TRIGGER_NAME IN (
+              'agent_bulk_orders_bootstrap_insert_barrier',
+              'agent_bulk_orders_bootstrap_update_barrier',
+              'agent_bulk_orders_bootstrap_delete_barrier',
+              'agent_bulk_items_bootstrap_insert_barrier',
+              'agent_bulk_items_bootstrap_update_barrier',
+              'agent_bulk_items_bootstrap_delete_barrier'
+          )
+    ) AS bootstrap_trigger_count
 FROM information_schema.TABLE_CONSTRAINTS
 WHERE CONSTRAINT_SCHEMA = DATABASE()
   AND CONSTRAINT_TYPE = 'CHECK'
@@ -106,7 +119,8 @@ SQL);
         if ($row === null
             || (int) $row->parent_ready_count !== 1
             || (int) $row->item_ready_count !== 1
-            || (int) $row->blocked_count !== 0) {
+            || (int) $row->blocked_count !== 0
+            || (int) $row->bootstrap_trigger_count !== 0) {
             throw new RuntimeException('Agent bulk Order authority is not finalized.');
         }
     }

@@ -1333,11 +1333,21 @@ SQL);
 
     private function sourceAuthorizationAuthorityFinalized(): bool
     {
-        /** @var object{ready_count:int|string|null,blocked_count:int|string|null}|null $row */
+        /** @var object{ready_count:int|string|null,blocked_count:int|string|null,bootstrap_trigger_count:int|string}|null $row */
         $row = DB::selectOne(<<<'SQL'
 SELECT
     SUM(CONSTRAINT_NAME = 'order_source_authorizations_authority_ready_v2_chk') AS ready_count,
-    SUM(CONSTRAINT_NAME = 'order_source_authorizations_bootstrap_block_chk') AS blocked_count
+    SUM(CONSTRAINT_NAME = 'order_source_authorizations_bootstrap_block_chk') AS blocked_count,
+    (
+        SELECT COUNT(*)
+        FROM information_schema.TRIGGERS
+        WHERE TRIGGER_SCHEMA = DATABASE()
+          AND TRIGGER_NAME IN (
+              'order_source_authorizations_bootstrap_insert_barrier',
+              'order_source_authorizations_bootstrap_update_barrier',
+              'order_source_authorizations_bootstrap_delete_barrier'
+          )
+    ) AS bootstrap_trigger_count
 FROM information_schema.TABLE_CONSTRAINTS
 WHERE CONSTRAINT_SCHEMA = DATABASE()
   AND TABLE_NAME = 'order_source_authorizations'
@@ -1348,7 +1358,10 @@ WHERE CONSTRAINT_SCHEMA = DATABASE()
   )
 SQL);
 
-        return $row !== null && (int) $row->ready_count === 1 && (int) $row->blocked_count === 0;
+        return $row !== null
+            && (int) $row->ready_count === 1
+            && (int) $row->blocked_count === 0
+            && (int) $row->bootstrap_trigger_count === 0;
     }
 
     private function replaceConstraint(string $table, string $constraint, string $definition): void
