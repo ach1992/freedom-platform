@@ -39,7 +39,7 @@ final readonly class AgentBulkOrderService
     ) {}
 
     /**
-     * @param list<BulkItemInput> $items
+     * @param  list<BulkItemInput>  $items
      *
      * @requirement AGT-003 AGT-004 BUY-001 BUY-002 PAY-002 DAT-002 DAT-003 DAT-004 SEC-002 QUA-001 QUA-004
      */
@@ -87,7 +87,7 @@ final readonly class AgentBulkOrderService
     }
 
     /**
-     * @param list<BulkItemInput> $items
+     * @param  list<BulkItemInput>  $items
      * @return array{0:BulkParentRow,1:bool}
      */
     private function ensureParent(
@@ -192,7 +192,7 @@ final readonly class AgentBulkOrderService
     }
 
     /**
-     * @param list<BulkItemInput> $items
+     * @param  list<BulkItemInput>  $items
      * @return array<string,SettlementAuthorityRow>
      */
     private function settlementAuthorities(Connection $connection, int $agentUserId, array $items): array
@@ -238,8 +238,8 @@ final readonly class AgentBulkOrderService
     }
 
     /**
-     * @param BulkParentRow $parent
-     * @param BulkItemRow $child
+     * @param  BulkParentRow  $parent
+     * @param  BulkItemRow  $child
      */
     private function markSucceeded(object $parent, object $child, PurchaseOrderReceipt $order): void
     {
@@ -282,8 +282,8 @@ final readonly class AgentBulkOrderService
     }
 
     /**
-     * @param BulkParentRow $parent
-     * @param BulkItemRow $child
+     * @param  BulkParentRow  $parent
+     * @param  BulkItemRow  $child
      */
     private function markFailed(object $parent, object $child, string $failureCode): void
     {
@@ -316,7 +316,6 @@ final readonly class AgentBulkOrderService
         }, 3);
     }
 
-    /** @return AgentBulkOrderReceipt */
     private function receipt(object $parent, bool $replayed): AgentBulkOrderReceipt
     {
         $items = [];
@@ -433,7 +432,7 @@ final readonly class AgentBulkOrderService
     }
 
     /**
-     * @param list<BulkItemInput> $items
+     * @param  list<BulkItemInput>  $items
      * @return list<BulkItemInput>
      */
     private function normalizedItems(array $items): array
