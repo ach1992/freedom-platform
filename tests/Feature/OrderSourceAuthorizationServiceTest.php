@@ -103,7 +103,7 @@ final class OrderSourceAuthorizationServiceTest extends TestCase
     {
         $ownerId = $this->benefitOwner();
         $userId = $this->benefitUser();
-        $offering = $this->benefitOffering('order-source-admin');
+        $offering = $this->activeBenefitOffering('order-source-admin');
         $service = $this->app->make(OrderSourceAuthorizationService::class);
 
         $ownerGrant = $service->authorizeAdministratorGrant(
@@ -144,7 +144,7 @@ final class OrderSourceAuthorizationServiceTest extends TestCase
         $ownerId = $this->benefitOwner();
         $administratorId = $this->nonOwnerAdministrator();
         $userId = $this->benefitUser();
-        $offering = $this->benefitOffering('order-source-admin-permission');
+        $offering = $this->activeBenefitOffering('order-source-admin-permission');
         $source = $this->app->make(OrderSourceAuthorizationService::class);
 
         try {
