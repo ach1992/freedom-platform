@@ -256,12 +256,12 @@ final readonly class ServiceBatchGrantService
                 throw new DomainException('Service batch grant is not active.');
             }
 
-            /** @var BatchItemRow|null $item */
             $itemQuery = $connection->table('service_batch_grant_items')
                 ->where('service_batch_grant_id', (int) $batch->id);
             if ($excludedItemIds !== []) {
                 $itemQuery->whereNotIn('id', $excludedItemIds);
             }
+            /** @var BatchItemRow|null $item */
             $item = $itemQuery
                 ->where(function ($query): void {
                     $query->whereIn('state', ['pending', 'failed'])
@@ -360,6 +360,14 @@ final readonly class ServiceBatchGrantService
         ?string $errorCode,
     ): void {
         $this->database->connection()->transaction(function (Connection $connection) use ($item, $sourceAuthorizationId, $orderId, $serviceSubscriptionId, $provisioningOperationId, $errorCode): void {
+            $batch = $connection->table('service_batch_grants')
+                ->where('id', (int) $item->service_batch_grant_id)
+                ->lockForUpdate()
+                ->first(['id']);
+            if ($batch === null) {
+                throw new RuntimeException('Service batch grant disappeared while finalizing claim.');
+            }
+
             /** @var BatchItemRow|null $locked */
             $locked = $connection->table('service_batch_grant_items')->where('id', (int) $item->id)->lockForUpdate()->first();
             if ($locked === null) {
@@ -476,7 +484,10 @@ final readonly class ServiceBatchGrantService
         }, 3);
     }
 
-    /** @param list<array{user_id:int,plan_offering_id:int}> $items @return list<array{user_id:int,plan_offering_id:int}> */
+    /**
+     * @param  list<array{user_id:int,plan_offering_id:int}>  $items
+     * @return list<array{user_id:int,plan_offering_id:int}>
+     */
     private function normalizedItems(array $items): array
     {
         if ($items === [] || count($items) > self::MAX_ITEMS) {
@@ -515,7 +526,10 @@ final readonly class ServiceBatchGrantService
         return hash('sha256', $payloadHash.':'.$position.':'.$item['user_id'].':'.$item['plan_offering_id']);
     }
 
-    /** @param BatchRow $batch @param list<array{user_id:int,plan_offering_id:int}> $items */
+    /**
+     * @param  BatchRow  $batch
+     * @param  list<array{user_id:int,plan_offering_id:int}>  $items
+     */
     private function assertBatchReplay(Connection $connection, object $batch, ServiceOperationalContext $context, array $items, string $payloadHash): void
     {
         $this->assertBatchContext($batch, $context);

@@ -15,7 +15,10 @@ use Illuminate\Support\Str;
 use RuntimeException;
 use Throwable;
 
-/** @phpstan-type ReconciliationRow object{id:int|string,public_id:string,request_key_hash:string,service_subscription_id:int|string,actor_administrator_id:int|string,service_target_id:int|string,before_remote_service_id:string,proposed_remote_service_id:?string,remote_disposition:string,remote_canonical_hash:?string,target_remote_identity_generation:int|string,target_lifecycle_version:int|string,state:string,audit_log_id:int|string|null,correlation_id:string,applied_at:?string} */
+/**
+ * @phpstan-type ReconciliationRow object{id:int|string,public_id:string,request_key_hash:string,service_subscription_id:int|string,actor_administrator_id:int|string,service_target_id:int|string,before_remote_service_id:string,proposed_remote_service_id:?string,remote_disposition:string,remote_canonical_hash:?string,target_remote_identity_generation:int|string,target_lifecycle_version:int|string,state:string,audit_log_id:int|string|null,correlation_id:string,applied_at:?string}
+ * @phpstan-type RepairReplayServiceRow object{id:int|string,service_target_id:int|string|null,remote_service_id:?string}
+ */
 final readonly class ServiceRepairService
 {
     private const PERMISSION = 'services.repair';
@@ -332,7 +335,10 @@ final readonly class ServiceRepairService
         }
     }
 
-    /** @param ReconciliationRow $row */
+    /**
+     * @param  ReconciliationRow  $row
+     * @param  RepairReplayServiceRow  $service
+     */
     private function assertReplay(object $row, object $service, string $proposedRemoteServiceId, ServiceOperationalContext $context): void
     {
         $this->assertContext($row, $context);

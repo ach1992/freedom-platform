@@ -12,7 +12,10 @@ use Illuminate\Database\DatabaseManager;
 use Illuminate\Support\Str;
 use RuntimeException;
 
-/** @phpstan-type TransferRow object{id:int|string,public_id:string,request_key_hash:string,service_subscription_id:int|string,from_user_id:int|string,to_user_id:int|string,actor_administrator_id:int|string,target_remote_identity_generation:int|string,target_lifecycle_version:int|string,state:string,audit_log_id:int|string|null,correlation_id:string,completed_at:?string} */
+/**
+ * @phpstan-type TransferRow object{id:int|string,public_id:string,request_key_hash:string,service_subscription_id:int|string,from_user_id:int|string,to_user_id:int|string,actor_administrator_id:int|string,target_remote_identity_generation:int|string,target_lifecycle_version:int|string,state:string,audit_log_id:int|string|null,correlation_id:string,completed_at:?string}
+ * @phpstan-type TransferReplayServiceRow object{id:int|string}
+ */
 final readonly class ServiceOwnershipTransferService
 {
     private const PERMISSION = 'services.transfer_ownership';
@@ -188,7 +191,10 @@ final readonly class ServiceOwnershipTransferService
         }, 3);
     }
 
-    /** @param TransferRow $row */
+    /**
+     * @param  TransferRow  $row
+     * @param  TransferReplayServiceRow  $service
+     */
     private function assertReplay(object $row, object $service, int $toUserId, ServiceOperationalContext $context): void
     {
         if ((int) $row->service_subscription_id !== (int) $service->id

@@ -423,7 +423,7 @@ SQL);
         }
     }
 
-    /** @return list<string> */
+    /** @return list<literal-string> */
     private function operationalEvidenceGuardStatements(): array
     {
         return [
@@ -466,7 +466,7 @@ SQL,
         ];
     }
 
-    /** @return list<string> */
+    /** @return list<literal-string> */
     private function batchEvidenceGuardStatements(): array
     {
         return [
