@@ -150,8 +150,8 @@ final readonly class InitialProvisioningQueueService
     }
 
     /**
-     * @param OrderRow $order
-     * @param OrderItemRow $item
+     * @param  OrderRow  $order
+     * @param  OrderItemRow  $item
      */
     private function createQueueEffect(
         Connection $connection,
@@ -417,10 +417,10 @@ final readonly class InitialProvisioningQueueService
     }
 
     /**
-     * @param OrderRow $order
-     * @param OrderItemRow $item
-     * @param SettlementRow $settlement
-     * @param IntentRow $intent
+     * @param  OrderRow  $order
+     * @param  OrderItemRow  $item
+     * @param  SettlementRow  $settlement
+     * @param  IntentRow  $intent
      */
     private function assertNewPurchaseQueueAuthority(object $order, object $item, object $settlement, object $intent): void
     {
@@ -472,9 +472,9 @@ final readonly class InitialProvisioningQueueService
     }
 
     /**
-     * @param OrderRow $order
-     * @param OrderItemRow $item
-     * @param SourceAuthorizationRow $authorization
+     * @param  OrderRow  $order
+     * @param  OrderItemRow  $item
+     * @param  SourceAuthorizationRow  $authorization
      */
     private function assertNewNonPaidQueueAuthority(
         object $order,
@@ -515,11 +515,11 @@ final readonly class InitialProvisioningQueueService
     }
 
     /**
-     * @param OrderRow $order
-     * @param OrderItemRow $item
-     * @param SettlementRow $settlement
-     * @param IntentRow $intent
-     * @param OperationRow $operation
+     * @param  OrderRow  $order
+     * @param  OrderItemRow  $item
+     * @param  SettlementRow  $settlement
+     * @param  IntentRow  $intent
+     * @param  OperationRow  $operation
      */
     private function replayPurchaseReceipt(
         Connection $connection,
@@ -542,10 +542,10 @@ final readonly class InitialProvisioningQueueService
     }
 
     /**
-     * @param OrderRow $order
-     * @param OrderItemRow $item
-     * @param SourceAuthorizationRow $authorization
-     * @param OperationRow $operation
+     * @param  OrderRow  $order
+     * @param  OrderItemRow  $item
+     * @param  SourceAuthorizationRow  $authorization
+     * @param  OperationRow  $operation
      */
     private function replayNonPaidReceipt(
         Connection $connection,
@@ -574,9 +574,9 @@ final readonly class InitialProvisioningQueueService
     }
 
     /**
-     * @param OrderRow $order
-     * @param OrderItemRow $item
-     * @param OperationRow $operation
+     * @param  OrderRow  $order
+     * @param  OrderItemRow  $item
+     * @param  OperationRow  $operation
      */
     private function replayQueueEffect(
         Connection $connection,
