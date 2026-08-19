@@ -332,15 +332,6 @@ final readonly class ServiceBatchGrantService
             $queue = $this->provisioning->queueInitial($order->orderPublicId, $item->correlation_id);
             $serviceSubscriptionId = $queue->serviceSubscriptionId;
             $provisioningOperationId = $queue->provisioningOperationId;
-
-            $this->finishClaim(
-                $item,
-                $sourceAuthorizationId,
-                $orderId,
-                $serviceSubscriptionId,
-                $provisioningOperationId,
-                null,
-            );
         } catch (Throwable $exception) {
             $this->finishClaim(
                 $item,
@@ -350,7 +341,18 @@ final readonly class ServiceBatchGrantService
                 $provisioningOperationId,
                 $this->safeErrorCode($exception),
             );
+
+            return;
         }
+
+        $this->finishClaim(
+            $item,
+            $sourceAuthorizationId,
+            $orderId,
+            $serviceSubscriptionId,
+            $provisioningOperationId,
+            null,
+        );
     }
 
     /** @param BatchItemRow $item */
