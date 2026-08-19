@@ -99,14 +99,39 @@ return new class extends Migration
 
     public function down(): void
     {
-        if (! Schema::hasTable('agent_bulk_orders') && ! Schema::hasTable('agent_bulk_order_items')) {
+        $parentExists = Schema::hasTable('agent_bulk_orders');
+        $itemsExist = Schema::hasTable('agent_bulk_order_items');
+        if (! $parentExists && ! $itemsExist) {
             return;
         }
-        if (Schema::hasTable('agent_bulk_orders') && DB::table('agent_bulk_orders')->exists()) {
+        if ($parentExists && DB::table('agent_bulk_orders')->exists()) {
             throw new RuntimeException('Cannot roll back agent bulk Order orchestration while parent Orders exist.');
         }
-        if (Schema::hasTable('agent_bulk_order_items') && DB::table('agent_bulk_order_items')->exists()) {
+        if ($itemsExist && DB::table('agent_bulk_order_items')->exists()) {
             throw new RuntimeException('Cannot roll back agent bulk Order orchestration while child authority evidence exists.');
+        }
+
+        // Close parent first with one durable DDL. A raced parent makes this ALTER fail while the
+        // final schema is still intact; a committed parent barrier prevents creation of any new
+        // valid child authority before the child surface is closed as well.
+        if ($parentExists) {
+            $this->ensureBootstrapCheck('agent_bulk_orders', self::PARENT_BOOTSTRAP_CHECK);
+        }
+        if ($itemsExist) {
+            $this->ensureBootstrapCheck('agent_bulk_order_items', self::ITEM_BOOTSTRAP_CHECK);
+        }
+        $this->dropReadyMarkersIfPresent();
+        if ($parentExists) {
+            $this->installParentBootstrapMutationBarriers();
+        }
+        if ($itemsExist) {
+            $this->installItemBootstrapMutationBarriers();
+        }
+        if ($parentExists && DB::table('agent_bulk_orders')->exists()) {
+            throw new RuntimeException('Cannot roll back agent bulk Order orchestration after the rollback barrier closed with parent authority present.');
+        }
+        if ($itemsExist && DB::table('agent_bulk_order_items')->exists()) {
+            throw new RuntimeException('Cannot roll back agent bulk Order orchestration after the rollback barrier closed with child authority evidence present.');
         }
 
         DB::unprepared('DROP TRIGGER IF EXISTS agent_bulk_items_delete_guard');

@@ -81,6 +81,17 @@ return new class extends Migration
             throw new RuntimeException('Cannot roll back non-paid Order source authority while authorization records exist.');
         }
 
+        // Close the authority surface with one durable DDL before removing any final guard. If a
+        // valid authorization races the pre-check, the CHECK installation itself fails against
+        // that row and leaves the final marker/guards intact; if it commits, no later INSERT can
+        // race the teardown. Interrupted rollback remains consumer-visible as blocked.
+        $this->ensureBootstrapCheck();
+        $this->dropReadyMarkerIfExists();
+        $this->installBootstrapMutationBarriers();
+        if (DB::table('order_source_authorizations')->exists()) {
+            throw new RuntimeException('Cannot roll back non-paid Order source authority after the rollback barrier closed with authorization records present.');
+        }
+
         DB::unprepared('DROP TRIGGER IF EXISTS order_source_authorizations_delete_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS order_source_authorizations_update_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS order_source_authorizations_insert_guard');

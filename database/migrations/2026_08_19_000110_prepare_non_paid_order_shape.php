@@ -339,12 +339,12 @@ SQL,
         }
     }
 
-    /** @return list<object{column_name:string,non_unique:int|string}> */
+    /** @return list<object{column_name:string,non_unique:int|string,sub_part:int|string|null}> */
     private function indexRows(string $table, string $index): array
     {
-        /** @var list<object{column_name:string,non_unique:int|string}> $rows */
+        /** @var list<object{column_name:string,non_unique:int|string,sub_part:int|string|null}> $rows */
         $rows = DB::select(
-            'SELECT COLUMN_NAME AS column_name, NON_UNIQUE AS non_unique FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ? ORDER BY SEQ_IN_INDEX',
+            'SELECT COLUMN_NAME AS column_name, NON_UNIQUE AS non_unique, SUB_PART AS sub_part FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ? ORDER BY SEQ_IN_INDEX',
             [$table, $index],
         );
 
@@ -352,14 +352,19 @@ SQL,
     }
 
     /**
-     * @param  list<object{column_name:string,non_unique:int|string}>  $rows
+     * @param  list<object{column_name:string,non_unique:int|string,sub_part:int|string|null}>  $rows
      * @param  list<string>  $columns
      */
     private function assertIndexRows(string $table, string $index, array $rows, array $columns, bool $unique): void
     {
         $actual = array_map(static fn ($row): string => (string) $row->column_name, $rows);
         $isUnique = $rows !== [] && (int) $rows[0]->non_unique === 0;
-        if ($actual !== $columns || $isUnique !== $unique) {
+        $fullColumns = $rows !== [] && array_reduce(
+            $rows,
+            static fn (bool $carry, $row): bool => $carry && $row->sub_part === null,
+            true,
+        );
+        if ($actual !== $columns || $isUnique !== $unique || ! $fullColumns) {
             throw new RuntimeException("Non-paid Order shape has incompatible index: {$table}.{$index}");
         }
     }

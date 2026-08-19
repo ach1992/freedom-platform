@@ -195,6 +195,20 @@ final class NonPaidOrderMigrationReentryTest extends TestCase
             $this->assertPreparedOrderShapeReady();
             $this->assertPurchaseOnlySourceFence();
 
+            DB::statement('ALTER TABLE `orders` DROP INDEX `orders_source_authorization_public_unique`');
+            DB::statement('ALTER TABLE `orders` ADD UNIQUE INDEX `orders_source_authorization_public_unique` (`order_source_authorization_public_id`(10))');
+            self::assertFalse($this->namedIndexMatches('orders', 'orders_source_authorization_public_unique', ['order_source_authorization_public_id'], true));
+            try {
+                $shape->up();
+                self::fail('Expected-name prefix indexes must not satisfy full-column source authority identity.');
+            } catch (RuntimeException $exception) {
+                self::assertSame('Non-paid Order shape has incompatible index: orders.orders_source_authorization_public_unique', $exception->getMessage());
+            }
+            DB::statement('ALTER TABLE `orders` DROP INDEX `orders_source_authorization_public_unique`');
+            DB::statement('ALTER TABLE `orders` ADD UNIQUE INDEX `orders_source_authorization_public_unique` (`order_source_authorization_public_id`)');
+            $shape->up();
+            $this->assertPreparedOrderShapeReady();
+
             DB::listen(function (QueryExecuted $query) use (&$injected): void {
                 if ($injected || ! str_contains(strtolower($query->sql), 'drop constraint `orders_state_chk`')) {
                     return;
@@ -688,16 +702,24 @@ final class NonPaidOrderMigrationReentryTest extends TestCase
     /** @param list<string> $columns */
     private function namedIndexMatches(string $table, string $index, array $columns, bool $unique): bool
     {
+        /** @var list<object{column_name:string,non_unique:int|string,sub_part:int|string|null}> $rows */
         $rows = DB::select(
-            'SELECT COLUMN_NAME AS column_name, NON_UNIQUE AS non_unique FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ? ORDER BY SEQ_IN_INDEX',
+            'SELECT COLUMN_NAME AS column_name, NON_UNIQUE AS non_unique, SUB_PART AS sub_part FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ? ORDER BY SEQ_IN_INDEX',
             [$table, $index],
         );
         if ($rows === []) {
             return false;
         }
         $actual = array_map(static fn (object $row): string => (string) $row->column_name, $rows);
+        $fullColumns = array_reduce(
+            $rows,
+            static fn (bool $carry, object $row): bool => $carry && $row->sub_part === null,
+            true,
+        );
 
-        return $actual === $columns && ((int) $rows[0]->non_unique === 0) === $unique;
+        return $actual === $columns
+            && ((int) $rows[0]->non_unique === 0) === $unique
+            && $fullColumns;
     }
 
     /** @param list<string> $columns */
