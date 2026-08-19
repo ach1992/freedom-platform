@@ -428,6 +428,14 @@ final class ServiceOperationalAuthorityTest extends TestCase
             'updated_at' => now('UTC'),
         ]);
         DB::table('panel_service_targets')->where('id', $targetId)->update(['state' => 'active', 'updated_at' => now('UTC')]);
+        $profileId = (int) DB::table('panel_target_protocol_profiles')
+            ->where('panel_service_target_id', $targetId)
+            ->value('panel_protocol_profile_id');
+        DB::table('panel_protocol_profiles')->where('id', $profileId)->update([
+            'host' => 'panel.example.com',
+            'sni' => 'panel.example.com',
+            'updated_at' => now('UTC'),
+        ]);
 
         $adapter = new ServiceOperationalPanelAdapter;
         $this->app->instance(

@@ -350,10 +350,6 @@ final readonly class ServiceImportService
         }
 
         $hosts = [];
-        $baseHost = parse_url($target->base_url, PHP_URL_HOST);
-        if (is_string($baseHost) && $this->validPublicHostname(strtolower($baseHost))) {
-            $hosts[strtolower(rtrim($baseHost, '.'))] = true;
-        }
         $profileHosts = $this->database->connection()->table('panel_target_protocol_profiles as assignment')
             ->join('panel_protocol_profiles as profile', 'profile.id', '=', 'assignment.panel_protocol_profile_id')
             ->where('assignment.panel_service_target_id', $serviceTargetId)
