@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Provisioning\Application;
 
+use App\Modules\Orders\Domain\OrderSourceType;
 use App\Modules\Orders\Domain\OrderState;
 use App\Modules\Payments\Domain\PaymentIntentState;
 use App\Modules\Provisioning\Domain\ProvisioningState;
@@ -18,18 +19,19 @@ use Illuminate\Support\Str;
 use RuntimeException;
 
 /**
- * @phpstan-type OrderLocator object{id:int|string,public_id:string,source_type:string,purchase_settlement_id:int|string|null,payment_intent_id:int|string|null}
+ * @phpstan-type OrderLocator object{id:int|string,public_id:string,source_type:string,purchase_settlement_id:int|string|null,payment_intent_id:int|string|null,order_source_authorization_id:int|string|null,order_source_authorization_public_id:string|null}
  * @phpstan-type SettlementRow object{id:int|string,public_id:string,payment_intent_id:int|string,user_id:int|string,source_quote_id:int|string,source_quote_public_id:string,amount_irr:int|string,currency:string,settled_at:string}
  * @phpstan-type IntentRow object{id:int|string,public_id:string,purpose:string,user_id:int|string,wallet_account_id:int|string|null,source_quote_id:int|string|null,source_quote_public_id:string|null,source_quote_configuration_hash:string|null,amount_irr:int|string,currency:string,state:string,captured_at:string|null}
- * @phpstan-type OrderRow object{id:int|string,public_id:string,source_type:string,purchase_settlement_id:int|string|null,purchase_settlement_public_id:string|null,payment_intent_id:int|string|null,payment_intent_public_id:string|null,user_id:int|string,source_quote_id:int|string|null,source_quote_public_id:string|null,source_quote_configuration_hash:string|null,state:string,state_version:int|string,total_amount_irr:int|string,settled_amount_irr:int|string|null,currency:string,paid_at:string|null}
- * @phpstan-type OrderItemRow object{id:int|string,public_id:string,order_id:int|string,line_number:int|string,source_quote_id:int|string,source_quote_public_id:string}
+ * @phpstan-type SourceAuthorizationRow object{id:int|string,public_id:string,source_type:string,user_id:int|string,plan_offering_id:int|string,configuration_snapshot_hash:string}
+ * @phpstan-type OrderRow object{id:int|string,public_id:string,source_type:string,purchase_settlement_id:int|string|null,purchase_settlement_public_id:string|null,payment_intent_id:int|string|null,payment_intent_public_id:string|null,order_source_authorization_id:int|string|null,order_source_authorization_public_id:string|null,user_id:int|string,source_quote_id:int|string|null,source_quote_public_id:string|null,source_quote_configuration_hash:string|null,state:string,state_version:int|string,total_amount_irr:int|string,settled_amount_irr:int|string|null,currency:string,paid_at:string|null}
+ * @phpstan-type OrderItemRow object{id:int|string,public_id:string,order_id:int|string,line_number:int|string,source_quote_id:int|string|null,source_quote_public_id:string|null,order_source_authorization_id:int|string|null,order_source_authorization_public_id:string|null,configuration_snapshot_hash:string}
  * @phpstan-type ServiceRow object{id:int|string,public_id:string,order_id:int|string,order_item_id:int|string,user_id:int|string,creation_correlation_id:string}
  * @phpstan-type OperationRow object{id:int|string,public_id:string,operation_key:string,operation_type:string,order_id:int|string,order_item_id:int|string,service_subscription_id:int|string,user_id:int|string,state:string,state_version:int|string,correlation_id:string}
  * @phpstan-type OutboxRow object{id:string,event_key:string,event_type:string,aggregate_type:string,aggregate_id:string,payload:string,payload_hash:string,correlation_id:string}
  */
 final readonly class InitialProvisioningQueueService
 {
-    private const SOURCE_TYPE = 'purchase';
+    private const PURCHASE_SOURCE_TYPE = 'purchase';
 
     private const OPERATION_TYPE = 'initial_provision';
 
@@ -45,7 +47,7 @@ final readonly class InitialProvisioningQueueService
         private OutboxPublisher $outbox,
     ) {}
 
-    /** @requirement BUY-001 PAY-002 PAY-003 PRV-002 PRV-003 ARCH-003 ARCH-004 DAT-002 DAT-003 DAT-004 SEC-002 SEC-008 QUA-001 QUA-004 */
+    /** @requirement BUY-001 CAT-006 ADM-002 PAY-002 PAY-003 PRV-002 PRV-003 ARCH-003 ARCH-004 DAT-002 DAT-003 DAT-004 SEC-002 SEC-008 QUA-001 QUA-004 */
     public function queueInitial(string $orderPublicId, string $correlationId): ProvisioningQueueReceipt
     {
         $this->assertUlid($orderPublicId, 'Order public ID');
@@ -54,126 +56,208 @@ final readonly class InitialProvisioningQueueService
         return $this->database->connection()->transaction(function (Connection $connection) use ($orderPublicId, $correlationId): ProvisioningQueueReceipt {
             $locator = $this->orderLocator($connection, $orderPublicId);
             if ($locator === null) {
-                throw new DomainException('Purchase Order does not exist.');
-            }
-            if ($locator->source_type !== self::SOURCE_TYPE
-                || $locator->purchase_settlement_id === null
-                || $locator->payment_intent_id === null) {
-                throw new DomainException('Only authoritative purchase Orders can queue initial provisioning.');
+                throw new DomainException('Order does not exist.');
             }
 
-            // Preserve the repository-wide financial lock order: settlement -> payment intent -> Order -> Item.
-            $settlement = $this->settlementById(
-                $connection,
-                $this->positiveDatabaseInt($locator->purchase_settlement_id, 'Purchase settlement ID'),
-                true,
-            );
-            $intent = $this->intentById(
-                $connection,
-                $this->positiveDatabaseInt($settlement->payment_intent_id, 'Payment intent ID'),
-                true,
-            );
-            $order = $this->orderById($connection, $this->positiveDatabaseInt($locator->id, 'Order ID'), true);
-            $item = $this->orderItem($connection, $this->positiveDatabaseInt($order->id, 'Order ID'), true);
-
-            $existingOperation = $this->operationByItem($connection, $this->positiveDatabaseInt($item->id, 'Order Item ID'), true);
-            if ($existingOperation !== null) {
-                return $this->replayReceipt($connection, $order, $item, $settlement, $intent, $existingOperation);
+            if ($locator->source_type === self::PURCHASE_SOURCE_TYPE) {
+                return $this->queuePurchase($connection, $locator, $correlationId);
             }
 
-            $this->assertNewQueueAuthority($order, $item, $settlement, $intent);
-
-            $timestamp = $this->timestamp();
-            $servicePublicId = (string) Str::ulid();
-            $serviceId = (int) $connection->table('service_subscriptions')->insertGetId([
-                'public_id' => $servicePublicId,
-                'order_id' => $this->positiveDatabaseInt($order->id, 'Order ID'),
-                'order_item_id' => $this->positiveDatabaseInt($item->id, 'Order Item ID'),
-                'user_id' => $this->positiveDatabaseInt($order->user_id, 'Order user ID'),
-                'creation_correlation_id' => $correlationId,
-                'created_at' => $timestamp,
-                'updated_at' => $timestamp,
-            ]);
-
-            $operationPublicId = (string) Str::ulid();
-            $operationKey = $this->operationKey($item->public_id);
-            $operationId = (int) $connection->table('provisioning_operations')->insertGetId([
-                'public_id' => $operationPublicId,
-                'operation_key' => $operationKey,
-                'operation_type' => self::OPERATION_TYPE,
-                'order_id' => $this->positiveDatabaseInt($order->id, 'Order ID'),
-                'order_item_id' => $this->positiveDatabaseInt($item->id, 'Order Item ID'),
-                'service_subscription_id' => $serviceId,
-                'user_id' => $this->positiveDatabaseInt($order->user_id, 'Order user ID'),
-                'state' => ProvisioningState::Queued->value,
-                'state_version' => 1,
-                'correlation_id' => $correlationId,
-                'created_at' => $timestamp,
-                'updated_at' => $timestamp,
-            ]);
-
-            $payload = $this->outboxPayload($order->public_id, $item->public_id, $servicePublicId, $operationPublicId);
-            $eventId = $this->outbox->publish(
-                (string) Str::uuid(),
-                $this->eventKey($operationPublicId),
-                self::EVENT_TYPE,
-                self::AGGREGATE_TYPE,
-                $operationPublicId,
-                $payload,
-                $correlationId,
-            );
-
-            $updated = $connection->table('orders')
-                ->where('id', $this->positiveDatabaseInt($order->id, 'Order ID'))
-                ->where('state', OrderState::Paid->value)
-                ->where('state_version', 1)
-                ->update([
-                    'state' => OrderState::ProvisioningQueued->value,
-                    'state_version' => 2,
-                    'updated_at' => $timestamp,
-                ]);
-            if ($updated !== 1) {
-                throw new RuntimeException('Purchase Order provisioning transition lost its authoritative state.');
+            $sourceType = OrderSourceType::tryFrom($locator->source_type);
+            if ($sourceType === null || ! $this->isSupportedNonPaidSource($sourceType)) {
+                throw new DomainException('Order source is not enabled for initial provisioning.');
             }
 
-            $released = $connection->table('outbox_messages')
-                ->where('id', $eventId)
-                ->where('event_type', self::EVENT_TYPE)
-                ->where('dispatch_state', 'authority_pending')
-                ->update([
-                    'dispatch_state' => 'pending',
-                    'updated_at' => $timestamp,
-                ]);
-            if ($released !== 1) {
-                throw new RuntimeException('Initial provisioning Outbox command did not release from final Order authority.');
-            }
-
-            $this->recordAudit(
-                $connection,
-                $order->public_id,
-                $item->public_id,
-                $servicePublicId,
-                $operationPublicId,
-                $eventId,
-                $correlationId,
-            );
-
-            return new ProvisioningQueueReceipt(
-                $this->positiveDatabaseInt($order->id, 'Order ID'),
-                $order->public_id,
-                $item->public_id,
-                $serviceId,
-                $servicePublicId,
-                $operationId,
-                $operationPublicId,
-                $eventId,
-                OrderState::ProvisioningQueued,
-                2,
-                ProvisioningState::Queued,
-                1,
-                false,
-            );
+            return $this->queueNonPaid($connection, $locator, $sourceType, $correlationId);
         }, self::DEADLOCK_RETRY_ATTEMPTS);
+    }
+
+    /** @param OrderLocator $locator */
+    private function queuePurchase(Connection $connection, object $locator, string $correlationId): ProvisioningQueueReceipt
+    {
+        if ($locator->purchase_settlement_id === null || $locator->payment_intent_id === null) {
+            throw new DomainException('Only authoritative purchase Orders can queue financial provisioning.');
+        }
+
+        // Preserve the repository-wide financial lock order: settlement -> payment intent -> Order -> Item.
+        $settlement = $this->settlementById(
+            $connection,
+            $this->positiveDatabaseInt($locator->purchase_settlement_id, 'Purchase settlement ID'),
+            true,
+        );
+        $intent = $this->intentById(
+            $connection,
+            $this->positiveDatabaseInt($settlement->payment_intent_id, 'Payment intent ID'),
+            true,
+        );
+        $order = $this->orderById($connection, $this->positiveDatabaseInt($locator->id, 'Order ID'), true);
+        $item = $this->singleOrderItem($connection, $this->positiveDatabaseInt($order->id, 'Order ID'), true);
+
+        $existingOperation = $this->operationByItem($connection, $this->positiveDatabaseInt($item->id, 'Order Item ID'), true);
+        if ($existingOperation !== null) {
+            return $this->replayPurchaseReceipt($connection, $order, $item, $settlement, $intent, $existingOperation);
+        }
+
+        $this->assertNewPurchaseQueueAuthority($order, $item, $settlement, $intent);
+
+        return $this->createQueueEffect(
+            $connection,
+            $order,
+            $item,
+            $correlationId,
+            OrderState::Paid,
+            1,
+            2,
+        );
+    }
+
+    /** @param OrderLocator $locator */
+    private function queueNonPaid(
+        Connection $connection,
+        object $locator,
+        OrderSourceType $sourceType,
+        string $correlationId,
+    ): ProvisioningQueueReceipt {
+        if ($locator->order_source_authorization_id === null || $locator->order_source_authorization_public_id === null) {
+            throw new DomainException('Zero-cost Order is missing source authorization authority.');
+        }
+
+        // Source-authorized Orders have no financial locks. Lock immutable source authority first, then Order and Item.
+        $authorization = $this->sourceAuthorizationById(
+            $connection,
+            $this->positiveDatabaseInt($locator->order_source_authorization_id, 'Order source authorization ID'),
+            true,
+        );
+        $order = $this->orderById($connection, $this->positiveDatabaseInt($locator->id, 'Order ID'), true);
+        $item = $this->singleOrderItem($connection, $this->positiveDatabaseInt($order->id, 'Order ID'), true);
+
+        $existingOperation = $this->operationByItem($connection, $this->positiveDatabaseInt($item->id, 'Order Item ID'), true);
+        if ($existingOperation !== null) {
+            return $this->replayNonPaidReceipt($connection, $order, $item, $authorization, $sourceType, $existingOperation);
+        }
+
+        $this->assertNewNonPaidQueueAuthority($order, $item, $authorization, $sourceType);
+
+        return $this->createQueueEffect(
+            $connection,
+            $order,
+            $item,
+            $correlationId,
+            OrderState::Authorized,
+            0,
+            1,
+        );
+    }
+
+    /**
+     * @param OrderRow $order
+     * @param OrderItemRow $item
+     */
+    private function createQueueEffect(
+        Connection $connection,
+        object $order,
+        object $item,
+        string $correlationId,
+        OrderState $fromState,
+        int $fromVersion,
+        int $toVersion,
+    ): ProvisioningQueueReceipt {
+        $timestamp = $this->timestamp();
+        $orderId = $this->positiveDatabaseInt($order->id, 'Order ID');
+        $itemId = $this->positiveDatabaseInt($item->id, 'Order Item ID');
+        $userId = $this->positiveDatabaseInt($order->user_id, 'Order user ID');
+
+        $servicePublicId = (string) Str::ulid();
+        $serviceId = (int) $connection->table('service_subscriptions')->insertGetId([
+            'public_id' => $servicePublicId,
+            'order_id' => $orderId,
+            'order_item_id' => $itemId,
+            'user_id' => $userId,
+            'creation_correlation_id' => $correlationId,
+            'created_at' => $timestamp,
+            'updated_at' => $timestamp,
+        ]);
+
+        $operationPublicId = (string) Str::ulid();
+        $operationId = (int) $connection->table('provisioning_operations')->insertGetId([
+            'public_id' => $operationPublicId,
+            'operation_key' => $this->operationKey($item->public_id),
+            'operation_type' => self::OPERATION_TYPE,
+            'order_id' => $orderId,
+            'order_item_id' => $itemId,
+            'service_subscription_id' => $serviceId,
+            'user_id' => $userId,
+            'state' => ProvisioningState::Queued->value,
+            'state_version' => 1,
+            'correlation_id' => $correlationId,
+            'created_at' => $timestamp,
+            'updated_at' => $timestamp,
+        ]);
+
+        $payload = $this->outboxPayload($order->public_id, $item->public_id, $servicePublicId, $operationPublicId);
+        $eventId = $this->outbox->publish(
+            (string) Str::uuid(),
+            $this->eventKey($operationPublicId),
+            self::EVENT_TYPE,
+            self::AGGREGATE_TYPE,
+            $operationPublicId,
+            $payload,
+            $correlationId,
+        );
+
+        $updated = $connection->table('orders')
+            ->where('id', $orderId)
+            ->where('state', $fromState->value)
+            ->where('state_version', $fromVersion)
+            ->update([
+                'state' => OrderState::ProvisioningQueued->value,
+                'state_version' => $toVersion,
+                'updated_at' => $timestamp,
+            ]);
+        if ($updated !== 1) {
+            throw new RuntimeException('Order provisioning transition lost its authoritative state.');
+        }
+
+        $released = $connection->table('outbox_messages')
+            ->where('id', $eventId)
+            ->where('event_type', self::EVENT_TYPE)
+            ->where('dispatch_state', 'authority_pending')
+            ->update([
+                'dispatch_state' => 'pending',
+                'updated_at' => $timestamp,
+            ]);
+        if ($released !== 1) {
+            throw new RuntimeException('Initial provisioning Outbox command did not release from final Order authority.');
+        }
+
+        $this->recordAudit(
+            $connection,
+            $order->public_id,
+            $item->public_id,
+            $servicePublicId,
+            $operationPublicId,
+            $eventId,
+            $correlationId,
+            $fromState,
+            $fromVersion,
+            $toVersion,
+        );
+
+        return new ProvisioningQueueReceipt(
+            $orderId,
+            $order->public_id,
+            $item->public_id,
+            $serviceId,
+            $servicePublicId,
+            $operationId,
+            $operationPublicId,
+            $eventId,
+            OrderState::ProvisioningQueued,
+            $toVersion,
+            ProvisioningState::Queued,
+            1,
+            false,
+        );
     }
 
     /** @return OrderLocator|null */
@@ -182,6 +266,7 @@ final readonly class InitialProvisioningQueueService
         /** @var OrderLocator|null $row */
         $row = $connection->table('orders')->where('public_id', $publicId)->first([
             'id', 'public_id', 'source_type', 'purchase_settlement_id', 'payment_intent_id',
+            'order_source_authorization_id', 'order_source_authorization_public_id',
         ]);
 
         return $row;
@@ -225,6 +310,24 @@ final readonly class InitialProvisioningQueueService
         return $row;
     }
 
+    /** @return SourceAuthorizationRow */
+    private function sourceAuthorizationById(Connection $connection, int $id, bool $lock = false): object
+    {
+        $query = $connection->table('order_source_authorizations')->where('id', $id);
+        if ($lock) {
+            $query->lockForUpdate();
+        }
+        /** @var SourceAuthorizationRow|null $row */
+        $row = $query->first([
+            'id', 'public_id', 'source_type', 'user_id', 'plan_offering_id', 'configuration_snapshot_hash',
+        ]);
+        if ($row === null) {
+            throw new RuntimeException('Order source authorization is unavailable.');
+        }
+
+        return $row;
+    }
+
     /** @return OrderRow */
     private function orderById(Connection $connection, int $id, bool $lock = false): object
     {
@@ -235,28 +338,31 @@ final readonly class InitialProvisioningQueueService
         /** @var OrderRow|null $row */
         $row = $query->first([
             'id', 'public_id', 'source_type', 'purchase_settlement_id', 'purchase_settlement_public_id',
-            'payment_intent_id', 'payment_intent_public_id', 'user_id', 'source_quote_id', 'source_quote_public_id',
-            'source_quote_configuration_hash', 'state', 'state_version', 'total_amount_irr', 'settled_amount_irr',
-            'currency', 'paid_at',
+            'payment_intent_id', 'payment_intent_public_id', 'order_source_authorization_id', 'order_source_authorization_public_id',
+            'user_id', 'source_quote_id', 'source_quote_public_id', 'source_quote_configuration_hash',
+            'state', 'state_version', 'total_amount_irr', 'settled_amount_irr', 'currency', 'paid_at',
         ]);
         if ($row === null) {
-            throw new RuntimeException('Purchase Order disappeared while acquiring queue authority.');
+            throw new RuntimeException('Order disappeared while acquiring queue authority.');
         }
 
         return $row;
     }
 
     /** @return OrderItemRow */
-    private function orderItem(Connection $connection, int $orderId, bool $lock = false): object
+    private function singleOrderItem(Connection $connection, int $orderId, bool $lock = false): object
     {
         $query = $connection->table('order_items')->where('order_id', $orderId)->where('line_number', 1);
         if ($lock) {
             $query->lockForUpdate();
         }
         /** @var OrderItemRow|null $row */
-        $row = $query->first(['id', 'public_id', 'order_id', 'line_number', 'source_quote_id', 'source_quote_public_id']);
+        $row = $query->first([
+            'id', 'public_id', 'order_id', 'line_number', 'source_quote_id', 'source_quote_public_id',
+            'order_source_authorization_id', 'order_source_authorization_public_id', 'configuration_snapshot_hash',
+        ]);
         if ($row === null || $connection->table('order_items')->where('order_id', $orderId)->count() !== 1) {
-            throw new RuntimeException('Purchase Order must contain exactly one authoritative Order Item in the current model.');
+            throw new RuntimeException('Order must contain exactly one authoritative Order Item for single-item initial provisioning.');
         }
 
         return $row;
@@ -287,9 +393,7 @@ final readonly class InitialProvisioningQueueService
         $row = $connection->table('service_subscriptions')
             ->where('id', $id)
             ->lockForUpdate()
-            ->first([
-                'id', 'public_id', 'order_id', 'order_item_id', 'user_id', 'creation_correlation_id',
-            ]);
+            ->first(['id', 'public_id', 'order_id', 'order_item_id', 'user_id', 'creation_correlation_id']);
         if ($row === null) {
             throw new RuntimeException('Provisioning Operation Service Subscription is unavailable.');
         }
@@ -313,14 +417,16 @@ final readonly class InitialProvisioningQueueService
     }
 
     /**
-     * @param  OrderRow  $order
-     * @param  OrderItemRow  $item
-     * @param  SettlementRow  $settlement
-     * @param  IntentRow  $intent
+     * @param OrderRow $order
+     * @param OrderItemRow $item
+     * @param SettlementRow $settlement
+     * @param IntentRow $intent
      */
-    private function assertNewQueueAuthority(object $order, object $item, object $settlement, object $intent): void
+    private function assertNewPurchaseQueueAuthority(object $order, object $item, object $settlement, object $intent): void
     {
-        if ($order->source_type !== self::SOURCE_TYPE
+        if ($order->source_type !== self::PURCHASE_SOURCE_TYPE
+            || $order->order_source_authorization_id !== null
+            || $order->order_source_authorization_public_id !== null
             || $order->purchase_settlement_id === null
             || (int) $order->purchase_settlement_id !== (int) $settlement->id
             || $order->purchase_settlement_public_id === null
@@ -332,7 +438,7 @@ final readonly class InitialProvisioningQueueService
             || (int) $settlement->payment_intent_id !== (int) $intent->id
             || (int) $order->user_id !== (int) $settlement->user_id
             || (int) $intent->user_id !== (int) $order->user_id
-            || $intent->purpose !== self::SOURCE_TYPE
+            || $intent->purpose !== self::PURCHASE_SOURCE_TYPE
             || $intent->wallet_account_id !== null
             || $intent->state !== PaymentIntentState::Captured->value
             || $intent->captured_at === null
@@ -342,11 +448,15 @@ final readonly class InitialProvisioningQueueService
             || (int) $order->source_quote_id !== (int) $settlement->source_quote_id
             || $intent->source_quote_id === null
             || (int) $intent->source_quote_id !== (int) $order->source_quote_id
+            || $item->source_quote_id === null
             || (int) $item->source_quote_id !== (int) $order->source_quote_id
+            || $item->order_source_authorization_id !== null
+            || $item->order_source_authorization_public_id !== null
             || $order->source_quote_public_id === null
             || ! hash_equals($order->source_quote_public_id, $settlement->source_quote_public_id)
             || $intent->source_quote_public_id === null
             || ! hash_equals($intent->source_quote_public_id, $order->source_quote_public_id)
+            || $item->source_quote_public_id === null
             || ! hash_equals($item->source_quote_public_id, $order->source_quote_public_id)
             || $order->source_quote_configuration_hash === null
             || $intent->source_quote_configuration_hash === null
@@ -362,13 +472,56 @@ final readonly class InitialProvisioningQueueService
     }
 
     /**
-     * @param  OrderRow  $order
-     * @param  OrderItemRow  $item
-     * @param  SettlementRow  $settlement
-     * @param  IntentRow  $intent
-     * @param  OperationRow  $operation
+     * @param OrderRow $order
+     * @param OrderItemRow $item
+     * @param SourceAuthorizationRow $authorization
      */
-    private function replayReceipt(
+    private function assertNewNonPaidQueueAuthority(
+        object $order,
+        object $item,
+        object $authorization,
+        OrderSourceType $sourceType,
+    ): void {
+        if ($order->source_type !== $sourceType->value
+            || ! $this->isSupportedNonPaidSource($sourceType)
+            || $order->purchase_settlement_id !== null
+            || $order->purchase_settlement_public_id !== null
+            || $order->payment_intent_id !== null
+            || $order->payment_intent_public_id !== null
+            || $order->source_quote_id !== null
+            || $order->source_quote_public_id !== null
+            || $order->source_quote_configuration_hash !== null
+            || $order->order_source_authorization_id === null
+            || (int) $order->order_source_authorization_id !== (int) $authorization->id
+            || $order->order_source_authorization_public_id === null
+            || ! hash_equals($order->order_source_authorization_public_id, $authorization->public_id)
+            || $authorization->source_type !== $sourceType->value
+            || (int) $authorization->user_id !== (int) $order->user_id
+            || $order->state !== OrderState::Authorized->value
+            || (int) $order->state_version !== 0
+            || (int) $order->total_amount_irr !== 0
+            || $order->settled_amount_irr !== null
+            || $order->currency !== 'IRR'
+            || $order->paid_at !== null
+            || $item->source_quote_id !== null
+            || $item->source_quote_public_id !== null
+            || $item->order_source_authorization_id === null
+            || (int) $item->order_source_authorization_id !== (int) $authorization->id
+            || $item->order_source_authorization_public_id === null
+            || ! hash_equals($item->order_source_authorization_public_id, $authorization->public_id)
+            || ! hash_equals(strtolower($item->configuration_snapshot_hash), strtolower($authorization->configuration_snapshot_hash))) {
+            throw new DomainException('Zero-cost Order is not currently eligible for initial provisioning.');
+        }
+    }
+
+    /**
+     * @param OrderRow $order
+     * @param OrderItemRow $item
+     * @param SettlementRow $settlement
+     * @param IntentRow $intent
+     * @param OperationRow $operation
+     */
+    private function replayPurchaseReceipt(
         Connection $connection,
         object $order,
         object $item,
@@ -376,20 +529,70 @@ final readonly class InitialProvisioningQueueService
         object $intent,
         object $operation,
     ): ProvisioningQueueReceipt {
+        if ($order->source_type !== self::PURCHASE_SOURCE_TYPE
+            || $order->purchase_settlement_id === null
+            || (int) $order->purchase_settlement_id !== (int) $settlement->id
+            || $order->payment_intent_id === null
+            || (int) $order->payment_intent_id !== (int) $intent->id
+            || (int) $settlement->payment_intent_id !== (int) $intent->id) {
+            throw new RuntimeException('Stored purchase provisioning authority is inconsistent.');
+        }
+
+        return $this->replayQueueEffect($connection, $order, $item, $operation, 2);
+    }
+
+    /**
+     * @param OrderRow $order
+     * @param OrderItemRow $item
+     * @param SourceAuthorizationRow $authorization
+     * @param OperationRow $operation
+     */
+    private function replayNonPaidReceipt(
+        Connection $connection,
+        object $order,
+        object $item,
+        object $authorization,
+        OrderSourceType $sourceType,
+        object $operation,
+    ): ProvisioningQueueReceipt {
+        if ($order->source_type !== $sourceType->value
+            || ! $this->isSupportedNonPaidSource($sourceType)
+            || $order->order_source_authorization_id === null
+            || (int) $order->order_source_authorization_id !== (int) $authorization->id
+            || $order->order_source_authorization_public_id === null
+            || ! hash_equals($order->order_source_authorization_public_id, $authorization->public_id)
+            || $authorization->source_type !== $sourceType->value
+            || (int) $authorization->user_id !== (int) $order->user_id
+            || $item->order_source_authorization_id === null
+            || (int) $item->order_source_authorization_id !== (int) $authorization->id
+            || $item->order_source_authorization_public_id === null
+            || ! hash_equals($item->order_source_authorization_public_id, $authorization->public_id)) {
+            throw new RuntimeException('Stored zero-cost provisioning authority is inconsistent.');
+        }
+
+        return $this->replayQueueEffect($connection, $order, $item, $operation, 1);
+    }
+
+    /**
+     * @param OrderRow $order
+     * @param OrderItemRow $item
+     * @param OperationRow $operation
+     */
+    private function replayQueueEffect(
+        Connection $connection,
+        object $order,
+        object $item,
+        object $operation,
+        int $expectedOrderVersion,
+    ): ProvisioningQueueReceipt {
         $service = $this->serviceById($connection, $this->positiveDatabaseInt($operation->service_subscription_id, 'Service Subscription ID'));
         $outbox = $this->outboxByOperation($connection, $operation->public_id);
         $expectedPayload = $this->outboxPayload($order->public_id, $item->public_id, $service->public_id, $operation->public_id);
         $expectedPayloadJson = $expectedPayload->json();
         $storedPayloadHash = hash('sha256', $outbox->payload);
 
-        if ($order->source_type !== self::SOURCE_TYPE
-            || $order->purchase_settlement_id === null
-            || (int) $order->purchase_settlement_id !== (int) $settlement->id
-            || $order->payment_intent_id === null
-            || (int) $order->payment_intent_id !== (int) $intent->id
-            || (int) $settlement->payment_intent_id !== (int) $intent->id
-            || $order->state !== OrderState::ProvisioningQueued->value
-            || (int) $order->state_version !== 2
+        if ($order->state !== OrderState::ProvisioningQueued->value
+            || (int) $order->state_version !== $expectedOrderVersion
             || (int) $item->order_id !== (int) $order->id
             || (int) $service->order_id !== (int) $order->id
             || (int) $service->order_item_id !== (int) $item->id
@@ -423,7 +626,7 @@ final readonly class InitialProvisioningQueueService
             $operation->public_id,
             $outbox->id,
             OrderState::ProvisioningQueued,
-            2,
+            $expectedOrderVersion,
             ProvisioningState::Queued,
             1,
             true,
@@ -462,6 +665,9 @@ final readonly class InitialProvisioningQueueService
         string $operationPublicId,
         string $eventId,
         string $correlationId,
+        OrderState $fromState,
+        int $fromVersion,
+        int $toVersion,
     ): void {
         $connection->table('audit_logs')->insert([
             'actor_type' => 'system',
@@ -470,12 +676,12 @@ final readonly class InitialProvisioningQueueService
             'target_type' => 'order',
             'target_id' => $orderPublicId,
             'before_safe_data' => json_encode([
-                'state' => OrderState::Paid->value,
-                'state_version' => 1,
+                'state' => $fromState->value,
+                'state_version' => $fromVersion,
             ], JSON_THROW_ON_ERROR),
             'after_safe_data' => json_encode([
                 'state' => OrderState::ProvisioningQueued->value,
-                'state_version' => 2,
+                'state_version' => $toVersion,
                 'order_item_public_id' => $itemPublicId,
                 'service_subscription_public_id' => $servicePublicId,
                 'provisioning_operation_public_id' => $operationPublicId,
@@ -487,6 +693,15 @@ final readonly class InitialProvisioningQueueService
             'request_fingerprint' => null,
             'created_at' => $this->timestamp(),
         ]);
+    }
+
+    private function isSupportedNonPaidSource(OrderSourceType $sourceType): bool
+    {
+        return in_array($sourceType, [
+            OrderSourceType::Trial,
+            OrderSourceType::BenefitCode,
+            OrderSourceType::AdministratorGrant,
+        ], true);
     }
 
     private function timestamp(): string
