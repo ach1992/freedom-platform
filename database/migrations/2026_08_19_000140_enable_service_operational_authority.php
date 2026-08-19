@@ -609,8 +609,7 @@ BEGIN
           AND order_row.total_amount_irr = 0
           AND order_row.purchase_settlement_id IS NULL
           AND order_row.payment_intent_id IS NULL
-          AND order_row.state = 'provisioning_queued'
-          AND operation_row.state = 'queued';
+          AND order_row.state IN ('provisioning_queued','provisioning','completed','needs_review');
     END IF;
 
     IF COALESCE(@app_service_batch_authority, '') <> 'service_batch_grant_v1'
