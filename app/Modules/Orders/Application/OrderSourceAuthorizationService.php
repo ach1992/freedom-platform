@@ -18,6 +18,10 @@ use RuntimeException;
 
 /**
  * @phpstan-type AuthorizationRow object{id:int|string,public_id:string,source_type:string,user_id:int|string,plan_offering_id:int|string,trial_reservation_id:int|string|null,trial_reservation_command_key:string|null,benefit_entitlement_id:int|string|null,benefit_entitlement_public_id:string|null,authorization_key:string,request_payload_hash:string,configuration_snapshot:string,configuration_snapshot_hash:string,actor_type:string,actor_id:int|string|null,reason_code:string,correlation_id:string}
+ * @phpstan-type TrialReservationRow object{id:int|string,command_key:string,payload_hash:string,trial_policy_id:int|string,trial_policy_version:int|string,policy_configuration_hash:string,plan_offering_id:int|string,user_id:int|string,plan_offering_route_selection_id:int|string,state:string,version:int|string,data_bytes:int|string,duration_days:int|string,fallback_used_snapshot:int|bool,delivery_template_key_snapshot:string,eligibility_snapshot_hash:string}
+ * @phpstan-type BenefitEntitlementRow object{id:int|string,public_id:string,user_id:int|string,plan_offering_id:int|string,configuration_snapshot:string,configuration_hash:string}
+ * @phpstan-type TrialConfiguration array{data_bytes:int,delivery_template_key:string,duration_days:int,eligibility_snapshot_hash:string,fallback_used:bool,plan_offering_route_selection_id:int,policy_configuration_hash:string,trial_policy_id:int,trial_policy_version:int,trial_reservation_version:int}
+ * @phpstan-type AdministratorGrantConfiguration array{data_allowance_bytes:int|null,device_limit:int|null,duration_days:int,offering_code:string,offering_version:int,protocol_selection_mode:string,sales_server_id:int,server_selection_mode:string,service_mode_code:string,service_target_id:int}
  */
 final readonly class OrderSourceAuthorizationService
 {
@@ -288,7 +292,10 @@ final readonly class OrderSourceAuthorizationService
         }
     }
 
-    /** @param object{id:int|string,command_key:string,payload_hash:string,trial_policy_id:int|string,trial_policy_version:int|string,policy_configuration_hash:string,plan_offering_id:int|string,user_id:int|string,plan_offering_route_selection_id:int|string,state:string,version:int|string,data_bytes:int|string,duration_days:int|string,fallback_used_snapshot:int|bool,delivery_template_key_snapshot:string,eligibility_snapshot_hash:string} $reservation */
+    /**
+     * @param TrialReservationRow $reservation
+     * @return TrialConfiguration
+     */
     private function trialConfiguration(object $reservation): array
     {
         return [
@@ -305,7 +312,10 @@ final readonly class OrderSourceAuthorizationService
         ];
     }
 
-    /** @param object{code:string,sales_server_id:int|string,panel_service_target_id:int|string,service_mode_code:string,server_selection_mode:string,protocol_selection_mode:string,duration_days:int|string,data_allowance_bytes:int|string|null,device_limit:int|string|null,version:int|string} $offering */
+    /**
+     * @param object{code:string,sales_server_id:int|string,panel_service_target_id:int|string,service_mode_code:string,server_selection_mode:string,protocol_selection_mode:string,duration_days:int|string,data_allowance_bytes:int|string|null,device_limit:int|string|null,version:int|string} $offering
+     * @return AdministratorGrantConfiguration
+     */
     private function administratorGrantConfiguration(object $offering): array
     {
         return [
@@ -510,7 +520,7 @@ final readonly class OrderSourceAuthorizationService
         }
     }
 
-    /** @return object{id:int|string,command_key:string,payload_hash:string,trial_policy_id:int|string,trial_policy_version:int|string,policy_configuration_hash:string,plan_offering_id:int|string,user_id:int|string,plan_offering_route_selection_id:int|string,state:string,version:int|string,data_bytes:int|string,duration_days:int|string,fallback_used_snapshot:int|bool,delivery_template_key_snapshot:string,eligibility_snapshot_hash:string}|null */
+    /** @return TrialReservationRow|null */
     private function trialReservationByCommandKey(Connection $connection, string $commandKey, bool $lock): ?object
     {
         $query = $connection->table('trial_reservations')->where('command_key', $commandKey);
@@ -518,7 +528,8 @@ final readonly class OrderSourceAuthorizationService
             $query->lockForUpdate();
         }
 
-        return $query->first([
+        /** @var TrialReservationRow|null $row */
+        $row = $query->first([
             'id',
             'command_key',
             'payload_hash',
@@ -536,9 +547,11 @@ final readonly class OrderSourceAuthorizationService
             'delivery_template_key_snapshot',
             'eligibility_snapshot_hash',
         ]);
+
+        return $row;
     }
 
-    /** @return object{id:int|string,public_id:string,user_id:int|string,plan_offering_id:int|string,configuration_snapshot:string,configuration_hash:string}|null */
+    /** @return BenefitEntitlementRow|null */
     private function benefitEntitlementByPublicId(Connection $connection, string $publicId, bool $lock): ?object
     {
         $query = $connection->table('benefit_code_free_service_entitlements')->where('public_id', $publicId);
@@ -546,7 +559,10 @@ final readonly class OrderSourceAuthorizationService
             $query->lockForUpdate();
         }
 
-        return $query->first(['id', 'public_id', 'user_id', 'plan_offering_id', 'configuration_snapshot', 'configuration_hash']);
+        /** @var BenefitEntitlementRow|null $row */
+        $row = $query->first(['id', 'public_id', 'user_id', 'plan_offering_id', 'configuration_snapshot', 'configuration_hash']);
+
+        return $row;
     }
 
     /** @return AuthorizationRow|null */
@@ -557,7 +573,8 @@ final readonly class OrderSourceAuthorizationService
             $query->lockForUpdate();
         }
 
-        return $query->first([
+        /** @var AuthorizationRow|null $row */
+        $row = $query->first([
             'id',
             'public_id',
             'source_type',
@@ -576,6 +593,8 @@ final readonly class OrderSourceAuthorizationService
             'reason_code',
             'correlation_id',
         ]);
+
+        return $row;
     }
 
     /** @param array<string,mixed> $payload */

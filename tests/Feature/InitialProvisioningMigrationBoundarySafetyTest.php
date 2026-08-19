@@ -62,6 +62,10 @@ final class InitialProvisioningMigrationBoundarySafetyTest extends TestCase
         $outboxOrderMigration = require database_path('migrations/2026_08_14_001164_harden_initial_provisioning_outbox_order_authority.php');
         /** @var Migration $activationMigration */
         $activationMigration = require database_path('migrations/2026_08_14_001165_activate_provisioning_queue_authority.php');
+        /** @var Migration $nonPaidInvalidationMigration */
+        $nonPaidInvalidationMigration = require database_path('migrations/2026_08_19_000115_extend_provisioning_invalidation_to_non_paid_sources.php');
+        /** @var Migration $nonPaidAuthorityMigration */
+        $nonPaidAuthorityMigration = require database_path('migrations/2026_08_19_000120_activate_non_paid_order_authority.php');
 
         try {
             $activationMigration->down();
@@ -127,6 +131,8 @@ final class InitialProvisioningMigrationBoundarySafetyTest extends TestCase
             $invalidationMigration->up();
             $outboxOrderMigration->up();
             $activationMigration->up();
+            $nonPaidInvalidationMigration->up();
+            $nonPaidAuthorityMigration->up();
         }
     }
 

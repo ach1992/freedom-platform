@@ -259,7 +259,10 @@ final readonly class NonPaidOrderService
         return $row;
     }
 
-    /** @param SourceAuthorizationRow $authorization */
+    /**
+     * @param OrderRow $order
+     * @param SourceAuthorizationRow $authorization
+     */
     private function replayReceipt(
         Connection $connection,
         object $order,

@@ -316,6 +316,7 @@ final readonly class AgentBulkOrderService
         }, 3);
     }
 
+    /** @param BulkParentRow $parent */
     private function receipt(object $parent, bool $replayed): AgentBulkOrderReceipt
     {
         $items = [];

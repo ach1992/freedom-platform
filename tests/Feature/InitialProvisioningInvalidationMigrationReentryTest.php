@@ -18,6 +18,8 @@ final class InitialProvisioningInvalidationMigrationReentryTest extends TestCase
     {
         /** @var Migration $migration */
         $migration = require database_path('migrations/2026_08_14_001163_harden_provisioning_financial_invalidation.php');
+        /** @var Migration $nonPaidInvalidationMigration */
+        $nonPaidInvalidationMigration = require database_path('migrations/2026_08_19_000115_extend_provisioning_invalidation_to_non_paid_sources.php');
 
         try {
             foreach ([
@@ -49,6 +51,7 @@ final class InitialProvisioningInvalidationMigrationReentryTest extends TestCase
             }
         } finally {
             $migration->up();
+            $nonPaidInvalidationMigration->up();
         }
     }
 
