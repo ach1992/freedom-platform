@@ -421,6 +421,91 @@ final class ServiceOperationalAuthorityTest extends TestCase
         self::assertSame(0, DB::table('service_subscriptions')->count());
     }
 
+    public function test_batch_cancellation_refuses_expired_started_work_and_parent_shortcuts(): void
+    {
+        $offering = $this->activeBenefitOffering('batch-cancel-fence');
+        $ownerId = $this->benefitOwner();
+        $userId = $this->benefitUser();
+        $service = $this->app->make(ServiceBatchGrantService::class);
+
+        $startedContext = $this->context('batch-cancel-started', $ownerId);
+        $started = $service->create($startedContext, [[
+            'user_id' => $userId,
+            'plan_offering_id' => $offering['id'],
+        ]]);
+        $startedItemId = (int) DB::table('service_batch_grant_items')
+            ->where('service_batch_grant_id', $started->batchId)
+            ->value('id');
+        DB::statement("SET @app_service_batch_authority = 'service_batch_grant_v1'");
+        try {
+            DB::table('service_batch_grant_items')->where('id', $startedItemId)->update([
+                'state' => 'processing',
+                'attempt_count' => 1,
+                'claim_token' => (string) Str::ulid(),
+                'claim_expires_at' => now('UTC')->subMinute(),
+                'updated_at' => now('UTC'),
+            ]);
+        } finally {
+            DB::statement('SET @app_service_batch_authority = NULL');
+        }
+
+        try {
+            $service->cancel($started->batchPublicId, $startedContext);
+            self::fail('Batch cancellation must refuse expired work that has already started.');
+        } catch (DomainException $exception) {
+            self::assertSame(
+                'Service batch grant has started unfinished work and must be resumed or reconciled before cancellation.',
+                $exception->getMessage(),
+            );
+        }
+        self::assertSame('active', DB::table('service_batch_grants')->where('id', $started->batchId)->value('state'));
+        self::assertSame('processing', DB::table('service_batch_grant_items')->where('id', $startedItemId)->value('state'));
+
+        DB::statement("SET @app_service_batch_authority = 'service_batch_grant_v1'");
+        try {
+            try {
+                DB::table('service_batch_grant_items')->where('id', $startedItemId)->update([
+                    'state' => 'cancelled',
+                    'claim_token' => null,
+                    'claim_expires_at' => null,
+                    'error_code' => null,
+                    'updated_at' => now('UTC'),
+                ]);
+                self::fail('DB guard must reject cancellation of a started batch item.');
+            } catch (QueryException $exception) {
+                self::assertStringContainsString('Service batch grant item update authority is invalid.', $exception->getMessage());
+            }
+        } finally {
+            DB::statement('SET @app_service_batch_authority = NULL');
+        }
+
+        $untouchedContext = $this->context('batch-cancel-untouched', $ownerId);
+        $untouched = $service->create($untouchedContext, [[
+            'user_id' => $userId,
+            'plan_offering_id' => $offering['id'],
+        ]]);
+        DB::statement("SET @app_service_batch_authority = 'service_batch_grant_v1'");
+        try {
+            try {
+                DB::table('service_batch_grants')->where('id', $untouched->batchId)->update([
+                    'state' => 'cancelled',
+                    'updated_at' => now('UTC'),
+                ]);
+                self::fail('DB guard must reject cancelling a parent before its unfinished items are cancelled.');
+            } catch (QueryException $exception) {
+                self::assertStringContainsString('Service batch grant update authority is invalid.', $exception->getMessage());
+            }
+        } finally {
+            DB::statement('SET @app_service_batch_authority = NULL');
+        }
+
+        $cancelled = $service->cancel($untouched->batchPublicId, $untouchedContext);
+        self::assertSame('cancelled', $cancelled->state);
+        self::assertSame('cancelled', DB::table('service_batch_grant_items')
+            ->where('service_batch_grant_id', $untouched->batchId)
+            ->value('state'));
+    }
+
     public function test_batch_result_guard_rejects_cross_batch_same_subject_result_forgery_even_with_internal_session_flag(): void
     {
         $offering = $this->activeBenefitOffering('batch-result-forgery');

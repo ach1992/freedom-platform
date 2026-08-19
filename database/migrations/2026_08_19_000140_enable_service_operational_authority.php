@@ -505,11 +505,13 @@ FOR EACH ROW
 BEGIN
     DECLARE succeeded_items INT DEFAULT 0;
     DECLARE failed_items INT DEFAULT 0;
+    DECLARE unfinished_items INT DEFAULT 0;
 
     SELECT
         SUM(item_row.state = 'succeeded'),
-        SUM(item_row.state = 'failed')
-      INTO succeeded_items, failed_items
+        SUM(item_row.state = 'failed'),
+        SUM(item_row.state NOT IN ('succeeded','cancelled'))
+      INTO succeeded_items, failed_items, unfinished_items
     FROM service_batch_grant_items item_row
     WHERE item_row.service_batch_grant_id = OLD.id;
 
@@ -528,7 +530,9 @@ BEGIN
             (NEW.state = OLD.state AND NEW.state IN ('active','paused','cancelled'))
             OR (OLD.state = 'active' AND NEW.state = 'paused')
             OR (OLD.state = 'paused' AND NEW.state = 'active')
-            OR (OLD.state IN ('active','paused') AND NEW.state = 'cancelled')
+            OR (OLD.state IN ('active','paused') AND NEW.state = 'cancelled'
+                AND COALESCE(unfinished_items, 0) = 0
+                AND COALESCE(succeeded_items, 0) < OLD.item_count)
             OR (OLD.state = 'active' AND NEW.state = 'completed'
                 AND NEW.succeeded_count = NEW.item_count AND NEW.failed_count = 0)
        ) THEN
@@ -641,10 +645,15 @@ BEGIN
                 AND NEW.attempt_count = OLD.attempt_count
                 AND NEW.claim_token IS NULL AND NEW.claim_expires_at IS NULL
                 AND NEW.error_code IN ('domain_rejected','processing_failed'))
-            OR (OLD.state IN ('pending','failed','processing') AND NEW.state = 'cancelled'
-                AND NEW.attempt_count = OLD.attempt_count
+            OR (OLD.state = 'pending' AND NEW.state = 'cancelled'
+                AND OLD.attempt_count = 0 AND NEW.attempt_count = 0
+                AND OLD.claim_token IS NULL AND OLD.claim_expires_at IS NULL
                 AND NEW.claim_token IS NULL AND NEW.claim_expires_at IS NULL
-                AND NEW.error_code IS NULL)
+                AND OLD.order_source_authorization_id IS NULL AND NEW.order_source_authorization_id IS NULL
+                AND OLD.order_id IS NULL AND NEW.order_id IS NULL
+                AND OLD.service_subscription_id IS NULL AND NEW.service_subscription_id IS NULL
+                AND OLD.provisioning_operation_id IS NULL AND NEW.provisioning_operation_id IS NULL
+                AND OLD.error_code IS NULL AND NEW.error_code IS NULL)
        ) THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service batch grant item update authority is invalid.';
     END IF;
@@ -722,7 +731,9 @@ SQL);
         if (! $this->triggerContains('service_subscriptions_update_guard', 'service_ownership_transfer_v1')
             || ! $this->triggerContains('service_subscriptions_update_guard', 'service_repair_v1')
             || ! $this->triggerContains('service_subscriptions_update_guard', 'service_import_attach_v1')
+            || ! $this->triggerContains('service_batch_grants_update_guard', 'unfinished_items')
             || ! $this->triggerContains('service_batch_grant_items_update_guard', 'source_row.authorization_key')
+            || ! $this->triggerContains('service_batch_grant_items_update_guard', 'OLD.attempt_count = 0')
             || ! $this->triggerExists('audit_logs_service_operational_insert_guard')) {
             return false;
         }
@@ -753,7 +764,9 @@ SQL);
             || ! $this->triggerContains('service_subscriptions_update_guard', 'service_ownership_transfer_v1')
             || ! $this->triggerContains('service_subscriptions_update_guard', 'service_repair_v1')
             || ! $this->triggerContains('service_subscriptions_update_guard', 'service_import_attach_v1')
+            || ! $this->triggerContains('service_batch_grants_update_guard', 'unfinished_items')
             || ! $this->triggerContains('service_batch_grant_items_update_guard', 'source_row.authorization_key')
+            || ! $this->triggerContains('service_batch_grant_items_update_guard', 'OLD.attempt_count = 0')
             || ! $this->triggerExists('audit_logs_service_operational_insert_guard')) {
             throw new RuntimeException('Service operational authority is incomplete before release.');
         }
@@ -779,7 +792,9 @@ SQL);
             || ! $this->triggerContains('service_subscriptions_update_guard', 'service_ownership_transfer_v1')
             || ! $this->triggerContains('service_subscriptions_update_guard', 'service_repair_v1')
             || ! $this->triggerContains('service_subscriptions_update_guard', 'service_import_attach_v1')
+            || ! $this->triggerContains('service_batch_grants_update_guard', 'unfinished_items')
             || ! $this->triggerContains('service_batch_grant_items_update_guard', 'source_row.authorization_key')
+            || ! $this->triggerContains('service_batch_grant_items_update_guard', 'OLD.attempt_count = 0')
             || ! $this->triggerExists('audit_logs_service_operational_insert_guard')) {
             throw new RuntimeException('Service operational authority is incomplete.');
         }

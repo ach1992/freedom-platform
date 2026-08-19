@@ -195,6 +195,13 @@ final readonly class ServiceBatchGrantService
             if ($connection->table('service_batch_grant_items')
                 ->where('service_batch_grant_id', (int) $batch->id)
                 ->where('state', '<>', 'succeeded')
+                ->where('attempt_count', '>', 0)
+                ->exists()) {
+                throw new DomainException('Service batch grant has started unfinished work and must be resumed or reconciled before cancellation.');
+            }
+            if ($connection->table('service_batch_grant_items')
+                ->where('service_batch_grant_id', (int) $batch->id)
+                ->where('state', '<>', 'succeeded')
                 ->where(function ($query): void {
                     $query->whereNotNull('order_source_authorization_id')
                         ->orWhereNotNull('order_id')
