@@ -406,11 +406,81 @@ final class ServiceOperationalAuthorityTest extends TestCase
             DB::statement('SET @app_service_batch_authority = NULL');
         }
 
+        try {
+            $service->pause($created->batchPublicId, $context);
+            self::fail('Batch grant must not pause while a live item claim is active.');
+        } catch (DomainException) {
+            self::assertSame('active', DB::table('service_batch_grants')->where('id', $created->batchId)->value('state'));
+        }
+
         $blocked = $service->resume($created->batchPublicId, $context);
         self::assertTrue($blocked->replayed);
         self::assertSame(0, DB::table('order_source_authorizations')->count());
         self::assertSame(0, DB::table('orders')->count());
         self::assertSame(0, DB::table('service_subscriptions')->count());
+    }
+
+    public function test_batch_result_guard_rejects_cross_item_result_forgery_even_with_internal_session_flag(): void
+    {
+        $offering = $this->activeBenefitOffering('batch-result-forgery');
+        $ownerId = $this->benefitOwner();
+        $firstUserId = $this->benefitUser();
+        $secondUserId = $this->benefitUser();
+        $service = $this->app->make(ServiceBatchGrantService::class);
+        $firstContext = $this->context('batch-result-source', $ownerId);
+        $first = $service->create($firstContext, [[
+            'user_id' => $firstUserId,
+            'plan_offering_id' => $offering['id'],
+        ]]);
+        $service->resume($first->batchPublicId, $firstContext);
+        $sourceItem = DB::table('service_batch_grant_items')->where('service_batch_grant_id', $first->batchId)->first();
+        self::assertNotNull($sourceItem);
+        self::assertSame('succeeded', $sourceItem->state);
+
+        $secondContext = $this->context('batch-result-target', $ownerId);
+        $second = $service->create($secondContext, [[
+            'user_id' => $secondUserId,
+            'plan_offering_id' => $offering['id'],
+        ]]);
+        $targetItem = DB::table('service_batch_grant_items')->where('service_batch_grant_id', $second->batchId)->first();
+        self::assertNotNull($targetItem);
+        $claimToken = (string) Str::ulid();
+
+        DB::statement("SET @app_service_batch_authority = 'service_batch_grant_v1'");
+        try {
+            DB::table('service_batch_grant_items')->where('id', (int) $targetItem->id)->update([
+                'state' => 'processing',
+                'attempt_count' => 1,
+                'claim_token' => $claimToken,
+                'claim_expires_at' => now('UTC')->addMinutes(5),
+                'updated_at' => now('UTC'),
+            ]);
+            try {
+                DB::table('service_batch_grant_items')->where('id', (int) $targetItem->id)->update([
+                    'state' => 'succeeded',
+                    'claim_token' => null,
+                    'claim_expires_at' => null,
+                    'order_source_authorization_id' => $sourceItem->order_source_authorization_id,
+                    'order_id' => $sourceItem->order_id,
+                    'service_subscription_id' => $sourceItem->service_subscription_id,
+                    'provisioning_operation_id' => $sourceItem->provisioning_operation_id,
+                    'updated_at' => now('UTC'),
+                ]);
+                self::fail('Batch item result guard must reject authority copied from another subject.');
+            } catch (QueryException $exception) {
+                self::assertStringContainsString('Service batch grant item update authority is invalid.', $exception->getMessage());
+            }
+        } finally {
+            DB::statement('SET @app_service_batch_authority = NULL');
+        }
+
+        $target = DB::table('service_batch_grant_items')->where('id', (int) $targetItem->id)->first();
+        self::assertNotNull($target);
+        self::assertSame('processing', $target->state);
+        self::assertNull($target->order_source_authorization_id);
+        self::assertNull($target->order_id);
+        self::assertSame(1, DB::table('orders')->count());
+        self::assertSame(1, DB::table('service_subscriptions')->count());
     }
 
     /** @return array{owner_id:int,user_id:int,offering_id:int,target_id:int,adapter:ServiceOperationalPanelAdapter} */

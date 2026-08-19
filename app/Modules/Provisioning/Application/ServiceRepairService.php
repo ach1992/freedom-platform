@@ -191,10 +191,18 @@ final readonly class ServiceRepairService
             }
             if ($connection->table('provisioning_operations')
                 ->where('service_subscription_id', (int) $service->id)
-                ->where('operation_type', '<>', 'initial_provision')
                 ->whereNotIn('state', ['succeeded', 'failed_final', 'compensated'])
                 ->exists()) {
                 throw new DomainException('Service reconciliation is blocked by an unresolved mutation.');
+            }
+            if ($connection->table('service_delivery_attempts as attempt')
+                ->leftJoin('service_delivery_effects as effect', 'effect.service_delivery_attempt_id', '=', 'attempt.id')
+                ->where('attempt.service_subscription_id', (int) $service->id)
+                ->where(function ($query): void {
+                    $query->whereNull('effect.id')->orWhereNotIn('effect.state', ['succeeded', 'failed_final']);
+                })
+                ->exists()) {
+                throw new DomainException('Service reconciliation is blocked by unresolved delivery authority.');
             }
 
             $auditId = $this->audit->record(

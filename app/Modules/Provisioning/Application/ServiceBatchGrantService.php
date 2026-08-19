@@ -445,6 +445,14 @@ final readonly class ServiceBatchGrantService
             if ($batch->state !== $from) {
                 throw new DomainException('Service batch grant cannot change state from its current state.');
             }
+            if ($from === 'active' && $to === 'paused'
+                && $connection->table('service_batch_grant_items')
+                    ->where('service_batch_grant_id', (int) $batch->id)
+                    ->where('state', 'processing')
+                    ->where('claim_expires_at', '>', $this->timestamp())
+                    ->exists()) {
+                throw new DomainException('Service batch grant cannot pause while an item claim is active.');
+            }
             $this->setBatchAuthority($connection);
             try {
                 $updated = $connection->table('service_batch_grants')->where('id', (int) $batch->id)->where('state', $from)->update([

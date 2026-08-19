@@ -74,10 +74,18 @@ final readonly class ServiceOwnershipTransferService
             }
             if ($connection->table('provisioning_operations')
                 ->where('service_subscription_id', (int) $service->id)
-                ->where('operation_type', '<>', 'initial_provision')
                 ->whereNotIn('state', ['succeeded', 'failed_final', 'compensated'])
                 ->exists()) {
                 throw new DomainException('Service ownership transfer is blocked by an unresolved mutation.');
+            }
+            if ($connection->table('service_delivery_attempts as attempt')
+                ->leftJoin('service_delivery_effects as effect', 'effect.service_delivery_attempt_id', '=', 'attempt.id')
+                ->where('attempt.service_subscription_id', (int) $service->id)
+                ->where(function ($query): void {
+                    $query->whereNull('effect.id')->orWhereNotIn('effect.state', ['succeeded', 'failed_final']);
+                })
+                ->exists()) {
+                throw new DomainException('Service ownership transfer is blocked by unresolved delivery authority.');
             }
             /** @var object{account_status:string,account_type:string}|null $targetUser */
             $targetUser = $connection->table('users')->where('id', $toUserId)->lockForUpdate()->first(['account_status', 'account_type']);

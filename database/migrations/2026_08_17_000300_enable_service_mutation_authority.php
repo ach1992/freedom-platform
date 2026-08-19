@@ -432,7 +432,50 @@ SQL);
             }
         }
 
-        return true;
+        return $this->serviceOperationalEvidenceGuardsReady()
+            && $this->serviceOperationalRemoteIndexReady();
+    }
+
+    private function serviceOperationalEvidenceGuardsReady(): bool
+    {
+        /** @var object{guard_count:int|string}|null $row */
+        $row = DB::selectOne(<<<'SQL'
+SELECT COUNT(*) AS guard_count
+FROM information_schema.TRIGGERS
+WHERE TRIGGER_SCHEMA = DATABASE()
+  AND TRIGGER_NAME IN (
+      'service_imports_insert_guard','service_imports_update_guard','service_imports_delete_guard',
+      'service_ownership_transfers_insert_guard','service_ownership_transfers_update_guard','service_ownership_transfers_delete_guard',
+      'service_reconciliation_cases_insert_guard','service_reconciliation_cases_update_guard','service_reconciliation_cases_delete_guard',
+      'service_reconciliation_changes_insert_guard','service_reconciliation_changes_update_guard','service_reconciliation_changes_delete_guard',
+      'service_batch_grants_insert_guard','service_batch_grants_update_guard','service_batch_grants_delete_guard',
+      'service_batch_grant_items_insert_guard','service_batch_grant_items_update_guard','service_batch_grant_items_delete_guard',
+      'audit_logs_service_operational_insert_guard'
+  )
+SQL);
+
+        return $row !== null && (int) $row->guard_count === 19;
+    }
+
+    private function serviceOperationalRemoteIndexReady(): bool
+    {
+        /** @var list<object{column_name:string,non_unique:int|string,sub_part:int|string|null}> $rows */
+        $rows = DB::select(<<<'SQL'
+SELECT COLUMN_NAME AS column_name, NON_UNIQUE AS non_unique, SUB_PART AS sub_part
+FROM information_schema.STATISTICS
+WHERE TABLE_SCHEMA = DATABASE()
+  AND TABLE_NAME = 'service_subscriptions'
+  AND INDEX_NAME = 'service_subscriptions_target_remote_unique'
+ORDER BY SEQ_IN_INDEX
+SQL);
+
+        return count($rows) === 2
+            && $rows[0]->column_name === 'service_target_id'
+            && $rows[1]->column_name === 'remote_service_id'
+            && (int) $rows[0]->non_unique === 0
+            && (int) $rows[1]->non_unique === 0
+            && $rows[0]->sub_part === null
+            && $rows[1]->sub_part === null;
     }
 
     private function installSql(string $file): void

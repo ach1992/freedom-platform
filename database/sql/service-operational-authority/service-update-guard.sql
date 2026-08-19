@@ -3,6 +3,7 @@ BEFORE UPDATE ON service_subscriptions
 FOR EACH ROW
 BEGIN
     DECLARE unresolved_mutations INT DEFAULT 0;
+    DECLARE unresolved_deliveries INT DEFAULT 0;
     DECLARE effect_operation_count INT DEFAULT 0;
     DECLARE effect_operation_type VARCHAR(64) DEFAULT NULL;
     DECLARE operational_evidence_count INT DEFAULT 0;
@@ -63,8 +64,14 @@ BEGIN
         SELECT COUNT(*) INTO unresolved_mutations
         FROM provisioning_operations operation_row
         WHERE operation_row.service_subscription_id = OLD.id
-          AND operation_row.operation_type <> 'initial_provision'
           AND operation_row.state NOT IN ('succeeded','failed_final','compensated');
+
+        SELECT COUNT(*) INTO unresolved_deliveries
+        FROM service_delivery_attempts attempt_row
+        LEFT JOIN service_delivery_effects delivery_row
+            ON delivery_row.service_delivery_attempt_id = attempt_row.id
+        WHERE attempt_row.service_subscription_id = OLD.id
+          AND (delivery_row.id IS NULL OR delivery_row.state NOT IN ('succeeded','failed_final'));
 
         SELECT COUNT(*) INTO operational_evidence_count
         FROM service_ownership_transfers transfer_row
@@ -80,6 +87,7 @@ BEGIN
 
         IF operational_evidence_count <> 1
            OR unresolved_mutations <> 0
+           OR unresolved_deliveries <> 0
            OR NEW.user_id = OLD.user_id
            OR NEW.id <> OLD.id
            OR BINARY NEW.public_id <> BINARY OLD.public_id
@@ -100,8 +108,14 @@ BEGIN
         SELECT COUNT(*) INTO unresolved_mutations
         FROM provisioning_operations operation_row
         WHERE operation_row.service_subscription_id = OLD.id
-          AND operation_row.operation_type <> 'initial_provision'
           AND operation_row.state NOT IN ('succeeded','failed_final','compensated');
+
+        SELECT COUNT(*) INTO unresolved_deliveries
+        FROM service_delivery_attempts attempt_row
+        LEFT JOIN service_delivery_effects delivery_row
+            ON delivery_row.service_delivery_attempt_id = attempt_row.id
+        WHERE attempt_row.service_subscription_id = OLD.id
+          AND (delivery_row.id IS NULL OR delivery_row.state NOT IN ('succeeded','failed_final'));
 
         SELECT COUNT(*) INTO operational_evidence_count
         FROM service_reconciliation_cases case_row
@@ -118,6 +132,7 @@ BEGIN
 
         IF operational_evidence_count <> 1
            OR unresolved_mutations <> 0
+           OR unresolved_deliveries <> 0
            OR NEW.id <> OLD.id
            OR BINARY NEW.public_id <> BINARY OLD.public_id
            OR NEW.order_id <> OLD.order_id
