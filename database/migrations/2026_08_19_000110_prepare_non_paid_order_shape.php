@@ -63,6 +63,11 @@ CHECK (
 )
 SQL,
         );
+        $this->replaceConstraint(
+            'order_items',
+            'order_items_override_source_chk',
+            "CHECK (`override_source` IN ('none','account','tier','agent','source'))",
+        );
 
         DB::statement(<<<'SQL'
 ALTER TABLE orders
@@ -77,6 +82,13 @@ ADD CONSTRAINT orders_source_authorization_shape_chk CHECK (
 )
 SQL);
         DB::statement(<<<'SQL'
+ALTER TABLE orders
+ADD CONSTRAINT orders_non_paid_lifecycle_chk CHECK (
+    `source_type` = 'purchase'
+    OR (`state` IN ('authorized','provisioning_queued','provisioning','completed','needs_review','canceled') AND `state_version` >= 0)
+)
+SQL);
+        DB::statement(<<<'SQL'
 ALTER TABLE order_items
 ADD CONSTRAINT order_items_source_authority_shape_chk CHECK (
     (`source_quote_id` IS NOT NULL
@@ -87,7 +99,13 @@ ADD CONSTRAINT order_items_source_authority_shape_chk CHECK (
     (`source_quote_id` IS NULL
         AND `source_quote_public_id` IS NULL
         AND `order_source_authorization_id` IS NOT NULL
-        AND `order_source_authorization_public_id` IS NOT NULL)
+        AND `order_source_authorization_public_id` IS NOT NULL
+        AND `override_source` = 'source'
+        AND `override_reference_code` IS NOT NULL
+        AND `override_price_irr` = 0
+        AND `effective_price_irr` = 0
+        AND `discount_irr` = 0
+        AND `final_price_irr` = 0)
 )
 SQL);
     }
@@ -100,7 +118,13 @@ SQL);
         }
 
         DB::statement('ALTER TABLE order_items DROP CONSTRAINT order_items_source_authority_shape_chk');
+        DB::statement('ALTER TABLE orders DROP CONSTRAINT orders_non_paid_lifecycle_chk');
         DB::statement('ALTER TABLE orders DROP CONSTRAINT orders_source_authorization_shape_chk');
+        $this->replaceConstraint(
+            'order_items',
+            'order_items_override_source_chk',
+            "CHECK (`override_source` IN ('none','account','tier','agent'))",
+        );
         $this->replaceConstraint(
             'orders',
             'orders_non_purchase_finance_shape_chk',
