@@ -28,6 +28,16 @@ final class NonPaidOrderMigrationReentryTest extends TestCase
     {
         parent::setUp();
         $this->seed();
+        $this->serviceOperationalMigration()->down();
+    }
+
+    protected function tearDown(): void
+    {
+        try {
+            $this->serviceOperationalMigration()->up();
+        } finally {
+            parent::tearDown();
+        }
     }
 
     public function test_source_authority_migration_converges_after_table_create_commits_without_migration_record(): void
@@ -383,6 +393,14 @@ final class NonPaidOrderMigrationReentryTest extends TestCase
             }
             $bulk->up();
         }
+    }
+
+    private function serviceOperationalMigration(): Migration
+    {
+        /** @var Migration $migration */
+        $migration = require database_path('migrations/2026_08_19_000140_enable_service_operational_authority.php');
+
+        return $migration;
     }
 
     /** @return array<string,mixed> */

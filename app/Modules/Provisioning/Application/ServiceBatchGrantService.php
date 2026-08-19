@@ -40,7 +40,8 @@ final readonly class ServiceBatchGrantService
     ) {}
 
     /**
-     * @param list<array{user_id:int,plan_offering_id:int}> $items
+     * @param  list<array{user_id:int,plan_offering_id:int}>  $items
+     *
      * @requirement SVC-011 SVC-012 ADM-002 ARCH-003 ARCH-004 DAT-003 SEC-002 QUA-004
      */
     public function create(ServiceOperationalContext $context, array $items): ServiceBatchGrantReceipt
@@ -287,13 +288,13 @@ final readonly class ServiceBatchGrantService
                     'error_code' => null,
                     'updated_at' => $this->timestamp(),
                 ]);
+                if ($updated !== 1) {
+                    throw new RuntimeException('Service batch item claim was lost.');
+                }
+                $this->refreshBatchCounts($connection, (int) $item->service_batch_grant_id);
             } finally {
                 $this->clearBatchAuthority($connection);
             }
-            if ($updated !== 1) {
-                throw new RuntimeException('Service batch item claim was lost.');
-            }
-            $this->refreshBatchCounts($connection, (int) $item->service_batch_grant_id);
 
             /** @var BatchItemRow|null $claimed */
             $claimed = $connection->table('service_batch_grant_items')->where('id', (int) $item->id)->first();

@@ -15,8 +15,8 @@ final readonly class ServiceOperationalAudit
     public function __construct(private Clock $clock) {}
 
     /**
-     * @param array<string, bool|int|string|null> $before
-     * @param array<string, bool|int|string|null> $after
+     * @param  array<string, bool|int|string|null>  $before
+     * @param  array<string, bool|int|string|null>  $after
      */
     public function record(
         Connection $connection,

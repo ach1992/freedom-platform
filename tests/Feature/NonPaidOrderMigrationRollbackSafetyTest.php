@@ -31,7 +31,18 @@ final class NonPaidOrderMigrationRollbackSafetyTest extends TestCase
         if (DB::connection()->getDriverName() !== 'mysql') {
             $this->markTestSkipped('Authority migration rollback safety requires MariaDB/MySQL.');
         }
+        $this->serviceOperationalMigration()->down();
         $this->seed();
+    }
+
+    protected function tearDown(): void
+    {
+        try {
+            $this->truncateDatabaseTables();
+            $this->serviceOperationalMigration()->up();
+        } finally {
+            parent::tearDown();
+        }
     }
 
     public function test_source_authority_rollback_preserves_raced_evidence_and_retries_from_a_durable_close(): void
@@ -329,6 +340,14 @@ final class NonPaidOrderMigrationRollbackSafetyTest extends TestCase
         ]);
 
         return $userId;
+    }
+
+    private function serviceOperationalMigration(): Migration
+    {
+        /** @var Migration $migration */
+        $migration = require database_path('migrations/2026_08_19_000140_enable_service_operational_authority.php');
+
+        return $migration;
     }
 
     private function independentPdo(): PDO

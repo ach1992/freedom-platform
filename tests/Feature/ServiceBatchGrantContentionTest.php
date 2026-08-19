@@ -31,16 +31,16 @@ namespace {
                 return;
             }
             $sql = strtolower($query);
-            if (! str_contains($sql, 'service_batch_grant_items') || ! str_contains($sql, 'for update')) {
+            if (! str_contains($sql, 'service_batch_grants') || ! str_contains($sql, 'for update')) {
                 return;
             }
 
             $barrierReached = true;
-            echo "BEFORE_BATCH_CLAIM_LOCK\n";
+            echo "BEFORE_BATCH_PARENT_LOCK\n";
             flush();
             $continue = fgets(STDIN);
             if ($continue === false || trim($continue) !== 'CONTINUE') {
-                throw new RuntimeException('Service-batch claim barrier was not released.');
+                throw new RuntimeException('Service-batch parent-lock barrier was not released.');
             }
         });
 
@@ -140,8 +140,8 @@ namespace Tests\Feature {
                 self::assertSame("READY\n", $this->readLine($second, 'second readiness'));
                 $this->sendCommand($first, 'GO');
                 $this->sendCommand($second, 'GO');
-                self::assertSame("BEFORE_BATCH_CLAIM_LOCK\n", $this->readLine($first, 'first claim barrier'));
-                self::assertSame("BEFORE_BATCH_CLAIM_LOCK\n", $this->readLine($second, 'second claim barrier'));
+                self::assertSame("BEFORE_BATCH_PARENT_LOCK\n", $this->readLine($first, 'first parent-lock barrier'));
+                self::assertSame("BEFORE_BATCH_PARENT_LOCK\n", $this->readLine($second, 'second parent-lock barrier'));
                 $this->sendCommand($first, 'CONTINUE');
                 $this->sendCommand($second, 'CONTINUE');
 

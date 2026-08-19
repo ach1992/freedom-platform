@@ -121,6 +121,7 @@ return new class extends Migration
             $bootstrap = self::BOOTSTRAP_CHECKS[$table];
             if (! Schema::hasTable($table)) {
                 DB::statement($sql);
+
                 continue;
             }
             if ($this->constraintExists($table, $bootstrap)) {

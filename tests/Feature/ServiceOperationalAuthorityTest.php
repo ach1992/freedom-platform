@@ -13,6 +13,7 @@ use App\Modules\Panels\Application\PanelAdapterRegistry;
 use App\Modules\Panels\Application\PanelCredentialPolicy;
 use App\Modules\Provisioning\Application\ProvisioningPanelAdapterResolver;
 use App\Modules\Provisioning\Application\ServiceBatchGrantService;
+use App\Modules\Provisioning\Application\ServiceImportReceipt;
 use App\Modules\Provisioning\Application\ServiceImportService;
 use App\Modules\Provisioning\Application\ServiceOperationalAuthorityGuard;
 use App\Modules\Provisioning\Application\ServiceOperationalContext;
@@ -498,13 +499,35 @@ final class ServiceOperationalAuthorityTest extends TestCase
             'updated_at' => now('UTC'),
         ]);
         DB::table('panel_service_targets')->where('id', $targetId)->update(['state' => 'active', 'updated_at' => now('UTC')]);
-        $profileId = (int) DB::table('panel_target_protocol_profiles')
-            ->where('panel_service_target_id', $targetId)
-            ->value('panel_protocol_profile_id');
-        DB::table('panel_protocol_profiles')->where('id', $profileId)->update([
+        $now = now('UTC');
+        $profileId = (int) DB::table('panel_protocol_profiles')->insertGetId([
+            'code' => 'svc-op-'.substr(hash('sha256', $suffix), 0, 20),
+            'name_fa' => 'Service operational test profile',
+            'name_en' => 'Service operational test profile',
+            'protocol_family' => 'vless',
+            'transport' => 'tcp',
+            'security_layer' => 'tls',
             'host' => 'panel.example.com',
             'sni' => 'panel.example.com',
-            'updated_at' => now('UTC'),
+            'path' => null,
+            'port' => 443,
+            'flow' => null,
+            'state' => 'disabled',
+            'version' => 1,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        DB::table('panel_target_protocol_profiles')->insert([
+            'panel_service_target_id' => $targetId,
+            'panel_protocol_profile_id' => $profileId,
+            'customer_selectable' => false,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        DB::table('panel_protocol_profiles')->where('id', $profileId)->update([
+            'state' => 'active',
+            'version' => 2,
+            'updated_at' => $now,
         ]);
 
         $adapter = new ServiceOperationalPanelAdapter;
@@ -529,7 +552,7 @@ final class ServiceOperationalAuthorityTest extends TestCase
     }
 
     /** @param array{owner_id:int,user_id:int,offering_id:int,target_id:int,adapter:ServiceOperationalPanelAdapter} $fixture */
-    private function attachedService(array $fixture, string $remoteId, string $username, string $contextSuffix): \App\Modules\Provisioning\Application\ServiceImportReceipt
+    private function attachedService(array $fixture, string $remoteId, string $username, string $contextSuffix): ServiceImportReceipt
     {
         $fixture['adapter']->seed($this->snapshot($remoteId, $username));
         $context = $this->context($contextSuffix, $fixture['owner_id']);
