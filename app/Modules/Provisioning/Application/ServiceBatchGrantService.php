@@ -94,7 +94,7 @@ final readonly class ServiceBatchGrantService
                         'position' => $position + 1,
                         'user_id' => $item['user_id'],
                         'plan_offering_id' => $item['plan_offering_id'],
-                        'request_key_hash' => $this->itemRequestHash($payloadHash, $position + 1, $item),
+                        'request_key_hash' => $this->itemRequestHash($context->requestHash(), $payloadHash, $position + 1, $item),
                         'state' => 'pending',
                         'attempt_count' => 0,
                         'claim_token' => null,
@@ -533,9 +533,9 @@ final readonly class ServiceBatchGrantService
     }
 
     /** @param array{user_id:int,plan_offering_id:int} $item */
-    private function itemRequestHash(string $payloadHash, int $position, array $item): string
+    private function itemRequestHash(string $batchRequestHash, string $payloadHash, int $position, array $item): string
     {
-        return hash('sha256', $payloadHash.':'.$position.':'.$item['user_id'].':'.$item['plan_offering_id']);
+        return hash('sha256', $batchRequestHash.':'.$payloadHash.':'.$position.':'.$item['user_id'].':'.$item['plan_offering_id']);
     }
 
     /**
@@ -559,7 +559,7 @@ final readonly class ServiceBatchGrantService
             if ((int) $row->position !== $index + 1
                 || (int) $row->user_id !== $item['user_id']
                 || (int) $row->plan_offering_id !== $item['plan_offering_id']
-                || ! hash_equals((string) $row->request_key_hash, $this->itemRequestHash($payloadHash, $index + 1, $item))) {
+                || ! hash_equals((string) $row->request_key_hash, $this->itemRequestHash($context->requestHash(), $payloadHash, $index + 1, $item))) {
                 throw new DomainException('Service batch grant request fingerprint conflicts with existing evidence.');
             }
         }
