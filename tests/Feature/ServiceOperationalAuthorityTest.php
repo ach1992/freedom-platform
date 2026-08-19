@@ -427,7 +427,14 @@ final class ServiceOperationalAuthorityTest extends TestCase
         $ownerId = $this->benefitOwner();
         $userId = $this->benefitUser();
         $service = $this->app->make(ServiceBatchGrantService::class);
-        $firstContext = $this->context('batch-result-source', $ownerId);
+        $sharedCorrelationId = 'svc-op-'.substr(hash('sha256', 'correlation:batch-result-shared'), 0, 32);
+        $firstContext = new ServiceOperationalContext(
+            'service-operational-batch-result-source',
+            $sharedCorrelationId,
+            'service_operational_test',
+            'Service operational authority test reason.',
+            $ownerId,
+        );
         $first = $service->create($firstContext, [[
             'user_id' => $userId,
             'plan_offering_id' => $offering['id'],
@@ -437,7 +444,13 @@ final class ServiceOperationalAuthorityTest extends TestCase
         self::assertNotNull($sourceItem);
         self::assertSame('succeeded', $sourceItem->state);
 
-        $secondContext = $this->context('batch-result-target', $ownerId);
+        $secondContext = new ServiceOperationalContext(
+            'service-operational-batch-result-target',
+            $sharedCorrelationId,
+            'service_operational_test',
+            'Service operational authority test reason.',
+            $ownerId,
+        );
         $second = $service->create($secondContext, [[
             'user_id' => $userId,
             'plan_offering_id' => $offering['id'],
