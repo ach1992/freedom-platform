@@ -16,6 +16,7 @@ use App\Modules\Promotions\BenefitCodes\Domain\BenefitCodeState;
 use App\Modules\Promotions\BenefitCodes\Domain\BenefitCodeType;
 use DateTimeImmutable;
 use Illuminate\Support\Facades\DB;
+use RuntimeException;
 
 trait CreatesBenefitCodeFixtures
 {
@@ -35,6 +36,24 @@ trait CreatesBenefitCodeFixtures
     protected function benefitOffering(string $suffix = 'benefit'): array
     {
         return $this->usageOffering(suffix: $suffix);
+    }
+
+    /** @return array{id:int,product_id:int,server_id:int} */
+    protected function activeBenefitOffering(string $suffix = 'benefit'): array
+    {
+        $offering = $this->benefitOffering($suffix);
+        $updated = DB::table('plan_offerings')
+            ->where('id', $offering['id'])
+            ->where('state', 'draft')
+            ->update([
+                'state' => 'active',
+                'updated_at' => now('UTC'),
+            ]);
+        if ($updated !== 1) {
+            throw new RuntimeException('Benefit test Plan Offering could not be activated.');
+        }
+
+        return $offering;
     }
 
     protected function benefitContext(int $administratorId, string $suffix): AccessChangeContext
