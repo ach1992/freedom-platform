@@ -33,7 +33,7 @@ final class NonPaidOrderLifecycleTest extends TestCase
 
     public function test_benefit_code_materializes_and_queues_once_without_financial_facts(): void
     {
-        $offering = $this->benefitOffering('non-paid-benefit-lifecycle');
+        $offering = $this->activeBenefitOffering('non-paid-benefit-lifecycle');
         $userId = $this->benefitUser();
         $entitlementPublicId = $this->freeServiceEntitlement($userId, $offering, 'non-paid-benefit-lifecycle');
         $paymentIntentCount = DB::table('payment_intents')->count();
@@ -80,7 +80,7 @@ final class NonPaidOrderLifecycleTest extends TestCase
     {
         $ownerId = $this->benefitOwner();
         $userId = $this->benefitUser();
-        $offering = $this->benefitOffering('non-paid-admin-lifecycle');
+        $offering = $this->activeBenefitOffering('non-paid-admin-lifecycle');
         $paymentIntentCount = DB::table('payment_intents')->count();
         $settlementCount = DB::table('purchase_settlements')->count();
 
