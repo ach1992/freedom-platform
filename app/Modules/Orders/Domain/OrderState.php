@@ -13,6 +13,7 @@ enum OrderState: string
     case Quoted = 'quoted';
     case AwaitingPayment = 'awaiting_payment';
     case PaymentPendingReview = 'payment_pending_review';
+    case Authorized = 'authorized';
     case Paid = 'paid';
     case ProvisioningQueued = 'provisioning_queued';
     case Provisioning = 'provisioning';
@@ -40,6 +41,7 @@ enum OrderState: string
             self::Quoted => [self::AwaitingPayment, self::Canceled],
             self::AwaitingPayment => [self::PaymentPendingReview, self::Paid, self::Canceled],
             self::PaymentPendingReview => [self::Paid, self::Canceled],
+            self::Authorized => [self::ProvisioningQueued, self::Canceled],
             self::Paid => [self::ProvisioningQueued, self::RefundPending],
             self::ProvisioningQueued => [self::Provisioning, self::NeedsReview],
             self::Provisioning => [self::Completed, self::NeedsReview],

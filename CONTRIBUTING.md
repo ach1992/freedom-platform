@@ -21,7 +21,8 @@ The project deliberately separates GitHub control, runtime execution, and deploy
 
 | Boundary | Use it for | Important behavior |
 |---|---|---|
-| ChatGPT Master + connected GitHub integration | Normal self-execution: Issues, PRs, refs, repository files, reviews, branch/PR maintenance, and Actions evidence exposed by the connected App | This is the default path. Verify every mutation from live GitHub. It is not an interactive server shell and does not reveal secret values. |
+| ChatGPT Master + connected GitHub integration | Normal project control: Issues, PRs, refs, repository files, reviews, branch/PR maintenance, and Actions evidence exposed by the connected App | This is the default source/control path. Verify every mutation from live GitHub. It does not reveal secret values. |
+| Dedicated AI Server MCP workspace | Persistent repo checkout via `AI_Server_Agent` for unprivileged Git/edit/diagnostic/local-command work in `/srv/ai-workspace/freedom-platform` when connected | Reuse it before asking the Owner to recreate shell access. Run as `aiworker`; repo Git uses SSH alias `github-freedom-platform`. The workspace is not project authority and its SSH private key must never be read/exposed. See `docs/09-deployment-runbook.md`. |
 | GitHub Actions self-hosted runner | Authoritative shell/runtime execution, repository CI, MariaDB/Redis integration validation, and reviewed operational/readiness workflows | Workflows create transient checkouts for the exact GitHub revision. They are not a second project source and must not become a generic chat-to-shell interface. |
 | External coding/review Worker | Optional delegated implementation/review when isolation, safe parallelism, specialist expertise, or a missing Master capability materially helps | Not a default prerequisite. Durable work must return to GitHub for Master verification. Codex Cloud is only one possible optional Worker, not the normal execution path. |
 | Deployment/staging target | Target-like runtime/readiness and explicitly authorized deployment/provider operations | Runtime state is not source state. Never treat a deployed tree as a developer checkout or hidden project copy. |
@@ -37,9 +38,9 @@ Exact CI/runtime requirements are owned by `docs/06-test-strategy.md`. Staging/p
 
 ### Master self-execution and Worker delegation
 
-The active ChatGPT Master should perform normal reversible READY work itself when the connected GitHub integration and repository-native automation expose the required capability. Do not route broad work to Codex Cloud merely because earlier documentation used it as the default working tree.
+The active ChatGPT Master should perform normal reversible READY work itself when the connected GitHub integration, the repo-scoped `AI_Server_Agent` workspace, or repository-native automation exposes the required capability. Do not route broad work to Codex Cloud merely because earlier documentation used it as the default working tree.
 
-Delegate only when there is a concrete benefit: independent review, isolation of risky experiments, safe parallelism, specialist capability, or an execution capability that the Master cannot obtain through GitHub/Actions. A Worker never becomes the project source of truth and never merges its own high-risk work.
+Delegate only when there is a concrete benefit: independent review, isolation of risky experiments, safe parallelism, specialist capability, or an execution capability that the Master cannot obtain through GitHub/MCP/Actions. A Worker never becomes the project source of truth and never merges its own high-risk work.
 
 ### GitHub Actions and repository permissions
 
