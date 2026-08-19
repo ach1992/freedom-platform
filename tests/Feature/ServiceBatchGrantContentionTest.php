@@ -108,9 +108,12 @@ namespace Tests\Feature {
                 $this->markTestSkipped('Service batch contention requires MariaDB/MySQL.');
             }
             $this->seed();
-            /** @var Migration $migration */
-            $migration = require database_path('migrations/2026_08_19_000140_enable_service_operational_authority.php');
-            $migration->up();
+            /** @var Migration $nonPaidAuthority */
+            $nonPaidAuthority = require database_path('migrations/2026_08_19_000120_activate_non_paid_order_authority.php');
+            $nonPaidAuthority->up();
+            /** @var Migration $serviceOperationalAuthority */
+            $serviceOperationalAuthority = require database_path('migrations/2026_08_19_000140_enable_service_operational_authority.php');
+            $serviceOperationalAuthority->up();
         }
 
         protected function tearDown(): void
@@ -156,27 +159,7 @@ namespace Tests\Feature {
 
                 $row = DB::table('service_batch_grants')->where('id', $batch->batchId)->first();
                 self::assertNotNull($row);
-                $item = DB::table('service_batch_grant_items')->where('service_batch_grant_id', $batch->batchId)->first();
-                self::assertNotNull($item);
-                $diagnostic = json_encode([
-                    'first' => $firstResult,
-                    'second' => $secondResult,
-                    'batch' => [
-                        'state' => $row->state,
-                        'succeeded_count' => (int) $row->succeeded_count,
-                        'failed_count' => (int) $row->failed_count,
-                    ],
-                    'item' => [
-                        'state' => $item->state,
-                        'attempt_count' => (int) $item->attempt_count,
-                        'error_code' => $item->error_code,
-                        'order_source_authorization_id' => $item->order_source_authorization_id,
-                        'order_id' => $item->order_id,
-                        'service_subscription_id' => $item->service_subscription_id,
-                        'provisioning_operation_id' => $item->provisioning_operation_id,
-                    ],
-                ], JSON_THROW_ON_ERROR);
-                self::assertSame('completed', $row->state, $diagnostic);
+                self::assertSame('completed', $row->state);
                 self::assertSame(1, (int) $row->succeeded_count);
                 self::assertSame(0, (int) $row->failed_count);
                 self::assertSame(1, (int) DB::table('service_batch_grant_items')->where('service_batch_grant_id', $batch->batchId)->value('attempt_count'));
