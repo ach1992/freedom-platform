@@ -19,11 +19,37 @@ final readonly class ServiceOperationalAuthorityGuard
         'service_batch_grant_items' => ['ready' => 'service_batch_items_authority_ready_v1_chk', 'bootstrap' => 'service_batch_items_bootstrap_block_chk'],
     ];
 
-    public function __construct(private DatabaseManager $database) {}
+    public function __construct(
+        private DatabaseManager $database,
+        private ServiceOperationalDatabaseCapability $databaseCapability,
+    ) {}
 
     public function assertFinalized(): void
     {
         $connection = $this->database->connection();
+        if (! $connection->getSchemaBuilder()->hasTable('service_operational_authority_capability')) {
+            throw new RuntimeException('Service operational authority is not finalized.');
+        }
+        /** @var object{capability_hash:string}|null $capability */
+        $capability = $connection->table('service_operational_authority_capability')->where('id', 1)->first(['capability_hash']);
+        if ($capability === null || ! is_string($capability->capability_hash)
+            || ! hash_equals($this->databaseCapability->expectedHash(), $capability->capability_hash)) {
+            throw new RuntimeException('Service operational database capability is not finalized.');
+        }
+        /** @var object{guard_count:int|string}|null $capabilityGuards */
+        $capabilityGuards = $connection->selectOne(<<<'SQL'
+SELECT COUNT(*) AS guard_count
+FROM information_schema.TRIGGERS
+WHERE TRIGGER_SCHEMA = DATABASE()
+  AND TRIGGER_NAME IN (
+      'service_operational_capability_insert_guard',
+      'service_operational_capability_update_guard',
+      'service_operational_capability_delete_guard'
+  )
+SQL);
+        if ($capabilityGuards === null || (int) $capabilityGuards->guard_count !== 3) {
+            throw new RuntimeException('Service operational database capability is not finalized.');
+        }
         foreach (self::TABLES as $table => $constraints) {
             /** @var object{ready_count:int|string|null,blocked_count:int|string|null}|null $row */
             $row = $connection->selectOne(<<<'SQL'
@@ -78,6 +104,23 @@ WHERE TRIGGER_SCHEMA = DATABASE()
 SQL);
         if ($guards === null || (int) $guards->guard_count !== 19) {
             throw new RuntimeException('Service operational evidence authority is not finalized.');
+        }
+        foreach ([
+            'service_subscriptions_update_guard' => 'operational_capability_count',
+            'service_imports_update_guard' => 'source_row.authorization_key',
+            'service_reconciliation_cases_update_guard' => 'service_reconciliation_changes change_row',
+            'service_batch_grants_update_guard' => 'live_claims',
+            'service_batch_grant_items_insert_guard' => 'items_committed_at IS NULL',
+            'audit_logs_service_operational_insert_guard' => 'service_operational_authority_capability',
+        ] as $triggerName => $marker) {
+            /** @var object{action_statement:string}|null $row */
+            $row = $connection->selectOne(
+                'SELECT ACTION_STATEMENT AS action_statement FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = DATABASE() AND TRIGGER_NAME = ?',
+                [$triggerName],
+            );
+            if ($row === null || ! is_string($row->action_statement) || ! str_contains($row->action_statement, $marker)) {
+                throw new RuntimeException('Service operational evidence authority is not finalized.');
+            }
         }
     }
 }

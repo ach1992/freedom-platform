@@ -432,7 +432,9 @@ SQL);
             }
         }
 
-        return $this->serviceOperationalEvidenceGuardsReady()
+        return $this->serviceOperationalCapabilityReady()
+            && $this->serviceOperationalEvidenceGuardsReady()
+            && $this->serviceOperationalServiceGuardReady()
             && $this->serviceOperationalRemoteIndexReady();
     }
 
@@ -454,7 +456,76 @@ WHERE TRIGGER_SCHEMA = DATABASE()
   )
 SQL);
 
-        return $row !== null && (int) $row->guard_count === 19;
+        if ($row === null || (int) $row->guard_count !== 19) {
+            return false;
+        }
+        foreach ([
+            'service_imports_update_guard' => 'source_row.authorization_key',
+            'service_reconciliation_cases_update_guard' => 'service_reconciliation_changes change_row',
+            'service_batch_grants_update_guard' => 'live_claims',
+            'service_batch_grant_items_insert_guard' => 'items_committed_at IS NULL',
+            'audit_logs_service_operational_insert_guard' => 'service_operational_authority_capability',
+        ] as $triggerName => $marker) {
+            /** @var object{action_statement:string}|null $trigger */
+            $trigger = DB::selectOne(
+                'SELECT ACTION_STATEMENT AS action_statement FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = DATABASE() AND TRIGGER_NAME = ?',
+                [$triggerName],
+            );
+            if ($trigger === null || ! is_string($trigger->action_statement) || ! str_contains($trigger->action_statement, $marker)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function serviceOperationalCapabilityReady(): bool
+    {
+        if (! Schema::hasTable('service_operational_authority_capability')) {
+            return false;
+        }
+        $key = config('app.key');
+        if (! is_string($key) || $key === '') {
+            return false;
+        }
+        $expected = hash('sha256', hash_hmac('sha256', 'service-operational-database-authority-v1', $key));
+        $row = DB::table('service_operational_authority_capability')->where('id', 1)->first(['capability_hash']);
+        if ($row === null || ! is_string($row->capability_hash) || ! hash_equals($expected, $row->capability_hash)) {
+            return false;
+        }
+        /** @var object{guard_count:int|string}|null $guards */
+        $guards = DB::selectOne(<<<'SQL'
+SELECT COUNT(*) AS guard_count
+FROM information_schema.TRIGGERS
+WHERE TRIGGER_SCHEMA = DATABASE()
+  AND TRIGGER_NAME IN (
+      'service_operational_capability_insert_guard',
+      'service_operational_capability_update_guard',
+      'service_operational_capability_delete_guard'
+  )
+SQL);
+
+        return $guards !== null && (int) $guards->guard_count === 3;
+    }
+
+    private function serviceOperationalServiceGuardReady(): bool
+    {
+        /** @var object{action_statement:string}|null $trigger */
+        $trigger = DB::selectOne(
+            'SELECT ACTION_STATEMENT AS action_statement FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = DATABASE() AND TRIGGER_NAME = ?',
+            ['service_subscriptions_update_guard'],
+        );
+        if ($trigger === null || ! is_string($trigger->action_statement)) {
+            return false;
+        }
+
+        foreach (['service_import_attach_v1', 'service_ownership_transfer_v1', 'service_repair_v1', 'operational_capability_count', 'case_row.before_remote_service_id'] as $required) {
+            if (! str_contains($trigger->action_statement, $required)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private function serviceOperationalRemoteIndexReady(): bool

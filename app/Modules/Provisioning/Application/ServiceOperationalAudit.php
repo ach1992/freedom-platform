@@ -12,7 +12,10 @@ final readonly class ServiceOperationalAudit
 {
     private const AUTHORITY = 'service_operational_audit_v1';
 
-    public function __construct(private Clock $clock) {}
+    public function __construct(
+        private Clock $clock,
+        private ServiceOperationalDatabaseCapability $databaseCapability,
+    ) {}
 
     /**
      * @param  array<string, bool|int|string|null>  $before
@@ -31,9 +34,10 @@ final readonly class ServiceOperationalAudit
             throw new RuntimeException('Service operational audit action is invalid.');
         }
 
-        $connection->statement('SET @app_service_operational_audit_authority = ?', [self::AUTHORITY]);
-        $connection->statement('SET @app_service_operational_request_hash = ?', [$context->requestHash()]);
+        $this->databaseCapability->apply($connection);
         try {
+            $connection->statement('SET @app_service_operational_audit_authority = ?', [self::AUTHORITY]);
+            $connection->statement('SET @app_service_operational_request_hash = ?', [$context->requestHash()]);
             $id = (int) $connection->table('audit_logs')->insertGetId([
                 'actor_type' => 'administrator',
                 'actor_id' => (string) $context->actorAdministratorId,
@@ -49,8 +53,13 @@ final readonly class ServiceOperationalAudit
                 'created_at' => $this->clock->now()->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s.u'),
             ]);
         } finally {
-            $connection->statement('SET @app_service_operational_audit_authority = NULL');
-            $connection->statement('SET @app_service_operational_request_hash = NULL');
+            try {
+                $this->databaseCapability->clear($connection);
+            } finally {
+                $connection->statement(
+                    'SET @app_service_operational_audit_authority = NULL, @app_service_operational_request_hash = NULL',
+                );
+            }
         }
         if ($id < 1) {
             throw new RuntimeException('Service operational audit was not created.');

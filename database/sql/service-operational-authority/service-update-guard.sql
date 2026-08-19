@@ -7,6 +7,7 @@ BEGIN
     DECLARE effect_operation_count INT DEFAULT 0;
     DECLARE effect_operation_type VARCHAR(64) DEFAULT NULL;
     DECLARE operational_evidence_count INT DEFAULT 0;
+    DECLARE operational_capability_count INT DEFAULT 0;
     DECLARE identity_unchanged BOOLEAN DEFAULT FALSE;
     DECLARE remote_binding_unchanged BOOLEAN DEFAULT FALSE;
 
@@ -25,19 +26,51 @@ BEGIN
         AND (NEW.remote_service_id <=> OLD.remote_service_id)
         AND (NEW.provisioned_at <=> OLD.provisioned_at);
 
+    SELECT COUNT(*) INTO operational_capability_count
+    FROM service_operational_authority_capability capability_row
+    WHERE capability_row.id = 1
+      AND BINARY capability_row.capability_hash = BINARY SHA2(COALESCE(@app_service_operational_capability, ''), 256);
+
     IF COALESCE(@app_service_operational_authority, '') = 'service_import_attach_v1' THEN
         SELECT COUNT(*) INTO operational_evidence_count
         FROM service_imports import_row
+        INNER JOIN order_source_authorizations source_row ON source_row.id = import_row.order_source_authorization_id
+        INNER JOIN orders order_row ON order_row.id = import_row.order_id AND order_row.order_source_authorization_id = source_row.id
+        INNER JOIN audit_logs audit_row ON audit_row.id = import_row.audit_log_id
         WHERE import_row.id = CAST(COALESCE(@app_service_operational_evidence_id, 0) AS UNSIGNED)
           AND import_row.state = 'attaching'
           AND import_row.service_subscription_id = OLD.id
           AND import_row.user_id = OLD.user_id
           AND import_row.service_target_id = NEW.service_target_id
           AND BINARY import_row.remote_service_id = BINARY NEW.remote_service_id
+          AND import_row.remote_canonical_hash IS NOT NULL
+          AND CHAR_LENGTH(import_row.remote_canonical_hash) = 64
           AND BINARY import_row.request_key_hash = BINARY COALESCE(@app_service_operational_request_hash, '')
-          AND BINARY import_row.correlation_id = BINARY COALESCE(@app_service_operational_correlation_id, '');
+          AND BINARY import_row.correlation_id = BINARY COALESCE(@app_service_operational_correlation_id, '')
+          AND source_row.source_type = 'admin_grant'
+          AND source_row.user_id = OLD.user_id
+          AND source_row.plan_offering_id = import_row.plan_offering_id
+          AND source_row.actor_type = 'administrator'
+          AND source_row.actor_id = import_row.actor_administrator_id
+          AND BINARY source_row.authorization_key = BINARY CONCAT('service-import:', import_row.public_id)
+          AND BINARY source_row.correlation_id = BINARY import_row.correlation_id
+          AND order_row.source_type = 'admin_grant'
+          AND order_row.user_id = OLD.user_id
+          AND order_row.total_amount_irr = 0
+          AND order_row.purchase_settlement_id IS NULL
+          AND order_row.payment_intent_id IS NULL
+          AND audit_row.action = 'service.operational.import.attached'
+          AND audit_row.actor_type = 'administrator'
+          AND audit_row.actor_id = CAST(import_row.actor_administrator_id AS CHAR)
+          AND audit_row.target_type = 'service_subscription'
+          AND BINARY audit_row.target_id = BINARY OLD.public_id
+          AND BINARY audit_row.request_fingerprint = BINARY import_row.request_key_hash
+          AND BINARY audit_row.correlation_id = BINARY import_row.correlation_id
+          AND BINARY JSON_UNQUOTE(JSON_EXTRACT(audit_row.after_safe_data, '$.remote_service_id_hash')) = BINARY SHA2(import_row.remote_service_id, 256)
+          AND BINARY JSON_UNQUOTE(JSON_EXTRACT(audit_row.after_safe_data, '$.remote_canonical_hash')) = BINARY import_row.remote_canonical_hash;
 
-        IF operational_evidence_count <> 1
+        IF operational_capability_count <> 1
+           OR operational_evidence_count <> 1
            OR OLD.route_selection_id IS NOT NULL
            OR OLD.service_target_id IS NOT NULL
            OR OLD.remote_service_id IS NOT NULL
@@ -75,6 +108,7 @@ BEGIN
 
         SELECT COUNT(*) INTO operational_evidence_count
         FROM service_ownership_transfers transfer_row
+        INNER JOIN audit_logs audit_row ON audit_row.id = transfer_row.audit_log_id
         WHERE transfer_row.id = CAST(COALESCE(@app_service_operational_evidence_id, 0) AS UNSIGNED)
           AND transfer_row.state = 'applying'
           AND transfer_row.service_subscription_id = OLD.id
@@ -83,9 +117,19 @@ BEGIN
           AND transfer_row.target_remote_identity_generation = OLD.remote_identity_generation
           AND transfer_row.target_lifecycle_version = OLD.lifecycle_version
           AND BINARY transfer_row.request_key_hash = BINARY COALESCE(@app_service_operational_request_hash, '')
-          AND BINARY transfer_row.correlation_id = BINARY COALESCE(@app_service_operational_correlation_id, '');
+          AND BINARY transfer_row.correlation_id = BINARY COALESCE(@app_service_operational_correlation_id, '')
+          AND audit_row.action = 'service.operational.ownership.transferred'
+          AND audit_row.actor_type = 'administrator'
+          AND audit_row.actor_id = CAST(transfer_row.actor_administrator_id AS CHAR)
+          AND audit_row.target_type = 'service_subscription'
+          AND BINARY audit_row.target_id = BINARY OLD.public_id
+          AND BINARY audit_row.request_fingerprint = BINARY transfer_row.request_key_hash
+          AND BINARY audit_row.correlation_id = BINARY transfer_row.correlation_id
+          AND CAST(JSON_UNQUOTE(JSON_EXTRACT(audit_row.before_safe_data, '$.user_id')) AS UNSIGNED) = OLD.user_id
+          AND CAST(JSON_UNQUOTE(JSON_EXTRACT(audit_row.after_safe_data, '$.user_id')) AS UNSIGNED) = NEW.user_id;
 
-        IF operational_evidence_count <> 1
+        IF operational_capability_count <> 1
+           OR operational_evidence_count <> 1
            OR unresolved_mutations <> 0
            OR unresolved_deliveries <> 0
            OR NEW.user_id = OLD.user_id
@@ -119,18 +163,38 @@ BEGIN
 
         SELECT COUNT(*) INTO operational_evidence_count
         FROM service_reconciliation_cases case_row
+        INNER JOIN audit_logs audit_row ON audit_row.id = case_row.audit_log_id
         WHERE case_row.id = CAST(COALESCE(@app_service_operational_evidence_id, 0) AS UNSIGNED)
           AND case_row.state = 'applying'
           AND case_row.service_subscription_id = OLD.id
+          AND case_row.service_target_id = OLD.service_target_id
+          AND BINARY case_row.before_remote_service_id = BINARY OLD.remote_service_id
           AND case_row.remote_disposition = 'present'
           AND case_row.proposed_remote_service_id IS NOT NULL
           AND BINARY case_row.proposed_remote_service_id = BINARY NEW.remote_service_id
+          AND case_row.remote_canonical_hash IS NOT NULL
+          AND CHAR_LENGTH(case_row.remote_canonical_hash) = 64
           AND case_row.target_remote_identity_generation = OLD.remote_identity_generation
           AND case_row.target_lifecycle_version = OLD.lifecycle_version
           AND BINARY case_row.request_key_hash = BINARY COALESCE(@app_service_operational_request_hash, '')
-          AND BINARY case_row.correlation_id = BINARY COALESCE(@app_service_operational_correlation_id, '');
+          AND BINARY case_row.correlation_id = BINARY COALESCE(@app_service_operational_correlation_id, '')
+          AND audit_row.action = 'service.operational.repair.applied'
+          AND audit_row.actor_type = 'administrator'
+          AND audit_row.actor_id = CAST(case_row.actor_administrator_id AS CHAR)
+          AND audit_row.target_type = 'service_subscription'
+          AND BINARY audit_row.target_id = BINARY OLD.public_id
+          AND BINARY audit_row.request_fingerprint = BINARY case_row.request_key_hash
+          AND BINARY audit_row.correlation_id = BINARY case_row.correlation_id
+          AND BINARY JSON_UNQUOTE(JSON_EXTRACT(audit_row.before_safe_data, '$.remote_service_id_hash')) = BINARY SHA2(case_row.before_remote_service_id, 256)
+          AND BINARY JSON_UNQUOTE(JSON_EXTRACT(audit_row.after_safe_data, '$.remote_service_id_hash')) = BINARY SHA2(case_row.proposed_remote_service_id, 256)
+          AND BINARY JSON_UNQUOTE(JSON_EXTRACT(audit_row.after_safe_data, '$.remote_canonical_hash')) = BINARY case_row.remote_canonical_hash
+          AND CAST(JSON_UNQUOTE(JSON_EXTRACT(audit_row.before_safe_data, '$.remote_identity_generation')) AS UNSIGNED) = OLD.remote_identity_generation
+          AND CAST(JSON_UNQUOTE(JSON_EXTRACT(audit_row.after_safe_data, '$.remote_identity_generation')) AS UNSIGNED) = OLD.remote_identity_generation + 1
+          AND CAST(JSON_UNQUOTE(JSON_EXTRACT(audit_row.before_safe_data, '$.lifecycle_version')) AS UNSIGNED) = OLD.lifecycle_version
+          AND CAST(JSON_UNQUOTE(JSON_EXTRACT(audit_row.after_safe_data, '$.lifecycle_version')) AS UNSIGNED) = OLD.lifecycle_version + 1;
 
-        IF operational_evidence_count <> 1
+        IF operational_capability_count <> 1
+           OR operational_evidence_count <> 1
            OR unresolved_mutations <> 0
            OR unresolved_deliveries <> 0
            OR NEW.id <> OLD.id

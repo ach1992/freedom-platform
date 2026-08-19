@@ -17,6 +17,7 @@ use App\Modules\Provisioning\Application\ServiceImportReceipt;
 use App\Modules\Provisioning\Application\ServiceImportService;
 use App\Modules\Provisioning\Application\ServiceOperationalAuthorityGuard;
 use App\Modules\Provisioning\Application\ServiceOperationalContext;
+use App\Modules\Provisioning\Application\ServiceOperationalDatabaseCapability;
 use App\Modules\Provisioning\Application\ServiceOwnershipTransferService;
 use App\Modules\Provisioning\Application\ServiceRepairService;
 use DomainException;
@@ -78,7 +79,7 @@ final class ServiceOperationalAuthorityTest extends TestCase
         $offering = $this->activeBenefitOffering('forged-import');
         $targetId = (int) DB::table('plan_offerings')->where('id', $offering['id'])->value('panel_service_target_id');
         $this->expectException(QueryException::class);
-        $this->expectExceptionMessage('Service operational evidence insert authority is invalid.');
+        $this->expectExceptionMessage('Service import evidence insert authority is invalid.');
         DB::table('service_imports')->insert([
             'public_id' => (string) Str::ulid(),
             'request_key_hash' => hash('sha256', 'forged-import'),
@@ -96,6 +97,273 @@ final class ServiceOperationalAuthorityTest extends TestCase
             'correlation_id' => 'forged-import-correlation',
             'created_at' => now('UTC'),
         ]);
+    }
+
+    public function test_internal_flags_without_application_capability_cannot_forge_operational_evidence(): void
+    {
+        $fixture = $this->operationalFixture('capability-forgery');
+        $attached = $this->attachedService($fixture, 'remote-capability', 'capability-user', 'capability-import');
+        $service = DB::table('service_subscriptions')->where('public_id', $attached->serviceSubscriptionPublicId)->first();
+        self::assertNotNull($service);
+        $ownerId = $fixture['owner_id'];
+
+        DB::statement("SET @app_service_operational_evidence_authority = 'service_operational_evidence_v1'");
+        try {
+            try {
+                DB::table('service_imports')->insert([
+                    'public_id' => (string) Str::ulid(),
+                    'request_key_hash' => hash('sha256', 'forged-import-with-flag'),
+                    'actor_administrator_id' => $ownerId,
+                    'user_id' => $fixture['user_id'],
+                    'plan_offering_id' => $fixture['offering_id'],
+                    'service_target_id' => $fixture['target_id'],
+                    'subscription_link_hash' => hash('sha256', 'https://panel.example.com/sub/forged-with-flag'),
+                    'registered_host' => 'panel.example.com',
+                    'remote_service_id' => 'forged-with-flag',
+                    'remote_username' => 'forged-with-flag',
+                    'remote_canonical_hash' => hash('sha256', 'forged-with-flag'),
+                    'remote_status' => 'active',
+                    'state' => 'previewed',
+                    'correlation_id' => 'forged-import-with-flag-correlation',
+                    'created_at' => now('UTC'),
+                ]);
+                self::fail('Operational session flag alone must not create import evidence.');
+            } catch (QueryException $exception) {
+                self::assertStringContainsString('Service import evidence insert authority is invalid.', $exception->getMessage());
+            }
+
+            try {
+                DB::table('service_reconciliation_cases')->insert([
+                    'public_id' => (string) Str::ulid(),
+                    'request_key_hash' => hash('sha256', 'forged-present-with-flag'),
+                    'service_subscription_id' => (int) $service->id,
+                    'actor_administrator_id' => $ownerId,
+                    'service_target_id' => (int) $service->service_target_id,
+                    'before_remote_service_id' => (string) $service->remote_service_id,
+                    'proposed_remote_service_id' => 'forged-present-remote',
+                    'remote_disposition' => 'present',
+                    'remote_canonical_hash' => hash('sha256', 'forged-present-canonical'),
+                    'target_remote_identity_generation' => (int) $service->remote_identity_generation,
+                    'target_lifecycle_version' => (int) $service->lifecycle_version,
+                    'state' => 'previewed',
+                    'audit_log_id' => null,
+                    'correlation_id' => 'forged-present-with-flag-correlation',
+                    'created_at' => now('UTC'),
+                    'applied_at' => null,
+                ]);
+                self::fail('Operational session flag alone must not synthesize present remote evidence.');
+            } catch (QueryException $exception) {
+                self::assertStringContainsString('Service reconciliation evidence insert authority is invalid.', $exception->getMessage());
+            }
+
+            try {
+                DB::table('service_ownership_transfers')->insert([
+                    'public_id' => (string) Str::ulid(),
+                    'request_key_hash' => hash('sha256', 'forged-transfer-with-flag'),
+                    'service_subscription_id' => (int) $service->id,
+                    'from_user_id' => (int) $service->user_id,
+                    'to_user_id' => $this->benefitUser(),
+                    'actor_administrator_id' => $ownerId,
+                    'target_remote_identity_generation' => (int) $service->remote_identity_generation,
+                    'target_lifecycle_version' => (int) $service->lifecycle_version,
+                    'state' => 'pending',
+                    'audit_log_id' => null,
+                    'correlation_id' => 'forged-transfer-with-flag-correlation',
+                    'created_at' => now('UTC'),
+                    'completed_at' => null,
+                ]);
+                self::fail('Operational session flag alone must not synthesize transfer evidence.');
+            } catch (QueryException $exception) {
+                self::assertStringContainsString('Service ownership transfer evidence insert authority is invalid.', $exception->getMessage());
+            }
+        } finally {
+            DB::statement('SET @app_service_operational_evidence_authority = NULL');
+        }
+
+        DB::statement("SET @app_service_operational_audit_authority = 'service_operational_audit_v1'");
+        DB::statement('SET @app_service_operational_request_hash = ?', [hash('sha256', 'forged-audit-with-flag')]);
+        try {
+            try {
+                DB::table('audit_logs')->insert([
+                    'actor_type' => 'administrator',
+                    'actor_id' => (string) $ownerId,
+                    'action' => 'service.operational.repair.applied',
+                    'target_type' => 'service_subscription',
+                    'target_id' => (string) $service->public_id,
+                    'before_safe_data' => json_encode(['remote_service_id_hash' => hash('sha256', (string) $service->remote_service_id)], JSON_THROW_ON_ERROR),
+                    'after_safe_data' => json_encode(['remote_service_id_hash' => hash('sha256', 'forged-audit-remote')], JSON_THROW_ON_ERROR),
+                    'reason_code' => 'service_operational_test',
+                    'reason' => 'Forged operational audit.',
+                    'correlation_id' => 'forged-audit-with-flag-correlation',
+                    'request_fingerprint' => hash('sha256', 'forged-audit-with-flag'),
+                    'created_at' => now('UTC'),
+                ]);
+                self::fail('Operational audit session flag alone must not create durable authority.');
+            } catch (QueryException $exception) {
+                self::assertStringContainsString('Service operational audit authority is invalid.', $exception->getMessage());
+            }
+        } finally {
+            DB::statement('SET @app_service_operational_audit_authority = NULL');
+            DB::statement('SET @app_service_operational_request_hash = NULL');
+        }
+    }
+
+    public function test_operational_evidence_cross_binding_rejects_reuse_and_terminal_rewrite_even_with_capability(): void
+    {
+        $fixture = $this->operationalFixture('cross-binding');
+        $attached = $this->attachedService($fixture, 'remote-cross-binding', 'cross-binding-user', 'cross-binding-import');
+        $service = DB::table('service_subscriptions')->where('public_id', $attached->serviceSubscriptionPublicId)->first();
+        self::assertNotNull($service);
+        $sourceImport = DB::table('service_imports')->where('service_subscription_id', (int) $service->id)->first();
+        self::assertNotNull($sourceImport);
+        self::assertSame('attached', $sourceImport->state);
+
+        $transferRequestHash = hash('sha256', 'forged-cross-transfer');
+        $transferCorrelationId = 'forged-cross-transfer-correlation';
+        $forgedTransferTargetUserId = $this->benefitUser();
+        $transferId = 0;
+        $repairRequestHash = hash('sha256', 'forged-cross-repair');
+        $repairCorrelationId = 'forged-cross-repair-correlation';
+        $repairProposedRemoteId = 'forged-cross-repair-remote';
+        $repairId = 0;
+
+        $this->setEvidenceAuthorityWithCapability();
+        try {
+            try {
+                DB::table('service_imports')->where('id', (int) $sourceImport->id)->update([
+                    'remote_username' => 'forged-terminal-rewrite',
+                ]);
+                self::fail('Terminal import evidence must be immutable even with the application capability.');
+            } catch (QueryException $exception) {
+                self::assertStringContainsString('Service import evidence update authority is invalid.', $exception->getMessage());
+            }
+
+            $forgedImportPublicId = (string) Str::ulid();
+            $forgedImportRequestHash = hash('sha256', 'forged-cross-import');
+            $forgedCorrelationId = 'forged-cross-import-correlation';
+            $forgedImportId = (int) DB::table('service_imports')->insertGetId([
+                'public_id' => $forgedImportPublicId,
+                'request_key_hash' => $forgedImportRequestHash,
+                'actor_administrator_id' => $fixture['owner_id'],
+                'user_id' => $fixture['user_id'],
+                'plan_offering_id' => $fixture['offering_id'],
+                'service_target_id' => $fixture['target_id'],
+                'subscription_link_hash' => hash('sha256', 'https://panel.example.com/sub/forged-cross-import'),
+                'registered_host' => 'panel.example.com',
+                'remote_service_id' => 'forged-cross-import',
+                'remote_username' => 'forged-cross-import',
+                'remote_canonical_hash' => hash('sha256', 'forged-cross-import-canonical'),
+                'remote_status' => 'active',
+                'state' => 'previewed',
+                'order_source_authorization_id' => null,
+                'order_id' => null,
+                'service_subscription_id' => null,
+                'audit_log_id' => null,
+                'correlation_id' => $forgedCorrelationId,
+                'created_at' => now('UTC'),
+                'attached_at' => null,
+            ]);
+            try {
+                DB::table('service_imports')->where('id', $forgedImportId)->update([
+                    'state' => 'attaching',
+                    'order_source_authorization_id' => $sourceImport->order_source_authorization_id,
+                    'order_id' => $sourceImport->order_id,
+                    'service_subscription_id' => $sourceImport->service_subscription_id,
+                    'audit_log_id' => $sourceImport->audit_log_id,
+                ]);
+                self::fail('Import evidence from another request must not authorize a forged attachment.');
+            } catch (QueryException $exception) {
+                self::assertStringContainsString('Service import evidence update authority is invalid.', $exception->getMessage());
+            }
+
+            $transferId = (int) DB::table('service_ownership_transfers')->insertGetId([
+                'public_id' => (string) Str::ulid(),
+                'request_key_hash' => $transferRequestHash,
+                'service_subscription_id' => (int) $service->id,
+                'from_user_id' => (int) $service->user_id,
+                'to_user_id' => $forgedTransferTargetUserId,
+                'actor_administrator_id' => $fixture['owner_id'],
+                'target_remote_identity_generation' => (int) $service->remote_identity_generation,
+                'target_lifecycle_version' => (int) $service->lifecycle_version,
+                'state' => 'pending',
+                'audit_log_id' => null,
+                'correlation_id' => $transferCorrelationId,
+                'created_at' => now('UTC'),
+                'completed_at' => null,
+            ]);
+            try {
+                DB::table('service_ownership_transfers')->where('id', $transferId)->update([
+                    'state' => 'applying',
+                    'audit_log_id' => $sourceImport->audit_log_id,
+                ]);
+                self::fail('Cross-action audit evidence must not authorize a forged transfer.');
+            } catch (QueryException $exception) {
+                self::assertStringContainsString('Service ownership transfer evidence update authority is invalid.', $exception->getMessage());
+            }
+
+            $repairId = (int) DB::table('service_reconciliation_cases')->insertGetId([
+                'public_id' => (string) Str::ulid(),
+                'request_key_hash' => $repairRequestHash,
+                'service_subscription_id' => (int) $service->id,
+                'actor_administrator_id' => $fixture['owner_id'],
+                'service_target_id' => (int) $service->service_target_id,
+                'before_remote_service_id' => (string) $service->remote_service_id,
+                'proposed_remote_service_id' => $repairProposedRemoteId,
+                'remote_disposition' => 'present',
+                'remote_canonical_hash' => hash('sha256', 'forged-cross-repair-canonical'),
+                'target_remote_identity_generation' => (int) $service->remote_identity_generation,
+                'target_lifecycle_version' => (int) $service->lifecycle_version,
+                'state' => 'previewed',
+                'audit_log_id' => null,
+                'correlation_id' => $repairCorrelationId,
+                'created_at' => now('UTC'),
+                'applied_at' => null,
+            ]);
+            try {
+                DB::table('service_reconciliation_cases')->where('id', $repairId)->update([
+                    'state' => 'applying',
+                    'audit_log_id' => $sourceImport->audit_log_id,
+                ]);
+                self::fail('Cross-action audit evidence must not authorize forged present repair evidence.');
+            } catch (QueryException $exception) {
+                self::assertStringContainsString('Service reconciliation evidence update authority is invalid.', $exception->getMessage());
+            }
+        } finally {
+            $this->clearEvidenceAuthorityWithCapability();
+        }
+
+        $this->setServiceAuthorityWithCapability('service_ownership_transfer_v1', $transferId, $transferRequestHash, $transferCorrelationId);
+        try {
+            try {
+                DB::table('service_subscriptions')->where('id', (int) $service->id)->update([
+                    'user_id' => $forgedTransferTargetUserId,
+                    'lifecycle_version' => (int) $service->lifecycle_version + 1,
+                    'updated_at' => now('UTC'),
+                ]);
+                self::fail('Pending forged transfer evidence must not authorize a Service transition.');
+            } catch (QueryException $exception) {
+                self::assertStringContainsString('Service ownership transfer authority is invalid.', $exception->getMessage());
+            }
+        } finally {
+            $this->clearServiceAuthorityWithCapability();
+        }
+
+        $this->setServiceAuthorityWithCapability('service_repair_v1', $repairId, $repairRequestHash, $repairCorrelationId);
+        try {
+            try {
+                DB::table('service_subscriptions')->where('id', (int) $service->id)->update([
+                    'remote_service_id' => $repairProposedRemoteId,
+                    'remote_identity_generation' => (int) $service->remote_identity_generation + 1,
+                    'lifecycle_version' => (int) $service->lifecycle_version + 1,
+                    'updated_at' => now('UTC'),
+                ]);
+                self::fail('Preview-only forged repair evidence must not authorize a Service identity transition.');
+            } catch (QueryException $exception) {
+                self::assertStringContainsString('Service reconciliation repair authority is invalid.', $exception->getMessage());
+            }
+        } finally {
+            $this->clearServiceAuthorityWithCapability();
+        }
     }
 
     public function test_import_is_ssrf_fail_closed_revalidates_remote_and_attaches_without_payment_or_provider_create(): void
@@ -394,7 +662,7 @@ final class ServiceOperationalAuthorityTest extends TestCase
 
         $created = $service->create($context, [['user_id' => $userId, 'plan_offering_id' => $offering['id']]]);
         $itemId = (int) DB::table('service_batch_grant_items')->where('service_batch_grant_id', $created->batchId)->value('id');
-        DB::statement("SET @app_service_batch_authority = 'service_batch_grant_v1'");
+        $this->setBatchAuthorityWithCapability();
         try {
             DB::table('service_batch_grant_items')->where('id', $itemId)->update([
                 'state' => 'processing',
@@ -404,7 +672,7 @@ final class ServiceOperationalAuthorityTest extends TestCase
                 'updated_at' => now('UTC'),
             ]);
         } finally {
-            DB::statement('SET @app_service_batch_authority = NULL');
+            $this->clearBatchAuthorityWithCapability();
         }
 
         try {
@@ -414,11 +682,96 @@ final class ServiceOperationalAuthorityTest extends TestCase
             self::assertSame('active', DB::table('service_batch_grants')->where('id', $created->batchId)->value('state'));
         }
 
+        $this->setBatchAuthorityWithCapability();
+        try {
+            try {
+                DB::table('service_batch_grants')->where('id', $created->batchId)->update([
+                    'state' => 'paused',
+                    'updated_at' => now('UTC'),
+                ]);
+                self::fail('DB authority must not pause a batch while a live item claim exists.');
+            } catch (QueryException $exception) {
+                self::assertStringContainsString('Service batch grant update authority is invalid.', $exception->getMessage());
+            }
+        } finally {
+            $this->clearBatchAuthorityWithCapability();
+        }
+
         $blocked = $service->resume($created->batchPublicId, $context);
         self::assertTrue($blocked->replayed);
         self::assertSame(0, DB::table('order_source_authorizations')->count());
         self::assertSame(0, DB::table('orders')->count());
         self::assertSame(0, DB::table('service_subscriptions')->count());
+    }
+
+    public function test_batch_family_rejects_extra_items_and_resume_reason_drift(): void
+    {
+        $offering = $this->activeBenefitOffering('batch-family-commitment');
+        $ownerId = $this->benefitOwner();
+        $userId = $this->benefitUser();
+        $otherUserId = $this->benefitUser();
+        $context = $this->context('batch-family-commitment', $ownerId);
+        $service = $this->app->make(ServiceBatchGrantService::class);
+        $created = $service->create($context, [[
+            'user_id' => $userId,
+            'plan_offering_id' => $offering['id'],
+        ]]);
+        $batch = DB::table('service_batch_grants')->where('id', $created->batchId)->first();
+        self::assertNotNull($batch);
+        self::assertNotNull($batch->items_committed_at);
+        self::assertSame(1, DB::table('service_batch_grant_items')->where('service_batch_grant_id', $created->batchId)->count());
+
+        $this->setBatchAuthorityWithCapability();
+        try {
+            foreach ([[0, $otherUserId], [2, $otherUserId]] as [$position, $targetUserId]) {
+                try {
+                    DB::table('service_batch_grant_items')->insert([
+                        'public_id' => (string) Str::ulid(),
+                        'service_batch_grant_id' => $created->batchId,
+                        'position' => $position,
+                        'user_id' => $targetUserId,
+                        'plan_offering_id' => $offering['id'],
+                        'request_key_hash' => hash('sha256', 'forged-batch-item:'.$position.':'.$targetUserId),
+                        'state' => 'pending',
+                        'attempt_count' => 0,
+                        'claim_token' => null,
+                        'claim_expires_at' => null,
+                        'order_source_authorization_id' => null,
+                        'order_id' => null,
+                        'service_subscription_id' => null,
+                        'provisioning_operation_id' => null,
+                        'error_code' => null,
+                        'correlation_id' => $context->correlationId,
+                        'created_at' => now('UTC'),
+                        'updated_at' => now('UTC'),
+                    ]);
+                    self::fail('Committed batch item family must reject injected children.');
+                } catch (QueryException $exception) {
+                    self::assertStringContainsString('Service batch grant item insert authority is invalid.', $exception->getMessage());
+                }
+            }
+        } finally {
+            $this->clearBatchAuthorityWithCapability();
+        }
+        self::assertSame(1, DB::table('service_batch_grant_items')->where('service_batch_grant_id', $created->batchId)->count());
+        self::assertSame(0, DB::table('order_source_authorizations')->count());
+        self::assertSame(0, DB::table('orders')->count());
+        self::assertSame(0, DB::table('service_subscriptions')->count());
+
+        $wrongReasonContext = new ServiceOperationalContext(
+            $context->requestKey,
+            $context->correlationId,
+            'service_operational_other',
+            $context->reason,
+            $context->actorAdministratorId,
+        );
+        try {
+            $service->resume($created->batchPublicId, $wrongReasonContext);
+            self::fail('Batch resume must preserve the accepted reason-code identity.');
+        } catch (DomainException $exception) {
+            self::assertSame('Service batch grant request identity conflicts with existing evidence.', $exception->getMessage());
+        }
+        self::assertSame(0, DB::table('order_source_authorizations')->count());
     }
 
     public function test_batch_cancellation_refuses_expired_started_work_and_parent_shortcuts(): void
@@ -436,7 +789,7 @@ final class ServiceOperationalAuthorityTest extends TestCase
         $startedItemId = (int) DB::table('service_batch_grant_items')
             ->where('service_batch_grant_id', $started->batchId)
             ->value('id');
-        DB::statement("SET @app_service_batch_authority = 'service_batch_grant_v1'");
+        $this->setBatchAuthorityWithCapability();
         try {
             DB::table('service_batch_grant_items')->where('id', $startedItemId)->update([
                 'state' => 'processing',
@@ -446,7 +799,7 @@ final class ServiceOperationalAuthorityTest extends TestCase
                 'updated_at' => now('UTC'),
             ]);
         } finally {
-            DB::statement('SET @app_service_batch_authority = NULL');
+            $this->clearBatchAuthorityWithCapability();
         }
 
         try {
@@ -461,7 +814,7 @@ final class ServiceOperationalAuthorityTest extends TestCase
         self::assertSame('active', DB::table('service_batch_grants')->where('id', $started->batchId)->value('state'));
         self::assertSame('processing', DB::table('service_batch_grant_items')->where('id', $startedItemId)->value('state'));
 
-        DB::statement("SET @app_service_batch_authority = 'service_batch_grant_v1'");
+        $this->setBatchAuthorityWithCapability();
         try {
             try {
                 DB::table('service_batch_grant_items')->where('id', $startedItemId)->update([
@@ -476,7 +829,7 @@ final class ServiceOperationalAuthorityTest extends TestCase
                 self::assertStringContainsString('Service batch grant item update authority is invalid.', $exception->getMessage());
             }
         } finally {
-            DB::statement('SET @app_service_batch_authority = NULL');
+            $this->clearBatchAuthorityWithCapability();
         }
 
         $untouchedContext = $this->context('batch-cancel-untouched', $ownerId);
@@ -484,7 +837,7 @@ final class ServiceOperationalAuthorityTest extends TestCase
             'user_id' => $userId,
             'plan_offering_id' => $offering['id'],
         ]]);
-        DB::statement("SET @app_service_batch_authority = 'service_batch_grant_v1'");
+        $this->setBatchAuthorityWithCapability();
         try {
             try {
                 DB::table('service_batch_grants')->where('id', $untouched->batchId)->update([
@@ -496,7 +849,7 @@ final class ServiceOperationalAuthorityTest extends TestCase
                 self::assertStringContainsString('Service batch grant update authority is invalid.', $exception->getMessage());
             }
         } finally {
-            DB::statement('SET @app_service_batch_authority = NULL');
+            $this->clearBatchAuthorityWithCapability();
         }
 
         $cancelled = $service->cancel($untouched->batchPublicId, $untouchedContext);
@@ -544,7 +897,7 @@ final class ServiceOperationalAuthorityTest extends TestCase
         self::assertNotNull($targetItem);
         $claimToken = (string) Str::ulid();
 
-        DB::statement("SET @app_service_batch_authority = 'service_batch_grant_v1'");
+        $this->setBatchAuthorityWithCapability();
         try {
             DB::table('service_batch_grant_items')->where('id', (int) $targetItem->id)->update([
                 'state' => 'processing',
@@ -569,7 +922,7 @@ final class ServiceOperationalAuthorityTest extends TestCase
                 self::assertStringContainsString('Service batch grant item update authority is invalid.', $exception->getMessage());
             }
         } finally {
-            DB::statement('SET @app_service_batch_authority = NULL');
+            $this->clearBatchAuthorityWithCapability();
         }
 
         $target = DB::table('service_batch_grant_items')->where('id', (int) $targetItem->id)->first();
@@ -677,6 +1030,54 @@ final class ServiceOperationalAuthorityTest extends TestCase
             hash('sha256', 'canonical:'.$remoteId.':'.$username),
             hash('sha256', 'equivalence:'.$remoteId.':'.$username),
         );
+    }
+
+    private function setBatchAuthorityWithCapability(): void
+    {
+        DB::statement('SET @app_service_operational_capability = ?', [
+            $this->app->make(ServiceOperationalDatabaseCapability::class)->value(),
+        ]);
+        DB::statement("SET @app_service_batch_authority = 'service_batch_grant_v1'");
+    }
+
+    private function clearBatchAuthorityWithCapability(): void
+    {
+        DB::statement('SET @app_service_batch_authority = NULL');
+        DB::statement('SET @app_service_operational_capability = NULL');
+    }
+
+    private function setEvidenceAuthorityWithCapability(): void
+    {
+        DB::statement('SET @app_service_operational_capability = ?', [
+            $this->app->make(ServiceOperationalDatabaseCapability::class)->value(),
+        ]);
+        DB::statement("SET @app_service_operational_evidence_authority = 'service_operational_evidence_v1'");
+    }
+
+    private function clearEvidenceAuthorityWithCapability(): void
+    {
+        DB::statement('SET @app_service_operational_evidence_authority = NULL');
+        DB::statement('SET @app_service_operational_capability = NULL');
+    }
+
+    private function setServiceAuthorityWithCapability(string $authority, int $evidenceId, string $requestHash, string $correlationId): void
+    {
+        DB::statement('SET @app_service_operational_capability = ?', [
+            $this->app->make(ServiceOperationalDatabaseCapability::class)->value(),
+        ]);
+        DB::statement('SET @app_service_operational_authority = ?', [$authority]);
+        DB::statement('SET @app_service_operational_evidence_id = ?', [$evidenceId]);
+        DB::statement('SET @app_service_operational_request_hash = ?', [$requestHash]);
+        DB::statement('SET @app_service_operational_correlation_id = ?', [$correlationId]);
+    }
+
+    private function clearServiceAuthorityWithCapability(): void
+    {
+        DB::statement('SET @app_service_operational_authority = NULL');
+        DB::statement('SET @app_service_operational_evidence_id = NULL');
+        DB::statement('SET @app_service_operational_request_hash = NULL');
+        DB::statement('SET @app_service_operational_correlation_id = NULL');
+        DB::statement('SET @app_service_operational_capability = NULL');
     }
 
     private function nonOwnerAdministrator(): int

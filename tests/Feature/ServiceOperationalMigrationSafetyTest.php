@@ -9,6 +9,7 @@ use App\Modules\Provisioning\Application\ServiceOperationalAuthorityGuard;
 use App\Modules\Provisioning\Application\ServiceOperationalContext;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
@@ -84,12 +85,42 @@ final class ServiceOperationalMigrationSafetyTest extends TestCase
         foreach (array_keys($this->bootstrapChecks()) as $table) {
             self::assertFalse(DB::getSchemaBuilder()->hasTable($table));
         }
+        self::assertFalse(DB::getSchemaBuilder()->hasTable('service_operational_authority_capability'));
         $this->migration()->up();
+        self::assertTrue(DB::getSchemaBuilder()->hasTable('service_operational_authority_capability'));
         $this->app->make(ServiceOperationalAuthorityGuard::class)->assertFinalized();
         $guard = $this->serviceUpdateGuard();
         self::assertStringContainsString('service_import_attach_v1', $guard);
         self::assertStringContainsString('service_ownership_transfer_v1', $guard);
         self::assertStringContainsString('service_repair_v1', $guard);
+    }
+
+    public function test_operational_database_capability_is_present_and_immutable(): void
+    {
+        self::assertTrue(DB::getSchemaBuilder()->hasTable('service_operational_authority_capability'));
+        $before = DB::table('service_operational_authority_capability')->where('id', 1)->value('capability_hash');
+        self::assertIsString($before);
+        self::assertSame(64, strlen($before));
+
+        foreach (['update', 'delete', 'insert'] as $operation) {
+            try {
+                match ($operation) {
+                    'update' => DB::table('service_operational_authority_capability')->where('id', 1)->update([
+                        'capability_hash' => hash('sha256', 'forged-capability'),
+                    ]),
+                    'delete' => DB::table('service_operational_authority_capability')->where('id', 1)->delete(),
+                    'insert' => DB::table('service_operational_authority_capability')->insert([
+                        'id' => 2,
+                        'capability_hash' => hash('sha256', 'forged-capability'),
+                        'created_at' => now('UTC'),
+                    ]),
+                };
+                self::fail('Service operational database capability must be immutable: '.$operation);
+            } catch (QueryException $exception) {
+                self::assertStringContainsString('Service operational database capability is immutable.', $exception->getMessage());
+            }
+        }
+        self::assertSame($before, DB::table('service_operational_authority_capability')->where('id', 1)->value('capability_hash'));
     }
 
     public function test_down_refuses_durable_batch_evidence_before_closing_or_dismantling_authority(): void

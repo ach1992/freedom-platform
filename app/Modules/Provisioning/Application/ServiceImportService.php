@@ -34,6 +34,7 @@ final readonly class ServiceImportService
         private Clock $clock,
         private AdministratorPermissionAuthorizer $authorizer,
         private ServiceOperationalAuthorityGuard $authority,
+        private ServiceOperationalDatabaseCapability $databaseCapability,
         private ProvisioningPanelAdapterResolver $adapters,
         private OrderSourceAuthorizationService $sourceAuthorizations,
         private NonPaidOrderService $orders,
@@ -233,6 +234,7 @@ final readonly class ServiceImportService
                     'user_id' => (int) $locked->user_id,
                     'service_target_id' => (int) $locked->service_target_id,
                     'remote_service_id_hash' => hash('sha256', $locked->remote_service_id),
+                    'remote_canonical_hash' => $locked->remote_canonical_hash,
                 ],
             );
 
@@ -471,28 +473,47 @@ final readonly class ServiceImportService
 
     private function setEvidenceAuthority(Connection $connection): void
     {
-        $connection->statement('SET @app_service_operational_evidence_authority = ?', [self::EVIDENCE_AUTHORITY]);
+        $this->databaseCapability->apply($connection);
+        try {
+            $connection->statement('SET @app_service_operational_evidence_authority = ?', [self::EVIDENCE_AUTHORITY]);
+        } catch (\Throwable $exception) {
+            $this->databaseCapability->clear($connection);
+            throw $exception;
+        }
     }
 
     private function clearEvidenceAuthority(Connection $connection): void
     {
-        $connection->statement('SET @app_service_operational_evidence_authority = NULL');
+        try {
+            $this->databaseCapability->clear($connection);
+        } finally {
+            $connection->statement('SET @app_service_operational_evidence_authority = NULL');
+        }
     }
 
     private function setServiceAuthority(Connection $connection, string $authority, int $evidenceId, string $requestHash, string $correlationId): void
     {
-        $connection->statement('SET @app_service_operational_authority = ?', [$authority]);
-        $connection->statement('SET @app_service_operational_evidence_id = ?', [$evidenceId]);
-        $connection->statement('SET @app_service_operational_request_hash = ?', [$requestHash]);
-        $connection->statement('SET @app_service_operational_correlation_id = ?', [$correlationId]);
+        $this->databaseCapability->apply($connection);
+        try {
+            $connection->statement('SET @app_service_operational_authority = ?', [$authority]);
+            $connection->statement('SET @app_service_operational_evidence_id = ?', [$evidenceId]);
+            $connection->statement('SET @app_service_operational_request_hash = ?', [$requestHash]);
+            $connection->statement('SET @app_service_operational_correlation_id = ?', [$correlationId]);
+        } catch (\Throwable $exception) {
+            $this->databaseCapability->clear($connection);
+            throw $exception;
+        }
     }
 
     private function clearServiceAuthority(Connection $connection): void
     {
-        $connection->statement('SET @app_service_operational_authority = NULL');
-        $connection->statement('SET @app_service_operational_evidence_id = NULL');
-        $connection->statement('SET @app_service_operational_request_hash = NULL');
-        $connection->statement('SET @app_service_operational_correlation_id = NULL');
+        try {
+            $this->databaseCapability->clear($connection);
+        } finally {
+            $connection->statement(
+                'SET @app_service_operational_authority = NULL, @app_service_operational_evidence_id = NULL, @app_service_operational_request_hash = NULL, @app_service_operational_correlation_id = NULL',
+            );
+        }
     }
 
     private function timestamp(): string

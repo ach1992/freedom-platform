@@ -17,7 +17,7 @@ use RuntimeException;
 use Throwable;
 
 /**
- * @phpstan-type BatchRow object{id:int|string,public_id:string,request_key_hash:string,actor_administrator_id:int|string,state:string,item_count:int|string,succeeded_count:int|string,failed_count:int|string,correlation_id:string,completed_at:?string}
+ * @phpstan-type BatchRow object{id:int|string,public_id:string,request_key_hash:string,payload_hash:string,reason_code:string,actor_administrator_id:int|string,state:string,item_count:int|string,succeeded_count:int|string,failed_count:int|string,correlation_id:string,items_committed_at:?string,completed_at:?string}
  * @phpstan-type BatchItemRow object{id:int|string,public_id:string,service_batch_grant_id:int|string,position:int|string,user_id:int|string,plan_offering_id:int|string,request_key_hash:string,state:string,attempt_count:int|string,claim_token:?string,claim_expires_at:?string,order_source_authorization_id:int|string|null,order_id:int|string|null,service_subscription_id:int|string|null,provisioning_operation_id:int|string|null,error_code:?string,correlation_id:string}
  */
 final readonly class ServiceBatchGrantService
@@ -33,6 +33,7 @@ final readonly class ServiceBatchGrantService
         private Clock $clock,
         private AdministratorPermissionAuthorizer $authorizer,
         private ServiceOperationalAuthorityGuard $authority,
+        private ServiceOperationalDatabaseCapability $databaseCapability,
         private OrderSourceAuthorizationService $sourceAuthorizations,
         private NonPaidOrderService $orders,
         private InitialProvisioningQueueService $provisioning,
@@ -68,14 +69,16 @@ final readonly class ServiceBatchGrantService
                 'service_batch_grant',
                 $batchPublicId,
                 $context,
-                ['state' => null, 'item_count' => 0],
-                ['state' => 'active', 'item_count' => count($normalized)],
+                ['state' => null, 'item_count' => 0, 'payload_hash' => null],
+                ['state' => 'active', 'item_count' => count($normalized), 'payload_hash' => $payloadHash],
             );
             $this->setBatchAuthority($connection);
             try {
                 $batchId = (int) $connection->table('service_batch_grants')->insertGetId([
                     'public_id' => $batchPublicId,
                     'request_key_hash' => $context->requestHash(),
+                    'payload_hash' => $payloadHash,
+                    'reason_code' => $context->reasonCode,
                     'actor_administrator_id' => $context->actorAdministratorId,
                     'audit_log_id' => $auditId,
                     'state' => 'active',
@@ -85,6 +88,7 @@ final readonly class ServiceBatchGrantService
                     'correlation_id' => $context->correlationId,
                     'created_at' => $timestamp,
                     'updated_at' => $timestamp,
+                    'items_committed_at' => null,
                     'completed_at' => null,
                 ]);
                 foreach ($normalized as $position => $item) {
@@ -108,6 +112,16 @@ final readonly class ServiceBatchGrantService
                         'created_at' => $timestamp,
                         'updated_at' => $timestamp,
                     ]);
+                }
+                $committed = $connection->table('service_batch_grants')
+                    ->where('id', $batchId)
+                    ->whereNull('items_committed_at')
+                    ->update([
+                        'items_committed_at' => $this->timestamp(),
+                        'updated_at' => $this->timestamp(),
+                    ]);
+                if ($committed !== 1) {
+                    throw new RuntimeException('Service batch grant item family did not finalize.');
                 }
             } finally {
                 $this->clearBatchAuthority($connection);
@@ -320,17 +334,18 @@ final readonly class ServiceBatchGrantService
             throw new RuntimeException('Service batch item claim token is unavailable.');
         }
 
+        [$batchPublicId, $acceptedReasonCode] = $this->batchExecutionIdentity((int) $item->service_batch_grant_id);
         $sourceAuthorizationId = null;
         $orderId = null;
         $serviceSubscriptionId = null;
         $provisioningOperationId = null;
         try {
             $source = $this->sourceAuthorizations->authorizeAdministratorGrant(
-                'service-batch:'.$this->batchPublicId((int) $item->service_batch_grant_id).':'.$item->public_id,
+                'service-batch:'.$batchPublicId.':'.$item->public_id,
                 $context->actorAdministratorId,
                 (int) $item->user_id,
                 (int) $item->plan_offering_id,
-                $context->reasonCode,
+                $acceptedReasonCode,
                 $item->correlation_id,
             );
             $sourceAuthorizationId = $source->authorizationId;
@@ -431,11 +446,15 @@ final readonly class ServiceBatchGrantService
         $succeeded = $connection->table('service_batch_grant_items')->where('service_batch_grant_id', $batchId)->where('state', 'succeeded')->count();
         $failed = $connection->table('service_batch_grant_items')->where('service_batch_grant_id', $batchId)->where('state', 'failed')->count();
         $total = $connection->table('service_batch_grant_items')->where('service_batch_grant_id', $batchId)->count();
-        $currentState = $connection->table('service_batch_grants')->where('id', $batchId)->value('state');
-        if (! is_string($currentState) || ! in_array($currentState, ['active', 'paused'], true)) {
+        /** @var object{state:string,item_count:int|string,items_committed_at:?string}|null $batch */
+        $batch = $connection->table('service_batch_grants')->where('id', $batchId)->first(['state', 'item_count', 'items_committed_at']);
+        if ($batch === null || ! is_string($batch->state) || ! in_array($batch->state, ['active', 'paused'], true)) {
             throw new RuntimeException('Service batch grant cannot refresh counts from its current state.');
         }
-        $state = $succeeded === $total ? 'completed' : $currentState;
+        if ($batch->items_committed_at === null || $total !== (int) $batch->item_count) {
+            throw new RuntimeException('Service batch grant item family is incomplete.');
+        }
+        $state = $succeeded === $total ? 'completed' : $batch->state;
         $connection->table('service_batch_grants')->where('id', $batchId)->update([
             'state' => $state,
             'succeeded_count' => $succeeded,
@@ -545,7 +564,7 @@ final readonly class ServiceBatchGrantService
     private function assertBatchReplay(Connection $connection, object $batch, ServiceOperationalContext $context, array $items, string $payloadHash): void
     {
         $this->assertBatchContext($batch, $context);
-        if ((int) $batch->item_count !== count($items)) {
+        if (! hash_equals($batch->payload_hash, $payloadHash) || (int) $batch->item_count !== count($items)) {
             throw new DomainException('Service batch grant request fingerprint conflicts with existing evidence.');
         }
         $rows = $connection->table('service_batch_grant_items')->where('service_batch_grant_id', (int) $batch->id)->orderBy('position')->get([
@@ -570,19 +589,26 @@ final readonly class ServiceBatchGrantService
     {
         if ((int) $batch->actor_administrator_id !== $context->actorAdministratorId
             || ! hash_equals($batch->request_key_hash, $context->requestHash())
-            || ! hash_equals($batch->correlation_id, $context->correlationId)) {
+            || ! hash_equals($batch->correlation_id, $context->correlationId)
+            || ! hash_equals($batch->reason_code, $context->reasonCode)
+            || $batch->items_committed_at === null) {
             throw new DomainException('Service batch grant request identity conflicts with existing evidence.');
         }
     }
 
-    private function batchPublicId(int $batchId): string
+    /** @return array{string,string} */
+    private function batchExecutionIdentity(int $batchId): array
     {
-        $value = $this->database->connection()->table('service_batch_grants')->where('id', $batchId)->value('public_id');
-        if (! is_string($value) || ! Str::isUlid($value)) {
-            throw new RuntimeException('Service batch grant identity is unavailable.');
+        /** @var object{public_id:string,reason_code:string,items_committed_at:?string}|null $batch */
+        $batch = $this->database->connection()->table('service_batch_grants')->where('id', $batchId)->first([
+            'public_id', 'reason_code', 'items_committed_at',
+        ]);
+        if ($batch === null || ! Str::isUlid($batch->public_id) || $batch->items_committed_at === null
+            || preg_match('/\A[a-z0-9_.-]{1,64}\z/', $batch->reason_code) !== 1) {
+            throw new RuntimeException('Service batch grant execution identity is unavailable.');
         }
 
-        return $value;
+        return [$batch->public_id, $batch->reason_code];
     }
 
     private function safeErrorCode(Throwable $exception): string
@@ -606,12 +632,22 @@ final readonly class ServiceBatchGrantService
 
     private function setBatchAuthority(Connection $connection): void
     {
-        $connection->statement('SET @app_service_batch_authority = ?', [self::BATCH_AUTHORITY]);
+        $this->databaseCapability->apply($connection);
+        try {
+            $connection->statement('SET @app_service_batch_authority = ?', [self::BATCH_AUTHORITY]);
+        } catch (\Throwable $exception) {
+            $this->databaseCapability->clear($connection);
+            throw $exception;
+        }
     }
 
     private function clearBatchAuthority(Connection $connection): void
     {
-        $connection->statement('SET @app_service_batch_authority = NULL');
+        try {
+            $this->databaseCapability->clear($connection);
+        } finally {
+            $connection->statement('SET @app_service_batch_authority = NULL');
+        }
     }
 
     private function timestamp(): string
