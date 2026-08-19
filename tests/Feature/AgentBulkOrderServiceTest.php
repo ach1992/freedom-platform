@@ -5,13 +5,13 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Modules\Agents\Application\AgentPricingService;
+use App\Modules\Agents\Domain\AgentPricingAction;
 use App\Modules\Orders\Application\AgentBulkOrderService;
 use App\Modules\Orders\Application\PurchaseOrderService;
 use App\Modules\Orders\Application\QuoteAgentPricingContext;
 use App\Modules\Orders\Application\QuotePricingInput;
 use App\Modules\Orders\Application\QuoteService;
 use App\Modules\Orders\Domain\QuoteOverrideSource;
-use App\Modules\Agents\Domain\AgentPricingAction;
 use App\Modules\Payments\Application\Contracts\PaymentEvidence;
 use App\Modules\Payments\Application\Contracts\PaymentEvidenceAuthority;
 use App\Modules\Payments\Application\Contracts\PaymentTransactionStatus;
@@ -149,10 +149,11 @@ final class AgentBulkOrderServiceTest extends TestCase
 
         [$validAgent, $offering] = $this->agentAuthority('bulk-direct-db');
         $settlement = $this->agentSettlement('bulk-direct-db', $validAgent, $offering['id']);
+        $directChildReference = 'bulk-direct-child-0001';
         $receipt = $service->execute(
             'bulk-direct-parent-0001',
             $validAgent,
-            [['child_key' => 'bulk-direct-child-0001', 'purchase_settlement_public_id' => $settlement->settlementPublicId]],
+            [['child_key' => $directChildReference, 'purchase_settlement_public_id' => $settlement->settlementPublicId]],
             $this->purchaseOrderCorrelation('bulk-direct-create'),
         );
         self::assertSame(1, $receipt->succeededCount);
