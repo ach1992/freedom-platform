@@ -239,7 +239,10 @@ final readonly class ServiceBatchGrantService
         }, 3);
     }
 
-    /** @param list<int> $excludedItemIds @return BatchItemRow|null */
+    /**
+     * @param  list<int>  $excludedItemIds
+     * @return BatchItemRow|null
+     */
     private function claimNext(string $batchPublicId, ServiceOperationalContext $context, array $excludedItemIds): ?object
     {
         return $this->database->connection()->transaction(function (Connection $connection) use ($batchPublicId, $context, $excludedItemIds): ?object {
