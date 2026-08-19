@@ -10,7 +10,7 @@ namespace App\Modules\Orders\Application;
 final readonly class AgentBulkOrderReceipt
 {
     /**
-     * @param list<AgentBulkChildReceipt> $items
+     * @param  list<AgentBulkChildReceipt>  $items
      */
     public function __construct(
         public int $bulkOrderId,
