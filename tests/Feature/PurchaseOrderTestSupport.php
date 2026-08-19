@@ -51,6 +51,32 @@ trait PurchaseOrderTestSupport
             DB::statement('SET timestamp = '.$this->purchaseOrderClock->value->getTimestamp());
             $this->beforeApplicationDestroyed(static function (): void {
                 DB::statement('SET timestamp = DEFAULT');
+
+                // MariaDB DDL implicitly commits. Historical migration fault-harness tests in this
+                // support family may therefore replace the final source-aware provisioning guards
+                // outside Laravel's row-level test isolation. Repair only when the live guard is
+                // no longer the final #150 form so later tests always start from migrated schema.
+                $guard = DB::selectOne(<<<'SQL'
+SELECT ACTION_STATEMENT AS action_statement
+FROM information_schema.TRIGGERS
+WHERE TRIGGER_SCHEMA = DATABASE()
+  AND TRIGGER_NAME = 'service_subscriptions_insert_guard'
+LIMIT 1
+SQL);
+                if ($guard !== null
+                    && isset($guard->action_statement)
+                    && is_string($guard->action_statement)
+                    && str_contains($guard->action_statement, 'zero-cost source authority shape is invalid')
+                ) {
+                    return;
+                }
+
+                /** @var \Illuminate\Database\Migrations\Migration $nonPaidInvalidationMigration */
+                $nonPaidInvalidationMigration = require database_path('migrations/2026_08_19_000115_extend_provisioning_invalidation_to_non_paid_sources.php');
+                /** @var \Illuminate\Database\Migrations\Migration $nonPaidAuthorityMigration */
+                $nonPaidAuthorityMigration = require database_path('migrations/2026_08_19_000120_activate_non_paid_order_authority.php');
+                $nonPaidInvalidationMigration->up();
+                $nonPaidAuthorityMigration->up();
             });
         }
 
