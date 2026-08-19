@@ -82,6 +82,7 @@ final readonly class InitialProvisioningExecutor
 
     public function __construct(
         private DatabaseManager $database,
+        private InitialProvisioningAuthorityGuard $authority,
         private Clock $clock,
         private PlanOfferingRouteSelector $routes,
         private ProvisioningPanelAdapterResolver $adapters,
@@ -89,7 +90,7 @@ final readonly class InitialProvisioningExecutor
         private TargetCapacityAllocator $capacity,
     ) {}
 
-    /** @requirement PAY-003 PRV-001 PRV-002 PRV-003 DAT-002 DAT-003 DAT-004 SEC-002 SEC-008 QUA-001 QUA-004 */
+    /** @requirement PAY-003 PRV-001 PRV-002 PRV-003 CAT-006 ADM-002 DAT-002 DAT-003 DAT-004 SEC-002 SEC-008 QUA-001 QUA-004 */
     public function execute(string $operationPublicId): InitialProvisioningExecutionReceipt
     {
         $operation = $this->operationByPublicId($operationPublicId);
@@ -118,8 +119,9 @@ final readonly class InitialProvisioningExecutor
             );
         }
 
-        // The financial check is deliberately its own short transaction. The running effect fence
-        // makes a concurrent refund fail closed until this remote attempt reaches a durable outcome.
+        // Revalidate the exact purchase or zero-cost source authority in its own short transaction
+        // immediately before the provider boundary. Purchase refunds remain fenced by the accepted
+        // running-effect invalidation guard; zero-cost sources never fabricate payment evidence.
         try {
             $this->revalidateFinancialAuthority($operation);
         } catch (Throwable $exception) {
@@ -132,7 +134,7 @@ final readonly class InitialProvisioningExecutor
             );
         }
 
-        // Capacity is separately revalidated after financial authority and immediately before the
+        // Capacity is separately revalidated after Order authority and immediately before the
         // provider boundary. The running-capacity DB fence prevents release/expiry transitions
         // after this check while the remote effect remains in flight.
         try {
@@ -184,8 +186,8 @@ final readonly class InitialProvisioningExecutor
     private function claim(object $locator): object
     {
         return $this->database->connection()->transaction(function (Connection $connection) use ($locator): object {
-            $authority = $this->lockedFinancialAuthority($connection, $locator);
-            $locked = $authority['operation'];
+            $this->authority->lockAndAssert($connection, $locator);
+            $locked = $this->operationById($connection, (int) $locator->id, true);
             $state = $this->storedState($locked->state);
             if ($state === ProvisioningState::Running) {
                 return $locked;
@@ -194,13 +196,6 @@ final readonly class InitialProvisioningExecutor
                 throw new DomainException('Initial provisioning operation cannot acquire remote-effect authority.');
             }
 
-            $this->assertCapturedFinancialAuthority(
-                $connection,
-                $locked,
-                $authority['settlement'],
-                $authority['intent'],
-                $authority['order'],
-            );
             $now = $this->nowString();
             $holdExpiry = $locked->route_selection_id === null
                 ? $this->clock->now()->add(new DateInterval(self::ROUTE_HOLD_INTERVAL))->format('Y-m-d H:i:s.u')
@@ -325,18 +320,11 @@ final readonly class InitialProvisioningExecutor
     private function revalidateFinancialAuthority(object $operation): void
     {
         $this->database->connection()->transaction(function (Connection $connection) use ($operation): void {
-            $authority = $this->lockedFinancialAuthority($connection, $operation);
-            $locked = $authority['operation'];
+            $this->authority->lockAndAssert($connection, $operation);
+            $locked = $this->operationById($connection, (int) $operation->id, true);
             if ($this->storedState($locked->state) !== ProvisioningState::Running) {
                 throw new DomainException('Initial provisioning operation lost its remote-effect fence.');
             }
-            $this->assertCapturedFinancialAuthority(
-                $connection,
-                $locked,
-                $authority['settlement'],
-                $authority['intent'],
-                $authority['order'],
-            );
         }, 3);
     }
 
