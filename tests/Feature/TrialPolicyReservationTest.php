@@ -13,6 +13,12 @@ use App\Modules\Catalog\Application\TrialPolicyService;
 use App\Modules\Catalog\Application\TrialReservationRequest;
 use App\Modules\Catalog\Application\TrialReservationService;
 use App\Modules\Catalog\Application\TrialRouteSelector;
+use App\Modules\Catalog\Domain\OfferingProtocolAssignment;
+use App\Modules\Catalog\Domain\PlanOfferingAudience;
+use App\Modules\Catalog\Domain\PlanOfferingDefinition;
+use App\Modules\Catalog\Domain\PlanOfferingProtocolSelectionMode;
+use App\Modules\Catalog\Domain\PlanOfferingServerSelectionMode;
+use App\Modules\Catalog\Domain\PlanOfferingServiceMode;
 use App\Modules\Catalog\Domain\PlanOfferingTagMatchMode;
 use App\Modules\Catalog\Domain\RouteCandidateUnavailable;
 use App\Modules\Catalog\Domain\TrialPolicyDefinition;
@@ -418,59 +424,40 @@ final class TrialPolicyReservationTest extends TestCase
             ]);
         }
 
-        $offeringId = (int) DB::table('plan_offerings')->insertGetId([
-            'code' => 'trial-offering-'.Str::lower(Str::random(8)),
-            'product_id' => $productId,
-            'variant_id' => null,
-            'sales_server_id' => $primaryServerId,
-            'panel_service_target_id' => $primaryTargetId,
-            'service_mode_code' => 'shared',
-            'service_mode_label_fa' => 'اشتراکی',
-            'service_mode_label_en' => 'Shared',
-            'audience' => 'customers',
-            'server_selection_mode' => 'system_selects',
-            'protocol_selection_mode' => 'fixed',
-            'tag_match_mode' => 'all',
-            'base_price_irr' => 0,
-            'duration_days' => 1,
-            'data_allowance_bytes' => 1_073_741_824,
-            'device_limit' => 1,
-            'sort_order' => 0,
-            'min_purchase_quantity' => 1,
-            'max_purchase_quantity' => 1,
-            'discount_eligible' => false,
-            'auto_renew_allowed' => false,
-            'custom_plan_allowed' => false,
-            'trial_allowed' => true,
-            'state' => 'draft',
-            'visibility' => 'hidden',
-            'version' => 1,
-            'created_at' => $now,
-            'updated_at' => $now,
-        ]);
-        DB::table('plan_offering_tiers')->insert([
-            'plan_offering_id' => $offeringId,
-            'tier_code' => 'normal',
-            'created_at' => $now,
-        ]);
-        DB::table('plan_offering_tags')->insert([
-            'plan_offering_id' => $offeringId,
-            'customer_tag_id' => $tagId,
-            'created_at' => $now,
-        ]);
-        DB::table('plan_offering_protocol_profiles')->insert([
-            'plan_offering_id' => $offeringId,
-            'panel_protocol_profile_id' => $profileId,
-            'customer_selectable' => false,
-            'is_default' => true,
-            'created_at' => $now,
-            'updated_at' => $now,
-        ]);
-        DB::table('plan_offering_required_capabilities')->insert([
-            'plan_offering_id' => $offeringId,
-            'capability_code' => 'create_service',
-            'created_at' => $now,
-        ]);
+        $offeringCode = 'trial-offering-'.Str::lower(Str::random(8));
+        $createdOffering = $this->app->make(PlanOfferingService::class)->create(
+            new PlanOfferingDefinition(
+                $offeringCode,
+                $productId,
+                null,
+                $primaryServerId,
+                $primaryTargetId,
+                new PlanOfferingServiceMode('shared', 'اشتراکی', 'Shared'),
+                PlanOfferingAudience::Customers,
+                PlanOfferingServerSelectionMode::System,
+                PlanOfferingProtocolSelectionMode::Fixed,
+                PlanOfferingTagMatchMode::All,
+                0,
+                1,
+                1_073_741_824,
+                1,
+                0,
+                1,
+                1,
+                false,
+                false,
+                false,
+                true,
+                ['normal'],
+                [$tagId],
+                [new OfferingProtocolAssignment($profileId, false, true)],
+                ['create_service'],
+                [],
+                [],
+            ),
+            $this->catalogContext($ownerId, 'create-'.$offeringCode),
+        );
+        $offeringId = $createdOffering->targetId;
         $routePolicyId = (int) DB::table('plan_offering_route_policies')->insertGetId([
             'plan_offering_id' => $offeringId,
             'configuration_hash' => hash('sha256', 'trial-routes-'.$offeringId),
