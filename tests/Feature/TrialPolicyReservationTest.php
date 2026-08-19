@@ -129,7 +129,6 @@ final class TrialPolicyReservationTest extends TestCase
             $this->policyDefinition($scenario['tag_id']),
             $this->catalogContext($scenario['owner_id'], 'trial-order-policy-create-0001'),
         );
-        $this->activateScenarioOffering($scenario);
 
         $trial = $this->serviceWithMembershipAllowed();
         $reservationCommandKey = 'trial-order-reservation-command-000001';
