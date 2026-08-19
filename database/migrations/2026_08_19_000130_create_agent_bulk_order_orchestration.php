@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Illuminate\Database\Connection;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
@@ -185,7 +186,7 @@ return new class extends Migration
     /** @param callable(Blueprint): void $definition */
     private function createIntrinsicallyFailClosedTable(string $table, string $bootstrapCheck, callable $definition): void
     {
-        /** @var \Illuminate\Database\Connection $connection */
+        /** @var Connection $connection */
         $connection = DB::connection();
         $blueprint = new Blueprint($connection, $table);
         $blueprint->create();
