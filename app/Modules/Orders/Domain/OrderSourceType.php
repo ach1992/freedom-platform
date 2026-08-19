@@ -23,6 +23,10 @@ enum OrderSourceType: string
 
     public function isZeroCostAuthorization(): bool
     {
-        return ! $this->requiresFinancialSettlement();
+        return in_array($this, [
+            self::Trial,
+            self::BenefitCode,
+            self::AdminGrant,
+        ], true);
     }
 }
