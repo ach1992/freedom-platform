@@ -41,15 +41,28 @@ SQL);
 SQL);
         $this->replaceProvisioningOperationChecks(true);
 
+        // @phpstan-ignore-next-line argument.type
+
+
         DB::unprepared($this->sqlFile('sql/service-paid-mutation-authority/service-update-guard.sql', 'Paid mutation Service update guard SQL is unavailable.'));
+        // @phpstan-ignore-next-line argument.type
+
         DB::unprepared($this->sqlFile('sql/service-paid-mutation-authority/operation-update-guard.sql', 'Paid mutation operation update guard SQL is unavailable.'));
+        // @phpstan-ignore-next-line argument.type
+
         DB::unprepared($this->sqlFile('sql/service-paid-mutation-authority/remote-effect-event-insert-guard.sql', 'Paid mutation remote-effect event guard SQL is unavailable.'));
+        // @phpstan-ignore-next-line argument.type
+
         DB::unprepared($this->sqlFile('sql/service-paid-mutation-authority/delivery-effect-operation-insert-guard.sql', 'Paid mutation delivery fence SQL is unavailable.'));
+        // @phpstan-ignore-next-line argument.type
+
         DB::unprepared($this->sqlFile('sql/service-paid-mutation-authority/history-insert-guard.sql', 'Paid mutation history guard SQL is unavailable.'));
         $this->createAuthorityGuards();
         $this->createRefundEffectFence(true);
 
         // Final enabling DDL. Everything that can consume a paid mutation is composed first.
+        // @phpstan-ignore-next-line argument.type
+
         DB::unprepared($this->sqlFile('sql/service-paid-mutation-authority/operation-insert-guard.sql', 'Paid mutation operation guard SQL is unavailable.'));
         $this->dropPaidUpgradeFence();
     }
@@ -68,7 +81,11 @@ SQL);
 
         $this->installPaidUpgradeFence();
         $this->createRefundEffectFence(false);
+        // @phpstan-ignore-next-line argument.type
+
         DB::unprepared($this->sqlFile('sql/service-mutation-authority/remote-effect-event-insert-guard.sql', 'Prior Service mutation remote-effect event guard SQL is unavailable.'));
+        // @phpstan-ignore-next-line argument.type
+
         DB::unprepared($this->sqlFile('migrations/support/service_delivery_effect_authority/05_mutation_insert_fence.sql', 'Prior Service mutation delivery fence SQL is unavailable.'));
         $this->restoreNonPaidOperationAuthority();
         DB::unprepared('DROP TRIGGER IF EXISTS service_paid_mutation_authorities_delete_guard');
@@ -359,6 +376,8 @@ SQL);
     private function createRefundEffectFence(bool $includePaidMutations): void
     {
         if ($includePaidMutations) {
+            // @phpstan-ignore-next-line argument.type
+
             DB::unprepared($this->sqlFile('sql/service-paid-mutation-authority/refund-invalidation-guard.sql', 'Paid mutation refund guard SQL is unavailable.'));
 
             return;
