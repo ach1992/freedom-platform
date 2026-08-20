@@ -67,59 +67,61 @@ trait PurchaseOrderTestSupport
                 // support family may therefore replace the final source-aware provisioning guards
                 // outside Laravel's row-level test isolation. Repair only when the live guards are
                 // no longer the final composed form so later tests always start from migrated schema.
-                $triggerStatement = static function (string $trigger): ?string {
-                    /** @var object{action_statement:mixed}|null $row */
-                    $row = DB::selectOne(
-                        'SELECT ACTION_STATEMENT AS action_statement FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = DATABASE() AND TRIGGER_NAME = ? LIMIT 1',
-                        [$trigger],
-                    );
-                    $statement = $row->action_statement ?? null;
-
-                    return is_string($statement) ? $statement : null;
-                };
-                $checkClause = static function (string $constraint): ?string {
-                    /** @var object{check_clause:mixed}|null $row */
-                    $row = DB::selectOne(
-                        'SELECT CHECK_CLAUSE AS check_clause FROM information_schema.CHECK_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME = ? AND CONSTRAINT_NAME = ? LIMIT 1',
-                        ['provisioning_operations', $constraint],
-                    );
-                    $clause = $row->check_clause ?? null;
-
-                    return is_string($clause) ? $clause : null;
-                };
-
-                $serviceGuard = $triggerStatement('service_subscriptions_insert_guard');
-                $operationGuard = $triggerStatement('provisioning_operations_insert_guard');
                 $paidMutationAuthorityExists = DB::getSchemaBuilder()->hasTable('service_paid_mutation_authorities');
-                $paidSurfaceReady = ! $paidMutationAuthorityExists || (
-                    ($refundGuard = $triggerStatement('purchase_refunds_provisioning_invalidation')) !== null
-                    && str_contains($refundGuard, 'service_paid_mutation_authorities')
-                    && ($serviceUpdateGuard = $triggerStatement('service_subscriptions_update_guard')) !== null
-                    && str_contains($serviceUpdateGuard, 'service_paid_mutation_queue_v1')
-                    && str_contains($serviceUpdateGuard, 'service_operational_authority_capability')
-                    && ($historyGuard = $triggerStatement('provisioning_operation_histories_insert_guard')) !== null
-                    && str_contains($historyGuard, 'add_data_days')
-                    && ($operationUpdateGuard = $triggerStatement('provisioning_operations_update_guard')) !== null
-                    && str_contains($operationUpdateGuard, 'service_paid_mutation_authorities')
-                    && str_contains($operationUpdateGuard, 'add_data_days')
-                    && ($remoteEffectGuard = $triggerStatement('provisioning_remote_effect_events_insert_guard')) !== null
-                    && str_contains($remoteEffectGuard, 'add_data_days')
-                    && ($deliveryGuard = $triggerStatement('provisioning_operations_delivery_effect_insert_guard')) !== null
-                    && str_contains($deliveryGuard, 'add_data_days')
-                    && ($operationTypeCheck = $checkClause('provisioning_operations_type_chk')) !== null
-                    && str_contains($operationTypeCheck, 'add_data_days')
-                    && ($operationExactTextCheck = $checkClause('provisioning_operations_provisioning_exact_text_chk')) !== null
-                    && str_contains($operationExactTextCheck, 'add_data_days')
-                );
+                /** @var object{base_ready:int|string|null,paid_ready:int|string|null}|null $authorityState */
+                $authorityState = DB::selectOne(<<<'SQL'
+SELECT
+    SUM(CASE WHEN TRIGGER_NAME = 'service_subscriptions_insert_guard'
+        AND LOCATE('zero-cost source authority shape is invalid', ACTION_STATEMENT) > 0
+        AND LOCATE('clean local lifecycle and no remote binding', ACTION_STATEMENT) > 0 THEN 1 ELSE 0 END)
+    + SUM(CASE WHEN TRIGGER_NAME = 'provisioning_operations_insert_guard'
+        AND LOCATE('Initial Provisioning Operation zero-cost authority shape is invalid', ACTION_STATEMENT) > 0
+        AND LOCATE('service_mutation_queue_v1', ACTION_STATEMENT) > 0 THEN 1 ELSE 0 END) AS base_ready,
+    SUM(CASE WHEN TRIGGER_NAME = 'provisioning_operations_insert_guard'
+        AND LOCATE('service_paid_mutation_queue_v1', ACTION_STATEMENT) > 0 THEN 1 ELSE 0 END)
+    + SUM(CASE WHEN TRIGGER_NAME = 'purchase_refunds_provisioning_invalidation'
+        AND LOCATE('service_paid_mutation_authorities', ACTION_STATEMENT) > 0 THEN 1 ELSE 0 END)
+    + SUM(CASE WHEN TRIGGER_NAME = 'service_subscriptions_update_guard'
+        AND LOCATE('service_paid_mutation_queue_v1', ACTION_STATEMENT) > 0
+        AND LOCATE('service_operational_authority_capability', ACTION_STATEMENT) > 0 THEN 1 ELSE 0 END)
+    + SUM(CASE WHEN TRIGGER_NAME = 'provisioning_operation_histories_insert_guard'
+        AND LOCATE('add_data_days', ACTION_STATEMENT) > 0 THEN 1 ELSE 0 END)
+    + SUM(CASE WHEN TRIGGER_NAME = 'provisioning_operations_update_guard'
+        AND LOCATE('service_paid_mutation_authorities', ACTION_STATEMENT) > 0
+        AND LOCATE('add_data_days', ACTION_STATEMENT) > 0 THEN 1 ELSE 0 END)
+    + SUM(CASE WHEN TRIGGER_NAME = 'provisioning_remote_effect_events_insert_guard'
+        AND LOCATE('add_data_days', ACTION_STATEMENT) > 0 THEN 1 ELSE 0 END)
+    + SUM(CASE WHEN TRIGGER_NAME = 'provisioning_operations_delivery_effect_insert_guard'
+        AND LOCATE('add_data_days', ACTION_STATEMENT) > 0 THEN 1 ELSE 0 END) AS paid_ready
+FROM information_schema.TRIGGERS
+WHERE TRIGGER_SCHEMA = DATABASE()
+  AND TRIGGER_NAME IN (
+      'service_subscriptions_insert_guard', 'service_subscriptions_update_guard',
+      'provisioning_operations_insert_guard', 'provisioning_operations_update_guard',
+      'provisioning_operation_histories_insert_guard', 'provisioning_remote_effect_events_insert_guard',
+      'provisioning_operations_delivery_effect_insert_guard', 'purchase_refunds_provisioning_invalidation'
+  )
+SQL);
 
-                if ($serviceGuard !== null
-                    && str_contains($serviceGuard, 'zero-cost source authority shape is invalid')
-                    && str_contains($serviceGuard, 'clean local lifecycle and no remote binding')
-                    && $operationGuard !== null
-                    && str_contains($operationGuard, 'Initial Provisioning Operation zero-cost authority shape is invalid')
-                    && str_contains($operationGuard, 'service_mutation_queue_v1')
-                    && (! $paidMutationAuthorityExists || str_contains($operationGuard, 'service_paid_mutation_queue_v1'))
-                    && $paidSurfaceReady
+                $paidChecksReady = true;
+                if ($paidMutationAuthorityExists) {
+                    /** @var object{aggregate:int|string|null}|null $checkState */
+                    $checkState = DB::selectOne(<<<'SQL'
+SELECT COUNT(*) AS aggregate
+FROM information_schema.CHECK_CONSTRAINTS
+WHERE CONSTRAINT_SCHEMA = DATABASE()
+  AND TABLE_NAME = 'provisioning_operations'
+  AND (
+      (CONSTRAINT_NAME = 'provisioning_operations_type_chk' AND LOCATE('add_data_days', CHECK_CLAUSE) > 0)
+      OR (CONSTRAINT_NAME = 'provisioning_operations_provisioning_exact_text_chk' AND LOCATE('add_data_days', CHECK_CLAUSE) > 0)
+  )
+SQL);
+                    $paidChecksReady = $checkState !== null && (int) $checkState->aggregate === 2;
+                }
+
+                if ($authorityState !== null
+                    && (int) $authorityState->base_ready === 2
+                    && (! $paidMutationAuthorityExists || ((int) $authorityState->paid_ready === 7 && $paidChecksReady))
                 ) {
                     return;
                 }
