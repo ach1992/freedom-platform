@@ -5,9 +5,11 @@ declare(strict_types=1);
 namespace App\Modules\Telegram\Infrastructure;
 
 use App\Modules\Telegram\Application\Contracts\ProtectedTelegramMessageSender;
+use App\Modules\Telegram\Application\ProtectedTelegramPresentation;
 use App\Modules\Telegram\Application\ProtectedTelegramSendOutcome;
 use App\Modules\Telegram\Application\ProtectedTelegramSendResult;
 use Illuminate\Http\Client\Factory;
+use Illuminate\Http\Client\Response;
 use InvalidArgumentException;
 use Throwable;
 
@@ -19,33 +21,16 @@ final readonly class HttpProtectedTelegramMessageSender implements ProtectedTele
         private TelegramRuntimeConfiguration $configuration,
     ) {}
 
-    public function send(int $telegramUserId, string $text): ProtectedTelegramSendResult
+    public function send(int $telegramUserId, ProtectedTelegramPresentation $presentation): ProtectedTelegramSendResult
     {
         if ($telegramUserId < 1) {
             throw new InvalidArgumentException('Protected Telegram recipient identity is invalid.');
         }
-        if ($text === '' || mb_strlen($text) > 4096) {
-            throw new InvalidArgumentException('Protected Telegram message must contain 1-4096 characters.');
-        }
 
         try {
-            // Deliberately one network attempt: no retry and no redirect follow after the
-            // provider boundary, because either can duplicate or disclose restricted material.
-            $response = $this->http
-                ->asJson()
-                ->acceptJson()
-                ->withoutRedirecting()
-                ->timeout($this->configuration->apiTimeoutSeconds)
-                ->connectTimeout(min(5, $this->configuration->apiTimeoutSeconds))
-                ->post(
-                    $this->configuration->apiBaseUrl.'/bot'.$this->configuration->botToken.'/sendMessage',
-                    [
-                        'chat_id' => $telegramUserId,
-                        'text' => $text,
-                        'protect_content' => true,
-                        'link_preview_options' => ['is_disabled' => true],
-                    ],
-                );
+            $response = $presentation->isText()
+                ? $this->sendText($telegramUserId, $presentation)
+                : $this->sendDocument($telegramUserId, $presentation);
         } catch (Throwable) {
             return new ProtectedTelegramSendResult(
                 ProtectedTelegramSendOutcome::UncertainResult,
@@ -53,6 +38,59 @@ final readonly class HttpProtectedTelegramMessageSender implements ProtectedTele
             );
         }
 
+        return $this->resultFromResponse($response);
+    }
+
+    private function sendText(int $telegramUserId, ProtectedTelegramPresentation $presentation): Response
+    {
+        $text = $presentation->text();
+        if ($text === '' || mb_strlen($text) > 4096) {
+            throw new InvalidArgumentException('Protected Telegram message must contain 1-4096 characters.');
+        }
+
+        return $this->http
+            ->asJson()
+            ->acceptJson()
+            ->withoutRedirecting()
+            ->timeout($this->configuration->apiTimeoutSeconds)
+            ->connectTimeout(min(5, $this->configuration->apiTimeoutSeconds))
+            ->post(
+                $this->configuration->apiBaseUrl.'/bot'.$this->configuration->botToken.'/sendMessage',
+                [
+                    'chat_id' => $telegramUserId,
+                    'text' => $text,
+                    'protect_content' => true,
+                    'link_preview_options' => ['is_disabled' => true],
+                ],
+            );
+    }
+
+    private function sendDocument(int $telegramUserId, ProtectedTelegramPresentation $presentation): Response
+    {
+        $document = $presentation->documentContents();
+        if ($document === '' || strlen($document) > 1_048_576) {
+            throw new InvalidArgumentException('Protected Telegram document exceeds the local safety bound.');
+        }
+
+        return $this->http
+            ->acceptJson()
+            ->withoutRedirecting()
+            ->timeout($this->configuration->apiTimeoutSeconds)
+            ->connectTimeout(min(5, $this->configuration->apiTimeoutSeconds))
+            ->attach('document', $document, $presentation->documentFilename())
+            ->post(
+                $this->configuration->apiBaseUrl.'/bot'.$this->configuration->botToken.'/sendDocument',
+                [
+                    'chat_id' => $telegramUserId,
+                    'caption' => $presentation->caption(),
+                    'protect_content' => true,
+                    'disable_content_type_detection' => true,
+                ],
+            );
+    }
+
+    private function resultFromResponse(Response $response): ProtectedTelegramSendResult
+    {
         $decoded = $response->json();
         if (! is_array($decoded)) {
             return new ProtectedTelegramSendResult(
@@ -111,8 +149,6 @@ final readonly class HttpProtectedTelegramMessageSender implements ProtectedTele
                 );
             }
 
-            // The bounded durable representation cannot encode this exact provider delay.
-            // Quarantine instead of silently converting it into a non-blocking rejection.
             return new ProtectedTelegramSendResult(
                 ProtectedTelegramSendOutcome::UncertainResult,
                 'telegram_retry_after_unrepresentable',
@@ -128,8 +164,6 @@ final readonly class HttpProtectedTelegramMessageSender implements ProtectedTele
 
         $errorCode = $decoded['error_code'] ?? null;
         if ($response->status() === 429 || $errorCode === 429 || $errorCode === '429') {
-            // Flood-control evidence without a usable exact delay is not safe to treat as
-            // definitive: doing so could admit another restricted delivery too early.
             return new ProtectedTelegramSendResult(
                 ProtectedTelegramSendOutcome::UncertainResult,
                 'telegram_retry_after_missing',

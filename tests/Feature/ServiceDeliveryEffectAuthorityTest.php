@@ -27,6 +27,7 @@ use App\Modules\Provisioning\Domain\ServiceDeliveryEffectState;
 use App\Modules\Provisioning\Domain\ServiceDeliveryPurpose;
 use App\Modules\Provisioning\Domain\ServiceMutationType;
 use App\Modules\Telegram\Application\Contracts\ProtectedTelegramMessageSender;
+use App\Modules\Telegram\Application\ProtectedTelegramPresentation;
 use App\Modules\Telegram\Application\ProtectedTelegramSendOutcome;
 use App\Modules\Telegram\Application\ProtectedTelegramSendResult;
 use App\Modules\Telegram\Infrastructure\HttpProtectedTelegramMessageSender;
@@ -530,7 +531,7 @@ final class ServiceDeliveryEffectAuthorityTest extends TestCase
             $configuration,
         );
 
-        $result = $sender->send(self::TELEGRAM_USER_ID, 'protected-test-message');
+        $result = $sender->send(self::TELEGRAM_USER_ID, ProtectedTelegramPresentation::text('protected-test-message'));
 
         self::assertSame(ProtectedTelegramSendOutcome::Success, $result->outcome);
         self::assertSame(9090, $result->messageId);

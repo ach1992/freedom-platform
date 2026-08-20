@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Modules\Telegram\Application\ProtectedTelegramPresentation;
 use App\Modules\Telegram\Application\ProtectedTelegramSendOutcome;
 use App\Modules\Telegram\Infrastructure\HttpProtectedTelegramMessageSender;
 use App\Modules\Telegram\Infrastructure\TelegramRuntimeConfiguration;
@@ -30,7 +31,7 @@ final class ProtectedTelegramMessageSenderTest extends TestCase
             ], 429),
         ]);
 
-        $result = $this->sender()->send(self::TELEGRAM_USER_ID, 'protected-test-message');
+        $result = $this->sender()->send(self::TELEGRAM_USER_ID, ProtectedTelegramPresentation::text('protected-test-message'));
 
         self::assertSame(ProtectedTelegramSendOutcome::RetryAfter, $result->outcome);
         self::assertSame('telegram_retry_after', $result->resultCode);
@@ -48,7 +49,7 @@ final class ProtectedTelegramMessageSenderTest extends TestCase
             ], 429),
         ]);
 
-        $result = $this->sender()->send(self::TELEGRAM_USER_ID, 'protected-test-message');
+        $result = $this->sender()->send(self::TELEGRAM_USER_ID, ProtectedTelegramPresentation::text('protected-test-message'));
 
         self::assertSame(ProtectedTelegramSendOutcome::UncertainResult, $result->outcome);
         self::assertSame('telegram_retry_after_unrepresentable', $result->resultCode);
@@ -64,7 +65,7 @@ final class ProtectedTelegramMessageSenderTest extends TestCase
             ], 429),
         ]);
 
-        $result = $this->sender()->send(self::TELEGRAM_USER_ID, 'protected-test-message');
+        $result = $this->sender()->send(self::TELEGRAM_USER_ID, ProtectedTelegramPresentation::text('protected-test-message'));
 
         self::assertSame(ProtectedTelegramSendOutcome::UncertainResult, $result->outcome);
         self::assertSame('telegram_retry_after_missing', $result->resultCode);
@@ -82,7 +83,7 @@ final class ProtectedTelegramMessageSenderTest extends TestCase
             ], 400),
         ]);
 
-        $result = $this->sender()->send(self::TELEGRAM_USER_ID, 'protected-test-message');
+        $result = $this->sender()->send(self::TELEGRAM_USER_ID, ProtectedTelegramPresentation::text('protected-test-message'));
 
         self::assertSame(ProtectedTelegramSendOutcome::UncertainResult, $result->outcome);
         self::assertSame('telegram_retry_after_malformed', $result->resultCode);
@@ -99,7 +100,7 @@ final class ProtectedTelegramMessageSenderTest extends TestCase
             ], 400),
         ]);
 
-        $result = $this->sender()->send(self::TELEGRAM_USER_ID, 'protected-test-message');
+        $result = $this->sender()->send(self::TELEGRAM_USER_ID, ProtectedTelegramPresentation::text('protected-test-message'));
 
         self::assertSame(ProtectedTelegramSendOutcome::UncertainResult, $result->outcome);
         self::assertSame('telegram_retry_after_missing', $result->resultCode);
@@ -116,7 +117,7 @@ final class ProtectedTelegramMessageSenderTest extends TestCase
             ], 400),
         ]);
 
-        $result = $this->sender()->send(self::TELEGRAM_USER_ID, 'protected-test-message');
+        $result = $this->sender()->send(self::TELEGRAM_USER_ID, ProtectedTelegramPresentation::text('protected-test-message'));
 
         self::assertSame(ProtectedTelegramSendOutcome::UncertainResult, $result->outcome);
         self::assertSame('telegram_retry_after_missing', $result->resultCode);
@@ -134,7 +135,7 @@ final class ProtectedTelegramMessageSenderTest extends TestCase
             ),
         ]);
 
-        $result = $this->sender()->send(self::TELEGRAM_USER_ID, 'protected-test-message');
+        $result = $this->sender()->send(self::TELEGRAM_USER_ID, ProtectedTelegramPresentation::text('protected-test-message'));
 
         self::assertSame(ProtectedTelegramSendOutcome::UncertainResult, $result->outcome);
         self::assertSame('telegram_error_code_malformed', $result->resultCode);
@@ -148,7 +149,7 @@ final class ProtectedTelegramMessageSenderTest extends TestCase
             '*' => Http::response('not-json', 429, ['Content-Type' => 'text/plain']),
         ]);
 
-        $result = $this->sender()->send(self::TELEGRAM_USER_ID, 'protected-test-message');
+        $result = $this->sender()->send(self::TELEGRAM_USER_ID, ProtectedTelegramPresentation::text('protected-test-message'));
 
         self::assertSame(ProtectedTelegramSendOutcome::UncertainResult, $result->outcome);
         self::assertSame('telegram_response_unparseable', $result->resultCode);
@@ -165,7 +166,7 @@ final class ProtectedTelegramMessageSenderTest extends TestCase
             ], 403),
         ]);
 
-        $result = $this->sender()->send(self::TELEGRAM_USER_ID, 'protected-test-message');
+        $result = $this->sender()->send(self::TELEGRAM_USER_ID, ProtectedTelegramPresentation::text('protected-test-message'));
 
         self::assertSame(ProtectedTelegramSendOutcome::DefinitiveFailure, $result->outcome);
         self::assertSame('telegram_api_error_403', $result->resultCode);
@@ -180,7 +181,7 @@ final class ProtectedTelegramMessageSenderTest extends TestCase
             throw new RuntimeException('Simulated transport timeout.');
         });
 
-        $result = $this->sender()->send(self::TELEGRAM_USER_ID, 'protected-test-message');
+        $result = $this->sender()->send(self::TELEGRAM_USER_ID, ProtectedTelegramPresentation::text('protected-test-message'));
 
         self::assertSame(ProtectedTelegramSendOutcome::UncertainResult, $result->outcome);
         self::assertSame('telegram_transport_uncertain', $result->resultCode);
@@ -200,7 +201,7 @@ final class ProtectedTelegramMessageSenderTest extends TestCase
             ),
         ]);
 
-        $result = $this->sender()->send(self::TELEGRAM_USER_ID, 'protected-test-message');
+        $result = $this->sender()->send(self::TELEGRAM_USER_ID, ProtectedTelegramPresentation::text('protected-test-message'));
 
         self::assertSame(ProtectedTelegramSendOutcome::UncertainResult, $result->outcome);
         self::assertSame('telegram_redirect_ambiguous', $result->resultCode);
@@ -213,7 +214,7 @@ final class ProtectedTelegramMessageSenderTest extends TestCase
             '*' => Http::response('not-json', 502, ['Content-Type' => 'text/plain']),
         ]);
 
-        $result = $this->sender()->send(self::TELEGRAM_USER_ID, 'protected-test-message');
+        $result = $this->sender()->send(self::TELEGRAM_USER_ID, ProtectedTelegramPresentation::text('protected-test-message'));
 
         self::assertSame(ProtectedTelegramSendOutcome::UncertainResult, $result->outcome);
         self::assertSame('telegram_response_unparseable', $result->resultCode);
@@ -229,7 +230,7 @@ final class ProtectedTelegramMessageSenderTest extends TestCase
             ], 500),
         ]);
 
-        $result = $this->sender()->send(self::TELEGRAM_USER_ID, 'protected-test-message');
+        $result = $this->sender()->send(self::TELEGRAM_USER_ID, ProtectedTelegramPresentation::text('protected-test-message'));
 
         self::assertSame(ProtectedTelegramSendOutcome::UncertainResult, $result->outcome);
         self::assertSame('telegram_response_ambiguous', $result->resultCode);
@@ -245,11 +246,40 @@ final class ProtectedTelegramMessageSenderTest extends TestCase
             ], 200),
         ]);
 
-        $result = $this->sender()->send(self::TELEGRAM_USER_ID, 'protected-test-message');
+        $result = $this->sender()->send(self::TELEGRAM_USER_ID, ProtectedTelegramPresentation::text('protected-test-message'));
 
         self::assertSame(ProtectedTelegramSendOutcome::UncertainResult, $result->outcome);
         self::assertSame('telegram_success_identity_missing', $result->resultCode);
         Http::assertSentCount(1);
+    }
+
+    public function test_svg_document_is_sent_once_as_a_protected_document(): void
+    {
+        Http::fake([
+            '*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 779900],
+            ], 200),
+        ]);
+
+        $result = $this->sender()->send(
+            self::TELEGRAM_USER_ID,
+            ProtectedTelegramPresentation::svgDocument('<svg xmlns="http://www.w3.org/2000/svg"></svg>', 'Service details'),
+        );
+
+        self::assertSame(ProtectedTelegramSendOutcome::Success, $result->outcome);
+        self::assertSame(779900, $result->messageId);
+        Http::assertSentCount(1);
+        Http::assertSent(function (Request $request): bool {
+            $data = $request->data();
+
+            return str_ends_with($request->url(), '/sendDocument')
+                && ($data['chat_id'] ?? null) === self::TELEGRAM_USER_ID
+                && ($data['caption'] ?? null) === 'Service details'
+                && ($data['protect_content'] ?? null) === true
+                && ($data['disable_content_type_detection'] ?? null) === true
+                && str_contains($request->body(), 'service-details.svg');
+        });
     }
 
     private function sender(): HttpProtectedTelegramMessageSender
