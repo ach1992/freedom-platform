@@ -43,7 +43,6 @@ SQL);
 
         // @phpstan-ignore-next-line argument.type
 
-
         DB::unprepared($this->sqlFile('sql/service-paid-mutation-authority/service-update-guard.sql', 'Paid mutation Service update guard SQL is unavailable.'));
         // @phpstan-ignore-next-line argument.type
 
