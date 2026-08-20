@@ -6,6 +6,7 @@ namespace App\Modules\Provisioning\Application;
 
 use Illuminate\Database\Connection;
 use RuntimeException;
+use Throwable;
 
 final readonly class ServiceOperationalDatabaseCapability
 {
@@ -28,11 +29,40 @@ final readonly class ServiceOperationalDatabaseCapability
 
     public function apply(Connection $connection): void
     {
-        $connection->statement('SET @app_service_operational_capability = ?', [$this->value()]);
+        try {
+            $connection->statement('SET @app_service_operational_capability = ?', [$this->value()]);
+        } catch (Throwable $exception) {
+            $this->disconnect($connection);
+            throw $exception;
+        }
     }
 
     public function clear(Connection $connection): void
     {
-        $connection->statement('SET @app_service_operational_capability = NULL');
+        try {
+            $connection->statement(<<<'SQL'
+SET @app_service_batch_authority = NULL,
+    @app_service_operational_audit_authority = NULL,
+    @app_service_operational_evidence_authority = NULL,
+    @app_service_operational_authority = NULL,
+    @app_service_operational_evidence_id = NULL,
+    @app_service_operational_request_hash = NULL,
+    @app_service_operational_correlation_id = NULL,
+    @app_service_operational_capability = NULL
+SQL);
+        } catch (Throwable $exception) {
+            $this->disconnect($connection);
+            throw $exception;
+        }
+    }
+
+    private function disconnect(Connection $connection): void
+    {
+        try {
+            $connection->disconnect();
+        } catch (Throwable) {
+            $connection->setPdo(null);
+            $connection->setReadPdo(null);
+        }
     }
 }

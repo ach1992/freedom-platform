@@ -8,7 +8,6 @@ use App\Modules\AccessControl\Application\AdministratorPermissionAuthorizer;
 use App\Modules\Orders\Application\NonPaidOrderService;
 use App\Modules\Orders\Application\OrderSourceAuthorizationService;
 use App\Shared\Application\Clock;
-use DateInterval;
 use DomainException;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
@@ -202,7 +201,7 @@ final readonly class ServiceBatchGrantService
             if ($connection->table('service_batch_grant_items')
                 ->where('service_batch_grant_id', (int) $batch->id)
                 ->where('state', 'processing')
-                ->where('claim_expires_at', '>', $this->timestamp())
+                ->whereRaw('claim_expires_at > CURRENT_TIMESTAMP(6)')
                 ->exists()) {
                 throw new DomainException('Service batch grant has an active processing claim.');
             }
@@ -290,7 +289,7 @@ final readonly class ServiceBatchGrantService
                 ->where(function ($query): void {
                     $query->whereIn('state', ['pending', 'failed'])
                         ->orWhere(function ($query): void {
-                            $query->where('state', 'processing')->where('claim_expires_at', '<=', $this->timestamp());
+                            $query->where('state', 'processing')->whereRaw('claim_expires_at <= CURRENT_TIMESTAMP(6)');
                         });
                 })
                 ->orderBy('position')
@@ -301,14 +300,13 @@ final readonly class ServiceBatchGrantService
             }
 
             $claimToken = (string) Str::ulid();
-            $claimExpiresAt = $this->clock->now()->add(new DateInterval('PT5M'))->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s.u');
             $this->setBatchAuthority($connection);
             try {
                 $updated = $connection->table('service_batch_grant_items')->where('id', (int) $item->id)->update([
                     'state' => 'processing',
                     'attempt_count' => (int) $item->attempt_count + 1,
                     'claim_token' => $claimToken,
-                    'claim_expires_at' => $claimExpiresAt,
+                    'claim_expires_at' => $connection->raw('DATE_ADD(CURRENT_TIMESTAMP(6), INTERVAL 5 MINUTE)'),
                     'error_code' => null,
                     'updated_at' => $this->timestamp(),
                 ]);
@@ -489,7 +487,7 @@ final readonly class ServiceBatchGrantService
                 && $connection->table('service_batch_grant_items')
                     ->where('service_batch_grant_id', (int) $batch->id)
                     ->where('state', 'processing')
-                    ->where('claim_expires_at', '>', $this->timestamp())
+                    ->whereRaw('claim_expires_at > CURRENT_TIMESTAMP(6)')
                     ->exists()) {
                 throw new DomainException('Service batch grant cannot pause while an item claim is active.');
             }
