@@ -183,6 +183,13 @@ jobs:
               || { echo "Missing mandatory Composer script: $script" >&2; exit 1; }
           done
 
+          while IFS= read -r changed_path; do
+            case "$changed_path" in
+              scripts/ci/*.sh) bash -n "$changed_path" ;;
+              *) : ;;
+            esac
+          done < build/evidence/preflight/changed-files.txt
+
       - name: Validate Docker runtime contract
         if: ${{ steps.plan.outputs.runtime == 'true' }}
         run: docker compose -f docker-compose.ci.yml config --quiet
