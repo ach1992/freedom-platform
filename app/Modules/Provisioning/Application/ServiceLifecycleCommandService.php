@@ -167,6 +167,10 @@ final readonly class ServiceLifecycleCommandService
             ServiceMutationType::ResetUsage, ServiceMutationType::Suspend, ServiceMutationType::Activate => 'services.operate',
             ServiceMutationType::RotateSubscriptionLink => 'services.rotate_link',
             ServiceMutationType::Delete => 'services.retire',
+            ServiceMutationType::Renew,
+            ServiceMutationType::AddData,
+            ServiceMutationType::AddDays,
+            ServiceMutationType::AddDataDays => throw new DomainException('Paid Service entitlement mutations are not lifecycle administrator commands.'),
         };
     }
 

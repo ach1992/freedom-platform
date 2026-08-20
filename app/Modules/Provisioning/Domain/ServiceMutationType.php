@@ -11,9 +11,32 @@ enum ServiceMutationType: string
     case Activate = 'activate';
     case Delete = 'delete';
     case RotateSubscriptionLink = 'rotate_subscription_link';
+    case Renew = 'renew';
+    case AddData = 'add_data';
+    case AddDays = 'add_days';
+    case AddDataDays = 'add_data_days';
 
     public function panelCapability(): string
     {
-        return $this->value;
+        return match ($this) {
+            self::Renew, self::AddDays => 'update_expiry',
+            self::AddData => 'add_data_allowance',
+            self::AddDataDays => 'update_expiry',
+            default => $this->value,
+        };
+    }
+
+    public function isPaidEntitlement(): bool
+    {
+        return in_array($this, [self::Renew, self::AddData, self::AddDays, self::AddDataDays], true);
+    }
+
+    /** @return list<string> */
+    public function panelCapabilities(): array
+    {
+        return match ($this) {
+            self::AddDataDays => ['update_expiry', 'add_data_allowance'],
+            default => [$this->panelCapability()],
+        };
     }
 }

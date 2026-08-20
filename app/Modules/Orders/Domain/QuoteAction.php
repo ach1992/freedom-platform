@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace App\Modules\Agents\Domain;
+namespace App\Modules\Orders\Domain;
 
-enum AgentPricingAction: string
+enum QuoteAction: string
 {
     case Purchase = 'purchase';
     case Renew = 'renew';

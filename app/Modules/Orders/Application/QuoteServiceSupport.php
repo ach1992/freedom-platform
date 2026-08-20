@@ -33,6 +33,7 @@ trait QuoteServiceSupport
         QuotePricingInput $pricing,
         DateTimeImmutable $expiresAt,
         ?QuoteAgentPricingContext $agentPricingContext,
+        ?ServicePackageQuoteContext $servicePackageContext,
     ): string {
         $payload = [
             'user_id' => $userId,
@@ -48,6 +49,10 @@ trait QuoteServiceSupport
             $payload['agent_pricing_actor_user_id'] = $agentPricingContext->actorUserId;
             $payload['agent_pricing_action'] = $agentPricingContext->action->value;
             $payload['agent_pricing_mode'] = 'authoritative';
+        }
+        if ($servicePackageContext !== null) {
+            $payload['service_public_id'] = $servicePackageContext->servicePublicId;
+            $payload['service_package_code'] = $servicePackageContext->packageCode;
         }
 
         return hash('sha256', json_encode($payload, JSON_THROW_ON_ERROR));

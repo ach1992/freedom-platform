@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Orders\Application;
 
 use App\Modules\Agents\Domain\AgentPricingAction;
+use App\Modules\Orders\Domain\QuoteAction;
 use App\Modules\Orders\Domain\QuoteOverrideSource;
 use DateTimeZone;
 use DomainException;
@@ -13,7 +14,7 @@ use RuntimeException;
 
 /**
  * @phpstan-type QuoteRow object{
- *     id:int|string, public_id:string, quote_key:string, request_payload_hash:string, user_id:int|string, account_type_snapshot:string,
+ *     id:int|string, public_id:string, quote_key:string, request_payload_hash:string, user_id:int|string, account_type_snapshot:string, action_snapshot:string,
  *     plan_offering_id:int|string, offering_code_snapshot:string, offering_version:int|string, offering_configuration_hash:string,
  *     offering_discount_eligible:int|bool|string, base_price_irr:int|string, override_source:string, override_reference_code:string|null,
  *     override_price_irr:int|string|null, effective_price_irr:int|string, discount_reference_code:string|null, discount_irr:int|string,
@@ -23,7 +24,10 @@ use RuntimeException;
  *     agent_pricing_profile_version_snapshot:int|string|null, agent_pricing_profile_configuration_hash:string|null, agent_pricing_action_snapshot:string|null,
  *     agent_pricing_rule_id_snapshot:int|string|null, agent_pricing_rule_public_id_snapshot:string|null, agent_pricing_rule_code_snapshot:string|null,
  *     agent_pricing_rule_version_snapshot:int|string|null, agent_pricing_rule_configuration_hash:string|null, agent_discount_combination_allowed:int|bool|string|null,
- *     valid_from:string, expires_at:string
+ *     service_subscription_id:int|string|null, service_subscription_public_id:string|null, service_target_id_snapshot:int|string|null,
+ *     service_remote_identity_generation_snapshot:int|string|null, service_lifecycle_version_snapshot:int|string|null, service_package_id_snapshot:int|string|null,
+ *     service_package_code_snapshot:string|null, service_package_type_snapshot:string|null, service_package_duration_days_snapshot:int|string|null,
+ *     service_package_data_bytes_snapshot:int|string|null, service_required_capability_code_snapshot:string|null, valid_from:string, expires_at:string
  * }
  */
 trait QuoteServiceReadsQuotes
@@ -75,7 +79,7 @@ trait QuoteServiceReadsQuotes
     private function quoteColumns(): array
     {
         return [
-            'id', 'public_id', 'quote_key', 'request_payload_hash', 'user_id', 'account_type_snapshot',
+            'id', 'public_id', 'quote_key', 'request_payload_hash', 'user_id', 'account_type_snapshot', 'action_snapshot',
             'plan_offering_id', 'offering_code_snapshot', 'offering_version', 'offering_configuration_hash',
             'offering_discount_eligible', 'base_price_irr', 'override_source', 'override_reference_code',
             'override_price_irr', 'effective_price_irr', 'discount_reference_code', 'discount_irr',
@@ -88,6 +92,10 @@ trait QuoteServiceReadsQuotes
             'agent_pricing_rule_id_snapshot', 'agent_pricing_rule_public_id_snapshot',
             'agent_pricing_rule_code_snapshot', 'agent_pricing_rule_version_snapshot',
             'agent_pricing_rule_configuration_hash', 'agent_discount_combination_allowed',
+            'service_subscription_id', 'service_subscription_public_id', 'service_target_id_snapshot',
+            'service_remote_identity_generation_snapshot', 'service_lifecycle_version_snapshot', 'service_package_id_snapshot',
+            'service_package_code_snapshot', 'service_package_type_snapshot', 'service_package_duration_days_snapshot',
+            'service_package_data_bytes_snapshot', 'service_required_capability_code_snapshot',
             'valid_from', 'expires_at',
         ];
     }
@@ -100,6 +108,8 @@ trait QuoteServiceReadsQuotes
         }
         $overrideSource = QuoteOverrideSource::tryFrom($row->override_source)
             ?? throw new RuntimeException('Stored quote override source is invalid.');
+        $action = QuoteAction::tryFrom($row->action_snapshot)
+            ?? throw new RuntimeException('Stored quote action is invalid.');
 
         return new QuoteReceipt(
             $this->positiveDatabaseInt($row->id, 'Quote ID'),
@@ -107,6 +117,7 @@ trait QuoteServiceReadsQuotes
             $row->quote_key,
             $this->positiveDatabaseInt($row->user_id, 'Quote user ID'),
             $row->account_type_snapshot,
+            $action,
             $this->positiveDatabaseInt($row->plan_offering_id, 'Quote offering ID'),
             $row->offering_code_snapshot,
             $this->positiveDatabaseInt($row->offering_version, 'Quote offering version'),
@@ -123,6 +134,7 @@ trait QuoteServiceReadsQuotes
             $row->currency,
             $row->configuration_snapshot_hash,
             $this->agentPricingSnapshotFromRow($row),
+            $this->servicePackageSnapshotFromRow($row, $action),
             $this->databaseDateTimeFromString($row->valid_from, 'Quote valid-from'),
             $this->databaseDateTimeFromString($row->expires_at, 'Quote expiry'),
             $replayed,
@@ -170,4 +182,38 @@ trait QuoteServiceReadsQuotes
             (bool) $row->agent_discount_combination_allowed,
         );
     }
+
+    /** @param QuoteRow $row */
+    private function servicePackageSnapshotFromRow(object $row, QuoteAction $action): ?ServicePackageQuoteSnapshot
+    {
+        if ($action === QuoteAction::Purchase) {
+            return null;
+        }
+        if ($row->service_subscription_id === null
+            || $row->service_subscription_public_id === null
+            || $row->service_target_id_snapshot === null
+            || $row->service_remote_identity_generation_snapshot === null
+            || $row->service_lifecycle_version_snapshot === null
+            || $row->service_package_id_snapshot === null
+            || $row->service_package_code_snapshot === null
+            || $row->service_package_type_snapshot === null) {
+            throw new RuntimeException('Stored Service package Quote binding is incomplete.');
+        }
+
+        return new ServicePackageQuoteSnapshot(
+            $action,
+            $this->positiveDatabaseInt($row->service_subscription_id, 'Quote Service Subscription ID'),
+            $row->service_subscription_public_id,
+            $this->positiveDatabaseInt($row->service_target_id_snapshot, 'Quote Service target ID'),
+            $this->positiveDatabaseInt($row->service_remote_identity_generation_snapshot, 'Quote Service remote identity generation'),
+            $this->nonNegativeDatabaseInt($row->service_lifecycle_version_snapshot, 'Quote Service lifecycle version'),
+            $this->positiveDatabaseInt($row->service_package_id_snapshot, 'Quote Service package ID'),
+            $row->service_package_code_snapshot,
+            $row->service_package_type_snapshot,
+            $row->service_package_duration_days_snapshot === null ? null : $this->positiveDatabaseInt($row->service_package_duration_days_snapshot, 'Quote Service package duration days'),
+            $row->service_package_data_bytes_snapshot === null ? null : $this->positiveDatabaseInt($row->service_package_data_bytes_snapshot, 'Quote Service package data bytes'),
+            $row->service_required_capability_code_snapshot,
+        );
+    }
+
 }

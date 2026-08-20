@@ -24,6 +24,7 @@ use App\Shared\Domain\Money;
 use DateTimeImmutable;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Support\Facades\DB;
+use RuntimeException;
 
 final class PurchaseOrderTestClock implements Clock
 {
@@ -81,6 +82,14 @@ WHERE TRIGGER_SCHEMA = DATABASE()
   AND TRIGGER_NAME = 'provisioning_operations_insert_guard'
 LIMIT 1
 SQL);
+                $refundGuard = DB::selectOne(<<<'SQL'
+SELECT ACTION_STATEMENT AS action_statement
+FROM information_schema.TRIGGERS
+WHERE TRIGGER_SCHEMA = DATABASE()
+  AND TRIGGER_NAME = 'purchase_refunds_provisioning_invalidation'
+LIMIT 1
+SQL);
+                $paidMutationAuthorityExists = DB::getSchemaBuilder()->hasTable('service_paid_mutation_authorities');
                 if ($serviceGuard !== null
                     && isset($serviceGuard->action_statement)
                     && is_string($serviceGuard->action_statement)
@@ -91,6 +100,11 @@ SQL);
                     && is_string($operationGuard->action_statement)
                     && str_contains($operationGuard->action_statement, 'Initial Provisioning Operation zero-cost authority shape is invalid')
                     && str_contains($operationGuard->action_statement, 'service_mutation_queue_v1')
+                    && (! $paidMutationAuthorityExists || str_contains($operationGuard->action_statement, 'service_paid_mutation_queue_v1'))
+                    && (! $paidMutationAuthorityExists || ($refundGuard !== null
+                        && isset($refundGuard->action_statement)
+                        && is_string($refundGuard->action_statement)
+                        && str_contains($refundGuard->action_statement, 'service_paid_mutation_authorities')))
                 ) {
                     return;
                 }
@@ -101,6 +115,16 @@ SQL);
                 $nonPaidAuthorityMigration = require database_path('migrations/2026_08_19_000120_activate_non_paid_order_authority.php');
                 $nonPaidInvalidationMigration->up();
                 $nonPaidAuthorityMigration->up();
+
+                if ($paidMutationAuthorityExists) {
+                    foreach (['operation-insert-guard.sql', 'operation-update-guard.sql', 'refund-invalidation-guard.sql'] as $guard) {
+                        $sql = file_get_contents(database_path('sql/service-paid-mutation-authority/'.$guard));
+                        if ($sql === false) {
+                            throw new RuntimeException('Paid Service mutation repair SQL is unavailable.');
+                        }
+                        DB::unprepared($sql);
+                    }
+                }
             });
         }
 

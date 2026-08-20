@@ -46,6 +46,7 @@ use RuntimeException;
  *     id:int|string,
  *     public_id:string,
  *     user_id:int|string,
+ *     action_snapshot:string,
  *     final_price_irr:int|string,
  *     currency:string,
  *     configuration_snapshot_hash:string,
@@ -219,7 +220,7 @@ final readonly class PurchasePaymentIntentService
     {
         /** @var QuoteRow|null $row */
         $row = $connection->table('quotes')->where('public_id', $publicId)->first([
-            'id', 'public_id', 'user_id', 'final_price_irr', 'currency',
+            'id', 'public_id', 'user_id', 'action_snapshot', 'final_price_irr', 'currency',
             'configuration_snapshot_hash', 'valid_from', 'expires_at',
         ]);
         if ($row === null) {
@@ -270,7 +271,8 @@ final readonly class PurchasePaymentIntentService
         if ((int) $decision->user_id !== $userId
             || (int) $decision->source_quote_id !== (int) $quote->id
             || ! hash_equals($decision->source_quote_public_id, $quote->public_id)
-            || $decision->action_snapshot !== 'purchase'
+            || $decision->action_snapshot !== $quote->action_snapshot
+            || ! in_array($decision->action_snapshot, ['purchase', 'renew', 'add_data', 'add_days', 'add_data_days'], true)
             || $decision->currency_snapshot !== $quote->currency
             || (int) $decision->amount_irr_snapshot !== (int) $quote->final_price_irr) {
             throw new DomainException('Payment eligibility decision does not match the purchase Quote.');

@@ -13,6 +13,23 @@ use App\Modules\Catalog\Domain\PlanOfferingRouteDefinition;
 use App\Modules\Catalog\Domain\PlanOfferingRoutePolicyDefinition;
 use App\Modules\Catalog\Domain\PlanOfferingRouteType;
 use App\Modules\Orders\Application\PurchaseOrderService;
+use App\Modules\Orders\Application\QuotePricingInput;
+use App\Modules\Orders\Application\QuoteReceipt;
+use App\Modules\Orders\Application\QuoteService;
+use App\Modules\Orders\Application\ServicePackageQuoteContext;
+use App\Modules\Orders\Domain\QuoteAction;
+use App\Modules\Orders\Domain\QuoteOverrideSource;
+use App\Modules\Payments\Application\Contracts\PaymentEvidence;
+use App\Modules\Payments\Application\Contracts\PaymentEvidenceAuthority;
+use App\Modules\Payments\Application\Contracts\PaymentTransactionStatus;
+use App\Modules\Payments\Application\Contracts\ProviderOperationOutcome;
+use App\Modules\Payments\Application\Contracts\VerifiedPaymentEvent;
+use App\Modules\Payments\Application\PurchasePaymentIntentService;
+use App\Modules\Payments\Application\PurchaseRefundService;
+use App\Modules\Payments\Application\PurchaseSettlementReceipt;
+use App\Modules\Payments\Application\PurchaseSettlementService;
+use App\Modules\Payments\Application\PurchaseWalletPaymentService;
+use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
 use App\Modules\Panels\Application\Contracts\DataAllowanceMode;
 use App\Modules\Panels\Application\Contracts\PanelAdapter;
 use App\Modules\Panels\Application\Contracts\PanelAdapterFactory;
@@ -32,13 +49,20 @@ use App\Modules\Provisioning\Application\InitialProvisioningQueueService;
 use App\Modules\Provisioning\Application\ServiceMutationExecutor;
 use App\Modules\Provisioning\Application\ServiceMutationQueueService;
 use App\Modules\Provisioning\Application\ServiceMutationReceipt;
+use App\Modules\Provisioning\Application\ServicePurchaseMutationQueueService;
 use App\Modules\Provisioning\Domain\ProvisioningState;
 use App\Modules\Provisioning\Domain\ServiceMutationType;
+use App\Modules\Wallet\Application\LedgerEntryDraft;
+use App\Modules\Wallet\Application\LedgerPostingService;
+use App\Modules\Wallet\Domain\IrrMoney;
+use App\Modules\Wallet\Domain\LedgerDirection;
+use App\Shared\Domain\Money;
 use Closure;
 use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PanelsAccessFoundationSeeder;
 use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
+use Database\Seeders\WalletFinancialFoundationSeeder;
 use DateTimeImmutable;
 use DomainException;
 use Illuminate\Contracts\Console\Kernel;
@@ -114,10 +138,12 @@ final class ServiceMutationTestPanelAdapter implements PanelAdapter
         'activate',
         'authoritative_username_lookup',
         'create_service',
+        'add_data_allowance',
         'delete',
         'reset_usage',
         'rotate_subscription_link',
         'suspend',
+        'update_expiry',
     ];
 
     public ?PanelOperationResult $forcedMutationResult = null;
@@ -126,6 +152,10 @@ final class ServiceMutationTestPanelAdapter implements PanelAdapter
 
     public ?Closure $beforeMutation = null;
 
+    public ?int $lastDataAllowanceBytes = null;
+
+    public ?DataAllowanceMode $lastDataAllowanceMode = null;
+
     /** @var array<string, RemoteServiceSnapshot> */
     private array $servicesByUsername = [];
 
@@ -133,6 +163,8 @@ final class ServiceMutationTestPanelAdapter implements PanelAdapter
     {
         $this->calls = [];
         $this->transactionLevels = [];
+        $this->lastDataAllowanceBytes = null;
+        $this->lastDataAllowanceMode = null;
     }
 
     public function testConnection(): PanelOperationResult
@@ -206,7 +238,7 @@ final class ServiceMutationTestPanelAdapter implements PanelAdapter
 
     public function updateExpiry(string $idempotencyKey, string $remoteId, DateTimeImmutable $expiresAt): PanelOperationResult
     {
-        throw new LogicException('Not used by Service mutation tests.');
+        return $this->mutation('update_expiry');
     }
 
     public function updateDataAllowance(
@@ -215,7 +247,10 @@ final class ServiceMutationTestPanelAdapter implements PanelAdapter
         int $bytes,
         DataAllowanceMode $mode,
     ): PanelOperationResult {
-        throw new LogicException('Not used by Service mutation tests.');
+        $this->lastDataAllowanceBytes = $bytes;
+        $this->lastDataAllowanceMode = $mode;
+
+        return $this->mutation('add_data_allowance');
     }
 
     public function resetUsage(string $idempotencyKey, string $remoteId): PanelOperationResult
@@ -322,6 +357,13 @@ final class ServiceMutationAuthorityRuntimeTest extends TestCase
         /** @var Migration $migration */
         $migration = require database_path('migrations/2026_08_17_000300_enable_service_mutation_authority.php');
         $migration->up();
+        foreach (['operation-insert-guard.sql', 'operation-update-guard.sql'] as $guard) {
+            $sql = file_get_contents(database_path('sql/service-paid-mutation-authority/'.$guard));
+            if ($sql === false) {
+                throw new RuntimeException('Paid Service mutation test guard SQL is unavailable.');
+            }
+            DB::unprepared($sql);
+        }
 
         $this->seed(IdentityAccessFoundationSeeder::class);
         $this->seed(CatalogAccessFoundationSeeder::class);
@@ -658,8 +700,535 @@ final class ServiceMutationAuthorityRuntimeTest extends TestCase
         }
     }
 
+    public function test_paid_service_authority_migrations_reenter_and_empty_rollback_round_trips(): void
+    {
+        /** @var Migration $quoteMigration */
+        $quoteMigration = require database_path('migrations/2026_08_20_000100_enable_service_package_quotes.php');
+        /** @var Migration $paidMutationMigration */
+        $paidMutationMigration = require database_path('migrations/2026_08_20_000110_enable_paid_service_mutation_authority.php');
+
+        try {
+            $quoteMigration->up();
+            $paidMutationMigration->up();
+            $quoteMigration->up();
+            $paidMutationMigration->up();
+
+            self::assertTrue(DB::getSchemaBuilder()->hasColumn('quotes', 'action_snapshot'));
+            self::assertTrue(DB::getSchemaBuilder()->hasTable('service_paid_mutation_authorities'));
+
+            $paidMutationMigration->down();
+            $quoteMigration->down();
+
+            self::assertFalse(DB::getSchemaBuilder()->hasColumn('quotes', 'action_snapshot'));
+            self::assertFalse(DB::getSchemaBuilder()->hasTable('service_paid_mutation_authorities'));
+        } finally {
+            $quoteMigration->up();
+            $paidMutationMigration->up();
+        }
+
+        self::assertTrue(DB::getSchemaBuilder()->hasColumn('quotes', 'action_snapshot'));
+        self::assertTrue(DB::getSchemaBuilder()->hasTable('service_paid_mutation_authorities'));
+        $operationGuard = DB::selectOne(<<<'SQL'
+SELECT ACTION_STATEMENT AS action_statement
+FROM information_schema.TRIGGERS
+WHERE TRIGGER_SCHEMA = DATABASE()
+  AND TRIGGER_NAME = 'provisioning_operations_insert_guard'
+LIMIT 1
+SQL);
+        self::assertNotNull($operationGuard);
+        self::assertStringContainsString('service_paid_mutation_queue_v1', (string) $operationGuard->action_statement);
+    }
+
+    public function test_paid_service_package_quotes_snapshot_all_supported_actions(): void
+    {
+        $scenario = $this->scenario('paid-package-quotes');
+        $cases = [
+            ['aq-renew-30d', QuoteAction::Renew, 600_000, 30, null],
+            ['aq-extra-10gb', QuoteAction::AddData, 500_000, null, 10 * 1024 * 1024 * 1024],
+            ['aq-extra-7d', QuoteAction::AddDays, 200_000, 7, null],
+            ['aq-extra-5gb-7d', QuoteAction::AddDataDays, 450_000, 7, 5 * 1024 * 1024 * 1024],
+        ];
+
+        foreach ($cases as [$packageCode, $action, $priceIrr, $durationDays, $dataBytes]) {
+            $quote = $this->paidPackageQuote($scenario, $packageCode, 'snapshot-'.$action->value);
+
+            self::assertSame($action, $quote->action);
+            self::assertSame($priceIrr, $quote->basePriceIrr);
+            self::assertSame($priceIrr, $quote->finalPriceIrr);
+            self::assertNotNull($quote->servicePackage);
+            self::assertSame($action, $quote->servicePackage->action);
+            self::assertSame($scenario['service_id'], $quote->servicePackage->serviceSubscriptionId);
+            self::assertSame($scenario['service_public_id'], $quote->servicePackage->serviceSubscriptionPublicId);
+            self::assertSame($scenario['target_id'], $quote->servicePackage->serviceTargetId);
+            self::assertSame($packageCode, $quote->servicePackage->packageCode);
+            self::assertSame($durationDays, $quote->servicePackage->durationDays);
+            self::assertSame($dataBytes, $quote->servicePackage->dataBytes);
+        }
+    }
+
+    public function test_paid_add_data_reuses_settled_purchase_and_replays_one_remote_mutation(): void
+    {
+        $scenario = $this->scenario('paid-add-data');
+        $quote = $this->paidPackageQuote($scenario, 'aq-extra-10gb', 'paid-add-data');
+        $settlement = $this->capturePaidPackageQuote($quote, 'paid-add-data');
+        $order = $this->app->make(PurchaseOrderService::class)->createFromSettlement(
+            $settlement->settlementPublicId,
+            $this->purchaseOrderCorrelation('paid-add-data-order'),
+        );
+
+        try {
+            $this->app->make(InitialProvisioningQueueService::class)->queueInitial(
+                $order->orderPublicId,
+                $this->purchaseOrderCorrelation('paid-add-data-initial'),
+            );
+            self::fail('Paid add-on Order must not create a second Service through initial provisioning.');
+        } catch (DomainException) {
+            self::assertSame(1, DB::table('service_subscriptions')->where('user_id', $scenario['user_id'])->count());
+        }
+
+        $queueService = $this->app->make(ServicePurchaseMutationQueueService::class);
+        $queue = $queueService->queueFromSettlement(
+            $settlement->settlementPublicId,
+            'paid-add-data-request-0001',
+            $this->purchaseOrderCorrelation('paid-add-data-queue'),
+        );
+        $replay = $queueService->queueFromSettlement(
+            $settlement->settlementPublicId,
+            'paid-add-data-request-0001',
+            $this->purchaseOrderCorrelation('paid-add-data-replay'),
+        );
+
+        self::assertSame(ServiceMutationType::AddData, $queue->type);
+        self::assertSame(1, $queue->generation);
+        self::assertFalse($queue->replayed);
+        self::assertTrue($replay->replayed);
+        self::assertSame($queue->operationPublicId, $replay->operationPublicId);
+        self::assertSame(1, DB::table('service_paid_mutation_authorities')->count());
+
+        $executed = $this->mutationExecutor()->execute($queue->operationPublicId);
+        self::assertSame(ProvisioningState::Succeeded, $executed->state);
+        self::assertSame(['lookup_remote_id', 'add_data_allowance'], $scenario['adapter']->calls);
+        self::assertSame([0, 0], $scenario['adapter']->transactionLevels);
+        self::assertSame(30 * 1024 * 1024 * 1024, $scenario['adapter']->lastDataAllowanceBytes);
+        self::assertSame(DataAllowanceMode::Set, $scenario['adapter']->lastDataAllowanceMode);
+
+        $authority = DB::table('service_paid_mutation_authorities')->first([
+            'remote_snapshot_hash', 'target_expires_at', 'target_data_limit_bytes', 'targets_resolved_at',
+        ]);
+        self::assertNotNull($authority);
+        self::assertMatchesRegularExpression('/\A[0-9a-f]{64}\z/', (string) $authority->remote_snapshot_hash);
+        self::assertNull($authority->target_expires_at);
+        self::assertSame(30 * 1024 * 1024 * 1024, (int) $authority->target_data_limit_bytes);
+        self::assertNotNull($authority->targets_resolved_at);
+
+        $operation = DB::table('provisioning_operations')->where('public_id', $queue->operationPublicId)->first([
+            'state', 'remote_effect_started_at', 'remote_effect_completed_at',
+        ]);
+        self::assertNotNull($operation);
+        self::assertSame(ProvisioningState::Succeeded->value, $operation->state);
+        self::assertNotNull($operation->remote_effect_started_at);
+        self::assertNotNull($operation->remote_effect_completed_at);
+
+        $terminalReplay = $this->mutationExecutor()->execute($queue->operationPublicId);
+        self::assertTrue($terminalReplay->replayed);
+        self::assertSame(['lookup_remote_id', 'add_data_allowance'], $scenario['adapter']->calls);
+    }
+
+    public function test_wallet_funded_paid_addon_reuses_purchase_settlement_authority(): void
+    {
+        $scenario = $this->scenario('paid-wallet-add-data');
+        $quote = $this->paidPackageQuote($scenario, 'aq-extra-10gb', 'paid-wallet-add-data');
+        $this->seed(WalletFinancialFoundationSeeder::class);
+
+        $administratorId = $this->ownerAdministrator();
+        $eligibility = $this->app->make(PaymentMethodEligibilityService::class);
+        $eligibility->configureMethod(
+            'paid.service.wallet.method.000001',
+            $administratorId,
+            'wallet',
+            true,
+            false,
+            1,
+            'Wallet funded paid Service package test method.',
+            $this->purchaseOrderCorrelation('paid-wallet-method'),
+        );
+        $eligibility->recordHealth(
+            'paid.service.wallet.health.000001',
+            $administratorId,
+            'wallet',
+            true,
+            $this->purchaseOrderClock->value->modify('+10 minutes'),
+            'Healthy wallet paid Service package test observation.',
+            $this->purchaseOrderCorrelation('paid-wallet-health'),
+        );
+        $decision = $eligibility->evaluate(
+            'paid.service.wallet.eligibility.000001',
+            $scenario['user_id'],
+            $quote->quotePublicId,
+        );
+        $walletAccountId = $this->fundedPaidServiceWallet(
+            $scenario['user_id'],
+            $quote->finalPriceIrr,
+            'paid-wallet-add-data',
+        );
+
+        $wallet = $this->app->make(PurchaseWalletPaymentService::class);
+        $intent = $wallet->reserve(
+            'paid.service.wallet.intent.000001',
+            $scenario['user_id'],
+            $walletAccountId,
+            $quote->quotePublicId,
+            $decision->publicId,
+            $this->purchaseOrderCorrelation('paid-wallet-reserve'),
+        );
+        self::assertSame('purchase', DB::table('payment_intents')->where('public_id', $intent->intentPublicId)->value('purpose'));
+        self::assertSame('wallet', DB::table('payment_intents')->where('public_id', $intent->intentPublicId)->value('provider_code'));
+
+        $order = $wallet->capture(
+            $intent->intentPublicId,
+            $this->purchaseOrderCorrelation('paid-wallet-capture'),
+        );
+        self::assertSame('wallet', DB::table('purchase_settlements')
+            ->where('public_id', $order->purchaseSettlementPublicId)->value('provider_code'));
+
+        $queue = $this->app->make(ServicePurchaseMutationQueueService::class)->queueFromSettlement(
+            $order->purchaseSettlementPublicId,
+            'paid-wallet-add-data-request-0001',
+            $this->purchaseOrderCorrelation('paid-wallet-queue'),
+        );
+        $receipt = $this->mutationExecutor()->execute($queue->operationPublicId);
+
+        self::assertSame(ProvisioningState::Succeeded, $receipt->state);
+        self::assertSame(['lookup_remote_id', 'add_data_allowance'], $scenario['adapter']->calls);
+        self::assertSame(30 * 1024 * 1024 * 1024, $scenario['adapter']->lastDataAllowanceBytes);
+    }
+
+    public function test_paid_provider_exception_after_boundary_is_quarantined_with_durable_absolute_target(): void
+    {
+        $scenario = $this->scenario('paid-provider-exception');
+        $quote = $this->paidPackageQuote($scenario, 'aq-extra-10gb', 'paid-provider-exception');
+        $settlement = $this->capturePaidPackageQuote($quote, 'paid-provider-exception');
+        $this->app->make(PurchaseOrderService::class)->createFromSettlement(
+            $settlement->settlementPublicId,
+            $this->purchaseOrderCorrelation('paid-provider-exception-order'),
+        );
+        $queue = $this->app->make(ServicePurchaseMutationQueueService::class)->queueFromSettlement(
+            $settlement->settlementPublicId,
+            'paid-provider-exception-request-0001',
+            $this->purchaseOrderCorrelation('paid-provider-exception-queue'),
+        );
+        $scenario['adapter']->throwOnMutation = true;
+
+        $receipt = $this->mutationExecutor()->execute($queue->operationPublicId);
+
+        self::assertSame(ProvisioningState::UncertainRemoteResult, $receipt->state);
+        self::assertSame(['lookup_remote_id', 'add_data_allowance'], $scenario['adapter']->calls);
+        self::assertSame([0, 0], $scenario['adapter']->transactionLevels);
+        self::assertSame(30 * 1024 * 1024 * 1024, $scenario['adapter']->lastDataAllowanceBytes);
+
+        $authority = DB::table('service_paid_mutation_authorities')->first([
+            'remote_snapshot_hash', 'target_expires_at', 'target_data_limit_bytes', 'targets_resolved_at',
+        ]);
+        self::assertNotNull($authority);
+        self::assertMatchesRegularExpression('/\A[0-9a-f]{64}\z/', (string) $authority->remote_snapshot_hash);
+        self::assertNull($authority->target_expires_at);
+        self::assertSame(30 * 1024 * 1024 * 1024, (int) $authority->target_data_limit_bytes);
+        self::assertNotNull($authority->targets_resolved_at);
+
+        $operation = DB::table('provisioning_operations')->where('public_id', $queue->operationPublicId)->first([
+            'state', 'last_result_code', 'remote_effect_started_at', 'remote_effect_completed_at',
+        ]);
+        self::assertNotNull($operation);
+        self::assertSame(ProvisioningState::UncertainRemoteResult->value, $operation->state);
+        self::assertSame('remote_effect_exception', $operation->last_result_code);
+        self::assertNotNull($operation->remote_effect_started_at);
+        self::assertNotNull($operation->remote_effect_completed_at);
+
+        try {
+            $this->mutationExecutor()->execute($queue->operationPublicId);
+            self::fail('Uncertain paid Service mutation must require reconciliation before another provider attempt.');
+        } catch (DomainException) {
+            self::assertSame(['lookup_remote_id', 'add_data_allowance'], $scenario['adapter']->calls);
+        }
+    }
+
+    public function test_paid_mutation_rejects_service_changed_after_immutable_quote(): void
+    {
+        $scenario = $this->scenario('paid-stale-service');
+        $quote = $this->paidPackageQuote($scenario, 'aq-extra-7d', 'paid-stale-service');
+
+        $suspend = $this->queueMutation($scenario, ServiceMutationType::Suspend, 'paid-stale-service-suspend');
+        $suspended = $this->mutationExecutor()->execute($suspend->operationPublicId);
+        self::assertSame(ProvisioningState::Succeeded, $suspended->state);
+        self::assertSame(1, (int) DB::table('service_subscriptions')->where('id', $scenario['service_id'])->value('lifecycle_version'));
+
+        $settlement = $this->capturePaidPackageQuote($quote, 'paid-stale-service');
+        $this->app->make(PurchaseOrderService::class)->createFromSettlement(
+            $settlement->settlementPublicId,
+            $this->purchaseOrderCorrelation('paid-stale-service-order'),
+        );
+
+        try {
+            $this->app->make(ServicePurchaseMutationQueueService::class)->queueFromSettlement(
+                $settlement->settlementPublicId,
+                'paid-stale-service-request-0001',
+                $this->purchaseOrderCorrelation('paid-stale-service-queue'),
+            );
+            self::fail('Paid mutation must reject a Service changed after the immutable Quote snapshot.');
+        } catch (DomainException $exception) {
+            self::assertSame(
+                'Service changed after the paid package Quote and requires reconciliation before mutation.',
+                $exception->getMessage(),
+            );
+        }
+        self::assertSame(0, DB::table('service_paid_mutation_authorities')->count());
+    }
+
+    public function test_combined_paid_addon_fails_before_boundary_without_atomic_adapter(): void
+    {
+        $scenario = $this->scenario('paid-combined-non-atomic');
+        $quote = $this->paidPackageQuote($scenario, 'aq-extra-5gb-7d', 'paid-combined-non-atomic');
+        $settlement = $this->capturePaidPackageQuote($quote, 'paid-combined-non-atomic');
+        $this->app->make(PurchaseOrderService::class)->createFromSettlement(
+            $settlement->settlementPublicId,
+            $this->purchaseOrderCorrelation('paid-combined-non-atomic-order'),
+        );
+        $queue = $this->app->make(ServicePurchaseMutationQueueService::class)->queueFromSettlement(
+            $settlement->settlementPublicId,
+            'paid-combined-request-0001',
+            $this->purchaseOrderCorrelation('paid-combined-queue'),
+        );
+
+        $receipt = $this->mutationExecutor()->execute($queue->operationPublicId);
+
+        self::assertSame(ProvisioningState::FailedFinal, $receipt->state);
+        self::assertSame([], $scenario['adapter']->calls);
+        $operation = DB::table('provisioning_operations')->where('public_id', $queue->operationPublicId)->first([
+            'last_result_code', 'remote_effect_started_at', 'remote_effect_completed_at',
+        ]);
+        self::assertNotNull($operation);
+        self::assertSame('atomic_combined_mutation_unavailable', $operation->last_result_code);
+        self::assertNull($operation->remote_effect_started_at);
+        self::assertNull($operation->remote_effect_completed_at);
+        self::assertNull(DB::table('service_paid_mutation_authorities')->value('targets_resolved_at'));
+        self::assertSame('paid', DB::table('orders')->where('purchase_settlement_id', $settlement->settlementId)->value('state'));
+    }
+
+    public function test_refund_after_queue_before_claim_definitively_rejects_paid_mutation_without_provider_io(): void
+    {
+        $scenario = $this->scenario('paid-refund-before-claim');
+        $quote = $this->paidPackageQuote($scenario, 'aq-extra-7d', 'paid-refund-before-claim');
+        $settlement = $this->capturePaidPackageQuote($quote, 'paid-refund-before-claim');
+        $this->app->make(PurchaseOrderService::class)->createFromSettlement(
+            $settlement->settlementPublicId,
+            $this->purchaseOrderCorrelation('paid-refund-before-claim-order'),
+        );
+        $queue = $this->app->make(ServicePurchaseMutationQueueService::class)->queueFromSettlement(
+            $settlement->settlementPublicId,
+            'paid-refund-before-claim-request-0001',
+            $this->purchaseOrderCorrelation('paid-refund-before-claim-queue'),
+        );
+
+        $this->recordFullPaidPackageRefund($settlement, 'paid-refund-before-claim');
+        $receipt = $this->mutationExecutor()->execute($queue->operationPublicId);
+
+        self::assertSame(ProvisioningState::FailedFinal, $receipt->state);
+        self::assertSame([], $scenario['adapter']->calls);
+        self::assertSame(1, DB::table('provisioning_financial_invalidations')
+            ->where('purchase_settlement_id', $settlement->settlementId)->count());
+        $operation = DB::table('provisioning_operations')->where('public_id', $queue->operationPublicId)->first([
+            'state', 'attempt_count', 'last_result_code', 'remote_effect_started_at', 'remote_effect_completed_at',
+        ]);
+        self::assertNotNull($operation);
+        self::assertSame(ProvisioningState::FailedFinal->value, $operation->state);
+        self::assertSame(0, (int) $operation->attempt_count);
+        self::assertSame('paid_mutation_financially_invalidated', $operation->last_result_code);
+        self::assertNull($operation->remote_effect_started_at);
+        self::assertNull($operation->remote_effect_completed_at);
+    }
+
+    public function test_refund_is_blocked_while_paid_service_mutation_holds_running_effect_fence(): void
+    {
+        $scenario = $this->scenario('paid-refund-fence');
+        $quote = $this->paidPackageQuote($scenario, 'aq-extra-7d', 'paid-refund-fence');
+        $settlement = $this->capturePaidPackageQuote($quote, 'paid-refund-fence');
+        $this->app->make(PurchaseOrderService::class)->createFromSettlement(
+            $settlement->settlementPublicId,
+            $this->purchaseOrderCorrelation('paid-refund-fence-order'),
+        );
+        $queue = $this->app->make(ServicePurchaseMutationQueueService::class)->queueFromSettlement(
+            $settlement->settlementPublicId,
+            'paid-refund-fence-request-0001',
+            $this->purchaseOrderCorrelation('paid-refund-fence-queue'),
+        );
+        $this->simulateClaim($queue);
+
+        try {
+            $this->recordFullPaidPackageRefund($settlement, 'paid-refund-fence');
+            self::fail('Refund must be rejected while a paid Service mutation holds the running effect fence.');
+        } catch (QueryException) {
+            self::assertSame(0, DB::table('purchase_refunds')->where('purchase_settlement_id', $settlement->settlementId)->count());
+            self::assertSame(0, DB::table('provisioning_financial_invalidations')->where('purchase_settlement_id', $settlement->settlementId)->count());
+            self::assertSame('captured', DB::table('payment_intents')->where('public_id', $settlement->intentPublicId)->value('state'));
+        }
+    }
+
+    /** @param array{service_id:int,service_public_id:string,target_id:int,offering_id:int,user_id:int,adapter:ServiceMutationTestPanelAdapter} $scenario */
+    private function paidPackageQuote(array $scenario, string $packageCode, string $suffix): QuoteReceipt
+    {
+        return $this->app->make(QuoteService::class)->create(
+            'service.package.quote.'.$suffix,
+            $scenario['user_id'],
+            $scenario['offering_id'],
+            new QuotePricingInput(
+                QuoteOverrideSource::None,
+                null,
+                null,
+                null,
+                0,
+                $this->purchaseOrderClock->value->modify('+30 minutes'),
+            ),
+            $this->purchaseOrderCorrelation('paid-package-quote-'.$suffix),
+            null,
+            new ServicePackageQuoteContext($scenario['service_public_id'], $packageCode),
+        );
+    }
+
+    private function capturePaidPackageQuote(QuoteReceipt $quote, string $suffix): PurchaseSettlementReceipt
+    {
+        $methodCode = 'paid_service_gateway_'.$suffix;
+        $administratorId = $this->ownerAdministrator();
+        $eligibility = $this->app->make(PaymentMethodEligibilityService::class);
+        $eligibility->configureMethod(
+            'paid.service.method.'.$suffix,
+            $administratorId,
+            $methodCode,
+            true,
+            false,
+            1,
+            'Paid Service package test method.',
+            $this->purchaseOrderCorrelation('paid-method-'.$suffix),
+        );
+        $eligibility->recordHealth(
+            'paid.service.health.'.$suffix,
+            $administratorId,
+            $methodCode,
+            true,
+            $this->purchaseOrderClock->value->modify('+10 minutes'),
+            'Healthy paid Service package test observation.',
+            $this->purchaseOrderCorrelation('paid-health-'.$suffix),
+        );
+        $decision = $eligibility->evaluate(
+            'paid.service.eligibility.'.$suffix,
+            $quote->userId,
+            $quote->quotePublicId,
+        );
+        self::assertSame($quote->action->value, DB::table('payment_eligibility_decisions')
+            ->where('id', $decision->decisionId)->value('action_snapshot'));
+
+        $intent = $this->app->make(PurchasePaymentIntentService::class)->create(
+            'paid.service.intent.'.$suffix,
+            $quote->userId,
+            $quote->quotePublicId,
+            $decision->publicId,
+            $methodCode,
+            $this->purchaseOrderCorrelation('paid-intent-'.$suffix),
+        );
+        DB::table('payment_intents')->where('public_id', $intent->intentPublicId)->update([
+            'state' => 'submitted',
+            'updated_at' => $this->purchaseOrderTimestamp(),
+        ]);
+
+        return $this->app->make(PurchaseSettlementService::class)->capture(
+            $intent->intentPublicId,
+            $methodCode,
+            new VerifiedPaymentEvent(
+                'evt-paid-service-'.$suffix,
+                hash('sha256', 'paid-service-provider-event:'.$suffix),
+                new PaymentEvidence(
+                    ProviderOperationOutcome::Success,
+                    PaymentEvidenceAuthority::Authoritative,
+                    PaymentTransactionStatus::Settled,
+                    'txn-paid-service-'.$suffix,
+                    'evt-paid-service-'.$suffix,
+                    Money::irr($intent->amount->amount()),
+                    $this->purchaseOrderClock->value,
+                    $this->purchaseOrderClock->value,
+                    hash('sha256', 'paid-service-provider-evidence:'.$suffix),
+                    ['provider_reference' => 'txn-paid-service-'.$suffix],
+                ),
+            ),
+            $this->purchaseOrderCorrelation('paid-settlement-'.$suffix),
+        );
+    }
+
+    private function fundedPaidServiceWallet(int $userId, int $amountIrr, string $suffix): int
+    {
+        $now = now('UTC');
+        $assetId = (int) DB::table('ledger_accounts')->insertGetId([
+            'code' => 'system.paid.service.wallet.asset.'.$suffix,
+            'account_class' => 'asset',
+            'owner_user_id' => null,
+            'wallet_bucket' => null,
+            'currency' => 'IRR',
+            'is_active' => true,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $walletId = (int) DB::table('ledger_accounts')->insertGetId([
+            'code' => 'wallet.cash.paid.service.'.$suffix.'.'.$userId,
+            'account_class' => 'liability',
+            'owner_user_id' => $userId,
+            'wallet_bucket' => 'cash',
+            'currency' => 'IRR',
+            'is_active' => true,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $this->app->make(LedgerPostingService::class)->post(
+            'ledger.paid.service.wallet.fund.'.$suffix.'.000001',
+            'paid_service_wallet_test_funding',
+            $this->purchaseOrderCorrelation('paid-wallet-fund-'.$suffix),
+            [
+                new LedgerEntryDraft($assetId, LedgerDirection::Debit, IrrMoney::positive($amountIrr)),
+                new LedgerEntryDraft($walletId, LedgerDirection::Credit, IrrMoney::positive($amountIrr)),
+            ],
+            'test_fixture',
+            'paid-service-wallet-'.$suffix,
+        );
+
+        return $walletId;
+    }
+
+    private function recordFullPaidPackageRefund(PurchaseSettlementReceipt $settlement, string $suffix): void
+    {
+        $occurredAt = $this->purchaseOrderClock->value->modify('+5 minutes');
+        $this->app->make(PurchaseRefundService::class)->record(
+            'paid.service.refund.'.$suffix,
+            $settlement->settlementPublicId,
+            $settlement->providerCode,
+            new VerifiedPaymentEvent(
+                'evt-paid-service-refund-'.$suffix,
+                hash('sha256', 'paid-service-refund-event:'.$suffix),
+                new PaymentEvidence(
+                    ProviderOperationOutcome::Success,
+                    PaymentEvidenceAuthority::Authoritative,
+                    PaymentTransactionStatus::Refunded,
+                    'refund-paid-service-'.$suffix,
+                    'evt-paid-service-refund-'.$suffix,
+                    Money::irr($settlement->amount->amount()),
+                    $occurredAt,
+                    $occurredAt,
+                    hash('sha256', 'paid-service-refund-evidence:'.$suffix),
+                    ['provider_reference' => 'refund-paid-service-'.$suffix],
+                ),
+            ),
+            $this->purchaseOrderCorrelation('paid-refund-'.$suffix),
+        );
+    }
+
     /**
-     * @return array{service_id:int,service_public_id:string,target_id:int,adapter:ServiceMutationTestPanelAdapter}
+     * @return array{service_id:int,service_public_id:string,target_id:int,offering_id:int,user_id:int,adapter:ServiceMutationTestPanelAdapter}
      */
     private function scenario(string $suffix): array
     {
@@ -708,11 +1277,13 @@ final class ServiceMutationAuthorityRuntimeTest extends TestCase
             'service_id' => (int) $service->id,
             'service_public_id' => (string) $service->public_id,
             'target_id' => $targetId,
+            'offering_id' => $offeringId,
+            'user_id' => $userId,
             'adapter' => $adapter,
         ];
     }
 
-    /** @param array{service_id:int,service_public_id:string,target_id:int,adapter:ServiceMutationTestPanelAdapter} $scenario */
+    /** @param array{service_id:int,service_public_id:string,target_id:int,offering_id:int,user_id:int,adapter:ServiceMutationTestPanelAdapter} $scenario */
     private function queueMutation(array $scenario, ServiceMutationType $type, string $suffix): ServiceMutationReceipt
     {
         return $this->mutationQueue()->queue(

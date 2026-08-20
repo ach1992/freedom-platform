@@ -22,7 +22,7 @@ use RuntimeException;
  * @phpstan-type MethodRow object{id:int|string,method_code:string,version:int|string,enabled:bool|int|string,maintenance:bool|int|string,display_priority:int|string,configuration_snapshot_hash:string,request_payload_hash:string}
  * @phpstan-type RuleRow object{id:int|string,method_code:string,rule_code:string,version:int|string,enabled:bool|int|string,effect:string,priority:int|string,subject_user_id:int|string|null,account_types:string,tier_codes:string,minimum_amount_irr:int|string|null,maximum_amount_irr:int|string|null,offering_codes:string,product_ids:string,sales_server_ids:string,required_identity_status:string|null,required_agent_status:string|null,starts_at_utc:string|null,ends_at_utc:string|null,requires_contact_otp_provenance:bool|int|string,requires_purchase_history:bool|int|string,requires_daily_payment_limit:bool|int|string,configuration_snapshot_hash:string,request_payload_hash:string}
  * @phpstan-type HealthRow object{id:int|string,method_code:string,healthy:bool|int|string,observed_at:string,expires_at:string,configuration_snapshot_hash:string,request_payload_hash:string}
- * @phpstan-type Facts array{account_status:string,account_type:string,agent_status:?string,amount_irr:int,currency:string,identity_status:string,offering_code:string,product_id:int,quote_configuration_snapshot_hash:string,quote_id:int,sales_server_id:int,source_quote_public_id:string,tag_codes:list<string>,tier_code:?string,user_id:int}
+ * @phpstan-type Facts array{account_status:string,account_type:string,action:string,agent_status:?string,amount_irr:int,currency:string,identity_status:string,offering_code:string,product_id:int,quote_configuration_snapshot_hash:string,quote_id:int,sales_server_id:int,source_quote_public_id:string,tag_codes:list<string>,tier_code:?string,user_id:int}
  * @phpstan-type HealthSnapshot array{observation_id:?int,configuration_snapshot_hash:?string,healthy:?bool,observed_at:?string,expires_at:?string}
  * @phpstan-type EvaluationSnapshot array{health:HealthSnapshot,outcome:string}&array<string,mixed>
  * @phpstan-type Candidate array{configuration_snapshot_hash:string,evaluation_snapshot:EvaluationSnapshot,method_code:string,method_version_id:int,method_version:int,outcome:string,route_order:?int}
@@ -389,7 +389,7 @@ final readonly class PaymentMethodEligibilityService
                 }
                 ksort($candidates, SORT_STRING);
                 $snapshot = [
-                    'action' => 'purchase',
+                    'action' => $facts['action'],
                     'formula_version' => 'pay-001-eligibility-v2',
                     'methods' => $methodSnapshots,
                     'source_quote' => [
@@ -421,7 +421,7 @@ final readonly class PaymentMethodEligibilityService
                     'source_quote_id' => $facts['quote_id'],
                     'source_quote_public_id' => $facts['source_quote_public_id'],
                     'user_id' => $facts['user_id'],
-                    'action_snapshot' => 'purchase',
+                    'action_snapshot' => $facts['action'],
                     'currency_snapshot' => $facts['currency'],
                     'amount_irr_snapshot' => $facts['amount_irr'],
                     'configuration_snapshot' => $snapshotJson,
@@ -690,7 +690,7 @@ final readonly class PaymentMethodEligibilityService
      */
     private function loadFacts(Connection $connection, int $actorUserId, string $quotePublicId, DateTimeImmutable $now): array
     {
-        /** @var object{quote_id:int|string,quote_public_id:string,user_id:int|string,currency:string,final_price_irr:int|string,expires_at:string,configuration_snapshot_hash:string,account_type:string,account_status:string,offering_code:string,product_id:int|string,sales_server_id:int|string,identity_verification_status:?string,tier_code:?string,agent_status:?string}|null $row */
+        /** @var object{quote_id:int|string,quote_public_id:string,user_id:int|string,action_snapshot:string,currency:string,final_price_irr:int|string,expires_at:string,configuration_snapshot_hash:string,account_type:string,account_status:string,offering_code:string,product_id:int|string,sales_server_id:int|string,identity_verification_status:?string,tier_code:?string,agent_status:?string}|null $row */
         $row = $connection->table('quotes as quotes')
             ->join('users as users', 'users.id', '=', 'quotes.user_id')
             ->join('plan_offerings as offerings', 'offerings.id', '=', 'quotes.plan_offering_id')
@@ -700,7 +700,7 @@ final readonly class PaymentMethodEligibilityService
             ->where('quotes.public_id', $quotePublicId)
             ->lockForUpdate()
             ->first([
-                'quotes.id as quote_id', 'quotes.public_id as quote_public_id', 'quotes.user_id',
+                'quotes.id as quote_id', 'quotes.public_id as quote_public_id', 'quotes.user_id', 'quotes.action_snapshot',
                 'quotes.currency', 'quotes.final_price_irr', 'quotes.expires_at', 'quotes.configuration_snapshot_hash',
                 'users.account_type', 'users.account_status', 'offerings.code as offering_code',
                 'offerings.product_id', 'offerings.sales_server_id', 'profiles.identity_verification_status',
@@ -714,7 +714,7 @@ final readonly class PaymentMethodEligibilityService
         }
         if (! in_array((string) $row->account_type, ['customer', 'agent'], true)
             || $this->databaseDateTimeFromString((string) $row->expires_at) <= $now) {
-            throw new RuntimeException('Payment eligibility requires a current purchase Quote.');
+            throw new RuntimeException('Payment eligibility requires a current commercial Quote.');
         }
 
         /** @var list<string> $tags */
@@ -730,6 +730,7 @@ final readonly class PaymentMethodEligibilityService
         return [
             'account_status' => (string) $row->account_status,
             'account_type' => (string) $row->account_type,
+            'action' => (string) $row->action_snapshot,
             'agent_status' => $row->agent_status === null ? null : (string) $row->agent_status,
             'amount_irr' => (int) $row->final_price_irr,
             'currency' => (string) $row->currency,
