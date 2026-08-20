@@ -63,6 +63,7 @@ SQL);
         } catch (Throwable) {
             $connection->setPdo(null);
             $connection->setReadPdo(null);
+            $connection->setDirectPdo(null);
         }
     }
 }
