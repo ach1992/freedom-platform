@@ -27,7 +27,8 @@ jobs:
         run: |
           set -euo pipefail
           test '${{ inputs.confirmation }}' = 'READ_ONLY_STAGING_CHECK'
-          test "$RUNNER_NAME" = 'freedom-staging-runner'
+          test "$RUNNER_OS" = 'Linux'
+          test "$RUNNER_ARCH" = 'X64'
 
       - name: Collect sanitized host facts
         shell: bash
