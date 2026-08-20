@@ -282,6 +282,15 @@ final class ProtectedTelegramMessageSenderTest extends TestCase
         });
     }
 
+    public function test_presentation_debug_representations_are_redacted(): void
+    {
+        $presentation = ProtectedTelegramPresentation::svgDocument('<svg>restricted-source</svg>', 'Service details');
+
+        self::assertSame('[PROTECTED_TELEGRAM_PRESENTATION]', (string) $presentation);
+        self::assertSame(['redacted' => true, 'type' => 'document'], $presentation->__debugInfo());
+        self::assertStringNotContainsString('restricted-source', (string) $presentation);
+    }
+
     private function sender(): HttpProtectedTelegramMessageSender
     {
         return new HttpProtectedTelegramMessageSender(
