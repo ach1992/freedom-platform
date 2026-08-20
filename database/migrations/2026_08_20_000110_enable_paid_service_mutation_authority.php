@@ -79,7 +79,7 @@ SQL);
         $this->dropPaidUpgradeFence();
     }
 
-    /** @return literal-string */
+    /** @return string */
     private function sqlFile(string $relativePath, string $unavailableMessage): string
     {
         $sql = file_get_contents(database_path($relativePath));
