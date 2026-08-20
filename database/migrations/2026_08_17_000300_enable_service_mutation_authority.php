@@ -380,6 +380,12 @@ SQL);
 
     private function createServiceUpdateAuthority(): void
     {
+        if ($this->serviceOperationalAuthorityFinalized()) {
+            $this->installOperationalServiceUpdateSql();
+
+            return;
+        }
+
         $this->installSql('service-update-guard.sql');
     }
 
@@ -397,6 +403,132 @@ SQL);
     private function createRemoteEffectEventAuthority(): void
     {
         $this->installSql('remote-effect-event-insert-guard.sql');
+    }
+
+    private function installOperationalServiceUpdateSql(): void
+    {
+        $path = database_path('sql/service-operational-authority/service-update-guard.sql');
+        $sql = file_get_contents($path);
+        if (! is_string($sql) || trim($sql) === '') {
+            throw new RuntimeException('Service operational update authority SQL asset is unavailable.');
+        }
+        DB::connection()->getPdo()->exec($sql);
+    }
+
+    private function serviceOperationalAuthorityFinalized(): bool
+    {
+        foreach ([
+            'service_imports' => ['service_imports_authority_ready_v1_chk', 'service_imports_bootstrap_block_chk'],
+            'service_ownership_transfers' => ['service_transfers_authority_ready_v1_chk', 'service_transfers_bootstrap_block_chk'],
+            'service_reconciliation_cases' => ['service_reconciliation_authority_ready_v1_chk', 'service_reconciliation_bootstrap_block_chk'],
+            'service_reconciliation_changes' => ['service_reconciliation_changes_authority_ready_v1_chk', 'service_reconciliation_changes_bootstrap_block_chk'],
+            'service_batch_grants' => ['service_batch_grants_authority_ready_v1_chk', 'service_batch_grants_bootstrap_block_chk'],
+            'service_batch_grant_items' => ['service_batch_items_authority_ready_v1_chk', 'service_batch_items_bootstrap_block_chk'],
+        ] as $table => [$ready, $bootstrap]) {
+            if (! Schema::hasTable($table)
+                || ! $this->constraintExists($table, $ready)
+                || $this->constraintExists($table, $bootstrap)) {
+                return false;
+            }
+        }
+
+        // The historical migration can temporarily replace the Service update trigger
+        // earlier in this same fail-closed re-entry. Select the operational asset from
+        // durable #152 authority state, then restore the composed trigger below.
+        return $this->serviceOperationalCapabilityReady()
+            && $this->serviceOperationalEvidenceGuardsReady()
+            && $this->serviceOperationalRemoteIndexReady();
+    }
+
+    private function serviceOperationalEvidenceGuardsReady(): bool
+    {
+        /** @var object{guard_count:int|string}|null $row */
+        $row = DB::selectOne(<<<'SQL'
+SELECT COUNT(*) AS guard_count
+FROM information_schema.TRIGGERS
+WHERE TRIGGER_SCHEMA = DATABASE()
+  AND TRIGGER_NAME IN (
+      'service_imports_insert_guard','service_imports_update_guard','service_imports_delete_guard',
+      'service_ownership_transfers_insert_guard','service_ownership_transfers_update_guard','service_ownership_transfers_delete_guard',
+      'service_reconciliation_cases_insert_guard','service_reconciliation_cases_update_guard','service_reconciliation_cases_delete_guard',
+      'service_reconciliation_changes_insert_guard','service_reconciliation_changes_update_guard','service_reconciliation_changes_delete_guard',
+      'service_batch_grants_insert_guard','service_batch_grants_update_guard','service_batch_grants_delete_guard',
+      'service_batch_grant_items_insert_guard','service_batch_grant_items_update_guard','service_batch_grant_items_delete_guard',
+      'audit_logs_service_operational_insert_guard'
+  )
+SQL);
+
+        if ($row === null || (int) $row->guard_count !== 19) {
+            return false;
+        }
+        foreach ([
+            'service_imports_update_guard' => 'source_row.authorization_key',
+            'service_reconciliation_cases_update_guard' => 'service_reconciliation_changes change_row',
+            'service_batch_grants_update_guard' => 'live_claims',
+            'service_batch_grant_items_insert_guard' => 'items_committed_at IS NULL',
+            'audit_logs_service_operational_insert_guard' => 'service_operational_authority_capability',
+        ] as $triggerName => $marker) {
+            /** @var object{action_statement:string}|null $trigger */
+            $trigger = DB::selectOne(
+                'SELECT ACTION_STATEMENT AS action_statement FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = DATABASE() AND TRIGGER_NAME = ?',
+                [$triggerName],
+            );
+            if ($trigger === null || ! is_string($trigger->action_statement) || ! str_contains($trigger->action_statement, $marker)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function serviceOperationalCapabilityReady(): bool
+    {
+        if (! Schema::hasTable('service_operational_authority_capability')) {
+            return false;
+        }
+        $key = config('app.key');
+        if (! is_string($key) || $key === '') {
+            return false;
+        }
+        $expected = hash('sha256', hash_hmac('sha256', 'service-operational-database-authority-v1', $key));
+        $row = DB::table('service_operational_authority_capability')->where('id', 1)->first(['capability_hash']);
+        if ($row === null || ! is_string($row->capability_hash) || ! hash_equals($expected, $row->capability_hash)) {
+            return false;
+        }
+        /** @var object{guard_count:int|string}|null $guards */
+        $guards = DB::selectOne(<<<'SQL'
+SELECT COUNT(*) AS guard_count
+FROM information_schema.TRIGGERS
+WHERE TRIGGER_SCHEMA = DATABASE()
+  AND TRIGGER_NAME IN (
+      'service_operational_capability_insert_guard',
+      'service_operational_capability_update_guard',
+      'service_operational_capability_delete_guard'
+  )
+SQL);
+
+        return $guards !== null && (int) $guards->guard_count === 3;
+    }
+
+    private function serviceOperationalRemoteIndexReady(): bool
+    {
+        /** @var list<object{column_name:string,non_unique:int|string,sub_part:int|string|null}> $rows */
+        $rows = DB::select(<<<'SQL'
+SELECT COLUMN_NAME AS column_name, NON_UNIQUE AS non_unique, SUB_PART AS sub_part
+FROM information_schema.STATISTICS
+WHERE TABLE_SCHEMA = DATABASE()
+  AND TABLE_NAME = 'service_subscriptions'
+  AND INDEX_NAME = 'service_subscriptions_target_remote_unique'
+ORDER BY SEQ_IN_INDEX
+SQL);
+
+        return count($rows) === 2
+            && $rows[0]->column_name === 'service_target_id'
+            && $rows[1]->column_name === 'remote_service_id'
+            && (int) $rows[0]->non_unique === 0
+            && (int) $rows[1]->non_unique === 0
+            && $rows[0]->sub_part === null
+            && $rows[1]->sub_part === null;
     }
 
     private function installSql(string $file): void

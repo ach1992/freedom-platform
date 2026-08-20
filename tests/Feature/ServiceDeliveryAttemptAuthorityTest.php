@@ -194,9 +194,6 @@ final class ServiceDeliveryAttemptAuthorityTest extends TestCase
         $payload = json_decode((string) $outbox->payload, true, flags: JSON_THROW_ON_ERROR);
         self::assertSame(['service_delivery_attempt_public_id' => $first->attemptPublicId], $payload);
         self::assertSame(hash('sha256', (string) $outbox->payload), $outbox->payload_hash);
-        foreach (['subscription_link', 'credential', 'password', 'private_key', 'secret', 'token', 'qr'] as $forbidden) {
-            self::assertStringNotContainsString($forbidden, strtolower((string) $outbox->payload));
-        }
         self::assertSame([], $scenario['adapter']->calls);
     }
 
