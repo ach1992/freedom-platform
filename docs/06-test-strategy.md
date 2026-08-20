@@ -35,32 +35,26 @@ If the Master cannot execute MariaDB/Docker/shell work directly, that is not its
 
 Delegate to an external Worker only when that materially improves execution or review.
 
-## CI tiers
+## CI validation plan
 
-### CONTROL CI
+CI classifies the complete PR diff into independent validation needs. The profile name is only a summary; the job flags are authoritative. Secret scanning remains mandatory for every executing CI revision.
 
-CONTROL CI is allowed only for a PR targeting `develop/v1.0.0-completion` when every changed path is in the documentation/governance-only allowlist encoded in `.github/workflows/ci.yml`.
+| Changed behavior | Material validation |
+|---|---|
+| canonical docs / governance | affected planning/project-control checks |
+| bounded read-only control plane | project/control contract + dedicated read-only workflow verifier |
+| PHP application/config/schema | Pint + PHPStan/forbidden/architecture + MariaDB 10.11/Redis integration |
+| PHP tests only | Pint + MariaDB 10.11/Redis integration |
+| Composer manifest/lock | Composer validation/audit/license + static/application integration affected by dependency changes |
+| Docker CI/runtime | Docker Compose contract + MariaDB 10.11/Redis integration |
+| operational/deployment entrypoints | shell/PHP operational syntax/entrypoint validation; separate High/Critical review/release gates still apply |
+| unknown/unclassified | fail safe to every normal validation domain |
 
-It requires:
+`.github/workflows/staging-readiness.yml` is the only current workflow intentionally classified as bounded read-only control plane. Its verifier requires manual dispatch, read-only token permissions, no secrets/protected environment, the canonical runner selector, an allowlisted action surface and no known runtime/host mutation commands. The verifier itself has adversarial tests. No wildcard `.github/workflows/*` downgrade exists.
 
-1. repository/planning/project-control preflight;
-2. secret scan.
+Changes to the CI classifier/workflow are self-modifying control-plane changes: representative classifier cases and verifier-abuse cases run independently of the classifier result. A CI-policy change does not manufacture a MariaDB run when the effective diff cannot affect application/database behavior; conversely any application/schema/database-affecting diff still requires MariaDB 10.11.
 
-Unknown, unclassifiable, or mixed diffs default to FULL CI.
-
-### FULL CI
-
-FULL CI is required for source, routes, bootstrap/config, schema/migrations, tests, dependencies, static/CI tooling, Docker/runtime/deployment/workflow changes, unknown paths, every PR targeting `main`, every push to `main`, and intentional release validation.
-
-Normal FULL CI requires:
-
-1. repository/project-control preflight;
-2. secret scan;
-3. dependency and license policy;
-4. Pint / Composer validation / PHPStan / forbidden-pattern / architecture checks;
-5. the complete application suite on disposable MariaDB 10.11 with authenticated Redis.
-
-MariaDB 10.11 is the primary required compatibility target. Other compatible MariaDB lines are explicit task/release compatibility evidence, not an automatic matrix on every PR.
+The normal integration target is MariaDB 10.11 with authenticated Redis. Other compatible MariaDB lines are explicit task/release compatibility evidence, not an automatic matrix on every PR.
 
 ## Workflow permissions
 
@@ -70,7 +64,7 @@ Repository settings/protection endpoints that the connected GitHub App cannot re
 
 ## Evidence reuse and reruns
 
-A green applicable CI tier proves the tested PR revision while the resulting tree remains materially unchanged. Revalidate after a base advance, conflict resolution, post-test edit, dependency/runtime change, or other material difference.
+A green applicable validation plan proves the tested PR revision while the resulting tree remains materially unchanged. Revalidate after a base advance, conflict resolution, post-test edit, dependency/runtime change, or other material difference. PR concurrency cancels superseded safe runs, and preflight rejects a run that starts after the event's exact base/head has already drifted. Integration still refreshes exact candidate, target, mergeability and applicable checks immediately before merge.
 
 For an unchanged revision:
 

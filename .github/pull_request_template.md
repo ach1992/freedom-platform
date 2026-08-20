@@ -19,7 +19,7 @@ When independent review is required, follow the Owner-relayed fresh-ChatGPT work
 
 ## Verification
 
-Expected CI tier: CONTROL / FULL
+Expected validation profile/checks: CONTROL / CONTROL_PLANE / APPLICATION / OPERATIONS / FULL; list only material job domains when useful
 
 Focused commands/tests/results or applicable CI reference:
 

@@ -161,11 +161,15 @@ MARIADB_VERSION=11.4 composer test:integration
 
 ## GitHub Actions tiers
 
-The workflow selects the cheapest safe tier and uses only the owner-controlled self-hosted runner.
+The workflow selects the narrowest safe validation plan and uses only the owner-controlled self-hosted runner. Secret scanning is always retained; other job domains are selected independently from the affected behavior.
 
-**CONTROL CI** is valid only when a PR targets `develop/v1.0.0-completion` and every changed path is in the explicit documentation/governance-only allowlist in `.github/workflows/ci.yml`. It runs repository/project-control validation and secret scanning. Any unknown path defaults to FULL.
+- Documentation/governance changes run only their relevant planning/project-control checks plus the secret scan.
+- Bounded control-plane changes run explicit workflow/control contract checks plus the secret scan. `staging-readiness.yml` is the only current read-only workflow with a narrow static contract; there is no directory-wide workflow allowlist.
+- PHP application/config/schema changes run the relevant style/static/architecture checks and the MariaDB 10.11 + Redis suite. Test-only changes keep test style + integration but do not rerun unrelated PHPStan/architecture analysis.
+- Composer dependency/lock changes add Composer validation, audit/license policy and the application checks they can affect. Docker/runtime changes add Docker contract validation and integration. Operational/deployment entrypoints use their own syntax/entrypoint checks rather than pretending an unrelated DB suite validates them.
+- Unknown or mixed paths accumulate the strongest applicable checks; unclassified paths fail safe to the full validation plan.
 
-**FULL CI** runs repository/project-control, secret scan, dependency/license policy, Pint/Composer/PHPStan/forbidden-pattern/architecture checks, and the complete application suite on MariaDB 10.11 with authenticated Redis. Additional MariaDB compatibility runs are intentional task/manual/release checks, not a mandatory matrix on every PR.
+Superseded safe PR/read-only runs are cancelled. CI also rejects a PR run that starts after its recorded base/head has already drifted; immediately before integration, the Master still refreshes exact candidate, target, mergeability and applicable checks.
 
 Routine successful PR runs rely on workflow/check results as evidence. Diagnostic artifacts are retained on failure, and intentional manual/release runs may retain artifacts when they have a real consumer; do not upload large success artifacts by default merely to create evidence.
 

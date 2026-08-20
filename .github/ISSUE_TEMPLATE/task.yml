@@ -59,7 +59,7 @@ body:
     attributes:
       label: Validation strategy
       description: Define how correctness will be demonstrated before implementation starts. Name focused tests/checks and expected CI tier when relevant; do not require ceremonial tests.
-      placeholder: "Focused validation: ...\nExpected CI tier: FULL"
+      placeholder: "Focused validation: ...\nExpected validation profile/checks: APPLICATION; MariaDB/Redis + static"
     validations:
       required: true
 

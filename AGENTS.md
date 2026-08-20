@@ -133,14 +133,16 @@ runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
 
 GitHub-hosted runners are not a fallback. Exact runtime and quality requirements are in `docs/06-test-strategy.md`.
 
-CI is risk-based:
+CI is risk-based and signal-driven. `.github/workflows/ci.yml` computes independent validation needs from the complete diff instead of treating every non-doc change as one all-or-nothing suite.
 
-- **CONTROL CI** is allowed only for PRs to `develop/v1.0.0-completion` whose complete diff is in the explicit documentation/governance-only allowlist. It runs repository/project-control validation and secret scanning.
-- **FULL CI** is required for source, routes, bootstrap/config, schema/migrations, tests, dependencies, static/CI tooling, Docker/runtime/deployment/workflow changes, any unknown path, every PR targeting `main`, and intentional manual release validation.
-- MariaDB `10.11` is the mandatory normal integration target. Other compatible MariaDB lines may be run for task-specific, manual, or release compatibility evidence when useful; they are not an automatic gate on every PR unless the task requires them.
-- Unknown changes default to FULL.
-- Draft PRs stay quiet. Marking a PR Ready triggers the applicable tier on the current revision.
-- Draft integration PR `#6` does not re-run FULL merely because already-reviewed work merged into `develop`; it receives intentional FULL validation at the release review boundary.
+- Secret scanning remains mandatory for every executing CI revision.
+- Repository/planning checks run when their canonical control/document surfaces change; they are not ceremonial application-test prerequisites.
+- PHP style/static/architecture, dependency/license policy, MariaDB/Redis integration, Docker/runtime validation and operational-entrypoint validation are selected independently when the changed behavior can affect those contracts.
+- The bounded read-only `staging-readiness.yml` workflow may use control-plane validation without application DB tests only while its static read-only contract proves that it remains manual, secret-free and non-mutating. Other workflow/control changes are never broadly allowlisted by directory.
+- MariaDB `10.11` is the mandatory normal integration target when application/database semantics are affected. It is not started for a change that independent validation proves cannot affect those semantics.
+- Unknown/ambiguous paths fail safely to the strongest validation plan. Removing an application/control prerequisite never downgrades validation.
+- Draft PRs stay quiet. Marking a PR Ready triggers validation on the current revision. Superseded safe runs are cancelled; guarded external-effect workflows retain non-cancellation where interruption would itself be unsafe.
+- Draft integration PR `#6` stays quiet during normal development and receives intentional release validation at the final review boundary.
 
 Reuse green evidence when the tested resulting tree has not materially changed. Rerun only clearly transient failed jobs where possible. Never rerun a deterministic failure hoping for green; fix the cause first.
 
