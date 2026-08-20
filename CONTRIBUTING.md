@@ -27,12 +27,13 @@ The project deliberately separates GitHub control, runtime execution, and deploy
 | External coding/review Worker | Optional delegated implementation/review when isolation, safe parallelism, specialist expertise, or a missing Master capability materially helps | Not a default prerequisite. Durable work must return to GitHub for Master verification. Codex Cloud is only one possible optional Worker, not the normal execution path. |
 | Deployment/staging target | Target-like runtime/readiness and explicitly authorized deployment/provider operations | Runtime state is not source state. Never treat a deployed tree as a developer checkout or hidden project copy. |
 
-The self-hosted runner contract is:
+The self-hosted runner contract is label- and toolchain-based:
 
 ```yaml
-runner name: freedom-staging-runner
 runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
 ```
+
+Runner display names are operational GitHub inventory, not durable repository contract. Replacing a runner host/name does not require repository changes as long as the required labels and validated toolchain remain satisfied.
 
 Exact CI/runtime requirements are owned by `docs/06-test-strategy.md`. Staging/provider workflow and secret interfaces are owned by `docs/09-deployment-runbook.md`.
 
