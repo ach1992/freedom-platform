@@ -9,9 +9,14 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
+    private const PAID_OPERATION_TYPES = ['renew', 'add_data', 'add_days', 'add_data_days'];
+
     /** @requirement BUY-002 PAY-002 SVC-003 SVC-004 PRV-002 PRV-003 DAT-003 SEC-002 QUA-004 */
     public function up(): void
     {
+        // MariaDB DDL commits per statement. Fence the new paid operation types first so
+        // interrupted/re-entered migration work can never expose a partially composed authority.
+        $this->installPaidUpgradeFence();
         $this->ensureAuthorityTable();
 
         $this->replaceCheckConstraint(
@@ -34,11 +39,19 @@ SQL);
           OR (`action` = 'add_data_days' AND `target_expires_at` IS NOT NULL AND `target_data_limit_bytes` IS NOT NULL)))
 )
 SQL);
+        $this->replaceProvisioningOperationChecks(true);
 
-        DB::unprepared(file_get_contents(database_path('sql/service-paid-mutation-authority/operation-insert-guard.sql')) ?: throw new RuntimeException('Paid mutation operation guard SQL is unavailable.'));
+        DB::unprepared(file_get_contents(database_path('sql/service-paid-mutation-authority/service-update-guard.sql')) ?: throw new RuntimeException('Paid mutation Service update guard SQL is unavailable.'));
         DB::unprepared(file_get_contents(database_path('sql/service-paid-mutation-authority/operation-update-guard.sql')) ?: throw new RuntimeException('Paid mutation operation update guard SQL is unavailable.'));
+        DB::unprepared(file_get_contents(database_path('sql/service-paid-mutation-authority/remote-effect-event-insert-guard.sql')) ?: throw new RuntimeException('Paid mutation remote-effect event guard SQL is unavailable.'));
+        DB::unprepared(file_get_contents(database_path('sql/service-paid-mutation-authority/delivery-effect-operation-insert-guard.sql')) ?: throw new RuntimeException('Paid mutation delivery fence SQL is unavailable.'));
+        DB::unprepared(file_get_contents(database_path('sql/service-paid-mutation-authority/history-insert-guard.sql')) ?: throw new RuntimeException('Paid mutation history guard SQL is unavailable.'));
         $this->createAuthorityGuards();
         $this->createRefundEffectFence(true);
+
+        // Final enabling DDL. Everything that can consume a paid mutation is composed first.
+        DB::unprepared(file_get_contents(database_path('sql/service-paid-mutation-authority/operation-insert-guard.sql')) ?: throw new RuntimeException('Paid mutation operation guard SQL is unavailable.'));
+        $this->dropPaidUpgradeFence();
     }
 
     public function down(): void
@@ -47,14 +60,34 @@ SQL);
             && DB::table('service_paid_mutation_authorities')->exists()) {
             throw new RuntimeException('Cannot roll back paid Service mutation authority while paid Service mutations exist.');
         }
+        if (Schema::hasTable('provisioning_operations')
+            && DB::table('provisioning_operations')->whereIn('operation_type', self::PAID_OPERATION_TYPES)->exists()) {
+            throw new RuntimeException('Cannot roll back paid Service mutation authority while paid mutation Operation evidence exists.');
+        }
 
+        $this->installPaidUpgradeFence();
         $this->createRefundEffectFence(false);
+        DB::unprepared(file_get_contents(database_path('sql/service-mutation-authority/remote-effect-event-insert-guard.sql')) ?: throw new RuntimeException('Prior Service mutation remote-effect event guard SQL is unavailable.'));
+        DB::unprepared(file_get_contents(database_path('migrations/support/service_delivery_effect_authority/05_mutation_insert_fence.sql')) ?: throw new RuntimeException('Prior Service mutation delivery fence SQL is unavailable.'));
+        $this->restoreNonPaidOperationAuthority();
         DB::unprepared('DROP TRIGGER IF EXISTS service_paid_mutation_authorities_delete_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS service_paid_mutation_authorities_update_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS service_paid_mutation_authorities_insert_guard');
         Schema::dropIfExists('service_paid_mutation_authorities');
-        DB::unprepared(file_get_contents(database_path('sql/service-mutation-authority/operation-insert-guard.sql')) ?: throw new RuntimeException('Prior Service mutation guard SQL is unavailable.'));
-        DB::unprepared(file_get_contents(database_path('sql/service-mutation-authority/operation-update-guard.sql')) ?: throw new RuntimeException('Prior Service mutation update guard SQL is unavailable.'));
+        $this->replaceProvisioningOperationChecks(false);
+        $this->dropPaidUpgradeFence();
+    }
+
+    private function restoreNonPaidOperationAuthority(): void
+    {
+        // #150 owns the final pre-paid Operation/history composition and detects the later #152
+        // Service operational guard, so reuse its convergent authority restoration on rollback.
+        $migration = require database_path('migrations/2026_08_19_000120_activate_non_paid_order_authority.php');
+        if (! is_object($migration) || ! method_exists($migration, 'up')) {
+            throw new RuntimeException('Non-paid Order authority predecessor cannot be restored safely.');
+        }
+
+        $migration->up();
     }
 
     private function ensureAuthorityTable(): void
@@ -101,20 +134,70 @@ SQL);
 
     private function replaceCheckConstraint(string $constraint, string $definition): void
     {
-        if ($this->constraintExists($constraint)) {
-            DB::statement("ALTER TABLE service_paid_mutation_authorities DROP CONSTRAINT `{$constraint}`");
-        }
-        DB::statement("ALTER TABLE service_paid_mutation_authorities ADD CONSTRAINT `{$constraint}` CHECK ({$definition})");
+        $this->replaceTableCheckConstraint('service_paid_mutation_authorities', $constraint, $definition);
     }
 
-    private function constraintExists(string $constraint): bool
+    private function replaceProvisioningOperationChecks(bool $includePaidMutations): void
+    {
+        $types = $includePaidMutations
+            ? "`operation_type` IN ('initial_provision','reset_usage','suspend','activate','delete','rotate_subscription_link','renew','add_data','add_days','add_data_days')"
+            : "`operation_type` IN ('initial_provision','reset_usage','suspend','activate','delete','rotate_subscription_link')";
+        $exactTypes = $includePaidMutations
+            ? "BINARY `operation_type` IN (BINARY 'initial_provision', BINARY 'reset_usage', BINARY 'suspend', BINARY 'activate', BINARY 'delete', BINARY 'rotate_subscription_link', BINARY 'renew', BINARY 'add_data', BINARY 'add_days', BINARY 'add_data_days')"
+            : "BINARY `operation_type` IN (BINARY 'initial_provision', BINARY 'reset_usage', BINARY 'suspend', BINARY 'activate', BINARY 'delete', BINARY 'rotate_subscription_link')";
+
+        $this->replaceTableCheckConstraint('provisioning_operations', 'provisioning_operations_type_chk', $types);
+        $this->replaceTableCheckConstraint('provisioning_operations', 'provisioning_operations_provisioning_exact_text_chk', <<<SQL
+(
+    COLLATION(`operation_key`) <> 'utf8mb4_bin'
+    OR (
+        {$exactTypes}
+        AND BINARY `operation_key` = BINARY RTRIM(`operation_key`)
+        AND BINARY `state` IN (
+            BINARY 'queued', BINARY 'running', BINARY 'uncertain_remote_result', BINARY 'retry_scheduled',
+            BINARY 'succeeded', BINARY 'failed_final', BINARY 'needs_review', BINARY 'compensating', BINARY 'compensated'
+        )
+        AND BINARY `correlation_id` = BINARY RTRIM(`correlation_id`)
+    )
+)
+SQL);
+    }
+
+    private function replaceTableCheckConstraint(string $table, string $constraint, string $definition): void
+    {
+        if ($this->constraintExists($table, $constraint)) {
+            DB::statement("ALTER TABLE `{$table}` DROP CONSTRAINT `{$constraint}`");
+        }
+        DB::statement("ALTER TABLE `{$table}` ADD CONSTRAINT `{$constraint}` CHECK ({$definition})");
+    }
+
+    private function constraintExists(string $table, string $constraint): bool
     {
         $row = DB::selectOne(
             'SELECT COUNT(*) AS aggregate FROM information_schema.TABLE_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME = ? AND CONSTRAINT_NAME = ?',
-            ['service_paid_mutation_authorities', $constraint],
+            [$table, $constraint],
         );
 
         return $row !== null && (int) $row->aggregate === 1;
+    }
+
+    private function installPaidUpgradeFence(): void
+    {
+        DB::unprepared(<<<'SQL'
+CREATE OR REPLACE TRIGGER provisioning_operations_paid_mutation_upgrade_fence
+BEFORE INSERT ON provisioning_operations
+FOR EACH ROW
+BEGIN
+    IF NEW.operation_type IN ('renew','add_data','add_days','add_data_days') THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Paid Service mutation creation is fenced while authority migration converges.';
+    END IF;
+END
+SQL);
+    }
+
+    private function dropPaidUpgradeFence(): void
+    {
+        DB::unprepared('DROP TRIGGER IF EXISTS provisioning_operations_paid_mutation_upgrade_fence');
     }
 
     private function createAuthorityGuards(): void

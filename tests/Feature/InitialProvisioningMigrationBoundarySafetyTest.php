@@ -66,8 +66,11 @@ final class InitialProvisioningMigrationBoundarySafetyTest extends TestCase
         $nonPaidInvalidationMigration = require database_path('migrations/2026_08_19_000115_extend_provisioning_invalidation_to_non_paid_sources.php');
         /** @var Migration $nonPaidAuthorityMigration */
         $nonPaidAuthorityMigration = require database_path('migrations/2026_08_19_000120_activate_non_paid_order_authority.php');
+        /** @var Migration $paidMutationMigration */
+        $paidMutationMigration = require database_path('migrations/2026_08_20_000110_enable_paid_service_mutation_authority.php');
 
         try {
+            $paidMutationMigration->down();
             $activationMigration->down();
             $outboxOrderMigration->down();
             $invalidationMigration->down();
@@ -133,6 +136,7 @@ final class InitialProvisioningMigrationBoundarySafetyTest extends TestCase
             $activationMigration->up();
             $nonPaidInvalidationMigration->up();
             $nonPaidAuthorityMigration->up();
+            $paidMutationMigration->up();
         }
     }
 

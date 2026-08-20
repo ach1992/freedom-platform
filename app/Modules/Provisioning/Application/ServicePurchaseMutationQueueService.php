@@ -184,6 +184,12 @@ final readonly class ServicePurchaseMutationQueueService
             if ($blockingDelivery !== null) {
                 throw new DomainException('Paid Service mutation is blocked by an unresolved delivery boundary.');
             }
+            $pendingInitialDelivery = $connection->table('service_initial_delivery_fences')
+                ->where('service_subscription_id', (int) $service->id)
+                ->first(['service_subscription_id']);
+            if ($pendingInitialDelivery !== null) {
+                throw new DomainException('Paid Service mutation is blocked until initial delivery is durably scheduled.');
+            }
             $active = $connection->table('provisioning_operations')
                 ->where('service_subscription_id', (int) $service->id)
                 ->where('operation_type', '<>', 'initial_provision')

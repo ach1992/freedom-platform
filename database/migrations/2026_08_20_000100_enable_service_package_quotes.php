@@ -307,6 +307,12 @@ BEGIN
                       WHERE capability.panel_service_target_id = service_row.service_target_id
                         AND capability.capability_code = 'add_data_allowance'
                         AND capability.verification_status = 'verified'
+                  )
+                  AND EXISTS (
+                      SELECT 1 FROM panel_target_capabilities capability
+                      WHERE capability.panel_service_target_id = service_row.service_target_id
+                        AND capability.capability_code = 'atomic_service_entitlements'
+                        AND capability.verification_status = 'verified'
                   ))
           )
           AND (operation_row.required_capability_code IS NULL OR EXISTS (

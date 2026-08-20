@@ -47,6 +47,7 @@ final class InitialProvisioningExactAuthorityUpgradeMigrationTest extends TestCa
             if (isset($this->app)) {
                 $this->restoreExactUpgradeAfterTest();
                 $this->truncateDatabaseTables();
+                $this->paidServiceMutationMigration()->up();
             }
         } finally {
             parent::tearDown();
@@ -374,6 +375,14 @@ SQL);
             $settlement->settlementPublicId,
             $this->purchaseOrderCorrelation('order-'.$suffix),
         );
+    }
+
+    private function paidServiceMutationMigration(): Migration
+    {
+        /** @var Migration $migration */
+        $migration = require database_path('migrations/2026_08_20_000110_enable_paid_service_mutation_authority.php');
+
+        return $migration;
     }
 
     private function restoreExactUpgradeAfterTest(): void

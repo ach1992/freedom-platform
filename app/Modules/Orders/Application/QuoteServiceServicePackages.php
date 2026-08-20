@@ -105,7 +105,7 @@ trait QuoteServiceServicePackages
         $requiredCapabilities = match ($action) {
             QuoteAction::Renew, QuoteAction::AddDays => ['update_expiry'],
             QuoteAction::AddData => ['add_data_allowance'],
-            QuoteAction::AddDataDays => ['update_expiry', 'add_data_allowance'],
+            QuoteAction::AddDataDays => ['update_expiry', 'add_data_allowance', 'atomic_service_entitlements'],
             QuoteAction::Purchase => throw new RuntimeException('Purchase is not a Service package action.'),
         };
         if (is_string($policy->required_capability_code) && $policy->required_capability_code !== '') {

@@ -35,7 +35,7 @@ enum ServiceMutationType: string
     public function panelCapabilities(): array
     {
         return match ($this) {
-            self::AddDataDays => ['update_expiry', 'add_data_allowance'],
+            self::AddDataDays => ['update_expiry', 'add_data_allowance', 'atomic_service_entitlements'],
             default => [$this->panelCapability()],
         };
     }

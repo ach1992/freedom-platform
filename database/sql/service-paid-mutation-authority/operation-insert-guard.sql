@@ -2,10 +2,13 @@ CREATE OR REPLACE TRIGGER provisioning_operations_insert_guard
 BEFORE INSERT ON provisioning_operations
 FOR EACH ROW
 BEGIN
+    DECLARE source_type_value VARCHAR(32) DEFAULT NULL;
     DECLARE authority_settlement_id BIGINT UNSIGNED DEFAULT NULL;
     DECLARE authority_intent_id BIGINT UNSIGNED DEFAULT NULL;
+    DECLARE authority_source_id BIGINT UNSIGNED DEFAULT NULL;
     DECLARE locked_settlement_id BIGINT UNSIGNED DEFAULT NULL;
     DECLARE locked_intent_id BIGINT UNSIGNED DEFAULT NULL;
+    DECLARE locked_source_id BIGINT UNSIGNED DEFAULT NULL;
     DECLARE valid_authority_order_id BIGINT UNSIGNED DEFAULT NULL;
     DECLARE valid_mutation_service_id BIGINT UNSIGNED DEFAULT NULL;
     DECLARE valid_paid_mutation_order_id BIGINT UNSIGNED DEFAULT NULL;
@@ -28,50 +31,104 @@ BEGIN
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Initial Provisioning Operation cannot be created with remote-effect evidence.';
         END IF;
 
-        SELECT purchase_settlement_id, payment_intent_id INTO authority_settlement_id, authority_intent_id
-        FROM orders WHERE id = NEW.order_id LIMIT 1;
-        IF authority_settlement_id IS NULL OR authority_intent_id IS NULL THEN
-            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Initial Provisioning Operation requires matching captured purchase authority and Service identity.';
+        SELECT source_type, purchase_settlement_id, payment_intent_id, order_source_authorization_id
+          INTO source_type_value, authority_settlement_id, authority_intent_id, authority_source_id
+        FROM orders
+        WHERE id = NEW.order_id
+        LIMIT 1;
+
+        IF source_type_value = 'purchase' THEN
+            IF authority_settlement_id IS NULL OR authority_intent_id IS NULL OR authority_source_id IS NOT NULL THEN
+                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Initial Provisioning Operation purchase authority shape is invalid.';
+            END IF;
+
+            SELECT id INTO locked_settlement_id FROM purchase_settlements WHERE id = authority_settlement_id LIMIT 1 FOR UPDATE;
+            SELECT id INTO locked_intent_id FROM payment_intents WHERE id = authority_intent_id LIMIT 1 FOR UPDATE;
+
+            SELECT order_row.id INTO valid_authority_order_id
+            FROM orders order_row
+            INNER JOIN order_items item_row ON item_row.id = NEW.order_item_id
+            INNER JOIN quotes quote_row ON quote_row.id = item_row.source_quote_id AND quote_row.action_snapshot = 'purchase'
+            INNER JOIN service_subscriptions service_row ON service_row.id = NEW.service_subscription_id
+            INNER JOIN purchase_settlements settlement_row ON settlement_row.id = order_row.purchase_settlement_id
+            INNER JOIN payment_intents intent_row ON intent_row.id = order_row.payment_intent_id
+            WHERE order_row.id = NEW.order_id
+              AND settlement_row.id = locked_settlement_id
+              AND intent_row.id = locked_intent_id
+              AND item_row.order_id = order_row.id
+              AND service_row.order_id = order_row.id
+              AND service_row.order_item_id = item_row.id
+              AND service_row.user_id = order_row.user_id
+              AND BINARY NEW.correlation_id = BINARY service_row.creation_correlation_id
+              AND NEW.user_id = order_row.user_id
+              AND NEW.operation_generation = 0
+              AND NEW.target_remote_identity_generation = 0
+              AND NEW.target_lifecycle_version = 0
+              AND NEW.request_key_hash IS NULL
+              AND NEW.operation_key = CONCAT('initial-provision:', item_row.public_id)
+              AND NEW.state = 'queued'
+              AND NEW.state_version = 1
+              AND order_row.source_type = 'purchase'
+              AND order_row.state = 'paid'
+              AND order_row.state_version = 1
+              AND settlement_row.payment_intent_id = intent_row.id
+              AND intent_row.purpose = 'purchase'
+              AND intent_row.wallet_account_id IS NULL
+              AND intent_row.state = 'captured'
+              AND intent_row.captured_at IS NOT NULL
+            LIMIT 1
+            FOR UPDATE;
+        ELSEIF source_type_value IN ('trial','benefit_code','admin_grant') THEN
+            IF authority_settlement_id IS NOT NULL OR authority_intent_id IS NOT NULL OR authority_source_id IS NULL THEN
+                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Initial Provisioning Operation zero-cost authority shape is invalid.';
+            END IF;
+
+            SELECT id INTO locked_source_id
+            FROM order_source_authorizations
+            WHERE id = authority_source_id
+            LIMIT 1
+            FOR UPDATE;
+
+            SELECT order_row.id INTO valid_authority_order_id
+            FROM orders order_row
+            INNER JOIN order_source_authorizations authorization_row
+                ON authorization_row.id = order_row.order_source_authorization_id
+            INNER JOIN order_items item_row ON item_row.id = NEW.order_item_id
+            INNER JOIN service_subscriptions service_row ON service_row.id = NEW.service_subscription_id
+            WHERE order_row.id = NEW.order_id
+              AND authorization_row.id = locked_source_id
+              AND order_row.source_type = authorization_row.source_type
+              AND order_row.source_type = source_type_value
+              AND order_row.order_source_authorization_public_id = authorization_row.public_id
+              AND authorization_row.user_id = order_row.user_id
+              AND item_row.order_id = order_row.id
+              AND item_row.order_source_authorization_id = authorization_row.id
+              AND item_row.order_source_authorization_public_id = authorization_row.public_id
+              AND item_row.plan_offering_id = authorization_row.plan_offering_id
+              AND item_row.configuration_snapshot_hash = authorization_row.configuration_snapshot_hash
+              AND service_row.order_id = order_row.id
+              AND service_row.order_item_id = item_row.id
+              AND service_row.user_id = order_row.user_id
+              AND BINARY NEW.correlation_id = BINARY service_row.creation_correlation_id
+              AND NEW.user_id = order_row.user_id
+              AND NEW.operation_generation = 0
+              AND NEW.target_remote_identity_generation = 0
+              AND NEW.target_lifecycle_version = 0
+              AND NEW.request_key_hash IS NULL
+              AND NEW.operation_key = CONCAT('initial-provision:', item_row.public_id)
+              AND NEW.state = 'queued'
+              AND NEW.state_version = 1
+              AND order_row.state = 'authorized'
+              AND order_row.state_version = 0
+              AND order_row.total_amount_irr = 0
+              AND order_row.settled_amount_irr IS NULL
+              AND order_row.paid_at IS NULL
+            LIMIT 1
+            FOR UPDATE;
         END IF;
 
-        SELECT id INTO locked_settlement_id FROM purchase_settlements WHERE id = authority_settlement_id LIMIT 1 FOR UPDATE;
-        SELECT id INTO locked_intent_id FROM payment_intents WHERE id = authority_intent_id LIMIT 1 FOR UPDATE;
-
-        SELECT order_row.id INTO valid_authority_order_id
-        FROM orders order_row
-        INNER JOIN order_items item_row ON item_row.id = NEW.order_item_id
-        INNER JOIN quotes quote_row ON quote_row.id = item_row.source_quote_id AND quote_row.action_snapshot = 'purchase'
-        INNER JOIN service_subscriptions service_row ON service_row.id = NEW.service_subscription_id
-        INNER JOIN purchase_settlements settlement_row ON settlement_row.id = order_row.purchase_settlement_id
-        INNER JOIN payment_intents intent_row ON intent_row.id = order_row.payment_intent_id
-        WHERE order_row.id = NEW.order_id
-          AND settlement_row.id = locked_settlement_id
-          AND intent_row.id = locked_intent_id
-          AND item_row.order_id = order_row.id
-          AND service_row.order_id = order_row.id
-          AND service_row.order_item_id = item_row.id
-          AND service_row.user_id = order_row.user_id
-          AND NEW.user_id = order_row.user_id
-          AND BINARY NEW.correlation_id = BINARY service_row.creation_correlation_id
-          AND NEW.operation_generation = 0
-          AND NEW.target_remote_identity_generation = 0
-          AND NEW.target_lifecycle_version = 0
-          AND NEW.request_key_hash IS NULL
-          AND NEW.operation_key = CONCAT('initial-provision:', item_row.public_id)
-          AND NEW.state = 'queued'
-          AND NEW.state_version = 1
-          AND order_row.source_type = 'purchase'
-          AND order_row.state = 'paid'
-          AND order_row.state_version = 1
-          AND settlement_row.payment_intent_id = intent_row.id
-          AND intent_row.purpose = 'purchase'
-          AND intent_row.wallet_account_id IS NULL
-          AND intent_row.state = 'captured'
-          AND intent_row.captured_at IS NOT NULL
-        LIMIT 1 FOR UPDATE;
-
         IF valid_authority_order_id IS NULL THEN
-            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Initial Provisioning Operation requires a purchase Quote and matching captured authority.';
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Initial Provisioning Operation requires one exact Order and Service authority.';
         END IF;
     ELSEIF COALESCE(@app_service_mutation_authority, '') = 'service_paid_mutation_queue_v1' THEN
         IF NEW.operation_type NOT IN ('renew','add_data','add_days','add_data_days')

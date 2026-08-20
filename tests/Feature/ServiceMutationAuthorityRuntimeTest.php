@@ -76,7 +76,11 @@ use RuntimeException;
 use Tests\TestCase;
 use Throwable;
 
-if (PHP_SAPI === 'cli' && ($argv[1] ?? null) === '--service-mutation-contention-worker') {
+$serviceMutationWorkerMode = $argv[1] ?? null;
+if (PHP_SAPI === 'cli' && in_array($serviceMutationWorkerMode, [
+    '--service-mutation-contention-worker',
+    '--service-paid-mutation-contention-worker',
+], true)) {
     $app = require dirname(__DIR__, 2).'/bootstrap/app.php';
     $app->make(Kernel::class)->bootstrap();
     $decoded = base64_decode($argv[2] ?? '', true);
@@ -101,12 +105,18 @@ if (PHP_SAPI === 'cli' && ($argv[1] ?? null) === '--service-mutation-contention-
     }
 
     try {
-        $receipt = $app->make(ServiceMutationQueueService::class)->queue(
-            $payload['service_public_id'],
-            ServiceMutationType::from($payload['operation_type']),
-            $payload['request_key'],
-            $payload['correlation_id'],
-        );
+        $receipt = $serviceMutationWorkerMode === '--service-paid-mutation-contention-worker'
+            ? $app->make(ServicePurchaseMutationQueueService::class)->queueFromSettlement(
+                $payload['purchase_settlement_public_id'],
+                $payload['request_key'],
+                $payload['correlation_id'],
+            )
+            : $app->make(ServiceMutationQueueService::class)->queue(
+                $payload['service_public_id'],
+                ServiceMutationType::from($payload['operation_type']),
+                $payload['request_key'],
+                $payload['correlation_id'],
+            );
         echo json_encode([
             'ok' => true,
             'result' => [
@@ -139,6 +149,7 @@ final class ServiceMutationTestPanelAdapter implements PanelAdapter
         'authoritative_username_lookup',
         'create_service',
         'add_data_allowance',
+        'atomic_service_entitlements',
         'delete',
         'reset_usage',
         'rotate_subscription_link',
@@ -715,6 +726,7 @@ final class ServiceMutationAuthorityRuntimeTest extends TestCase
 
             self::assertTrue(DB::getSchemaBuilder()->hasColumn('quotes', 'action_snapshot'));
             self::assertTrue(DB::getSchemaBuilder()->hasTable('service_paid_mutation_authorities'));
+            $this->assertPaidMutationDatabaseSurface();
 
             $paidMutationMigration->down();
             $quoteMigration->down();
@@ -733,6 +745,7 @@ SQL);
 
             self::assertFalse(DB::getSchemaBuilder()->hasColumn('quotes', 'action_snapshot'));
             self::assertFalse(DB::getSchemaBuilder()->hasTable('service_paid_mutation_authorities'));
+            $this->assertLegacyMutationDatabaseSurface();
         } finally {
             $quoteMigration->up();
             $paidMutationMigration->up();
@@ -740,6 +753,7 @@ SQL);
 
         self::assertTrue(DB::getSchemaBuilder()->hasColumn('quotes', 'action_snapshot'));
         self::assertTrue(DB::getSchemaBuilder()->hasTable('service_paid_mutation_authorities'));
+        $this->assertPaidMutationDatabaseSurface();
         $operationGuard = DB::selectOne(<<<'SQL'
 SELECT ACTION_STATEMENT AS action_statement
 FROM information_schema.TRIGGERS
@@ -766,6 +780,7 @@ SQL);
     public function test_paid_service_package_quotes_snapshot_all_supported_actions(): void
     {
         $scenario = $this->scenario('paid-package-quotes');
+        $this->verifySyntheticTargetCapability($scenario['target_id'], 'atomic_service_entitlements', 'paid-package-quotes');
         $cases = [
             ['aq-renew-30d', QuoteAction::Renew, 600_000, 30, null],
             ['aq-extra-10gb', QuoteAction::AddData, 500_000, null, 10 * 1024 * 1024 * 1024],
@@ -788,6 +803,23 @@ SQL);
             self::assertSame($durationDays, $quote->servicePackage->durationDays);
             self::assertSame($dataBytes, $quote->servicePackage->dataBytes);
         }
+    }
+
+    public function test_combined_paid_package_requires_explicit_verified_atomic_capability_before_quote(): void
+    {
+        $scenario = $this->scenario('paid-combined-capability');
+
+        try {
+            $this->paidPackageQuote($scenario, 'aq-extra-5gb-7d', 'paid-combined-capability-denied');
+            self::fail('Combined paid package must not be quoted without explicit verified atomic entitlement capability.');
+        } catch (DomainException $exception) {
+            self::assertSame('Service target does not have the verified capability required by this package.', $exception->getMessage());
+        }
+
+        $this->verifySyntheticTargetCapability($scenario['target_id'], 'atomic_service_entitlements', 'paid-combined-capability');
+        $quote = $this->paidPackageQuote($scenario, 'aq-extra-5gb-7d', 'paid-combined-capability-allowed');
+
+        self::assertSame(QuoteAction::AddDataDays, $quote->action);
     }
 
     public function test_paid_add_data_reuses_settled_purchase_and_replays_one_remote_mutation(): void
@@ -856,6 +888,45 @@ SQL);
         $terminalReplay = $this->mutationExecutor()->execute($queue->operationPublicId);
         self::assertTrue($terminalReplay->replayed);
         self::assertSame(['lookup_remote_id', 'add_data_allowance'], $scenario['adapter']->calls);
+    }
+
+    public function test_concurrent_paid_queue_replays_one_settlement_authority_and_generation(): void
+    {
+        $scenario = $this->scenario('paid-queue-contention');
+        $quote = $this->paidPackageQuote($scenario, 'aq-extra-10gb', 'paid-queue-contention');
+        $settlement = $this->capturePaidPackageQuote($quote, 'paid-queue-contention');
+        $this->app->make(PurchaseOrderService::class)->createFromSettlement(
+            $settlement->settlementPublicId,
+            $this->purchaseOrderCorrelation('paid-queue-contention-order'),
+        );
+        $payloads = [
+            [
+                'purchase_settlement_public_id' => $settlement->settlementPublicId,
+                'request_key' => 'paid-queue-contention-request-0001',
+                'correlation_id' => $this->purchaseOrderCorrelation('paid-queue-contention-a'),
+            ],
+            [
+                'purchase_settlement_public_id' => $settlement->settlementPublicId,
+                'request_key' => 'paid-queue-contention-request-0001',
+                'correlation_id' => $this->purchaseOrderCorrelation('paid-queue-contention-b'),
+            ],
+        ];
+
+        $results = $this->runConcurrentMutationQueues($payloads, '--service-paid-mutation-contention-worker');
+
+        self::assertTrue((bool) ($results[0]['ok'] ?? false), json_encode($results, JSON_THROW_ON_ERROR));
+        self::assertTrue((bool) ($results[1]['ok'] ?? false), json_encode($results, JSON_THROW_ON_ERROR));
+        self::assertSame(1, $results[0]['result']['generation']);
+        self::assertSame(1, $results[1]['result']['generation']);
+        self::assertSame($results[0]['result']['operation_public_id'], $results[1]['result']['operation_public_id']);
+        $replayStatuses = [
+            (bool) $results[0]['result']['replayed'],
+            (bool) $results[1]['result']['replayed'],
+        ];
+        sort($replayStatuses);
+        self::assertSame([false, true], $replayStatuses);
+        self::assertSame(1, DB::table('service_paid_mutation_authorities')->count());
+        self::assertSame(1, (int) DB::table('service_subscriptions')->where('id', $scenario['service_id'])->value('mutation_generation'));
     }
 
     public function test_wallet_funded_paid_addon_reuses_purchase_settlement_authority(): void
@@ -1011,6 +1082,7 @@ SQL);
     public function test_combined_paid_addon_fails_before_boundary_without_atomic_adapter(): void
     {
         $scenario = $this->scenario('paid-combined-non-atomic');
+        $this->verifySyntheticTargetCapability($scenario['target_id'], 'atomic_service_entitlements', 'paid-combined-non-atomic');
         $quote = $this->paidPackageQuote($scenario, 'aq-extra-5gb-7d', 'paid-combined-non-atomic');
         $settlement = $this->capturePaidPackageQuote($quote, 'paid-combined-non-atomic');
         $this->app->make(PurchaseOrderService::class)->createFromSettlement(
@@ -1332,8 +1404,14 @@ SQL);
      * @param  list<array<string, string>>  $payloads
      * @return list<array<string, mixed>>
      */
-    private function runConcurrentMutationQueues(array $payloads): array
-    {
+    private function runConcurrentMutationQueues(
+        array $payloads,
+        string $workerMode = '--service-mutation-contention-worker',
+    ): array {
+        if (! in_array($workerMode, ['--service-mutation-contention-worker', '--service-paid-mutation-contention-worker'], true)) {
+            throw new RuntimeException('Unsupported Service mutation contention worker mode.');
+        }
+
         $workers = [];
         try {
             foreach ($payloads as $payload) {
@@ -1343,7 +1421,7 @@ SQL);
                     '-d',
                     'pcov.enabled=0',
                     __FILE__,
-                    '--service-mutation-contention-worker',
+                    $workerMode,
                     base64_encode(json_encode($payload, JSON_THROW_ON_ERROR)),
                 ], [
                     0 => ['pipe', 'r'],
@@ -1450,6 +1528,75 @@ SQL);
         }
     }
 
+    private function assertPaidMutationDatabaseSurface(): void
+    {
+        $operationInsertGuard = $this->triggerStatement('provisioning_operations_insert_guard');
+        $serviceUpdateGuard = $this->triggerStatement('service_subscriptions_update_guard');
+
+        self::assertStringContainsString('add_data_days', $this->checkConstraintClause('provisioning_operations', 'provisioning_operations_type_chk'));
+        self::assertStringContainsString('add_data_days', $this->checkConstraintClause('provisioning_operations', 'provisioning_operations_provisioning_exact_text_chk'));
+        self::assertStringContainsString('service_paid_mutation_queue_v1', $operationInsertGuard);
+        self::assertStringContainsString('order_source_authorizations', $operationInsertGuard);
+        self::assertStringContainsString("action_snapshot = 'purchase'", $operationInsertGuard);
+        self::assertStringContainsString('service_paid_mutation_queue_v1', $serviceUpdateGuard);
+        self::assertStringContainsString('service_operational_authority_capability', $serviceUpdateGuard);
+        self::assertStringContainsString('add_data_days', $this->triggerStatement('provisioning_remote_effect_events_insert_guard'));
+        self::assertStringContainsString('add_data_days', $this->triggerStatement('provisioning_operations_delivery_effect_insert_guard'));
+        self::assertStringContainsString('add_data_days', $this->triggerStatement('provisioning_operation_histories_insert_guard'));
+        self::assertFalse($this->triggerExists('provisioning_operations_paid_mutation_upgrade_fence'));
+    }
+
+    private function assertLegacyMutationDatabaseSurface(): void
+    {
+        $operationInsertGuard = $this->triggerStatement('provisioning_operations_insert_guard');
+        $serviceUpdateGuard = $this->triggerStatement('service_subscriptions_update_guard');
+
+        self::assertStringNotContainsString('add_data_days', $this->checkConstraintClause('provisioning_operations', 'provisioning_operations_type_chk'));
+        self::assertStringNotContainsString('add_data_days', $this->checkConstraintClause('provisioning_operations', 'provisioning_operations_provisioning_exact_text_chk'));
+        self::assertStringNotContainsString('service_paid_mutation_queue_v1', $operationInsertGuard);
+        self::assertStringContainsString('order_source_authorizations', $operationInsertGuard);
+        self::assertStringNotContainsString('service_paid_mutation_queue_v1', $serviceUpdateGuard);
+        self::assertStringContainsString('service_operational_authority_capability', $serviceUpdateGuard);
+        self::assertStringNotContainsString('add_data_days', $this->triggerStatement('provisioning_remote_effect_events_insert_guard'));
+        self::assertStringNotContainsString('add_data_days', $this->triggerStatement('provisioning_operations_delivery_effect_insert_guard'));
+        self::assertStringNotContainsString('add_data_days', $this->triggerStatement('provisioning_operation_histories_insert_guard'));
+        self::assertFalse($this->triggerExists('provisioning_operations_paid_mutation_upgrade_fence'));
+    }
+
+    private function checkConstraintClause(string $table, string $constraint): string
+    {
+        $row = DB::selectOne(
+            'SELECT CHECK_CLAUSE AS check_clause FROM information_schema.CHECK_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME = ? AND CONSTRAINT_NAME = ?',
+            [$table, $constraint],
+        );
+        self::assertNotNull($row);
+        self::assertIsString($row->check_clause);
+
+        return $row->check_clause;
+    }
+
+    private function triggerStatement(string $trigger): string
+    {
+        $row = DB::selectOne(
+            'SELECT ACTION_STATEMENT AS action_statement FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = DATABASE() AND TRIGGER_NAME = ?',
+            [$trigger],
+        );
+        self::assertNotNull($row);
+        self::assertIsString($row->action_statement);
+
+        return $row->action_statement;
+    }
+
+    private function triggerExists(string $trigger): bool
+    {
+        $row = DB::selectOne(
+            'SELECT COUNT(*) AS aggregate FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = DATABASE() AND TRIGGER_NAME = ?',
+            [$trigger],
+        );
+
+        return $row !== null && (int) $row->aggregate === 1;
+    }
+
     private function simulateClaim(ServiceMutationReceipt $queue): void
     {
         $operation = DB::table('provisioning_operations')->where('public_id', $queue->operationPublicId)->first([
@@ -1488,6 +1635,21 @@ SQL);
         self::assertNotNull($service);
 
         return $service;
+    }
+
+    private function verifySyntheticTargetCapability(int $targetId, string $capability, string $suffix): void
+    {
+        $now = $this->purchaseOrderTimestamp();
+        $evidenceHash = hash('sha256', 'service-mutation-synthetic-capability-'.$suffix.'-'.$capability);
+        DB::table('panel_target_capabilities')->insert([
+            'panel_service_target_id' => $targetId,
+            'capability_code' => $capability,
+            'verification_status' => 'verified',
+            'evidence_hash' => $evidenceHash,
+            'verified_at' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
     }
 
     private function makeOfferingOperational(int $offeringId, int $userId, string $suffix): int
