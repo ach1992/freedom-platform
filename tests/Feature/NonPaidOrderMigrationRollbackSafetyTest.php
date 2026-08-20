@@ -40,6 +40,7 @@ final class NonPaidOrderMigrationRollbackSafetyTest extends TestCase
         try {
             $this->truncateDatabaseTables();
             $this->serviceOperationalMigration()->up();
+            $this->paidServiceMutationMigration()->up();
         } finally {
             parent::tearDown();
         }
@@ -340,6 +341,14 @@ final class NonPaidOrderMigrationRollbackSafetyTest extends TestCase
         ]);
 
         return $userId;
+    }
+
+    private function paidServiceMutationMigration(): Migration
+    {
+        /** @var Migration $migration */
+        $migration = require database_path('migrations/2026_08_20_000110_enable_paid_service_mutation_authority.php');
+
+        return $migration;
     }
 
     private function serviceOperationalMigration(): Migration

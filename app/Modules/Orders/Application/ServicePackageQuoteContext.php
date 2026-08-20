@@ -9,6 +9,7 @@ use InvalidArgumentException;
 final readonly class ServicePackageQuoteContext
 {
     public string $servicePublicId;
+
     public string $packageCode;
 
     public function __construct(string $servicePublicId, string $packageCode)

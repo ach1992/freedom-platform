@@ -19,17 +19,6 @@ use App\Modules\Orders\Application\QuoteService;
 use App\Modules\Orders\Application\ServicePackageQuoteContext;
 use App\Modules\Orders\Domain\QuoteAction;
 use App\Modules\Orders\Domain\QuoteOverrideSource;
-use App\Modules\Payments\Application\Contracts\PaymentEvidence;
-use App\Modules\Payments\Application\Contracts\PaymentEvidenceAuthority;
-use App\Modules\Payments\Application\Contracts\PaymentTransactionStatus;
-use App\Modules\Payments\Application\Contracts\ProviderOperationOutcome;
-use App\Modules\Payments\Application\Contracts\VerifiedPaymentEvent;
-use App\Modules\Payments\Application\PurchasePaymentIntentService;
-use App\Modules\Payments\Application\PurchaseRefundService;
-use App\Modules\Payments\Application\PurchaseSettlementReceipt;
-use App\Modules\Payments\Application\PurchaseSettlementService;
-use App\Modules\Payments\Application\PurchaseWalletPaymentService;
-use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
 use App\Modules\Panels\Application\Contracts\DataAllowanceMode;
 use App\Modules\Panels\Application\Contracts\PanelAdapter;
 use App\Modules\Panels\Application\Contracts\PanelAdapterFactory;
@@ -44,6 +33,17 @@ use App\Modules\Panels\Application\PanelAdapterRegistry;
 use App\Modules\Panels\Application\PanelAdapterSession;
 use App\Modules\Panels\Application\PanelCredentialPolicy;
 use App\Modules\Panels\Domain\PanelProviderType;
+use App\Modules\Payments\Application\Contracts\PaymentEvidence;
+use App\Modules\Payments\Application\Contracts\PaymentEvidenceAuthority;
+use App\Modules\Payments\Application\Contracts\PaymentTransactionStatus;
+use App\Modules\Payments\Application\Contracts\ProviderOperationOutcome;
+use App\Modules\Payments\Application\Contracts\VerifiedPaymentEvent;
+use App\Modules\Payments\Application\PurchasePaymentIntentService;
+use App\Modules\Payments\Application\PurchaseRefundService;
+use App\Modules\Payments\Application\PurchaseSettlementReceipt;
+use App\Modules\Payments\Application\PurchaseSettlementService;
+use App\Modules\Payments\Application\PurchaseWalletPaymentService;
+use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
 use App\Modules\Provisioning\Application\InitialProvisioningExecutor;
 use App\Modules\Provisioning\Application\InitialProvisioningQueueService;
 use App\Modules\Provisioning\Application\ServiceMutationExecutor;
@@ -718,6 +718,18 @@ final class ServiceMutationAuthorityRuntimeTest extends TestCase
 
             $paidMutationMigration->down();
             $quoteMigration->down();
+            $legacyRefundGuard = DB::selectOne(<<<'SQL'
+SELECT ACTION_STATEMENT AS action_statement
+FROM information_schema.TRIGGERS
+WHERE TRIGGER_SCHEMA = DATABASE()
+  AND TRIGGER_NAME = 'purchase_refunds_provisioning_invalidation'
+LIMIT 1
+SQL);
+            self::assertNotNull($legacyRefundGuard);
+            self::assertStringContainsString(
+                'Initial provisioning remote-effect fence is active',
+                (string) $legacyRefundGuard->action_statement,
+            );
 
             self::assertFalse(DB::getSchemaBuilder()->hasColumn('quotes', 'action_snapshot'));
             self::assertFalse(DB::getSchemaBuilder()->hasTable('service_paid_mutation_authorities'));
@@ -737,6 +749,18 @@ LIMIT 1
 SQL);
         self::assertNotNull($operationGuard);
         self::assertStringContainsString('service_paid_mutation_queue_v1', (string) $operationGuard->action_statement);
+
+        $refundGuard = DB::selectOne(<<<'SQL'
+SELECT ACTION_STATEMENT AS action_statement
+FROM information_schema.TRIGGERS
+WHERE TRIGGER_SCHEMA = DATABASE()
+  AND TRIGGER_NAME = 'purchase_refunds_provisioning_invalidation'
+LIMIT 1
+SQL);
+        self::assertNotNull($refundGuard);
+        self::assertStringContainsString('Initial provisioning remote-effect fence is active', (string) $refundGuard->action_statement);
+        self::assertStringContainsString('Paid Service mutation remote-effect fence is active', (string) $refundGuard->action_statement);
+        self::assertStringContainsString('service_paid_mutation_authorities', (string) $refundGuard->action_statement);
     }
 
     public function test_paid_service_package_quotes_snapshot_all_supported_actions(): void

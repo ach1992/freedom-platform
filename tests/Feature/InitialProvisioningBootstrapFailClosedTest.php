@@ -84,9 +84,15 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
         $nonPaidAuthorityMigration = require database_path('migrations/2026_08_19_000120_activate_non_paid_order_authority.php');
         /** @var Migration $serviceOperationalMigration */
         $serviceOperationalMigration = require database_path('migrations/2026_08_19_000140_enable_service_operational_authority.php');
+        /** @var Migration $servicePackageQuoteMigration */
+        $servicePackageQuoteMigration = require database_path('migrations/2026_08_20_000100_enable_service_package_quotes.php');
+        /** @var Migration $paidServiceMutationMigration */
+        $paidServiceMutationMigration = require database_path('migrations/2026_08_20_000110_enable_paid_service_mutation_authority.php');
 
         try {
             // Remove newer descendant authorities before replaying the historical provisioning bootstrap chain.
+            $paidServiceMutationMigration->down();
+            $servicePackageQuoteMigration->down();
             $serviceOperationalMigration->down();
             $deliveryEffectMigration->down();
             $deliveryAttemptMigration->down();
@@ -277,6 +283,8 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
             $nonPaidInvalidationMigration->up();
             $nonPaidAuthorityMigration->up();
             $serviceOperationalMigration->up();
+            $servicePackageQuoteMigration->up();
+            $paidServiceMutationMigration->up();
         }
     }
 

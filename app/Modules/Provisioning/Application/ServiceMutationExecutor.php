@@ -286,7 +286,7 @@ final readonly class ServiceMutationExecutor
     }
 
     /**
-     * @param MutationOperation $operation
+     * @param  MutationOperation  $operation
      * @return MutationOperation
      */
     private function rejectFinanciallyInvalidatedOn(Connection $connection, object $operation): object
@@ -918,7 +918,7 @@ final readonly class ServiceMutationExecutor
 
     private function timestamp(): string
     {
-        return $this->clock->now()->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s.u');
+        return $this->clock->now()->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s.u');
     }
 
     private function resultCode(string $value): string

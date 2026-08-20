@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -106,8 +107,12 @@ final class ServiceMutationAuthorityMigrationTest extends TestCase
     {
         $migration = require database_path('migrations/2026_08_17_000300_enable_service_mutation_authority.php');
         $nonPaidAuthorityMigration = require database_path('migrations/2026_08_19_000120_activate_non_paid_order_authority.php');
+        $servicePackageQuoteMigration = require database_path('migrations/2026_08_20_000100_enable_service_package_quotes.php');
+        $paidServiceMutationMigration = require database_path('migrations/2026_08_20_000110_enable_paid_service_mutation_authority.php');
 
         try {
+            $paidServiceMutationMigration->down();
+            $servicePackageQuoteMigration->down();
             $migration->down();
 
             $this->assertFalse(Schema::hasColumn('service_subscriptions', 'lifecycle_state'));
@@ -132,6 +137,8 @@ final class ServiceMutationAuthorityMigrationTest extends TestCase
             // authority explicitly so this historical rollback test cannot leak predecessor guards.
             $migration->up();
             $nonPaidAuthorityMigration->up();
+            $servicePackageQuoteMigration->up();
+            $paidServiceMutationMigration->up();
         }
 
         $this->assertServiceMutationAuthoritySurface();
@@ -156,6 +163,7 @@ final class ServiceMutationAuthorityMigrationTest extends TestCase
             $this->assertStringNotContainsString('Service Subscription zero-cost source authority shape is invalid.', $serviceInsertGuard);
         } finally {
             $migration->up();
+            $this->paidServiceMutationMigration()->up();
         }
 
         $this->assertServiceMutationAuthoritySurface();
@@ -214,6 +222,7 @@ final class ServiceMutationAuthorityMigrationTest extends TestCase
         } finally {
             $this->restoreRemoteEffectEventGuard();
             $migration->up();
+            $this->paidServiceMutationMigration()->up();
         }
 
         $reopenedFence = $this->triggerStatement('orders_unimplemented_source_insert_guard');
@@ -245,6 +254,11 @@ final class ServiceMutationAuthorityMigrationTest extends TestCase
         ] as $requiredGuard) {
             self::assertStringContainsString($requiredGuard, $source);
         }
+    }
+
+    private function paidServiceMutationMigration(): Migration
+    {
+        return require database_path('migrations/2026_08_20_000110_enable_paid_service_mutation_authority.php');
     }
 
     private function installFailClosedRemoteEffectReadinessFault(): void

@@ -215,5 +215,4 @@ trait QuoteServiceReadsQuotes
             $row->service_required_capability_code_snapshot,
         );
     }
-
 }

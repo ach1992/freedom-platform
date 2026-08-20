@@ -252,8 +252,7 @@ SQL);
             return;
         }
 
-        $paidJoin = '';
-        DB::unprepared(str_replace('__PAID_MUTATION_MATCH__', $paidJoin, <<<'SQL'
+        DB::unprepared(<<<'SQL'
 CREATE OR REPLACE TRIGGER purchase_refunds_provisioning_invalidation
 AFTER INSERT ON purchase_refunds
 FOR EACH ROW
@@ -272,16 +271,16 @@ BEGIN
     FOR UPDATE;
 
     IF locked_order_id IS NOT NULL THEN
-        SELECT operation_row.id INTO running_operation_id
-        FROM provisioning_operations operation_row
-        WHERE operation_row.order_id = locked_order_id
-          AND operation_row.state = 'running'
-          AND (operation_row.operation_type = 'initial_provision'__PAID_MUTATION_MATCH__)
+        SELECT id INTO running_operation_id
+        FROM provisioning_operations
+        WHERE order_id = locked_order_id
+          AND operation_type = 'initial_provision'
+          AND state = 'running'
         LIMIT 1
         FOR UPDATE;
 
         IF running_operation_id IS NOT NULL THEN
-            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Provisioning remote-effect fence is active; retry refund after reconciliation.';
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Initial provisioning remote-effect fence is active; retry refund after reconciliation.';
         END IF;
     END IF;
 
@@ -311,7 +310,6 @@ BEGIN
         );
     END IF;
 END
-SQL));
+SQL);
     }
-
 };

@@ -4,6 +4,7 @@ FOR EACH ROW
 BEGIN
     DECLARE locked_order_id BIGINT UNSIGNED DEFAULT NULL;
     DECLARE running_operation_id BIGINT UNSIGNED DEFAULT NULL;
+    DECLARE running_operation_type VARCHAR(32) DEFAULT NULL;
     DECLARE existing_invalidation_id BIGINT UNSIGNED DEFAULT NULL;
     DECLARE existing_purchase_refund_id BIGINT UNSIGNED DEFAULT NULL;
     DECLARE valid_existing_refund_count INT DEFAULT 0;
@@ -16,7 +17,8 @@ BEGIN
     FOR UPDATE;
 
     IF locked_order_id IS NOT NULL THEN
-        SELECT operation_row.id INTO running_operation_id
+        SELECT operation_row.id, operation_row.operation_type
+        INTO running_operation_id, running_operation_type
         FROM provisioning_operations operation_row
         WHERE operation_row.order_id = locked_order_id
           AND operation_row.state = 'running'
@@ -32,7 +34,11 @@ BEGIN
         FOR UPDATE;
 
         IF running_operation_id IS NOT NULL THEN
-            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Provisioning remote-effect fence is active; retry refund after reconciliation.';
+            IF running_operation_type = 'initial_provision' THEN
+                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Initial provisioning remote-effect fence is active; retry refund after reconciliation.';
+            ELSE
+                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Paid Service mutation remote-effect fence is active; retry refund after reconciliation.';
+            END IF;
         END IF;
     END IF;
 
