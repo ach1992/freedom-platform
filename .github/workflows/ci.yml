@@ -23,7 +23,7 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref_name }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -52,80 +52,107 @@ jobs:
     if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.draft == false) }}
     runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
     outputs:
-      application: ${{ steps.mode.outputs.application }}
-      full_ci: ${{ steps.mode.outputs.full_ci }}
-      tier: ${{ steps.mode.outputs.tier }}
+      profile: ${{ steps.plan.outputs.profile }}
+      project_control: ${{ steps.plan.outputs.project_control }}
+      planning: ${{ steps.plan.outputs.planning }}
+      control_plane: ${{ steps.plan.outputs.control_plane }}
+      style: ${{ steps.plan.outputs.style }}
+      static_analysis: ${{ steps.plan.outputs.static_analysis }}
+      dependencies: ${{ steps.plan.outputs.dependencies }}
+      integration: ${{ steps.plan.outputs.integration }}
+      runtime: ${{ steps.plan.outputs.runtime }}
+      operations: ${{ steps.plan.outputs.operations }}
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
 
-      - name: Determine CI tier
-        id: mode
+      - name: Reject stale pull request revision
+        if: ${{ github.event_name == 'pull_request' }}
+        shell: bash
+        env:
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EXPECTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          current_head=$(git ls-remote origin "refs/heads/$HEAD_REF" | awk 'NR == 1 {print $1}')
+          current_base=$(git ls-remote origin "refs/heads/$BASE_REF" | awk 'NR == 1 {print $1}')
+          test -n "$current_head" || { echo "Current PR head ref is unavailable: $HEAD_REF" >&2; exit 1; }
+          test -n "$current_base" || { echo "Current PR base ref is unavailable: $BASE_REF" >&2; exit 1; }
+          if [[ "$current_head" != "$EXPECTED_HEAD_SHA" || "$current_base" != "$EXPECTED_BASE_SHA" ]]; then
+            echo 'Pull request revision drifted before validation started.' >&2
+            echo "Expected head/base: $EXPECTED_HEAD_SHA / $EXPECTED_BASE_SHA" >&2
+            echo "Current head/base: $current_head / $current_base" >&2
+            exit 1
+          fi
+
+      - name: Determine validation plan
+        id: plan
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p build/evidence/preflight
-
-          application=false
-          [[ -f composer.json ]] && application=true
-
-          full_ci=true
-          tier=FULL
-          reason='push, manual run, or main-target PR requires full validation'
-          : > build/evidence/preflight/changed-files.txt
+          changed=build/evidence/preflight/changed-files.txt
+          plan=build/evidence/preflight/validation-plan.txt
+          : > "$changed"
 
           if [[ "$GITHUB_EVENT_NAME" == 'pull_request' && "${{ github.base_ref }}" == 'develop/v1.0.0-completion' ]]; then
             if git rev-parse --verify HEAD^1 >/dev/null 2>&1; then
-              git diff --name-only HEAD^1 HEAD | sort -u > build/evidence/preflight/changed-files.txt
-
-              control_only=true
-              if [[ ! -s build/evidence/preflight/changed-files.txt ]]; then
-                control_only=false
-                reason='unable to prove a non-empty control-only diff'
-              fi
-
-              while IFS= read -r path; do
-                [[ -n "$path" ]] || continue
-                case "$path" in
-                  README.md|AGENTS.md|CONTRIBUTING.md|.gitignore|.github/CODEOWNERS|.github/dependabot.yml|.github/pull_request_template.md|.github/ISSUE_TEMPLATE/*|docs/*|evidence/README.md)
-                    ;;
-                  *)
-                    control_only=false
-                    reason="application, runtime, test, CI, or unknown path changed: $path"
-                    break
-                    ;;
-                esac
-              done < build/evidence/preflight/changed-files.txt
-
-              if [[ "$control_only" == 'true' ]]; then
-                full_ci=false
-                tier=CONTROL
-                reason='all changed paths are in the explicit documentation/governance-only allowlist'
-              fi
-            else
-              reason='PR merge parent unavailable; defaulting safely to full validation'
+              git diff --name-only HEAD^1 HEAD | sort -u > "$changed"
             fi
           fi
 
-          if [[ "$application" != 'true' ]]; then
-            full_ci=false
-            tier=CONTROL
-            reason='application manifest is absent; application gates are not applicable'
+          bash scripts/ci/classify-validation-plan.sh "$changed" > "$plan"
+
+          profile=FULL
+          project_control=true
+          planning=true
+          control_plane=true
+          style=true
+          static_analysis=true
+          dependencies=true
+          integration=true
+          runtime=true
+          operations=true
+
+          while IFS='=' read -r key value; do
+            case "$key" in
+              profile|project_control|planning|control_plane|style|static_analysis|dependencies|integration|runtime|operations)
+                printf -v "$key" '%s' "$value"
+                ;;
+              *)
+                echo "Validation classifier returned an unknown key: $key" >&2
+                exit 1
+                ;;
+            esac
+          done < "$plan"
+
+          # Independent self-modifying-CI guard: these surfaces may not suppress their own control validation.
+          if grep -Eq '^(\.github/workflows/ci\.yml|\.github/workflows/staging-readiness\.yml|scripts/ci/(classify-validation-plan|test-validation-plan|verify-project-control|verify-readonly-staging-workflow)\.sh)$' "$changed"; then
+            project_control=true
+            control_plane=true
           fi
 
-          echo "application=$application" >> "$GITHUB_OUTPUT"
-          echo "full_ci=$full_ci" >> "$GITHUB_OUTPUT"
-          echo "tier=$tier" >> "$GITHUB_OUTPUT"
+          for key in profile project_control planning control_plane style static_analysis dependencies integration runtime operations; do
+            printf '%s=%s\n' "$key" "${!key}" >> "$GITHUB_OUTPUT"
+          done
 
           {
             echo '# CI preflight'
             echo
-            echo "- Mode: $([[ "$application" == 'true' ]] && echo application || echo planning)"
-            echo "- Tier: $tier"
-            echo "- Full application gates: $full_ci"
-            echo "- Reason: $reason"
+            echo "- Profile: $profile"
+            echo "- Project control: $project_control"
+            echo "- Planning consistency: $planning"
+            echo "- Control-plane validation: $control_plane"
+            echo "- PHP style: $style"
+            echo "- PHP/static architecture: $static_analysis"
+            echo "- Dependency/license policy: $dependencies"
+            echo "- MariaDB/Redis integration: $integration"
+            echo "- Docker/runtime contract: $runtime"
+            echo "- Operational syntax: $operations"
           } > build/evidence/preflight/summary.md
 
       - name: Validate repository contract
@@ -133,7 +160,13 @@ jobs:
         run: |
           set -euo pipefail
           required_repository_files=(
+            composer.json
+            composer.lock
+            artisan
             docker-compose.ci.yml
+            scripts/ci/classify-validation-plan.sh
+            scripts/ci/test-validation-plan.sh
+            scripts/ci/verify-readonly-staging-workflow.sh
             scripts/ci/verify-planning.sh
             scripts/ci/verify-project-control.sh
           )
@@ -141,18 +174,18 @@ jobs:
             test -s "$path" || { echo "Required repository control file is missing or empty: $path" >&2; exit 1; }
           done
 
-          if [[ "${{ steps.mode.outputs.full_ci }}" == 'true' ]]; then
-            docker compose -f docker-compose.ci.yml config --quiet
-          fi
+          for script in scripts/ci/classify-validation-plan.sh scripts/ci/test-validation-plan.sh scripts/ci/verify-readonly-staging-workflow.sh scripts/ci/verify-planning.sh scripts/ci/verify-project-control.sh; do
+            bash -n "$script"
+          done
 
-          if [[ -f composer.json ]]; then
-            test -s composer.lock || { echo 'composer.lock is mandatory once composer.json exists.' >&2; exit 1; }
-            test -s artisan || { echo 'artisan is mandatory once composer.json exists.' >&2; exit 1; }
-            for script in ci:static ci:test ci:forbidden-patterns ci:architecture ci:licenses; do
-              jq -e --arg script "$script" '.scripts[$script] | type == "string" or type == "array"' composer.json >/dev/null \
-                || { echo "Missing mandatory Composer script: $script" >&2; exit 1; }
-            done
-          fi
+          for script in ci:static ci:test ci:forbidden-patterns ci:architecture ci:licenses; do
+            jq -e --arg script "$script" '.scripts[$script] | type == "string" or type == "array"' composer.json >/dev/null \
+              || { echo "Missing mandatory Composer script: $script" >&2; exit 1; }
+          done
+
+      - name: Validate Docker runtime contract
+        if: ${{ steps.plan.outputs.runtime == 'true' }}
+        run: docker compose -f docker-compose.ci.yml config --quiet
 
       - name: Record runner facts
         shell: bash
@@ -166,12 +199,30 @@ jobs:
             echo "- UTC: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
           } >> build/evidence/preflight/summary.md
 
-      - name: Verify planning and project control
+      - name: Verify planning consistency
+        if: ${{ steps.plan.outputs.planning == 'true' }}
         shell: bash
         run: |
           set -o pipefail
           bash scripts/ci/verify-planning.sh 2>&1 | tee build/evidence/preflight/planning.log
+
+      - name: Verify project and control-plane contract
+        if: ${{ steps.plan.outputs.project_control == 'true' }}
+        shell: bash
+        run: |
+          set -o pipefail
           bash scripts/ci/verify-project-control.sh 2>&1 | tee build/evidence/preflight/project-control.log
+
+      - name: Verify changed CI/read-only control mechanisms
+        if: ${{ steps.plan.outputs.control_plane == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          changed=build/evidence/preflight/changed-files.txt
+          if [[ ! -s "$changed" ]] || grep -Eq '^(\.github/workflows/(ci|staging-readiness)\.yml|scripts/ci/(classify-validation-plan|test-validation-plan|verify-project-control|verify-readonly-staging-workflow)\.sh)$' "$changed"; then
+            bash scripts/ci/test-validation-plan.sh
+            bash scripts/ci/verify-readonly-staging-workflow.sh
+          fi
 
       - name: Upload diagnostic preflight evidence
         if: ${{ failure() || github.event_name == 'workflow_dispatch' }}
@@ -184,10 +235,10 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-  static:
-    name: PHP static and dependency quality
+  quality:
+    name: PHP style and static architecture
     needs: preflight
-    if: ${{ needs.preflight.outputs.application == 'true' && needs.preflight.outputs.full_ci == 'true' }}
+    if: ${{ needs.preflight.outputs.static_analysis == 'true' || (needs.preflight.outputs.style == 'true' && needs.preflight.outputs.integration != 'true') }}
     runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -203,6 +254,7 @@ jobs:
           php artisan package:discover --ansi
 
       - name: Code style
+        if: ${{ needs.preflight.outputs.style == 'true' }}
         shell: bash
         run: |
           set -o pipefail
@@ -214,35 +266,66 @@ jobs:
           git diff -- . | tee build/evidence/static/pint.diff
           exit 1
 
-      - name: Static, architecture, dependency, and license policy
+      - name: Static and architecture policy
+        if: ${{ needs.preflight.outputs.static_analysis == 'true' }}
         timeout-minutes: 15
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p build/evidence/static build/evidence/dependencies
-          composer validate --strict --no-check-publish 2>&1 | tee build/evidence/static/composer-validate.log
+          mkdir -p build/evidence/static
           php -d memory_limit=1G vendor/bin/phpstan analyse --no-progress --error-format=table --memory-limit=1G 2>&1 | tee build/evidence/static/phpstan.log
           bash scripts/ci/forbidden-patterns.sh 2>&1 | tee build/evidence/static/forbidden-patterns.log
           bash scripts/ci/architecture.sh 2>&1 | tee build/evidence/static/architecture.log
+
+      - name: Upload diagnostic quality evidence
+        if: ${{ failure() || github.event_name == 'workflow_dispatch' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: quality-evidence-${{ github.run_id }}
+          path: build/evidence/static
+          if-no-files-found: warn
+          retention-days: 14
+
+  dependencies:
+    name: Dependency and license policy
+    needs: preflight
+    if: ${{ needs.preflight.outputs.dependencies == 'true' }}
+    runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Use runner PHP toolchain
+        timeout-minutes: 2
+        run: bash scripts/ci/bootstrap-self-hosted-toolchain.sh no-coverage
+
+      - name: Install locked dependencies
+        timeout-minutes: 10
+        run: composer install --no-interaction --prefer-dist --no-progress --no-scripts
+
+      - name: Validate dependency contract
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/evidence/dependencies
+          composer validate --strict --no-check-publish 2>&1 | tee build/evidence/dependencies/composer-validate.log
           composer audit --locked --abandoned=fail --format=json > build/evidence/dependencies/audit.json
           bash scripts/ci/licenses.sh
           test -s build/evidence/dependencies/licenses.json
 
-      - name: Upload diagnostic static evidence
+      - name: Upload diagnostic dependency evidence
         if: ${{ failure() || github.event_name == 'workflow_dispatch' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: static-evidence-${{ github.run_id }}
-          path: |
-            build/evidence/static
-            build/evidence/dependencies
+          name: dependency-evidence-${{ github.run_id }}
+          path: build/evidence/dependencies
           if-no-files-found: warn
           retention-days: 14
 
   integration:
     name: MariaDB 10.11 and Redis tests
     needs: preflight
-    if: ${{ needs.preflight.outputs.application == 'true' && needs.preflight.outputs.full_ci == 'true' }}
+    if: ${{ needs.preflight.outputs.integration == 'true' }}
     runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
     env:
       MARIADB_VERSION: '10.11'
@@ -259,15 +342,20 @@ jobs:
           [[ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' ]] && mode=coverage
           bash scripts/ci/bootstrap-self-hosted-toolchain.sh "$mode"
 
-      - name: Start disposable dependencies
-        timeout-minutes: 5
-        run: docker compose -f docker-compose.ci.yml up -d --wait
-
       - name: Install locked dependencies
         timeout-minutes: 10
         run: |
           composer install --no-interaction --prefer-dist --no-progress --no-scripts
           php artisan package:discover --ansi
+
+      - name: Code style for integration-only PHP changes
+        if: ${{ needs.preflight.outputs.style == 'true' && needs.preflight.outputs.static_analysis != 'true' }}
+        shell: bash
+        run: php vendor/bin/pint --test
+
+      - name: Start disposable dependencies
+        timeout-minutes: 5
+        run: docker compose -f docker-compose.ci.yml up -d --wait
 
       - name: Run complete automated suite
         timeout-minutes: 30
@@ -316,6 +404,61 @@ jobs:
             build/evidence/services
           if-no-files-found: warn
           retention-days: 14
+
+  operations:
+    name: Operational syntax and entrypoints
+    needs: preflight
+    if: ${{ needs.preflight.outputs.operations == 'true' }}
+    runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+
+      - name: Validate affected operational entrypoints
+        shell: bash
+        run: |
+          set -euo pipefail
+          files=$(mktemp)
+          trap 'rm -f "$files"' EXIT
+
+          if [[ "$GITHUB_EVENT_NAME" == 'pull_request' && "${{ github.base_ref }}" == 'develop/v1.0.0-completion' ]] && git rev-parse --verify HEAD^1 >/dev/null 2>&1; then
+            git diff --name-only HEAD^1 HEAD | grep -E '^(deploy/|scripts/ci/(PasarGuardLiveAcceptance\.php|pasarguard-live-acceptance\.php|pasarguard-readonly-probe\.php)$)' > "$files" || true
+          else
+            find deploy -type f -print > "$files"
+            printf '%s\n' scripts/ci/PasarGuardLiveAcceptance.php scripts/ci/pasarguard-live-acceptance.php scripts/ci/pasarguard-readonly-probe.php >> "$files"
+          fi
+
+          while IFS= read -r file; do
+            [[ -f "$file" ]] || continue
+            case "$file" in
+              *.sh)
+                bash -n "$file"
+                ;;
+              *.php)
+                "$PHP_ROOT/bin/php" -l "$file" >/dev/null
+                ;;
+              *.conf)
+                awk '''
+                  /^[[:space:]]*($|;|#)/ { next }
+                  /^\[[^][]+\]$/ { next }
+                  /^[A-Za-z0-9_.-]+=.*/ { next }
+                  { print "Invalid supervisor-style config line " NR ": " $0 > "/dev/stderr"; exit 1 }
+                ''' "$file"
+                ;;
+              *.cron)
+                awk '''
+                  /^[[:space:]]*($|#)/ { next }
+                  NF >= 6 { next }
+                  { print "Invalid cron entry line " NR ": " $0 > "/dev/stderr"; exit 1 }
+                ''' "$file"
+                ;;
+              *)
+                echo "No operational validator exists for changed file: $file" >&2
+                exit 1
+                ;;
+            esac
+          done < "$files"
 
   secrets:
     name: Secret scan

@@ -27,6 +27,10 @@ required_files=(
     .github/ISSUE_TEMPLATE/task.yml
     .github/pull_request_template.md
     .github/workflows/ci.yml
+    scripts/ci/classify-validation-plan.sh
+    scripts/ci/test-validation-plan.sh
+    scripts/ci/verify-readonly-staging-workflow.sh
+
 )
 
 for path in "${required_files[@]}"; do
@@ -46,8 +50,8 @@ grep -F 'Chat history is optional context, never project state.' AGENTS.md >/dev
     || fail 'AGENTS.md must make repository/GitHub state recoverable without Chat'
 grep -F 'Only two branches are long-lived' AGENTS.md >/dev/null \
     || fail 'AGENTS.md must define the two long-lived branch policy'
-grep -F 'MariaDB `10.11` is the mandatory normal integration target.' AGENTS.md >/dev/null \
-    || fail 'AGENTS.md must define the primary MariaDB CI target'
+grep -F 'MariaDB `10.11` is the mandatory normal integration target when' AGENTS.md >/dev/null \
+    || fail 'AGENTS.md must define when the primary MariaDB integration target applies'
 grep -F 'does not track implementation status' docs/05-architecture-overview.md >/dev/null \
     || fail 'architecture document must reject mutable implementation status'
 grep -F 'no implementation status' docs/01-authoritative-requirements.md >/dev/null \
@@ -147,8 +151,8 @@ for workflow in "${workflow_files[@]}"; do
     [[ "$found_runner" == true ]] || fail "workflow has no explicit self-hosted runs-on selector: $workflow"
 done
 
-# Generic CI protects the self-hosted runner, keeps Drafts quiet, defaults unknown changes to FULL,
-# and uses MariaDB 10.11 as the single mandatory normal integration target.
+# Generic CI protects the self-hosted runner, keeps Drafts quiet, computes a fail-safe validation plan,
+# cancels superseded PR work, and uses MariaDB 10.11 only when application/database integration applies.
 ci=.github/workflows/ci.yml
 grep -A16 -F 'pull_request:' "$ci" | grep -F 'develop/v1.0.0-completion' >/dev/null \
     || fail 'generic CI does not validate Worker PRs targeting the integration branch'
@@ -160,19 +164,75 @@ grep -F 'github.event.pull_request.head.repo.full_name == github.repository' "$c
     || fail 'generic CI lacks same-repository protection for the self-hosted runner'
 grep -F 'github.event.pull_request.draft == false' "$ci" >/dev/null \
     || fail 'generic CI does not suppress automatic self-hosted jobs for Draft PRs'
-grep -F 'full_ci=true' "$ci" >/dev/null \
-    || fail 'generic CI must default changes to FULL validation'
-grep -F "github.base_ref }}\" == 'develop/v1.0.0-completion'" "$ci" >/dev/null \
-    || fail 'generic CI may not downgrade PRs unless they target the integration branch'
+grep -F 'scripts/ci/classify-validation-plan.sh' "$ci" >/dev/null \
+    || fail 'generic CI must use the shared validation-plan classifier'
+grep -F 'github.event.pull_request.number || github.ref' "$ci" >/dev/null \
+    || fail 'generic CI concurrency must use pull-request identity for supersession'
+grep -A3 -F 'concurrency:' "$ci" | grep -F 'cancel-in-progress: true' >/dev/null \
+    || fail 'generic CI must cancel superseded runs'
+grep -F 'EXPECTED_HEAD_SHA' "$ci" >/dev/null \
+    || fail 'generic CI lacks exact PR head/base freshness validation'
+grep -F 'needs.preflight.outputs.integration == ' "$ci" >/dev/null \
+    || fail 'MariaDB/Redis integration must be gated by the computed validation plan'
+grep -F 'needs.preflight.outputs.dependencies == ' "$ci" >/dev/null \
+    || fail 'dependency/license policy must be independently gated by the validation plan'
+grep -F 'needs.preflight.outputs.operations == ' "$ci" >/dev/null \
+    || fail 'operational validation must be independently gated by the validation plan'
 grep -F "MARIADB_VERSION: '10.11'" "$ci" >/dev/null \
-    || fail 'normal FULL CI must use MariaDB 10.11'
+    || fail 'applicable integration CI must use MariaDB 10.11'
 if grep -Eq 'matrix:|mariadb_version:.*11\.4|MARIADB_VERSION:.*11\.4' "$ci"; then
     fail 'normal CI must not require a MariaDB compatibility matrix on every PR'
 fi
-grep -F '.github/ISSUE_TEMPLATE/*|docs/*|evidence/README.md)' "$ci" >/dev/null \
-    || fail 'generic CI lacks the explicit control-only allowlist'
 if grep -Eq 'secrets\.(PASARGUARD|STAGING|TELEGRAM|NOWPAYMENTS|ZARINPAL|MELLI|KAVENEGAR)' "$ci"; then
     fail 'generic CI references protected provider/staging/runtime secrets'
 fi
+
+# Superseded read-only checks may be cancelled; a guarded provider mutation must not be interrupted mid-effect.
+grep -A3 -F 'concurrency:' .github/workflows/staging-readiness.yml | grep -F 'cancel-in-progress: true' >/dev/null \
+    || fail 'staging-readiness must cancel superseded manual runs'
+grep -A3 -F 'concurrency:' .github/workflows/provider-readiness.yml | grep -F 'cancel-in-progress: true' >/dev/null \
+    || fail 'provider-readiness must cancel superseded read-only runs'
+grep -A3 -F 'concurrency:' .github/workflows/provider-live-acceptance.yml | grep -F 'cancel-in-progress: false' >/dev/null \
+    || fail 'provider live mutation must not be cancelled mid-effect'
+
+# Provider workflow safeguards remain explicit and fail closed.
+provider_readonly=.github/workflows/provider-readiness.yml
+grep -F 'workflow_dispatch:' "$provider_readonly" >/dev/null \
+    || fail 'provider-readiness must remain manual-only'
+grep -F 'READ_ONLY_PROVIDER_CHECK' "$provider_readonly" >/dev/null \
+    || fail 'provider-readiness lost its explicit read-only confirmation sentinel'
+grep -F 'contents: read' "$provider_readonly" >/dev/null \
+    || fail 'provider-readiness must retain read-only repository permissions'
+grep -F 'pasarguard-readonly-probe.php' "$provider_readonly" >/dev/null \
+    || fail 'provider-readiness must use the bounded read-only probe'
+grep -F 'secrets.PASARGUARD_TEST_ORIGIN' "$provider_readonly" >/dev/null \
+    || fail 'provider-readiness lost the protected origin input'
+grep -F 'secrets.PASARGUARD_TEST_API_KEY' "$provider_readonly" >/dev/null \
+    || fail 'provider-readiness lost the protected API-key input'
+if grep -Eq '^[[:space:]]*(push|pull_request|pull_request_target|schedule|workflow_run):' "$provider_readonly"; then
+    fail 'provider-readiness may not gain an automatic trigger'
+fi
+if grep -Eq '^[[:space:]]*environment:' "$provider_readonly"; then
+    fail 'provider-readiness must not bind the protected live-mutation environment'
+fi
+if grep -Eq '^[[:space:]]+(sudo|curl|wget|ssh|scp|rsync|git[[:space:]]+push|php[[:space:]]+artisan|composer[[:space:]]+(install|update)|docker[[:space:]]+compose[[:space:]]+(up|down|run|exec|start|stop|restart|pull|build))([[:space:]]|$)|pasarguard-live-acceptance\.php' "$provider_readonly"; then
+    fail 'provider-readiness contains a command outside its bounded read-only provider contract'
+fi
+
+provider_live=.github/workflows/provider-live-acceptance.yml
+grep -F 'workflow_dispatch:' "$provider_live" >/dev/null \
+    || fail 'provider live acceptance must remain manual-only'
+grep -F 'contents: read' "$provider_live" >/dev/null \
+    || fail 'provider live acceptance must retain read-only repository permissions'
+grep -F 'MUTATE_DISPOSABLE_PASARGUARD_V5_2_1' "$provider_live" >/dev/null \
+    || fail 'provider live acceptance lost its explicit mutation sentinel'
+grep -F 'name: provider-live-acceptance' "$provider_live" >/dev/null \
+    || fail 'provider live acceptance must retain the protected environment gate'
+grep -F 'pasarguard-live-acceptance.php' "$provider_live" >/dev/null \
+    || fail 'provider live acceptance must retain the guarded acceptance entrypoint'
+grep -F 'secrets.PASARGUARD_TEST_ORIGIN' "$provider_live" >/dev/null \
+    || fail 'provider live acceptance lost the protected origin input'
+grep -F 'secrets.PASARGUARD_TEST_API_KEY' "$provider_live" >/dev/null \
+    || fail 'provider live acceptance lost the protected API-key input'
 
 printf '%s\n' 'Project control verification passed.'
