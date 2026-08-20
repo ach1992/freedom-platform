@@ -87,7 +87,6 @@ SQL);
             throw new RuntimeException($unavailableMessage);
         }
 
-        /** @var literal-string $sql */
         return $sql;
     }
 
