@@ -668,16 +668,10 @@ final readonly class ServiceMutationExecutor
             return;
         }
 
-        $expectedStates = match ($type) {
-            ServiceMutationType::Suspend => ['active'],
-            ServiceMutationType::Activate => ['suspended'],
-            ServiceMutationType::Delete => ['active', 'suspended'],
-            default => throw new RuntimeException('Service mutation type does not have a lifecycle transition.'),
-        };
-        $nextState = match ($type) {
-            ServiceMutationType::Suspend => 'suspended',
-            ServiceMutationType::Activate => 'active',
-            ServiceMutationType::Delete => 'retired',
+        [$expectedStates, $nextState] = match ($type) {
+            ServiceMutationType::Suspend => [['active'], 'suspended'],
+            ServiceMutationType::Activate => [['suspended'], 'active'],
+            ServiceMutationType::Delete => [['active', 'suspended'], 'retired'],
             default => throw new RuntimeException('Service mutation type does not have a lifecycle transition.'),
         };
         $updates = [

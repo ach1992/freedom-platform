@@ -304,6 +304,7 @@ final readonly class ServicePurchaseMutationQueueService
             throw new RuntimeException('Paid Service mutation operation disappeared.');
         }
 
+        /** @var PaidOperation $row */
         return $row;
     }
 

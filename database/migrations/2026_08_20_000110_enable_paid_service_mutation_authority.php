@@ -79,7 +79,7 @@ SQL);
         $this->dropPaidUpgradeFence();
     }
 
-    /** @return literal-string */
+    /** @return non-empty-string */
     private function sqlFile(string $relativePath, string $unavailableMessage): string
     {
         $sql = file_get_contents(database_path($relativePath));
@@ -87,7 +87,6 @@ SQL);
             throw new RuntimeException($unavailableMessage);
         }
 
-        /** @var literal-string $sql */
         return $sql;
     }
 
