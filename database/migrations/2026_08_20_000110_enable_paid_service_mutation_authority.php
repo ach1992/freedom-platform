@@ -41,16 +41,16 @@ SQL);
 SQL);
         $this->replaceProvisioningOperationChecks(true);
 
-        DB::unprepared(file_get_contents(database_path('sql/service-paid-mutation-authority/service-update-guard.sql')) ?: throw new RuntimeException('Paid mutation Service update guard SQL is unavailable.'));
-        DB::unprepared(file_get_contents(database_path('sql/service-paid-mutation-authority/operation-update-guard.sql')) ?: throw new RuntimeException('Paid mutation operation update guard SQL is unavailable.'));
-        DB::unprepared(file_get_contents(database_path('sql/service-paid-mutation-authority/remote-effect-event-insert-guard.sql')) ?: throw new RuntimeException('Paid mutation remote-effect event guard SQL is unavailable.'));
-        DB::unprepared(file_get_contents(database_path('sql/service-paid-mutation-authority/delivery-effect-operation-insert-guard.sql')) ?: throw new RuntimeException('Paid mutation delivery fence SQL is unavailable.'));
-        DB::unprepared(file_get_contents(database_path('sql/service-paid-mutation-authority/history-insert-guard.sql')) ?: throw new RuntimeException('Paid mutation history guard SQL is unavailable.'));
+        DB::unprepared($this->sqlFile('sql/service-paid-mutation-authority/service-update-guard.sql', 'Paid mutation Service update guard SQL is unavailable.'));
+        DB::unprepared($this->sqlFile('sql/service-paid-mutation-authority/operation-update-guard.sql', 'Paid mutation operation update guard SQL is unavailable.'));
+        DB::unprepared($this->sqlFile('sql/service-paid-mutation-authority/remote-effect-event-insert-guard.sql', 'Paid mutation remote-effect event guard SQL is unavailable.'));
+        DB::unprepared($this->sqlFile('sql/service-paid-mutation-authority/delivery-effect-operation-insert-guard.sql', 'Paid mutation delivery fence SQL is unavailable.'));
+        DB::unprepared($this->sqlFile('sql/service-paid-mutation-authority/history-insert-guard.sql', 'Paid mutation history guard SQL is unavailable.'));
         $this->createAuthorityGuards();
         $this->createRefundEffectFence(true);
 
         // Final enabling DDL. Everything that can consume a paid mutation is composed first.
-        DB::unprepared(file_get_contents(database_path('sql/service-paid-mutation-authority/operation-insert-guard.sql')) ?: throw new RuntimeException('Paid mutation operation guard SQL is unavailable.'));
+        DB::unprepared($this->sqlFile('sql/service-paid-mutation-authority/operation-insert-guard.sql', 'Paid mutation operation guard SQL is unavailable.'));
         $this->dropPaidUpgradeFence();
     }
 
@@ -64,11 +64,12 @@ SQL);
             && DB::table('provisioning_operations')->whereIn('operation_type', self::PAID_OPERATION_TYPES)->exists()) {
             throw new RuntimeException('Cannot roll back paid Service mutation authority while paid mutation Operation evidence exists.');
         }
+        $this->assertServicePackageQuoteAuthorityCanRollBack();
 
         $this->installPaidUpgradeFence();
         $this->createRefundEffectFence(false);
-        DB::unprepared(file_get_contents(database_path('sql/service-mutation-authority/remote-effect-event-insert-guard.sql')) ?: throw new RuntimeException('Prior Service mutation remote-effect event guard SQL is unavailable.'));
-        DB::unprepared(file_get_contents(database_path('migrations/support/service_delivery_effect_authority/05_mutation_insert_fence.sql')) ?: throw new RuntimeException('Prior Service mutation delivery fence SQL is unavailable.'));
+        DB::unprepared($this->sqlFile('sql/service-mutation-authority/remote-effect-event-insert-guard.sql', 'Prior Service mutation remote-effect event guard SQL is unavailable.'));
+        DB::unprepared($this->sqlFile('migrations/support/service_delivery_effect_authority/05_mutation_insert_fence.sql', 'Prior Service mutation delivery fence SQL is unavailable.'));
         $this->restoreNonPaidOperationAuthority();
         DB::unprepared('DROP TRIGGER IF EXISTS service_paid_mutation_authorities_delete_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS service_paid_mutation_authorities_update_guard');
@@ -76,6 +77,36 @@ SQL);
         Schema::dropIfExists('service_paid_mutation_authorities');
         $this->replaceProvisioningOperationChecks(false);
         $this->dropPaidUpgradeFence();
+    }
+
+    /** @return literal-string */
+    private function sqlFile(string $relativePath, string $unavailableMessage): string
+    {
+        $sql = file_get_contents(database_path($relativePath));
+        if (! is_string($sql) || $sql === '') {
+            throw new RuntimeException($unavailableMessage);
+        }
+
+        /** @var literal-string $sql */
+        return $sql;
+    }
+
+    private function assertServicePackageQuoteAuthorityCanRollBack(): void
+    {
+        if (Schema::hasColumn('quotes', 'action_snapshot')
+            && DB::table('quotes')->where('action_snapshot', '<>', 'purchase')->exists()) {
+            throw new RuntimeException('Cannot roll back paid Service mutation authority while Service-operation Quotes exist.');
+        }
+
+        foreach (['agent_pricing_rule_versions', 'agent_pricing_resolutions', 'pricing_rule_versions', 'pricing_rule_resolutions'] as $table) {
+            if (Schema::hasTable($table) && DB::table($table)->where('action', 'add_data_days')->exists()) {
+                throw new RuntimeException('Cannot roll back paid Service mutation authority while combined-action pricing evidence exists.');
+            }
+        }
+        if (Schema::hasTable('payment_method_eligibility_decisions')
+            && DB::table('payment_method_eligibility_decisions')->where('action_snapshot', 'add_data_days')->exists()) {
+            throw new RuntimeException('Cannot roll back paid Service mutation authority while combined-action payment decisions exist.');
+        }
     }
 
     private function restoreNonPaidOperationAuthority(): void
@@ -330,7 +361,7 @@ SQL);
     private function createRefundEffectFence(bool $includePaidMutations): void
     {
         if ($includePaidMutations) {
-            DB::unprepared(file_get_contents(database_path('sql/service-paid-mutation-authority/refund-invalidation-guard.sql')) ?: throw new RuntimeException('Paid mutation refund guard SQL is unavailable.'));
+            DB::unprepared($this->sqlFile('sql/service-paid-mutation-authority/refund-invalidation-guard.sql', 'Paid mutation refund guard SQL is unavailable.'));
 
             return;
         }

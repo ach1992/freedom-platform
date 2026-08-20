@@ -777,6 +777,27 @@ SQL);
         self::assertStringContainsString('service_paid_mutation_authorities', (string) $refundGuard->action_statement);
     }
 
+    public function test_paid_authority_rollback_refuses_to_strand_service_package_quote_authority(): void
+    {
+        $scenario = $this->scenario('paid-rollback-quote-fence');
+        $this->paidPackageQuote($scenario, 'aq-extra-10gb', 'paid-rollback-quote-fence');
+
+        /** @var Migration $paidMutationMigration */
+        $paidMutationMigration = require database_path('migrations/2026_08_20_000110_enable_paid_service_mutation_authority.php');
+
+        try {
+            $paidMutationMigration->down();
+            self::fail('Paid mutation authority rollback must fail before DDL when Service package Quote authority cannot roll back.');
+        } catch (RuntimeException $exception) {
+            self::assertSame(
+                'Cannot roll back paid Service mutation authority while Service-operation Quotes exist.',
+                $exception->getMessage(),
+            );
+        }
+
+        $this->assertPaidMutationDatabaseSurface();
+    }
+
     public function test_paid_service_package_quotes_snapshot_all_supported_actions(): void
     {
         $scenario = $this->scenario('paid-package-quotes');

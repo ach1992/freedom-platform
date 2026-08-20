@@ -672,11 +672,13 @@ final readonly class ServiceMutationExecutor
             ServiceMutationType::Suspend => ['active'],
             ServiceMutationType::Activate => ['suspended'],
             ServiceMutationType::Delete => ['active', 'suspended'],
+            default => throw new RuntimeException('Service mutation type does not have a lifecycle transition.'),
         };
         $nextState = match ($type) {
             ServiceMutationType::Suspend => 'suspended',
             ServiceMutationType::Activate => 'active',
             ServiceMutationType::Delete => 'retired',
+            default => throw new RuntimeException('Service mutation type does not have a lifecycle transition.'),
         };
         $updates = [
             'lifecycle_state' => $nextState,
@@ -895,7 +897,10 @@ final readonly class ServiceMutationExecutor
         $connection->statement('SET @app_service_mutation_generation = NULL');
     }
 
-    /** @param MutationOperation $operation @param PaidTarget $target */
+    /**
+     * @param  MutationOperation  $operation
+     * @param  PaidTarget  $target
+     */
     private function setPaidTargetAuthority(Connection $connection, object $operation, array $target): void
     {
         $connection->statement('SET @app_service_paid_mutation_target_authority = ?', ['service_paid_mutation_target_v1']);

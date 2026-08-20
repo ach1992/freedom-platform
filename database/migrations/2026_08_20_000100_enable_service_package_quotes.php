@@ -379,9 +379,11 @@ SQL);
 
     private function replacePaymentIntentInsertGuard(bool $legacy = false): void
     {
+        /** @var literal-string $actions */
         $actions = $legacy ? "decision_row.action_snapshot = 'purchase'" : 'decision_row.action_snapshot = quote_row.action_snapshot';
         DB::unprepared('DROP TRIGGER IF EXISTS payment_intents_insert_guard');
-        DB::unprepared(str_replace('__ACTION_AUTHORITY__', $actions, <<<'SQL'
+        /** @var literal-string $guardSql */
+        $guardSql = str_replace('__ACTION_AUTHORITY__', $actions, <<<'SQL'
 CREATE TRIGGER payment_intents_insert_guard
 BEFORE INSERT ON payment_intents
 FOR EACH ROW
@@ -443,7 +445,8 @@ BEGIN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Payment intent purpose is unsupported.';
     END IF;
 END
-SQL));
+SQL);
+        DB::unprepared($guardSql);
     }
 
     private function restoreLegacyQuoteInsertGuard(): void

@@ -22,6 +22,7 @@ use RuntimeException;
  * @phpstan-type PaidItem object{id:int|string,public_id:string,order_id:int|string,source_quote_id:int|string|null}
  * @phpstan-type PackageQuote object{id:int|string,public_id:string,user_id:int|string,action_snapshot:string,service_subscription_id:int|string|null,service_subscription_public_id:?string,service_target_id_snapshot:int|string|null,service_remote_identity_generation_snapshot:int|string|null,service_lifecycle_version_snapshot:int|string|null,service_package_code_snapshot:?string,service_package_duration_days_snapshot:int|string|null,service_package_data_bytes_snapshot:int|string|null}
  * @phpstan-type Service object{id:int|string,public_id:string,user_id:int|string,service_target_id:int|string|null,remote_service_id:?string,provisioned_at:?string,lifecycle_state:string,lifecycle_version:int|string,remote_identity_generation:int|string,mutation_generation:int|string,remote_deleted_at:?string}
+ * @phpstan-type PaidOperation object{id:int|string,public_id:string,operation_type:string,service_subscription_id:int|string,state:string,state_version:int|string,operation_generation:int|string,target_remote_identity_generation:int|string,target_lifecycle_version:int|string,request_key_hash:?string}
  */
 final readonly class ServicePurchaseMutationQueueService
 {
@@ -292,6 +293,7 @@ final readonly class ServicePurchaseMutationQueueService
         $connection->statement('SET @app_service_mutation_correlation_id = NULL');
     }
 
+    /** @return PaidOperation */
     private function operation(Connection $connection, int $id): object
     {
         $row = $connection->table('provisioning_operations')->where('id', $id)->lockForUpdate()->first([
@@ -305,6 +307,10 @@ final readonly class ServicePurchaseMutationQueueService
         return $row;
     }
 
+    /**
+     * @param  Service  $service
+     * @param  PaidOperation  $operation
+     */
     private function receipt(object $service, object $operation, bool $replayed): ServiceMutationReceipt
     {
         $type = ServiceMutationType::tryFrom((string) $operation->operation_type)

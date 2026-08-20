@@ -102,12 +102,7 @@ trait QuoteServiceServicePackages
             throw new DomainException('Service package operation is not enabled for customer/agent execution.');
         }
 
-        $requiredCapabilities = match ($action) {
-            QuoteAction::Renew, QuoteAction::AddDays => ['update_expiry'],
-            QuoteAction::AddData => ['add_data_allowance'],
-            QuoteAction::AddDataDays => ['update_expiry', 'add_data_allowance', 'atomic_service_entitlements'],
-            QuoteAction::Purchase => throw new RuntimeException('Purchase is not a Service package action.'),
-        };
+        $requiredCapabilities = $this->requiredCapabilities($action);
         if (is_string($policy->required_capability_code) && $policy->required_capability_code !== '') {
             $requiredCapabilities[] = $policy->required_capability_code;
         }
@@ -156,5 +151,16 @@ trait QuoteServiceServicePackages
             'discount_eligible' => (bool) $package->discount_eligible && (bool) $policy->discount_eligible,
             'required_capability_code' => $policy->required_capability_code,
         ];
+    }
+
+    /** @return list<string> */
+    private function requiredCapabilities(QuoteAction $action): array
+    {
+        return match ($action) {
+            QuoteAction::Renew, QuoteAction::AddDays => ['update_expiry'],
+            QuoteAction::AddData => ['add_data_allowance'],
+            QuoteAction::AddDataDays => ['update_expiry', 'add_data_allowance', 'atomic_service_entitlements'],
+            QuoteAction::Purchase => throw new RuntimeException('Purchase is not a Service package action.'),
+        };
     }
 }
