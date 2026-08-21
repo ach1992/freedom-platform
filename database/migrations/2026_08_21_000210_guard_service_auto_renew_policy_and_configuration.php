@@ -190,12 +190,18 @@ BEGIN
     DECLARE config_changed BOOLEAN DEFAULT FALSE;
     DECLARE version_changed BOOLEAN DEFAULT FALSE;
     DECLARE settled_price_changed BOOLEAN DEFAULT FALSE;
+    DECLARE observation_changed BOOLEAN DEFAULT FALSE;
 
     SET config_changed = NOT (OLD.enabled <=> NEW.enabled)
         OR NOT (OLD.renewal_package_id <=> NEW.renewal_package_id)
         OR NOT (OLD.accepted_price_irr <=> NEW.accepted_price_irr);
     SET version_changed = NOT (OLD.configuration_version <=> NEW.configuration_version);
     SET settled_price_changed = NOT (OLD.last_settled_price_irr <=> NEW.last_settled_price_irr);
+    SET observation_changed = NOT (OLD.observed_expires_at <=> NEW.observed_expires_at)
+        OR NOT (OLD.expiry_observed_at <=> NEW.expiry_observed_at)
+        OR NOT (OLD.observed_expiry_evidence_hash <=> NEW.observed_expiry_evidence_hash)
+        OR NOT (OLD.observed_expiry_source <=> NEW.observed_expiry_source)
+        OR NOT (OLD.observed_remote_identity_generation <=> NEW.observed_remote_identity_generation);
 
     IF OLD.service_subscription_id <> NEW.service_subscription_id OR OLD.created_at <> NEW.created_at THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew Service configuration identity is immutable.';
@@ -270,6 +276,38 @@ BEGIN
                  AND pi.captured_at IS NOT NULL
            ) THEN
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew settled price requires captured settlement authority.';
+        END IF;
+    END IF;
+
+    IF NOT version_changed AND observation_changed THEN
+        IF COALESCE(@app_service_auto_renew_authority, '') <> 'service_auto_renew_observation_v1'
+           OR COALESCE(CAST(@app_service_auto_renew_scope_id AS UNSIGNED), 0) <> NEW.id
+           OR BINARY COALESCE(@app_service_auto_renew_correlation_id, '') <> BINARY NEW.last_correlation_id
+           OR NEW.observed_expiry_source <> 'paid_mutation'
+           OR NOT EXISTS (
+               SELECT 1
+               FROM service_auto_renew_attempts a
+               JOIN service_paid_mutation_authorities m ON m.provisioning_operation_id = a.provisioning_operation_id
+               JOIN provisioning_operations op ON op.id = a.provisioning_operation_id
+               JOIN service_subscriptions s ON s.id = a.service_subscription_id
+               WHERE a.id = COALESCE(CAST(@app_service_auto_renew_attempt_id AS UNSIGNED), 0)
+                 AND a.auto_renew_configuration_id = NEW.id
+                 AND a.service_subscription_id = NEW.service_subscription_id
+                 AND a.state = 'mutation_queued'
+                 AND BINARY a.correlation_id = BINARY NEW.last_correlation_id
+                 AND op.state = 'succeeded'
+                 AND m.service_subscription_id = NEW.service_subscription_id
+                 AND m.action = 'renew'
+                 AND m.target_expires_at = NEW.observed_expires_at
+                 AND m.quoted_remote_identity_generation = NEW.observed_remote_identity_generation
+                 AND s.remote_identity_generation = NEW.observed_remote_identity_generation
+                 AND BINARY LOWER(NEW.observed_expiry_evidence_hash) = BINARY LOWER(SHA2(CONCAT(
+                     'paid_mutation|', m.id, '|', a.provisioning_operation_id, '|',
+                     DATE_FORMAT(m.target_expires_at, '%Y-%m-%d %H:%i:%s.%f'), '|',
+                     m.quoted_remote_identity_generation
+                 ), 256))
+           ) THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew expiry observation requires successful paid mutation authority.';
         END IF;
     END IF;
 
