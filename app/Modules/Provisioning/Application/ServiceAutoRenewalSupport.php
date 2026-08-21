@@ -14,6 +14,7 @@ use Throwable;
 
 trait ServiceAutoRenewalSupport
 {
+    /** @param ServiceAutoRenewConfigurationFacts $facts */
     private function cycleKey(object $facts): string
     {
         if (! $this->hasCompleteCycleEvidence($facts)) {
@@ -32,6 +33,7 @@ trait ServiceAutoRenewalSupport
         ]));
     }
 
+    /** @param ServiceAutoRenewConfigurationFacts $facts */
     private function hasCompleteCycleEvidence(object $facts): bool
     {
         return $facts->observed_expires_at !== null
@@ -40,6 +42,7 @@ trait ServiceAutoRenewalSupport
             && $facts->observed_remote_identity_generation !== null;
     }
 
+    /** @param ServiceAutoRenewConfigurationFacts $facts */
     private function runtimeEligible(object $facts): bool
     {
         return (bool) $facts->enabled
@@ -58,11 +61,13 @@ trait ServiceAutoRenewalSupport
             && (int) $facts->observed_remote_identity_generation === (int) $facts->remote_identity_generation;
     }
 
+    /** @return ServiceAutoRenewConfigurationFacts */
     private function configurationFacts(int $configurationId): object
     {
         return $this->configurationFactsOn($this->database->connection(), $configurationId, false);
     }
 
+    /** @return ServiceAutoRenewConfigurationFacts */
     private function configurationFactsOn(Connection $connection, int $configurationId, bool $lock): object
     {
         $query = $connection->table('service_auto_renew_configurations as c')
@@ -91,11 +96,13 @@ trait ServiceAutoRenewalSupport
         return $row;
     }
 
+    /** @return ServiceAutoRenewAttemptRow */
     private function attempt(int $attemptId): object
     {
         return $this->attemptOn($this->database->connection(), $attemptId, false);
     }
 
+    /** @return ServiceAutoRenewAttemptRow */
     private function attemptOn(Connection $connection, int $attemptId, bool $lock): object
     {
         $query = $connection->table('service_auto_renew_attempts')->where('id', $attemptId);
@@ -116,11 +123,13 @@ trait ServiceAutoRenewalSupport
         return $row;
     }
 
+    /** @return ServiceAutoRenewAttemptRow|null */
     private function attemptForCycle(string $cycleKey): ?object
     {
         return $this->attemptForCycleOn($this->database->connection(), $cycleKey, false);
     }
 
+    /** @return ServiceAutoRenewAttemptRow|null */
     private function attemptForCycleOn(Connection $connection, string $cycleKey, bool $lock): ?object
     {
         $query = $connection->table('service_auto_renew_attempts')->where('cycle_key', $cycleKey);
@@ -139,6 +148,10 @@ trait ServiceAutoRenewalSupport
         return $row;
     }
 
+    /**
+     * @param ServiceAutoRenewAttemptRow $attempt
+     * @param ServiceAutoRenewConfigurationFacts $facts
+     */
     private function attemptMatchesConfigurationFacts(object $attempt, object $facts): bool
     {
         return (int) $attempt->auto_renew_configuration_id === (int) $facts->config_id
@@ -152,7 +165,7 @@ trait ServiceAutoRenewalSupport
     /** @return list<int> */
     private function staleUnfinancializedAttemptIds(int $limit): array
     {
-        return $this->database->connection()->table('service_auto_renew_attempts as a')
+        return array_values($this->database->connection()->table('service_auto_renew_attempts as a')
             ->join('service_auto_renew_configurations as c', 'c.id', '=', 'a.auto_renew_configuration_id')
             ->whereIn('a.state', [
                 AutoRenewAttemptState::Pending->value,
@@ -170,26 +183,26 @@ trait ServiceAutoRenewalSupport
             ->limit($limit)
             ->pluck('a.id')
             ->map(static fn (mixed $id): int => (int) $id)
-            ->all();
+            ->all());
     }
 
     /** @return list<int> */
     private function outstandingMutationAttemptIds(int $limit): array
     {
-        return $this->database->connection()->table('service_auto_renew_attempts')
+        return array_values($this->database->connection()->table('service_auto_renew_attempts')
             ->where('state', AutoRenewAttemptState::MutationQueued->value)
             ->whereNotNull('provisioning_operation_id')
             ->orderBy('updated_at')
             ->limit($limit)
             ->pluck('id')
             ->map(static fn (mixed $id): int => (int) $id)
-            ->all();
+            ->all());
     }
 
     /** @return list<int> */
     private function outstandingFinancialAttemptIds(int $limit): array
     {
-        return $this->database->connection()->table('service_auto_renew_attempts')
+        return array_values($this->database->connection()->table('service_auto_renew_attempts')
             ->whereNotIn('state', [
                 AutoRenewAttemptState::PriceChangeBlocked->value,
                 AutoRenewAttemptState::Succeeded->value,
@@ -209,7 +222,7 @@ trait ServiceAutoRenewalSupport
             ->limit($limit)
             ->pluck('id')
             ->map(static fn (mixed $id): int => (int) $id)
-            ->all();
+            ->all());
     }
 
     private function receiptById(int $attemptId, bool $replayed): ServiceAutoRenewAttemptReceipt
@@ -217,6 +230,7 @@ trait ServiceAutoRenewalSupport
         return $this->receipt($this->attempt($attemptId), $replayed);
     }
 
+    /** @param ServiceAutoRenewAttemptRow $attempt */
     private function receipt(object $attempt, bool $replayed): ServiceAutoRenewAttemptReceipt
     {
         $connection = $this->database->connection();
@@ -265,6 +279,7 @@ trait ServiceAutoRenewalSupport
         }
     }
 
+    /** @return ServiceAutoRenewPaymentIntentRow|null */
     private function paymentIntentByCreationKey(string $creationKey): ?object
     {
         return $this->database->connection()->table('payment_intents')
