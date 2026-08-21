@@ -273,13 +273,14 @@ final class ProtectedTelegramMessageSenderTest extends TestCase
         Http::assertSentCount(1);
         Http::assertSent(function (Request $request): bool {
             $data = $request->data();
+            $body = $request->body();
 
             return str_ends_with($request->url(), '/sendDocument')
                 && ($data['chat_id'] ?? null) === self::TELEGRAM_USER_ID
                 && ($data['caption'] ?? null) === 'Service details'
-                && ($data['protect_content'] ?? null) === true
-                && ($data['disable_content_type_detection'] ?? null) === true
-                && str_contains($request->body(), 'service-details.svg');
+                && str_contains($body, 'name="protect_content"'."\r\n\r\ntrue")
+                && str_contains($body, 'name="disable_content_type_detection"'."\r\n\r\ntrue")
+                && str_contains($body, 'service-details.svg');
         });
     }
 

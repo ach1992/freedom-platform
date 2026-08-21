@@ -83,8 +83,9 @@ final readonly class HttpProtectedTelegramMessageSender implements ProtectedTele
                 [
                     'chat_id' => $telegramUserId,
                     'caption' => $presentation->caption(),
-                    'protect_content' => true,
-                    'disable_content_type_detection' => true,
+                    // Multipart scalar parts are strings; use the Bot API's explicit boolean literal.
+                    'protect_content' => 'true',
+                    'disable_content_type_detection' => 'true',
                 ],
             );
     }
