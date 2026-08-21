@@ -101,6 +101,7 @@ SQL,
             'service-insert-guard.sql',
             'history-insert-guard.sql',
             'history-after-insert.sql',
+            'remote-effect-event-insert-guard.sql',
             'operation-update-guard.sql',
             'operation-insert-guard.sql',
         ] as $file) {
