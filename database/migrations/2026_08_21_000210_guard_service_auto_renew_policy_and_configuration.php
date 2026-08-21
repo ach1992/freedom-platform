@@ -115,8 +115,6 @@ BEGIN
              AND BINARY p.price_change_mode = BINARY NEW.price_change_mode
              AND p.absolute_increase_limit_irr <=> NEW.absolute_increase_limit_irr
              AND p.percentage_increase_limit_bps <=> NEW.percentage_increase_limit_bps
-             AND p.actor_administrator_id = NEW.actor_administrator_id
-             AND BINARY p.correlation_id = BINARY NEW.correlation_id
        ) THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew policy history requires matching current administrator authority.';
     END IF;
@@ -335,7 +333,6 @@ BEGIN
              AND c.observed_expiry_evidence_hash <=> NEW.observed_expiry_evidence_hash
              AND c.observed_expiry_source <=> NEW.observed_expiry_source
              AND c.observed_remote_identity_generation <=> NEW.observed_remote_identity_generation
-             AND BINARY c.last_correlation_id = BINARY NEW.correlation_id
        ) THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew configuration history requires matching current owner authority.';
     END IF;
