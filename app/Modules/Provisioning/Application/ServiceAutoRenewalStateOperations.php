@@ -48,6 +48,12 @@ trait ServiceAutoRenewalStateOperations
             if ($current->isTerminal() || in_array($current, [AutoRenewAttemptState::Settled, AutoRenewAttemptState::MutationQueued], true)) {
                 return;
             }
+            if ($current === $retryState
+                && (string) ($attempt->reason_code ?? '') === $reasonCode
+                && $attempt->next_retry_at !== null
+                && $this->storedDateTime((string) $attempt->next_retry_at) > $this->clock->now()) {
+                return;
+            }
 
             $retryCount = (int) $attempt->retry_count + 1;
             if ($retryCount > $this->maxRetryCount()) {
