@@ -106,11 +106,12 @@ SQL);
         foreach (['quotes_agent_action_match_chk', 'quotes_service_package_shape_chk', 'quotes_action_chk'] as $constraint) {
             $this->dropConstraintIfExists('quotes', $constraint);
         }
-        if ($this->indexExists('quotes', 'quotes_service_action_idx')) {
-            DB::statement('ALTER TABLE quotes DROP INDEX quotes_service_action_idx');
-        }
+        // MariaDB requires the foreign key to be removed before its supporting index.
         if ($this->constraintExists('quotes', 'quotes_service_subscription_fk')) {
             DB::statement('ALTER TABLE quotes DROP FOREIGN KEY quotes_service_subscription_fk');
+        }
+        if ($this->indexExists('quotes', 'quotes_service_action_idx')) {
+            DB::statement('ALTER TABLE quotes DROP INDEX quotes_service_action_idx');
         }
         if (Schema::hasColumn('quotes', 'action_snapshot')) {
             Schema::table('quotes', function (Blueprint $table): void {
