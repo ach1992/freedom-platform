@@ -56,6 +56,16 @@ trait PurchaseOrderTestSupport
             /** @var Migration $serviceOperationalMigration */
             $serviceOperationalMigration = require database_path('migrations/2026_08_19_000140_enable_service_operational_authority.php');
             $serviceOperationalMigration->up();
+
+            // Re-entering #140 deliberately restores its predecessor guard surface. On the
+            // final schema, immediately reapply the paid successor so ordinary runtime
+            // fixtures keep testing the authority contract that production installs.
+            if (DB::getSchemaBuilder()->hasTable('service_paid_mutation_authorities')) {
+                /** @var Migration $paidMutationAuthorityMigration */
+                $paidMutationAuthorityMigration = require database_path('migrations/2026_08_20_000110_enable_paid_service_mutation_authority.php');
+                $paidMutationAuthorityMigration->up();
+            }
+
             DB::statement('SET timestamp = '.$this->purchaseOrderClock->value->getTimestamp());
 
             // Exact-authority upgrade tests intentionally exercise the historical 001165 schema.
