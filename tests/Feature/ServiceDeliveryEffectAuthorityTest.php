@@ -556,6 +556,9 @@ final class ServiceDeliveryEffectAuthorityTest extends TestCase
         self::assertCount(1, $uncertain['doubles']->sendCalls);
         self::assertSame(['delivery_artifacts'], $uncertain['doubles']->panelCalls);
         self::assertSame(ServiceDeliveryEffectState::Uncertain->value, DB::table('service_delivery_effects')->value('state'));
+        $attemptCountBefore = DB::table('service_delivery_attempts')->count();
+        $outboxCountBefore = DB::table('outbox_messages')
+            ->where('event_type', ServiceDeliveryAttemptQueueService::OUTBOX_EVENT_TYPE)->count();
 
         try {
             $this->resends()->resend(
@@ -566,9 +569,10 @@ final class ServiceDeliveryEffectAuthorityTest extends TestCase
         } catch (DomainException) {
             // Expected.
         }
-        self::assertSame(1, DB::table('service_delivery_attempts')->count());
-        self::assertSame(1, DB::table('outbox_messages')
+        self::assertSame($attemptCountBefore, DB::table('service_delivery_attempts')->count());
+        self::assertSame($outboxCountBefore, DB::table('outbox_messages')
             ->where('event_type', ServiceDeliveryAttemptQueueService::OUTBOX_EVENT_TYPE)->count());
+        // The caller was fenced before acceptance; no immutable accepted-resend audit is created.
         self::assertSame(0, DB::table('audit_logs')->where('action', ServiceDeliveryResendAudit::ACTION)->count());
 
         $this->truncateTablesForAllConnections();
