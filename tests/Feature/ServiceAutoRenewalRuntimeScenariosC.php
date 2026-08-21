@@ -8,10 +8,15 @@ use App\Modules\Orders\Application\QuotePricingInput;
 use App\Modules\Orders\Application\QuoteService;
 use App\Modules\Orders\Application\ServicePackageQuoteContext;
 use App\Modules\Orders\Domain\QuoteOverrideSource;
+use App\Modules\Payments\Application\PurchaseWalletPaymentService;
+use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
 use App\Modules\Provisioning\Application\ServiceAutoRenewalProcessor;
+use App\Modules\Provisioning\Application\ServiceAutoRenewConfigurationService;
+use Database\Seeders\WalletFinancialFoundationSeeder;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 trait ServiceAutoRenewalRuntimeScenariosC
 {
@@ -72,5 +77,117 @@ trait ServiceAutoRenewalRuntimeScenariosC
                 'current_price_irr' => $foreignQuote->finalPriceIrr,
                 'updated_at' => $this->purchaseOrderTimestamp(),
             ]);
+    }
+
+    public function test_reserved_wallet_hold_is_released_when_auto_renew_is_disabled_before_capture(): void
+    {
+        $scenario = $this->scenario('reserved-disabled');
+        $this->enableWalletMethod('reserved-disabled');
+        $this->seed(WalletFinancialFoundationSeeder::class);
+        $walletAccountId = $this->fundWallet($scenario['user_id'], 600_000, 'reserved-disabled');
+        $configuration = $this->enableAutoRenew($scenario, 'reserved-disabled');
+
+        $quote = $this->app->make(QuoteService::class)->create(
+            'service.auto-renew.reserved-disabled.quote.000001',
+            $scenario['user_id'],
+            $scenario['offering_id'],
+            new QuotePricingInput(
+                QuoteOverrideSource::None,
+                null,
+                null,
+                null,
+                0,
+                $this->purchaseOrderClock->value->modify('+15 minutes'),
+            ),
+            $this->purchaseOrderCorrelation('auto-renew-reserved-disabled-quote'),
+            null,
+            new ServicePackageQuoteContext($scenario['service_public_id'], 'aq-renew-30d'),
+        );
+        $eligibility = $this->app->make(PaymentMethodEligibilityService::class)->evaluate(
+            'service.auto-renew.reserved-disabled.eligibility.000001',
+            $scenario['user_id'],
+            $quote->quotePublicId,
+        );
+        $intent = $this->app->make(PurchaseWalletPaymentService::class)->reserve(
+            'service.auto-renew.reserved-disabled.intent.000001',
+            $scenario['user_id'],
+            $walletAccountId,
+            $quote->quotePublicId,
+            $eligibility->publicId,
+            $this->purchaseOrderCorrelation('auto-renew-reserved-disabled-reserve'),
+        );
+
+        $configRow = DB::table('service_auto_renew_configurations')
+            ->where('id', $configuration->configurationId)
+            ->first();
+        self::assertNotNull($configRow);
+        $cycleKey = hash('sha256', implode('|', [
+            (string) $configuration->configurationId,
+            (string) $scenario['service_id'],
+            (string) $configuration->configurationVersion,
+            (string) $configRow->observed_remote_identity_generation,
+            (string) $configRow->observed_expires_at,
+        ]));
+        $attemptId = (int) DB::table('service_auto_renew_attempts')->insertGetId([
+            'public_id' => (string) Str::ulid(),
+            'cycle_key' => $cycleKey,
+            'auto_renew_configuration_id' => $configuration->configurationId,
+            'service_subscription_id' => $scenario['service_id'],
+            'configuration_version' => $configuration->configurationVersion,
+            'remote_identity_generation' => (int) $configRow->observed_remote_identity_generation,
+            'observed_expires_at' => (string) $configRow->observed_expires_at,
+            'observed_expiry_evidence_hash' => (string) $configRow->observed_expiry_evidence_hash,
+            'observed_expiry_source' => (string) $configRow->observed_expiry_source,
+            'state' => 'pending',
+            'reason_code' => null,
+            'baseline_price_irr' => $configuration->acceptedPriceIrr,
+            'current_price_irr' => null,
+            'quote_id' => null,
+            'payment_eligibility_decision_id' => null,
+            'payment_intent_id' => null,
+            'purchase_settlement_id' => null,
+            'provisioning_operation_id' => null,
+            'correlation_id' => $this->purchaseOrderCorrelation('auto-renew-reserved-disabled-attempt'),
+            'completed_at' => null,
+            'created_at' => $this->purchaseOrderTimestamp(),
+            'updated_at' => $this->purchaseOrderTimestamp(),
+        ]);
+        $intentId = (int) DB::table('payment_intents')
+            ->where('public_id', $intent->intentPublicId)
+            ->value('id');
+        DB::table('service_auto_renew_attempts')->where('id', $attemptId)->update([
+            'quote_id' => $quote->quoteId,
+            'payment_eligibility_decision_id' => $eligibility->decisionId,
+            'payment_intent_id' => $intentId,
+            'current_price_irr' => $quote->finalPriceIrr,
+            'reason_code' => 'wallet_reserved',
+            'updated_at' => $this->purchaseOrderTimestamp(),
+        ]);
+
+        $this->app->make(ServiceAutoRenewConfigurationService::class)->configure(
+            'service.auto-renew.config.reserved-disabled.000002',
+            $scenario['user_id'],
+            $scenario['service_public_id'],
+            'aq-renew-30d',
+            false,
+            $this->purchaseOrderCorrelation('auto-renew-reserved-disabled-disable'),
+        );
+
+        $this->app->make(ServiceAutoRenewalProcessor::class)->processDue(10);
+
+        $attempt = DB::table('service_auto_renew_attempts')
+            ->where('id', $attemptId)
+            ->first(['state', 'reason_code']);
+        self::assertNotNull($attempt);
+        self::assertSame('failed', $attempt->state);
+        self::assertSame('configuration_changed_after_reservation', $attempt->reason_code);
+        self::assertSame(0, DB::table('purchase_settlements')->where('provider_code', 'wallet')->count());
+        self::assertSame(
+            'released',
+            DB::table('purchase_wallet_reservations as reservation')
+                ->join('wallet_holds as hold', 'hold.id', '=', 'reservation.wallet_hold_id')
+                ->where('reservation.payment_intent_id', $intentId)
+                ->value('hold.status'),
+        );
     }
 }
