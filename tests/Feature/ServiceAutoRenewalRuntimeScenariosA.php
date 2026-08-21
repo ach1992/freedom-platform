@@ -116,15 +116,23 @@ trait ServiceAutoRenewalRuntimeScenariosA
         $this->enableWalletMethod('price-stop');
         $this->seed(WalletFinancialFoundationSeeder::class);
         $this->fundWallet($scenario['user_id'], 1_000_000, 'price-stop');
-        $configuration = $this->enableAutoRenew($scenario, 'price-stop');
 
-        // Simulate a previously settled renewal at a lower accepted commercial price. The
-        // production processor owns this field after capture; the fixture only establishes
-        // the prior-cycle baseline needed to exercise the stop policy against a fresh Quote.
-        DB::table('service_auto_renew_configurations')->where('id', $configuration->configurationId)->update([
-            'last_settled_price_irr' => 500_000,
-            'updated_at' => $this->purchaseOrderTimestamp(),
-        ]);
+        DB::table('plan_offering_packages')
+            ->where('plan_offering_id', $scenario['offering_id'])
+            ->where('code', 'aq-renew-30d')
+            ->update([
+                'price_irr' => 500_000,
+                'updated_at' => $this->purchaseOrderTimestamp(),
+            ]);
+        $configuration = $this->enableAutoRenew($scenario, 'price-stop');
+        self::assertSame(500_000, $configuration->acceptedPriceIrr);
+        DB::table('plan_offering_packages')
+            ->where('plan_offering_id', $scenario['offering_id'])
+            ->where('code', 'aq-renew-30d')
+            ->update([
+                'price_irr' => 600_000,
+                'updated_at' => $this->purchaseOrderTimestamp(),
+            ]);
 
         $result = $this->app->make(ServiceAutoRenewalProcessor::class)->processDue(10);
 
