@@ -317,17 +317,31 @@ trait ServiceAutoRenewalPersistence
                 (string) $authority->target_expires_at,
                 (string) $authority->quoted_remote_identity_generation,
             ]));
-            $connection->table('service_auto_renew_configurations')
-                ->where('id', (int) $attempt->auto_renew_configuration_id)
-                ->update([
-                    'observed_expires_at' => (string) $authority->target_expires_at,
-                    'expiry_observed_at' => $this->timestamp(),
-                    'observed_expiry_evidence_hash' => $evidenceHash,
-                    'observed_expiry_source' => 'paid_mutation',
-                    'observed_remote_identity_generation' => (int) $authority->quoted_remote_identity_generation,
-                    'last_correlation_id' => (string) $attempt->correlation_id,
-                    'updated_at' => $this->timestamp(),
-                ]);
+
+            ServiceAutoRenewDatabaseAuthority::observation(
+                $connection,
+                (int) $attempt->auto_renew_configuration_id,
+                $attemptId,
+                (string) $attempt->correlation_id,
+            );
+            try {
+                $updated = $connection->table('service_auto_renew_configurations')
+                    ->where('id', (int) $attempt->auto_renew_configuration_id)
+                    ->update([
+                        'observed_expires_at' => (string) $authority->target_expires_at,
+                        'expiry_observed_at' => $this->timestamp(),
+                        'observed_expiry_evidence_hash' => $evidenceHash,
+                        'observed_expiry_source' => 'paid_mutation',
+                        'observed_remote_identity_generation' => (int) $authority->quoted_remote_identity_generation,
+                        'last_correlation_id' => (string) $attempt->correlation_id,
+                        'updated_at' => $this->timestamp(),
+                    ]);
+                if ($updated !== 1) {
+                    throw new RuntimeException('Auto-renew successful mutation observation lost configuration authority.');
+                }
+            } finally {
+                ServiceAutoRenewDatabaseAuthority::clear($connection);
+            }
         }, 3);
     }
 }
