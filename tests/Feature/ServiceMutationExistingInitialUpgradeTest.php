@@ -53,6 +53,9 @@ final class ServiceMutationExistingInitialUpgradeTest extends TestCase
             $migration->down();
             self::assertFalse(Schema::hasColumn('service_subscriptions', 'lifecycle_state'));
             self::assertFalse(Schema::hasColumn('provisioning_operations', 'operation_generation'));
+            // This upgrade test targets the older Service-mutation schema, not the
+            // unrelated Quote read contract used by the shared purchase fixture.
+            $servicePackageQuoteMigration->up();
 
             $settlement = $this->createPurchaseOrderSettlement('mutation-existing-initial-upgrade');
             $order = $this->app->make(PurchaseOrderService::class)->createFromSettlement(

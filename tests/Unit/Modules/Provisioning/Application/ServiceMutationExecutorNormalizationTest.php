@@ -50,7 +50,7 @@ final class ServiceMutationExecutorNormalizationTest extends TestCase
         self::assertIsInt($preflight);
         self::assertIsInt($claim);
         self::assertLessThan($claim, $preflight);
-        self::assertSame(3, substr_count($source, '$this->assertProviderCallOutsideTransaction();'));
+        self::assertSame(4, substr_count($source, '$this->assertProviderCallOutsideTransaction();'));
     }
 
     public function test_stale_provider_boundary_is_fail_closed_without_entering_remote_effect(): void

@@ -205,12 +205,12 @@ final class PaymentMethodEligibilityFoundationTest extends TestCase
             ->update(['amount_irr_snapshot' => 1]));
 
         $this->clock->value = $this->clock->value->modify('+5 minutes');
-        $this->assertRuntimeMessage('Payment eligibility requires a current purchase Quote.', fn (): mixed => $service->evaluate(
+        $this->assertRuntimeMessage('Payment eligibility requires a current commercial Quote.', fn (): mixed => $service->evaluate(
             'eligibility.guard.000001',
             $quote->userId,
             $quote->quotePublicId,
         ));
-        $this->assertRuntimeMessage('Payment eligibility requires a current purchase Quote.', fn (): mixed => $service->evaluate(
+        $this->assertRuntimeMessage('Payment eligibility requires a current commercial Quote.', fn (): mixed => $service->evaluate(
             'eligibility.expired.000001',
             $quote->userId,
             $quote->quotePublicId,

@@ -94,6 +94,8 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
             $paidServiceMutationMigration->down();
             $servicePackageQuoteMigration->down();
             $serviceOperationalMigration->down();
+            $nonPaidAuthorityMigration->down();
+            $nonPaidInvalidationMigration->down();
             $deliveryEffectMigration->down();
             $deliveryAttemptMigration->down();
             $lifecycleAuditMigration->down();
@@ -118,6 +120,10 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
             $bootstrapMigration->down();
 
             $bootstrapMigration->up();
+            // The historical provisioning schema remains under test, while the
+            // shared purchase fixture deliberately uses the current Quote contract.
+            // Restore that independent Quote schema before creating fixture data.
+            $servicePackageQuoteMigration->up();
 
             self::assertSame(0, $this->triggerCount('service_subscriptions_insert_guard'));
             self::assertSame(0, $this->triggerCount('provisioning_operations_insert_guard'));

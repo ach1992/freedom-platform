@@ -10,6 +10,7 @@ use App\Modules\Orders\Application\QuotePricingInput;
 use App\Modules\Orders\Application\QuoteService;
 use App\Modules\Orders\Domain\QuoteOverrideSource;
 use App\Modules\Panels\Application\TargetCapacityAllocator;
+use App\Modules\Provisioning\Application\ServiceOperationalDatabaseCapability;
 use App\Modules\Payments\Application\Contracts\PaymentEvidence;
 use App\Modules\Payments\Application\Contracts\PaymentEvidenceAuthority;
 use App\Modules\Payments\Application\Contracts\PaymentTransactionStatus;
@@ -103,6 +104,11 @@ WHERE TRIGGER_SCHEMA = DATABASE()
   )
 SQL);
 
+                $operationalCapabilityReady = ! DB::getSchemaBuilder()->hasTable('service_operational_authority_capability')
+                    || hash_equals(
+                        (new ServiceOperationalDatabaseCapability)->expectedHash(),
+                        (string) DB::table('service_operational_authority_capability')->where('id', 1)->value('capability_hash'),
+                    );
                 $paidChecksReady = true;
                 if ($paidMutationAuthorityExists) {
                     /** @var object{aggregate:int|string|null}|null $checkState */
@@ -121,11 +127,18 @@ SQL);
 
                 if ($authorityState !== null
                     && (int) $authorityState->base_ready === 2
+                    && $operationalCapabilityReady
                     && (! $paidMutationAuthorityExists || ((int) $authorityState->paid_ready === 7 && $paidChecksReady))
                 ) {
                     return;
                 }
 
+                // DatabaseTruncation empties the immutable operational-capability
+                // singleton without firing its row triggers. Re-enter #152 first so
+                // predecessor restoration selects the operational Service guard.
+                /** @var Migration $serviceOperationalMigration */
+                $serviceOperationalMigration = require database_path('migrations/2026_08_19_000140_enable_service_operational_authority.php');
+                $serviceOperationalMigration->up();
                 /** @var Migration $nonPaidInvalidationMigration */
                 $nonPaidInvalidationMigration = require database_path('migrations/2026_08_19_000115_extend_provisioning_invalidation_to_non_paid_sources.php');
                 /** @var Migration $nonPaidAuthorityMigration */
