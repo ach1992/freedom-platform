@@ -156,83 +156,93 @@ final readonly class ServiceAutoRenewConfigurationService
                     throw new DomainException('Auto-renew acceptance Quote is stale for the current Service or package.');
                 }
 
-                $config = $connection->table('service_auto_renew_configurations')
-                    ->where('service_subscription_id', (int) $lockedFacts->id)
-                    ->lockForUpdate()
-                    ->first([
-                        'id', 'renewal_package_id', 'enabled', 'accepted_price_irr', 'last_settled_price_irr',
-                        'configuration_version',
-                    ]);
-                $timestamp = $this->timestamp();
-                $evidenceHash = strtolower($remote->canonicalHash);
-                if ($config === null) {
-                    $configurationVersion = 1;
-                    $configurationId = (int) $connection->table('service_auto_renew_configurations')->insertGetId([
-                        'service_subscription_id' => (int) $lockedFacts->id,
-                        'renewal_package_id' => $snapshot->packageId,
-                        'enabled' => true,
-                        'accepted_price_irr' => $quote->finalPriceIrr,
-                        'last_settled_price_irr' => null,
-                        'observed_expires_at' => $this->databaseDateTime($remote->expiresAt),
-                        'expiry_observed_at' => $timestamp,
-                        'observed_expiry_evidence_hash' => $evidenceHash,
-                        'observed_expiry_source' => 'remote_snapshot',
-                        'observed_remote_identity_generation' => (int) $lockedFacts->remote_identity_generation,
-                        'configuration_version' => $configurationVersion,
-                        'last_correlation_id' => $correlationId,
-                        'created_at' => $timestamp,
-                        'updated_at' => $timestamp,
-                    ]);
-                } else {
-                    $configurationId = (int) $config->id;
-                    // Every non-replayed enable/configure request is an explicit commercial re-acceptance.
-                    // Advance the version even when the package and price happen to be unchanged so a
-                    // previously blocked renewal cycle can be retried only after an explicit user action.
-                    $configurationVersion = (int) $config->configuration_version + 1;
-                    $lastSettled = null;
-                    $connection->table('service_auto_renew_configurations')->where('id', $configurationId)->update([
-                        'renewal_package_id' => $snapshot->packageId,
-                        'enabled' => true,
-                        'accepted_price_irr' => $quote->finalPriceIrr,
-                        'last_settled_price_irr' => $lastSettled,
-                        'observed_expires_at' => $this->databaseDateTime($remote->expiresAt),
-                        'expiry_observed_at' => $timestamp,
-                        'observed_expiry_evidence_hash' => $evidenceHash,
-                        'observed_expiry_source' => 'remote_snapshot',
-                        'observed_remote_identity_generation' => (int) $lockedFacts->remote_identity_generation,
-                        'configuration_version' => $configurationVersion,
-                        'last_correlation_id' => $correlationId,
-                        'updated_at' => $timestamp,
-                    ]);
-                }
-
-                $this->recordHistory(
+                ServiceAutoRenewDatabaseAuthority::configuration(
                     $connection,
-                    $configurationId,
-                    $configurationVersion,
                     $actorUserId,
-                    true,
-                    $snapshot->packageId,
-                    $quote->finalPriceIrr,
-                    $remote->expiresAt,
-                    $evidenceHash,
-                    'remote_snapshot',
-                    (int) $lockedFacts->remote_identity_generation,
-                    $requestHash,
-                    $payloadHash,
+                    (int) $lockedFacts->id,
+                    $quote->quoteId,
                     $correlationId,
                 );
+                try {
+                    $config = $connection->table('service_auto_renew_configurations')
+                        ->where('service_subscription_id', (int) $lockedFacts->id)
+                        ->lockForUpdate()
+                        ->first([
+                            'id', 'renewal_package_id', 'enabled', 'accepted_price_irr', 'last_settled_price_irr',
+                            'configuration_version',
+                        ]);
+                    $timestamp = $this->timestamp();
+                    $evidenceHash = strtolower($remote->canonicalHash);
+                    if ($config === null) {
+                        $configurationVersion = 1;
+                        $configurationId = (int) $connection->table('service_auto_renew_configurations')->insertGetId([
+                            'service_subscription_id' => (int) $lockedFacts->id,
+                            'renewal_package_id' => $snapshot->packageId,
+                            'enabled' => true,
+                            'accepted_price_irr' => $quote->finalPriceIrr,
+                            'last_settled_price_irr' => null,
+                            'observed_expires_at' => $this->databaseDateTime($remote->expiresAt),
+                            'expiry_observed_at' => $timestamp,
+                            'observed_expiry_evidence_hash' => $evidenceHash,
+                            'observed_expiry_source' => 'remote_snapshot',
+                            'observed_remote_identity_generation' => (int) $lockedFacts->remote_identity_generation,
+                            'configuration_version' => $configurationVersion,
+                            'last_correlation_id' => $correlationId,
+                            'created_at' => $timestamp,
+                            'updated_at' => $timestamp,
+                        ]);
+                    } else {
+                        $configurationId = (int) $config->id;
+                        // Every non-replayed enable/configure request is an explicit commercial re-acceptance.
+                        // Advance the version even when the package and price happen to be unchanged so a
+                        // previously blocked renewal cycle can be retried only after an explicit user action.
+                        $configurationVersion = (int) $config->configuration_version + 1;
+                        $connection->table('service_auto_renew_configurations')->where('id', $configurationId)->update([
+                            'renewal_package_id' => $snapshot->packageId,
+                            'enabled' => true,
+                            'accepted_price_irr' => $quote->finalPriceIrr,
+                            'last_settled_price_irr' => null,
+                            'observed_expires_at' => $this->databaseDateTime($remote->expiresAt),
+                            'expiry_observed_at' => $timestamp,
+                            'observed_expiry_evidence_hash' => $evidenceHash,
+                            'observed_expiry_source' => 'remote_snapshot',
+                            'observed_remote_identity_generation' => (int) $lockedFacts->remote_identity_generation,
+                            'configuration_version' => $configurationVersion,
+                            'last_correlation_id' => $correlationId,
+                            'updated_at' => $timestamp,
+                        ]);
+                    }
 
-                return new ServiceAutoRenewConfigurationReceipt(
-                    $configurationId,
-                    $servicePublicId,
-                    true,
-                    $packageCode,
-                    $quote->finalPriceIrr,
-                    $remote->expiresAt,
-                    $configurationVersion,
-                    false,
-                );
+                    $this->recordHistory(
+                        $connection,
+                        $configurationId,
+                        $configurationVersion,
+                        $actorUserId,
+                        true,
+                        $snapshot->packageId,
+                        $quote->finalPriceIrr,
+                        $remote->expiresAt,
+                        $evidenceHash,
+                        'remote_snapshot',
+                        (int) $lockedFacts->remote_identity_generation,
+                        $requestHash,
+                        $payloadHash,
+                        $correlationId,
+                    );
+
+                    return new ServiceAutoRenewConfigurationReceipt(
+                        $configurationId,
+                        $servicePublicId,
+                        true,
+                        $packageCode,
+                        $quote->finalPriceIrr,
+                        $remote->expiresAt,
+                        $configurationVersion,
+                        false,
+                    );
+                } finally {
+                    ServiceAutoRenewDatabaseAuthority::clear($connection);
+                }
             }, 3);
         } catch (QueryException $exception) {
             $replay = $this->replay($requestHash, $payloadHash, $servicePublicId);
@@ -288,47 +298,58 @@ final readonly class ServiceAutoRenewConfigurationService
                 throw new DomainException('Disable request must reference the currently configured renewal package.');
             }
 
-            $configurationVersion = (int) $config->configuration_version + ((bool) $config->enabled ? 1 : 0);
-            $timestamp = $this->timestamp();
-            if ((bool) $config->enabled) {
-                $connection->table('service_auto_renew_configurations')->where('id', (int) $config->id)->update([
-                    'enabled' => false,
-                    'configuration_version' => $configurationVersion,
-                    'last_correlation_id' => $correlationId,
-                    'updated_at' => $timestamp,
-                ]);
-            }
-
-            $observedExpiry = $config->observed_expires_at === null
-                ? null
-                : $this->storedDateTime((string) $config->observed_expires_at);
-            $this->recordHistory(
+            ServiceAutoRenewDatabaseAuthority::configuration(
                 $connection,
-                (int) $config->id,
-                $configurationVersion,
                 $actorUserId,
-                false,
-                (int) $config->renewal_package_id,
-                (int) $config->accepted_price_irr,
-                $observedExpiry,
-                $config->observed_expiry_evidence_hash === null ? null : (string) $config->observed_expiry_evidence_hash,
-                $config->observed_expiry_source === null ? null : (string) $config->observed_expiry_source,
-                $config->observed_remote_identity_generation === null ? null : (int) $config->observed_remote_identity_generation,
-                $requestHash,
-                $payloadHash,
+                (int) $lockedFacts->id,
+                null,
                 $correlationId,
             );
+            try {
+                $configurationVersion = (int) $config->configuration_version + ((bool) $config->enabled ? 1 : 0);
+                $timestamp = $this->timestamp();
+                if ((bool) $config->enabled) {
+                    $connection->table('service_auto_renew_configurations')->where('id', (int) $config->id)->update([
+                        'enabled' => false,
+                        'configuration_version' => $configurationVersion,
+                        'last_correlation_id' => $correlationId,
+                        'updated_at' => $timestamp,
+                    ]);
+                }
 
-            return new ServiceAutoRenewConfigurationReceipt(
-                (int) $config->id,
-                (string) $lockedFacts->public_id,
-                false,
-                $storedPackageCode,
-                (int) $config->accepted_price_irr,
-                $observedExpiry,
-                $configurationVersion,
-                false,
-            );
+                $observedExpiry = $config->observed_expires_at === null
+                    ? null
+                    : $this->storedDateTime((string) $config->observed_expires_at);
+                $this->recordHistory(
+                    $connection,
+                    (int) $config->id,
+                    $configurationVersion,
+                    $actorUserId,
+                    false,
+                    (int) $config->renewal_package_id,
+                    (int) $config->accepted_price_irr,
+                    $observedExpiry,
+                    $config->observed_expiry_evidence_hash === null ? null : (string) $config->observed_expiry_evidence_hash,
+                    $config->observed_expiry_source === null ? null : (string) $config->observed_expiry_source,
+                    $config->observed_remote_identity_generation === null ? null : (int) $config->observed_remote_identity_generation,
+                    $requestHash,
+                    $payloadHash,
+                    $correlationId,
+                );
+
+                return new ServiceAutoRenewConfigurationReceipt(
+                    (int) $config->id,
+                    (string) $lockedFacts->public_id,
+                    false,
+                    $storedPackageCode,
+                    (int) $config->accepted_price_irr,
+                    $observedExpiry,
+                    $configurationVersion,
+                    false,
+                );
+            } finally {
+                ServiceAutoRenewDatabaseAuthority::clear($connection);
+            }
         }, 3);
     }
 
