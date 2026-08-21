@@ -370,16 +370,9 @@ final class ServiceMutationAuthorityRuntimeTest extends TestCase
     {
         parent::setUp();
 
-        /** @var Migration $migration */
-        $migration = require database_path('migrations/2026_08_17_000300_enable_service_mutation_authority.php');
-        $migration->up();
-        foreach (['operation-insert-guard.sql', 'operation-update-guard.sql'] as $guard) {
-            $sql = file_get_contents(database_path('sql/service-paid-mutation-authority/'.$guard));
-            if ($sql === false) {
-                throw new RuntimeException('Paid Service mutation test guard SQL is unavailable.');
-            }
-            DB::unprepared($sql);
-        }
+        // DatabaseTruncation migrates the current schema once, then clears rows between
+        // tests. Runtime scenarios must retain the final composed guards; historical
+        // authority migrations are exercised exclusively by the dedicated migration tests.
 
         $this->seed(IdentityAccessFoundationSeeder::class);
         $this->seed(CatalogAccessFoundationSeeder::class);
