@@ -4,14 +4,14 @@ declare(strict_types=1);
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Support\Facades\DB;
+use RuntimeException;
 
 return new class extends Migration
 {
     public function up(): void
     {
-        DB::unprepared('DROP TRIGGER IF EXISTS sara_commercial_binding_guard');
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER sara_commercial_binding_guard
+CREATE TRIGGER IF NOT EXISTS sara_commercial_binding_guard
 BEFORE UPDATE ON service_auto_renew_attempts
 FOR EACH ROW
 BEGIN
@@ -67,6 +67,10 @@ SQL);
 
     public function down(): void
     {
+        if (DB::table('service_auto_renew_attempts')->exists()) {
+            throw new RuntimeException('Cannot remove Service auto-renew guards while auto-renew authority rows exist.');
+        }
+
         DB::unprepared('DROP TRIGGER IF EXISTS sara_commercial_binding_guard');
     }
 };
