@@ -10,13 +10,15 @@ use App\Modules\Orders\Application\ServicePackageQuoteContext;
 use App\Modules\Orders\Domain\QuoteOverrideSource;
 use App\Modules\Payments\Application\PurchaseWalletPaymentService;
 use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
-use App\Modules\Provisioning\Application\ServiceAutoRenewConfigurationService;
 use App\Modules\Provisioning\Application\ServiceAutoRenewalProcessor;
+use App\Modules\Provisioning\Application\ServiceAutoRenewConfigurationService;
 use App\Modules\Provisioning\Application\ServiceMutationExecutor;
 use App\Modules\Provisioning\Domain\AutoRenewAttemptState;
 use App\Modules\Provisioning\Domain\ProvisioningState;
 use Database\Seeders\WalletFinancialFoundationSeeder;
+use Illuminate\Database\Migrations\Migration;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 trait ServiceAutoRenewalRuntimeScenariosB
 {
@@ -90,7 +92,7 @@ trait ServiceAutoRenewalRuntimeScenariosB
     {
         $scenario = $this->scenario('rollback-fence');
         $this->enableAutoRenew($scenario, 'rollback-fence');
-        /** @var \Illuminate\Database\Migrations\Migration $migration */
+        /** @var Migration $migration */
         $migration = require database_path('migrations/2026_08_21_000200_enable_service_auto_renew_authority.php');
 
         try {
@@ -157,7 +159,7 @@ trait ServiceAutoRenewalRuntimeScenariosB
             (string) $configRow->observed_expires_at,
         ]));
         $attemptId = (int) DB::table('service_auto_renew_attempts')->insertGetId([
-            'public_id' => (string) \Illuminate\Support\Str::ulid(),
+            'public_id' => (string) Str::ulid(),
             'cycle_key' => $cycleKey,
             'auto_renew_configuration_id' => $configuration->configurationId,
             'service_subscription_id' => $scenario['service_id'],

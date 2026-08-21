@@ -4,31 +4,13 @@ declare(strict_types=1);
 
 namespace App\Modules\Provisioning\Application;
 
-use App\Modules\Agents\Domain\AgentPricingAction;
 use App\Modules\Orders\Application\PurchaseOrderReceipt;
-use App\Modules\Orders\Application\QuoteAgentPricingContext;
-use App\Modules\Orders\Application\QuotePricingInput;
-use App\Modules\Orders\Application\QuoteReceipt;
-use App\Modules\Orders\Application\QuoteService;
-use App\Modules\Orders\Application\ServicePackageQuoteContext;
-use App\Modules\Orders\Domain\QuoteAction;
-use App\Modules\Orders\Domain\QuoteOverrideSource;
-use App\Modules\Panels\Application\Contracts\PanelServiceStatus;
-use App\Modules\Payments\Application\PurchaseWalletPaymentService;
-use App\Modules\Payments\Eligibility\Application\PaymentEligibilityDecisionReceipt;
-use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
 use App\Modules\Provisioning\Domain\AutoRenewAttemptState;
 use App\Modules\Provisioning\Domain\AutoRenewNotificationOutcome;
-use App\Modules\Provisioning\Domain\AutoRenewPriceChangeMode;
 use App\Modules\Provisioning\Domain\ProvisioningState;
-use App\Shared\Application\Clock;
 use DateTimeImmutable;
-use DateTimeZone;
 use DomainException;
 use Illuminate\Database\Connection;
-use Illuminate\Database\DatabaseManager;
-use Illuminate\Database\QueryException;
-use Illuminate\Support\Str;
 use RuntimeException;
 use Throwable;
 
@@ -155,6 +137,7 @@ trait ServiceAutoRenewalCommercialOperations
                 if ($observation['expires_at'] != $originalExpiry || $observation['expires_at'] > $dueUntil) {
                     try {
                         $this->walletPayments->release((string) $intent->public_id, 'auto-renew expiry changed before capture');
+
                         return $this->finishFailure($attemptId, 'expiry_changed_after_reservation');
                     } catch (DomainException|RuntimeException $releaseException) {
                         $refreshedIntent = $this->database->connection()->table('payment_intents')
@@ -348,5 +331,4 @@ trait ServiceAutoRenewalCommercialOperations
 
         return $this->receiptById($attemptId, true);
     }
-
 }

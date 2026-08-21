@@ -225,5 +225,4 @@ CREATE TRIGGER sarni_delete_guard BEFORE DELETE ON service_auto_renew_notificati
 FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew notification intents are append-only.'; END
 SQL);
     }
-
 };

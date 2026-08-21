@@ -15,8 +15,8 @@ final readonly class ServiceAutoRenewalProcessor
 {
     use ServiceAutoRenewalBatchOperations;
     use ServiceAutoRenewalCommercialOperations;
-    use ServiceAutoRenewalRemoteOperations;
     use ServiceAutoRenewalPersistence;
+    use ServiceAutoRenewalRemoteOperations;
     use ServiceAutoRenewalStateOperations;
     use ServiceAutoRenewalSupport;
 

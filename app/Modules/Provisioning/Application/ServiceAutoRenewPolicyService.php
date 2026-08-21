@@ -55,119 +55,119 @@ final readonly class ServiceAutoRenewPolicyService
 
         try {
             return $this->database->connection()->transaction(function (Connection $connection) use (
-            $requestHash,
-            $payloadHash,
-            $administratorId,
-            $planOfferingId,
-            $mode,
-            $absoluteIncreaseLimitIrr,
-            $percentageIncreaseLimitBps,
-            $reasonCode,
-            $reason,
-            $correlationId,
-        ): ServiceAutoRenewPolicyReceipt {
-            $history = $connection->table('plan_offering_auto_renew_policy_histories')
-                ->where('request_key_hash', $requestHash)
-                ->first([
-                    'auto_renew_policy_id', 'version', 'price_change_mode', 'absolute_increase_limit_irr',
-                    'percentage_increase_limit_bps', 'payload_hash',
-                ]);
-            if ($history !== null) {
-                if (! hash_equals((string) $history->payload_hash, $payloadHash)) {
-                    throw new DomainException('Auto-renew policy request key conflicts with an accepted request.');
-                }
-
-                $policy = $connection->table('plan_offering_auto_renew_policies')
-                    ->where('id', (int) $history->auto_renew_policy_id)
-                    ->first(['plan_offering_id']);
-                if ($policy === null || (int) $policy->plan_offering_id !== $planOfferingId) {
-                    throw new RuntimeException('Auto-renew policy replay authority is inconsistent.');
-                }
-
-                return new ServiceAutoRenewPolicyReceipt(
-                    (int) $history->auto_renew_policy_id,
-                    $planOfferingId,
-                    AutoRenewPriceChangeMode::from((string) $history->price_change_mode),
-                    $history->absolute_increase_limit_irr === null ? null : (int) $history->absolute_increase_limit_irr,
-                    $history->percentage_increase_limit_bps === null ? null : (int) $history->percentage_increase_limit_bps,
-                    (int) $history->version,
-                    true,
-                );
-            }
-
-            $offering = $connection->table('plan_offerings')
-                ->where('id', $planOfferingId)
-                ->lockForUpdate()
-                ->first(['id', 'state', 'auto_renew_allowed']);
-            if ($offering === null || $offering->state !== 'active' || ! (bool) $offering->auto_renew_allowed) {
-                throw new DomainException('Auto-renew policy requires an active auto-renew-enabled offering.');
-            }
-
-            $policy = $connection->table('plan_offering_auto_renew_policies')
-                ->where('plan_offering_id', $planOfferingId)
-                ->lockForUpdate()
-                ->first([
-                    'id', 'price_change_mode', 'absolute_increase_limit_irr',
-                    'percentage_increase_limit_bps', 'version',
-                ]);
-            $timestamp = $this->timestamp();
-            if ($policy === null) {
-                $policyId = (int) $connection->table('plan_offering_auto_renew_policies')->insertGetId([
-                    'plan_offering_id' => $planOfferingId,
-                    'price_change_mode' => $mode->value,
-                    'absolute_increase_limit_irr' => $absoluteIncreaseLimitIrr,
-                    'percentage_increase_limit_bps' => $percentageIncreaseLimitBps,
-                    'version' => 1,
-                    'actor_administrator_id' => $administratorId,
-                    'correlation_id' => $correlationId,
-                    'created_at' => $timestamp,
-                    'updated_at' => $timestamp,
-                ]);
-                $version = 1;
-            } else {
-                $policyId = (int) $policy->id;
-                $changed = $policy->price_change_mode !== $mode->value
-                    || ($policy->absolute_increase_limit_irr === null ? null : (int) $policy->absolute_increase_limit_irr) !== $absoluteIncreaseLimitIrr
-                    || ($policy->percentage_increase_limit_bps === null ? null : (int) $policy->percentage_increase_limit_bps) !== $percentageIncreaseLimitBps;
-                $version = (int) $policy->version;
-                if ($changed) {
-                    $version++;
-                    $connection->table('plan_offering_auto_renew_policies')->where('id', $policyId)->update([
-                        'price_change_mode' => $mode->value,
-                        'absolute_increase_limit_irr' => $absoluteIncreaseLimitIrr,
-                        'percentage_increase_limit_bps' => $percentageIncreaseLimitBps,
-                        'version' => $version,
-                        'actor_administrator_id' => $administratorId,
-                        'correlation_id' => $correlationId,
-                        'updated_at' => $timestamp,
-                    ]);
-                }
-            }
-
-            $connection->table('plan_offering_auto_renew_policy_histories')->insert([
-                'auto_renew_policy_id' => $policyId,
-                'version' => $version,
-                'price_change_mode' => $mode->value,
-                'absolute_increase_limit_irr' => $absoluteIncreaseLimitIrr,
-                'percentage_increase_limit_bps' => $percentageIncreaseLimitBps,
-                'actor_administrator_id' => $administratorId,
-                'request_key_hash' => $requestHash,
-                'payload_hash' => $payloadHash,
-                'reason_code' => $reasonCode,
-                'reason' => trim($reason),
-                'correlation_id' => $correlationId,
-                'created_at' => $timestamp,
-            ]);
-
-            return new ServiceAutoRenewPolicyReceipt(
-                $policyId,
+                $requestHash,
+                $payloadHash,
+                $administratorId,
                 $planOfferingId,
                 $mode,
                 $absoluteIncreaseLimitIrr,
                 $percentageIncreaseLimitBps,
-                $version,
-                false,
-            );
+                $reasonCode,
+                $reason,
+                $correlationId,
+            ): ServiceAutoRenewPolicyReceipt {
+                $history = $connection->table('plan_offering_auto_renew_policy_histories')
+                    ->where('request_key_hash', $requestHash)
+                    ->first([
+                        'auto_renew_policy_id', 'version', 'price_change_mode', 'absolute_increase_limit_irr',
+                        'percentage_increase_limit_bps', 'payload_hash',
+                    ]);
+                if ($history !== null) {
+                    if (! hash_equals((string) $history->payload_hash, $payloadHash)) {
+                        throw new DomainException('Auto-renew policy request key conflicts with an accepted request.');
+                    }
+
+                    $policy = $connection->table('plan_offering_auto_renew_policies')
+                        ->where('id', (int) $history->auto_renew_policy_id)
+                        ->first(['plan_offering_id']);
+                    if ($policy === null || (int) $policy->plan_offering_id !== $planOfferingId) {
+                        throw new RuntimeException('Auto-renew policy replay authority is inconsistent.');
+                    }
+
+                    return new ServiceAutoRenewPolicyReceipt(
+                        (int) $history->auto_renew_policy_id,
+                        $planOfferingId,
+                        AutoRenewPriceChangeMode::from((string) $history->price_change_mode),
+                        $history->absolute_increase_limit_irr === null ? null : (int) $history->absolute_increase_limit_irr,
+                        $history->percentage_increase_limit_bps === null ? null : (int) $history->percentage_increase_limit_bps,
+                        (int) $history->version,
+                        true,
+                    );
+                }
+
+                $offering = $connection->table('plan_offerings')
+                    ->where('id', $planOfferingId)
+                    ->lockForUpdate()
+                    ->first(['id', 'state', 'auto_renew_allowed']);
+                if ($offering === null || $offering->state !== 'active' || ! (bool) $offering->auto_renew_allowed) {
+                    throw new DomainException('Auto-renew policy requires an active auto-renew-enabled offering.');
+                }
+
+                $policy = $connection->table('plan_offering_auto_renew_policies')
+                    ->where('plan_offering_id', $planOfferingId)
+                    ->lockForUpdate()
+                    ->first([
+                        'id', 'price_change_mode', 'absolute_increase_limit_irr',
+                        'percentage_increase_limit_bps', 'version',
+                    ]);
+                $timestamp = $this->timestamp();
+                if ($policy === null) {
+                    $policyId = (int) $connection->table('plan_offering_auto_renew_policies')->insertGetId([
+                        'plan_offering_id' => $planOfferingId,
+                        'price_change_mode' => $mode->value,
+                        'absolute_increase_limit_irr' => $absoluteIncreaseLimitIrr,
+                        'percentage_increase_limit_bps' => $percentageIncreaseLimitBps,
+                        'version' => 1,
+                        'actor_administrator_id' => $administratorId,
+                        'correlation_id' => $correlationId,
+                        'created_at' => $timestamp,
+                        'updated_at' => $timestamp,
+                    ]);
+                    $version = 1;
+                } else {
+                    $policyId = (int) $policy->id;
+                    $changed = $policy->price_change_mode !== $mode->value
+                        || ($policy->absolute_increase_limit_irr === null ? null : (int) $policy->absolute_increase_limit_irr) !== $absoluteIncreaseLimitIrr
+                        || ($policy->percentage_increase_limit_bps === null ? null : (int) $policy->percentage_increase_limit_bps) !== $percentageIncreaseLimitBps;
+                    $version = (int) $policy->version;
+                    if ($changed) {
+                        $version++;
+                        $connection->table('plan_offering_auto_renew_policies')->where('id', $policyId)->update([
+                            'price_change_mode' => $mode->value,
+                            'absolute_increase_limit_irr' => $absoluteIncreaseLimitIrr,
+                            'percentage_increase_limit_bps' => $percentageIncreaseLimitBps,
+                            'version' => $version,
+                            'actor_administrator_id' => $administratorId,
+                            'correlation_id' => $correlationId,
+                            'updated_at' => $timestamp,
+                        ]);
+                    }
+                }
+
+                $connection->table('plan_offering_auto_renew_policy_histories')->insert([
+                    'auto_renew_policy_id' => $policyId,
+                    'version' => $version,
+                    'price_change_mode' => $mode->value,
+                    'absolute_increase_limit_irr' => $absoluteIncreaseLimitIrr,
+                    'percentage_increase_limit_bps' => $percentageIncreaseLimitBps,
+                    'actor_administrator_id' => $administratorId,
+                    'request_key_hash' => $requestHash,
+                    'payload_hash' => $payloadHash,
+                    'reason_code' => $reasonCode,
+                    'reason' => trim($reason),
+                    'correlation_id' => $correlationId,
+                    'created_at' => $timestamp,
+                ]);
+
+                return new ServiceAutoRenewPolicyReceipt(
+                    $policyId,
+                    $planOfferingId,
+                    $mode,
+                    $absoluteIncreaseLimitIrr,
+                    $percentageIncreaseLimitBps,
+                    $version,
+                    false,
+                );
             }, 3);
         } catch (QueryException $exception) {
             $replay = $this->replay($requestHash, $payloadHash, $planOfferingId);

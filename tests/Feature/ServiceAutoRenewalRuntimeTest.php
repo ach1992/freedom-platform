@@ -24,9 +24,9 @@ final class ServiceAutoRenewalRuntimeTest extends TestCase
     use AgentPricingQuoteIntegrationTestSupport;
     use DatabaseTruncation;
     use PurchaseOrderTestSupport;
-    use ServiceAutoRenewalRuntimeTestHelpers;
     use ServiceAutoRenewalRuntimeScenariosA;
     use ServiceAutoRenewalRuntimeScenariosB;
+    use ServiceAutoRenewalRuntimeTestHelpers;
 
     protected function setUp(): void
     {

@@ -9,7 +9,9 @@ use App\Modules\Provisioning\Application\ServiceMutationExecutor;
 use App\Modules\Provisioning\Domain\AutoRenewAttemptState;
 use App\Modules\Provisioning\Domain\ProvisioningState;
 use Database\Seeders\WalletFinancialFoundationSeeder;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 trait ServiceAutoRenewalRuntimeScenariosA
 {
@@ -141,9 +143,9 @@ trait ServiceAutoRenewalRuntimeScenariosA
         $configRow = DB::table('service_auto_renew_configurations')->where('id', $configuration->configurationId)->first();
         self::assertNotNull($configRow);
 
-        $this->expectException(\Illuminate\Database\QueryException::class);
+        $this->expectException(QueryException::class);
         DB::table('service_auto_renew_attempts')->insert([
-            'public_id' => (string) \Illuminate\Support\Str::ulid(),
+            'public_id' => (string) Str::ulid(),
             'cycle_key' => hash('sha256', 'forged-auto-renew-cycle'),
             'auto_renew_configuration_id' => $configuration->configurationId,
             'service_subscription_id' => $scenario['service_id'],
@@ -167,5 +169,4 @@ trait ServiceAutoRenewalRuntimeScenariosA
             'updated_at' => $this->purchaseOrderTimestamp(),
         ]);
     }
-
 }

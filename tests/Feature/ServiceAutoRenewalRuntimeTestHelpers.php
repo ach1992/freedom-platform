@@ -14,8 +14,9 @@ use App\Modules\Panels\Application\PanelCredentialPolicy;
 use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
 use App\Modules\Provisioning\Application\InitialProvisioningExecutor;
 use App\Modules\Provisioning\Application\InitialProvisioningQueueService;
-use App\Modules\Provisioning\Application\ServiceAutoRenewConfigurationService;
 use App\Modules\Provisioning\Application\ServiceAutoRenewalProcessor;
+use App\Modules\Provisioning\Application\ServiceAutoRenewConfigurationReceipt;
+use App\Modules\Provisioning\Application\ServiceAutoRenewConfigurationService;
 use App\Modules\Provisioning\Application\ServiceMutationExecutor;
 use App\Modules\Provisioning\Domain\ProvisioningState;
 use App\Modules\Wallet\Application\LedgerEntryDraft;
@@ -27,7 +28,7 @@ use Illuminate\Support\Facades\DB;
 
 trait ServiceAutoRenewalRuntimeTestHelpers
 {
-    private function enableAutoRenew(array $scenario, string $suffix): \App\Modules\Provisioning\Application\ServiceAutoRenewConfigurationReceipt
+    private function enableAutoRenew(array $scenario, string $suffix): ServiceAutoRenewConfigurationReceipt
     {
         return $this->app->make(ServiceAutoRenewConfigurationService::class)->configure(
             'service.auto-renew.config.'.$suffix.'.000001',
