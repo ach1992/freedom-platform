@@ -16,6 +16,10 @@ use RuntimeException;
 
 trait ServiceAutoRenewalPersistence
 {
+    /**
+     * @param ServiceAutoRenewConfigurationFacts $facts
+     * @return ServiceAutoRenewAttemptRow
+     */
     private function ensureAttempt(object $facts): object
     {
         $cycleKey = $this->cycleKey($facts);
@@ -136,6 +140,7 @@ trait ServiceAutoRenewalPersistence
     {
         $this->database->connection()->transaction(function (Connection $connection) use ($attemptId, $intentPublicId, $reasonCode): void {
             $attempt = $this->attemptOn($connection, $attemptId, true);
+            /** @var object{id:int|string,source_quote_id:int|string,payment_eligibility_decision_id:int|string,payment_method_code:string}|null $intent */
             $intent = $connection->table('payment_intents')->where('public_id', $intentPublicId)->first([
                 'id', 'source_quote_id', 'payment_eligibility_decision_id', 'payment_method_code',
             ]);
@@ -145,6 +150,7 @@ trait ServiceAutoRenewalPersistence
             if ($attempt->payment_intent_id !== null && (int) $attempt->payment_intent_id !== (int) $intent->id) {
                 throw new RuntimeException('Auto-renew attempt is already bound to a different Payment Intent.');
             }
+            /** @var object{final_price_irr:int|string}|null $quote */
             $quote = $connection->table('quotes')->where('id', (int) $intent->source_quote_id)->first(['final_price_irr']);
             if ($quote === null) {
                 throw new RuntimeException('Auto-renew Payment Intent source Quote disappeared.');
@@ -165,6 +171,7 @@ trait ServiceAutoRenewalPersistence
     {
         $this->database->connection()->transaction(function (Connection $connection) use ($attemptId, $order): void {
             $attempt = $this->attemptOn($connection, $attemptId, true);
+            /** @var object{id:int|string,payment_intent_id:int|string}|null $settlement */
             $settlement = $connection->table('purchase_settlements')
                 ->where('public_id', $order->purchaseSettlementPublicId)
                 ->first(['id', 'payment_intent_id']);
@@ -194,6 +201,7 @@ trait ServiceAutoRenewalPersistence
             if ($attempt->current_price_irr === null) {
                 throw new RuntimeException('Auto-renew settled attempt lacks current price authority.');
             }
+            /** @var object{configuration_version:int|string}|null $config */
             $config = $connection->table('service_auto_renew_configurations')
                 ->where('id', (int) $attempt->auto_renew_configuration_id)
                 ->lockForUpdate()
@@ -217,12 +225,14 @@ trait ServiceAutoRenewalPersistence
             if ($attempt->provisioning_operation_id === null) {
                 throw new RuntimeException('Successful auto-renew attempt lacks mutation authority.');
             }
+            /** @var object{id:int|string,quoted_remote_identity_generation:int|string,target_expires_at:string|null}|null $authority */
             $authority = $connection->table('service_paid_mutation_authorities')
                 ->where('provisioning_operation_id', (int) $attempt->provisioning_operation_id)
                 ->first(['id', 'quoted_remote_identity_generation', 'target_expires_at']);
             if ($authority === null || $authority->target_expires_at === null) {
                 throw new RuntimeException('Successful auto-renew mutation lacks resolved target expiry authority.');
             }
+            /** @var object{remote_identity_generation:int|string}|null $service */
             $service = $connection->table('service_subscriptions')
                 ->where('id', (int) $attempt->service_subscription_id)
                 ->lockForUpdate()
