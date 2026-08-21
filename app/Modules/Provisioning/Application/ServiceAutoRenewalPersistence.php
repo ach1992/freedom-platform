@@ -227,6 +227,7 @@ trait ServiceAutoRenewalPersistence
                 ], true)) {
                     throw new RuntimeException('Auto-renew settlement replay has inconsistent attempt state.');
                 }
+                $this->recordSettledPrice($attemptId);
 
                 return;
             }
@@ -238,6 +239,7 @@ trait ServiceAutoRenewalPersistence
                 'updated_at' => $this->timestamp(),
             ]);
             $this->event($connection, $attemptId, (string) $attempt->state, AutoRenewAttemptState::Settled, 'wallet_captured');
+            $this->recordSettledPrice($attemptId);
         }, 3);
     }
 
