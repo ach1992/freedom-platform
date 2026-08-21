@@ -82,6 +82,7 @@ trait ServiceAutoRenewalStateOperations
         }
     }
 
+    /** @param ServiceAutoRenewAttemptRow $attempt */
     private function retryReady(object $attempt): bool
     {
         if ($attempt->next_retry_at === null) {
