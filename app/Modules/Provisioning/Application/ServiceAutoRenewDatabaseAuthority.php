@@ -48,7 +48,7 @@ final class ServiceAutoRenewDatabaseAuthority
     public static function observation(
         Connection $connection,
         int $configurationId,
-        int $attemptId,
+        ?int $attemptId,
         string $correlationId,
     ): void {
         self::set($connection, self::OBSERVATION, null, $configurationId, null, $attemptId, $correlationId);
