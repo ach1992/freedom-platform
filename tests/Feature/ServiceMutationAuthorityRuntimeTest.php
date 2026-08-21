@@ -167,6 +167,8 @@ final class ServiceMutationTestPanelAdapter implements PanelAdapter
 
     public ?DataAllowanceMode $lastDataAllowanceMode = null;
 
+    public ?DateTimeImmutable $lastExpiryAt = null;
+
     /** @var array<string, RemoteServiceSnapshot> */
     private array $servicesByUsername = [];
 
@@ -176,6 +178,7 @@ final class ServiceMutationTestPanelAdapter implements PanelAdapter
         $this->transactionLevels = [];
         $this->lastDataAllowanceBytes = null;
         $this->lastDataAllowanceMode = null;
+        $this->lastExpiryAt = null;
     }
 
     public function testConnection(): PanelOperationResult
@@ -249,6 +252,8 @@ final class ServiceMutationTestPanelAdapter implements PanelAdapter
 
     public function updateExpiry(string $idempotencyKey, string $remoteId, DateTimeImmutable $expiresAt): PanelOperationResult
     {
+        $this->lastExpiryAt = $expiresAt;
+
         return $this->mutation('update_expiry');
     }
 
@@ -909,6 +914,47 @@ SQL);
         $terminalReplay = $this->mutationExecutor()->execute($queue->operationPublicId);
         self::assertTrue($terminalReplay->replayed);
         self::assertSame(['lookup_remote_id', 'add_data_allowance'], $scenario['adapter']->calls);
+    }
+
+    public function test_paid_expiry_mutations_use_one_remote_effect_and_persist_the_exact_absolute_target(): void
+    {
+        foreach ([
+            ['renew', 'aq-renew-30d', ServiceMutationType::Renew],
+            ['add-days', 'aq-extra-7d', ServiceMutationType::AddDays],
+        ] as [$suffix, $packageCode, $type]) {
+            $scenario = $this->scenario('paid-'.$suffix);
+            $quote = $this->paidPackageQuote($scenario, $packageCode, 'paid-'.$suffix);
+            $settlement = $this->capturePaidPackageQuote($quote, 'paid-'.$suffix);
+            $this->app->make(PurchaseOrderService::class)->createFromSettlement(
+                $settlement->settlementPublicId,
+                $this->purchaseOrderCorrelation('paid-'.$suffix.'-order'),
+            );
+
+            $queue = $this->app->make(ServicePurchaseMutationQueueService::class)->queueFromSettlement(
+                $settlement->settlementPublicId,
+                'paid-'.$suffix.'-request-0001',
+                $this->purchaseOrderCorrelation('paid-'.$suffix.'-queue'),
+            );
+            self::assertSame($type, $queue->type);
+
+            $executed = $this->mutationExecutor()->execute($queue->operationPublicId);
+            self::assertSame(ProvisioningState::Succeeded, $executed->state);
+            self::assertSame(['lookup_remote_id', 'update_expiry'], $scenario['adapter']->calls);
+            self::assertSame([0, 0], $scenario['adapter']->transactionLevels);
+            self::assertNotNull($scenario['adapter']->lastExpiryAt);
+
+            $authority = DB::table('service_paid_mutation_authorities')
+                ->where('provisioning_operation_id', DB::table('provisioning_operations')
+                    ->where('public_id', $queue->operationPublicId)->value('id'))
+                ->first(['target_expires_at', 'target_data_limit_bytes', 'targets_resolved_at']);
+            self::assertNotNull($authority);
+            self::assertSame(
+                $scenario['adapter']->lastExpiryAt->format('Y-m-d H:i:s.u'),
+                (string) $authority->target_expires_at,
+            );
+            self::assertNull($authority->target_data_limit_bytes);
+            self::assertNotNull($authority->targets_resolved_at);
+        }
     }
 
     public function test_concurrent_paid_queue_replays_one_settlement_authority_and_generation(): void

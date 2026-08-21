@@ -21,7 +21,7 @@ enum ServiceMutationType: string
         return match ($this) {
             self::Renew, self::AddDays => 'update_expiry',
             self::AddData => 'add_data_allowance',
-            self::AddDataDays => 'update_expiry',
+            self::AddDataDays => throw new \LogicException('Combined Service mutations require the full panel capability set.'),
             default => $this->value,
         };
     }

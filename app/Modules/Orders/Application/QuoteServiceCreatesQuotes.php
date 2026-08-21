@@ -81,6 +81,13 @@ trait QuoteServiceCreatesQuotes
                     || ! in_array($user->account_type, ['customer', 'agent'], true)) {
                     throw new DomainException('Quote requires an active customer or agent account.');
                 }
+                if ($user->account_type === 'agent') {
+                    if ($agentPricingContext === null || $agentPricingContext->actorUserId !== $userId) {
+                        throw new AuthorizationException('Agent quote creation requires an authorized pricing actor.');
+                    }
+                } elseif ($agentPricingContext !== null) {
+                    throw new AuthorizationException('Agent pricing context is not authorized for this quote subject.');
+                }
 
                 /** @var object{id:int|string,code:string,version:int|string,base_price_irr:int|string,discount_eligible:int|bool,state:string,visibility:string}|null $offering */
                 $offering = $connection->table('plan_offerings')
