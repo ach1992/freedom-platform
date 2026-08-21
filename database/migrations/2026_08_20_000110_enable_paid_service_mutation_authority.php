@@ -232,6 +232,7 @@ SQL);
     private function unpreparedSqlFile(string $relativePath, string $unavailableMessage): void
     {
         $sql = $this->sqlFile($relativePath, $unavailableMessage);
+        // @phpstan-ignore-next-line argument.type -- sqlFile verifies a migration-owned SQL asset.
         DB::unprepared($sql);
     }
 
