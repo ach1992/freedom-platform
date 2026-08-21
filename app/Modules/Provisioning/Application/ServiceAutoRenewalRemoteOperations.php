@@ -21,6 +21,7 @@ use RuntimeException;
 
 trait ServiceAutoRenewalRemoteOperations
 {
+    /** @param ServiceAutoRenewConfigurationFacts $facts */
     private function refreshRemoteObservation(object $facts): bool
     {
         $observation = $this->remoteObservation($facts);
@@ -49,6 +50,7 @@ trait ServiceAutoRenewalRemoteOperations
     }
 
     /**
+     * @param ServiceAutoRenewConfigurationFacts $facts
      * @return array{expires_at:DateTimeImmutable,evidence_hash:string}
      */
     private function remoteObservation(object $facts): array
@@ -75,6 +77,10 @@ trait ServiceAutoRenewalRemoteOperations
         return ['expires_at' => $remote->expiresAt, 'evidence_hash' => strtolower($remote->canonicalHash)];
     }
 
+    /**
+     * @param ServiceAutoRenewAttemptRow $attempt
+     * @param ServiceAutoRenewConfigurationFacts $facts
+     */
     private function freshQuote(object $attempt, object $facts): QuoteReceipt
     {
         $ttlMinutes = $this->boundedConfigInt('auto_renew.quote_ttl_minutes', 15, 1, 120);
@@ -119,6 +125,7 @@ trait ServiceAutoRenewalRemoteOperations
         if ($lock) {
             $query->lockForUpdate();
         }
+        /** @var object{price_change_mode:string,absolute_increase_limit_irr:int|string|null,percentage_increase_limit_bps:int|string|null}|null $row */
         $row = $query->first(['price_change_mode', 'absolute_increase_limit_irr', 'percentage_increase_limit_bps']);
         if ($row === null) {
             return ['mode' => AutoRenewPriceChangeMode::Stop, 'absolute' => null, 'percentage' => null];
