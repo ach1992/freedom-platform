@@ -116,7 +116,7 @@ trait ServiceAutoRenewalSupport
             'configuration_version', 'remote_identity_generation', 'observed_expires_at',
             'observed_expiry_evidence_hash', 'observed_expiry_source', 'state', 'reason_code',
             'baseline_price_irr', 'current_price_irr', 'quote_id', 'payment_eligibility_decision_id',
-            'payment_intent_id', 'purchase_settlement_id', 'provisioning_operation_id', 'correlation_id', 'retry_count', 'next_retry_at', 'completed_at',
+            'payment_intent_id', 'purchase_settlement_id', 'provisioning_operation_id', 'correlation_id', 'commercial_generation', 'retry_count', 'next_retry_at', 'completed_at',
         ]);
         if ($row === null) {
             throw new RuntimeException('Auto-renew attempt does not exist.');
@@ -145,7 +145,7 @@ trait ServiceAutoRenewalSupport
             'configuration_version', 'remote_identity_generation', 'observed_expires_at',
             'observed_expiry_evidence_hash', 'observed_expiry_source', 'state', 'reason_code',
             'baseline_price_irr', 'current_price_irr', 'quote_id', 'payment_eligibility_decision_id',
-            'payment_intent_id', 'purchase_settlement_id', 'provisioning_operation_id', 'correlation_id', 'retry_count', 'next_retry_at', 'completed_at',
+            'payment_intent_id', 'purchase_settlement_id', 'provisioning_operation_id', 'correlation_id', 'commercial_generation', 'retry_count', 'next_retry_at', 'completed_at',
         ]);
 
         return $row;
@@ -295,10 +295,14 @@ trait ServiceAutoRenewalSupport
 
     private function commercialAuthorityGeneration(int $attemptId): int
     {
-        return (int) $this->database->connection()->table('service_auto_renew_attempt_events')
-            ->where('auto_renew_attempt_id', $attemptId)
-            ->whereIn('reason_code', ['commercial_authority_reset_for_requote', 'commercial_authority_reset_before_failure'])
-            ->count();
+        $generation = $this->database->connection()->table('service_auto_renew_attempts')
+            ->where('id', $attemptId)
+            ->value('commercial_generation');
+        if (! is_int($generation) && ! is_string($generation)) {
+            throw new RuntimeException('Auto-renew commercial generation is unavailable.');
+        }
+
+        return (int) $generation;
     }
 
     private function commercialAuthorityKeySuffix(int $attemptId): string

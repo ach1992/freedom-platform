@@ -79,6 +79,29 @@ trait ServiceAutoRenewalRuntimeScenariosC
             ]);
     }
 
+    public function test_database_rejects_forged_commercial_generation_without_safe_reset(): void
+    {
+        $scenario = $this->scenario('db-commercial-generation');
+        $this->enableWalletMethod('db-commercial-generation');
+        $this->seed(WalletFinancialFoundationSeeder::class);
+        $this->fundWallet($scenario['user_id'], 1, 'db-commercial-generation');
+        $this->enableAutoRenew($scenario, 'db-commercial-generation');
+
+        $this->app->make(ServiceAutoRenewalProcessor::class)->processDue(10);
+        $attempt = DB::table('service_auto_renew_attempts')->first(['id', 'state', 'commercial_generation']);
+        self::assertNotNull($attempt);
+        self::assertSame('insufficient_wallet', $attempt->state);
+        self::assertSame(0, (int) $attempt->commercial_generation);
+
+        $this->expectException(QueryException::class);
+        DB::table('service_auto_renew_attempts')
+            ->where('id', (int) $attempt->id)
+            ->update([
+                'commercial_generation' => 1,
+                'updated_at' => $this->purchaseOrderTimestamp(),
+            ]);
+    }
+
     public function test_reserved_wallet_hold_is_released_when_auto_renew_is_disabled_before_capture(): void
     {
         $scenario = $this->scenario('reserved-disabled');

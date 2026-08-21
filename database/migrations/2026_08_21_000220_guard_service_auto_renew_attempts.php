@@ -67,6 +67,7 @@ BEGIN
        OR NEW.payment_intent_id IS NOT NULL
        OR NEW.purchase_settlement_id IS NOT NULL
        OR NEW.provisioning_operation_id IS NOT NULL
+       OR NEW.commercial_generation <> 0
        OR NEW.retry_count <> 0
        OR NEW.next_retry_at IS NOT NULL
        OR NEW.completed_at IS NOT NULL THEN
@@ -130,6 +131,7 @@ BEGIN
                OR NEW.quote_id IS NOT NULL
                OR NEW.payment_eligibility_decision_id IS NOT NULL
                OR NEW.current_price_irr IS NOT NULL
+               OR NEW.commercial_generation <> OLD.commercial_generation + 1
                OR NOT EXISTS (
                    SELECT 1
                    FROM payment_intents pi
@@ -146,6 +148,9 @@ BEGIN
                 SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew commercial authority can reset only after safe pre-capture terminalization.';
             END IF;
         ELSE
+            IF NEW.commercial_generation <> OLD.commercial_generation THEN
+                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew commercial generation cannot change without safe authority reset.';
+            END IF;
             IF NOT (OLD.quote_id <=> NEW.quote_id)
                OR NOT (OLD.payment_eligibility_decision_id <=> NEW.payment_eligibility_decision_id)
                OR NOT (OLD.current_price_irr <=> NEW.current_price_irr) THEN
@@ -155,6 +160,9 @@ BEGIN
                 SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew Payment Intent authority cannot be replaced after binding.';
             END IF;
         END IF;
+    END IF;
+    IF OLD.payment_intent_id IS NULL AND NEW.commercial_generation <> OLD.commercial_generation THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew commercial generation cannot change without bound authority reset.';
     END IF;
     IF OLD.purchase_settlement_id IS NOT NULL AND NOT (OLD.purchase_settlement_id <=> NEW.purchase_settlement_id) THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew settlement authority cannot be replaced after binding.';
@@ -198,6 +206,7 @@ BEGIN
             OR NOT (OLD.payment_intent_id <=> NEW.payment_intent_id)
             OR NOT (OLD.purchase_settlement_id <=> NEW.purchase_settlement_id)
             OR NOT (OLD.provisioning_operation_id <=> NEW.provisioning_operation_id)
+            OR NOT (OLD.commercial_generation <=> NEW.commercial_generation)
             OR NOT (OLD.retry_count <=> NEW.retry_count)
             OR NOT (OLD.next_retry_at <=> NEW.next_retry_at)
             OR NOT (OLD.completed_at <=> NEW.completed_at)) THEN

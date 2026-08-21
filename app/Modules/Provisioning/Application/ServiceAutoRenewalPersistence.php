@@ -70,6 +70,7 @@ trait ServiceAutoRenewalPersistence
                     'purchase_settlement_id' => null,
                     'provisioning_operation_id' => null,
                     'correlation_id' => $correlationId,
+                    'commercial_generation' => 0,
                     'retry_count' => 0,
                     'next_retry_at' => null,
                     'completed_at' => null,
@@ -192,6 +193,7 @@ trait ServiceAutoRenewalPersistence
                 'payment_intent_id' => null,
                 'current_price_irr' => null,
                 'reason_code' => $reasonCode,
+                'commercial_generation' => $connection->raw('commercial_generation + 1'),
                 'updated_at' => $this->timestamp(),
             ]);
         if ($updated !== 1) {

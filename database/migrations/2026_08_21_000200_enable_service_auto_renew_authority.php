@@ -116,6 +116,7 @@ return new class extends Migration
             $table->foreignId('provisioning_operation_id')->nullable();
             $table->foreign('provisioning_operation_id', 'sara_operation_fk')->references('id')->on('provisioning_operations')->restrictOnDelete();
             $table->string('correlation_id', 64);
+            $table->unsignedSmallInteger('commercial_generation')->default(0);
             $table->unsignedSmallInteger('retry_count')->default(0);
             $table->dateTime('next_retry_at', 6)->nullable();
             $table->dateTime('completed_at', 6)->nullable();
