@@ -35,17 +35,30 @@ trait ServiceAutoRenewalRemoteOperations
                 return false;
             }
 
-            $connection->table('service_auto_renew_configurations')->where('id', (int) $facts->config_id)->update([
-                'observed_expires_at' => $this->databaseDateTime($observation['expires_at']),
-                'expiry_observed_at' => $this->timestamp(),
-                'observed_expiry_evidence_hash' => $observation['evidence_hash'],
-                'observed_expiry_source' => 'remote_snapshot',
-                'observed_remote_identity_generation' => (int) $facts->remote_identity_generation,
-                'last_correlation_id' => $correlationId,
-                'updated_at' => $this->timestamp(),
-            ]);
+            ServiceAutoRenewDatabaseAuthority::observation(
+                $connection,
+                (int) $facts->config_id,
+                null,
+                $correlationId,
+            );
+            try {
+                $updated = $connection->table('service_auto_renew_configurations')->where('id', (int) $facts->config_id)->update([
+                    'observed_expires_at' => $this->databaseDateTime($observation['expires_at']),
+                    'expiry_observed_at' => $this->timestamp(),
+                    'observed_expiry_evidence_hash' => $observation['evidence_hash'],
+                    'observed_expiry_source' => 'remote_snapshot',
+                    'observed_remote_identity_generation' => (int) $facts->remote_identity_generation,
+                    'last_correlation_id' => $correlationId,
+                    'updated_at' => $this->timestamp(),
+                ]);
+                if ($updated !== 1) {
+                    throw new RuntimeException('Auto-renew remote observation lost configuration authority.');
+                }
 
-            return true;
+                return true;
+            } finally {
+                ServiceAutoRenewDatabaseAuthority::clear($connection);
+            }
         }, 3);
     }
 
