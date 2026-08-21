@@ -339,6 +339,10 @@ jobs:
     needs: preflight
     if: ${{ needs.preflight.outputs.integration == 'true' }}
     runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
+    # Docker publishes fixed loopback ports; serialize only this shared-host integration job.
+    concurrency:
+      group: freedom-platform-mariadb-redis-integration
+      cancel-in-progress: false
     env:
       MARIADB_VERSION: '10.11'
       COMPOSE_PROJECT_NAME: freedom-platform-ci-${{ github.run_id }}
@@ -477,7 +481,8 @@ jobs:
 
   secrets:
     name: Secret scan
-    if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.draft == false) }}
+    # A filtered workflow_dispatch is diagnostic-only; every pull-request run still scans its changed history.
+    if: ${{ (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.draft == false)) && !(github.event_name == 'workflow_dispatch' && inputs.phpunit_filter != '') }}
     runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
