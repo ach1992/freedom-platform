@@ -156,6 +156,22 @@ Database migrations should use expand/contract compatibility. A code rollback is
 
 If activation fails, preserve diagnostics, prevent unsafe new effects, and use the guarded rollback/restore path appropriate to the proven schema state. Never run `migrate:rollback` blindly on production.
 
+### Paid Service package authority migrations
+
+The Service package quote and paid-mutation authority changes are a single financial-schema release unit. Their ordered migrations are [`2026_08_20_000100_enable_service_package_quotes.php`](../database/migrations/2026_08_20_000100_enable_service_package_quotes.php) followed by [`2026_08_20_000110_enable_paid_service_mutation_authority.php`](../database/migrations/2026_08_20_000110_enable_paid_service_mutation_authority.php). Apply them only through the reviewed, exact-release migration mechanism after the release gate in this document has passed. Do not apply either migration ad hoc, out of timestamp order, or against an unknown partial schema.
+
+| Release stage | Required operator evidence and action | Unsafe shortcut prohibited by the contract |
+|---|---|---|
+| **Preflight** | Confirm exact-revision FULL CI, including MariaDB and Redis, is green; verify that the prerequisite non-paid and operational Service authority migrations are already applied; quiesce workers and entrypoints that can create paid Service operations; take a verified database backup and identify the release owner who can authorize restoration. | Do not infer migration compatibility from a green quick test, a fake provider, or source presence alone. |
+| **Apply** | Apply the ordinary timestamped migration sequence while paid mutation creation remains unavailable. The second migration deliberately installs `provisioning_operations_paid_mutation_upgrade_fence` before composing its table, constraints, and guards, and removes that fence only after its final paid-operation insert guard is installed. | Do not manually create, alter, or drop the paid upgrade fence, trigger guards, check constraints, or authority table to accelerate the release. |
+| **Postflight** | Verify that the two migrations are recorded, the paid authority table and expected guards exist, `provisioning_operations_paid_mutation_upgrade_fence` is absent, and guarded smoke checks prove that unauthorized paid operations remain rejected. Reopen workers only after those checks succeed and the release owner accepts the result. | Do not reopen paid mutation processing merely because DDL completed; the completed authoritative guard surface is the acceptance condition. |
+| **Interrupted or failed apply** | Keep paid creation fail-closed, preserve the database and release diagnostics, and resume only the approved migration path on the same reviewed release revision after establishing the actual schema state. Escalate to restore when the state cannot be proven. | Never delete the fence or run an unreviewed partial rollback to make traffic appear healthy. |
+
+A rollback is exceptional, not a routine release operation. The paid-mutation migration itself refuses rollback while a paid authority row or paid provisioning-operation evidence exists; it also refuses when Service-operation Quote or combined-action pricing/eligibility evidence would be stranded. The preceding quote migration similarly refuses rollback while non-purchase Service-operation Quotes or combined-action evidence exist. When any of those guards reject rollback, retain the current schema, stop unsafe new effects, and use the approved forward-fix or backup/restore decision rather than bypassing the guard. [1] [2]
+
 ## Operational evidence
 
 Keep detailed operational evidence in protected target storage. Repository release records contain only sanitized metadata needed for release audit. Never commit credentials, private provider payloads, customer data, subscription URLs, or private backup contents.
+
+[1]: ../database/migrations/2026_08_20_000110_enable_paid_service_mutation_authority.php "Paid Service mutation authority migration"
+[2]: ../database/migrations/2026_08_20_000100_enable_service_package_quotes.php "Service package Quote authority migration"
