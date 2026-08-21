@@ -318,12 +318,6 @@ trait ServiceAutoRenewalCommercialOperations
         }
 
         $this->bindSettlement($attemptId, $order);
-        try {
-            $this->recordSettledPrice($attemptId);
-        } catch (Throwable $exception) {
-            report($exception);
-            $this->recordSameStateEvent($attemptId, 'settled_price_sync_deferred');
-        }
 
         return $this->queueCapturedAttempt($attemptId);
     }
@@ -341,6 +335,10 @@ trait ServiceAutoRenewalCommercialOperations
         if ($attempt->purchase_settlement_id === null) {
             throw new RuntimeException('Auto-renew mutation queue requires a captured settlement.');
         }
+
+        $this->recordSettledPrice($attemptId);
+        $attempt = $this->attempt($attemptId);
+
         /** @var object{public_id:string}|null $settlement */
         $settlement = $this->database->connection()->table('purchase_settlements')
             ->where('id', (int) $attempt->purchase_settlement_id)
