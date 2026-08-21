@@ -41,6 +41,7 @@ final readonly class ServiceDeliveryEffectExecutor
         private ProvisioningPanelAdapterResolver $adapters,
         private ProtectedTelegramDeliveryRuntime $telegram,
         private ProtectedTelegramMessageSender $sender,
+        private ProtectedServiceDeliveryPresentationFactory $presentations,
     ) {}
 
     /** @requirement SVC-002 SVC-014 PRV-002 PRV-003 ARCH-004 DAT-003 SEC-002 SEC-008 INT-001 INT-002 OPS-003 QUA-001 QUA-004 */
@@ -72,14 +73,14 @@ final readonly class ServiceDeliveryEffectExecutor
             return $this->receipt($context['attempt'], $context['effect'], false);
         }
 
-        $text = $this->protectedText($artifacts);
-        if ($text === null) {
+        $presentation = $this->presentations->make($artifacts);
+        if ($presentation === null) {
             return $this->finalizePreparedFailure(
                 $context['effect'],
                 'delivery_text_unavailable',
             );
         }
-        if (mb_strlen($text) > 4096) {
+        if ($presentation->isText() && mb_strlen($presentation->text()) > 4096) {
             return $this->finalizePreparedFailure(
                 $context['effect'],
                 'delivery_text_too_large',
@@ -98,7 +99,7 @@ final readonly class ServiceDeliveryEffectExecutor
         try {
             $result = $this->sender->send(
                 $this->positiveDatabaseInt($sending->telegram_user_id, 'Telegram user ID'),
-                $text,
+                $presentation,
             );
         } catch (Throwable) {
             return $this->finalizeBoundaryResult(
