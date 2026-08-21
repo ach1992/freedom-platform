@@ -17,6 +17,7 @@ use App\Modules\Panels\Application\Contracts\SensitiveDeliveryArtifacts;
 use App\Modules\Panels\Application\PanelAdapterSession;
 use App\Modules\Panels\Domain\PanelProviderType;
 use App\Modules\Telegram\Application\Contracts\ProtectedTelegramMessageSender;
+use App\Modules\Telegram\Application\ProtectedTelegramPresentation;
 use App\Modules\Telegram\Application\ProtectedTelegramSendResult;
 use Closure;
 use DateTimeImmutable;
@@ -28,7 +29,7 @@ final class ServiceDeliveryEffectTestDoubles implements PanelAdapter, PanelAdapt
     /** @var list<string> */
     public array $panelCalls = [];
 
-    /** @var list<array{telegram_user_id:int,text:string}> */
+    /** @var list<array{telegram_user_id:int,text:string,presentation:ProtectedTelegramPresentation}> */
     public array $sendCalls = [];
 
     public ?Closure $beforeDeliveryArtifacts = null;
@@ -199,9 +200,9 @@ final class ServiceDeliveryEffectTestDoubles implements PanelAdapter, PanelAdapt
         ]];
     }
 
-    public function send(int $telegramUserId, string $text): ProtectedTelegramSendResult
+    public function send(int $telegramUserId, ProtectedTelegramPresentation $presentation): ProtectedTelegramSendResult
     {
-        $this->sendCalls[] = ['telegram_user_id' => $telegramUserId, 'text' => $text];
+        $this->sendCalls[] = ['telegram_user_id' => $telegramUserId, 'text' => $presentation->isText() ? $presentation->text() : $presentation->caption(), 'presentation' => $presentation];
         if ($this->beforeSend !== null) {
             ($this->beforeSend)();
         }
