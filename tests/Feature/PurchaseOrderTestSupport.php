@@ -50,22 +50,9 @@ trait PurchaseOrderTestSupport
         // the database session to the same deterministic instant rather than weakening those
         // production guards or comparing two different clocks.
         if (DB::connection()->getDriverName() === 'mysql') {
-            // DatabaseTruncation empties the immutable operational-capability singleton.
-            // Re-enter its convergent migration before each fixture so historical migration
-            // tests do not inherit a final DDL graph with an empty readiness anchor.
-            /** @var Migration $serviceOperationalMigration */
-            $serviceOperationalMigration = require database_path('migrations/2026_08_19_000140_enable_service_operational_authority.php');
-            $serviceOperationalMigration->up();
-
-            // Re-entering #140 deliberately restores its predecessor guard surface. On the
-            // final schema, immediately reapply the paid successor so ordinary runtime
-            // fixtures keep testing the authority contract that production installs.
-            if (DB::getSchemaBuilder()->hasTable('service_paid_mutation_authorities')) {
-                /** @var Migration $paidMutationAuthorityMigration */
-                $paidMutationAuthorityMigration = require database_path('migrations/2026_08_20_000110_enable_paid_service_mutation_authority.php');
-                $paidMutationAuthorityMigration->up();
-            }
-
+            // Migration DDL commits implicitly in MariaDB. Never re-enter authority migrations
+            // while Laravel has established this test's transaction/savepoint stack; the guarded
+            // teardown repair below runs only after a historical fault harness has changed DDL.
             DB::statement('SET timestamp = '.$this->purchaseOrderClock->value->getTimestamp());
 
             // Exact-authority upgrade tests intentionally exercise the historical 001165 schema.
