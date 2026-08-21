@@ -79,14 +79,21 @@ final class ServiceAutoRenewFinancialAuthorityVerificationTest extends TestCase
         }
     }
 
-    public function test_direct_configuration_price_baseline_writes_are_rejected_after_legitimate_configuration(): void
+    public function test_direct_configuration_financial_and_observation_authority_writes_are_rejected(): void
     {
         $scenario = $this->scenario('financial-config-authority');
         $configuration = $this->enableAutoRenew($scenario, 'financial-config-authority');
         $stored = DB::table('service_auto_renew_configurations')
             ->where('id', $configuration->configurationId)
-            ->first(['accepted_price_irr', 'configuration_version']);
+            ->first([
+                'accepted_price_irr',
+                'configuration_version',
+                'observed_expires_at',
+                'observed_remote_identity_generation',
+            ]);
         self::assertNotNull($stored);
+        self::assertNotNull($stored->observed_expires_at);
+        self::assertNotNull($stored->observed_remote_identity_generation);
 
         try {
             DB::table('service_auto_renew_configurations')
@@ -116,6 +123,28 @@ final class ServiceAutoRenewFinancialAuthorityVerificationTest extends TestCase
         } catch (QueryException $exception) {
             self::assertStringContainsString(
                 'Auto-renew settled price requires captured settlement authority.',
+                $exception->getMessage(),
+            );
+        }
+
+        try {
+            DB::table('service_auto_renew_configurations')
+                ->where('id', $configuration->configurationId)
+                ->update([
+                    'observed_expires_at' => (new \DateTimeImmutable((string) $stored->observed_expires_at))
+                        ->modify('+1 hour')
+                        ->format('Y-m-d H:i:s.u'),
+                    'expiry_observed_at' => $this->purchaseOrderTimestamp(),
+                    'observed_expiry_evidence_hash' => hash('sha256', 'forged-auto-renew-observation'),
+                    'observed_expiry_source' => 'remote_snapshot',
+                    'observed_remote_identity_generation' => (int) $stored->observed_remote_identity_generation,
+                    'last_correlation_id' => $this->purchaseOrderCorrelation('forged-observation'),
+                    'updated_at' => $this->purchaseOrderTimestamp(),
+                ]);
+            self::fail('Direct renewal timing mutation must require successful paid mutation authority.');
+        } catch (QueryException $exception) {
+            self::assertStringContainsString(
+                'Auto-renew expiry observation requires successful paid mutation authority.',
                 $exception->getMessage(),
             );
         }
