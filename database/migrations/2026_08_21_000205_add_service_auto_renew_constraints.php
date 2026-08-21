@@ -21,13 +21,13 @@ return new class extends Migration
     {
         DB::statement("ALTER TABLE plan_offering_auto_renew_policies ADD CONSTRAINT sarp_mode_chk CHECK (`price_change_mode` IN ('stop','continue','within_limit'))");
         DB::statement('ALTER TABLE plan_offering_auto_renew_policies ADD CONSTRAINT sarp_abs_chk CHECK (`absolute_increase_limit_irr` IS NULL OR `absolute_increase_limit_irr` >= 0)');
-        DB::statement('ALTER TABLE plan_offering_auto_renew_policies ADD CONSTRAINT sarp_pct_chk CHECK (`percentage_increase_limit_bps` IS NULL OR `percentage_increase_limit_bps` <= 1000000)');
+        DB::statement('ALTER TABLE plan_offering_auto_renew_policies ADD CONSTRAINT sarp_pct_chk CHECK (`percentage_increase_limit_bps` IS NULL OR (`percentage_increase_limit_bps` >= 0 AND `percentage_increase_limit_bps` <= 1000000))');
         DB::statement("ALTER TABLE plan_offering_auto_renew_policies ADD CONSTRAINT sarp_limits_chk CHECK ((`price_change_mode` = 'within_limit' AND (`absolute_increase_limit_irr` IS NOT NULL OR `percentage_increase_limit_bps` IS NOT NULL)) OR (`price_change_mode` <> 'within_limit' AND `absolute_increase_limit_irr` IS NULL AND `percentage_increase_limit_bps` IS NULL))");
         DB::statement('ALTER TABLE plan_offering_auto_renew_policies ADD CONSTRAINT sarp_version_chk CHECK (`version` >= 1)');
 
         DB::statement("ALTER TABLE plan_offering_auto_renew_policy_histories ADD CONSTRAINT sarph_mode_chk CHECK (`price_change_mode` IN ('stop','continue','within_limit'))");
         DB::statement('ALTER TABLE plan_offering_auto_renew_policy_histories ADD CONSTRAINT sarph_abs_chk CHECK (`absolute_increase_limit_irr` IS NULL OR `absolute_increase_limit_irr` >= 0)');
-        DB::statement('ALTER TABLE plan_offering_auto_renew_policy_histories ADD CONSTRAINT sarph_pct_chk CHECK (`percentage_increase_limit_bps` IS NULL OR `percentage_increase_limit_bps` <= 1000000)');
+        DB::statement('ALTER TABLE plan_offering_auto_renew_policy_histories ADD CONSTRAINT sarph_pct_chk CHECK (`percentage_increase_limit_bps` IS NULL OR (`percentage_increase_limit_bps` >= 0 AND `percentage_increase_limit_bps` <= 1000000))');
         DB::statement("ALTER TABLE plan_offering_auto_renew_policy_histories ADD CONSTRAINT sarph_limits_chk CHECK ((`price_change_mode` = 'within_limit' AND (`absolute_increase_limit_irr` IS NOT NULL OR `percentage_increase_limit_bps` IS NOT NULL)) OR (`price_change_mode` <> 'within_limit' AND `absolute_increase_limit_irr` IS NULL AND `percentage_increase_limit_bps` IS NULL))");
         DB::statement('ALTER TABLE plan_offering_auto_renew_policy_histories ADD CONSTRAINT sarph_hash_chk CHECK (`request_key_hash` REGEXP \'^[0-9a-f]{64}$\' AND `payload_hash` REGEXP \'^[0-9a-f]{64}$\')');
 
