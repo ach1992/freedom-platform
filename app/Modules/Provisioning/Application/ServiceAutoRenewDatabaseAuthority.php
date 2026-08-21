@@ -15,6 +15,8 @@ final class ServiceAutoRenewDatabaseAuthority
 
     private const SETTLEMENT = 'service_auto_renew_settlement_v1';
 
+    private const OBSERVATION = 'service_auto_renew_observation_v1';
+
     public static function policy(
         Connection $connection,
         int $administratorId,
@@ -41,6 +43,15 @@ final class ServiceAutoRenewDatabaseAuthority
         string $correlationId,
     ): void {
         self::set($connection, self::SETTLEMENT, null, $configurationId, null, $attemptId, $correlationId);
+    }
+
+    public static function observation(
+        Connection $connection,
+        int $configurationId,
+        int $attemptId,
+        string $correlationId,
+    ): void {
+        self::set($connection, self::OBSERVATION, null, $configurationId, null, $attemptId, $correlationId);
     }
 
     public static function clear(Connection $connection): void
