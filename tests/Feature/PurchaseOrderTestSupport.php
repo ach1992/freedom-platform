@@ -145,6 +145,18 @@ SQL);
                 /** @var Migration $serviceOperationalMigration */
                 $serviceOperationalMigration = require database_path('migrations/2026_08_19_000140_enable_service_operational_authority.php');
                 $serviceOperationalMigration->up();
+
+                /** @var Migration|null $paidMutationAuthorityMigration */
+                $paidMutationAuthorityMigration = null;
+                if ($paidMutationAuthorityExists) {
+                    $paidMutationAuthorityMigration = require database_path('migrations/2026_08_20_000110_enable_paid_service_mutation_authority.php');
+
+                    // #120 validates predecessor non-paid DDL before it can reopen source
+                    // authority. Restore that predecessor before re-entering #120 rather than
+                    // running it while successor paid guards remain installed.
+                    $paidMutationAuthorityMigration->down();
+                }
+
                 /** @var Migration $nonPaidInvalidationMigration */
                 $nonPaidInvalidationMigration = require database_path('migrations/2026_08_19_000115_extend_provisioning_invalidation_to_non_paid_sources.php');
                 /** @var Migration $nonPaidAuthorityMigration */
@@ -152,11 +164,7 @@ SQL);
                 $nonPaidInvalidationMigration->up();
                 $nonPaidAuthorityMigration->up();
 
-                if ($paidMutationAuthorityExists) {
-                    /** @var Migration $paidMutationAuthorityMigration */
-                    $paidMutationAuthorityMigration = require database_path('migrations/2026_08_20_000110_enable_paid_service_mutation_authority.php');
-                    $paidMutationAuthorityMigration->up();
-                }
+                $paidMutationAuthorityMigration?->up();
             });
         }
 
