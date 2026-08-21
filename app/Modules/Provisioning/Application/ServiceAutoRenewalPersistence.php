@@ -212,8 +212,21 @@ trait ServiceAutoRenewalPersistence
                 || (int) $settlement->payment_intent_id !== (int) $attempt->payment_intent_id) {
                 throw new RuntimeException('Auto-renew captured settlement does not match the bound Payment Intent.');
             }
-            if ($attempt->purchase_settlement_id !== null && (int) $attempt->purchase_settlement_id !== (int) $settlement->id) {
-                throw new RuntimeException('Auto-renew attempt is already bound to a different settlement.');
+            if ($attempt->purchase_settlement_id !== null) {
+                if ((int) $attempt->purchase_settlement_id !== (int) $settlement->id) {
+                    throw new RuntimeException('Auto-renew attempt is already bound to a different settlement.');
+                }
+                $state = AutoRenewAttemptState::from((string) $attempt->state);
+                if (! in_array($state, [
+                    AutoRenewAttemptState::Settled,
+                    AutoRenewAttemptState::MutationQueued,
+                    AutoRenewAttemptState::Succeeded,
+                    AutoRenewAttemptState::Failed,
+                ], true)) {
+                    throw new RuntimeException('Auto-renew settlement replay has inconsistent attempt state.');
+                }
+
+                return;
             }
             $connection->table('service_auto_renew_attempts')->where('id', $attemptId)->update([
                 'purchase_settlement_id' => (int) $settlement->id,

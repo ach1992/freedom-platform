@@ -102,6 +102,16 @@ trait ServiceAutoRenewalCommercialOperations
         DateTimeImmutable $dueUntil,
     ): ServiceAutoRenewAttemptReceipt {
         $attempt = $this->attempt($attemptId);
+        $state = AutoRenewAttemptState::from((string) $attempt->state);
+        if ($state->isTerminal()) {
+            return $this->receipt($attempt, true);
+        }
+        if ($attempt->provisioning_operation_id !== null || $state === AutoRenewAttemptState::MutationQueued) {
+            return $this->reconcileAttempt($attemptId);
+        }
+        if ($attempt->purchase_settlement_id !== null || $state === AutoRenewAttemptState::Settled) {
+            return $this->queueCapturedAttempt($attemptId);
+        }
         if ($attempt->payment_intent_id === null) {
             return $this->executeCommercialAttempt($attemptId, $facts);
         }
@@ -321,6 +331,13 @@ trait ServiceAutoRenewalCommercialOperations
     private function queueCapturedAttempt(int $attemptId): ServiceAutoRenewAttemptReceipt
     {
         $attempt = $this->attempt($attemptId);
+        $state = AutoRenewAttemptState::from((string) $attempt->state);
+        if ($state->isTerminal()) {
+            return $this->receipt($attempt, true);
+        }
+        if ($attempt->provisioning_operation_id !== null || $state === AutoRenewAttemptState::MutationQueued) {
+            return $this->reconcileAttempt($attemptId);
+        }
         if ($attempt->purchase_settlement_id === null) {
             throw new RuntimeException('Auto-renew mutation queue requires a captured settlement.');
         }

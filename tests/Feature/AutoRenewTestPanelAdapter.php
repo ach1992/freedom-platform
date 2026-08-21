@@ -53,6 +53,29 @@ final class AutoRenewTestPanelAdapter implements PanelAdapter
         $this->lastExpiryAt = null;
     }
 
+    public function seedKnownEntitlements(string $remoteId, int $dataLimitBytes, DateTimeImmutable $expiresAt): void
+    {
+        $username = 'seeded-'.substr(hash('sha256', $remoteId), 0, 16);
+        $hash = hash('sha256', implode('|', [
+            $remoteId,
+            $username,
+            PanelServiceStatus::Active->value,
+            (string) $dataLimitBytes,
+            '0',
+            $expiresAt->format(DATE_ATOM),
+        ]));
+        $this->servicesByUsername[$username] = new RemoteServiceSnapshot(
+            $remoteId,
+            $username,
+            PanelServiceStatus::Active,
+            $dataLimitBytes,
+            0,
+            $expiresAt,
+            $hash,
+            $hash,
+        );
+    }
+
     public function setKnownEntitlements(string $remoteId, int $dataLimitBytes, DateTimeImmutable $expiresAt): void
     {
         foreach ($this->servicesByUsername as $username => $service) {
