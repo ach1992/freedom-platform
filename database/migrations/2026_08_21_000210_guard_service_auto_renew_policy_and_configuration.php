@@ -4,19 +4,29 @@ declare(strict_types=1);
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Support\Facades\DB;
+use RuntimeException;
 
 return new class extends Migration
 {
     public function up(): void
     {
-        $this->dropGuards();
         $this->createPolicyGuards();
         $this->createConfigurationGuards();
     }
 
     public function down(): void
     {
+        $this->assertRollbackSafe();
         $this->dropGuards();
+    }
+
+    private function assertRollbackSafe(): void
+    {
+        foreach (['plan_offering_auto_renew_policies', 'service_auto_renew_configurations'] as $table) {
+            if (DB::table($table)->exists()) {
+                throw new RuntimeException('Cannot remove Service auto-renew guards while auto-renew authority rows exist.');
+            }
+        }
     }
 
     private function dropGuards(): void
@@ -32,7 +42,7 @@ return new class extends Migration
     private function createPolicyGuards(): void
     {
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER sarp_insert_guard
+CREATE TRIGGER IF NOT EXISTS sarp_insert_guard
 BEFORE INSERT ON plan_offering_auto_renew_policies
 FOR EACH ROW
 BEGIN
@@ -46,7 +56,7 @@ END
 SQL);
 
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER sarp_update_guard
+CREATE TRIGGER IF NOT EXISTS sarp_update_guard
 BEFORE UPDATE ON plan_offering_auto_renew_policies
 FOR EACH ROW
 BEGIN
@@ -66,7 +76,7 @@ END
 SQL);
 
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER sarp_delete_guard
+CREATE TRIGGER IF NOT EXISTS sarp_delete_guard
 BEFORE DELETE ON plan_offering_auto_renew_policies
 FOR EACH ROW
 BEGIN
@@ -78,7 +88,7 @@ SQL);
     private function createConfigurationGuards(): void
     {
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER sarc_insert_guard
+CREATE TRIGGER IF NOT EXISTS sarc_insert_guard
 BEFORE INSERT ON service_auto_renew_configurations
 FOR EACH ROW
 BEGIN
@@ -111,7 +121,7 @@ END
 SQL);
 
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER sarc_update_guard
+CREATE TRIGGER IF NOT EXISTS sarc_update_guard
 BEFORE UPDATE ON service_auto_renew_configurations
 FOR EACH ROW
 BEGIN
@@ -156,7 +166,7 @@ END
 SQL);
 
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER sarc_delete_guard
+CREATE TRIGGER IF NOT EXISTS sarc_delete_guard
 BEFORE DELETE ON service_auto_renew_configurations
 FOR EACH ROW
 BEGIN
