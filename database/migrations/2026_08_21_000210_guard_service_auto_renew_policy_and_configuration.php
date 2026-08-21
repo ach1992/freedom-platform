@@ -282,9 +282,21 @@ BEGIN
     IF NOT version_changed AND observation_changed THEN
         IF COALESCE(@app_service_auto_renew_authority, '') <> 'service_auto_renew_observation_v1'
            OR COALESCE(CAST(@app_service_auto_renew_scope_id AS UNSIGNED), 0) <> NEW.id
-           OR BINARY COALESCE(@app_service_auto_renew_correlation_id, '') <> BINARY NEW.last_correlation_id
-           OR NEW.observed_expiry_source <> 'paid_mutation'
-           OR NOT EXISTS (
+           OR BINARY COALESCE(@app_service_auto_renew_correlation_id, '') <> BINARY NEW.last_correlation_id THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew expiry observation requires explicit observation authority.';
+        END IF;
+
+        IF NEW.observed_expiry_source = 'remote_snapshot' THEN
+            IF COALESCE(CAST(@app_service_auto_renew_attempt_id AS UNSIGNED), 0) <> 0
+               OR NOT EXISTS (
+                   SELECT 1 FROM service_subscriptions s
+                   WHERE s.id = NEW.service_subscription_id
+                     AND s.remote_identity_generation = NEW.observed_remote_identity_generation
+               ) THEN
+                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew remote observation authority is stale for the Service identity.';
+            END IF;
+        ELSEIF NEW.observed_expiry_source = 'paid_mutation' THEN
+            IF NOT EXISTS (
                SELECT 1
                FROM service_auto_renew_attempts a
                JOIN service_paid_mutation_authorities m ON m.provisioning_operation_id = a.provisioning_operation_id
@@ -306,8 +318,11 @@ BEGIN
                      DATE_FORMAT(m.target_expires_at, '%Y-%m-%d %H:%i:%s.%f'), '|',
                      m.quoted_remote_identity_generation
                  ), 256))
-           ) THEN
-            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew expiry observation requires successful paid mutation authority.';
+            ) THEN
+                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew expiry observation requires successful paid mutation authority.';
+            END IF;
+        ELSE
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew expiry observation source is not authorized.';
         END IF;
     END IF;
 
