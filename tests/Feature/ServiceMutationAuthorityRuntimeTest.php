@@ -1076,7 +1076,11 @@ SQL);
 
         $receipt = $this->mutationExecutor()->execute($queue->operationPublicId);
 
-        self::assertSame(ProvisioningState::UncertainRemoteResult, $receipt->state);
+        self::assertSame(
+            ProvisioningState::UncertainRemoteResult,
+            $receipt->state,
+            $this->operationOutcome($queue->operationPublicId),
+        );
         self::assertSame(['lookup_remote_id', 'add_data_allowance'], $scenario['adapter']->calls);
         self::assertSame([0, 0], $scenario['adapter']->transactionLevels);
         self::assertSame(30 * 1024 * 1024 * 1024, $scenario['adapter']->lastDataAllowanceBytes);
@@ -1453,6 +1457,15 @@ SQL);
     private function mutationQueue(): ServiceMutationQueueService
     {
         return $this->app->make(ServiceMutationQueueService::class);
+    }
+
+    private function operationOutcome(string $operationPublicId): string
+    {
+        $operation = DB::table('provisioning_operations')->where('public_id', $operationPublicId)->first([
+            'state', 'last_result_code', 'last_result_message', 'remote_effect_started_at', 'remote_effect_completed_at',
+        ]);
+
+        return json_encode($operation, JSON_THROW_ON_ERROR);
     }
 
     private function mutationExecutor(): ServiceMutationExecutor
