@@ -1279,7 +1279,7 @@ SQL);
             $quote->userId,
             $quote->quotePublicId,
         );
-        self::assertSame($quote->action->value, DB::table('payment_eligibility_decisions')
+        self::assertSame($quote->action->value, DB::table('payment_method_eligibility_decisions')
             ->where('id', $decision->decisionId)->value('action_snapshot'));
 
         $intent = $this->app->make(PurchasePaymentIntentService::class)->create(
