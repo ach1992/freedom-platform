@@ -760,7 +760,9 @@ final class ServiceMutationAuthorityRuntimeTest extends TestCase
             // This migration fault harness truncates immutable singleton rows. Re-enter #140
             // only at this DDL-safe rollback boundary so #110 can restore the operational
             // predecessor guard without committing an ordinary runtime test transaction.
-            $this->serviceOperationalMigration()->up();
+            /** @var Migration $operationalMigration */
+            $operationalMigration = require database_path('migrations/2026_08_19_000140_enable_service_operational_authority.php');
+            $operationalMigration->up();
             $paidMutationMigration->down();
             $quoteMigration->down();
             $legacyRefundGuard = DB::selectOne(<<<'SQL'
