@@ -16,6 +16,7 @@ use Throwable;
 
 trait ServiceAutoRenewalCommercialOperations
 {
+    /** @param ServiceAutoRenewConfigurationFacts $facts */
     private function executeCommercialAttempt(int $attemptId, object $facts): ServiceAutoRenewAttemptReceipt
     {
         $attempt = $this->attempt($attemptId);
@@ -94,6 +95,7 @@ trait ServiceAutoRenewalCommercialOperations
         return $this->captureAndQueue($attemptId);
     }
 
+    /** @param ServiceAutoRenewConfigurationFacts $facts */
     private function resumeReservedAttempt(
         int $attemptId,
         object $facts,
@@ -103,6 +105,7 @@ trait ServiceAutoRenewalCommercialOperations
         if ($attempt->payment_intent_id === null) {
             return $this->executeCommercialAttempt($attemptId, $facts);
         }
+        /** @var object{public_id:string,state:string}|null $intent */
         $intent = $this->database->connection()->table('payment_intents')
             ->where('id', (int) $attempt->payment_intent_id)
             ->first(['public_id', 'state']);
@@ -118,6 +121,7 @@ trait ServiceAutoRenewalCommercialOperations
 
                 return $this->finishFailure($attemptId, 'configuration_changed_after_reservation');
             } catch (DomainException|RuntimeException $releaseException) {
+                /** @var object{state:string}|null $refreshedIntent */
                 $refreshedIntent = $this->database->connection()->table('payment_intents')
                     ->where('id', (int) $attempt->payment_intent_id)
                     ->first(['state']);
@@ -140,6 +144,7 @@ trait ServiceAutoRenewalCommercialOperations
 
                         return $this->finishFailure($attemptId, 'expiry_changed_after_reservation');
                     } catch (DomainException|RuntimeException $releaseException) {
+                        /** @var object{state:string}|null $refreshedIntent */
                         $refreshedIntent = $this->database->connection()->table('payment_intents')
                             ->where('id', (int) $attempt->payment_intent_id)
                             ->first(['state']);
@@ -166,6 +171,7 @@ trait ServiceAutoRenewalCommercialOperations
         if ($attempt->payment_intent_id === null) {
             throw new RuntimeException('Auto-renew capture requires a bound Payment Intent.');
         }
+        /** @var object{public_id:string}|null $intent */
         $intent = $this->database->connection()->table('payment_intents')
             ->where('id', (int) $attempt->payment_intent_id)
             ->first(['public_id']);
@@ -176,6 +182,7 @@ trait ServiceAutoRenewalCommercialOperations
         try {
             $order = $this->database->connection()->transaction(function (Connection $connection) use ($attemptId, $intent): ?PurchaseOrderReceipt {
                 $lockedAttempt = $this->attemptOn($connection, $attemptId, true);
+                /** @var object{public_id:string,state:string}|null $lockedIntent */
                 $lockedIntent = $connection->table('payment_intents')
                     ->where('id', (int) $lockedAttempt->payment_intent_id)
                     ->lockForUpdate()
@@ -243,6 +250,7 @@ trait ServiceAutoRenewalCommercialOperations
         if ($attempt->purchase_settlement_id === null) {
             throw new RuntimeException('Auto-renew mutation queue requires a captured settlement.');
         }
+        /** @var object{public_id:string}|null $settlement */
         $settlement = $this->database->connection()->table('purchase_settlements')
             ->where('id', (int) $attempt->purchase_settlement_id)
             ->first(['public_id']);
@@ -271,6 +279,7 @@ trait ServiceAutoRenewalCommercialOperations
             return $this->receiptById($attemptId, true);
         }
 
+        /** @var object{id:int|string}|null $operation */
         $operation = $this->database->connection()->table('provisioning_operations')
             ->where('public_id', $mutation->operationPublicId)
             ->first(['id']);
@@ -306,6 +315,7 @@ trait ServiceAutoRenewalCommercialOperations
             return $this->receipt($attempt, true);
         }
 
+        /** @var object{state:string}|null $operation */
         $operation = $this->database->connection()->table('provisioning_operations')
             ->where('id', (int) $attempt->provisioning_operation_id)
             ->first(['state']);
