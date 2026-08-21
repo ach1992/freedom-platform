@@ -1,0 +1,219 @@
+<?php
+
+declare(strict_types=1);
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Support\Facades\DB;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        $this->dropGuards();
+        $this->createAttemptGuards();
+        $this->createAppendOnlyGuards();
+    }
+
+    public function down(): void
+    {
+        $this->dropGuards();
+    }
+
+    private function dropGuards(): void
+    {
+        DB::unprepared('DROP TRIGGER IF EXISTS sara_insert_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS sara_update_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS sara_delete_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS sarph_update_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS sarph_delete_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS sarch_update_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS sarch_delete_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS sarae_update_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS sarae_delete_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS sarni_update_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS sarni_delete_guard');
+    }
+
+    private function createAttemptGuards(): void
+    {
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER sara_insert_guard
+BEFORE INSERT ON service_auto_renew_attempts
+FOR EACH ROW
+BEGIN
+    IF NEW.state <> 'pending'
+       OR NEW.reason_code IS NOT NULL
+       OR NEW.current_price_irr IS NOT NULL
+       OR NEW.quote_id IS NOT NULL
+       OR NEW.payment_eligibility_decision_id IS NOT NULL
+       OR NEW.payment_intent_id IS NOT NULL
+       OR NEW.purchase_settlement_id IS NOT NULL
+       OR NEW.provisioning_operation_id IS NOT NULL
+       OR NEW.retry_count <> 0
+       OR NEW.next_retry_at IS NOT NULL
+       OR NEW.completed_at IS NOT NULL THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew attempt must start without commercial or terminal authority.';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM service_auto_renew_configurations c
+        JOIN service_subscriptions s ON s.id = c.service_subscription_id
+        WHERE c.id = NEW.auto_renew_configuration_id
+          AND c.service_subscription_id = NEW.service_subscription_id
+          AND c.enabled = 1
+          AND c.configuration_version = NEW.configuration_version
+          AND c.observed_remote_identity_generation = NEW.remote_identity_generation
+          AND c.observed_expires_at = NEW.observed_expires_at
+          AND c.observed_expiry_evidence_hash = NEW.observed_expiry_evidence_hash
+          AND c.observed_expiry_source = NEW.observed_expiry_source
+          AND COALESCE(c.last_settled_price_irr, c.accepted_price_irr) = NEW.baseline_price_irr
+          AND s.remote_identity_generation = NEW.remote_identity_generation
+    ) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew attempt does not match current configuration and Service cycle authority.';
+    END IF;
+END
+SQL);
+
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER sara_update_guard
+BEFORE UPDATE ON service_auto_renew_attempts
+FOR EACH ROW
+BEGIN
+    IF OLD.public_id <> NEW.public_id
+       OR OLD.cycle_key <> NEW.cycle_key
+       OR OLD.auto_renew_configuration_id <> NEW.auto_renew_configuration_id
+       OR OLD.service_subscription_id <> NEW.service_subscription_id
+       OR OLD.configuration_version <> NEW.configuration_version
+       OR OLD.remote_identity_generation <> NEW.remote_identity_generation
+       OR OLD.observed_expires_at <> NEW.observed_expires_at
+       OR OLD.observed_expiry_evidence_hash <> NEW.observed_expiry_evidence_hash
+       OR OLD.observed_expiry_source <> NEW.observed_expiry_source
+       OR OLD.baseline_price_irr <> NEW.baseline_price_irr
+       OR OLD.correlation_id <> NEW.correlation_id
+       OR OLD.created_at <> NEW.created_at THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew attempt identity is immutable.';
+    END IF;
+
+    IF OLD.payment_intent_id IS NOT NULL THEN
+        IF NOT (OLD.quote_id <=> NEW.quote_id)
+           OR NOT (OLD.payment_eligibility_decision_id <=> NEW.payment_eligibility_decision_id)
+           OR NOT (OLD.current_price_irr <=> NEW.current_price_irr) THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew commercial authority is frozen after Payment Intent binding.';
+        END IF;
+    END IF;
+    IF OLD.payment_intent_id IS NOT NULL AND NOT (OLD.payment_intent_id <=> NEW.payment_intent_id) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew Payment Intent authority cannot be replaced after binding.';
+    END IF;
+    IF OLD.purchase_settlement_id IS NOT NULL AND NOT (OLD.purchase_settlement_id <=> NEW.purchase_settlement_id) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew settlement authority cannot be replaced after binding.';
+    END IF;
+    IF OLD.provisioning_operation_id IS NOT NULL AND NOT (OLD.provisioning_operation_id <=> NEW.provisioning_operation_id) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew mutation authority cannot be replaced after binding.';
+    END IF;
+
+    IF NEW.payment_intent_id IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM payment_intents pi
+        WHERE pi.id = NEW.payment_intent_id
+          AND pi.purpose = 'purchase'
+          AND pi.source_quote_id = NEW.quote_id
+          AND pi.payment_eligibility_decision_id = NEW.payment_eligibility_decision_id
+          AND pi.payment_method_code = 'wallet'
+    ) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew Payment Intent does not match bound Quote and eligibility authority.';
+    END IF;
+    IF NEW.purchase_settlement_id IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM purchase_settlements ps
+        WHERE ps.id = NEW.purchase_settlement_id AND ps.payment_intent_id = NEW.payment_intent_id
+    ) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew settlement does not match bound Payment Intent.';
+    END IF;
+    IF NEW.provisioning_operation_id IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM service_paid_mutation_authorities a
+        WHERE a.provisioning_operation_id = NEW.provisioning_operation_id
+          AND a.purchase_settlement_id = NEW.purchase_settlement_id
+          AND a.service_subscription_id = NEW.service_subscription_id
+          AND a.action = 'renew'
+    ) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew mutation does not match the captured renewal authority.';
+    END IF;
+
+    IF OLD.state IN ('price_change_blocked', 'succeeded', 'failed')
+       AND (NEW.state <> OLD.state
+            OR NOT (OLD.reason_code <=> NEW.reason_code)
+            OR NOT (OLD.current_price_irr <=> NEW.current_price_irr)
+            OR NOT (OLD.quote_id <=> NEW.quote_id)
+            OR NOT (OLD.payment_eligibility_decision_id <=> NEW.payment_eligibility_decision_id)
+            OR NOT (OLD.payment_intent_id <=> NEW.payment_intent_id)
+            OR NOT (OLD.purchase_settlement_id <=> NEW.purchase_settlement_id)
+            OR NOT (OLD.provisioning_operation_id <=> NEW.provisioning_operation_id)
+            OR NOT (OLD.retry_count <=> NEW.retry_count)
+            OR NOT (OLD.next_retry_at <=> NEW.next_retry_at)
+            OR NOT (OLD.completed_at <=> NEW.completed_at)) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Terminal auto-renew attempt authority is immutable.';
+    END IF;
+    IF OLD.state = 'pending' AND NEW.state NOT IN ('pending', 'price_change_blocked', 'insufficient_wallet', 'retry_pending', 'settled', 'failed') THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew pending transition is invalid.';
+    END IF;
+    IF OLD.state = 'insufficient_wallet' AND NEW.state NOT IN ('insufficient_wallet', 'retry_pending', 'price_change_blocked', 'settled', 'failed') THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew insufficient-wallet transition is invalid.';
+    END IF;
+    IF OLD.state = 'retry_pending' AND NEW.state NOT IN ('retry_pending', 'price_change_blocked', 'insufficient_wallet', 'settled', 'failed') THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew retry-pending transition is invalid.';
+    END IF;
+    IF OLD.state = 'settled' AND NEW.state NOT IN ('settled', 'mutation_queued', 'failed') THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew settled transition is invalid.';
+    END IF;
+    IF OLD.state = 'mutation_queued' AND NEW.state NOT IN ('mutation_queued', 'succeeded', 'failed') THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew mutation transition is invalid.';
+    END IF;
+END
+SQL);
+
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER sara_delete_guard
+BEFORE DELETE ON service_auto_renew_attempts
+FOR EACH ROW
+BEGIN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew attempts are non-deletable.';
+END
+SQL);
+    }
+
+    private function createAppendOnlyGuards(): void
+    {
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER sarph_update_guard BEFORE UPDATE ON plan_offering_auto_renew_policy_histories
+FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew offering policy histories are append-only.'; END
+SQL);
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER sarph_delete_guard BEFORE DELETE ON plan_offering_auto_renew_policy_histories
+FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew offering policy histories are append-only.'; END
+SQL);
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER sarch_update_guard BEFORE UPDATE ON service_auto_renew_configuration_histories
+FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew Service configuration histories are append-only.'; END
+SQL);
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER sarch_delete_guard BEFORE DELETE ON service_auto_renew_configuration_histories
+FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew Service configuration histories are append-only.'; END
+SQL);
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER sarae_update_guard BEFORE UPDATE ON service_auto_renew_attempt_events
+FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew attempt events are append-only.'; END
+SQL);
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER sarae_delete_guard BEFORE DELETE ON service_auto_renew_attempt_events
+FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew attempt events are append-only.'; END
+SQL);
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER sarni_update_guard BEFORE UPDATE ON service_auto_renew_notification_intents
+FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew notification intents are append-only.'; END
+SQL);
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER sarni_delete_guard BEFORE DELETE ON service_auto_renew_notification_intents
+FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew notification intents are append-only.'; END
+SQL);
+    }
+
+};

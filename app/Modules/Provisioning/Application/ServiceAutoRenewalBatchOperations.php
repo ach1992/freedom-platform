@@ -1,0 +1,208 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Modules\Provisioning\Application;
+
+use App\Modules\Agents\Domain\AgentPricingAction;
+use App\Modules\Orders\Application\PurchaseOrderReceipt;
+use App\Modules\Orders\Application\QuoteAgentPricingContext;
+use App\Modules\Orders\Application\QuotePricingInput;
+use App\Modules\Orders\Application\QuoteReceipt;
+use App\Modules\Orders\Application\QuoteService;
+use App\Modules\Orders\Application\ServicePackageQuoteContext;
+use App\Modules\Orders\Domain\QuoteAction;
+use App\Modules\Orders\Domain\QuoteOverrideSource;
+use App\Modules\Panels\Application\Contracts\PanelServiceStatus;
+use App\Modules\Payments\Application\PurchaseWalletPaymentService;
+use App\Modules\Payments\Eligibility\Application\PaymentEligibilityDecisionReceipt;
+use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
+use App\Modules\Provisioning\Domain\AutoRenewAttemptState;
+use App\Modules\Provisioning\Domain\AutoRenewNotificationOutcome;
+use App\Modules\Provisioning\Domain\AutoRenewPriceChangeMode;
+use App\Modules\Provisioning\Domain\ProvisioningState;
+use App\Shared\Application\Clock;
+use DateTimeImmutable;
+use DateTimeZone;
+use DomainException;
+use Illuminate\Database\Connection;
+use Illuminate\Database\DatabaseManager;
+use Illuminate\Database\QueryException;
+use Illuminate\Support\Str;
+use RuntimeException;
+use Throwable;
+
+trait ServiceAutoRenewalBatchOperations
+{
+    public function processDue(int $limit): ServiceAutoRenewBatchReceipt
+    {
+        if ($limit < 1 || $limit > 500) {
+            throw new DomainException('Auto-renew batch limit must be between 1 and 500.');
+        }
+
+        $counters = [
+            'candidates' => 0,
+            'attempted' => 0,
+            'queued' => 0,
+            'succeeded' => 0,
+            'blocked' => 0,
+            'insufficient' => 0,
+            'failed' => 0,
+        ];
+
+        foreach ($this->staleUnfinancializedAttemptIds($limit) as $attemptId) {
+            try {
+                $receipt = $this->finishFailure($attemptId, 'configuration_superseded');
+                $this->countReceipt($receipt, $counters, false);
+            } catch (Throwable $exception) {
+                report($exception);
+                $this->safeRecordAttemptEvent($attemptId, 'configuration_supersession_deferred');
+                $counters['failed']++;
+            }
+        }
+
+        foreach ($this->outstandingMutationAttemptIds($limit) as $attemptId) {
+            try {
+                $receipt = $this->reconcileAttempt($attemptId);
+                $this->countReceipt($receipt, $counters, false);
+            } catch (Throwable $exception) {
+                report($exception);
+                $this->safeRecordAttemptEvent($attemptId, 'mutation_reconciliation_deferred');
+                $counters['failed']++;
+            }
+        }
+        foreach ($this->outstandingFinancialAttemptIds($limit) as $attemptId) {
+            try {
+                $attempt = $this->attempt($attemptId);
+                $facts = $this->configurationFacts((int) $attempt->auto_renew_configuration_id);
+                $receipt = $attempt->purchase_settlement_id !== null
+                    ? $this->queueCapturedAttempt($attemptId)
+                    : $this->resumeReservedAttempt(
+                        $attemptId,
+                        $facts,
+                        $this->clock->now()->modify('+'.$this->windowHours().' hours'),
+                    );
+                $this->countReceipt($receipt, $counters, false);
+            } catch (Throwable $exception) {
+                report($exception);
+                $this->safeRecordAttemptEvent($attemptId, 'financial_recovery_deferred');
+                $counters['failed']++;
+            }
+        }
+
+        $windowHours = $this->boundedConfigInt('auto_renew.window_hours', 24, 1, 720);
+        $dueUntil = $this->clock->now()->modify('+'.$windowHours.' hours');
+        $candidateIds = $this->database->connection()->table('service_auto_renew_configurations')
+            ->where('enabled', true)
+            ->whereNotNull('observed_expires_at')
+            ->where('observed_expires_at', '<=', $this->databaseDateTime($dueUntil))
+            ->orderBy('observed_expires_at')
+            ->orderBy('id')
+            ->limit($limit)
+            ->pluck('id')
+            ->map(static fn (mixed $id): int => (int) $id)
+            ->all();
+        $counters['candidates'] = count($candidateIds);
+
+        foreach ($candidateIds as $configurationId) {
+            try {
+                $receipt = $this->processConfiguration($configurationId, $dueUntil);
+                if ($receipt !== null) {
+                    $this->countReceipt($receipt, $counters, true);
+                }
+            } catch (Throwable $exception) {
+                report($exception);
+                $receipt = $this->recordCandidateFailure($configurationId, 'auto_renew_unexpected_failure');
+                if ($receipt !== null) {
+                    $this->countReceipt($receipt, $counters, true);
+                } else {
+                    $counters['failed']++;
+                }
+            }
+        }
+
+        return new ServiceAutoRenewBatchReceipt(
+            $counters['candidates'],
+            $counters['attempted'],
+            $counters['queued'],
+            $counters['succeeded'],
+            $counters['blocked'],
+            $counters['insufficient'],
+            $counters['failed'],
+        );
+    }
+
+    private function processConfiguration(int $configurationId, DateTimeImmutable $dueUntil): ?ServiceAutoRenewAttemptReceipt
+    {
+        $facts = $this->configurationFacts($configurationId);
+        if (! (bool) $facts->enabled) {
+            return null;
+        }
+
+        $existing = $this->hasCompleteCycleEvidence($facts)
+            ? $this->attemptForCycle($this->cycleKey($facts))
+            : null;
+        if ($existing !== null) {
+            $state = AutoRenewAttemptState::from((string) $existing->state);
+            if ($state->isTerminal()) {
+                return $this->receipt($existing, true);
+            }
+            if ($existing->provisioning_operation_id !== null || $state === AutoRenewAttemptState::MutationQueued) {
+                return $this->reconcileAttempt((int) $existing->id);
+            }
+            if ($existing->purchase_settlement_id !== null || $state === AutoRenewAttemptState::Settled) {
+                return $this->queueCapturedAttempt((int) $existing->id);
+            }
+            if ($existing->payment_intent_id !== null) {
+                if (! $this->retryReady($existing)) {
+                    return null;
+                }
+
+                return $this->resumeReservedAttempt((int) $existing->id, $facts, $dueUntil);
+            }
+            if (in_array($state, [AutoRenewAttemptState::RetryPending, AutoRenewAttemptState::InsufficientWallet], true)
+                && ! $this->retryReady($existing)) {
+                return null;
+            }
+        }
+        if (! $this->runtimeEligible($facts)) {
+            if (! $this->hasCompleteCycleEvidence($facts)) {
+                throw new DomainException('Auto-renew configuration has stale or incomplete cycle evidence.');
+            }
+            $attempt = $existing ?? $this->ensureAttempt($facts);
+
+            return $this->finishFailure((int) $attempt->id, 'service_not_eligible');
+        }
+
+        try {
+            $refreshed = $this->refreshRemoteObservation($facts);
+        } catch (Throwable $exception) {
+            report($exception);
+            $attempt = $existing ?? $this->ensureAttempt($facts);
+            $this->scheduleRetry((int) $attempt->id, AutoRenewAttemptState::RetryPending, 'remote_observation_unavailable');
+            $this->notification((int) $attempt->id, AutoRenewNotificationOutcome::Failure, 'remote_observation_unavailable');
+
+            return $this->receiptById((int) $attempt->id, $existing !== null);
+        }
+        if (! $refreshed) {
+            return null;
+        }
+
+        $facts = $this->configurationFacts($configurationId);
+        if ($facts->observed_expires_at === null || $this->storedDateTime($facts->observed_expires_at) > $dueUntil) {
+            return null;
+        }
+
+        $attempt = $this->ensureAttempt($facts);
+        $state = AutoRenewAttemptState::from((string) $attempt->state);
+        if ($state->isTerminal()) {
+            return $this->receipt($attempt, true);
+        }
+        if ($attempt->payment_intent_id !== null) {
+            return $this->resumeReservedAttempt((int) $attempt->id, $facts, $dueUntil);
+        }
+
+        return $this->executeCommercialAttempt((int) $attempt->id, $facts);
+    }
+
+}
