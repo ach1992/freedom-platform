@@ -110,64 +110,70 @@ final readonly class ServiceAutoRenewPolicyService
                         'id', 'price_change_mode', 'absolute_increase_limit_irr',
                         'percentage_increase_limit_bps', 'version',
                     ]);
-                $timestamp = $this->timestamp();
-                if ($policy === null) {
-                    $policyId = (int) $connection->table('plan_offering_auto_renew_policies')->insertGetId([
-                        'plan_offering_id' => $planOfferingId,
-                        'price_change_mode' => $mode->value,
-                        'absolute_increase_limit_irr' => $absoluteIncreaseLimitIrr,
-                        'percentage_increase_limit_bps' => $percentageIncreaseLimitBps,
-                        'version' => 1,
-                        'actor_administrator_id' => $administratorId,
-                        'correlation_id' => $correlationId,
-                        'created_at' => $timestamp,
-                        'updated_at' => $timestamp,
-                    ]);
-                    $version = 1;
-                } else {
-                    $policyId = (int) $policy->id;
-                    $changed = $policy->price_change_mode !== $mode->value
-                        || ($policy->absolute_increase_limit_irr === null ? null : (int) $policy->absolute_increase_limit_irr) !== $absoluteIncreaseLimitIrr
-                        || ($policy->percentage_increase_limit_bps === null ? null : (int) $policy->percentage_increase_limit_bps) !== $percentageIncreaseLimitBps;
-                    $version = (int) $policy->version;
-                    if ($changed) {
-                        $version++;
-                        $connection->table('plan_offering_auto_renew_policies')->where('id', $policyId)->update([
+
+                ServiceAutoRenewDatabaseAuthority::policy($connection, $administratorId, $planOfferingId, $correlationId);
+                try {
+                    $timestamp = $this->timestamp();
+                    if ($policy === null) {
+                        $policyId = (int) $connection->table('plan_offering_auto_renew_policies')->insertGetId([
+                            'plan_offering_id' => $planOfferingId,
                             'price_change_mode' => $mode->value,
                             'absolute_increase_limit_irr' => $absoluteIncreaseLimitIrr,
                             'percentage_increase_limit_bps' => $percentageIncreaseLimitBps,
-                            'version' => $version,
+                            'version' => 1,
                             'actor_administrator_id' => $administratorId,
                             'correlation_id' => $correlationId,
+                            'created_at' => $timestamp,
                             'updated_at' => $timestamp,
                         ]);
+                        $version = 1;
+                    } else {
+                        $policyId = (int) $policy->id;
+                        $changed = $policy->price_change_mode !== $mode->value
+                            || ($policy->absolute_increase_limit_irr === null ? null : (int) $policy->absolute_increase_limit_irr) !== $absoluteIncreaseLimitIrr
+                            || ($policy->percentage_increase_limit_bps === null ? null : (int) $policy->percentage_increase_limit_bps) !== $percentageIncreaseLimitBps;
+                        $version = (int) $policy->version;
+                        if ($changed) {
+                            $version++;
+                            $connection->table('plan_offering_auto_renew_policies')->where('id', $policyId)->update([
+                                'price_change_mode' => $mode->value,
+                                'absolute_increase_limit_irr' => $absoluteIncreaseLimitIrr,
+                                'percentage_increase_limit_bps' => $percentageIncreaseLimitBps,
+                                'version' => $version,
+                                'actor_administrator_id' => $administratorId,
+                                'correlation_id' => $correlationId,
+                                'updated_at' => $timestamp,
+                            ]);
+                        }
                     }
+
+                    $connection->table('plan_offering_auto_renew_policy_histories')->insert([
+                        'auto_renew_policy_id' => $policyId,
+                        'version' => $version,
+                        'price_change_mode' => $mode->value,
+                        'absolute_increase_limit_irr' => $absoluteIncreaseLimitIrr,
+                        'percentage_increase_limit_bps' => $percentageIncreaseLimitBps,
+                        'actor_administrator_id' => $administratorId,
+                        'request_key_hash' => $requestHash,
+                        'payload_hash' => $payloadHash,
+                        'reason_code' => $reasonCode,
+                        'reason' => trim($reason),
+                        'correlation_id' => $correlationId,
+                        'created_at' => $timestamp,
+                    ]);
+
+                    return new ServiceAutoRenewPolicyReceipt(
+                        $policyId,
+                        $planOfferingId,
+                        $mode,
+                        $absoluteIncreaseLimitIrr,
+                        $percentageIncreaseLimitBps,
+                        $version,
+                        false,
+                    );
+                } finally {
+                    ServiceAutoRenewDatabaseAuthority::clear($connection);
                 }
-
-                $connection->table('plan_offering_auto_renew_policy_histories')->insert([
-                    'auto_renew_policy_id' => $policyId,
-                    'version' => $version,
-                    'price_change_mode' => $mode->value,
-                    'absolute_increase_limit_irr' => $absoluteIncreaseLimitIrr,
-                    'percentage_increase_limit_bps' => $percentageIncreaseLimitBps,
-                    'actor_administrator_id' => $administratorId,
-                    'request_key_hash' => $requestHash,
-                    'payload_hash' => $payloadHash,
-                    'reason_code' => $reasonCode,
-                    'reason' => trim($reason),
-                    'correlation_id' => $correlationId,
-                    'created_at' => $timestamp,
-                ]);
-
-                return new ServiceAutoRenewPolicyReceipt(
-                    $policyId,
-                    $planOfferingId,
-                    $mode,
-                    $absoluteIncreaseLimitIrr,
-                    $percentageIncreaseLimitBps,
-                    $version,
-                    false,
-                );
             }, 3);
         } catch (QueryException $exception) {
             $replay = $this->replay($requestHash, $payloadHash, $planOfferingId);
