@@ -50,6 +50,12 @@ trait PurchaseOrderTestSupport
         // the database session to the same deterministic instant rather than weakening those
         // production guards or comparing two different clocks.
         if (DB::connection()->getDriverName() === 'mysql') {
+            // DatabaseTruncation empties the immutable operational-capability singleton.
+            // Re-enter its convergent migration before each fixture so historical migration
+            // tests do not inherit a final DDL graph with an empty readiness anchor.
+            /** @var Migration $serviceOperationalMigration */
+            $serviceOperationalMigration = require database_path('migrations/2026_08_19_000140_enable_service_operational_authority.php');
+            $serviceOperationalMigration->up();
             DB::statement('SET timestamp = '.$this->purchaseOrderClock->value->getTimestamp());
 
             // Exact-authority upgrade tests intentionally exercise the historical 001165 schema.

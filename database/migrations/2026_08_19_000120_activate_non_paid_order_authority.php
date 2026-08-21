@@ -101,7 +101,6 @@ SQL,
             'service-insert-guard.sql',
             'history-insert-guard.sql',
             'history-after-insert.sql',
-            'remote-effect-event-insert-guard.sql',
             'operation-update-guard.sql',
             'operation-insert-guard.sql',
         ] as $file) {
@@ -1436,27 +1435,23 @@ WHERE TRIGGER_SCHEMA = DATABASE()
   )
 SQL);
 
-        $readiness = [
-            'trigger-count' => $triggerRow !== null && (int) $triggerRow->aggregate === 16,
-            'source-authorization' => $this->sourceAuthorizationAuthorityFinalized(),
-            'order-source-constraint' => $this->constraintExists('orders', 'orders_source_type_chk'),
-            'order-exact-authority-constraint' => $this->constraintExists('orders', 'orders_provisioning_exact_authority_chk'),
-            'service-zero-cost-insert' => $this->triggerContains('service_subscriptions_insert_guard', 'zero-cost source authority shape is invalid'),
-            'service-clean-lifecycle-insert' => $this->triggerContains('service_subscriptions_insert_guard', 'clean local lifecycle and no remote binding'),
-            'service-mutation-queue-update' => $this->triggerContains('service_subscriptions_update_guard', 'service_mutation_queue_v1'),
-            'service-mutation-effect-update' => $this->triggerContains('service_subscriptions_update_guard', 'service_mutation_effect_v1'),
-            'operation-zero-cost-insert' => $this->triggerContains('provisioning_operations_insert_guard', 'Initial Provisioning Operation zero-cost authority shape is invalid'),
-            'operation-mutation-queue-insert' => $this->triggerContains('provisioning_operations_insert_guard', 'service_mutation_queue_v1'),
-            'operation-initial-effect-update' => $this->triggerContains('provisioning_operations_update_guard', 'initial_remote_effect_v1'),
-            'operation-mutation-effect-update' => $this->triggerContains('provisioning_operations_update_guard', 'service_mutation_effect_v1'),
-            'operation-recovery-update' => $this->triggerContains('provisioning_operations_update_guard', 'recovery_transition'),
-            'operation-history-mutation' => $this->triggerContains('provisioning_operation_histories_insert_guard', 'service_mutation_requested'),
-            'operation-initial-history-mutation' => $this->triggerContains('provisioning_operation_initial_history', 'service_mutation_requested'),
-            'remote-effect-mutation' => $this->triggerContains('provisioning_remote_effect_events_insert_guard', 'service_mutation_effect_v1'),
-        ];
-        $missing = array_keys(array_filter($readiness, static fn (bool $ready): bool => ! $ready));
-        if ($missing !== []) {
-            throw new RuntimeException('Non-paid Order authority activation prerequisites are incomplete: '.implode(', ', $missing).'.');
+        if ($triggerRow === null || (int) $triggerRow->aggregate !== 16
+            || ! $this->sourceAuthorizationAuthorityFinalized()
+            || ! $this->constraintExists('orders', 'orders_source_type_chk')
+            || ! $this->constraintExists('orders', 'orders_provisioning_exact_authority_chk')
+            || ! $this->triggerContains('service_subscriptions_insert_guard', 'zero-cost source authority shape is invalid')
+            || ! $this->triggerContains('service_subscriptions_insert_guard', 'clean local lifecycle and no remote binding')
+            || ! $this->triggerContains('service_subscriptions_update_guard', 'service_mutation_queue_v1')
+            || ! $this->triggerContains('service_subscriptions_update_guard', 'service_mutation_effect_v1')
+            || ! $this->triggerContains('provisioning_operations_insert_guard', 'Initial Provisioning Operation zero-cost authority shape is invalid')
+            || ! $this->triggerContains('provisioning_operations_insert_guard', 'service_mutation_queue_v1')
+            || ! $this->triggerContains('provisioning_operations_update_guard', 'initial_remote_effect_v1')
+            || ! $this->triggerContains('provisioning_operations_update_guard', 'service_mutation_effect_v1')
+            || ! $this->triggerContains('provisioning_operations_update_guard', 'recovery_transition')
+            || ! $this->triggerContains('provisioning_operation_histories_insert_guard', 'service_mutation_requested')
+            || ! $this->triggerContains('provisioning_operation_initial_history', 'service_mutation_requested')
+            || ! $this->triggerContains('provisioning_remote_effect_events_insert_guard', 'service_mutation_effect_v1')) {
+            throw new RuntimeException('Non-paid Order authority activation prerequisites are incomplete.');
         }
     }
 
