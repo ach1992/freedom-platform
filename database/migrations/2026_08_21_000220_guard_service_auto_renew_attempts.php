@@ -4,19 +4,37 @@ declare(strict_types=1);
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Support\Facades\DB;
+use RuntimeException;
 
 return new class extends Migration
 {
     public function up(): void
     {
-        $this->dropGuards();
         $this->createAttemptGuards();
         $this->createAppendOnlyGuards();
     }
 
     public function down(): void
     {
+        $this->assertRollbackSafe();
         $this->dropGuards();
+    }
+
+    private function assertRollbackSafe(): void
+    {
+        foreach ([
+            'plan_offering_auto_renew_policies',
+            'plan_offering_auto_renew_policy_histories',
+            'service_auto_renew_configurations',
+            'service_auto_renew_configuration_histories',
+            'service_auto_renew_attempts',
+            'service_auto_renew_attempt_events',
+            'service_auto_renew_notification_intents',
+        ] as $table) {
+            if (DB::table($table)->exists()) {
+                throw new RuntimeException('Cannot remove Service auto-renew guards while auto-renew authority rows exist.');
+            }
+        }
     }
 
     private function dropGuards(): void
@@ -37,7 +55,7 @@ return new class extends Migration
     private function createAttemptGuards(): void
     {
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER sara_insert_guard
+CREATE TRIGGER IF NOT EXISTS sara_insert_guard
 BEFORE INSERT ON service_auto_renew_attempts
 FOR EACH ROW
 BEGIN
@@ -86,7 +104,7 @@ END
 SQL);
 
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER sara_update_guard
+CREATE TRIGGER IF NOT EXISTS sara_update_guard
 BEFORE UPDATE ON service_auto_renew_attempts
 FOR EACH ROW
 BEGIN
@@ -106,14 +124,37 @@ BEGIN
     END IF;
 
     IF OLD.payment_intent_id IS NOT NULL THEN
-        IF NOT (OLD.quote_id <=> NEW.quote_id)
-           OR NOT (OLD.payment_eligibility_decision_id <=> NEW.payment_eligibility_decision_id)
-           OR NOT (OLD.current_price_irr <=> NEW.current_price_irr) THEN
-            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew commercial authority is frozen after Payment Intent binding.';
+        IF NEW.payment_intent_id IS NULL THEN
+            IF OLD.purchase_settlement_id IS NOT NULL
+               OR OLD.provisioning_operation_id IS NOT NULL
+               OR NEW.quote_id IS NOT NULL
+               OR NEW.payment_eligibility_decision_id IS NOT NULL
+               OR NEW.current_price_irr IS NOT NULL
+               OR NOT EXISTS (
+                   SELECT 1
+                   FROM payment_intents pi
+                   JOIN purchase_wallet_reservations pwr ON pwr.payment_intent_id = pi.id
+                   JOIN wallet_holds wh ON wh.id = pwr.wallet_hold_id
+                   WHERE pi.id = OLD.payment_intent_id
+                     AND pi.state IN ('expired', 'canceled')
+                     AND wh.status = 'released'
+                     AND NOT EXISTS (
+                         SELECT 1 FROM purchase_settlements ps
+                         WHERE ps.payment_intent_id = OLD.payment_intent_id
+                     )
+               ) THEN
+                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew commercial authority can reset only after safe pre-capture terminalization.';
+            END IF;
+        ELSE
+            IF NOT (OLD.quote_id <=> NEW.quote_id)
+               OR NOT (OLD.payment_eligibility_decision_id <=> NEW.payment_eligibility_decision_id)
+               OR NOT (OLD.current_price_irr <=> NEW.current_price_irr) THEN
+                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew commercial authority is frozen after Payment Intent binding.';
+            END IF;
+            IF NOT (OLD.payment_intent_id <=> NEW.payment_intent_id) THEN
+                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew Payment Intent authority cannot be replaced after binding.';
+            END IF;
         END IF;
-    END IF;
-    IF OLD.payment_intent_id IS NOT NULL AND NOT (OLD.payment_intent_id <=> NEW.payment_intent_id) THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew Payment Intent authority cannot be replaced after binding.';
     END IF;
     IF OLD.purchase_settlement_id IS NOT NULL AND NOT (OLD.purchase_settlement_id <=> NEW.purchase_settlement_id) THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew settlement authority cannot be replaced after binding.';
@@ -181,7 +222,7 @@ END
 SQL);
 
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER sara_delete_guard
+CREATE TRIGGER IF NOT EXISTS sara_delete_guard
 BEFORE DELETE ON service_auto_renew_attempts
 FOR EACH ROW
 BEGIN
@@ -193,35 +234,35 @@ SQL);
     private function createAppendOnlyGuards(): void
     {
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER sarph_update_guard BEFORE UPDATE ON plan_offering_auto_renew_policy_histories
+CREATE TRIGGER IF NOT EXISTS sarph_update_guard BEFORE UPDATE ON plan_offering_auto_renew_policy_histories
 FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew offering policy histories are append-only.'; END
 SQL);
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER sarph_delete_guard BEFORE DELETE ON plan_offering_auto_renew_policy_histories
+CREATE TRIGGER IF NOT EXISTS sarph_delete_guard BEFORE DELETE ON plan_offering_auto_renew_policy_histories
 FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew offering policy histories are append-only.'; END
 SQL);
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER sarch_update_guard BEFORE UPDATE ON service_auto_renew_configuration_histories
+CREATE TRIGGER IF NOT EXISTS sarch_update_guard BEFORE UPDATE ON service_auto_renew_configuration_histories
 FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew Service configuration histories are append-only.'; END
 SQL);
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER sarch_delete_guard BEFORE DELETE ON service_auto_renew_configuration_histories
+CREATE TRIGGER IF NOT EXISTS sarch_delete_guard BEFORE DELETE ON service_auto_renew_configuration_histories
 FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew Service configuration histories are append-only.'; END
 SQL);
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER sarae_update_guard BEFORE UPDATE ON service_auto_renew_attempt_events
+CREATE TRIGGER IF NOT EXISTS sarae_update_guard BEFORE UPDATE ON service_auto_renew_attempt_events
 FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew attempt events are append-only.'; END
 SQL);
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER sarae_delete_guard BEFORE DELETE ON service_auto_renew_attempt_events
+CREATE TRIGGER IF NOT EXISTS sarae_delete_guard BEFORE DELETE ON service_auto_renew_attempt_events
 FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew attempt events are append-only.'; END
 SQL);
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER sarni_update_guard BEFORE UPDATE ON service_auto_renew_notification_intents
+CREATE TRIGGER IF NOT EXISTS sarni_update_guard BEFORE UPDATE ON service_auto_renew_notification_intents
 FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew notification intents are append-only.'; END
 SQL);
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER sarni_delete_guard BEFORE DELETE ON service_auto_renew_notification_intents
+CREATE TRIGGER IF NOT EXISTS sarni_delete_guard BEFORE DELETE ON service_auto_renew_notification_intents
 FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew notification intents are append-only.'; END
 SQL);
     }
