@@ -28,10 +28,8 @@ permissions:
   pull-requests: read
 
 concurrency:
-  # Keep one current pull-request validation, while independent manual diagnostics
-  # receive unique groups and can use all available self-hosted runners safely.
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || 'candidate' }}
-  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 env:
   APP_ENV: testing
