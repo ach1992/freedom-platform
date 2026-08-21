@@ -90,7 +90,10 @@ final readonly class ProtectedServiceDeliveryPresentationFactory
     private function boundedInt(string $key, int $minimum, int $maximum): int
     {
         $value = $this->config->get('service_delivery.presentation.'.$key);
-        if (is_string($value) && preg_match('/\A(?:0|[1-9][0-9]*)\z/', $value) === 1) {
+        if (is_string($value)
+            && $value !== ''
+            && strspn($value, '0123456789') === strlen($value)
+            && ($value === '0' || $value[0] !== '0')) {
             $value = (int) $value;
         }
         if (! is_int($value) || $value < $minimum || $value > $maximum) {
