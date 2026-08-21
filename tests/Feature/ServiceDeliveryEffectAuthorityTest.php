@@ -19,6 +19,9 @@ use App\Modules\Provisioning\Application\InitialProvisioningOutboxHandler;
 use App\Modules\Provisioning\Application\InitialProvisioningQueueService;
 use App\Modules\Provisioning\Application\ServiceDeliveryAttemptQueueService;
 use App\Modules\Provisioning\Application\ServiceDeliveryEffectExecutor;
+use App\Modules\Provisioning\Application\ServiceDeliveryResendAudit;
+use App\Modules\Provisioning\Application\ServiceDeliveryResendContext;
+use App\Modules\Provisioning\Application\ServiceDeliveryResendService;
 use App\Modules\Provisioning\Application\ServiceDeliveryOutboxHandler;
 use App\Modules\Provisioning\Application\ServiceMutationExecutor;
 use App\Modules\Provisioning\Application\ServiceMutationQueueService;
@@ -39,6 +42,7 @@ use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PanelsAccessFoundationSeeder;
 use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
 use DomainException;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
@@ -77,6 +81,10 @@ final class ServiceDeliveryEffectAuthorityTest extends TestCase
         /** @var Migration $deliveryEffectMigration */
         $deliveryEffectMigration = require database_path('migrations/2026_08_18_000200_enable_service_delivery_effect_authority.php');
         $deliveryEffectMigration->up();
+
+        /** @var Migration $resendAuditMigration */
+        $resendAuditMigration = require database_path('migrations/2026_08_21_000100_enable_service_delivery_resend_audit_authority.php');
+        $resendAuditMigration->up();
 
         $this->seed(IdentityAccessFoundationSeeder::class);
         $this->seed(CatalogAccessFoundationSeeder::class);
@@ -156,6 +164,114 @@ final class ServiceDeliveryEffectAuthorityTest extends TestCase
         $outboxEvidence = json_encode(DB::table('outbox_messages')->where('id', $attempt->outboxEventId)->first(), JSON_THROW_ON_ERROR);
         self::assertStringNotContainsString($secretLink, $effectEvidence);
         self::assertStringNotContainsString($secretLink, $outboxEvidence);
+    }
+
+    public function test_explicit_owner_resend_is_audited_and_replays_without_second_delivery_attempt_or_outbox(): void
+    {
+        $secretLink = 'https://subscription.example.test/'.str_repeat('a', 48);
+        $scenario = $this->provisionedScenario(
+            'explicit-resend-replay',
+            $secretLink,
+            new ProtectedTelegramSendResult(ProtectedTelegramSendOutcome::Success, 'telegram_success', messageId: 4401),
+        );
+        $context = $this->resendContext($scenario['user_id'], 'explicit-resend-replay');
+
+        $first = $this->resends()->resend($scenario['service_public_id'], $context);
+        self::assertFalse($first->attempt->replayed);
+        self::assertFalse($first->auditReplayed);
+        self::assertSame(ServiceDeliveryPurpose::Resend, $first->attempt->purpose);
+
+        $audit = DB::table('audit_logs')->where('id', $first->auditLogId)->first([
+            'actor_type', 'actor_id', 'action', 'target_type', 'target_id', 'before_safe_data', 'after_safe_data',
+            'reason_code', 'reason', 'correlation_id', 'request_fingerprint',
+        ]);
+        self::assertNotNull($audit);
+        self::assertSame('user', $audit->actor_type);
+        self::assertSame((string) $scenario['user_id'], $audit->actor_id);
+        self::assertSame(ServiceDeliveryResendAudit::ACTION, $audit->action);
+        self::assertSame('service_subscription', $audit->target_type);
+        self::assertSame($scenario['service_public_id'], $audit->target_id);
+        self::assertSame($context->reasonCode, $audit->reason_code);
+        self::assertSame($context->reason, $audit->reason);
+        self::assertSame($context->correlationId, $audit->correlation_id);
+        self::assertSame($context->requestHash(), $audit->request_fingerprint);
+        self::assertStringNotContainsString($secretLink, (string) $audit->before_safe_data);
+        self::assertStringNotContainsString($secretLink, (string) $audit->after_safe_data);
+
+        $replay = $this->resends()->resend($scenario['service_public_id'], $context);
+        self::assertTrue($replay->attempt->replayed);
+        self::assertTrue($replay->auditReplayed);
+        self::assertSame($first->attempt->attemptPublicId, $replay->attempt->attemptPublicId);
+        self::assertSame($first->auditLogId, $replay->auditLogId);
+        self::assertSame(1, DB::table('service_delivery_attempts')->where('service_subscription_id', $scenario['service_id'])->count());
+        self::assertSame(1, DB::table('outbox_messages')
+            ->where('event_type', ServiceDeliveryAttemptQueueService::OUTBOX_EVENT_TYPE)->count());
+        self::assertSame(1, DB::table('audit_logs')->where('action', ServiceDeliveryResendAudit::ACTION)->count());
+
+        try {
+            DB::table('audit_logs')->where('id', $first->auditLogId)->update(['reason' => 'tampered']);
+            self::fail('Service delivery resend audit must be immutable.');
+        } catch (QueryException) {
+            // Expected.
+        }
+        try {
+            DB::table('audit_logs')->where('id', $first->auditLogId)->delete();
+            self::fail('Service delivery resend audit must be non-deletable.');
+        } catch (QueryException) {
+            // Expected.
+        }
+    }
+
+    public function test_cross_user_resend_is_rejected_before_delivery_attempt_outbox_or_audit(): void
+    {
+        $scenario = $this->provisionedScenario(
+            'explicit-resend-cross-user',
+            'https://subscription.example.test/cross-user',
+            new ProtectedTelegramSendResult(ProtectedTelegramSendOutcome::Success, 'telegram_success', messageId: 4402),
+        );
+
+        try {
+            $this->resends()->resend(
+                $scenario['service_public_id'],
+                $this->resendContext($scenario['user_id'] + 1000000, 'explicit-resend-cross-user'),
+            );
+            self::fail('A user must not resend restricted Service details for another user Service.');
+        } catch (AuthorizationException) {
+            // Expected.
+        }
+
+        self::assertSame(0, DB::table('service_delivery_attempts')->where('service_subscription_id', $scenario['service_id'])->count());
+        self::assertSame(0, DB::table('outbox_messages')
+            ->where('event_type', ServiceDeliveryAttemptQueueService::OUTBOX_EVENT_TYPE)->count());
+        self::assertSame(0, DB::table('audit_logs')->where('action', ServiceDeliveryResendAudit::ACTION)->count());
+    }
+
+    public function test_replay_of_low_level_resend_without_caller_audit_fails_closed(): void
+    {
+        $scenario = $this->provisionedScenario(
+            'explicit-resend-missing-audit',
+            'https://subscription.example.test/missing-audit',
+            new ProtectedTelegramSendResult(ProtectedTelegramSendOutcome::Success, 'telegram_success', messageId: 4403),
+        );
+        $context = $this->resendContext($scenario['user_id'], 'explicit-resend-missing-audit');
+
+        $lowLevel = $this->deliveryQueue()->queue(
+            $scenario['service_public_id'],
+            ServiceDeliveryPurpose::Resend,
+            $context->requestKey,
+            $context->correlationId,
+        );
+        self::assertFalse($lowLevel->replayed);
+
+        try {
+            $this->resends()->resend($scenario['service_public_id'], $context);
+            self::fail('A low-level resend replay without caller audit must not be retroactively attributed.');
+        } catch (RuntimeException) {
+            // Expected.
+        }
+
+        self::assertSame(1, DB::table('service_delivery_attempts')->where('service_subscription_id', $scenario['service_id'])->count());
+        self::assertSame(0, DB::table('audit_logs')->where('action', ServiceDeliveryResendAudit::ACTION)->count());
     }
 
     public function test_missing_recipient_rejects_before_restricted_artifact_retrieval_and_direct_db_forgery_fails(): void
@@ -630,6 +746,22 @@ final class ServiceDeliveryEffectAuthorityTest extends TestCase
     private function deliveryQueue(): ServiceDeliveryAttemptQueueService
     {
         return $this->app->make(ServiceDeliveryAttemptQueueService::class);
+    }
+
+    private function resends(): ServiceDeliveryResendService
+    {
+        return $this->app->make(ServiceDeliveryResendService::class);
+    }
+
+    private function resendContext(int $userId, string $suffix): ServiceDeliveryResendContext
+    {
+        return new ServiceDeliveryResendContext(
+            requestKey: 'request-'.$suffix.'-0001',
+            correlationId: 'correlation-'.$suffix.'-0001',
+            reasonCode: 'user_requested_details',
+            reason: 'User requested current Service details.',
+            actorUserId: $userId,
+        );
     }
 
     private function deliveryHandler(): ServiceDeliveryOutboxHandler
