@@ -40,8 +40,11 @@ final class InitialProvisioningExactAuthorityUpgradeRollbackTest extends TestCas
     {
         /** @var Migration $migration */
         $migration = require database_path('migrations/2026_08_14_001164_z_enforce_exact_provisioning_authority_text.php');
+        /** @var Migration $paidMutationMigration */
+        $paidMutationMigration = require database_path('migrations/2026_08_20_000110_enable_paid_service_mutation_authority.php');
 
         try {
+            $paidMutationMigration->down();
             self::assertTrue(
                 DB::table('migrations')->where('migration', '2026_08_14_001165_activate_provisioning_queue_authority')->exists(),
                 'The rollback regression must retain the already-recorded 001165 migration state.',
@@ -77,6 +80,7 @@ final class InitialProvisioningExactAuthorityUpgradeRollbackTest extends TestCas
             }
         } finally {
             $migration->up();
+            $paidMutationMigration->up();
         }
 
         self::assertTrue($this->constraintExists('payment_intents', 'payment_intents_provisioning_exact_authority_chk'));

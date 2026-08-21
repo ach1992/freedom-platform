@@ -13,6 +13,7 @@ final readonly class QuoteService
     use QuoteServiceAgentPricing;
     use QuoteServiceCreatesQuotes;
     use QuoteServiceReadsQuotes;
+    use QuoteServiceServicePackages;
     use QuoteServiceSupport;
 
     private const FORMULA_VERSION = 'buy-002-v1';

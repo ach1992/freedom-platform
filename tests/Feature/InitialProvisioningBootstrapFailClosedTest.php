@@ -84,10 +84,18 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
         $nonPaidAuthorityMigration = require database_path('migrations/2026_08_19_000120_activate_non_paid_order_authority.php');
         /** @var Migration $serviceOperationalMigration */
         $serviceOperationalMigration = require database_path('migrations/2026_08_19_000140_enable_service_operational_authority.php');
+        /** @var Migration $servicePackageQuoteMigration */
+        $servicePackageQuoteMigration = require database_path('migrations/2026_08_20_000100_enable_service_package_quotes.php');
+        /** @var Migration $paidServiceMutationMigration */
+        $paidServiceMutationMigration = require database_path('migrations/2026_08_20_000110_enable_paid_service_mutation_authority.php');
 
         try {
             // Remove newer descendant authorities before replaying the historical provisioning bootstrap chain.
+            $paidServiceMutationMigration->down();
+            $servicePackageQuoteMigration->down();
             $serviceOperationalMigration->down();
+            $nonPaidAuthorityMigration->down();
+            $nonPaidInvalidationMigration->down();
             $deliveryEffectMigration->down();
             $deliveryAttemptMigration->down();
             $lifecycleAuditMigration->down();
@@ -112,6 +120,10 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
             $bootstrapMigration->down();
 
             $bootstrapMigration->up();
+            // The historical provisioning schema remains under test, while the
+            // shared purchase fixture deliberately uses the current Quote contract.
+            // Restore that independent Quote schema before creating fixture data.
+            $servicePackageQuoteMigration->up();
 
             self::assertSame(0, $this->triggerCount('service_subscriptions_insert_guard'));
             self::assertSame(0, $this->triggerCount('provisioning_operations_insert_guard'));
@@ -277,6 +289,8 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
             $nonPaidInvalidationMigration->up();
             $nonPaidAuthorityMigration->up();
             $serviceOperationalMigration->up();
+            $servicePackageQuoteMigration->up();
+            $paidServiceMutationMigration->up();
         }
     }
 

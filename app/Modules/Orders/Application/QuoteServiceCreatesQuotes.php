@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Modules\Orders\Application;
 
+use App\Modules\Agents\Domain\AgentPricingAction;
+use App\Modules\Orders\Domain\QuoteAction;
 use App\Modules\Orders\Domain\QuoteOverrideSource;
 use DateTimeZone;
 use DomainException;
@@ -23,6 +25,7 @@ trait QuoteServiceCreatesQuotes
         QuotePricingInput $pricing,
         string $correlationId,
         ?QuoteAgentPricingContext $agentPricingContext = null,
+        ?ServicePackageQuoteContext $servicePackageContext = null,
     ): QuoteReceipt {
         $this->assertToken($quoteKey, 'Quote key', 8, 128);
         $this->assertPositiveId($userId, 'Quote user ID');
@@ -40,6 +43,7 @@ trait QuoteServiceCreatesQuotes
             $pricing,
             $expiresAt,
             $agentPricingContext,
+            $servicePackageContext,
         );
 
         try {
@@ -52,6 +56,7 @@ trait QuoteServiceCreatesQuotes
                 $expiresAt,
                 $requestPayloadHash,
                 $agentPricingContext,
+                $servicePackageContext,
             ): QuoteReceipt {
                 $existing = $this->quoteByKey($connection, $quoteKey, true);
                 if ($existing !== null) {
@@ -76,11 +81,11 @@ trait QuoteServiceCreatesQuotes
                     || ! in_array($user->account_type, ['customer', 'agent'], true)) {
                     throw new DomainException('Quote requires an active customer or agent account.');
                 }
-
-                if ($user->account_type === 'agent' && $agentPricingContext === null) {
-                    throw new AuthorizationException('Agent quote creation requires an authorized agent pricing context.');
-                }
-                if ($user->account_type !== 'agent' && $agentPricingContext !== null) {
+                if ($user->account_type === 'agent') {
+                    if ($agentPricingContext === null || $agentPricingContext->actorUserId !== $userId) {
+                        throw new AuthorizationException('Agent quote creation requires an authorized pricing actor.');
+                    }
+                } elseif ($agentPricingContext !== null) {
                     throw new AuthorizationException('Agent pricing context is not authorized for this quote subject.');
                 }
 
@@ -101,6 +106,23 @@ trait QuoteServiceCreatesQuotes
                     $planOfferingId,
                     $offeringVersion,
                 );
+                $servicePackage = $servicePackageContext === null
+                    ? null
+                    : $this->servicePackageFacts($connection, $userId, $planOfferingId, $servicePackageContext);
+                $action = $servicePackage === null ? QuoteAction::Purchase : $servicePackage['action'];
+                if ($servicePackage !== null) {
+                    $basePriceIrr = $servicePackage['price_irr'];
+                    $offeringDiscountEligible = $offeringDiscountEligible && $servicePackage['discount_eligible'];
+                }
+
+                $expectedAgentAction = $servicePackage === null ? AgentPricingAction::Purchase : $servicePackage['agent_action'];
+                if ($user->account_type === 'agent') {
+                    if ($agentPricingContext === null || $agentPricingContext->action !== $expectedAgentAction) {
+                        throw new AuthorizationException('Agent quote creation requires the matching authorized pricing action.');
+                    }
+                } elseif ($agentPricingContext !== null) {
+                    throw new AuthorizationException('Agent pricing context is not authorized for this quote subject.');
+                }
 
                 $agentResolution = null;
                 $overrideSource = $pricing->overrideSource;
@@ -157,6 +179,7 @@ trait QuoteServiceCreatesQuotes
 
                 $snapshot = [
                     'account_type' => $user->account_type,
+                    'action' => $action->value,
                     'base_price_irr' => $basePriceIrr,
                     'currency' => 'IRR',
                     'discount_irr' => $pricing->discountIrr,
@@ -178,6 +201,22 @@ trait QuoteServiceCreatesQuotes
                 if ($agentResolution !== null) {
                     $snapshot['agent_pricing'] = $this->agentPricingSnapshotArray($agentResolution);
                 }
+                if ($servicePackage !== null) {
+                    $snapshot['service_package'] = [
+                        'action' => $action->value,
+                        'data_bytes' => $servicePackage['data_bytes'],
+                        'duration_days' => $servicePackage['duration_days'],
+                        'lifecycle_version' => $servicePackage['lifecycle_version'],
+                        'package_code' => $servicePackage['package_code'],
+                        'package_id' => $servicePackage['package_id'],
+                        'package_type' => $servicePackage['package_type'],
+                        'remote_identity_generation' => $servicePackage['remote_identity_generation'],
+                        'required_capability_code' => $servicePackage['required_capability_code'],
+                        'service_public_id' => $servicePackage['service_subscription_public_id'],
+                        'service_subscription_id' => $servicePackage['service_subscription_id'],
+                        'service_target_id' => $servicePackage['service_target_id'],
+                    ];
+                }
                 ksort($snapshot, SORT_STRING);
                 $snapshotJson = json_encode($snapshot, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
                 if (strlen($snapshotJson) > 8192) {
@@ -192,6 +231,7 @@ trait QuoteServiceCreatesQuotes
                     'request_payload_hash' => $requestPayloadHash,
                     'user_id' => $userId,
                     'account_type_snapshot' => $user->account_type,
+                    'action_snapshot' => $action->value,
                     'plan_offering_id' => $planOfferingId,
                     'offering_code_snapshot' => $offering->code,
                     'offering_version' => $offeringVersion,
@@ -215,6 +255,21 @@ trait QuoteServiceCreatesQuotes
                 ];
                 if ($agentResolution !== null) {
                     $insert += $this->agentPricingColumns($agentResolution);
+                }
+                if ($servicePackage !== null) {
+                    $insert += [
+                        'service_subscription_id' => $servicePackage['service_subscription_id'],
+                        'service_subscription_public_id' => $servicePackage['service_subscription_public_id'],
+                        'service_target_id_snapshot' => $servicePackage['service_target_id'],
+                        'service_remote_identity_generation_snapshot' => $servicePackage['remote_identity_generation'],
+                        'service_lifecycle_version_snapshot' => $servicePackage['lifecycle_version'],
+                        'service_package_id_snapshot' => $servicePackage['package_id'],
+                        'service_package_code_snapshot' => $servicePackage['package_code'],
+                        'service_package_type_snapshot' => $servicePackage['package_type'],
+                        'service_package_duration_days_snapshot' => $servicePackage['duration_days'],
+                        'service_package_data_bytes_snapshot' => $servicePackage['data_bytes'],
+                        'service_required_capability_code_snapshot' => $servicePackage['required_capability_code'],
+                    ];
                 }
 
                 $quoteId = (int) $connection->table('quotes')->insertGetId($insert);

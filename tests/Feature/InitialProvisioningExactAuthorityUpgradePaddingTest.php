@@ -43,6 +43,9 @@ final class InitialProvisioningExactAuthorityUpgradePaddingTest extends TestCase
                 /** @var Migration $migration */
                 $migration = require database_path('migrations/2026_08_14_001164_z_enforce_exact_provisioning_authority_text.php');
                 $migration->up();
+                /** @var Migration $paidMutationMigration */
+                $paidMutationMigration = require database_path('migrations/2026_08_20_000110_enable_paid_service_mutation_authority.php');
+                $paidMutationMigration->up();
             }
         } finally {
             parent::tearDown();

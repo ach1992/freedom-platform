@@ -244,7 +244,7 @@ trait AgentPricingQuoteIntegrationTestSupport
                 'customer_selectable' => true, 'created_at' => $now, 'updated_at' => $now,
             ]);
         }
-        foreach (['create_service', 'fetch_status'] as $capability) {
+        foreach (['create_service', 'fetch_status', 'update_expiry', 'add_data_allowance'] as $capability) {
             DB::table('panel_target_capabilities')->insert([
                 'panel_service_target_id' => $targetId, 'capability_code' => $capability,
                 'verification_status' => 'declared', 'evidence_hash' => null, 'verified_at' => null,
@@ -275,7 +275,7 @@ trait AgentPricingQuoteIntegrationTestSupport
             PlanOfferingTagMatchMode::All,
             $priceIrr,
             30,
-            null,
+            20 * 1024 * 1024 * 1024,
             3,
             10,
             1,
@@ -290,9 +290,19 @@ trait AgentPricingQuoteIntegrationTestSupport
                 new OfferingProtocolAssignment($dependencies['profile_ids'][0], true, true),
                 new OfferingProtocolAssignment($dependencies['profile_ids'][1], true, false),
             ],
-            ['create_service', 'fetch_status'],
-            [new OfferingOperationPolicy(OfferingOperationCode::Renew, true, true, 0, true, 'create_service')],
-            [new OfferingPackageDefinition('aq-extra-10gb', OfferingPackageType::AddData, 'ده گیگابایت', '10 GB', 500_000, null, 10 * 1024 * 1024 * 1024, true, 10)],
+            ['create_service', 'fetch_status', 'update_expiry', 'add_data_allowance'],
+            [
+                new OfferingOperationPolicy(OfferingOperationCode::Renew, true, true, 0, true, 'update_expiry'),
+                new OfferingOperationPolicy(OfferingOperationCode::AddData, true, true, 0, true, 'add_data_allowance'),
+                new OfferingOperationPolicy(OfferingOperationCode::AddDays, true, true, 0, true, 'update_expiry'),
+                new OfferingOperationPolicy(OfferingOperationCode::AddDataDays, true, true, 0, true, 'update_expiry'),
+            ],
+            [
+                new OfferingPackageDefinition('aq-renew-30d', OfferingPackageType::Renewal, 'تمدید سی روزه', '30 days', 600_000, 30, null, true, 10),
+                new OfferingPackageDefinition('aq-extra-10gb', OfferingPackageType::AddData, 'ده گیگابایت', '10 GB', 500_000, null, 10 * 1024 * 1024 * 1024, true, 20),
+                new OfferingPackageDefinition('aq-extra-7d', OfferingPackageType::AddDays, 'هفت روز', '7 days', 200_000, 7, null, true, 30),
+                new OfferingPackageDefinition('aq-extra-5gb-7d', OfferingPackageType::AddDataDays, 'پنج گیگابایت و هفت روز', '5 GB + 7 days', 450_000, 7, 5 * 1024 * 1024 * 1024, true, 40),
+            ],
         );
     }
 }

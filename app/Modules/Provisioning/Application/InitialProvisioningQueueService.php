@@ -98,7 +98,7 @@ final readonly class InitialProvisioningQueueService
             return $this->replayPurchaseReceipt($connection, $order, $item, $settlement, $intent, $existingOperation);
         }
 
-        $this->assertNewPurchaseQueueAuthority($order, $item, $settlement, $intent);
+        $this->assertNewPurchaseQueueAuthority($connection, $order, $item, $settlement, $intent);
 
         return $this->createQueueEffect(
             $connection,
@@ -422,9 +422,14 @@ final readonly class InitialProvisioningQueueService
      * @param  SettlementRow  $settlement
      * @param  IntentRow  $intent
      */
-    private function assertNewPurchaseQueueAuthority(object $order, object $item, object $settlement, object $intent): void
+    private function assertNewPurchaseQueueAuthority(Connection $connection, object $order, object $item, object $settlement, object $intent): void
     {
-        if ($order->source_type !== self::PURCHASE_SOURCE_TYPE
+        $quoteAction = $order->source_quote_id === null
+            ? null
+            : $connection->table('quotes')->where('id', (int) $order->source_quote_id)->value('action_snapshot');
+
+        if ($quoteAction !== 'purchase'
+            || $order->source_type !== self::PURCHASE_SOURCE_TYPE
             || $order->order_source_authorization_id !== null
             || $order->order_source_authorization_public_id !== null
             || $order->purchase_settlement_id === null

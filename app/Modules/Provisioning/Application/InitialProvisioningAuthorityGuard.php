@@ -110,7 +110,12 @@ final readonly class InitialProvisioningAuthorityGuard
             throw new RuntimeException('Provisioning Order Item disappeared.');
         }
 
-        if ($order->source_type !== OrderSourceType::Purchase->value
+        $quoteAction = $order->source_quote_id === null
+            ? null
+            : $connection->table('quotes')->where('id', (int) $order->source_quote_id)->value('action_snapshot');
+
+        if ($quoteAction !== 'purchase'
+            || $order->source_type !== OrderSourceType::Purchase->value
             || $order->order_source_authorization_id !== null
             || (int) $order->purchase_settlement_id !== (int) $settlement->id
             || (int) $order->payment_intent_id !== (int) $intent->id

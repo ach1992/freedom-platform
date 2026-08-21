@@ -4,15 +4,22 @@ declare(strict_types=1);
 
 namespace App\Modules\Provisioning\Application;
 
+use App\Modules\Panels\Application\Contracts\AtomicServiceEntitlementAdapter;
+use App\Modules\Panels\Application\Contracts\DataAllowanceMode;
 use App\Modules\Panels\Application\Contracts\PanelAdapter;
 use App\Modules\Panels\Application\Contracts\PanelOperationOutcome;
 use App\Modules\Panels\Application\Contracts\PanelOperationResult;
+use App\Modules\Panels\Application\Contracts\RemoteServiceSnapshot;
 use App\Modules\Provisioning\Domain\ProvisioningState;
 use App\Modules\Provisioning\Domain\ServiceMutationType;
 use App\Shared\Application\Clock;
+use DateTimeImmutable;
+use DateTimeZone;
 use DomainException;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
+use Illuminate\Database\Query\JoinClause;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Str;
 use RuntimeException;
 use Throwable;
@@ -20,6 +27,8 @@ use Throwable;
 /**
  * @phpstan-type MutationOperation object{id:int|string,public_id:string,operation_key:string,operation_type:string,service_subscription_id:int|string,state:string,state_version:int|string,correlation_id:string,effect_fence_key:?string,service_target_id:int|string|null,attempt_count:int|string,last_result_code:?string,last_result_message:?string,remote_service_id:?string,remote_effect_started_at:?string,remote_effect_completed_at:?string,operation_generation:int|string,target_remote_identity_generation:int|string,target_lifecycle_version:int|string,request_key_hash:?string}
  * @phpstan-type MutationService object{id:int|string,public_id:string,service_target_id:int|string|null,remote_service_id:?string,lifecycle_state:string,lifecycle_version:int|string,remote_identity_generation:int|string,mutation_generation:int|string,remote_deleted_at:?string}
+ * @phpstan-type PaidTarget array{snapshot_hash:string,target_expires_at:?DateTimeImmutable,target_data_limit_bytes:?int}
+ * @phpstan-type PaidAuthority object{id:int|string,provisioning_operation_id:int|string,purchase_settlement_id:int|string,payment_intent_id:int|string,action:string,duration_days:int|string|null,data_bytes:int|string|null,remote_snapshot_hash:?string,target_expires_at:?string,target_data_limit_bytes:int|string|null,targets_resolved_at:?string}
  */
 final readonly class ServiceMutationExecutor
 {
@@ -53,7 +62,19 @@ final readonly class ServiceMutationExecutor
 
         $this->assertProviderCallOutsideTransaction();
 
-        $operation = $this->claim($operation);
+        try {
+            $operation = $this->claim($operation);
+        } catch (QueryException $exception) {
+            if (! $type->isPaidEntitlement() || ! $this->paidMutationFinanciallyInvalidated((int) $operation->id)) {
+                throw $exception;
+            }
+
+            return $this->rejectFinanciallyInvalidated($operation, $type);
+        }
+        if ($this->isTerminal($this->state($operation->state))) {
+            return $this->receipt($operation, $type, false);
+        }
+
         $service = $this->serviceById((int) $operation->service_subscription_id);
         if (! $this->serviceMatchesOperation($service, $operation, $type)) {
             return $this->finalize(
@@ -68,7 +89,14 @@ final readonly class ServiceMutationExecutor
         try {
             $targetId = $this->positiveDatabaseInt($operation->service_target_id, 'Service target ID');
             $adapter = $this->adapters->resolve($targetId);
-            $supportsMutation = $adapter->capabilities()->supports($type->panelCapability());
+            $capabilities = $adapter->capabilities();
+            $supportsMutation = true;
+            foreach ($type->panelCapabilities() as $capability) {
+                if (! $capabilities->supports($capability)) {
+                    $supportsMutation = false;
+                    break;
+                }
+            }
         } catch (Throwable) {
             return $this->finalize(
                 $operation,
@@ -88,17 +116,65 @@ final readonly class ServiceMutationExecutor
                 'Panel does not support the requested Service mutation.',
             );
         }
+        if ($type === ServiceMutationType::AddDataDays && ! $adapter instanceof AtomicServiceEntitlementAdapter) {
+            return $this->finalize(
+                $operation,
+                $type,
+                ProvisioningState::FailedFinal,
+                'atomic_combined_mutation_unavailable',
+                'Panel does not provide an atomic combined data and expiry mutation boundary.',
+            );
+        }
+
+        /** @var PaidTarget|null $paidTarget */
+        $paidTarget = null;
+        if ($type->isPaidEntitlement()) {
+            $this->assertProviderCallOutsideTransaction();
+            try {
+                $remote = $adapter->findByRemoteId($this->requiredString($operation->remote_service_id, 'Remote Service ID'));
+            } catch (Throwable) {
+                return $this->finalize(
+                    $operation,
+                    $type,
+                    ProvisioningState::RetryScheduled,
+                    'paid_mutation_remote_lookup_unavailable',
+                    'Authoritative remote Service lookup is unavailable before the paid mutation boundary.',
+                );
+            }
+            if ($remote === null) {
+                return $this->finalize(
+                    $operation,
+                    $type,
+                    ProvisioningState::NeedsReview,
+                    'paid_mutation_remote_missing',
+                    'Paid Service mutation target is absent from the authoritative remote lookup.',
+                );
+            }
+            try {
+                $paidTarget = $this->paidTarget($operation, $type, $remote);
+            } catch (DomainException|RuntimeException) {
+                return $this->finalize(
+                    $operation,
+                    $type,
+                    ProvisioningState::NeedsReview,
+                    'paid_mutation_remote_state_ambiguous',
+                    'Paid Service mutation cannot derive a safe absolute target from current remote state.',
+                );
+            }
+        }
 
         $this->assertProviderCallOutsideTransaction();
 
-        $boundaryOperation = $this->markProviderBoundary($operation, $type);
+        $boundaryOperation = $paidTarget === null
+            ? $this->markProviderBoundary($operation, $type)
+            : $this->markPaidProviderBoundary($operation, $type, $paidTarget);
         if ($boundaryOperation === null) {
             return $this->finalize(
                 $operation,
                 $type,
                 ProvisioningState::NeedsReview,
                 'stale_service_at_provider_boundary',
-                'Service lifecycle or remote identity changed before the provider boundary.',
+                'Service, financial, or remote identity authority changed before the provider boundary.',
             );
         }
         $operation = $boundaryOperation;
@@ -106,12 +182,20 @@ final readonly class ServiceMutationExecutor
         $this->assertProviderCallOutsideTransaction();
 
         try {
-            $result = $this->invoke(
-                $adapter,
-                $type,
-                $this->requiredString($operation->effect_fence_key, 'Service mutation effect fence'),
-                $this->requiredString($operation->remote_service_id, 'Remote Service ID'),
-            );
+            $result = $paidTarget === null
+                ? $this->invoke(
+                    $adapter,
+                    $type,
+                    $this->requiredString($operation->effect_fence_key, 'Service mutation effect fence'),
+                    $this->requiredString($operation->remote_service_id, 'Remote Service ID'),
+                )
+                : $this->invokePaid(
+                    $adapter,
+                    $type,
+                    $this->requiredString($operation->effect_fence_key, 'Service mutation effect fence'),
+                    $this->requiredString($operation->remote_service_id, 'Remote Service ID'),
+                    $paidTarget,
+                );
         } catch (Throwable) {
             return $this->finalize(
                 $operation,
@@ -142,6 +226,10 @@ final readonly class ServiceMutationExecutor
             }
 
             $type = $this->mutationType($locked->operation_type);
+            if ($type->isPaidEntitlement() && $this->paidMutationFinanciallyInvalidatedOn($connection, (int) $locked->id)) {
+                return $this->rejectFinanciallyInvalidatedOn($connection, $locked);
+            }
+
             $service = $this->serviceByIdOn($connection, (int) $locked->service_subscription_id, true);
             if (! $this->serviceMatchesOperation($service, $locked, $type)) {
                 throw new DomainException('Service mutation lifecycle or remote identity is no longer authoritative.');
@@ -175,6 +263,76 @@ final readonly class ServiceMutationExecutor
                 $this->clearEffectAuthority($connection);
             }
         }, 3);
+    }
+
+    /** @param MutationOperation $locator */
+    private function rejectFinanciallyInvalidated(object $locator, ServiceMutationType $type): ServiceMutationReceipt
+    {
+        return $this->database->connection()->transaction(function (Connection $connection) use ($locator, $type): ServiceMutationReceipt {
+            $operation = $this->operationById($connection, (int) $locator->id, true);
+            $state = $this->state($operation->state);
+            if ($this->isTerminal($state)) {
+                return $this->receipt($operation, $type, true);
+            }
+            if (! in_array($state, [ProvisioningState::Queued, ProvisioningState::RetryScheduled], true)
+                || ! $this->paidMutationFinanciallyInvalidatedOn($connection, (int) $operation->id)) {
+                throw new DomainException('Paid Service mutation financial invalidation cannot be finalized from the current state.');
+            }
+
+            $next = $this->rejectFinanciallyInvalidatedOn($connection, $operation);
+
+            return $this->receipt($next, $type, false);
+        }, 3);
+    }
+
+    /**
+     * @param  MutationOperation  $operation
+     * @return MutationOperation
+     */
+    private function rejectFinanciallyInvalidatedOn(Connection $connection, object $operation): object
+    {
+        $now = $this->timestamp();
+        $this->setEffectAuthority($connection, $operation);
+        try {
+            $updated = $connection->table('provisioning_operations')
+                ->where('id', (int) $operation->id)
+                ->whereIn('state', [ProvisioningState::Queued->value, ProvisioningState::RetryScheduled->value])
+                ->where('state_version', (int) $operation->state_version)
+                ->whereNull('remote_effect_started_at')
+                ->update([
+                    'state' => ProvisioningState::FailedFinal->value,
+                    'state_version' => (int) $operation->state_version + 1,
+                    'last_result_code' => 'paid_mutation_financially_invalidated',
+                    'last_result_message' => 'Paid Service mutation was financially invalidated before provider authority could be claimed.',
+                    'updated_at' => $now,
+                ]);
+            if ($updated !== 1) {
+                throw new RuntimeException('Financially invalidated paid Service mutation lost its queued state.');
+            }
+
+            $next = $this->operationById($connection, (int) $operation->id, true);
+            $this->recordEvent($connection, $next, ProvisioningState::FailedFinal->value, 'paid_mutation_financially_invalidated');
+
+            return $next;
+        } finally {
+            $this->clearEffectAuthority($connection);
+        }
+    }
+
+    private function paidMutationFinanciallyInvalidated(int $operationId): bool
+    {
+        return $this->paidMutationFinanciallyInvalidatedOn($this->database->connection(), $operationId);
+    }
+
+    private function paidMutationFinanciallyInvalidatedOn(Connection $connection, int $operationId): bool
+    {
+        return $connection->table('service_paid_mutation_authorities as paid_authority')
+            ->join('provisioning_financial_invalidations as invalidation', function (JoinClause $join): void {
+                $join->on('invalidation.purchase_settlement_id', '=', 'paid_authority.purchase_settlement_id')
+                    ->on('invalidation.payment_intent_id', '=', 'paid_authority.payment_intent_id');
+            })
+            ->where('paid_authority.provisioning_operation_id', $operationId)
+            ->exists();
     }
 
     /**
@@ -218,6 +376,186 @@ final readonly class ServiceMutationExecutor
                 $this->clearEffectAuthority($connection);
             }
         }, 3);
+    }
+
+    /**
+     * @param  MutationOperation  $operation
+     * @return PaidTarget
+     */
+    private function paidTarget(object $operation, ServiceMutationType $type, RemoteServiceSnapshot $remote): array
+    {
+        if (! hash_equals($this->requiredString($operation->remote_service_id, 'Remote Service ID'), $remote->remoteId)) {
+            throw new DomainException('Authoritative remote Service identity changed before paid mutation.');
+        }
+
+        /** @var PaidAuthority|null $authority */
+        $authority = $this->database->connection()->table('service_paid_mutation_authorities')
+            ->where('provisioning_operation_id', (int) $operation->id)
+            ->first([
+                'id', 'provisioning_operation_id', 'purchase_settlement_id', 'payment_intent_id', 'action',
+                'duration_days', 'data_bytes', 'remote_snapshot_hash', 'target_expires_at',
+                'target_data_limit_bytes', 'targets_resolved_at',
+            ]);
+        if ($authority === null || $authority->action !== $type->value) {
+            throw new DomainException('Paid Service mutation commercial authority is unavailable.');
+        }
+        if ($authority->targets_resolved_at !== null
+            || $authority->remote_snapshot_hash !== null
+            || $authority->target_expires_at !== null
+            || $authority->target_data_limit_bytes !== null) {
+            throw new DomainException('Paid Service mutation target was already resolved and requires reconciliation.');
+        }
+
+        $targetExpiry = null;
+        if (in_array($type, [ServiceMutationType::Renew, ServiceMutationType::AddDays, ServiceMutationType::AddDataDays], true)) {
+            $durationDays = $this->positiveDatabaseInt($authority->duration_days, 'Paid Service mutation duration days');
+            if ($remote->expiresAt === null) {
+                throw new DomainException('Paid duration mutation cannot safely extend an unlimited/unknown remote expiry.');
+            }
+            $now = $this->clock->now()->setTimezone(new DateTimeZone('UTC'));
+            $base = $remote->expiresAt > $now ? $remote->expiresAt : $now;
+            $targetExpiry = $base->modify('+'.$durationDays.' days');
+            if (! $targetExpiry instanceof DateTimeImmutable || $targetExpiry <= $base) {
+                throw new RuntimeException('Paid duration mutation target overflowed.');
+            }
+        }
+
+        $targetDataLimit = null;
+        if (in_array($type, [ServiceMutationType::AddData, ServiceMutationType::AddDataDays], true)) {
+            $dataBytes = $this->positiveDatabaseInt($authority->data_bytes, 'Paid Service mutation data bytes');
+            if ($remote->dataLimitBytes === null) {
+                throw new DomainException('Paid data mutation cannot safely extend an unlimited/unknown remote allowance.');
+            }
+            if ($remote->dataLimitBytes > PHP_INT_MAX - $dataBytes) {
+                throw new RuntimeException('Paid data mutation target overflowed.');
+            }
+            $targetDataLimit = $remote->dataLimitBytes + $dataBytes;
+        }
+
+        return [
+            'snapshot_hash' => $remote->canonicalHash,
+            'target_expires_at' => $targetExpiry,
+            'target_data_limit_bytes' => $targetDataLimit,
+        ];
+    }
+
+    /**
+     * @param  MutationOperation  $locator
+     * @param  PaidTarget  $target
+     * @return MutationOperation|null
+     */
+    private function markPaidProviderBoundary(object $locator, ServiceMutationType $type, array $target): ?object
+    {
+        return $this->database->connection()->transaction(function (Connection $connection) use ($locator, $type, $target): ?object {
+            $operation = $this->operationById($connection, (int) $locator->id, true);
+            if ($this->state($operation->state) !== ProvisioningState::Running
+                || $operation->remote_effect_started_at !== null
+                || $operation->remote_effect_completed_at !== null) {
+                throw new DomainException('Paid Service mutation provider boundary cannot be entered from the current state.');
+            }
+
+            $service = $this->serviceByIdOn($connection, (int) $operation->service_subscription_id, true);
+            if (! $this->serviceMatchesOperation($service, $operation, $type)) {
+                return null;
+            }
+
+            /** @var PaidAuthority|null $authority */
+            $authority = $connection->table('service_paid_mutation_authorities')
+                ->where('provisioning_operation_id', (int) $operation->id)
+                ->lockForUpdate()
+                ->first([
+                    'id', 'provisioning_operation_id', 'purchase_settlement_id', 'payment_intent_id', 'action',
+                    'duration_days', 'data_bytes', 'remote_snapshot_hash', 'target_expires_at',
+                    'target_data_limit_bytes', 'targets_resolved_at',
+                ]);
+            if ($authority === null
+                || $authority->action !== $type->value
+                || $authority->targets_resolved_at !== null
+                || $authority->remote_snapshot_hash !== null
+                || $authority->target_expires_at !== null
+                || $authority->target_data_limit_bytes !== null
+                || $connection->table('provisioning_financial_invalidations')
+                    ->where('purchase_settlement_id', (int) $authority->purchase_settlement_id)
+                    ->where('payment_intent_id', (int) $authority->payment_intent_id)
+                    ->exists()) {
+                return null;
+            }
+
+            $now = $this->timestamp();
+            $this->setPaidTargetAuthority($connection, $operation, $target);
+            try {
+                $updatedAuthority = $connection->table('service_paid_mutation_authorities')
+                    ->where('id', (int) $authority->id)
+                    ->whereNull('targets_resolved_at')
+                    ->whereNull('remote_snapshot_hash')
+                    ->whereNull('target_expires_at')
+                    ->whereNull('target_data_limit_bytes')
+                    ->update([
+                        'remote_snapshot_hash' => $target['snapshot_hash'],
+                        'target_expires_at' => $target['target_expires_at']?->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s.u'),
+                        'target_data_limit_bytes' => $target['target_data_limit_bytes'],
+                        'targets_resolved_at' => $now,
+                    ]);
+                if ($updatedAuthority !== 1) {
+                    throw new RuntimeException('Paid Service mutation target resolution lost its authority.');
+                }
+            } finally {
+                $this->clearPaidTargetAuthority($connection);
+            }
+
+            $this->setEffectAuthority($connection, $operation);
+            try {
+                $updated = $connection->table('provisioning_operations')
+                    ->where('id', (int) $operation->id)
+                    ->where('state', ProvisioningState::Running->value)
+                    ->where('state_version', (int) $operation->state_version)
+                    ->whereNull('remote_effect_started_at')
+                    ->update([
+                        'state_version' => (int) $operation->state_version + 1,
+                        'remote_effect_started_at' => $now,
+                        'updated_at' => $now,
+                    ]);
+                if ($updated !== 1) {
+                    throw new RuntimeException('Paid Service mutation provider boundary lost its authority.');
+                }
+
+                return $this->operationById($connection, (int) $operation->id, true);
+            } finally {
+                $this->clearEffectAuthority($connection);
+            }
+        }, 3);
+    }
+
+    /** @param PaidTarget $target */
+    private function invokePaid(
+        PanelAdapter $adapter,
+        ServiceMutationType $type,
+        string $idempotencyKey,
+        string $remoteId,
+        array $target,
+    ): PanelOperationResult {
+        return match ($type) {
+            ServiceMutationType::Renew, ServiceMutationType::AddDays => $adapter->updateExpiry(
+                $idempotencyKey,
+                $remoteId,
+                $target['target_expires_at'] ?? throw new RuntimeException('Paid expiry target is unavailable.'),
+            ),
+            ServiceMutationType::AddData => $adapter->updateDataAllowance(
+                $idempotencyKey,
+                $remoteId,
+                $target['target_data_limit_bytes'] ?? throw new RuntimeException('Paid data target is unavailable.'),
+                DataAllowanceMode::Set,
+            ),
+            ServiceMutationType::AddDataDays => $adapter instanceof AtomicServiceEntitlementAdapter
+                ? $adapter->updateServiceEntitlements(
+                    $idempotencyKey,
+                    $remoteId,
+                    $target['target_expires_at'] ?? throw new RuntimeException('Paid combined expiry target is unavailable.'),
+                    $target['target_data_limit_bytes'] ?? throw new RuntimeException('Paid combined data target is unavailable.'),
+                )
+                : throw new RuntimeException('Atomic combined Service mutation adapter is unavailable.'),
+            default => throw new RuntimeException('Non-paid Service mutation reached the paid provider path.'),
+        };
     }
 
     /** @param MutationOperation $operation */
@@ -325,19 +663,16 @@ final readonly class ServiceMutationExecutor
         ServiceMutationType $type,
         string $now,
     ): void {
-        if (in_array($type, [ServiceMutationType::ResetUsage, ServiceMutationType::RotateSubscriptionLink], true)) {
+        if ($type->isPaidEntitlement()
+            || in_array($type, [ServiceMutationType::ResetUsage, ServiceMutationType::RotateSubscriptionLink], true)) {
             return;
         }
 
-        $expectedStates = match ($type) {
-            ServiceMutationType::Suspend => ['active'],
-            ServiceMutationType::Activate => ['suspended'],
-            ServiceMutationType::Delete => ['active', 'suspended'],
-        };
-        $nextState = match ($type) {
-            ServiceMutationType::Suspend => 'suspended',
-            ServiceMutationType::Activate => 'active',
-            ServiceMutationType::Delete => 'retired',
+        [$expectedStates, $nextState] = match ($type) {
+            ServiceMutationType::Suspend => [['active'], 'suspended'],
+            ServiceMutationType::Activate => [['suspended'], 'active'],
+            ServiceMutationType::Delete => [['active', 'suspended'], 'retired'],
+            default => throw new RuntimeException('Service mutation type does not have a lifecycle transition.'),
         };
         $updates = [
             'lifecycle_state' => $nextState,
@@ -389,7 +724,11 @@ final readonly class ServiceMutationExecutor
             ServiceMutationType::Activate => $service->lifecycle_state === 'suspended',
             ServiceMutationType::Delete,
             ServiceMutationType::ResetUsage,
-            ServiceMutationType::RotateSubscriptionLink => in_array($service->lifecycle_state, ['active', 'suspended'], true),
+            ServiceMutationType::RotateSubscriptionLink,
+            ServiceMutationType::Renew,
+            ServiceMutationType::AddData,
+            ServiceMutationType::AddDays,
+            ServiceMutationType::AddDataDays => in_array($service->lifecycle_state, ['active', 'suspended'], true),
         };
     }
 
@@ -401,6 +740,10 @@ final readonly class ServiceMutationExecutor
             ServiceMutationType::Activate => $adapter->activate($idempotencyKey, $remoteId),
             ServiceMutationType::Delete => $adapter->delete($idempotencyKey, $remoteId),
             ServiceMutationType::RotateSubscriptionLink => $adapter->rotateSubscriptionLink($idempotencyKey, $remoteId),
+            ServiceMutationType::Renew,
+            ServiceMutationType::AddData,
+            ServiceMutationType::AddDays,
+            ServiceMutationType::AddDataDays => throw new RuntimeException('Paid Service mutation reached the manual provider path.'),
         };
     }
 
@@ -548,9 +891,33 @@ final readonly class ServiceMutationExecutor
         $connection->statement('SET @app_service_mutation_generation = NULL');
     }
 
+    /**
+     * @param  MutationOperation  $operation
+     * @param  PaidTarget  $target
+     */
+    private function setPaidTargetAuthority(Connection $connection, object $operation, array $target): void
+    {
+        $connection->statement('SET @app_service_paid_mutation_target_authority = ?', ['service_paid_mutation_target_v1']);
+        $connection->statement('SET @app_service_paid_mutation_operation_id = ?', [(int) $operation->id]);
+        $connection->statement('SET @app_service_paid_mutation_snapshot_hash = ?', [$target['snapshot_hash']]);
+        $connection->statement('SET @app_service_paid_mutation_target_expires_at = ?', [
+            $target['target_expires_at']?->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s.u'),
+        ]);
+        $connection->statement('SET @app_service_paid_mutation_target_data_limit = ?', [$target['target_data_limit_bytes']]);
+    }
+
+    private function clearPaidTargetAuthority(Connection $connection): void
+    {
+        $connection->statement('SET @app_service_paid_mutation_target_authority = NULL');
+        $connection->statement('SET @app_service_paid_mutation_operation_id = NULL');
+        $connection->statement('SET @app_service_paid_mutation_snapshot_hash = NULL');
+        $connection->statement('SET @app_service_paid_mutation_target_expires_at = NULL');
+        $connection->statement('SET @app_service_paid_mutation_target_data_limit = NULL');
+    }
+
     private function timestamp(): string
     {
-        return $this->clock->now()->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s.u');
+        return $this->clock->now()->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s.u');
     }
 
     private function resultCode(string $value): string

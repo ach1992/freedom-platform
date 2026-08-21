@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Orders\Application;
 
+use App\Modules\Orders\Domain\QuoteAction;
 use App\Modules\Orders\Domain\QuoteOverrideSource;
 use DateTimeImmutable;
 
@@ -15,6 +16,7 @@ final readonly class QuoteReceipt
         public string $quoteKey,
         public int $userId,
         public string $accountType,
+        public QuoteAction $action,
         public int $planOfferingId,
         public string $offeringCode,
         public int $offeringVersion,
@@ -31,6 +33,7 @@ final readonly class QuoteReceipt
         public string $currency,
         public string $configurationSnapshotHash,
         public ?QuoteAgentPricingSnapshot $agentPricing,
+        public ?ServicePackageQuoteSnapshot $servicePackage,
         public DateTimeImmutable $validFrom,
         public DateTimeImmutable $expiresAt,
         public bool $replayed,

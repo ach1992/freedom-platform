@@ -40,13 +40,22 @@ final class ServiceMutationExistingInitialUpgradeTest extends TestCase
     {
         /** @var Migration $migration */
         $migration = require database_path('migrations/2026_08_17_000300_enable_service_mutation_authority.php');
-        $migration->down();
-        $migration->down();
+        /** @var Migration $servicePackageQuoteMigration */
+        $servicePackageQuoteMigration = require database_path('migrations/2026_08_20_000100_enable_service_package_quotes.php');
+        /** @var Migration $paidServiceMutationMigration */
+        $paidServiceMutationMigration = require database_path('migrations/2026_08_20_000110_enable_paid_service_mutation_authority.php');
         $upgraded = false;
 
         try {
+            $paidServiceMutationMigration->down();
+            $servicePackageQuoteMigration->down();
+            $migration->down();
+            $migration->down();
             self::assertFalse(Schema::hasColumn('service_subscriptions', 'lifecycle_state'));
             self::assertFalse(Schema::hasColumn('provisioning_operations', 'operation_generation'));
+            // This upgrade test targets the older Service-mutation schema, not the
+            // unrelated Quote read contract used by the shared purchase fixture.
+            $servicePackageQuoteMigration->up();
 
             $settlement = $this->createPurchaseOrderSettlement('mutation-existing-initial-upgrade');
             $order = $this->app->make(PurchaseOrderService::class)->createFromSettlement(
@@ -127,6 +136,8 @@ SQL);
             if (! $upgraded) {
                 $migration->up();
             }
+            $servicePackageQuoteMigration->up();
+            $paidServiceMutationMigration->up();
         }
     }
 }

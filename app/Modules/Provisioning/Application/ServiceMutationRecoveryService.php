@@ -223,7 +223,11 @@ final readonly class ServiceMutationRecoveryService
             ServiceMutationType::Activate => $service->lifecycle_state === 'suspended',
             ServiceMutationType::Delete,
             ServiceMutationType::ResetUsage,
-            ServiceMutationType::RotateSubscriptionLink => in_array($service->lifecycle_state, ['active', 'suspended'], true),
+            ServiceMutationType::RotateSubscriptionLink,
+            ServiceMutationType::Renew,
+            ServiceMutationType::AddData,
+            ServiceMutationType::AddDays,
+            ServiceMutationType::AddDataDays => in_array($service->lifecycle_state, ['active', 'suspended'], true),
         };
     }
 

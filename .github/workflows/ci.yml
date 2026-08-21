@@ -17,6 +17,11 @@ on:
       - ready_for_review
       - converted_to_draft
   workflow_dispatch:
+    inputs:
+      phpunit_filter:
+        description: Optional PHPUnit --filter regexp for targeted MariaDB/Redis diagnosis.
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -337,6 +342,7 @@ jobs:
     env:
       MARIADB_VERSION: '10.11'
       COMPOSE_PROJECT_NAME: freedom-platform-ci-${{ github.run_id }}
+      PHPUNIT_FILTER: ${{ inputs.phpunit_filter }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -346,7 +352,7 @@ jobs:
         run: |
           set -euo pipefail
           mode=no-coverage
-          [[ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' ]] && mode=coverage
+          [[ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' && -z "$PHPUNIT_FILTER" ]] && mode=coverage
           bash scripts/ci/bootstrap-self-hosted-toolchain.sh "$mode"
 
       - name: Install locked dependencies
@@ -362,7 +368,17 @@ jobs:
 
       - name: Start disposable dependencies
         timeout-minutes: 5
-        run: docker compose -f docker-compose.ci.yml up -d --wait
+        shell: bash
+        run: |
+          set -euo pipefail
+          export MARIADB_HOST_PORT=0
+          export REDIS_HOST_PORT=0
+          docker compose -f docker-compose.ci.yml up -d --wait
+          mariadb_port=$(docker compose -f docker-compose.ci.yml port mariadb 3306 | sed -E 's/.*:([0-9]+)$/\1/')
+          redis_port=$(docker compose -f docker-compose.ci.yml port redis 6379 | sed -E 's/.*:([0-9]+)$/\1/')
+          [[ "$mariadb_port" =~ ^[0-9]{2,5}$ ]]
+          [[ "$redis_port" =~ ^[0-9]{2,5}$ ]]
+          printf 'DB_PORT=%s\nREDIS_PORT=%s\n' "$mariadb_port" "$redis_port" >> "$GITHUB_ENV"
 
       - name: Run complete automated suite
         timeout-minutes: 30
@@ -380,13 +396,15 @@ jobs:
             --fail-on-warning
             --log-junit build/evidence/tests/junit.xml
           )
-          if [[ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' ]]; then
+          if [[ -n "$PHPUNIT_FILTER" ]]; then
+            phpunit_args+=(--filter "$PHPUNIT_FILTER")
+          elif [[ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' ]]; then
             phpunit_args+=(--coverage-clover build/evidence/coverage/clover.xml)
           fi
 
           COLUMNS=240 php vendor/bin/phpunit "${phpunit_args[@]}" 2>&1 | tee build/evidence/tests/test.log
           test -s build/evidence/tests/junit.xml
-          if [[ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' ]]; then
+          if [[ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' && -z "$PHPUNIT_FILTER" ]]; then
             test -s build/evidence/coverage/clover.xml
           fi
 
@@ -469,7 +487,8 @@ jobs:
 
   secrets:
     name: Secret scan
-    if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.draft == false) }}
+    # A filtered workflow_dispatch is diagnostic-only; every pull-request run still scans its changed history.
+    if: ${{ (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.draft == false)) && !(github.event_name == 'workflow_dispatch' && inputs.phpunit_filter != '') }}
     runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

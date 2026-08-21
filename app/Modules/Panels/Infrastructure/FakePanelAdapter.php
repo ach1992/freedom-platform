@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Panels\Infrastructure;
 
+use App\Modules\Panels\Application\Contracts\AtomicServiceEntitlementAdapter;
 use App\Modules\Panels\Application\Contracts\DataAllowanceMode;
 use App\Modules\Panels\Application\Contracts\PanelAdapter;
 use App\Modules\Panels\Application\Contracts\PanelCapabilities;
@@ -18,7 +19,7 @@ use Closure;
 use DateTimeImmutable;
 use RuntimeException;
 
-final class FakePanelAdapter implements PanelAdapter
+final class FakePanelAdapter implements AtomicServiceEntitlementAdapter, PanelAdapter
 {
     /** @var array<string, RemoteServiceSnapshot> */
     private array $services = [];
@@ -187,6 +188,27 @@ final class FakePanelAdapter implements PanelAdapter
 
                 return $this->replace($remoteId, dataLimitBytes: $limit);
             },
+        );
+    }
+
+    public function updateServiceEntitlements(
+        string $idempotencyKey,
+        string $remoteId,
+        DateTimeImmutable $expiresAt,
+        int $dataLimitBytes,
+    ): PanelOperationResult {
+        if ($dataLimitBytes < 0) {
+            throw new \InvalidArgumentException('Service entitlement data limit must not be negative.');
+        }
+
+        return $this->idempotentOperation(
+            $idempotencyKey,
+            $this->operationFingerprint('update_service_entitlements', [
+                'remote_id' => $remoteId,
+                'expires_at_unix' => $expiresAt->getTimestamp(),
+                'data_limit_bytes' => $dataLimitBytes,
+            ]),
+            fn (): PanelOperationResult => $this->replace($remoteId, expiresAt: $expiresAt, dataLimitBytes: $dataLimitBytes),
         );
     }
 
