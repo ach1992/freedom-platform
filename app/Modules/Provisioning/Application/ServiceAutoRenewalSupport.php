@@ -149,8 +149,8 @@ trait ServiceAutoRenewalSupport
     }
 
     /**
-     * @param ServiceAutoRenewAttemptRow $attempt
-     * @param ServiceAutoRenewConfigurationFacts $facts
+     * @param  ServiceAutoRenewAttemptRow  $attempt
+     * @param  ServiceAutoRenewConfigurationFacts  $facts
      */
     private function attemptMatchesConfigurationFacts(object $attempt, object $facts): bool
     {
@@ -287,9 +287,24 @@ trait ServiceAutoRenewalSupport
             ->first(['id', 'public_id', 'state']);
     }
 
-    private function paymentIntentCreationKey(string $cycleKey): string
+    private function commercialAuthorityGeneration(int $attemptId): int
     {
-        return 'service.auto-renew.intent.'.$cycleKey;
+        return (int) $this->database->connection()->table('service_auto_renew_attempt_events')
+            ->where('auto_renew_attempt_id', $attemptId)
+            ->whereIn('reason_code', ['commercial_authority_reset_for_requote', 'commercial_authority_reset_before_failure'])
+            ->count();
+    }
+
+    private function commercialAuthorityKeySuffix(int $attemptId): string
+    {
+        $generation = $this->commercialAuthorityGeneration($attemptId);
+
+        return $generation === 0 ? '' : '.r'.$generation;
+    }
+
+    private function paymentIntentCreationKey(string $cycleKey, int $attemptId): string
+    {
+        return 'service.auto-renew.intent.'.$cycleKey.$this->commercialAuthorityKeySuffix($attemptId);
     }
 
     private function mutationQueueFailureIsRetryable(string $message): bool

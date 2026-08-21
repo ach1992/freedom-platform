@@ -64,7 +64,7 @@ trait ServiceAutoRenewalCommercialOperations
         }
 
         $attempt = $this->attempt($attemptId);
-        $creationKey = $this->paymentIntentCreationKey((string) $attempt->cycle_key);
+        $creationKey = $this->paymentIntentCreationKey((string) $attempt->cycle_key, $attemptId);
         try {
             $intent = $this->walletPayments->reserve(
                 $creationKey,
@@ -180,35 +180,97 @@ trait ServiceAutoRenewalCommercialOperations
         }
 
         try {
-            $order = $this->database->connection()->transaction(function (Connection $connection) use ($attemptId, $intent): ?PurchaseOrderReceipt {
+            $order = $this->database->connection()->transaction(function (Connection $connection) use ($attemptId, $intent): PurchaseOrderReceipt|false|null {
                 $lockedAttempt = $this->attemptOn($connection, $attemptId, true);
-                /** @var object{public_id:string,state:string}|null $lockedIntent */
-                $lockedIntent = $connection->table('payment_intents')
-                    ->where('id', (int) $lockedAttempt->payment_intent_id)
+                /** @var object{public_id:string,state:string,quote_expires_at:string,quote_configuration_snapshot_hash:string}|null $lockedIntent */
+                $lockedIntent = $connection->table('payment_intents as intent')
+                    ->join('quotes as quote', 'quote.id', '=', 'intent.source_quote_id')
+                    ->where('intent.id', (int) $lockedAttempt->payment_intent_id)
                     ->lockForUpdate()
-                    ->first(['public_id', 'state']);
+                    ->first([
+                        'intent.public_id',
+                        'intent.state',
+                        'quote.expires_at as quote_expires_at',
+                        'quote.configuration_snapshot_hash as quote_configuration_snapshot_hash',
+                    ]);
                 if ($lockedIntent === null || ! hash_equals((string) $lockedIntent->public_id, (string) $intent->public_id)) {
                     throw new RuntimeException('Auto-renew Payment Intent changed before capture.');
                 }
 
                 if ($lockedIntent->state !== 'captured') {
+                    if ($lockedIntent->state === 'expired' || $lockedIntent->state === 'canceled') {
+                        $this->resetCommercialAuthorityForRequoteOn(
+                            $connection,
+                            $attemptId,
+                            'commercial_authority_reset_for_requote',
+                        );
+
+                        return false;
+                    }
+
                     $facts = $this->configurationFactsOn($connection, (int) $lockedAttempt->auto_renew_configuration_id, true);
+                    if (! (bool) $facts->enabled
+                        || ! $this->runtimeEligible($facts)
+                        || ! $this->attemptMatchesConfigurationFacts($lockedAttempt, $facts)) {
+                        $this->walletPayments->cancel(
+                            (string) $lockedIntent->public_id,
+                            (string) $lockedAttempt->correlation_id,
+                        );
+                        $this->resetCommercialAuthorityForRequoteOn(
+                            $connection,
+                            $attemptId,
+                            'commercial_authority_reset_before_failure',
+                        );
+
+                        return null;
+                    }
+
+                    if ($this->storedDateTime((string) $lockedIntent->quote_expires_at) <= $this->clock->now()) {
+                        $this->walletPayments->expire(
+                            (string) $lockedIntent->public_id,
+                            (string) $lockedAttempt->correlation_id,
+                        );
+                        $this->resetCommercialAuthorityForRequoteOn(
+                            $connection,
+                            $attemptId,
+                            'commercial_authority_reset_for_requote',
+                        );
+
+                        return false;
+                    }
+
+                    $validationQuote = $this->captureValidationQuote(
+                        $lockedAttempt,
+                        $facts,
+                        (string) $lockedIntent->public_id,
+                    );
                     $policy = $this->pricePolicyForOfferingOn($connection, (int) $facts->plan_offering_id, true);
-                    $policyAllows = $lockedAttempt->current_price_irr !== null
+                    $commercialSnapshotCurrent = $lockedAttempt->current_price_irr !== null
+                        && hash_equals(
+                            strtolower((string) $lockedIntent->quote_configuration_snapshot_hash),
+                            strtolower($validationQuote->configurationSnapshotHash),
+                        )
+                        && (int) $lockedAttempt->current_price_irr === $validationQuote->finalPriceIrr;
+                    $policyAllows = $commercialSnapshotCurrent
                         && $this->pricePolicy->allows(
                             (int) $lockedAttempt->baseline_price_irr,
-                            (int) $lockedAttempt->current_price_irr,
+                            $validationQuote->finalPriceIrr,
                             $policy['mode'],
                             $policy['absolute'],
                             $policy['percentage'],
                         );
-                    if (! (bool) $facts->enabled
-                        || ! $this->runtimeEligible($facts)
-                        || ! $this->attemptMatchesConfigurationFacts($lockedAttempt, $facts)
-                        || ! $policyAllows) {
-                        $this->walletPayments->release((string) $lockedIntent->public_id, 'auto-renew authority changed before capture');
+                    if (! $commercialSnapshotCurrent || ! $policyAllows) {
+                        $this->walletPayments->cancel(
+                            (string) $lockedIntent->public_id,
+                            (string) $lockedAttempt->correlation_id,
+                        );
+                        $this->resetCommercialAuthorityForRequoteOn(
+                            $connection,
+                            $attemptId,
+                            'commercial_authority_reset_for_requote',
+                        );
 
-                        return null;
+                        return false;
                     }
                 }
 
@@ -227,6 +289,18 @@ trait ServiceAutoRenewalCommercialOperations
             }
 
             $order = $this->walletPayments->capture((string) $intent->public_id, (string) $attempt->correlation_id);
+        }
+
+        if ($order === false) {
+            $facts = $this->configurationFacts((int) $attempt->auto_renew_configuration_id);
+            $refreshedAttempt = $this->attempt($attemptId);
+            if (! (bool) $facts->enabled
+                || ! $this->runtimeEligible($facts)
+                || ! $this->attemptMatchesConfigurationFacts($refreshedAttempt, $facts)) {
+                return $this->finishFailure($attemptId, 'authority_changed_before_requote');
+            }
+
+            return $this->executeCommercialAttempt($attemptId, $facts);
         }
 
         if ($order === null) {

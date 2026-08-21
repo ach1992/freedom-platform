@@ -50,7 +50,7 @@ trait ServiceAutoRenewalRemoteOperations
     }
 
     /**
-     * @param ServiceAutoRenewConfigurationFacts $facts
+     * @param  ServiceAutoRenewConfigurationFacts  $facts
      * @return array{expires_at:DateTimeImmutable,evidence_hash:string}
      */
     private function remoteObservation(object $facts): array
@@ -78,18 +78,54 @@ trait ServiceAutoRenewalRemoteOperations
     }
 
     /**
-     * @param ServiceAutoRenewAttemptRow $attempt
-     * @param ServiceAutoRenewConfigurationFacts $facts
+     * @param  ServiceAutoRenewAttemptRow  $attempt
+     * @param  ServiceAutoRenewConfigurationFacts  $facts
      */
     private function freshQuote(object $attempt, object $facts): QuoteReceipt
     {
         $ttlMinutes = $this->boundedConfigInt('auto_renew.quote_ttl_minutes', 15, 1, 120);
         $bucket = intdiv($this->clock->now()->getTimestamp(), $ttlMinutes * 60);
+        $keySuffix = $this->commercialAuthorityKeySuffix((int) $attempt->id);
+
+        return $this->createRenewalQuote(
+            'service.auto-renew.quote.'.(string) $attempt->public_id.$keySuffix.'.'.$bucket,
+            $attempt,
+            $facts,
+            $ttlMinutes,
+        );
+    }
+
+    /**
+     * @param  ServiceAutoRenewAttemptRow  $attempt
+     * @param  ServiceAutoRenewConfigurationFacts  $facts
+     */
+    private function captureValidationQuote(object $attempt, object $facts, string $paymentIntentPublicId): QuoteReceipt
+    {
+        $ttlMinutes = $this->boundedConfigInt('auto_renew.quote_ttl_minutes', 15, 1, 120);
+
+        return $this->createRenewalQuote(
+            'service.auto-renew.capture-check.'.$paymentIntentPublicId.'.'.(int) $attempt->retry_count,
+            $attempt,
+            $facts,
+            $ttlMinutes,
+        );
+    }
+
+    /**
+     * @param  ServiceAutoRenewAttemptRow  $attempt
+     * @param  ServiceAutoRenewConfigurationFacts  $facts
+     */
+    private function createRenewalQuote(
+        string $quoteKey,
+        object $attempt,
+        object $facts,
+        int $ttlMinutes,
+    ): QuoteReceipt {
         $agentContext = $facts->account_type === 'agent'
             ? new QuoteAgentPricingContext((int) $facts->user_id, AgentPricingAction::Renew)
             : null;
         $quote = $this->quotes->create(
-            'service.auto-renew.quote.'.(string) $attempt->public_id.'.'.$bucket,
+            $quoteKey,
             (int) $facts->user_id,
             (int) $facts->plan_offering_id,
             new QuotePricingInput(

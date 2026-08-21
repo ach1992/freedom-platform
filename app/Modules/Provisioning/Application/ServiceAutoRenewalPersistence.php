@@ -17,7 +17,7 @@ use RuntimeException;
 trait ServiceAutoRenewalPersistence
 {
     /**
-     * @param ServiceAutoRenewConfigurationFacts $facts
+     * @param  ServiceAutoRenewConfigurationFacts  $facts
      * @return ServiceAutoRenewAttemptRow
      */
     private function ensureAttempt(object $facts): object
@@ -165,6 +165,38 @@ trait ServiceAutoRenewalPersistence
             ]);
             $this->event($connection, $attemptId, (string) $attempt->state, AutoRenewAttemptState::from((string) $attempt->state), $reasonCode);
         }, 3);
+    }
+
+    private function resetCommercialAuthorityForRequoteOn(
+        Connection $connection,
+        int $attemptId,
+        string $reasonCode,
+    ): void {
+        $attempt = $this->attemptOn($connection, $attemptId, true);
+        if ($attempt->payment_intent_id === null) {
+            return;
+        }
+        if ($attempt->purchase_settlement_id !== null || $attempt->provisioning_operation_id !== null) {
+            throw new RuntimeException('Captured auto-renew authority cannot be reset for re-quote.');
+        }
+
+        $state = AutoRenewAttemptState::from((string) $attempt->state);
+        $this->event($connection, $attemptId, $state->value, $state, $reasonCode);
+
+        $updated = $connection->table('service_auto_renew_attempts')
+            ->where('id', $attemptId)
+            ->where('payment_intent_id', (int) $attempt->payment_intent_id)
+            ->update([
+                'quote_id' => null,
+                'payment_eligibility_decision_id' => null,
+                'payment_intent_id' => null,
+                'current_price_irr' => null,
+                'reason_code' => $reasonCode,
+                'updated_at' => $this->timestamp(),
+            ]);
+        if ($updated !== 1) {
+            throw new RuntimeException('Auto-renew commercial authority reset lost its authoritative state.');
+        }
     }
 
     private function bindSettlement(int $attemptId, PurchaseOrderReceipt $order): void

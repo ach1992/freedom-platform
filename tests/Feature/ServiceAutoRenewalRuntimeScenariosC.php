@@ -190,4 +190,122 @@ trait ServiceAutoRenewalRuntimeScenariosC
                 ->value('hold.status'),
         );
     }
+
+    public function test_expired_reserved_quote_is_requoted_before_capture_without_double_debit(): void
+    {
+        $scenario = $this->scenario('expired-reserved-quote');
+        $this->enableWalletMethod('expired-reserved-quote');
+        $this->seed(WalletFinancialFoundationSeeder::class);
+        $walletAccountId = $this->fundWallet($scenario['user_id'], 600_000, 'expired-reserved-quote');
+        $configuration = $this->enableAutoRenew($scenario, 'expired-reserved-quote');
+
+        $quote = $this->app->make(QuoteService::class)->create(
+            'service.auto-renew.expired-reserved.quote.000001',
+            $scenario['user_id'],
+            $scenario['offering_id'],
+            new QuotePricingInput(
+                QuoteOverrideSource::None,
+                null,
+                null,
+                null,
+                0,
+                $this->purchaseOrderClock->value->modify('+1 minute'),
+            ),
+            $this->purchaseOrderCorrelation('auto-renew-expired-reserved-quote'),
+            null,
+            new ServicePackageQuoteContext($scenario['service_public_id'], 'aq-renew-30d'),
+        );
+        $eligibility = $this->app->make(PaymentMethodEligibilityService::class)->evaluate(
+            'service.auto-renew.expired-reserved.eligibility.000001',
+            $scenario['user_id'],
+            $quote->quotePublicId,
+        );
+        $intent = $this->app->make(PurchaseWalletPaymentService::class)->reserve(
+            'service.auto-renew.expired-reserved.intent.000001',
+            $scenario['user_id'],
+            $walletAccountId,
+            $quote->quotePublicId,
+            $eligibility->publicId,
+            $this->purchaseOrderCorrelation('auto-renew-expired-reserved-reserve'),
+        );
+
+        $configRow = DB::table('service_auto_renew_configurations')
+            ->where('id', $configuration->configurationId)
+            ->first();
+        self::assertNotNull($configRow);
+        $cycleKey = hash('sha256', implode('|', [
+            (string) $configuration->configurationId,
+            (string) $scenario['service_id'],
+            (string) $configuration->configurationVersion,
+            (string) $configRow->observed_remote_identity_generation,
+            (string) $configRow->observed_expires_at,
+        ]));
+        $attemptId = (int) DB::table('service_auto_renew_attempts')->insertGetId([
+            'public_id' => (string) Str::ulid(),
+            'cycle_key' => $cycleKey,
+            'auto_renew_configuration_id' => $configuration->configurationId,
+            'service_subscription_id' => $scenario['service_id'],
+            'configuration_version' => $configuration->configurationVersion,
+            'remote_identity_generation' => (int) $configRow->observed_remote_identity_generation,
+            'observed_expires_at' => (string) $configRow->observed_expires_at,
+            'observed_expiry_evidence_hash' => (string) $configRow->observed_expiry_evidence_hash,
+            'observed_expiry_source' => (string) $configRow->observed_expiry_source,
+            'state' => 'pending',
+            'reason_code' => null,
+            'baseline_price_irr' => $configuration->acceptedPriceIrr,
+            'current_price_irr' => null,
+            'quote_id' => null,
+            'payment_eligibility_decision_id' => null,
+            'payment_intent_id' => null,
+            'purchase_settlement_id' => null,
+            'provisioning_operation_id' => null,
+            'correlation_id' => $this->purchaseOrderCorrelation('auto-renew-expired-reserved-attempt'),
+            'completed_at' => null,
+            'created_at' => $this->purchaseOrderTimestamp(),
+            'updated_at' => $this->purchaseOrderTimestamp(),
+        ]);
+        $oldIntentId = (int) DB::table('payment_intents')
+            ->where('public_id', $intent->intentPublicId)
+            ->value('id');
+        DB::table('service_auto_renew_attempts')->where('id', $attemptId)->update([
+            'quote_id' => $quote->quoteId,
+            'payment_eligibility_decision_id' => $eligibility->decisionId,
+            'payment_intent_id' => $oldIntentId,
+            'current_price_irr' => $quote->finalPriceIrr,
+            'reason_code' => 'wallet_reserved',
+            'updated_at' => $this->purchaseOrderTimestamp(),
+        ]);
+
+        $ledgerCountBeforeRecovery = DB::table('ledger_transactions')->count();
+        $this->purchaseOrderClock->value = $this->purchaseOrderClock->value->modify('+2 minutes');
+        DB::statement('SET timestamp = '.$this->purchaseOrderClock->value->getTimestamp());
+
+        $result = $this->app->make(ServiceAutoRenewalProcessor::class)->processDue(10);
+
+        self::assertGreaterThanOrEqual(1, $result->queued);
+        $attempt = DB::table('service_auto_renew_attempts')
+            ->where('id', $attemptId)
+            ->first(['state', 'quote_id', 'payment_intent_id']);
+        self::assertNotNull($attempt);
+        self::assertSame('mutation_queued', $attempt->state);
+        self::assertNotSame($quote->quoteId, (int) $attempt->quote_id);
+        self::assertNotSame($oldIntentId, (int) $attempt->payment_intent_id);
+        self::assertSame('expired', DB::table('payment_intents')->where('id', $oldIntentId)->value('state'));
+        self::assertSame(
+            'released',
+            DB::table('purchase_wallet_reservations as reservation')
+                ->join('wallet_holds as hold', 'hold.id', '=', 'reservation.wallet_hold_id')
+                ->where('reservation.payment_intent_id', $oldIntentId)
+                ->value('hold.status'),
+        );
+        self::assertSame($ledgerCountBeforeRecovery + 1, DB::table('ledger_transactions')->count());
+        self::assertSame(1, DB::table('purchase_settlements')->where('provider_code', 'wallet')->count());
+        self::assertSame(1, DB::table('service_paid_mutation_authorities')->count());
+        $resetEvent = DB::table('service_auto_renew_attempt_events')
+            ->where('auto_renew_attempt_id', $attemptId)
+            ->where('reason_code', 'commercial_authority_reset_for_requote')
+            ->first(['payment_intent_id']);
+        self::assertNotNull($resetEvent);
+        self::assertSame($oldIntentId, (int) $resetEvent->payment_intent_id);
+    }
 }
