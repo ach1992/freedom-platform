@@ -124,19 +124,30 @@ SQL);
         if (! Schema::hasTable('service_paid_mutation_authorities')) {
             Schema::create('service_paid_mutation_authorities', function (Blueprint $table): void {
                 $table->bigIncrements('id');
-                $table->ulid('public_id')->unique();
-                $table->foreignId('provisioning_operation_id')->unique()->constrained('provisioning_operations')->restrictOnDelete();
-                $table->foreignId('service_subscription_id')->constrained('service_subscriptions')->restrictOnDelete();
-                $table->foreignId('source_quote_id')->unique()->constrained('quotes')->restrictOnDelete();
-                $table->foreignId('purchase_order_id')->unique()->constrained('orders')->restrictOnDelete();
-                $table->foreignId('purchase_order_item_id')->unique()->constrained('order_items')->restrictOnDelete();
-                $table->foreignId('purchase_settlement_id')->unique()->constrained('purchase_settlements')->restrictOnDelete();
-                $table->foreignId('payment_intent_id')->unique()->constrained('payment_intents')->restrictOnDelete();
+                // MariaDB limits identifiers to 64 characters. The semantic table and
+                // column names are intentionally descriptive, so every derived index
+                // and foreign-key identifier must be explicitly bounded.
+                $table->ulid('public_id')->unique('spma_public_id_uq');
+                $table->foreignId('provisioning_operation_id')->unique('spma_operation_uq');
+                $table->foreign('provisioning_operation_id', 'spma_operation_fk')->references('id')->on('provisioning_operations')->restrictOnDelete();
+                $table->foreignId('service_subscription_id');
+                $table->foreign('service_subscription_id', 'spma_service_fk')->references('id')->on('service_subscriptions')->restrictOnDelete();
+                $table->foreignId('source_quote_id')->unique('spma_source_quote_uq');
+                $table->foreign('source_quote_id', 'spma_source_quote_fk')->references('id')->on('quotes')->restrictOnDelete();
+                $table->foreignId('purchase_order_id')->unique('spma_order_uq');
+                $table->foreign('purchase_order_id', 'spma_order_fk')->references('id')->on('orders')->restrictOnDelete();
+                $table->foreignId('purchase_order_item_id')->unique('spma_order_item_uq');
+                $table->foreign('purchase_order_item_id', 'spma_order_item_fk')->references('id')->on('order_items')->restrictOnDelete();
+                $table->foreignId('purchase_settlement_id')->unique('spma_settlement_uq');
+                $table->foreign('purchase_settlement_id', 'spma_settlement_fk')->references('id')->on('purchase_settlements')->restrictOnDelete();
+                $table->foreignId('payment_intent_id')->unique('spma_intent_uq');
+                $table->foreign('payment_intent_id', 'spma_intent_fk')->references('id')->on('payment_intents')->restrictOnDelete();
                 $table->string('action', 32);
                 $table->string('package_code', 64);
                 $table->unsignedInteger('duration_days')->nullable();
                 $table->unsignedBigInteger('data_bytes')->nullable();
-                $table->foreignId('quoted_service_target_id')->constrained('panel_service_targets')->restrictOnDelete();
+                $table->foreignId('quoted_service_target_id');
+                $table->foreign('quoted_service_target_id', 'spma_target_fk')->references('id')->on('panel_service_targets')->restrictOnDelete();
                 $table->unsignedBigInteger('quoted_remote_identity_generation');
                 $table->unsignedBigInteger('quoted_lifecycle_version');
                 $table->char('remote_snapshot_hash', 64)->nullable();
