@@ -272,14 +272,18 @@ final class ProtectedTelegramMessageSenderTest extends TestCase
         self::assertSame(779900, $result->messageId);
         Http::assertSentCount(1);
         Http::assertSent(function (Request $request): bool {
-            $data = $request->data();
             $body = $request->body();
+            $hasScalar = static function (string $name, string $value) use ($body): bool {
+                $pattern = '~name="'.preg_quote($name, '~').'"(?:\\r\\n[^\\r\\n]+)*\\r\\n\\r\\n'.preg_quote($value, '~').'\\r\\n~';
+
+                return preg_match($pattern, $body) === 1;
+            };
 
             return str_ends_with($request->url(), '/sendDocument')
-                && ($data['chat_id'] ?? null) === self::TELEGRAM_USER_ID
-                && ($data['caption'] ?? null) === 'Service details'
-                && str_contains($body, 'name="protect_content"'."\r\n\r\ntrue")
-                && str_contains($body, 'name="disable_content_type_detection"'."\r\n\r\ntrue")
+                && $hasScalar('chat_id', (string) self::TELEGRAM_USER_ID)
+                && $hasScalar('caption', 'Service details')
+                && $hasScalar('protect_content', 'true')
+                && $hasScalar('disable_content_type_detection', 'true')
                 && str_contains($body, 'service-details.svg');
         });
     }
