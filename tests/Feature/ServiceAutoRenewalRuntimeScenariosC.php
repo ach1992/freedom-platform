@@ -308,4 +308,36 @@ trait ServiceAutoRenewalRuntimeScenariosC
         self::assertNotNull($resetEvent);
         self::assertSame($oldIntentId, (int) $resetEvent->payment_intent_id);
     }
+
+    public function test_commercial_guard_rollback_refuses_when_configuration_exists_without_attempt(): void
+    {
+        $scenario = $this->scenario('commercial-rollback-fence');
+        $this->enableAutoRenew($scenario, 'commercial-rollback-fence');
+        self::assertSame(0, DB::table('service_auto_renew_attempts')->count());
+        self::assertSame(
+            1,
+            (int) DB::selectOne(
+                "SELECT COUNT(*) AS aggregate FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = DATABASE() AND TRIGGER_NAME = 'sara_commercial_binding_guard'",
+            )->aggregate,
+        );
+
+        /** @var Migration $migration */
+        $migration = require database_path('migrations/2026_08_21_000230_guard_service_auto_renew_commercial_binding.php');
+        try {
+            $migration->down();
+            self::fail('Commercial auto-renew guard rollback must refuse while configuration authority exists.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame(
+                'Cannot remove Service auto-renew guards while auto-renew authority rows exist.',
+                $exception->getMessage(),
+            );
+        }
+
+        self::assertSame(
+            1,
+            (int) DB::selectOne(
+                "SELECT COUNT(*) AS aggregate FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = DATABASE() AND TRIGGER_NAME = 'sara_commercial_binding_guard'",
+            )->aggregate,
+        );
+    }
 }

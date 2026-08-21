@@ -79,6 +79,7 @@ trait ServiceAutoRenewalSupport
         if ($lock) {
             $query->lockForUpdate();
         }
+        /** @var ServiceAutoRenewConfigurationFacts|null $row */
         $row = $query->first([
             'c.id as config_id', 'c.service_subscription_id', 'c.renewal_package_id', 'c.enabled',
             'c.accepted_price_irr', 'c.last_settled_price_irr', 'c.observed_expires_at', 'c.expiry_observed_at',
@@ -109,6 +110,7 @@ trait ServiceAutoRenewalSupport
         if ($lock) {
             $query->lockForUpdate();
         }
+        /** @var ServiceAutoRenewAttemptRow|null $row */
         $row = $query->first([
             'id', 'public_id', 'cycle_key', 'auto_renew_configuration_id', 'service_subscription_id',
             'configuration_version', 'remote_identity_generation', 'observed_expires_at',
@@ -137,6 +139,7 @@ trait ServiceAutoRenewalSupport
             $query->lockForUpdate();
         }
 
+        /** @var ServiceAutoRenewAttemptRow|null $row */
         $row = $query->first([
             'id', 'public_id', 'cycle_key', 'auto_renew_configuration_id', 'service_subscription_id',
             'configuration_version', 'remote_identity_generation', 'observed_expires_at',
@@ -282,9 +285,12 @@ trait ServiceAutoRenewalSupport
     /** @return ServiceAutoRenewPaymentIntentRow|null */
     private function paymentIntentByCreationKey(string $creationKey): ?object
     {
-        return $this->database->connection()->table('payment_intents')
+        /** @var ServiceAutoRenewPaymentIntentRow|null $row */
+        $row = $this->database->connection()->table('payment_intents')
             ->where('creation_key', $creationKey)
             ->first(['id', 'public_id', 'state']);
+
+        return $row;
     }
 
     private function commercialAuthorityGeneration(int $attemptId): int

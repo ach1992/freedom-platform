@@ -67,10 +67,24 @@ SQL);
 
     public function down(): void
     {
-        if (DB::table('service_auto_renew_attempts')->exists()) {
-            throw new RuntimeException('Cannot remove Service auto-renew guards while auto-renew authority rows exist.');
-        }
-
+        $this->assertRollbackSafe();
         DB::unprepared('DROP TRIGGER IF EXISTS sara_commercial_binding_guard');
+    }
+
+    private function assertRollbackSafe(): void
+    {
+        foreach ([
+            'plan_offering_auto_renew_policies',
+            'plan_offering_auto_renew_policy_histories',
+            'service_auto_renew_configurations',
+            'service_auto_renew_configuration_histories',
+            'service_auto_renew_attempts',
+            'service_auto_renew_attempt_events',
+            'service_auto_renew_notification_intents',
+        ] as $table) {
+            if (DB::table($table)->exists()) {
+                throw new RuntimeException('Cannot remove Service auto-renew guards while auto-renew authority rows exist.');
+            }
+        }
     }
 };

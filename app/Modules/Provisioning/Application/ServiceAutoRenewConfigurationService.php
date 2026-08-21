@@ -420,6 +420,7 @@ final readonly class ServiceAutoRenewConfigurationService
         if ($lock) {
             $query->lockForUpdate();
         }
+        /** @var ServiceFacts|null $row */
         $row = $query->first([
             's.id', 's.public_id', 's.user_id', 'u.account_type', 's.plan_offering_id', 's.service_target_id',
             's.remote_service_id', 's.provisioned_at', 's.lifecycle_state', 's.lifecycle_version',
