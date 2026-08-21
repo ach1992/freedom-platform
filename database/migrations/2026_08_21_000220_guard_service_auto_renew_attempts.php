@@ -55,6 +55,16 @@ BEGIN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew attempt must start without commercial or terminal authority.';
     END IF;
 
+    IF BINARY NEW.cycle_key <> BINARY LOWER(SHA2(CONCAT(
+        NEW.auto_renew_configuration_id, '|',
+        NEW.service_subscription_id, '|',
+        NEW.configuration_version, '|',
+        NEW.remote_identity_generation, '|',
+        DATE_FORMAT(NEW.observed_expires_at, '%Y-%m-%d %H:%i:%s.%f')
+    ), 256)) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew cycle identity is not derived from the current Service cycle authority.';
+    END IF;
+
     IF NOT EXISTS (
         SELECT 1
         FROM service_auto_renew_configurations c
