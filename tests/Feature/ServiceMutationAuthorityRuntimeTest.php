@@ -757,6 +757,10 @@ final class ServiceMutationAuthorityRuntimeTest extends TestCase
             self::assertTrue(DB::getSchemaBuilder()->hasTable('service_paid_mutation_authorities'));
             $this->assertPaidMutationDatabaseSurface();
 
+            // This migration fault harness truncates immutable singleton rows. Re-enter #140
+            // only at this DDL-safe rollback boundary so #110 can restore the operational
+            // predecessor guard without committing an ordinary runtime test transaction.
+            $this->serviceOperationalMigration()->up();
             $paidMutationMigration->down();
             $quoteMigration->down();
             $legacyRefundGuard = DB::selectOne(<<<'SQL'
