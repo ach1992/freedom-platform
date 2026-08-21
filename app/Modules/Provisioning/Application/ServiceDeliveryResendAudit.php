@@ -30,8 +30,8 @@ final readonly class ServiceDeliveryResendAudit
             throw new RuntimeException('Service delivery resend audit requires a Resend Delivery Attempt.');
         }
 
-        $this->setAuthority($connection, $attempt->attemptPublicId, $context->requestHash());
         try {
+            $this->setAuthority($connection, $attempt->attemptPublicId, $context->requestHash());
             $auditLogId = (int) $connection->table('audit_logs')->insertGetId([
                 'actor_type' => $context->actorType(),
                 'actor_id' => (string) $context->actorId(),

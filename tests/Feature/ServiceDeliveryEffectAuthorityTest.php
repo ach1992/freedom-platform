@@ -222,6 +222,47 @@ final class ServiceDeliveryEffectAuthorityTest extends TestCase
         }
     }
 
+    public function test_direct_resend_audit_forgery_without_database_authority_fails_closed(): void
+    {
+        $scenario = $this->provisionedScenario(
+            'explicit-resend-forged-audit',
+            'https://subscription.example.test/forged-audit',
+            new ProtectedTelegramSendResult(ProtectedTelegramSendOutcome::Success, 'telegram_success', messageId: 4404),
+        );
+
+        try {
+            DB::table('audit_logs')->insert([
+                'actor_type' => 'user',
+                'actor_id' => (string) $scenario['user_id'],
+                'action' => ServiceDeliveryResendAudit::ACTION,
+                'target_type' => 'service_subscription',
+                'target_id' => $scenario['service_public_id'],
+                'before_safe_data' => json_encode([
+                    'lifecycle_state' => 'active',
+                    'lifecycle_version' => 0,
+                    'remote_identity_generation' => 1,
+                ], JSON_THROW_ON_ERROR),
+                'after_safe_data' => json_encode([
+                    'delivery_attempt_public_id' => (string) Str::ulid(),
+                    'delivery_purpose' => 'resend',
+                    'target_remote_identity_generation' => 1,
+                    'target_lifecycle_version' => 0,
+                    'outbox_event_id' => '00000000-0000-4000-8000-000000000000',
+                ], JSON_THROW_ON_ERROR),
+                'reason_code' => 'forged',
+                'reason' => 'forged',
+                'correlation_id' => 'correlation-forged-audit-0001',
+                'request_fingerprint' => hash('sha256', 'request-forged-audit-0001'),
+                'created_at' => $this->purchaseOrderTimestamp(),
+            ]);
+            self::fail('Direct Service delivery resend audit insertion must fail closed.');
+        } catch (QueryException) {
+            // Expected.
+        }
+
+        self::assertSame(0, DB::table('audit_logs')->where('action', ServiceDeliveryResendAudit::ACTION)->count());
+    }
+
     public function test_cross_user_resend_is_rejected_before_delivery_attempt_outbox_or_audit(): void
     {
         $scenario = $this->provisionedScenario(

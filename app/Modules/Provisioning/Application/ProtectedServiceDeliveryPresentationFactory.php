@@ -24,13 +24,9 @@ final readonly class ProtectedServiceDeliveryPresentationFactory
 
     public function make(SensitiveDeliveryArtifacts $artifacts): ?ProtectedTelegramPresentation
     {
-        try {
-            return $this->mode() === 'qr'
-                ? $this->qrPresentation($artifacts)
-                : $this->textPresentation($artifacts);
-        } catch (Throwable) {
-            return null;
-        }
+        return $this->mode() === 'qr'
+            ? $this->qrPresentation($artifacts)
+            : $this->textPresentation($artifacts);
     }
 
     private function textPresentation(SensitiveDeliveryArtifacts $artifacts): ?ProtectedTelegramPresentation
@@ -61,15 +57,20 @@ final readonly class ProtectedServiceDeliveryPresentationFactory
             return null;
         }
 
-        $svg = (new SvgWriter())->write(new QrCode(
-            data: $source,
-            encoding: new Encoding('UTF-8'),
-            errorCorrectionLevel: ErrorCorrectionLevel::Medium,
-            size: 300,
-            margin: 10,
-            roundBlockSizeMode: RoundBlockSizeMode::Margin,
-        ))->getString();
-        if (strlen($svg) > $this->boundedInt('max_document_bytes', 1_024, 1_048_576)) {
+        $maximumDocumentBytes = $this->boundedInt('max_document_bytes', 1_024, 1_048_576);
+        try {
+            $svg = (new SvgWriter())->write(new QrCode(
+                data: $source,
+                encoding: new Encoding('UTF-8'),
+                errorCorrectionLevel: ErrorCorrectionLevel::Medium,
+                size: 300,
+                margin: 10,
+                roundBlockSizeMode: RoundBlockSizeMode::Margin,
+            ))->getString();
+        } catch (Throwable) {
+            return null;
+        }
+        if (strlen($svg) > $maximumDocumentBytes) {
             return null;
         }
 
@@ -89,6 +90,9 @@ final readonly class ProtectedServiceDeliveryPresentationFactory
     private function boundedInt(string $key, int $minimum, int $maximum): int
     {
         $value = $this->config->get('service_delivery.presentation.'.$key);
+        if (is_string($value) && preg_match('/\A(?:0|[1-9][0-9]*)\z/', $value) === 1) {
+            $value = (int) $value;
+        }
         if (! is_int($value) || $value < $minimum || $value > $maximum) {
             throw new \LogicException('Service delivery presentation policy is invalid.');
         }

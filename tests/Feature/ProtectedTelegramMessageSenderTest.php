@@ -11,6 +11,7 @@ use App\Modules\Telegram\Infrastructure\TelegramRuntimeConfiguration;
 use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
+use InvalidArgumentException;
 use RuntimeException;
 use Tests\TestCase;
 
@@ -280,6 +281,56 @@ final class ProtectedTelegramMessageSenderTest extends TestCase
                 && ($data['disable_content_type_detection'] ?? null) === true
                 && str_contains($request->body(), 'service-details.svg');
         });
+    }
+
+    public function test_oversize_document_cannot_be_constructed_or_sent(): void
+    {
+        Http::fake();
+
+        $this->expectException(InvalidArgumentException::class);
+        try {
+            ProtectedTelegramPresentation::svgDocument(str_repeat('x', 1_048_577), 'Service details');
+        } finally {
+            Http::assertNothingSent();
+        }
+    }
+
+    public function test_document_transport_exception_becomes_uncertain_without_a_second_attempt(): void
+    {
+        $attempts = 0;
+        Http::fake(function (Request $request) use (&$attempts): never {
+            $attempts++;
+            throw new RuntimeException('Simulated document transport timeout.');
+        });
+
+        $result = $this->sender()->send(
+            self::TELEGRAM_USER_ID,
+            ProtectedTelegramPresentation::svgDocument('<svg></svg>', 'Service details'),
+        );
+
+        self::assertSame(ProtectedTelegramSendOutcome::UncertainResult, $result->outcome);
+        self::assertSame('telegram_transport_uncertain', $result->resultCode);
+        self::assertSame(1, $attempts);
+    }
+
+    public function test_document_redirect_response_is_not_followed_and_is_uncertain_after_one_http_attempt(): void
+    {
+        Http::fake([
+            '*' => Http::response(
+                ['ok' => false, 'error_code' => 403],
+                307,
+                ['Location' => 'https://redirect.example.test/sendDocument'],
+            ),
+        ]);
+
+        $result = $this->sender()->send(
+            self::TELEGRAM_USER_ID,
+            ProtectedTelegramPresentation::svgDocument('<svg></svg>', 'Service details'),
+        );
+
+        self::assertSame(ProtectedTelegramSendOutcome::UncertainResult, $result->outcome);
+        self::assertSame('telegram_redirect_ambiguous', $result->resultCode);
+        Http::assertSentCount(1);
     }
 
     public function test_presentation_debug_representations_are_redacted(): void
