@@ -557,6 +557,20 @@ final class ServiceDeliveryEffectAuthorityTest extends TestCase
         self::assertSame(['delivery_artifacts'], $uncertain['doubles']->panelCalls);
         self::assertSame(ServiceDeliveryEffectState::Uncertain->value, DB::table('service_delivery_effects')->value('state'));
 
+        try {
+            $this->resends()->resend(
+                $uncertain['service_public_id'],
+                $this->resendContext($uncertain['user_id'], 'uncertain-resend-fence'),
+            );
+            self::fail('An uncertain Service delivery effect must fence a new restricted resend.');
+        } catch (DomainException) {
+            // Expected.
+        }
+        self::assertSame(1, DB::table('service_delivery_attempts')->count());
+        self::assertSame(1, DB::table('outbox_messages')
+            ->where('event_type', ServiceDeliveryAttemptQueueService::OUTBOX_EVENT_TYPE)->count());
+        self::assertSame(0, DB::table('audit_logs')->where('action', ServiceDeliveryResendAudit::ACTION)->count());
+
         $this->truncateTablesForAllConnections();
         $this->seed(IdentityAccessFoundationSeeder::class);
         $this->seed(CatalogAccessFoundationSeeder::class);

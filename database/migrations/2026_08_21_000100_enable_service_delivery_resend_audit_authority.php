@@ -11,7 +11,7 @@ return new class extends Migration
     /** @requirement SVC-002 SVC-014 ARCH-003 ARCH-004 DAT-003 SEC-002 SEC-003 SEC-008 QUA-004 QUA-007 QUA-010 */
     public function up(): void
     {
-        foreach (['audit_logs', 'service_delivery_attempts', 'service_subscriptions', 'users', 'administrators'] as $table) {
+        foreach (['audit_logs', 'outbox_messages', 'service_delivery_attempts', 'service_subscriptions', 'users', 'administrators'] as $table) {
             if (! Schema::hasTable($table)) {
                 throw new RuntimeException('Service delivery resend audit prerequisites are incomplete.');
             }
