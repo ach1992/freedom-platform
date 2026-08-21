@@ -141,10 +141,10 @@ final class ServiceAutoRenewFinancialAuthorityVerificationTest extends TestCase
                     'last_correlation_id' => $this->purchaseOrderCorrelation('forged-observation'),
                     'updated_at' => $this->purchaseOrderTimestamp(),
                 ]);
-            self::fail('Direct renewal timing mutation must require successful paid mutation authority.');
+            self::fail('Direct renewal timing mutation must require explicit observation authority.');
         } catch (QueryException $exception) {
             self::assertStringContainsString(
-                'Auto-renew expiry observation requires successful paid mutation authority.',
+                'Auto-renew expiry observation requires explicit observation authority.',
                 $exception->getMessage(),
             );
         }
