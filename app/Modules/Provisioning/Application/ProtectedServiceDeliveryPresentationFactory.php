@@ -46,7 +46,7 @@ final readonly class ProtectedServiceDeliveryPresentationFactory
             $parts[] = count($links) === 1 ? $link : 'Link '.($index + 1).":\n".$link;
         }
 
-        return ProtectedTelegramPresentation::text(implode("\n\n", $parts));
+        return ProtectedTelegramPresentation::plainText(implode("\n\n", $parts));
     }
 
     private function qrPresentation(SensitiveDeliveryArtifacts $artifacts): ?ProtectedTelegramPresentation

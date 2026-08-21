@@ -706,7 +706,7 @@ final class ServiceDeliveryEffectAuthorityTest extends TestCase
             $configuration,
         );
 
-        $result = $sender->send(self::TELEGRAM_USER_ID, ProtectedTelegramPresentation::text('protected-test-message'));
+        $result = $sender->send(self::TELEGRAM_USER_ID, ProtectedTelegramPresentation::plainText('protected-test-message'));
 
         self::assertSame(ProtectedTelegramSendOutcome::Success, $result->outcome);
         self::assertSame(9090, $result->messageId);

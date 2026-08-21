@@ -18,7 +18,7 @@ use RuntimeException;
  * delivery resend. It authorizes and binds immutable caller audit evidence in
  * the same transaction as the Delivery Attempt and its Outbox handoff.
  *
- * @phpstan-type ServiceRow object{id:int|string,public_id:string,user_id:int|string}
+ * @phpstan-type ServiceRow object{id:int|string,public_id:string,user_id:int|string,lifecycle_state:string,lifecycle_version:int|string,remote_identity_generation:int|string}
  */
 final readonly class ServiceDeliveryResendService
 {

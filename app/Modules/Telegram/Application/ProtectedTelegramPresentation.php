@@ -21,7 +21,7 @@ final readonly class ProtectedTelegramPresentation implements Stringable
         private ?string $caption,
     ) {}
 
-    public static function text(string $text): self
+    public static function plainText(string $text): self
     {
         if ($text === '') {
             throw new InvalidArgumentException('Protected Telegram text is required.');
