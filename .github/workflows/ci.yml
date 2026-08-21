@@ -17,6 +17,11 @@ on:
       - ready_for_review
       - converted_to_draft
   workflow_dispatch:
+    inputs:
+      phpunit_filter:
+        description: Optional PHPUnit --filter regexp for targeted MariaDB/Redis diagnosis.
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -337,6 +342,7 @@ jobs:
     env:
       MARIADB_VERSION: '10.11'
       COMPOSE_PROJECT_NAME: freedom-platform-ci-${{ github.run_id }}
+      PHPUNIT_FILTER: ${{ inputs.phpunit_filter }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -346,7 +352,7 @@ jobs:
         run: |
           set -euo pipefail
           mode=no-coverage
-          [[ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' ]] && mode=coverage
+          [[ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' && -z "$PHPUNIT_FILTER" ]] && mode=coverage
           bash scripts/ci/bootstrap-self-hosted-toolchain.sh "$mode"
 
       - name: Install locked dependencies
@@ -380,13 +386,15 @@ jobs:
             --fail-on-warning
             --log-junit build/evidence/tests/junit.xml
           )
-          if [[ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' ]]; then
+          if [[ -n "$PHPUNIT_FILTER" ]]; then
+            phpunit_args+=(--filter "$PHPUNIT_FILTER")
+          elif [[ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' ]]; then
             phpunit_args+=(--coverage-clover build/evidence/coverage/clover.xml)
           fi
 
           COLUMNS=240 php vendor/bin/phpunit "${phpunit_args[@]}" 2>&1 | tee build/evidence/tests/test.log
           test -s build/evidence/tests/junit.xml
-          if [[ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' ]]; then
+          if [[ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' && -z "$PHPUNIT_FILTER" ]]; then
             test -s build/evidence/coverage/clover.xml
           fi
 
