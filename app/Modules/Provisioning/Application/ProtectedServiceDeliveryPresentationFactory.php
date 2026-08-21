@@ -59,7 +59,7 @@ final readonly class ProtectedServiceDeliveryPresentationFactory
 
         $maximumDocumentBytes = $this->boundedInt('max_document_bytes', 1_024, 1_048_576);
         try {
-            $svg = (new SvgWriter())->write(new QrCode(
+            $svg = (new SvgWriter)->write(new QrCode(
                 data: $source,
                 encoding: new Encoding('UTF-8'),
                 errorCorrectionLevel: ErrorCorrectionLevel::Medium,
