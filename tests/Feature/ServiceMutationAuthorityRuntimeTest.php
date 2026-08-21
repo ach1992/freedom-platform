@@ -181,6 +181,37 @@ final class ServiceMutationTestPanelAdapter implements PanelAdapter
         $this->lastExpiryAt = null;
     }
 
+    public function setKnownEntitlements(string $remoteId, int $dataLimitBytes, DateTimeImmutable $expiresAt): void
+    {
+        foreach ($this->servicesByUsername as $username => $service) {
+            if (! hash_equals($service->remoteId, $remoteId)) {
+                continue;
+            }
+
+            $this->servicesByUsername[$username] = new RemoteServiceSnapshot(
+                $service->remoteId,
+                $service->username,
+                $service->status,
+                $dataLimitBytes,
+                $service->usedBytes,
+                $expiresAt,
+                hash('sha256', implode('|', [
+                    $service->remoteId,
+                    $service->username,
+                    $service->status->value,
+                    (string) $dataLimitBytes,
+                    (string) $service->usedBytes,
+                    $expiresAt->format(DATE_ATOM),
+                ])),
+                $service->createEquivalenceHash,
+            );
+
+            return;
+        }
+
+        throw new LogicException('Test remote Service is unavailable for entitlement setup.');
+    }
+
     public function testConnection(): PanelOperationResult
     {
         return new PanelOperationResult(PanelOperationOutcome::Success, null, 'test_connection_ok', 'Test panel is healthy.');
@@ -1432,6 +1463,14 @@ SQL);
         self::assertNull($service->remote_deleted_at);
         self::assertNotNull($service->remote_service_id);
         self::assertNotNull($service->provisioned_at);
+        // Initial provisioning deliberately has no entitlement payload. Establish a
+        // known finite remote snapshot to exercise the paid mutation success path;
+        // separate tests retain the fail-closed unknown/unlimited remote cases.
+        $adapter->setKnownEntitlements(
+            (string) $service->remote_service_id,
+            20 * 1024 * 1024 * 1024,
+            $this->purchaseOrderClock->value->modify('+30 days'),
+        );
 
         return [
             'service_id' => (int) $service->id,
