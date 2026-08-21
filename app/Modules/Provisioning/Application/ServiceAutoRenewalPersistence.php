@@ -245,22 +245,42 @@ trait ServiceAutoRenewalPersistence
     {
         $this->database->connection()->transaction(function (Connection $connection) use ($attemptId): void {
             $attempt = $this->attemptOn($connection, $attemptId, true);
-            if ($attempt->current_price_irr === null) {
-                throw new RuntimeException('Auto-renew settled attempt lacks current price authority.');
+            if ($attempt->current_price_irr === null || $attempt->purchase_settlement_id === null) {
+                throw new RuntimeException('Auto-renew settled attempt lacks captured price authority.');
             }
-            /** @var object{configuration_version:int|string}|null $config */
+            /** @var object{configuration_version:int|string,last_settled_price_irr:int|string|null}|null $config */
             $config = $connection->table('service_auto_renew_configurations')
                 ->where('id', (int) $attempt->auto_renew_configuration_id)
                 ->lockForUpdate()
-                ->first(['configuration_version']);
-            if ($config !== null && (int) $config->configuration_version === (int) $attempt->configuration_version) {
-                $connection->table('service_auto_renew_configurations')
+                ->first(['configuration_version', 'last_settled_price_irr']);
+            if ($config === null || (int) $config->configuration_version !== (int) $attempt->configuration_version) {
+                return;
+            }
+            if ($config->last_settled_price_irr !== null
+                && (int) $config->last_settled_price_irr === (int) $attempt->current_price_irr) {
+                return;
+            }
+
+            ServiceAutoRenewDatabaseAuthority::settlement(
+                $connection,
+                (int) $attempt->auto_renew_configuration_id,
+                $attemptId,
+                (string) $attempt->correlation_id,
+            );
+            try {
+                $updated = $connection->table('service_auto_renew_configurations')
                     ->where('id', (int) $attempt->auto_renew_configuration_id)
+                    ->where('configuration_version', (int) $attempt->configuration_version)
                     ->update([
                         'last_settled_price_irr' => (int) $attempt->current_price_irr,
                         'last_correlation_id' => (string) $attempt->correlation_id,
                         'updated_at' => $this->timestamp(),
                     ]);
+                if ($updated !== 1) {
+                    throw new RuntimeException('Auto-renew settled price synchronization lost configuration authority.');
+                }
+            } finally {
+                ServiceAutoRenewDatabaseAuthority::clear($connection);
             }
         }, 3);
     }
