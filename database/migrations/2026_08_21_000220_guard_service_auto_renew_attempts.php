@@ -374,7 +374,8 @@ BEGIN
                   AND a.state = 'insufficient_wallet')
               OR (NEW.outcome = 'failure'
                   AND (
-                      a.state = 'failed'
+                      (a.state = 'failed'
+                          AND a.reason_code NOT IN ('configuration_superseded', 'cycle_superseded'))
                       OR (
                           a.state = 'mutation_queued'
                           AND a.reason_code = 'mutation_reconciliation_required'
