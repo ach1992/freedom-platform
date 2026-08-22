@@ -88,9 +88,30 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
         $servicePackageQuoteMigration = require database_path('migrations/2026_08_20_000100_enable_service_package_quotes.php');
         /** @var Migration $paidServiceMutationMigration */
         $paidServiceMutationMigration = require database_path('migrations/2026_08_20_000110_enable_paid_service_mutation_authority.php');
+        /** @var Migration $autoRenewAuthorityMigration */
+        $autoRenewAuthorityMigration = require database_path('migrations/2026_08_21_000200_enable_service_auto_renew_authority.php');
+        /** @var Migration $autoRenewConstraintsMigration */
+        $autoRenewConstraintsMigration = require database_path('migrations/2026_08_21_000205_add_service_auto_renew_constraints.php');
+        /** @var Migration $autoRenewPolicyGuardMigration */
+        $autoRenewPolicyGuardMigration = require database_path('migrations/2026_08_21_000210_guard_service_auto_renew_policy_and_configuration.php');
+        /** @var Migration $autoRenewDatabaseCapabilityMigration */
+        $autoRenewDatabaseCapabilityMigration = require database_path('migrations/2026_08_21_000215_require_service_auto_renew_database_capability.php');
+        /** @var Migration $autoRenewAttemptGuardMigration */
+        $autoRenewAttemptGuardMigration = require database_path('migrations/2026_08_21_000220_guard_service_auto_renew_attempts.php');
+        /** @var Migration $autoRenewCommercialGuardMigration */
+        $autoRenewCommercialGuardMigration = require database_path('migrations/2026_08_21_000230_guard_service_auto_renew_commercial_binding.php');
+        /** @var Migration $autoRenewRuntimeCapabilityMigration */
+        $autoRenewRuntimeCapabilityMigration = require database_path('migrations/2026_08_21_000235_require_service_auto_renew_runtime_capability.php');
 
         try {
             // Remove newer descendant authorities before replaying the historical provisioning bootstrap chain.
+            $autoRenewRuntimeCapabilityMigration->down();
+            $autoRenewCommercialGuardMigration->down();
+            $autoRenewAttemptGuardMigration->down();
+            $autoRenewDatabaseCapabilityMigration->down();
+            $autoRenewPolicyGuardMigration->down();
+            $autoRenewConstraintsMigration->down();
+            $autoRenewAuthorityMigration->down();
             $paidServiceMutationMigration->down();
             $servicePackageQuoteMigration->down();
             $serviceOperationalMigration->down();
@@ -291,6 +312,13 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
             $serviceOperationalMigration->up();
             $servicePackageQuoteMigration->up();
             $paidServiceMutationMigration->up();
+            $autoRenewAuthorityMigration->up();
+            $autoRenewConstraintsMigration->up();
+            $autoRenewPolicyGuardMigration->up();
+            $autoRenewDatabaseCapabilityMigration->up();
+            $autoRenewAttemptGuardMigration->up();
+            $autoRenewCommercialGuardMigration->up();
+            $autoRenewRuntimeCapabilityMigration->up();
         }
     }
 

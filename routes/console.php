@@ -40,3 +40,15 @@ Schedule::command('wallet:maintenance', [
     ->everyFiveMinutes()
     ->withoutOverlapping()
     ->onOneServer();
+
+Schedule::command('services:auto-renew', [
+    '--limit' => config('auto_renew.batch_limit', 50),
+    '--json' => true,
+])
+    ->name('services.auto-renew')
+    ->everyFiveMinutes()
+    // Laravel's default overlap lock lasts 24 hours. Bound this critical scheduler so an abnormal
+    // process death cannot suppress renewal processing for an entire day, while still leaving
+    // ample headroom for the bounded 50-Service batch to finish normally.
+    ->withoutOverlapping(30)
+    ->onOneServer();
