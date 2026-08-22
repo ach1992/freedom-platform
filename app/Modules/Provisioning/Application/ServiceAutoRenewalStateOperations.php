@@ -292,8 +292,11 @@ trait ServiceAutoRenewalStateOperations
             } else {
                 $this->scheduleConfigurationRetry((int) $attempt->id, $reasonCode);
             }
-            $this->notification((int) $attempt->id, AutoRenewNotificationOutcome::Failure, $reasonCode);
 
+            // Retry scheduling owns its notification in the same locked transaction. Avoid a
+            // second out-of-transaction notification: a competing worker may have terminalized the
+            // attempt after scheduling returned, and that stale diagnostic must not create a false
+            // failure intent for a successful/blocked terminal result.
             return $this->receiptById((int) $attempt->id, true);
         } catch (Throwable $exception) {
             report($exception);
