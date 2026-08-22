@@ -130,6 +130,43 @@ trait ServiceAutoRenewalRuntimeScenariosA
         );
     }
 
+    public function test_unsafe_renewal_window_creates_no_financial_authority_and_recovers_after_configuration_is_safe(): void
+    {
+        $scenario = $this->scenario('unsafe-renewal-window');
+        $this->enableWalletMethod('unsafe-renewal-window');
+        $this->seed(WalletFinancialFoundationSeeder::class);
+        $this->fundWallet($scenario['user_id'], 600_000, 'unsafe-renewal-window');
+        $this->enableAutoRenew($scenario, 'unsafe-renewal-window');
+
+        // The fixture renewal package is 30 days. A 30-day scheduler window would make an
+        // already-expired Service immediately due again after one successful 30-day renewal.
+        config()->set('auto_renew.window_hours', 720);
+        $processor = $this->app->make(ServiceAutoRenewalProcessor::class);
+        $unsafe = $processor->processDue(10);
+
+        self::assertSame(1, $unsafe->failed);
+        $attempt = DB::table('service_auto_renew_attempts')->first([
+            'state', 'reason_code', 'retry_count', 'next_retry_at', 'payment_intent_id', 'purchase_settlement_id',
+        ]);
+        self::assertNotNull($attempt);
+        self::assertSame(AutoRenewAttemptState::RetryPending->value, $attempt->state);
+        self::assertSame('renewal_window_unsafe', $attempt->reason_code);
+        self::assertSame(1, (int) $attempt->retry_count);
+        self::assertNotNull($attempt->next_retry_at);
+        self::assertNull($attempt->payment_intent_id);
+        self::assertNull($attempt->purchase_settlement_id);
+        self::assertSame(0, DB::table('purchase_wallet_reservations')->count());
+        self::assertSame(0, DB::table('purchase_settlements')->where('provider_code', 'wallet')->count());
+
+        config()->set('auto_renew.window_hours', 24);
+        $this->purchaseOrderClock->value = $this->purchaseOrderClock->value->modify('+16 minutes');
+        $recovered = $processor->processDue(10);
+
+        self::assertSame(1, $recovered->queued);
+        self::assertSame(1, DB::table('purchase_settlements')->where('provider_code', 'wallet')->count());
+        self::assertSame(1, DB::table('service_paid_mutation_authorities')->count());
+    }
+
     public function test_retryable_insufficient_wallet_exhausts_configured_retry_budget(): void
     {
         config()->set('auto_renew.max_retry_count', 1);

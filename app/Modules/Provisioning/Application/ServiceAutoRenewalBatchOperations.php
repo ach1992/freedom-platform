@@ -182,6 +182,21 @@ trait ServiceAutoRenewalBatchOperations
                 return null;
             }
         }
+
+        // A renewal must push even an already-expired Service beyond the active scheduler window.
+        // Otherwise a successful short-duration renewal can remain immediately due and be charged
+        // again on the next scheduler pass. Fail closed before any new wallet authority is created,
+        // but keep the cycle retryable so an operator can safely reduce the window configuration.
+        if (! $this->renewalWindowIsShorterThanPackage($facts)) {
+            if (! $this->hasCompleteCycleEvidence($facts)) {
+                throw new DomainException('Auto-renew configuration has stale or incomplete cycle evidence.');
+            }
+            $attempt = $existing ?? $this->ensureAttempt($facts);
+            $this->scheduleRetry((int) $attempt->id, AutoRenewAttemptState::RetryPending, 'renewal_window_unsafe');
+
+            return $this->receiptById((int) $attempt->id, $existing !== null);
+        }
+
         if (! $this->runtimeEligible($facts)) {
             if (! $this->hasCompleteCycleEvidence($facts)) {
                 throw new DomainException('Auto-renew configuration has stale or incomplete cycle evidence.');
@@ -220,5 +235,15 @@ trait ServiceAutoRenewalBatchOperations
         }
 
         return $this->executeCommercialAttempt((int) $attempt->id, $facts);
+    }
+
+    /** @param ServiceAutoRenewConfigurationFacts $facts */
+    private function renewalWindowIsShorterThanPackage(object $facts): bool
+    {
+        if ($facts->package_duration_days === null || (int) $facts->package_duration_days < 1) {
+            return false;
+        }
+
+        return (int) $facts->package_duration_days > intdiv($this->windowHours(), 24);
     }
 }
