@@ -236,15 +236,22 @@ trait ServiceAutoRenewalStateOperations
         ]);
     }
 
-    private function recordCandidateFailure(int $configurationId, string $reasonCode): ?ServiceAutoRenewAttemptReceipt
-    {
+    private function recordCandidateFailure(
+        int $configurationId,
+        string $reasonCode,
+        bool $consumeRetryBudget = true,
+    ): ?ServiceAutoRenewAttemptReceipt {
         try {
             $facts = $this->configurationFacts($configurationId);
             if (! (bool) $facts->enabled || ! $this->hasCompleteCycleEvidence($facts)) {
                 return null;
             }
             $attempt = $this->ensureAttempt($facts);
-            $this->scheduleRetry((int) $attempt->id, AutoRenewAttemptState::RetryPending, $reasonCode);
+            if ($consumeRetryBudget) {
+                $this->scheduleRetry((int) $attempt->id, AutoRenewAttemptState::RetryPending, $reasonCode);
+            } else {
+                $this->scheduleConfigurationRetry((int) $attempt->id, $reasonCode);
+            }
             $this->notification((int) $attempt->id, AutoRenewNotificationOutcome::Failure, $reasonCode);
 
             return $this->receiptById((int) $attempt->id, true);
