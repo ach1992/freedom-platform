@@ -24,6 +24,7 @@ use App\Modules\Wallet\Application\LedgerEntryDraft;
 use App\Modules\Wallet\Application\LedgerPostingService;
 use App\Modules\Wallet\Domain\IrrMoney;
 use App\Modules\Wallet\Domain\LedgerDirection;
+use Illuminate\Database\Migrations\Migration;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 
@@ -113,6 +114,13 @@ trait ServiceAutoRenewalRuntimeTestHelpers
     /** @return array{service_id:int,service_public_id:string,target_id:int,offering_id:int,user_id:int,adapter:AutoRenewTestPanelAdapter} */
     private function scenario(string $suffix): array
     {
+        // DatabaseTruncation clears the immutable operational-capability singleton between tests.
+        // Re-enter the accepted foundation migration so legitimate auto-renew setup uses the same
+        // app-key-derived capability contract as production instead of weakening the DB guards.
+        /** @var Migration $migration */
+        $migration = require database_path('migrations/2026_08_19_000140_enable_service_operational_authority.php');
+        $migration->up();
+
         $settlement = $this->createPurchaseOrderSettlement('auto-renew-'.$suffix);
         $order = $this->app->make(PurchaseOrderService::class)->createFromSettlement(
             $settlement->settlementPublicId,
