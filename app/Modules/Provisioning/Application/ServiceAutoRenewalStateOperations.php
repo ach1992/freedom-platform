@@ -197,31 +197,33 @@ trait ServiceAutoRenewalStateOperations
         return $finished ? $this->receiptById($attemptId, false) : null;
     }
 
-    private function recordSameStateEvent(int $attemptId, string $reasonCode): void
-    {
-        $this->database->connection()->transaction(function (Connection $connection) use ($attemptId, $reasonCode): void {
+    private function recordSameStateEvent(
+        int $attemptId,
+        string $reasonCode,
+        ?AutoRenewNotificationOutcome $outcome = null,
+    ): void {
+        $this->database->connection()->transaction(function (Connection $connection) use ($attemptId, $reasonCode, $outcome): void {
             $attempt = $this->attemptOn($connection, $attemptId, true);
             $state = AutoRenewAttemptState::from((string) $attempt->state);
             // Terminal authority is immutable at the database layer. Mirror that rule here so a
             // stale recovery worker cannot turn benign concurrency into exception/log noise or a
             // false batch failure while trying to attach a diagnostic reason to a finished attempt.
-            if ($state->isTerminal() || (string) ($attempt->reason_code ?? '') === $reasonCode) {
+            if ($state->isTerminal()) {
                 return;
             }
-            $connection->table('service_auto_renew_attempts')->where('id', $attemptId)->update([
-                'reason_code' => $reasonCode,
-                'updated_at' => $this->timestamp(),
-            ]);
-            $this->event($connection, $attemptId, $state->value, $state, $reasonCode);
+            if ((string) ($attempt->reason_code ?? '') !== $reasonCode) {
+                $connection->table('service_auto_renew_attempts')->where('id', $attemptId)->update([
+                    'reason_code' => $reasonCode,
+                    'updated_at' => $this->timestamp(),
+                ]);
+                $this->event($connection, $attemptId, $state->value, $state, $reasonCode);
+            }
+            if ($outcome !== null) {
+                // Keep same-state diagnostic evidence and the user-facing intent under the same
+                // row lock. A competing terminal transition cannot slip between the two writes.
+                $this->notificationOn($connection, $attemptId, $outcome, $reasonCode);
+            }
         }, 3);
-    }
-
-    private function notification(
-        int $attemptId,
-        AutoRenewNotificationOutcome $outcome,
-        string $reasonCode,
-    ): void {
-        $this->notificationOn($this->database->connection(), $attemptId, $outcome, $reasonCode);
     }
 
     private function notificationOn(
