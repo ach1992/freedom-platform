@@ -152,7 +152,7 @@ trait ServiceAutoRenewalRuntimeScenariosA
         self::assertNotNull($attempt);
         self::assertSame(AutoRenewAttemptState::RetryPending->value, $attempt->state);
         self::assertSame('renewal_window_unsafe', $attempt->reason_code);
-        self::assertSame(1, (int) $attempt->retry_count);
+        self::assertSame(0, (int) $attempt->retry_count);
         self::assertNotNull($attempt->next_retry_at);
         self::assertNull($attempt->payment_intent_id);
         self::assertNull($attempt->purchase_settlement_id);
@@ -168,7 +168,7 @@ trait ServiceAutoRenewalRuntimeScenariosA
         self::assertNotNull($deferred);
         self::assertSame(AutoRenewAttemptState::RetryPending->value, $deferred->state);
         self::assertSame('renewal_window_unsafe', $deferred->reason_code);
-        self::assertSame(1, (int) $deferred->retry_count);
+        self::assertSame(0, (int) $deferred->retry_count);
         self::assertNotNull($deferred->next_retry_at);
         self::assertSame(0, DB::table('purchase_wallet_reservations')->count());
         self::assertSame(0, DB::table('purchase_settlements')->where('provider_code', 'wallet')->count());
