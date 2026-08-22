@@ -73,7 +73,6 @@ trait ServiceAutoRenewalCommercialOperations
         try {
             $this->reserveAndBindWalletIntent(
                 $attemptId,
-                $facts,
                 $walletAccountId,
                 $quote,
                 $decision,
@@ -81,29 +80,10 @@ trait ServiceAutoRenewalCommercialOperations
             );
         } catch (DomainException $exception) {
             if ($exception->getMessage() === 'Auto-renew commercial authority changed before wallet reservation.') {
-                // Another scheduler may have advanced or reset this attempt while this worker was
-                // preparing its commercial snapshot. Do not manufacture a retry/failure signal for
-                // concurrent progress; continue from the durable authority that actually won.
-                $refreshed = $this->attempt($attemptId);
-                $state = AutoRenewAttemptState::from((string) $refreshed->state);
-                if ($state->isTerminal()) {
-                    return $this->receipt($refreshed, true);
-                }
-                if ($refreshed->provisioning_operation_id !== null || $state === AutoRenewAttemptState::MutationQueued) {
-                    return $this->reconcileAttempt($attemptId);
-                }
-                if ($refreshed->purchase_settlement_id !== null || $state === AutoRenewAttemptState::Settled) {
-                    return $this->queueCapturedAttempt($attemptId);
-                }
-                if ($refreshed->payment_intent_id !== null) {
-                    return $this->resumeReservedAttempt(
-                        $attemptId,
-                        $facts,
-                        $this->clock->now()->modify('+'.$this->windowHours().' hours'),
-                    );
-                }
-
-                return $this->receipt($refreshed, true);
+                // Another scheduler or configuration write won the race. Do not manufacture a
+                // retry/failure signal or continue with stale facts; the durable winner will be
+                // resumed by its worker or by the next scheduler pass.
+                return $this->receiptById($attemptId, true);
             }
 
             $existingIntent = $this->paymentIntentByCreationKey($creationKey);
@@ -125,10 +105,8 @@ trait ServiceAutoRenewalCommercialOperations
         return $this->captureAndQueue($attemptId, $immediateRequoteCount);
     }
 
-    /** @param ServiceAutoRenewConfigurationFacts $facts */
     private function reserveAndBindWalletIntent(
         int $attemptId,
-        object $facts,
         int $walletAccountId,
         QuoteReceipt $quote,
         PaymentEligibilityDecisionReceipt $decision,
@@ -136,7 +114,6 @@ trait ServiceAutoRenewalCommercialOperations
     ): void {
         $this->database->connection()->transaction(function (Connection $connection) use (
             $attemptId,
-            $facts,
             $walletAccountId,
             $quote,
             $decision,
@@ -162,6 +139,17 @@ trait ServiceAutoRenewalCommercialOperations
                 return;
             }
 
+            $currentFacts = $this->configurationFactsOn(
+                $connection,
+                (int) $attempt->auto_renew_configuration_id,
+                true,
+            );
+            if (! (bool) $currentFacts->enabled
+                || ! $this->runtimeEligible($currentFacts)
+                || ! $this->attemptMatchesConfigurationFacts($attempt, $currentFacts)) {
+                throw new DomainException('Auto-renew commercial authority changed before wallet reservation.');
+            }
+
             $generation = (int) $attempt->commercial_generation;
             $expectedCreationKey = 'service.auto-renew.intent.'.(string) $attempt->cycle_key
                 .($generation === 0 ? '' : '.r'.$generation);
@@ -173,11 +161,11 @@ trait ServiceAutoRenewalCommercialOperations
             }
 
             // Keep wallet reserve and attempt binding in one outer transaction while holding the
-            // attempt row lock. A crash or competing supersession can therefore produce either no
-            // reservation or a durably bound reservation, never an orphaned wallet hold.
+            // attempt/configuration row locks. A crash or competing supersession can therefore
+            // produce either no reservation or a durably bound reservation, never an orphaned hold.
             $intent = $this->walletPayments->reserve(
                 $creationKey,
-                (int) $facts->user_id,
+                (int) $currentFacts->user_id,
                 $walletAccountId,
                 $quote->quotePublicId,
                 $decision->publicId,
