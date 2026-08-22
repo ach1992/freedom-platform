@@ -152,6 +152,84 @@ namespace Tests\Feature {
             }
         }
 
+        public function test_concurrent_scheduler_claims_and_financializes_unreserved_cycle_once(): void
+        {
+            if (DB::connection()->getDriverName() !== 'mysql') {
+                self::markTestSkipped('Scheduler initial-cycle contention verification requires MariaDB/MySQL process concurrency.');
+            }
+
+            $suffix = 'scheduler-initial-contention';
+            $scenario = $this->scenario($suffix);
+            $this->enableWalletMethod($suffix);
+            $this->seed(WalletFinancialFoundationSeeder::class);
+            $this->fundWallet($scenario['user_id'], 600_000, $suffix);
+            $configuration = $this->enableAutoRenew($scenario, $suffix);
+            $configRow = DB::table('service_auto_renew_configurations')
+                ->where('id', $configuration->configurationId)
+                ->first(['observed_expires_at']);
+            $service = DB::table('service_subscriptions')
+                ->where('id', $scenario['service_id'])
+                ->first(['remote_service_id']);
+            self::assertNotNull($configRow);
+            self::assertNotNull($service);
+            self::assertIsString($service->remote_service_id);
+            self::assertSame(0, DB::table('service_auto_renew_attempts')->count());
+
+            $ledgerCountBefore = DB::table('ledger_transactions')->count();
+            $settlementCountBefore = DB::table('purchase_settlements')->where('provider_code', 'wallet')->count();
+            $mutationCountBefore = DB::table('service_paid_mutation_authorities')->count();
+            $renewOperationCountBefore = DB::table('provisioning_operations')->where('operation_type', 'renew')->count();
+            $payload = $this->workerPayload([
+                'remote_id' => (string) $service->remote_service_id,
+                'remote_expires_at' => (new \DateTimeImmutable((string) $configRow->observed_expires_at))->format(DATE_ATOM),
+            ], true);
+            $results = $this->runConcurrent([$payload, $payload]);
+
+            self::assertTrue((bool) ($results[0]['ok'] ?? false), json_encode($results[0], JSON_THROW_ON_ERROR));
+            self::assertTrue((bool) ($results[1]['ok'] ?? false), json_encode($results[1], JSON_THROW_ON_ERROR));
+            self::assertSame(0, (int) ($results[0]['result']['failed'] ?? -1), json_encode($results[0], JSON_THROW_ON_ERROR));
+            self::assertSame(0, (int) ($results[1]['result']['failed'] ?? -1), json_encode($results[1], JSON_THROW_ON_ERROR));
+
+            $attempt = DB::table('service_auto_renew_attempts')->first([
+                'id', 'state', 'payment_intent_id', 'purchase_settlement_id', 'provisioning_operation_id',
+            ]);
+            self::assertNotNull($attempt);
+            self::assertSame(1, DB::table('service_auto_renew_attempts')->count());
+            self::assertSame(AutoRenewAttemptState::MutationQueued->value, $attempt->state);
+            self::assertNotNull($attempt->payment_intent_id);
+            self::assertNotNull($attempt->purchase_settlement_id);
+            self::assertNotNull($attempt->provisioning_operation_id);
+            self::assertSame($ledgerCountBefore + 1, DB::table('ledger_transactions')->count());
+            self::assertSame($settlementCountBefore + 1, DB::table('purchase_settlements')->where('provider_code', 'wallet')->count());
+            self::assertSame($mutationCountBefore + 1, DB::table('service_paid_mutation_authorities')->count());
+            self::assertSame($renewOperationCountBefore + 1, DB::table('provisioning_operations')->where('operation_type', 'renew')->count());
+            self::assertSame(
+                1,
+                DB::table('service_auto_renew_attempt_events')
+                    ->where('auto_renew_attempt_id', (int) $attempt->id)
+                    ->where('reason_code', 'cycle_claimed')
+                    ->count(),
+            );
+            self::assertSame(
+                0,
+                DB::table('service_auto_renew_notification_intents')
+                    ->where('auto_renew_attempt_id', (int) $attempt->id)
+                    ->where('outcome', 'failure')
+                    ->count(),
+            );
+            self::assertSame(
+                'captured',
+                DB::table('payment_intents')->where('id', (int) $attempt->payment_intent_id)->value('state'),
+            );
+            self::assertSame(
+                'captured',
+                DB::table('purchase_wallet_reservations as reservation')
+                    ->join('wallet_holds as hold', 'hold.id', '=', 'reservation.wallet_hold_id')
+                    ->where('reservation.payment_intent_id', (int) $attempt->payment_intent_id)
+                    ->value('hold.status'),
+            );
+        }
+
         public function test_concurrent_scheduler_resume_captures_reserved_attempt_once(): void
         {
             if (DB::connection()->getDriverName() !== 'mysql') {
@@ -268,7 +346,7 @@ namespace Tests\Feature {
         }
 
         /**
-         * @param  array{attempt_id:int,intent_id:int,remote_id:string,remote_expires_at:string}  $prepared
+         * @param  array{remote_id:string,remote_expires_at:string}  $prepared
          * @return array{clock:string,remote_id:string,remote_expires_at:string,data_limit_bytes:int,limit:int,seed_remote:bool}
          */
         private function workerPayload(array $prepared, bool $seedRemote): array
