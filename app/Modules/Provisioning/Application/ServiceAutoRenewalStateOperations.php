@@ -85,6 +85,11 @@ trait ServiceAutoRenewalStateOperations
 
             $retryCount = (int) $attempt->retry_count + ($consumeBudget ? 1 : 0);
             if ($consumeBudget && $retryCount > $this->maxRetryCount()) {
+                if ((string) ($attempt->reason_code ?? '') !== $reasonCode) {
+                    // Preserve the cause that exhausted the budget before the terminal marker
+                    // replaces the attempt reason with the stable retry_exhausted contract.
+                    $this->event($connection, $attemptId, $current->value, $current, $reasonCode);
+                }
                 $connection->table('service_auto_renew_attempts')->where('id', $attemptId)->update([
                     'state' => AutoRenewAttemptState::Failed->value,
                     'reason_code' => 'retry_exhausted',
