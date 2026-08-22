@@ -83,9 +83,7 @@ trait ServiceAutoRenewalStateOperations
                 return;
             }
 
-            $retryCount = $consumeBudget
-                ? (int) $attempt->retry_count + 1
-                : max(1, (int) $attempt->retry_count);
+            $retryCount = (int) $attempt->retry_count + ($consumeBudget ? 1 : 0);
             if ($consumeBudget && $retryCount > $this->maxRetryCount()) {
                 $connection->table('service_auto_renew_attempts')->where('id', $attemptId)->update([
                     'state' => AutoRenewAttemptState::Failed->value,
@@ -110,7 +108,9 @@ trait ServiceAutoRenewalStateOperations
                 'state' => $retryState->value,
                 'reason_code' => $reasonCode,
                 'retry_count' => $retryCount,
-                'next_retry_at' => $this->databaseDateTime($this->clock->now()->modify('+'.$this->retryDelayMinutes($retryCount).' minutes')),
+                'next_retry_at' => $this->databaseDateTime(
+                    $this->clock->now()->modify('+'.$this->retryDelayMinutes(max(1, $retryCount)).' minutes'),
+                ),
                 'completed_at' => null,
                 'updated_at' => $this->timestamp(),
             ]);
