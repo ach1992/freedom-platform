@@ -9,7 +9,6 @@ use App\Modules\Orders\Application\QuotePricingInput;
 use App\Modules\Orders\Application\QuoteService;
 use App\Modules\Orders\Application\ServicePackageQuoteContext;
 use App\Modules\Orders\Domain\QuoteOverrideSource;
-use DateTimeImmutable;
 use Illuminate\Support\Facades\DB;
 
 trait ServiceAutoRenewalRuntimeScenariosD
@@ -20,8 +19,8 @@ trait ServiceAutoRenewalRuntimeScenariosD
         $scenario = $this->scenario($suffix);
         $requestKey = 'service.auto-renew.config.'.$suffix.'.000001';
         $requestHash = hash('sha256', $requestKey);
-        $issuedSecond = $this->purchaseOrderClock->value->getTimestamp();
-        $expiresAt = (new DateTimeImmutable('@'.$issuedSecond))->modify('+15 minutes +1 second');
+        $issuedAt = $this->purchaseOrderClock->value;
+        $expiresAt = $issuedAt->modify('+15 minutes');
         $accountType = DB::table('users')->where('id', $scenario['user_id'])->value('account_type');
         $agentContext = $accountType === 'agent'
             ? QuoteAgentPricingContext::forRenewal($scenario['user_id'])
@@ -29,9 +28,9 @@ trait ServiceAutoRenewalRuntimeScenariosD
 
         // Simulate a process that persisted its acceptance Quote and then crashed before the
         // configuration/history transaction committed. A later retry of the same business request
-        // must create a new current Quote rather than reuse the old key with a moving expiry payload.
+        // must create a new current Quote rather than reuse an idempotency key with a moving payload.
         $this->app->make(QuoteService::class)->create(
-            'service.auto-renew.config.quote.'.$requestHash.'.'.$issuedSecond,
+            'service.auto-renew.config.quote.'.$requestHash.'.'.$issuedAt->format('U.u'),
             $scenario['user_id'],
             $scenario['offering_id'],
             new QuotePricingInput(
@@ -48,7 +47,8 @@ trait ServiceAutoRenewalRuntimeScenariosD
         );
         self::assertSame(0, DB::table('service_auto_renew_configurations')->count());
 
-        $this->purchaseOrderClock->value = $this->purchaseOrderClock->value->modify('+1 second');
+        // A microsecond difference must be enough to request a fresh commercial snapshot.
+        $this->purchaseOrderClock->value = $this->purchaseOrderClock->value->modify('+1 microsecond');
         $configuration = $this->enableAutoRenew($scenario, $suffix);
 
         self::assertTrue($configuration->enabled);
