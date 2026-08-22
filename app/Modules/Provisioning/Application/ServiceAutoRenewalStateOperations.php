@@ -129,16 +129,6 @@ trait ServiceAutoRenewalStateOperations
                 $reasonCode,
             );
         }, 3);
-
-        if (! $consumeBudget) {
-            return;
-        }
-
-        $attempt = $this->attempt($attemptId);
-        if (AutoRenewAttemptState::from((string) $attempt->state) === AutoRenewAttemptState::Failed
-            && (string) $attempt->reason_code === 'retry_exhausted') {
-            $this->notification($attemptId, AutoRenewNotificationOutcome::Failure, 'retry_exhausted');
-        }
     }
 
     /** @param ServiceAutoRenewAttemptRow $attempt */
@@ -171,7 +161,6 @@ trait ServiceAutoRenewalStateOperations
     private function finishFailure(int $attemptId, string $reasonCode): ServiceAutoRenewAttemptReceipt
     {
         $this->transition($attemptId, AutoRenewAttemptState::Failed, $reasonCode, true);
-        $this->notification($attemptId, AutoRenewNotificationOutcome::Failure, $reasonCode);
 
         return $this->receiptById($attemptId, false);
     }
