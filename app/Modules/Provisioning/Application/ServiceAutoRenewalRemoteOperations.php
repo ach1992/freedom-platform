@@ -106,7 +106,7 @@ trait ServiceAutoRenewalRemoteOperations
             $ttlMinutes,
         );
         if (! $this->renewalQuoteWindowIsSafe($quote)) {
-            throw new DomainException('Auto-renew renewal package duration must exceed the scheduler window.');
+            throw new DomainException(self::UNSAFE_RENEWAL_WINDOW_MESSAGE);
         }
 
         return $quote;
