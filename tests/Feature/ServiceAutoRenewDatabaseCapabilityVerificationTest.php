@@ -158,7 +158,8 @@ SQL,
         $result = $this->app->make(ServiceAutoRenewalProcessor::class)->processDue(10);
         self::assertSame(1, $result->queued);
         $attempt = DB::table('service_auto_renew_attempts')->first([
-            'id', 'state', 'reason_code', 'provisioning_operation_id',
+            'id', 'state', 'reason_code', 'quote_id', 'payment_intent_id', 'purchase_settlement_id',
+            'provisioning_operation_id', 'correlation_id',
         ]);
         self::assertNotNull($attempt);
         $attemptId = (int) $attempt->id;
@@ -206,6 +207,31 @@ SQL,
                     $exception->getMessage(),
                 );
             }
+
+            $nextSequence = (int) $connection->table('service_auto_renew_attempt_events')
+                ->where('auto_renew_attempt_id', $attemptId)
+                ->max('sequence') + 1;
+            try {
+                $connection->table('service_auto_renew_attempt_events')->insert([
+                    'auto_renew_attempt_id' => $attemptId,
+                    'sequence' => $nextSequence,
+                    'from_state' => 'mutation_queued',
+                    'to_state' => 'succeeded',
+                    'reason_code' => 'renewal_succeeded',
+                    'quote_id' => $attempt->quote_id,
+                    'payment_intent_id' => $attempt->payment_intent_id,
+                    'purchase_settlement_id' => $attempt->purchase_settlement_id,
+                    'provisioning_operation_id' => $attempt->provisioning_operation_id,
+                    'correlation_id' => (string) $attempt->correlation_id,
+                    'created_at' => $this->purchaseOrderTimestamp(),
+                ]);
+                self::fail('Runtime capability alone must not forge a success audit event.');
+            } catch (QueryException $exception) {
+                self::assertStringContainsString(
+                    'Auto-renew attempt event does not match current attempt authority.',
+                    $exception->getMessage(),
+                );
+            }
         } finally {
             ServiceAutoRenewDatabaseAuthority::endRuntime($connection);
         }
@@ -219,6 +245,13 @@ SQL,
             DB::table('service_auto_renew_notification_intents')
                 ->where('auto_renew_attempt_id', $attemptId)
                 ->where('outcome', 'success')
+                ->count(),
+        );
+        self::assertSame(
+            0,
+            DB::table('service_auto_renew_attempt_events')
+                ->where('auto_renew_attempt_id', $attemptId)
+                ->where('to_state', 'succeeded')
                 ->count(),
         );
     }
