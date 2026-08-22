@@ -374,7 +374,7 @@ BEGIN
                   AND a.state = 'insufficient_wallet')
               OR (NEW.outcome = 'failure'
                   AND (
-                      a.state IN ('retry_pending', 'failed')
+                      a.state = 'failed'
                       OR (
                           a.state = 'mutation_queued'
                           AND a.reason_code = 'mutation_reconciliation_required'
