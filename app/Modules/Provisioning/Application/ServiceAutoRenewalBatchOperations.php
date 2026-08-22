@@ -41,8 +41,10 @@ trait ServiceAutoRenewalBatchOperations
 
         foreach ($this->staleUnfinancializedAttemptIds($limit) as $attemptId) {
             try {
-                $receipt = $this->finishFailure($attemptId, 'configuration_superseded');
-                $this->countReceipt($receipt, $counters, false);
+                $receipt = $this->finishUnfinancializedFailure($attemptId, 'configuration_superseded');
+                if ($receipt !== null) {
+                    $this->countReceipt($receipt, $counters, false);
+                }
             } catch (Throwable $exception) {
                 report($exception);
                 $this->safeRecordAttemptEvent($attemptId, 'configuration_supersession_deferred');
@@ -51,8 +53,10 @@ trait ServiceAutoRenewalBatchOperations
         }
         foreach ($this->supersededCycleUnfinancializedAttemptIds($limit) as $attemptId) {
             try {
-                $receipt = $this->finishFailure($attemptId, 'cycle_superseded');
-                $this->countReceipt($receipt, $counters, false);
+                $receipt = $this->finishUnfinancializedFailure($attemptId, 'cycle_superseded');
+                if ($receipt !== null) {
+                    $this->countReceipt($receipt, $counters, false);
+                }
             } catch (Throwable $exception) {
                 report($exception);
                 $this->safeRecordAttemptEvent($attemptId, 'cycle_supersession_deferred');
@@ -240,7 +244,12 @@ trait ServiceAutoRenewalBatchOperations
 
         $facts = $this->configurationFacts($configurationId);
         if ($existing !== null && ! $this->attemptMatchesConfigurationFacts($existing, $facts)) {
-            $this->finishFailure((int) $existing->id, 'cycle_superseded');
+            $retired = $this->finishUnfinancializedFailure((int) $existing->id, 'cycle_superseded');
+            if ($retired === null) {
+                // Another worker acquired financial authority after our initial read. Do not open
+                // a second cycle here; the financial recovery pass will release/reconcile it first.
+                return null;
+            }
             $existing = null;
         }
         if ($facts->observed_expires_at === null || $this->storedDateTime($facts->observed_expires_at) > $dueUntil) {
