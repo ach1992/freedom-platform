@@ -73,7 +73,8 @@ trait ServiceAutoRenewalSupport
         $query = $connection->table('service_auto_renew_configurations as c')
             ->join('service_subscriptions as s', 's.id', '=', 'c.service_subscription_id')
             ->join('users as u', 'u.id', '=', 's.user_id')
-            ->join('plan_offerings as o', 'o.id', '=', 's.plan_offering_id')
+            ->join('order_items as oi', 'oi.id', '=', 's.order_item_id')
+            ->join('plan_offerings as o', 'o.id', '=', 'oi.plan_offering_id')
             ->join('plan_offering_packages as p', 'p.id', '=', 'c.renewal_package_id')
             ->where('c.id', $configurationId);
         if ($lock) {
@@ -85,7 +86,7 @@ trait ServiceAutoRenewalSupport
             'c.accepted_price_irr', 'c.last_settled_price_irr', 'c.observed_expires_at', 'c.expiry_observed_at',
             'c.observed_expiry_evidence_hash', 'c.observed_expiry_source', 'c.observed_remote_identity_generation',
             'c.configuration_version', 's.public_id as service_public_id', 's.user_id', 'u.account_type',
-            's.plan_offering_id', 's.service_target_id', 's.remote_service_id', 's.provisioned_at',
+            'oi.plan_offering_id as plan_offering_id', 's.service_target_id', 's.remote_service_id', 's.provisioned_at',
             's.lifecycle_state', 's.lifecycle_version', 's.remote_identity_generation', 's.remote_deleted_at',
             'o.state as offering_state', 'o.auto_renew_allowed', 'p.code as package_code', 'p.package_type',
             'p.duration_days as package_duration_days',
