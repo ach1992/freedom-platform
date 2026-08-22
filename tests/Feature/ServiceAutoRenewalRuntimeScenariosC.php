@@ -14,6 +14,7 @@ use App\Modules\Payments\Application\PurchaseWalletPaymentService;
 use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
 use App\Modules\Provisioning\Application\ServiceAutoRenewalProcessor;
 use App\Modules\Provisioning\Application\ServiceAutoRenewConfigurationService;
+use App\Modules\Provisioning\Application\ServiceAutoRenewDatabaseAuthority;
 use Database\Seeders\WalletFinancialFoundationSeeder;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\QueryException;
@@ -72,7 +73,7 @@ trait ServiceAutoRenewalRuntimeScenariosC
         );
 
         $connection = DB::connection();
-        \App\Modules\Provisioning\Application\ServiceAutoRenewDatabaseAuthority::beginRuntime($connection);
+        ServiceAutoRenewDatabaseAuthority::beginRuntime($connection);
         try {
             $connection->table('service_auto_renew_attempts')
                 ->where('id', (int) $attempt->id)
@@ -88,7 +89,7 @@ trait ServiceAutoRenewalRuntimeScenariosC
                 $exception->getMessage(),
             );
         } finally {
-            \App\Modules\Provisioning\Application\ServiceAutoRenewDatabaseAuthority::endRuntime($connection);
+            ServiceAutoRenewDatabaseAuthority::endRuntime($connection);
         }
     }
 
@@ -107,7 +108,7 @@ trait ServiceAutoRenewalRuntimeScenariosC
         self::assertSame(0, (int) $attempt->commercial_generation);
 
         $connection = DB::connection();
-        \App\Modules\Provisioning\Application\ServiceAutoRenewDatabaseAuthority::beginRuntime($connection);
+        ServiceAutoRenewDatabaseAuthority::beginRuntime($connection);
         try {
             $connection->table('service_auto_renew_attempts')
                 ->where('id', (int) $attempt->id)
@@ -122,7 +123,7 @@ trait ServiceAutoRenewalRuntimeScenariosC
                 $exception->getMessage(),
             );
         } finally {
-            \App\Modules\Provisioning\Application\ServiceAutoRenewDatabaseAuthority::endRuntime($connection);
+            ServiceAutoRenewDatabaseAuthority::endRuntime($connection);
         }
     }
 
