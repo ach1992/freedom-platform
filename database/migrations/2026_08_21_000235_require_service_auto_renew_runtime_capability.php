@@ -27,12 +27,16 @@ return new class extends Migration
     public function down(): void
     {
         foreach ([
+            'plan_offering_auto_renew_policies',
+            'plan_offering_auto_renew_policy_histories',
+            'service_auto_renew_configurations',
+            'service_auto_renew_configuration_histories',
+            'service_auto_renew_attempts',
             'service_auto_renew_attempt_events',
             'service_auto_renew_notification_intents',
-            'service_auto_renew_attempts',
         ] as $table) {
             if (Schema::hasTable($table) && DB::table($table)->exists()) {
-                throw new RuntimeException('Cannot remove Service auto-renew runtime capability guards while runtime authority rows exist.');
+                throw new RuntimeException('Cannot remove Service auto-renew runtime capability guards while auto-renew authority rows exist.');
             }
         }
 
