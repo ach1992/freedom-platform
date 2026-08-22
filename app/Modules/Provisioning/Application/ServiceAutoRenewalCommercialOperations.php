@@ -17,8 +17,11 @@ use Throwable;
 trait ServiceAutoRenewalCommercialOperations
 {
     /** @param ServiceAutoRenewConfigurationFacts $facts */
-    private function executeCommercialAttempt(int $attemptId, object $facts): ServiceAutoRenewAttemptReceipt
-    {
+    private function executeCommercialAttempt(
+        int $attemptId,
+        object $facts,
+        int $immediateRequoteCount = 0,
+    ): ServiceAutoRenewAttemptReceipt {
         $attempt = $this->attempt($attemptId);
         if ($attempt->payment_intent_id !== null) {
             return $this->resumeReservedAttempt($attemptId, $facts, $this->clock->now()->modify('+'.$this->windowHours().' hours'));
@@ -92,7 +95,7 @@ trait ServiceAutoRenewalCommercialOperations
             }
         }
 
-        return $this->captureAndQueue($attemptId);
+        return $this->captureAndQueue($attemptId, $immediateRequoteCount);
     }
 
     /** @param ServiceAutoRenewConfigurationFacts $facts */
@@ -175,8 +178,10 @@ trait ServiceAutoRenewalCommercialOperations
         return $this->captureAndQueue($attemptId);
     }
 
-    private function captureAndQueue(int $attemptId): ServiceAutoRenewAttemptReceipt
-    {
+    private function captureAndQueue(
+        int $attemptId,
+        int $immediateRequoteCount = 0,
+    ): ServiceAutoRenewAttemptReceipt {
         $attempt = $this->attempt($attemptId);
         if ($attempt->payment_intent_id === null) {
             throw new RuntimeException('Auto-renew capture requires a bound Payment Intent.');
@@ -310,8 +315,14 @@ trait ServiceAutoRenewalCommercialOperations
                 || ! $this->attemptMatchesConfigurationFacts($refreshedAttempt, $facts)) {
                 return $this->finishFailure($attemptId, 'authority_changed_before_requote');
             }
+            if ($immediateRequoteCount >= 1) {
+                $this->scheduleRetry($attemptId, AutoRenewAttemptState::RetryPending, 'commercial_requote_deferred');
+                $this->notification($attemptId, AutoRenewNotificationOutcome::Failure, 'commercial_requote_deferred');
 
-            return $this->executeCommercialAttempt($attemptId, $facts);
+                return $this->receiptById($attemptId, true);
+            }
+
+            return $this->executeCommercialAttempt($attemptId, $facts, $immediateRequoteCount + 1);
         }
 
         if ($order === null) {
