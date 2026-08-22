@@ -121,6 +121,10 @@ return new class extends Migration
             $table->dateTime('next_retry_at', 6)->nullable();
             $table->dateTime('completed_at', 6)->nullable();
             $table->timestamps(6);
+            $table->index(
+                ['auto_renew_configuration_id', 'configuration_version', 'remote_identity_generation', 'observed_expires_at'],
+                'sara_config_cycle_idx',
+            );
             $table->index(['state', 'next_retry_at', 'updated_at'], 'sara_state_retry_idx');
             $table->index(['service_subscription_id', 'created_at'], 'sara_service_created_idx');
         });
