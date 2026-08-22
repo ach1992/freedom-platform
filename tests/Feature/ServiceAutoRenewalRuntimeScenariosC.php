@@ -71,14 +71,25 @@ trait ServiceAutoRenewalRuntimeScenariosC
             new ServicePackageQuoteContext($foreign['service_public_id'], 'aq-renew-30d'),
         );
 
-        $this->expectException(QueryException::class);
-        DB::table('service_auto_renew_attempts')
-            ->where('id', (int) $attempt->id)
-            ->update([
-                'quote_id' => $foreignQuote->quoteId,
-                'current_price_irr' => $foreignQuote->finalPriceIrr,
-                'updated_at' => $this->purchaseOrderTimestamp(),
-            ]);
+        $connection = DB::connection();
+        \App\Modules\Provisioning\Application\ServiceAutoRenewDatabaseAuthority::beginRuntime($connection);
+        try {
+            $connection->table('service_auto_renew_attempts')
+                ->where('id', (int) $attempt->id)
+                ->update([
+                    'quote_id' => $foreignQuote->quoteId,
+                    'current_price_irr' => $foreignQuote->finalPriceIrr,
+                    'updated_at' => $this->purchaseOrderTimestamp(),
+                ]);
+            self::fail('Foreign-Service Quote binding must be rejected by the commercial authority guard.');
+        } catch (QueryException $exception) {
+            self::assertStringContainsString(
+                'Auto-renew Quote does not match current Service renewal authority.',
+                $exception->getMessage(),
+            );
+        } finally {
+            \App\Modules\Provisioning\Application\ServiceAutoRenewDatabaseAuthority::endRuntime($connection);
+        }
     }
 
     public function test_database_rejects_forged_commercial_generation_without_safe_reset(): void
@@ -95,13 +106,24 @@ trait ServiceAutoRenewalRuntimeScenariosC
         self::assertSame('insufficient_wallet', $attempt->state);
         self::assertSame(0, (int) $attempt->commercial_generation);
 
-        $this->expectException(QueryException::class);
-        DB::table('service_auto_renew_attempts')
-            ->where('id', (int) $attempt->id)
-            ->update([
-                'commercial_generation' => 1,
-                'updated_at' => $this->purchaseOrderTimestamp(),
-            ]);
+        $connection = DB::connection();
+        \App\Modules\Provisioning\Application\ServiceAutoRenewDatabaseAuthority::beginRuntime($connection);
+        try {
+            $connection->table('service_auto_renew_attempts')
+                ->where('id', (int) $attempt->id)
+                ->update([
+                    'commercial_generation' => 1,
+                    'updated_at' => $this->purchaseOrderTimestamp(),
+                ]);
+            self::fail('Commercial generation mutation must require a safe bound authority reset.');
+        } catch (QueryException $exception) {
+            self::assertStringContainsString(
+                'Auto-renew commercial generation cannot change without bound authority reset.',
+                $exception->getMessage(),
+            );
+        } finally {
+            \App\Modules\Provisioning\Application\ServiceAutoRenewDatabaseAuthority::endRuntime($connection);
+        }
     }
 
     public function test_reserved_wallet_hold_is_released_when_auto_renew_is_disabled_before_capture(): void
