@@ -14,13 +14,11 @@ require_once __DIR__.'/ServiceAutoRenewalRuntimeScenariosA.php';
 require_once __DIR__.'/ServiceAutoRenewalRuntimeScenariosB.php';
 require_once __DIR__.'/ServiceAutoRenewalRuntimeScenariosC.php';
 
-use App\Modules\Provisioning\Application\ServiceAutoRenewDatabaseAuthority;
 use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PanelsAccessFoundationSeeder;
 use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
-use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
 
 final class ServiceAutoRenewalRuntimeTest extends TestCase
@@ -49,18 +47,5 @@ final class ServiceAutoRenewalRuntimeTest extends TestCase
         config()->set('auto_renew.max_retry_count', 5);
         config()->set('auto_renew.retry_initial_delay_minutes', 15);
         config()->set('auto_renew.retry_max_delay_minutes', 240);
-
-        ServiceAutoRenewDatabaseAuthority::beginRuntime(DB::connection());
-    }
-
-    protected function tearDown(): void
-    {
-        try {
-            if (isset($this->app)) {
-                ServiceAutoRenewDatabaseAuthority::endRuntime(DB::connection());
-            }
-        } finally {
-            parent::tearDown();
-        }
     }
 }
