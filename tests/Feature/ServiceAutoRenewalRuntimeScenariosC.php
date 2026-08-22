@@ -338,6 +338,7 @@ trait ServiceAutoRenewalRuntimeScenariosC
         $this->enableWalletMethod('reserved-price-change');
         $this->seed(WalletFinancialFoundationSeeder::class);
         $walletAccountId = $this->fundWallet($scenario['user_id'], 700_000, 'reserved-price-change');
+        $pricingAuthority = $this->enableScenarioAgentRenewPricing($scenario, 600_000, 'reserved-price-change');
         $configuration = $this->enableAutoRenew($scenario, 'reserved-price-change');
 
         $quote = $this->app->make(QuoteService::class)->create(
@@ -417,13 +418,7 @@ trait ServiceAutoRenewalRuntimeScenariosC
             'updated_at' => $this->purchaseOrderTimestamp(),
         ]);
 
-        DB::table('plan_offering_packages')
-            ->where('plan_offering_id', $scenario['offering_id'])
-            ->where('code', 'aq-renew-30d')
-            ->update([
-                'price_irr' => 650_000,
-                'updated_at' => $this->purchaseOrderTimestamp(),
-            ]);
+        $this->reviseScenarioAgentRenewPricing($scenario, $pricingAuthority, 650_000, 'reserved-price-change-raised');
 
         $ledgerCountBeforeRecovery = DB::table('ledger_transactions')->count();
         $result = $this->app->make(ServiceAutoRenewalProcessor::class)->processDue(10);
