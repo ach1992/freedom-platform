@@ -131,13 +131,13 @@ trait ServiceAutoRenewalRemoteOperations
     /** @return array{key_token:string,expires_at:DateTimeImmutable} */
     private function renewalQuoteRequest(int $ttlMinutes): array
     {
-        $issuedSecond = $this->clock->now()->getTimestamp();
+        $issuedAt = $this->clock->now();
 
         return [
-            'key_token' => (string) $issuedSecond,
-            // Derive expiry from the same token used by the idempotency key. Concurrent calls in
-            // one second therefore replay an identical request, while later retries always re-quote.
-            'expires_at' => (new DateTimeImmutable('@'.$issuedSecond))->modify('+'.$ttlMinutes.' minutes +1 second'),
+            'key_token' => $issuedAt->format('U.u'),
+            // The key token and expiry share the exact same clock instant. Identical concurrent
+            // observations replay safely; even sub-second pricing/config changes receive a fresh Quote.
+            'expires_at' => $issuedAt->modify('+'.$ttlMinutes.' minutes'),
         ];
     }
 
