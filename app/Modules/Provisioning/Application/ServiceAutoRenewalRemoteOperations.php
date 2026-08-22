@@ -99,13 +99,17 @@ trait ServiceAutoRenewalRemoteOperations
         $ttlMinutes = $this->boundedConfigInt('auto_renew.quote_ttl_minutes', 15, 1, 120);
         $bucket = intdiv($this->clock->now()->getTimestamp(), $ttlMinutes * 60);
         $keySuffix = $this->commercialAuthorityKeySuffix((int) $attempt->id);
-
-        return $this->createRenewalQuote(
+        $quote = $this->createRenewalQuote(
             'service.auto-renew.quote.'.(string) $attempt->public_id.$keySuffix.'.'.$bucket,
             $attempt,
             $facts,
             $ttlMinutes,
         );
+        if (! $this->renewalQuoteWindowIsSafe($quote)) {
+            throw new DomainException('Auto-renew renewal package duration must exceed the scheduler window.');
+        }
+
+        return $quote;
     }
 
     /**
@@ -158,6 +162,16 @@ trait ServiceAutoRenewalRemoteOperations
         }
 
         return $quote;
+    }
+
+    private function renewalQuoteWindowIsSafe(QuoteReceipt $quote): bool
+    {
+        $durationDays = $quote->servicePackage?->durationDays;
+        if ($durationDays === null || $durationDays < 1) {
+            return false;
+        }
+
+        return $durationDays > intdiv($this->windowHours(), 24);
     }
 
     /** @return array{mode:AutoRenewPriceChangeMode,absolute:?int,percentage:?int} */
