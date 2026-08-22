@@ -41,7 +41,10 @@ trait ServiceAutoRenewalRemoteOperations
                 $correlationId,
             );
             try {
-                $updated = $connection->table('service_auto_renew_configurations')->where('id', (int) $facts->config_id)->update([
+                // The locked configuration row already proves current authority. MariaDB reports
+                // zero affected rows when a concurrent worker has persisted this exact observation;
+                // that is an idempotent replay, not lost authority.
+                $connection->table('service_auto_renew_configurations')->where('id', (int) $facts->config_id)->update([
                     'observed_expires_at' => $this->databaseDateTime($observation['expires_at']),
                     'expiry_observed_at' => $this->timestamp(),
                     'observed_expiry_evidence_hash' => $observation['evidence_hash'],
@@ -50,9 +53,6 @@ trait ServiceAutoRenewalRemoteOperations
                     'last_correlation_id' => $correlationId,
                     'updated_at' => $this->timestamp(),
                 ]);
-                if ($updated !== 1) {
-                    throw new RuntimeException('Auto-renew remote observation lost configuration authority.');
-                }
 
                 return true;
             } finally {
