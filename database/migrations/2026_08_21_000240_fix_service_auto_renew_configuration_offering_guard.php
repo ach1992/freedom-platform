@@ -22,8 +22,10 @@ return new class extends Migration
         DB::unprepared('DROP TRIGGER IF EXISTS sarc_insert_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS sarc_update_guard');
 
-        /** @var Migration $legacy */
         $legacy = require database_path('migrations/2026_08_21_000210_guard_service_auto_renew_policy_and_configuration.php');
+        if (! is_object($legacy) || ! method_exists($legacy, 'up')) {
+            throw new RuntimeException('Legacy auto-renew configuration guard migration is unavailable.');
+        }
         $legacy->up();
     }
 
