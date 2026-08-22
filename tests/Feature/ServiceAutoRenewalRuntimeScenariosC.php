@@ -200,6 +200,7 @@ trait ServiceAutoRenewalRuntimeScenariosC
             'created_at' => $this->purchaseOrderTimestamp(),
             'updated_at' => $this->purchaseOrderTimestamp(),
         ]);
+        $this->recordAutoRenewCycleClaimedEvent($attemptId);
         $intentId = (int) DB::table('payment_intents')
             ->where('public_id', $intent->intentPublicId)
             ->value('id');
@@ -312,6 +313,7 @@ trait ServiceAutoRenewalRuntimeScenariosC
             'created_at' => $this->purchaseOrderTimestamp(),
             'updated_at' => $this->purchaseOrderTimestamp(),
         ]);
+        $this->recordAutoRenewCycleClaimedEvent($attemptId);
         $oldIntentId = (int) DB::table('payment_intents')
             ->where('public_id', $intent->intentPublicId)
             ->value('id');
@@ -434,6 +436,7 @@ trait ServiceAutoRenewalRuntimeScenariosC
             'created_at' => $this->purchaseOrderTimestamp(),
             'updated_at' => $this->purchaseOrderTimestamp(),
         ]);
+        $this->recordAutoRenewCycleClaimedEvent($attemptId);
         $oldIntentId = (int) DB::table('payment_intents')
             ->where('public_id', $intent->intentPublicId)
             ->value('id');
