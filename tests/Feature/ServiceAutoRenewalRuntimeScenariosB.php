@@ -88,6 +88,43 @@ trait ServiceAutoRenewalRuntimeScenariosB
         self::assertSame(1, DB::table('service_auto_renew_notification_intents')->where('outcome', 'failure')->count());
     }
 
+    public function test_definitive_downstream_mutation_failure_preserves_captured_settlement_and_terminalizes_attempt(): void
+    {
+        $scenario = $this->scenario('provider-definitive-failure');
+        $this->enableWalletMethod('provider-definitive-failure');
+        $this->seed(WalletFinancialFoundationSeeder::class);
+        $this->fundWallet($scenario['user_id'], 600_000, 'provider-definitive-failure');
+        $this->enableAutoRenew($scenario, 'provider-definitive-failure');
+
+        $processor = $this->app->make(ServiceAutoRenewalProcessor::class);
+        $queued = $processor->processDue(10);
+        self::assertSame(1, $queued->queued);
+        self::assertSame(1, DB::table('purchase_settlements')->where('provider_code', 'wallet')->count());
+        $ledgerCountAfterCapture = DB::table('ledger_transactions')->count();
+
+        $operationPublicId = (string) DB::table('provisioning_operations')->where('operation_type', 'renew')->value('public_id');
+        self::assertNotSame('', $operationPublicId);
+        $scenario['adapter']->definitiveFailureOnUpdateExpiry = true;
+
+        $execution = $this->app->make(ServiceMutationExecutor::class)->execute($operationPublicId);
+        self::assertSame(ProvisioningState::FailedFinal, $execution->state);
+
+        $reconciled = $processor->processDue(10);
+        self::assertGreaterThanOrEqual(1, $reconciled->failed);
+        $attempt = DB::table('service_auto_renew_attempts')->first([
+            'state', 'reason_code', 'purchase_settlement_id', 'provisioning_operation_id',
+        ]);
+        self::assertNotNull($attempt);
+        self::assertSame(AutoRenewAttemptState::Failed->value, $attempt->state);
+        self::assertSame('renewal_mutation_failed', $attempt->reason_code);
+        self::assertNotNull($attempt->purchase_settlement_id);
+        self::assertNotNull($attempt->provisioning_operation_id);
+        self::assertSame($ledgerCountAfterCapture, DB::table('ledger_transactions')->count());
+        self::assertSame(1, DB::table('purchase_settlements')->where('provider_code', 'wallet')->count());
+        self::assertSame(1, DB::table('service_paid_mutation_authorities')->count());
+        self::assertSame(1, DB::table('service_auto_renew_notification_intents')->where('outcome', 'failure')->count());
+    }
+
     public function test_auto_renew_migration_rollback_refuses_to_delete_authority_rows(): void
     {
         $scenario = $this->scenario('rollback-fence');
