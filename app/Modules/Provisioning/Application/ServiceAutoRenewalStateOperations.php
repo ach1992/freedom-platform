@@ -213,7 +213,10 @@ trait ServiceAutoRenewalStateOperations
         $this->database->connection()->transaction(function (Connection $connection) use ($attemptId, $reasonCode): void {
             $attempt = $this->attemptOn($connection, $attemptId, true);
             $state = AutoRenewAttemptState::from((string) $attempt->state);
-            if ((string) ($attempt->reason_code ?? '') === $reasonCode) {
+            // Terminal authority is immutable at the database layer. Mirror that rule here so a
+            // stale recovery worker cannot turn benign concurrency into exception/log noise or a
+            // false batch failure while trying to attach a diagnostic reason to a finished attempt.
+            if ($state->isTerminal() || (string) ($attempt->reason_code ?? '') === $reasonCode) {
                 return;
             }
             $connection->table('service_auto_renew_attempts')->where('id', $attemptId)->update([
