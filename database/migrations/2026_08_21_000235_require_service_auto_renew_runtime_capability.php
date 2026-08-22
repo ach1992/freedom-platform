@@ -40,14 +40,10 @@ return new class extends Migration
             }
         }
 
-        foreach ([
-            'DROP TRIGGER IF EXISTS `sara_cap_insert_guard`',
-            'DROP TRIGGER IF EXISTS `sara_cap_update_guard`',
-            'DROP TRIGGER IF EXISTS `sarae_cap_insert_guard`',
-            'DROP TRIGGER IF EXISTS `sarni_cap_insert_guard`',
-        ] as $statement) {
-            DB::unprepared($statement);
-        }
+        DB::unprepared('DROP TRIGGER IF EXISTS `sara_cap_insert_guard`');
+        DB::unprepared('DROP TRIGGER IF EXISTS `sara_cap_update_guard`');
+        DB::unprepared('DROP TRIGGER IF EXISTS `sarae_cap_insert_guard`');
+        DB::unprepared('DROP TRIGGER IF EXISTS `sarni_cap_insert_guard`');
     }
 
     private function createCapabilityGuard(string $trigger, string $table, string $event): void
