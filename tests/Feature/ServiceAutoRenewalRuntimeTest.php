@@ -7,6 +7,7 @@ namespace Tests\Feature;
 require_once dirname(__DIR__, 2).'/vendor/autoload.php';
 require_once __DIR__.'/AgentPricingQuoteIntegrationTestSupport.php';
 require_once __DIR__.'/PurchaseOrderTestSupport.php';
+require_once __DIR__.'/ServiceAutoRenewalAgentPricingTestSupport.php';
 require_once __DIR__.'/ServiceAutoRenewalRuntimeTestSupport.php';
 require_once __DIR__.'/ServiceAutoRenewalRuntimeTestHelpers.php';
 require_once __DIR__.'/ServiceAutoRenewalRuntimeScenariosA.php';
@@ -25,6 +26,7 @@ final class ServiceAutoRenewalRuntimeTest extends TestCase
     use AgentPricingQuoteIntegrationTestSupport;
     use DatabaseTruncation;
     use PurchaseOrderTestSupport;
+    use ServiceAutoRenewalAgentPricingTestSupport;
     use ServiceAutoRenewalRuntimeScenariosA;
     use ServiceAutoRenewalRuntimeScenariosB;
     use ServiceAutoRenewalRuntimeScenariosC;
