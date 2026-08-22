@@ -10,6 +10,7 @@ require_once __DIR__.'/PurchaseOrderTestSupport.php';
 require_once __DIR__.'/ServiceAutoRenewalRuntimeTestSupport.php';
 require_once __DIR__.'/ServiceAutoRenewalRuntimeTestHelpers.php';
 
+use App\Modules\Provisioning\Application\ServiceAutoRenewalProcessor;
 use App\Modules\Provisioning\Application\ServiceAutoRenewDatabaseAuthority;
 use App\Modules\Provisioning\Application\ServiceAutoRenewPolicyService;
 use App\Modules\Provisioning\Domain\AutoRenewPriceChangeMode;
@@ -17,6 +18,7 @@ use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PanelsAccessFoundationSeeder;
 use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
+use Database\Seeders\WalletFinancialFoundationSeeder;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
@@ -142,6 +144,82 @@ SQL,
         } catch (QueryException $exception) {
             self::assertStringContainsString('Auto-renew runtime database capability is invalid.', $exception->getMessage());
         }
+    }
+
+    public function test_valid_runtime_capability_cannot_forge_success_before_mutation_succeeds(): void
+    {
+        $suffix = 'forged-semantic-success';
+        $scenario = $this->scenario($suffix);
+        $this->enableWalletMethod($suffix);
+        $this->seed(WalletFinancialFoundationSeeder::class);
+        $this->fundWallet($scenario['user_id'], 600_000, $suffix);
+        $this->enableAutoRenew($scenario, $suffix);
+
+        $result = $this->app->make(ServiceAutoRenewalProcessor::class)->processDue(10);
+        self::assertSame(1, $result->queued);
+        $attempt = DB::table('service_auto_renew_attempts')->first([
+            'id', 'state', 'reason_code', 'provisioning_operation_id',
+        ]);
+        self::assertNotNull($attempt);
+        self::assertSame('mutation_queued', $attempt->state);
+        self::assertNotNull($attempt->provisioning_operation_id);
+        self::assertNotSame(
+            'succeeded',
+            DB::table('provisioning_operations')
+                ->where('id', (int) $attempt->provisioning_operation_id)
+                ->value('state'),
+        );
+
+        $connection = DB::connection();
+        ServiceAutoRenewDatabaseAuthority::beginRuntime($connection);
+        try {
+            try {
+                $connection->table('service_auto_renew_attempts')
+                    ->where('id', (int) $attempt->id)
+                    ->update([
+                        'state' => 'succeeded',
+                        'reason_code' => 'renewal_succeeded',
+                        'completed_at' => $this->purchaseOrderTimestamp(),
+                        'updated_at' => $this->purchaseOrderTimestamp(),
+                    ]);
+                self::fail('Runtime capability alone must not forge a succeeded renewal attempt.');
+            } catch (QueryException $exception) {
+                self::assertStringContainsString(
+                    'Auto-renew success requires succeeded provisioning operation authority.',
+                    $exception->getMessage(),
+                );
+            }
+
+            try {
+                $connection->table('service_auto_renew_notification_intents')->insert([
+                    'public_id' => (string) Str::ulid(),
+                    'auto_renew_attempt_id' => (int) $attempt->id,
+                    'outcome' => 'success',
+                    'reason_code' => 'renewal_succeeded',
+                    'created_at' => $this->purchaseOrderTimestamp(),
+                ]);
+                self::fail('Runtime capability alone must not forge a success notification intent.');
+            } catch (QueryException $exception) {
+                self::assertStringContainsString(
+                    'Auto-renew notification outcome does not match current attempt authority.',
+                    $exception->getMessage(),
+                );
+            }
+        } finally {
+            ServiceAutoRenewDatabaseAuthority::endRuntime($connection);
+        }
+
+        $attempt = DB::table('service_auto_renew_attempts')->where('id', (int) $attempt->id)->first(['state', 'reason_code']);
+        self::assertNotNull($attempt);
+        self::assertSame('mutation_queued', $attempt->state);
+        self::assertSame('mutation_queued', $attempt->reason_code);
+        self::assertSame(
+            0,
+            DB::table('service_auto_renew_notification_intents')
+                ->where('auto_renew_attempt_id', (int) $attempt->id)
+                ->where('outcome', 'success')
+                ->count(),
+        );
     }
 
     public function test_runtime_capability_rollback_refuses_with_configuration_before_first_attempt(): void
