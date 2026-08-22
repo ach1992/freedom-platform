@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Modules\Provisioning\Application\ServiceAutoRenewDatabaseAuthority;
 use App\Modules\Provisioning\Application\ServiceAutoRenewalProcessor;
 use App\Modules\Provisioning\Application\ServiceMutationExecutor;
 use App\Modules\Provisioning\Domain\AutoRenewAttemptState;
@@ -139,30 +140,41 @@ trait ServiceAutoRenewalRuntimeScenariosA
         $configRow = DB::table('service_auto_renew_configurations')->where('id', $configuration->configurationId)->first();
         self::assertNotNull($configRow);
 
-        $this->expectException(QueryException::class);
-        DB::table('service_auto_renew_attempts')->insert([
-            'public_id' => (string) Str::ulid(),
-            'cycle_key' => hash('sha256', 'forged-auto-renew-cycle'),
-            'auto_renew_configuration_id' => $configuration->configurationId,
-            'service_subscription_id' => $scenario['service_id'],
-            'configuration_version' => $configuration->configurationVersion,
-            'remote_identity_generation' => (int) $configRow->observed_remote_identity_generation,
-            'observed_expires_at' => (string) $configRow->observed_expires_at,
-            'observed_expiry_evidence_hash' => (string) $configRow->observed_expiry_evidence_hash,
-            'observed_expiry_source' => (string) $configRow->observed_expiry_source,
-            'state' => AutoRenewAttemptState::Pending->value,
-            'reason_code' => null,
-            'baseline_price_irr' => $configuration->acceptedPriceIrr + 1,
-            'current_price_irr' => null,
-            'quote_id' => null,
-            'payment_eligibility_decision_id' => null,
-            'payment_intent_id' => null,
-            'purchase_settlement_id' => null,
-            'provisioning_operation_id' => null,
-            'correlation_id' => $this->purchaseOrderCorrelation('auto-renew-forged-attempt'),
-            'completed_at' => null,
-            'created_at' => $this->purchaseOrderTimestamp(),
-            'updated_at' => $this->purchaseOrderTimestamp(),
-        ]);
+        $connection = DB::connection();
+        ServiceAutoRenewDatabaseAuthority::beginRuntime($connection);
+        try {
+            $connection->table('service_auto_renew_attempts')->insert([
+                'public_id' => (string) Str::ulid(),
+                'cycle_key' => hash('sha256', 'forged-auto-renew-cycle'),
+                'auto_renew_configuration_id' => $configuration->configurationId,
+                'service_subscription_id' => $scenario['service_id'],
+                'configuration_version' => $configuration->configurationVersion,
+                'remote_identity_generation' => (int) $configRow->observed_remote_identity_generation,
+                'observed_expires_at' => (string) $configRow->observed_expires_at,
+                'observed_expiry_evidence_hash' => (string) $configRow->observed_expiry_evidence_hash,
+                'observed_expiry_source' => (string) $configRow->observed_expiry_source,
+                'state' => AutoRenewAttemptState::Pending->value,
+                'reason_code' => null,
+                'baseline_price_irr' => $configuration->acceptedPriceIrr + 1,
+                'current_price_irr' => null,
+                'quote_id' => null,
+                'payment_eligibility_decision_id' => null,
+                'payment_intent_id' => null,
+                'purchase_settlement_id' => null,
+                'provisioning_operation_id' => null,
+                'correlation_id' => $this->purchaseOrderCorrelation('auto-renew-forged-attempt'),
+                'completed_at' => null,
+                'created_at' => $this->purchaseOrderTimestamp(),
+                'updated_at' => $this->purchaseOrderTimestamp(),
+            ]);
+            self::fail('Forged auto-renew cycle authority must be rejected.');
+        } catch (QueryException $exception) {
+            self::assertStringContainsString(
+                'Auto-renew cycle identity is not derived from the current Service cycle authority.',
+                $exception->getMessage(),
+            );
+        } finally {
+            ServiceAutoRenewDatabaseAuthority::endRuntime($connection);
+        }
     }
 }
