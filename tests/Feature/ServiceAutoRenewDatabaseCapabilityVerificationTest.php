@@ -17,6 +17,7 @@ use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PanelsAccessFoundationSeeder;
 use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
+use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\DB;
@@ -141,5 +142,31 @@ SQL,
         } catch (QueryException $exception) {
             self::assertStringContainsString('Auto-renew runtime database capability is invalid.', $exception->getMessage());
         }
+    }
+
+    public function test_runtime_capability_rollback_refuses_with_configuration_before_first_attempt(): void
+    {
+        $scenario = $this->scenario('runtime-capability-rollback');
+        $this->enableAutoRenew($scenario, 'runtime-capability-rollback');
+        self::assertSame(0, DB::table('service_auto_renew_attempts')->count());
+
+        /** @var Migration $migration */
+        $migration = require database_path('migrations/2026_08_21_000235_require_service_auto_renew_runtime_capability.php');
+        try {
+            $migration->down();
+            self::fail('Runtime capability rollback must refuse while auto-renew configuration authority exists.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame(
+                'Cannot remove Service auto-renew runtime capability guards while auto-renew authority rows exist.',
+                $exception->getMessage(),
+            );
+        }
+
+        self::assertSame(
+            1,
+            (int) DB::selectOne(
+                "SELECT COUNT(*) AS aggregate FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = DATABASE() AND TRIGGER_NAME = 'sara_cap_insert_guard'",
+            )->aggregate,
+        );
     }
 }
