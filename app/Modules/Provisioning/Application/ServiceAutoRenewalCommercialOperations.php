@@ -8,7 +8,6 @@ use App\Modules\Orders\Application\PurchaseOrderReceipt;
 use App\Modules\Orders\Application\QuoteReceipt;
 use App\Modules\Payments\Eligibility\Application\PaymentEligibilityDecisionReceipt;
 use App\Modules\Provisioning\Domain\AutoRenewAttemptState;
-use App\Modules\Provisioning\Domain\AutoRenewNotificationOutcome;
 use App\Modules\Provisioning\Domain\ProvisioningState;
 use DateTimeImmutable;
 use DomainException;
@@ -503,11 +502,10 @@ trait ServiceAutoRenewalCommercialOperations
             return $this->finishFailure($attemptId, 'renewal_mutation_failed');
         }
         if (in_array($provisioningState, [ProvisioningState::UncertainRemoteResult, ProvisioningState::NeedsReview], true)) {
-            $this->recordSameStateEvent(
-                $attemptId,
-                'mutation_reconciliation_required',
-                AutoRenewNotificationOutcome::Failure,
-            );
+            // Uncertain provider outcome is an operational attention state, not a user-facing
+            // renewal failure. Keep the attempt and audit evidence pending reconciliation; a
+            // later definitive failure will create the one durable failure notification intent.
+            $this->recordSameStateEvent($attemptId, 'mutation_reconciliation_required');
         }
 
         return $this->receiptById($attemptId, true);
