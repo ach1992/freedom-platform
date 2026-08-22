@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Modules\Provisioning\Application;
 
-use App\Modules\Agents\Domain\AgentPricingAction;
 use App\Modules\Orders\Application\QuoteAgentPricingContext;
 use App\Modules\Orders\Application\QuotePricingInput;
 use App\Modules\Orders\Application\QuoteReceipt;
@@ -364,7 +363,7 @@ final readonly class ServiceAutoRenewConfigurationService
     ): QuoteReceipt {
         $ttlMinutes = $this->boundedConfigInt('auto_renew.quote_ttl_minutes', 15, 1, 120);
         $agentContext = $facts->account_type === 'agent'
-            ? new QuoteAgentPricingContext($actorUserId, AgentPricingAction::Renew)
+            ? QuoteAgentPricingContext::forRenewal($actorUserId)
             : null;
 
         return $this->quotes->create(
