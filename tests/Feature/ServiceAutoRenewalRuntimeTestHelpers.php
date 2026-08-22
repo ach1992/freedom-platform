@@ -18,6 +18,7 @@ use App\Modules\Provisioning\Application\ServiceAutoRenewalProcessor;
 use App\Modules\Provisioning\Application\ServiceAutoRenewConfigurationReceipt;
 use App\Modules\Provisioning\Application\ServiceAutoRenewConfigurationService;
 use App\Modules\Provisioning\Application\ServiceMutationExecutor;
+use App\Modules\Provisioning\Application\ServiceOperationalDatabaseCapability;
 use App\Modules\Provisioning\Domain\ProvisioningState;
 use App\Modules\Wallet\Application\LedgerEntryDraft;
 use App\Modules\Wallet\Application\LedgerPostingService;
@@ -30,7 +31,7 @@ trait ServiceAutoRenewalRuntimeTestHelpers
 {
     private function enableAutoRenew(array $scenario, string $suffix): ServiceAutoRenewConfigurationReceipt
     {
-        return $this->app->make(ServiceAutoRenewConfigurationService::class)->configure(
+        $receipt = $this->app->make(ServiceAutoRenewConfigurationService::class)->configure(
             'service.auto-renew.config.'.$suffix.'.000001',
             $scenario['user_id'],
             $scenario['service_public_id'],
@@ -38,6 +39,12 @@ trait ServiceAutoRenewalRuntimeTestHelpers
             true,
             $this->purchaseOrderCorrelation('auto-renew-config-'.$suffix),
         );
+
+        // Direct fixture writes in the runtime verification suite must cross the same
+        // app-key-derived database capability as production runtime writes.
+        (new ServiceOperationalDatabaseCapability)->apply(DB::connection());
+
+        return $receipt;
     }
 
     private function enableWalletMethod(string $suffix): void
