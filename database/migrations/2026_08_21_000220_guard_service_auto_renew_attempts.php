@@ -45,6 +45,7 @@ return new class extends Migration
         DB::unprepared('DROP TRIGGER IF EXISTS sarph_delete_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS sarch_update_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS sarch_delete_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS sarae_insert_authority_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS sarae_update_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS sarae_delete_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS sarni_insert_authority_guard');
@@ -297,6 +298,51 @@ SQL);
         DB::unprepared(<<<'SQL'
 CREATE TRIGGER IF NOT EXISTS sarch_delete_guard BEFORE DELETE ON service_auto_renew_configuration_histories
 FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew Service configuration histories are append-only.'; END
+SQL);
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER IF NOT EXISTS sarae_insert_authority_guard
+BEFORE INSERT ON service_auto_renew_attempt_events
+FOR EACH ROW
+BEGIN
+    DECLARE previous_sequence INT UNSIGNED DEFAULT 0;
+    DECLARE previous_to_state VARCHAR(32) DEFAULT NULL;
+
+    SELECT COALESCE(MAX(sequence), 0)
+      INTO previous_sequence
+      FROM service_auto_renew_attempt_events
+     WHERE auto_renew_attempt_id = NEW.auto_renew_attempt_id;
+
+    IF previous_sequence = 0 THEN
+        IF NEW.sequence <> 1 OR NEW.from_state IS NOT NULL THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew attempt event sequence does not start from cycle authority.';
+        END IF;
+    ELSE
+        SELECT to_state
+          INTO previous_to_state
+          FROM service_auto_renew_attempt_events
+         WHERE auto_renew_attempt_id = NEW.auto_renew_attempt_id
+           AND sequence = previous_sequence
+         LIMIT 1;
+        IF NEW.sequence <> previous_sequence + 1
+           OR NOT (NEW.from_state <=> previous_to_state) THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew attempt event sequence does not continue current audit authority.';
+        END IF;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM service_auto_renew_attempts a
+        WHERE a.id = NEW.auto_renew_attempt_id
+          AND a.state = NEW.to_state
+          AND (a.quote_id <=> NEW.quote_id)
+          AND (a.payment_intent_id <=> NEW.payment_intent_id)
+          AND (a.purchase_settlement_id <=> NEW.purchase_settlement_id)
+          AND (a.provisioning_operation_id <=> NEW.provisioning_operation_id)
+          AND BINARY a.correlation_id = BINARY NEW.correlation_id
+    ) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew attempt event does not match current attempt authority.';
+    END IF;
+END
 SQL);
         DB::unprepared(<<<'SQL'
 CREATE TRIGGER IF NOT EXISTS sarae_update_guard BEFORE UPDATE ON service_auto_renew_attempt_events
