@@ -61,12 +61,15 @@ trait ServiceAutoRenewalRuntimeTestHelpers
             'Auto-renew wallet test method.',
             $this->purchaseOrderCorrelation('auto-renew-wallet-method-'.$suffix),
         );
+        // Auto-renew scenarios intentionally advance the frozen clock to exercise retry and
+        // recovery semantics. Keep unrelated wallet-health expiry outside those test windows;
+        // stale-health behavior should be made explicit by the scenario that owns it.
         $eligibility->recordHealth(
             'service.auto-renew.wallet.health.'.$suffix.'.000001',
             $administratorId,
             'wallet',
             true,
-            $this->purchaseOrderClock->value->modify('+10 minutes'),
+            $this->purchaseOrderClock->value->modify('+24 hours'),
             'Healthy auto-renew wallet test observation.',
             $this->purchaseOrderCorrelation('auto-renew-wallet-health-'.$suffix),
         );
