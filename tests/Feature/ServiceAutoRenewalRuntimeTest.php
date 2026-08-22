@@ -13,6 +13,7 @@ require_once __DIR__.'/ServiceAutoRenewalRuntimeTestHelpers.php';
 require_once __DIR__.'/ServiceAutoRenewalRuntimeScenariosA.php';
 require_once __DIR__.'/ServiceAutoRenewalRuntimeScenariosB.php';
 require_once __DIR__.'/ServiceAutoRenewalRuntimeScenariosC.php';
+require_once __DIR__.'/ServiceAutoRenewalRuntimeScenariosD.php';
 
 use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
@@ -30,6 +31,7 @@ final class ServiceAutoRenewalRuntimeTest extends TestCase
     use ServiceAutoRenewalRuntimeScenariosA;
     use ServiceAutoRenewalRuntimeScenariosB;
     use ServiceAutoRenewalRuntimeScenariosC;
+    use ServiceAutoRenewalRuntimeScenariosD;
     use ServiceAutoRenewalRuntimeTestHelpers;
 
     protected function setUp(): void
