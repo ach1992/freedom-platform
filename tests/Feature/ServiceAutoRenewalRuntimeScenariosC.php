@@ -354,7 +354,10 @@ trait ServiceAutoRenewalRuntimeScenariosC
                 $this->purchaseOrderClock->value->modify('+15 minutes'),
             ),
             $this->purchaseOrderCorrelation('auto-renew-reserved-price-change-quote'),
-            null,
+            new \App\Modules\Orders\Application\QuoteAgentPricingContext(
+                $scenario['user_id'],
+                \App\Modules\Agents\Domain\AgentPricingAction::Renew,
+            ),
             new ServicePackageQuoteContext($scenario['service_public_id'], 'aq-renew-30d'),
         );
         $eligibility = $this->app->make(PaymentMethodEligibilityService::class)->evaluate(
