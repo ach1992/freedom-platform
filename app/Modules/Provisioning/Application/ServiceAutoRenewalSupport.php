@@ -358,6 +358,15 @@ trait ServiceAutoRenewalSupport
         if ($attempted) {
             $counters['attempted']++;
         }
+        if ($receipt->state === AutoRenewAttemptState::MutationQueued
+            && $receipt->reasonCode === 'mutation_reconciliation_required') {
+            // A protected mutation with uncertain provider outcome remains financially authoritative
+            // and must not be re-queued, but operations still needs a persistent attention signal
+            // until reconciliation resolves it.
+            $counters['failed']++;
+
+            return;
+        }
         match ($receipt->state) {
             AutoRenewAttemptState::MutationQueued => $counters['queued']++,
             AutoRenewAttemptState::Succeeded => $counters['succeeded']++,
