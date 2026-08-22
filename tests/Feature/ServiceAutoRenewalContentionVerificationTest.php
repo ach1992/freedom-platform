@@ -101,6 +101,7 @@ namespace Tests\Feature {
     use App\Modules\Orders\Domain\QuoteOverrideSource;
     use App\Modules\Payments\Application\PurchaseWalletPaymentService;
     use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
+    use App\Modules\Provisioning\Application\ServiceAutoRenewDatabaseAuthority;
     use App\Modules\Provisioning\Domain\AutoRenewAttemptState;
     use Database\Seeders\CatalogAccessFoundationSeeder;
     use Database\Seeders\IdentityAccessFoundationSeeder;
@@ -296,41 +297,47 @@ namespace Tests\Feature {
                 (string) $configRow->observed_remote_identity_generation,
                 (string) $configRow->observed_expires_at,
             ]));
-            $attemptId = (int) DB::table('service_auto_renew_attempts')->insertGetId([
-                'public_id' => (string) Str::ulid(),
-                'cycle_key' => $cycleKey,
-                'auto_renew_configuration_id' => $configuration->configurationId,
-                'service_subscription_id' => $scenario['service_id'],
-                'configuration_version' => $configuration->configurationVersion,
-                'remote_identity_generation' => (int) $configRow->observed_remote_identity_generation,
-                'observed_expires_at' => (string) $configRow->observed_expires_at,
-                'observed_expiry_evidence_hash' => (string) $configRow->observed_expiry_evidence_hash,
-                'observed_expiry_source' => (string) $configRow->observed_expiry_source,
-                'state' => AutoRenewAttemptState::Pending->value,
-                'reason_code' => null,
-                'baseline_price_irr' => $configuration->acceptedPriceIrr,
-                'current_price_irr' => null,
-                'quote_id' => null,
-                'payment_eligibility_decision_id' => null,
-                'payment_intent_id' => null,
-                'purchase_settlement_id' => null,
-                'provisioning_operation_id' => null,
-                'correlation_id' => $this->purchaseOrderCorrelation('auto-renew-'.$suffix.'-attempt'),
-                'completed_at' => null,
-                'created_at' => $this->purchaseOrderTimestamp(),
-                'updated_at' => $this->purchaseOrderTimestamp(),
-            ]);
-            $intentId = (int) DB::table('payment_intents')
-                ->where('public_id', $intent->intentPublicId)
-                ->value('id');
-            DB::table('service_auto_renew_attempts')->where('id', $attemptId)->update([
-                'quote_id' => $quote->quoteId,
-                'payment_eligibility_decision_id' => $eligibility->decisionId,
-                'payment_intent_id' => $intentId,
-                'current_price_irr' => $quote->finalPriceIrr,
-                'reason_code' => 'wallet_reserved',
-                'updated_at' => $this->purchaseOrderTimestamp(),
-            ]);
+            $connection = DB::connection();
+            ServiceAutoRenewDatabaseAuthority::beginRuntime($connection);
+            try {
+                $attemptId = (int) $connection->table('service_auto_renew_attempts')->insertGetId([
+                    'public_id' => (string) Str::ulid(),
+                    'cycle_key' => $cycleKey,
+                    'auto_renew_configuration_id' => $configuration->configurationId,
+                    'service_subscription_id' => $scenario['service_id'],
+                    'configuration_version' => $configuration->configurationVersion,
+                    'remote_identity_generation' => (int) $configRow->observed_remote_identity_generation,
+                    'observed_expires_at' => (string) $configRow->observed_expires_at,
+                    'observed_expiry_evidence_hash' => (string) $configRow->observed_expiry_evidence_hash,
+                    'observed_expiry_source' => (string) $configRow->observed_expiry_source,
+                    'state' => AutoRenewAttemptState::Pending->value,
+                    'reason_code' => null,
+                    'baseline_price_irr' => $configuration->acceptedPriceIrr,
+                    'current_price_irr' => null,
+                    'quote_id' => null,
+                    'payment_eligibility_decision_id' => null,
+                    'payment_intent_id' => null,
+                    'purchase_settlement_id' => null,
+                    'provisioning_operation_id' => null,
+                    'correlation_id' => $this->purchaseOrderCorrelation('auto-renew-'.$suffix.'-attempt'),
+                    'completed_at' => null,
+                    'created_at' => $this->purchaseOrderTimestamp(),
+                    'updated_at' => $this->purchaseOrderTimestamp(),
+                ]);
+                $intentId = (int) $connection->table('payment_intents')
+                    ->where('public_id', $intent->intentPublicId)
+                    ->value('id');
+                $connection->table('service_auto_renew_attempts')->where('id', $attemptId)->update([
+                    'quote_id' => $quote->quoteId,
+                    'payment_eligibility_decision_id' => $eligibility->decisionId,
+                    'payment_intent_id' => $intentId,
+                    'current_price_irr' => $quote->finalPriceIrr,
+                    'reason_code' => 'wallet_reserved',
+                    'updated_at' => $this->purchaseOrderTimestamp(),
+                ]);
+            } finally {
+                ServiceAutoRenewDatabaseAuthority::endRuntime($connection);
+            }
 
             return [
                 'attempt_id' => $attemptId,
