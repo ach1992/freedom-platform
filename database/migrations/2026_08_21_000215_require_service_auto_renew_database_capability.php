@@ -14,16 +14,90 @@ return new class extends Migration
             throw new RuntimeException('Service auto-renew database capability requires the operational capability foundation.');
         }
 
-        foreach ([
-            ['sarp_cap_insert_guard', 'plan_offering_auto_renew_policies', 'INSERT'],
-            ['sarp_cap_update_guard', 'plan_offering_auto_renew_policies', 'UPDATE'],
-            ['sarph_cap_insert_guard', 'plan_offering_auto_renew_policy_histories', 'INSERT'],
-            ['sarc_cap_insert_guard', 'service_auto_renew_configurations', 'INSERT'],
-            ['sarc_cap_update_guard', 'service_auto_renew_configurations', 'UPDATE'],
-            ['sarch_cap_insert_guard', 'service_auto_renew_configuration_histories', 'INSERT'],
-        ] as [$trigger, $table, $event]) {
-            $this->createCapabilityGuard($trigger, $table, $event);
-        }
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER IF NOT EXISTS `sarp_cap_insert_guard`
+BEFORE INSERT ON `plan_offering_auto_renew_policies`
+FOR EACH ROW
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM service_operational_authority_capability capability_row
+        WHERE capability_row.id = 1
+          AND BINARY capability_row.capability_hash = BINARY SHA2(COALESCE(@app_service_operational_capability, ''), 256)
+    ) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew database capability is invalid.';
+    END IF;
+END
+SQL);
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER IF NOT EXISTS `sarp_cap_update_guard`
+BEFORE UPDATE ON `plan_offering_auto_renew_policies`
+FOR EACH ROW
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM service_operational_authority_capability capability_row
+        WHERE capability_row.id = 1
+          AND BINARY capability_row.capability_hash = BINARY SHA2(COALESCE(@app_service_operational_capability, ''), 256)
+    ) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew database capability is invalid.';
+    END IF;
+END
+SQL);
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER IF NOT EXISTS `sarph_cap_insert_guard`
+BEFORE INSERT ON `plan_offering_auto_renew_policy_histories`
+FOR EACH ROW
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM service_operational_authority_capability capability_row
+        WHERE capability_row.id = 1
+          AND BINARY capability_row.capability_hash = BINARY SHA2(COALESCE(@app_service_operational_capability, ''), 256)
+    ) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew database capability is invalid.';
+    END IF;
+END
+SQL);
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER IF NOT EXISTS `sarc_cap_insert_guard`
+BEFORE INSERT ON `service_auto_renew_configurations`
+FOR EACH ROW
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM service_operational_authority_capability capability_row
+        WHERE capability_row.id = 1
+          AND BINARY capability_row.capability_hash = BINARY SHA2(COALESCE(@app_service_operational_capability, ''), 256)
+    ) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew database capability is invalid.';
+    END IF;
+END
+SQL);
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER IF NOT EXISTS `sarc_cap_update_guard`
+BEFORE UPDATE ON `service_auto_renew_configurations`
+FOR EACH ROW
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM service_operational_authority_capability capability_row
+        WHERE capability_row.id = 1
+          AND BINARY capability_row.capability_hash = BINARY SHA2(COALESCE(@app_service_operational_capability, ''), 256)
+    ) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew database capability is invalid.';
+    END IF;
+END
+SQL);
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER IF NOT EXISTS `sarch_cap_insert_guard`
+BEFORE INSERT ON `service_auto_renew_configuration_histories`
+FOR EACH ROW
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM service_operational_authority_capability capability_row
+        WHERE capability_row.id = 1
+          AND BINARY capability_row.capability_hash = BINARY SHA2(COALESCE(@app_service_operational_capability, ''), 256)
+    ) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew database capability is invalid.';
+    END IF;
+END
+SQL);
     }
 
     public function down(): void
@@ -40,28 +114,5 @@ return new class extends Migration
         DB::unprepared('DROP TRIGGER IF EXISTS `sarc_cap_insert_guard`');
         DB::unprepared('DROP TRIGGER IF EXISTS `sarc_cap_update_guard`');
         DB::unprepared('DROP TRIGGER IF EXISTS `sarch_cap_insert_guard`');
-    }
-
-    private function createCapabilityGuard(string $trigger, string $table, string $event): void
-    {
-        if (! in_array($event, ['INSERT', 'UPDATE'], true)) {
-            throw new RuntimeException('Service auto-renew capability guard event is invalid.');
-        }
-
-        DB::unprepared(<<<SQL
-CREATE TRIGGER IF NOT EXISTS `{$trigger}`
-BEFORE {$event} ON `{$table}`
-FOR EACH ROW
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1
-        FROM service_operational_authority_capability capability_row
-        WHERE capability_row.id = 1
-          AND BINARY capability_row.capability_hash = BINARY SHA2(COALESCE(@app_service_operational_capability, ''), 256)
-    ) THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew database capability is invalid.';
-    END IF;
-END
-SQL);
     }
 };
