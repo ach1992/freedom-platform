@@ -128,8 +128,16 @@ trait ServiceAutoRenewalBatchOperations
                     $this->countReceipt($receipt, $counters, true);
                 }
             } catch (Throwable $exception) {
-                report($exception);
-                $receipt = $this->recordCandidateFailure($configurationId, 'auto_renew_unexpected_failure');
+                $configurationDeferral = $exception instanceof DomainException
+                    && $exception->getMessage() === self::UNSAFE_RENEWAL_WINDOW_MESSAGE;
+                if (! $configurationDeferral) {
+                    report($exception);
+                }
+                $receipt = $this->recordCandidateFailure(
+                    $configurationId,
+                    $configurationDeferral ? 'renewal_window_unsafe' : 'auto_renew_unexpected_failure',
+                    ! $configurationDeferral,
+                );
                 if ($receipt !== null) {
                     $this->countReceipt($receipt, $counters, true);
                 } else {
