@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Provisioning\Application;
 
 use Illuminate\Database\Connection;
+use Throwable;
 
 /** @requirement SVC-007 DAT-003 SEC-002 */
 final class ServiceAutoRenewDatabaseAuthority
@@ -56,14 +57,20 @@ final class ServiceAutoRenewDatabaseAuthority
 
     public static function clear(Connection $connection): void
     {
-        $connection->statement(<<<'SQL'
+        try {
+            $connection->statement(<<<'SQL'
 SET @app_service_auto_renew_authority = NULL,
     @app_service_auto_renew_actor_id = NULL,
     @app_service_auto_renew_scope_id = NULL,
     @app_service_auto_renew_quote_id = NULL,
     @app_service_auto_renew_attempt_id = NULL,
-    @app_service_auto_renew_correlation_id = NULL
+    @app_service_auto_renew_correlation_id = NULL,
+    @app_service_operational_capability = NULL
 SQL);
+        } catch (Throwable $exception) {
+            self::disconnect($connection);
+            throw $exception;
+        }
     }
 
     private static function set(
@@ -75,8 +82,11 @@ SQL);
         ?int $attemptId,
         string $correlationId,
     ): void {
-        $connection->statement(
-            <<<'SQL'
+        (new ServiceOperationalDatabaseCapability)->apply($connection);
+
+        try {
+            $connection->statement(
+                <<<'SQL'
 SET @app_service_auto_renew_authority = ?,
     @app_service_auto_renew_actor_id = ?,
     @app_service_auto_renew_scope_id = ?,
@@ -84,7 +94,22 @@ SET @app_service_auto_renew_authority = ?,
     @app_service_auto_renew_attempt_id = ?,
     @app_service_auto_renew_correlation_id = ?
 SQL,
-            [$authority, $actorId, $scopeId, $quoteId, $attemptId, $correlationId],
-        );
+                [$authority, $actorId, $scopeId, $quoteId, $attemptId, $correlationId],
+            );
+        } catch (Throwable $exception) {
+            (new ServiceOperationalDatabaseCapability)->clear($connection);
+            throw $exception;
+        }
+    }
+
+    private static function disconnect(Connection $connection): void
+    {
+        try {
+            $connection->disconnect();
+        } catch (Throwable) {
+            $connection->setPdo(null);
+            $connection->setReadPdo(null);
+            $connection->setDirectPdo(null);
+        }
     }
 }
