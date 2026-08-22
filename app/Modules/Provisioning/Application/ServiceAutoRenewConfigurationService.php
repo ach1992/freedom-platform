@@ -436,14 +436,15 @@ final readonly class ServiceAutoRenewConfigurationService
     {
         $query = $connection->table('service_subscriptions as s')
             ->join('users as u', 'u.id', '=', 's.user_id')
-            ->join('plan_offerings as o', 'o.id', '=', 's.plan_offering_id')
+            ->join('order_items as oi', 'oi.id', '=', 's.order_item_id')
+            ->join('plan_offerings as o', 'o.id', '=', 'oi.plan_offering_id')
             ->where('s.public_id', $servicePublicId);
         if ($lock) {
             $query->lockForUpdate();
         }
         /** @var ServiceFacts|null $row */
         $row = $query->first([
-            's.id', 's.public_id', 's.user_id', 'u.account_type', 's.plan_offering_id', 's.service_target_id',
+            's.id', 's.public_id', 's.user_id', 'u.account_type', 'oi.plan_offering_id as plan_offering_id', 's.service_target_id',
             's.remote_service_id', 's.provisioned_at', 's.lifecycle_state', 's.lifecycle_version',
             's.remote_identity_generation', 's.remote_deleted_at', 'o.state as offering_state', 'o.auto_renew_allowed',
         ]);
