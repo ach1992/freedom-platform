@@ -41,7 +41,6 @@ trait ServiceAutoRenewalCommercialOperations
         $this->bindQuote($attemptId, $quote, $allowed ? 'fresh_quote_accepted_for_evaluation' : 'price_change_blocked');
         if (! $allowed) {
             $this->transition($attemptId, AutoRenewAttemptState::PriceChangeBlocked, 'price_change_blocked', true);
-            $this->notification($attemptId, AutoRenewNotificationOutcome::PriceChangeBlocked, 'price_change_blocked');
 
             return $this->receiptById($attemptId, false);
         }
@@ -54,7 +53,6 @@ trait ServiceAutoRenewalCommercialOperations
         if (! $this->walletIsEligible($decision)) {
             $this->bindEligibility($attemptId, $quote, $decision, 'wallet_not_eligible');
             $this->scheduleRetry($attemptId, AutoRenewAttemptState::RetryPending, 'wallet_not_eligible');
-            $this->notification($attemptId, AutoRenewNotificationOutcome::Failure, 'wallet_not_eligible');
 
             return $this->receiptById($attemptId, false);
         }
@@ -63,7 +61,6 @@ trait ServiceAutoRenewalCommercialOperations
         $walletAccountId = $this->walletAccountId((int) $facts->user_id);
         if ($walletAccountId === null) {
             $this->scheduleRetry($attemptId, AutoRenewAttemptState::InsufficientWallet, 'insufficient_wallet');
-            $this->notification($attemptId, AutoRenewNotificationOutcome::InsufficientWallet, 'insufficient_wallet');
 
             return $this->receiptById($attemptId, false);
         }
@@ -91,12 +88,10 @@ trait ServiceAutoRenewalCommercialOperations
                 $this->bindPaymentIntent($attemptId, (string) $existingIntent->public_id, 'wallet_reservation_replayed');
             } elseif ($exception->getMessage() === self::INSUFFICIENT_WALLET_MESSAGE) {
                 $this->scheduleRetry($attemptId, AutoRenewAttemptState::InsufficientWallet, 'insufficient_wallet');
-                $this->notification($attemptId, AutoRenewNotificationOutcome::InsufficientWallet, 'insufficient_wallet');
 
                 return $this->receiptById($attemptId, false);
             } else {
                 $this->scheduleRetry($attemptId, AutoRenewAttemptState::RetryPending, 'wallet_reservation_deferred');
-                $this->notification($attemptId, AutoRenewNotificationOutcome::Failure, 'wallet_reservation_deferred');
 
                 return $this->receiptById($attemptId, false);
             }
@@ -218,7 +213,6 @@ trait ServiceAutoRenewalCommercialOperations
                 if ($refreshedIntent === null || $refreshedIntent->state !== 'captured') {
                     report($releaseException);
                     $this->scheduleRetry($attemptId, AutoRenewAttemptState::RetryPending, 'reservation_release_deferred');
-                    $this->notification($attemptId, AutoRenewNotificationOutcome::Failure, 'reservation_release_deferred');
 
                     return $this->receiptById($attemptId, true);
                 }
@@ -246,7 +240,6 @@ trait ServiceAutoRenewalCommercialOperations
             } catch (Throwable $exception) {
                 report($exception);
                 $this->scheduleRetry($attemptId, AutoRenewAttemptState::RetryPending, 'reserved_attempt_recheck_deferred');
-                $this->notification($attemptId, AutoRenewNotificationOutcome::Failure, 'reserved_attempt_recheck_deferred');
 
                 return $this->receiptById($attemptId, true);
             }
@@ -376,7 +369,6 @@ trait ServiceAutoRenewalCommercialOperations
             if (! $captured) {
                 report($exception);
                 $this->scheduleRetry($attemptId, AutoRenewAttemptState::RetryPending, 'wallet_capture_deferred');
-                $this->notification($attemptId, AutoRenewNotificationOutcome::Failure, 'wallet_capture_deferred');
 
                 return $this->receiptById($attemptId, true);
             }
@@ -394,7 +386,6 @@ trait ServiceAutoRenewalCommercialOperations
             }
             if ($immediateRequoteCount >= 1) {
                 $this->scheduleRetry($attemptId, AutoRenewAttemptState::RetryPending, 'commercial_requote_deferred');
-                $this->notification($attemptId, AutoRenewNotificationOutcome::Failure, 'commercial_requote_deferred');
 
                 return $this->receiptById($attemptId, true);
             }
@@ -505,7 +496,6 @@ trait ServiceAutoRenewalCommercialOperations
         if ($provisioningState === ProvisioningState::Succeeded) {
             $this->updateObservationFromSuccessfulMutation($attemptId);
             $this->transition($attemptId, AutoRenewAttemptState::Succeeded, 'renewal_succeeded', true);
-            $this->notification($attemptId, AutoRenewNotificationOutcome::Success, 'renewal_succeeded');
 
             return $this->receiptById($attemptId, true);
         }
