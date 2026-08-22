@@ -18,4 +18,9 @@ final readonly class QuoteAgentPricingContext
             throw new InvalidArgumentException('Quote agent pricing actor user ID must be positive.');
         }
     }
+
+    public static function forRenewal(int $actorUserId): self
+    {
+        return new self($actorUserId, AgentPricingAction::Renew);
+    }
 }

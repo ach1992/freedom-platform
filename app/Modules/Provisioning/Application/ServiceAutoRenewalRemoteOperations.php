@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Modules\Provisioning\Application;
 
-use App\Modules\Agents\Domain\AgentPricingAction;
 use App\Modules\Orders\Application\QuoteAgentPricingContext;
 use App\Modules\Orders\Application\QuotePricingInput;
 use App\Modules\Orders\Application\QuoteReceipt;
@@ -139,7 +138,7 @@ trait ServiceAutoRenewalRemoteOperations
         int $ttlMinutes,
     ): QuoteReceipt {
         $agentContext = $facts->account_type === 'agent'
-            ? new QuoteAgentPricingContext((int) $facts->user_id, AgentPricingAction::Renew)
+            ? QuoteAgentPricingContext::forRenewal((int) $facts->user_id)
             : null;
         $quote = $this->quotes->create(
             $quoteKey,
