@@ -18,6 +18,17 @@ trait ServiceAutoRenewalBatchOperations
             throw new DomainException('Auto-renew batch limit must be between 1 and 500.');
         }
 
+        $connection = $this->database->connection();
+        ServiceAutoRenewDatabaseAuthority::beginRuntime($connection);
+        try {
+            return $this->processDueAuthorized($limit);
+        } finally {
+            ServiceAutoRenewDatabaseAuthority::endRuntime($connection);
+        }
+    }
+
+    private function processDueAuthorized(int $limit): ServiceAutoRenewBatchReceipt
+    {
         $counters = [
             'candidates' => 0,
             'attempted' => 0,
