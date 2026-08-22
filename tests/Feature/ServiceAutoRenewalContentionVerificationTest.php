@@ -101,6 +101,7 @@ namespace Tests\Feature {
     use App\Modules\Orders\Domain\QuoteOverrideSource;
     use App\Modules\Payments\Application\PurchaseWalletPaymentService;
     use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
+    use App\Modules\Provisioning\Application\ServiceAutoRenewalProcessor;
     use App\Modules\Provisioning\Application\ServiceAutoRenewDatabaseAuthority;
     use App\Modules\Provisioning\Domain\AutoRenewAttemptState;
     use Database\Seeders\CatalogAccessFoundationSeeder;
@@ -224,6 +225,46 @@ namespace Tests\Feature {
                     ->where('outcome', 'failure')
                     ->count(),
             );
+        }
+
+        public function test_reserved_attempt_revalidates_scheduler_window_before_capture(): void
+        {
+            if (DB::connection()->getDriverName() !== 'mysql') {
+                self::markTestSkipped('Reserved capture-window verification requires MariaDB/MySQL.');
+            }
+
+            $prepared = $this->prepareReservedAttempt('capture-window-race');
+            $ledgerCountBefore = DB::table('ledger_transactions')->count();
+            config()->set('auto_renew.window_hours', 720);
+
+            $result = $this->app->make(ServiceAutoRenewalProcessor::class)->processDue(10);
+
+            self::assertGreaterThanOrEqual(1, $result->failed);
+            $attempt = DB::table('service_auto_renew_attempts')
+                ->where('id', $prepared['attempt_id'])
+                ->first([
+                    'state', 'reason_code', 'retry_count', 'next_retry_at',
+                    'payment_intent_id', 'purchase_settlement_id', 'provisioning_operation_id',
+                ]);
+            self::assertNotNull($attempt);
+            self::assertSame(AutoRenewAttemptState::RetryPending->value, $attempt->state);
+            self::assertSame('renewal_window_unsafe', $attempt->reason_code);
+            self::assertSame(0, (int) $attempt->retry_count);
+            self::assertNotNull($attempt->next_retry_at);
+            self::assertNull($attempt->payment_intent_id);
+            self::assertNull($attempt->purchase_settlement_id);
+            self::assertNull($attempt->provisioning_operation_id);
+            self::assertSame('canceled', DB::table('payment_intents')->where('id', $prepared['intent_id'])->value('state'));
+            self::assertSame(
+                'released',
+                DB::table('purchase_wallet_reservations as reservation')
+                    ->join('wallet_holds as hold', 'hold.id', '=', 'reservation.wallet_hold_id')
+                    ->where('reservation.payment_intent_id', $prepared['intent_id'])
+                    ->value('hold.status'),
+            );
+            self::assertSame($ledgerCountBefore, DB::table('ledger_transactions')->count());
+            self::assertSame(0, DB::table('purchase_settlements')->where('provider_code', 'wallet')->count());
+            self::assertSame(0, DB::table('service_paid_mutation_authorities')->count());
         }
 
         /**
