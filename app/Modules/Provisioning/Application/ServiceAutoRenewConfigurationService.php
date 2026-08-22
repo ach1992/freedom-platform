@@ -362,14 +362,14 @@ final readonly class ServiceAutoRenewConfigurationService
         string $correlationId,
     ): QuoteReceipt {
         $ttlMinutes = $this->boundedConfigInt('auto_renew.quote_ttl_minutes', 15, 1, 120);
-        $issuedSecond = $this->clock->now()->getTimestamp();
-        $expiresAt = (new DateTimeImmutable('@'.$issuedSecond))->modify('+'.$ttlMinutes.' minutes +1 second');
+        $issuedAt = $this->clock->now();
+        $expiresAt = $issuedAt->modify('+'.$ttlMinutes.' minutes');
         $agentContext = $facts->account_type === 'agent'
             ? QuoteAgentPricingContext::forRenewal($actorUserId)
             : null;
 
         return $this->quotes->create(
-            'service.auto-renew.config.quote.'.substr($requestHash, 0, 64).'.'.$issuedSecond,
+            'service.auto-renew.config.quote.'.substr($requestHash, 0, 64).'.'.$issuedAt->format('U.u'),
             $actorUserId,
             (int) $facts->plan_offering_id,
             new QuotePricingInput(
