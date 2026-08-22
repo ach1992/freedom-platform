@@ -12,11 +12,13 @@ use App\Modules\Payments\Application\PurchaseWalletPaymentService;
 use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
 use App\Modules\Provisioning\Application\ServiceAutoRenewalProcessor;
 use App\Modules\Provisioning\Application\ServiceAutoRenewConfigurationService;
+use App\Modules\Provisioning\Application\ServiceAutoRenewDatabaseAuthority;
 use App\Modules\Provisioning\Application\ServiceMutationExecutor;
 use App\Modules\Provisioning\Domain\AutoRenewAttemptState;
 use App\Modules\Provisioning\Domain\ProvisioningState;
 use Database\Seeders\WalletFinancialFoundationSeeder;
 use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
@@ -63,6 +65,29 @@ trait ServiceAutoRenewalRuntimeScenariosB
                 ->count(),
             'Superseded unfinancialized cycles are audit retirement, not renewal failure notifications.',
         );
+
+        $connection = DB::connection();
+        ServiceAutoRenewDatabaseAuthority::beginRuntime($connection);
+        try {
+            try {
+                $connection->table('service_auto_renew_notification_intents')->insert([
+                    'public_id' => (string) Str::ulid(),
+                    'auto_renew_attempt_id' => $oldAttemptId,
+                    'outcome' => 'failure',
+                    'reason_code' => 'configuration_superseded',
+                    'created_at' => $this->purchaseOrderTimestamp(),
+                ]);
+                self::fail('Runtime capability must not forge a failure notification for supersession retirement.');
+            } catch (QueryException $exception) {
+                self::assertStringContainsString(
+                    'Auto-renew notification outcome does not match current attempt authority.',
+                    $exception->getMessage(),
+                );
+            }
+        } finally {
+            ServiceAutoRenewDatabaseAuthority::endRuntime($connection);
+        }
+
         self::assertSame(0, DB::table('purchase_settlements')->where('provider_code', 'wallet')->count());
         self::assertSame(0, DB::table('purchase_wallet_reservations')->count());
         self::assertSame(1, DB::table('service_auto_renew_attempts')->where('configuration_version', $secondConfiguration->configurationVersion)->count());
