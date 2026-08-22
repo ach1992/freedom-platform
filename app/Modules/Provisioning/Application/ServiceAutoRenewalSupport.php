@@ -191,6 +191,34 @@ trait ServiceAutoRenewalSupport
     }
 
     /** @return list<int> */
+    private function supersededCycleUnfinancializedAttemptIds(int $limit): array
+    {
+        return array_values($this->database->connection()->table('service_auto_renew_attempts as a')
+            ->join('service_auto_renew_configurations as c', 'c.id', '=', 'a.auto_renew_configuration_id')
+            ->whereIn('a.state', [
+                AutoRenewAttemptState::Pending->value,
+                AutoRenewAttemptState::RetryPending->value,
+                AutoRenewAttemptState::InsufficientWallet->value,
+            ])
+            ->whereNull('a.payment_intent_id')
+            ->whereNull('a.purchase_settlement_id')
+            ->whereNull('a.provisioning_operation_id')
+            ->whereColumn('a.configuration_version', 'c.configuration_version')
+            ->where('c.enabled', true)
+            ->where(function ($query): void {
+                $query->whereNull('c.observed_expires_at')
+                    ->orWhereNull('c.observed_remote_identity_generation')
+                    ->orWhereColumn('a.remote_identity_generation', '<>', 'c.observed_remote_identity_generation')
+                    ->orWhereColumn('a.observed_expires_at', '<>', 'c.observed_expires_at');
+            })
+            ->orderBy('a.updated_at')
+            ->limit($limit)
+            ->pluck('a.id')
+            ->map(static fn (mixed $id): int => (int) $id)
+            ->all());
+    }
+
+    /** @return list<int> */
     private function outstandingMutationAttemptIds(int $limit): array
     {
         return array_values($this->database->connection()->table('service_auto_renew_attempts')
