@@ -22,6 +22,8 @@ final readonly class ServiceAutoRenewalProcessor
 
     private const INSUFFICIENT_WALLET_MESSAGE = 'Wallet available balance is insufficient for this hold.';
 
+    private const UNSAFE_RENEWAL_WINDOW_MESSAGE = 'Auto-renew renewal package duration must exceed the scheduler window.';
+
     public function __construct(
         private DatabaseManager $database,
         private Clock $clock,
