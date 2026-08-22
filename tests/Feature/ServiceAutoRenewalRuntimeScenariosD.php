@@ -75,6 +75,8 @@ trait ServiceAutoRenewalRuntimeScenariosD
         $reservationCount = DB::table('purchase_wallet_reservations')->count();
         $holdCount = DB::table('wallet_holds')->count();
         $ledgerCount = DB::table('ledger_transactions')->count();
+        $walletSettlementCount = DB::table('purchase_settlements')->where('provider_code', 'wallet')->count();
+        $mutationAuthorityCount = DB::table('service_paid_mutation_authorities')->count();
 
         DB::unprepared('DROP TRIGGER IF EXISTS auto_renew_test_fail_intent_bind');
         DB::unprepared(<<<'SQL'
@@ -108,9 +110,44 @@ SQL);
             self::assertSame($reservationCount, DB::table('purchase_wallet_reservations')->count());
             self::assertSame($holdCount, DB::table('wallet_holds')->count());
             self::assertSame($ledgerCount, DB::table('ledger_transactions')->count());
-            self::assertSame(0, DB::table('purchase_settlements')->where('provider_code', 'wallet')->count());
+            self::assertSame($walletSettlementCount, DB::table('purchase_settlements')->where('provider_code', 'wallet')->count());
+            self::assertSame($mutationAuthorityCount, DB::table('service_paid_mutation_authorities')->count());
         } finally {
             DB::unprepared('DROP TRIGGER IF EXISTS auto_renew_test_fail_intent_bind');
         }
+
+        // Once the injected failure is gone and the bounded retry becomes due, the same cycle must
+        // recover from its rolled-back pre-financial state and create exactly one financial/mutation
+        // authority chain rather than becoming stuck or duplicating the prior failed reservation.
+        $this->purchaseOrderClock->value = $this->purchaseOrderClock->value->modify('+16 minutes');
+        DB::statement('SET timestamp = '.$this->purchaseOrderClock->value->getTimestamp());
+        $recovered = $this->app->make(ServiceAutoRenewalProcessor::class)->processDue(10);
+
+        self::assertGreaterThanOrEqual(1, $recovered->queued);
+        $attempt = DB::table('service_auto_renew_attempts')->first([
+            'state', 'payment_intent_id', 'purchase_settlement_id', 'provisioning_operation_id',
+        ]);
+        self::assertNotNull($attempt);
+        self::assertSame('mutation_queued', $attempt->state);
+        self::assertNotNull($attempt->payment_intent_id);
+        self::assertNotNull($attempt->purchase_settlement_id);
+        self::assertNotNull($attempt->provisioning_operation_id);
+        self::assertSame($paymentIntentCount + 1, DB::table('payment_intents')->count());
+        self::assertSame($reservationCount + 1, DB::table('purchase_wallet_reservations')->count());
+        self::assertSame($holdCount + 1, DB::table('wallet_holds')->count());
+        self::assertSame($ledgerCount + 1, DB::table('ledger_transactions')->count());
+        self::assertSame($walletSettlementCount + 1, DB::table('purchase_settlements')->where('provider_code', 'wallet')->count());
+        self::assertSame($mutationAuthorityCount + 1, DB::table('service_paid_mutation_authorities')->count());
+        self::assertSame(
+            'captured',
+            DB::table('payment_intents')->where('id', (int) $attempt->payment_intent_id)->value('state'),
+        );
+        self::assertSame(
+            'captured',
+            DB::table('purchase_wallet_reservations as reservation')
+                ->join('wallet_holds as hold', 'hold.id', '=', 'reservation.wallet_hold_id')
+                ->where('reservation.payment_intent_id', (int) $attempt->payment_intent_id)
+                ->value('hold.status'),
+        );
     }
 }
