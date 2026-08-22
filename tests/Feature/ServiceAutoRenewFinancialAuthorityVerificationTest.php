@@ -10,6 +10,7 @@ require_once __DIR__.'/PurchaseOrderTestSupport.php';
 require_once __DIR__.'/ServiceAutoRenewalRuntimeTestSupport.php';
 require_once __DIR__.'/ServiceAutoRenewalRuntimeTestHelpers.php';
 
+use App\Modules\Provisioning\Application\ServiceAutoRenewDatabaseAuthority;
 use App\Modules\Provisioning\Application\ServiceAutoRenewPolicyService;
 use App\Modules\Provisioning\Domain\AutoRenewPriceChangeMode;
 use Database\Seeders\CatalogAccessFoundationSeeder;
@@ -43,6 +44,19 @@ final class ServiceAutoRenewFinancialAuthorityVerificationTest extends TestCase
         config()->set('auto_renew.max_retry_count', 5);
         config()->set('auto_renew.retry_initial_delay_minutes', 15);
         config()->set('auto_renew.retry_max_delay_minutes', 240);
+
+        ServiceAutoRenewDatabaseAuthority::beginRuntime(DB::connection());
+    }
+
+    protected function tearDown(): void
+    {
+        try {
+            if (isset($this->app)) {
+                ServiceAutoRenewDatabaseAuthority::endRuntime(DB::connection());
+            }
+        } finally {
+            parent::tearDown();
+        }
     }
 
     public function test_direct_policy_write_is_rejected_after_legitimate_policy_configuration(): void
