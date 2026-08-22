@@ -156,8 +156,9 @@ BEGIN
     IF NEW.enabled = 1 AND NOT EXISTS (
         SELECT 1
         FROM service_subscriptions s
-        JOIN plan_offerings o ON o.id = s.plan_offering_id
-        JOIN plan_offering_packages p ON p.id = NEW.renewal_package_id AND p.plan_offering_id = s.plan_offering_id
+        JOIN order_items oi ON oi.id = s.order_item_id
+        JOIN plan_offerings o ON o.id = oi.plan_offering_id
+        JOIN plan_offering_packages p ON p.id = NEW.renewal_package_id AND p.plan_offering_id = oi.plan_offering_id
         WHERE s.id = NEW.service_subscription_id
           AND s.lifecycle_state IN ('active', 'suspended')
           AND s.remote_deleted_at IS NULL
@@ -328,8 +329,9 @@ BEGIN
     IF NEW.enabled = 1 AND NOT EXISTS (
         SELECT 1
         FROM service_subscriptions s
-        JOIN plan_offerings o ON o.id = s.plan_offering_id
-        JOIN plan_offering_packages p ON p.id = NEW.renewal_package_id AND p.plan_offering_id = s.plan_offering_id
+        JOIN order_items oi ON oi.id = s.order_item_id
+        JOIN plan_offerings o ON o.id = oi.plan_offering_id
+        JOIN plan_offering_packages p ON p.id = NEW.renewal_package_id AND p.plan_offering_id = oi.plan_offering_id
         WHERE s.id = NEW.service_subscription_id
           AND s.lifecycle_state IN ('active', 'suspended')
           AND s.remote_deleted_at IS NULL
