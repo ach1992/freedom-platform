@@ -120,7 +120,11 @@ trait ServiceAutoRenewalRuntimeScenariosB
         self::assertNotNull($attempt->purchase_settlement_id);
         self::assertNotNull($attempt->provisioning_operation_id);
         self::assertSame(1, DB::table('purchase_settlements')->where('provider_code', 'wallet')->count());
-        self::assertSame(1, DB::table('service_auto_renew_notification_intents')->where('outcome', 'failure')->count());
+        self::assertSame(
+            0,
+            DB::table('service_auto_renew_notification_intents')->where('outcome', 'failure')->count(),
+            'Provider uncertainty requires operational attention but is not a definitive renewal failure.',
+        );
     }
 
     public function test_definitive_downstream_mutation_failure_preserves_captured_settlement_and_terminalizes_attempt(): void
