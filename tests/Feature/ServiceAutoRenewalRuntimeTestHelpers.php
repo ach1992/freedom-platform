@@ -47,6 +47,36 @@ trait ServiceAutoRenewalRuntimeTestHelpers
         return $receipt;
     }
 
+    private function recordAutoRenewCycleClaimedEvent(int $attemptId): void
+    {
+        $attempt = DB::table('service_auto_renew_attempts')->where('id', $attemptId)->first([
+            'state', 'quote_id', 'payment_intent_id', 'purchase_settlement_id',
+            'provisioning_operation_id', 'correlation_id',
+        ]);
+        self::assertNotNull($attempt);
+        self::assertSame('pending', $attempt->state);
+        self::assertSame(
+            0,
+            DB::table('service_auto_renew_attempt_events')
+                ->where('auto_renew_attempt_id', $attemptId)
+                ->count(),
+        );
+
+        DB::table('service_auto_renew_attempt_events')->insert([
+            'auto_renew_attempt_id' => $attemptId,
+            'sequence' => 1,
+            'from_state' => null,
+            'to_state' => 'pending',
+            'reason_code' => 'cycle_claimed',
+            'quote_id' => $attempt->quote_id,
+            'payment_intent_id' => $attempt->payment_intent_id,
+            'purchase_settlement_id' => $attempt->purchase_settlement_id,
+            'provisioning_operation_id' => $attempt->provisioning_operation_id,
+            'correlation_id' => (string) $attempt->correlation_id,
+            'created_at' => $this->purchaseOrderTimestamp(),
+        ]);
+    }
+
     private function enableWalletMethod(string $suffix): void
     {
         $administratorId = $this->ownerAdministrator();
