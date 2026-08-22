@@ -373,15 +373,8 @@ BEGIN
               OR (NEW.outcome = 'insufficient_wallet'
                   AND a.state = 'insufficient_wallet')
               OR (NEW.outcome = 'failure'
-                  AND (
-                      (a.state = 'failed'
-                          AND a.reason_code NOT IN ('configuration_superseded', 'cycle_superseded'))
-                      OR (
-                          a.state = 'mutation_queued'
-                          AND a.reason_code = 'mutation_reconciliation_required'
-                          AND op.state IN ('uncertain_remote_result', 'needs_review')
-                      )
-                  ))
+                  AND a.state = 'failed'
+                  AND a.reason_code NOT IN ('configuration_superseded', 'cycle_superseded'))
           )
     ) THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew notification outcome does not match current attempt authority.';
