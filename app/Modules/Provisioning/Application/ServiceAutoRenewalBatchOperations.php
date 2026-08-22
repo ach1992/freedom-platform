@@ -49,6 +49,16 @@ trait ServiceAutoRenewalBatchOperations
                 $counters['failed']++;
             }
         }
+        foreach ($this->supersededCycleUnfinancializedAttemptIds($limit) as $attemptId) {
+            try {
+                $receipt = $this->finishFailure($attemptId, 'cycle_superseded');
+                $this->countReceipt($receipt, $counters, false);
+            } catch (Throwable $exception) {
+                report($exception);
+                $this->safeRecordAttemptEvent($attemptId, 'cycle_supersession_deferred');
+                $counters['failed']++;
+            }
+        }
 
         foreach ($this->outstandingMutationAttemptIds($limit) as $attemptId) {
             try {
@@ -229,11 +239,15 @@ trait ServiceAutoRenewalBatchOperations
         }
 
         $facts = $this->configurationFacts($configurationId);
+        if ($existing !== null && ! $this->attemptMatchesConfigurationFacts($existing, $facts)) {
+            $this->finishFailure((int) $existing->id, 'cycle_superseded');
+            $existing = null;
+        }
         if ($facts->observed_expires_at === null || $this->storedDateTime($facts->observed_expires_at) > $dueUntil) {
             return null;
         }
 
-        $attempt = $this->ensureAttempt($facts);
+        $attempt = $existing ?? $this->ensureAttempt($facts);
         $state = AutoRenewAttemptState::from((string) $attempt->state);
         if ($state->isTerminal()) {
             return $this->receipt($attempt, true);
