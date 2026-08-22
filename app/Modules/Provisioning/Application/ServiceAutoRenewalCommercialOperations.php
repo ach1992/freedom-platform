@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Modules\Provisioning\Application;
 
 use App\Modules\Orders\Application\PurchaseOrderReceipt;
+use App\Modules\Orders\Application\QuoteReceipt;
+use App\Modules\Payments\Eligibility\Application\PaymentEligibilityDecisionReceipt;
 use App\Modules\Provisioning\Domain\AutoRenewAttemptState;
 use App\Modules\Provisioning\Domain\AutoRenewNotificationOutcome;
 use App\Modules\Provisioning\Domain\ProvisioningState;
@@ -69,16 +71,22 @@ trait ServiceAutoRenewalCommercialOperations
         $attempt = $this->attempt($attemptId);
         $creationKey = $this->paymentIntentCreationKey((string) $attempt->cycle_key, $attemptId);
         try {
-            $intent = $this->walletPayments->reserve(
-                $creationKey,
-                (int) $facts->user_id,
+            $this->reserveAndBindWalletIntent(
+                $attemptId,
+                $facts,
                 $walletAccountId,
-                $quote->quotePublicId,
-                $decision->publicId,
-                (string) $attempt->correlation_id,
+                $quote,
+                $decision,
+                $creationKey,
             );
-            $this->bindPaymentIntent($attemptId, $intent->intentPublicId, 'wallet_reserved');
         } catch (DomainException $exception) {
+            if ($exception->getMessage() === 'Auto-renew commercial authority changed before wallet reservation.') {
+                $this->scheduleRetry($attemptId, AutoRenewAttemptState::RetryPending, 'commercial_authority_changed_before_reservation');
+                $this->notification($attemptId, AutoRenewNotificationOutcome::Failure, 'commercial_authority_changed_before_reservation');
+
+                return $this->receiptById($attemptId, true);
+            }
+
             $existingIntent = $this->paymentIntentByCreationKey($creationKey);
             if ($existingIntent !== null) {
                 $this->bindPaymentIntent($attemptId, (string) $existingIntent->public_id, 'wallet_reservation_replayed');
@@ -96,6 +104,68 @@ trait ServiceAutoRenewalCommercialOperations
         }
 
         return $this->captureAndQueue($attemptId, $immediateRequoteCount);
+    }
+
+    /** @param ServiceAutoRenewConfigurationFacts $facts */
+    private function reserveAndBindWalletIntent(
+        int $attemptId,
+        object $facts,
+        int $walletAccountId,
+        QuoteReceipt $quote,
+        PaymentEligibilityDecisionReceipt $decision,
+        string $creationKey,
+    ): void {
+        $this->database->connection()->transaction(function (Connection $connection) use (
+            $attemptId,
+            $facts,
+            $walletAccountId,
+            $quote,
+            $decision,
+            $creationKey,
+        ): void {
+            $attempt = $this->attemptOn($connection, $attemptId, true);
+            $state = AutoRenewAttemptState::from((string) $attempt->state);
+            if ($state->isTerminal()
+                || in_array($state, [AutoRenewAttemptState::Settled, AutoRenewAttemptState::MutationQueued], true)
+                || $attempt->purchase_settlement_id !== null
+                || $attempt->provisioning_operation_id !== null) {
+                throw new DomainException('Auto-renew commercial authority changed before wallet reservation.');
+            }
+            if ($attempt->payment_intent_id !== null) {
+                /** @var object{creation_key:string}|null $boundIntent */
+                $boundIntent = $connection->table('payment_intents')
+                    ->where('id', (int) $attempt->payment_intent_id)
+                    ->first(['creation_key']);
+                if ($boundIntent === null || ! hash_equals((string) $boundIntent->creation_key, $creationKey)) {
+                    throw new RuntimeException('Auto-renew attempt is bound to unexpected wallet authority.');
+                }
+
+                return;
+            }
+
+            $generation = (int) $attempt->commercial_generation;
+            $expectedCreationKey = 'service.auto-renew.intent.'.(string) $attempt->cycle_key
+                .($generation === 0 ? '' : '.r'.$generation);
+            if (! hash_equals($expectedCreationKey, $creationKey)
+                || (int) $attempt->quote_id !== $quote->quoteId
+                || (int) $attempt->payment_eligibility_decision_id !== $decision->decisionId
+                || (int) $attempt->current_price_irr !== $quote->finalPriceIrr) {
+                throw new DomainException('Auto-renew commercial authority changed before wallet reservation.');
+            }
+
+            // Keep wallet reserve and attempt binding in one outer transaction while holding the
+            // attempt row lock. A crash or competing supersession can therefore produce either no
+            // reservation or a durably bound reservation, never an orphaned wallet hold.
+            $intent = $this->walletPayments->reserve(
+                $creationKey,
+                (int) $facts->user_id,
+                $walletAccountId,
+                $quote->quotePublicId,
+                $decision->publicId,
+                (string) $attempt->correlation_id,
+            );
+            $this->bindPaymentIntent($attemptId, $intent->intentPublicId, 'wallet_reserved');
+        }, 3);
     }
 
     /** @param ServiceAutoRenewConfigurationFacts $facts */
