@@ -242,6 +242,7 @@ return new class extends Migration
         DB::unprepared('DROP TRIGGER IF EXISTS sarch_delete_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS sarae_update_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS sarae_delete_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS sarni_insert_authority_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS sarni_update_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS sarni_delete_guard');
     }
