@@ -81,10 +81,29 @@ trait ServiceAutoRenewalCommercialOperations
             );
         } catch (DomainException $exception) {
             if ($exception->getMessage() === 'Auto-renew commercial authority changed before wallet reservation.') {
-                $this->scheduleRetry($attemptId, AutoRenewAttemptState::RetryPending, 'commercial_authority_changed_before_reservation');
-                $this->notification($attemptId, AutoRenewNotificationOutcome::Failure, 'commercial_authority_changed_before_reservation');
+                // Another scheduler may have advanced or reset this attempt while this worker was
+                // preparing its commercial snapshot. Do not manufacture a retry/failure signal for
+                // concurrent progress; continue from the durable authority that actually won.
+                $refreshed = $this->attempt($attemptId);
+                $state = AutoRenewAttemptState::from((string) $refreshed->state);
+                if ($state->isTerminal()) {
+                    return $this->receipt($refreshed, true);
+                }
+                if ($refreshed->provisioning_operation_id !== null || $state === AutoRenewAttemptState::MutationQueued) {
+                    return $this->reconcileAttempt($attemptId);
+                }
+                if ($refreshed->purchase_settlement_id !== null || $state === AutoRenewAttemptState::Settled) {
+                    return $this->queueCapturedAttempt($attemptId);
+                }
+                if ($refreshed->payment_intent_id !== null) {
+                    return $this->resumeReservedAttempt(
+                        $attemptId,
+                        $facts,
+                        $this->clock->now()->modify('+'.$this->windowHours().' hours'),
+                    );
+                }
 
-                return $this->receiptById($attemptId, true);
+                return $this->receipt($refreshed, true);
             }
 
             $existingIntent = $this->paymentIntentByCreationKey($creationKey);
