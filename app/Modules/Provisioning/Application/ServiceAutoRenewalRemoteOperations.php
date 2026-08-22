@@ -96,13 +96,13 @@ trait ServiceAutoRenewalRemoteOperations
     private function freshQuote(object $attempt, object $facts): QuoteReceipt
     {
         $ttlMinutes = $this->boundedConfigInt('auto_renew.quote_ttl_minutes', 15, 1, 120);
-        $bucket = intdiv($this->clock->now()->getTimestamp(), $ttlMinutes * 60);
+        $request = $this->renewalQuoteRequest($ttlMinutes);
         $keySuffix = $this->commercialAuthorityKeySuffix((int) $attempt->id);
         $quote = $this->createRenewalQuote(
-            'service.auto-renew.quote.'.(string) $attempt->public_id.$keySuffix.'.'.$bucket,
+            'service.auto-renew.quote.'.(string) $attempt->public_id.$keySuffix.'.'.(int) $attempt->retry_count.'.'.$request['key_token'],
             $attempt,
             $facts,
-            $ttlMinutes,
+            $request['expires_at'],
         );
         if (! $this->renewalQuoteWindowIsSafe($quote)) {
             throw new DomainException(self::UNSAFE_RENEWAL_WINDOW_MESSAGE);
@@ -118,13 +118,27 @@ trait ServiceAutoRenewalRemoteOperations
     private function captureValidationQuote(object $attempt, object $facts, string $paymentIntentPublicId): QuoteReceipt
     {
         $ttlMinutes = $this->boundedConfigInt('auto_renew.quote_ttl_minutes', 15, 1, 120);
+        $request = $this->renewalQuoteRequest($ttlMinutes);
 
         return $this->createRenewalQuote(
-            'service.auto-renew.capture-check.'.$paymentIntentPublicId.'.'.(int) $attempt->retry_count,
+            'service.auto-renew.capture-check.'.$paymentIntentPublicId.'.'.(int) $attempt->retry_count.'.'.$request['key_token'],
             $attempt,
             $facts,
-            $ttlMinutes,
+            $request['expires_at'],
         );
+    }
+
+    /** @return array{key_token:string,expires_at:DateTimeImmutable} */
+    private function renewalQuoteRequest(int $ttlMinutes): array
+    {
+        $issuedSecond = $this->clock->now()->getTimestamp();
+
+        return [
+            'key_token' => (string) $issuedSecond,
+            // Derive expiry from the same token used by the idempotency key. Concurrent calls in
+            // one second therefore replay an identical request, while later retries always re-quote.
+            'expires_at' => (new DateTimeImmutable('@'.$issuedSecond))->modify('+'.$ttlMinutes.' minutes +1 second'),
+        ];
     }
 
     /**
@@ -135,7 +149,7 @@ trait ServiceAutoRenewalRemoteOperations
         string $quoteKey,
         object $attempt,
         object $facts,
-        int $ttlMinutes,
+        DateTimeImmutable $expiresAt,
     ): QuoteReceipt {
         $agentContext = $facts->account_type === 'agent'
             ? QuoteAgentPricingContext::forRenewal((int) $facts->user_id)
@@ -150,7 +164,7 @@ trait ServiceAutoRenewalRemoteOperations
                 null,
                 null,
                 0,
-                $this->clock->now()->modify('+'.$ttlMinutes.' minutes'),
+                $expiresAt,
             ),
             (string) $attempt->correlation_id,
             $agentContext,
