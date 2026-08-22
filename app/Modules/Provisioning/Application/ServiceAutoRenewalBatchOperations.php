@@ -192,7 +192,7 @@ trait ServiceAutoRenewalBatchOperations
                 throw new DomainException('Auto-renew configuration has stale or incomplete cycle evidence.');
             }
             $attempt = $existing ?? $this->ensureAttempt($facts);
-            $this->scheduleRetry((int) $attempt->id, AutoRenewAttemptState::RetryPending, 'renewal_window_unsafe');
+            $this->scheduleConfigurationRetry((int) $attempt->id, 'renewal_window_unsafe');
 
             return $this->receiptById((int) $attempt->id, $existing !== null);
         }
