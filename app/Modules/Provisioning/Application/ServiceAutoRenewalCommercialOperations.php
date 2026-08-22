@@ -255,6 +255,7 @@ trait ServiceAutoRenewalCommercialOperations
                         (string) $lockedIntent->public_id,
                     );
                     $policy = $this->pricePolicyForOfferingOn($connection, (int) $facts->plan_offering_id, true);
+                    $renewalWindowSafe = $this->renewalQuoteWindowIsSafe($validationQuote);
                     $commercialSnapshotCurrent = $lockedAttempt->current_price_irr !== null
                         && hash_equals(
                             strtolower((string) $lockedIntent->quote_configuration_snapshot_hash),
@@ -269,7 +270,7 @@ trait ServiceAutoRenewalCommercialOperations
                             $policy['absolute'],
                             $policy['percentage'],
                         );
-                    if (! $commercialSnapshotCurrent || ! $policyAllows) {
+                    if (! $renewalWindowSafe || ! $commercialSnapshotCurrent || ! $policyAllows) {
                         $this->walletPayments->cancel(
                             (string) $lockedIntent->public_id,
                             (string) $lockedAttempt->correlation_id,
