@@ -191,8 +191,9 @@ trait ServiceAutoRenewalStateOperations
                 'completed_at' => $this->timestamp(),
                 'updated_at' => $this->timestamp(),
             ]);
+            // Supersession retirement is terminal audit state, not a user-facing renewal failure.
+            // The caller treats it as routine cleanup unless the retirement write itself fails.
             $this->event($connection, $attemptId, $current->value, AutoRenewAttemptState::Failed, $reasonCode);
-            $this->notificationOn($connection, $attemptId, AutoRenewNotificationOutcome::Failure, $reasonCode);
 
             return true;
         }, 3);
