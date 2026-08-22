@@ -85,20 +85,19 @@ trait ServiceAutoRenewalRuntimeScenariosA
     {
         $this->enableWalletMethod('scheduler-fairness');
         $this->seed(WalletFinancialFoundationSeeder::class);
-        $processor = $this->app->make(ServiceAutoRenewalProcessor::class);
 
         $blocked = $this->scenario('scheduler-fairness-blocked');
         $this->fundWallet($blocked['user_id'], 1_000_000, 'scheduler-fairness-blocked');
         $pricingAuthority = $this->enableScenarioAgentRenewPricing($blocked, 500_000, 'scheduler-fairness-blocked');
         $this->enableAutoRenew($blocked, 'scheduler-fairness-blocked');
         $this->reviseScenarioAgentRenewPricing($blocked, $pricingAuthority, 600_000, 'scheduler-fairness-blocked-raised');
-        $blockedResult = $processor->processDue(10);
+        $blockedResult = $this->app->make(ServiceAutoRenewalProcessor::class)->processDue(10);
         self::assertSame(1, $blockedResult->blocked);
 
         $delayed = $this->scenario('scheduler-fairness-delayed');
         $this->fundWallet($delayed['user_id'], 1, 'scheduler-fairness-delayed');
         $this->enableAutoRenew($delayed, 'scheduler-fairness-delayed');
-        $delayedResult = $processor->processDue(10);
+        $delayedResult = $this->app->make(ServiceAutoRenewalProcessor::class)->processDue(10);
         self::assertSame(1, $delayedResult->insufficientWallet);
         $delayedAttempt = DB::table('service_auto_renew_attempts')
             ->where('service_subscription_id', $delayed['service_id'])
@@ -112,7 +111,7 @@ trait ServiceAutoRenewalRuntimeScenariosA
         $this->fundWallet($actionable['user_id'], 600_000, 'scheduler-fairness-actionable');
         $this->enableAutoRenew($actionable, 'scheduler-fairness-actionable');
 
-        $result = $processor->processDue(1);
+        $result = $this->app->make(ServiceAutoRenewalProcessor::class)->processDue(1);
 
         self::assertSame(1, $result->candidates);
         self::assertSame(1, $result->attempted);
