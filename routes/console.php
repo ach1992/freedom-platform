@@ -47,5 +47,8 @@ Schedule::command('services:auto-renew', [
 ])
     ->name('services.auto-renew')
     ->everyFiveMinutes()
-    ->withoutOverlapping()
+    // Laravel's default overlap lock lasts 24 hours. Bound this critical scheduler so an abnormal
+    // process death cannot suppress renewal processing for an entire day, while still leaving
+    // ample headroom for the bounded 50-Service batch to finish normally.
+    ->withoutOverlapping(30)
     ->onOneServer();
