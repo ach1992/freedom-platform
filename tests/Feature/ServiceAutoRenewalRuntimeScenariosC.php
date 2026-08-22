@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Modules\Agents\Domain\AgentPricingAction;
+use App\Modules\Orders\Application\QuoteAgentPricingContext;
 use App\Modules\Orders\Application\QuotePricingInput;
 use App\Modules\Orders\Application\QuoteService;
 use App\Modules\Orders\Application\ServicePackageQuoteContext;
@@ -354,9 +356,9 @@ trait ServiceAutoRenewalRuntimeScenariosC
                 $this->purchaseOrderClock->value->modify('+15 minutes'),
             ),
             $this->purchaseOrderCorrelation('auto-renew-reserved-price-change-quote'),
-            new \App\Modules\Orders\Application\QuoteAgentPricingContext(
+            new QuoteAgentPricingContext(
                 $scenario['user_id'],
-                \App\Modules\Agents\Domain\AgentPricingAction::Renew,
+                AgentPricingAction::Renew,
             ),
             new ServicePackageQuoteContext($scenario['service_public_id'], 'aq-renew-30d'),
         );
