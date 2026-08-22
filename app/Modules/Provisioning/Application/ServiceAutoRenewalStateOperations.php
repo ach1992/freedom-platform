@@ -33,6 +33,15 @@ trait ServiceAutoRenewalStateOperations
                 'updated_at' => $this->timestamp(),
             ]);
             $this->event($connection, $attemptId, $current->value, $next, $reasonCode);
+            $terminalOutcome = match ($next) {
+                AutoRenewAttemptState::PriceChangeBlocked => AutoRenewNotificationOutcome::PriceChangeBlocked,
+                AutoRenewAttemptState::Succeeded => AutoRenewNotificationOutcome::Success,
+                AutoRenewAttemptState::Failed => AutoRenewNotificationOutcome::Failure,
+                default => null,
+            };
+            if ($terminalOutcome !== null) {
+                $this->notificationOn($connection, $attemptId, $terminalOutcome, $reasonCode);
+            }
         }, 3);
     }
 
@@ -66,6 +75,12 @@ trait ServiceAutoRenewalStateOperations
                     'updated_at' => $this->timestamp(),
                 ]);
                 $this->event($connection, $attemptId, $current->value, AutoRenewAttemptState::Failed, 'retry_exhausted');
+                $this->notificationOn(
+                    $connection,
+                    $attemptId,
+                    AutoRenewNotificationOutcome::Failure,
+                    'retry_exhausted',
+                );
 
                 return;
             }
@@ -79,6 +94,14 @@ trait ServiceAutoRenewalStateOperations
                 'updated_at' => $this->timestamp(),
             ]);
             $this->event($connection, $attemptId, $current->value, $retryState, $reasonCode);
+            $this->notificationOn(
+                $connection,
+                $attemptId,
+                $retryState === AutoRenewAttemptState::InsufficientWallet
+                    ? AutoRenewNotificationOutcome::InsufficientWallet
+                    : AutoRenewNotificationOutcome::Failure,
+                $reasonCode,
+            );
         }, 3);
 
         $attempt = $this->attempt($attemptId);
@@ -144,7 +167,16 @@ trait ServiceAutoRenewalStateOperations
         AutoRenewNotificationOutcome $outcome,
         string $reasonCode,
     ): void {
-        $this->database->connection()->table('service_auto_renew_notification_intents')->insertOrIgnore([
+        $this->notificationOn($this->database->connection(), $attemptId, $outcome, $reasonCode);
+    }
+
+    private function notificationOn(
+        Connection $connection,
+        int $attemptId,
+        AutoRenewNotificationOutcome $outcome,
+        string $reasonCode,
+    ): void {
+        $connection->table('service_auto_renew_notification_intents')->insertOrIgnore([
             'public_id' => (string) Str::ulid(),
             'auto_renew_attempt_id' => $attemptId,
             'outcome' => $outcome->value,
