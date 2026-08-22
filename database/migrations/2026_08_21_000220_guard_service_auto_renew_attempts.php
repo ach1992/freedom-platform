@@ -47,6 +47,7 @@ return new class extends Migration
         DB::unprepared('DROP TRIGGER IF EXISTS sarch_delete_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS sarae_update_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS sarae_delete_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS sarni_insert_authority_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS sarni_update_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS sarni_delete_guard');
     }
@@ -196,6 +197,46 @@ BEGIN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew mutation does not match the captured renewal authority.';
     END IF;
 
+    IF NEW.state = 'succeeded'
+       AND (
+           NEW.reason_code <> 'renewal_succeeded'
+           OR NEW.provisioning_operation_id IS NULL
+           OR NOT EXISTS (
+               SELECT 1
+               FROM provisioning_operations op
+               WHERE op.id = NEW.provisioning_operation_id
+                 AND op.state = 'succeeded'
+           )
+       ) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew success requires succeeded provisioning operation authority.';
+    END IF;
+    IF NEW.state = 'failed'
+       AND NEW.reason_code = 'renewal_mutation_failed'
+       AND (
+           NEW.provisioning_operation_id IS NULL
+           OR NOT EXISTS (
+               SELECT 1
+               FROM provisioning_operations op
+               WHERE op.id = NEW.provisioning_operation_id
+                 AND op.state IN ('failed_final', 'compensated')
+           )
+       ) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew mutation failure requires terminal provisioning operation authority.';
+    END IF;
+    IF NEW.state = 'mutation_queued'
+       AND NEW.reason_code = 'mutation_reconciliation_required'
+       AND (
+           NEW.provisioning_operation_id IS NULL
+           OR NOT EXISTS (
+               SELECT 1
+               FROM provisioning_operations op
+               WHERE op.id = NEW.provisioning_operation_id
+                 AND op.state IN ('uncertain_remote_result', 'needs_review')
+           )
+       ) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew reconciliation reason requires uncertain provisioning operation authority.';
+    END IF;
+
     IF OLD.state IN ('price_change_blocked', 'succeeded', 'failed')
        AND (NEW.state <> OLD.state
             OR NOT (OLD.reason_code <=> NEW.reason_code)
@@ -264,6 +305,41 @@ SQL);
         DB::unprepared(<<<'SQL'
 CREATE TRIGGER IF NOT EXISTS sarae_delete_guard BEFORE DELETE ON service_auto_renew_attempt_events
 FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew attempt events are append-only.'; END
+SQL);
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER IF NOT EXISTS sarni_insert_authority_guard
+BEFORE INSERT ON service_auto_renew_notification_intents
+FOR EACH ROW
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM service_auto_renew_attempts a
+        LEFT JOIN provisioning_operations op ON op.id = a.provisioning_operation_id
+        WHERE a.id = NEW.auto_renew_attempt_id
+          AND BINARY COALESCE(a.reason_code, '') = BINARY COALESCE(NEW.reason_code, '')
+          AND (
+              (NEW.outcome = 'success'
+                  AND a.state = 'succeeded'
+                  AND a.reason_code = 'renewal_succeeded'
+                  AND op.state = 'succeeded')
+              OR (NEW.outcome = 'price_change_blocked'
+                  AND a.state = 'price_change_blocked')
+              OR (NEW.outcome = 'insufficient_wallet'
+                  AND a.state = 'insufficient_wallet')
+              OR (NEW.outcome = 'failure'
+                  AND (
+                      a.state IN ('retry_pending', 'failed')
+                      OR (
+                          a.state = 'mutation_queued'
+                          AND a.reason_code = 'mutation_reconciliation_required'
+                          AND op.state IN ('uncertain_remote_result', 'needs_review')
+                      )
+                  ))
+          )
+    ) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew notification outcome does not match current attempt authority.';
+    END IF;
+END
 SQL);
         DB::unprepared(<<<'SQL'
 CREATE TRIGGER IF NOT EXISTS sarni_update_guard BEFORE UPDATE ON service_auto_renew_notification_intents
