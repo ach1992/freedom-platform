@@ -88,9 +88,24 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
         $servicePackageQuoteMigration = require database_path('migrations/2026_08_20_000100_enable_service_package_quotes.php');
         /** @var Migration $paidServiceMutationMigration */
         $paidServiceMutationMigration = require database_path('migrations/2026_08_20_000110_enable_paid_service_mutation_authority.php');
+        /** @var Migration $autoRenewAuthorityMigration */
+        $autoRenewAuthorityMigration = require database_path('migrations/2026_08_21_000200_enable_service_auto_renew_authority.php');
+        /** @var Migration $autoRenewConstraintsMigration */
+        $autoRenewConstraintsMigration = require database_path('migrations/2026_08_21_000205_add_service_auto_renew_constraints.php');
+        /** @var Migration $autoRenewPolicyGuardMigration */
+        $autoRenewPolicyGuardMigration = require database_path('migrations/2026_08_21_000210_guard_service_auto_renew_policy_and_configuration.php');
+        /** @var Migration $autoRenewAttemptGuardMigration */
+        $autoRenewAttemptGuardMigration = require database_path('migrations/2026_08_21_000220_guard_service_auto_renew_attempts.php');
+        /** @var Migration $autoRenewCommercialGuardMigration */
+        $autoRenewCommercialGuardMigration = require database_path('migrations/2026_08_21_000230_guard_service_auto_renew_commercial_binding.php');
 
         try {
             // Remove newer descendant authorities before replaying the historical provisioning bootstrap chain.
+            $autoRenewCommercialGuardMigration->down();
+            $autoRenewAttemptGuardMigration->down();
+            $autoRenewPolicyGuardMigration->down();
+            $autoRenewConstraintsMigration->down();
+            $autoRenewAuthorityMigration->down();
             $paidServiceMutationMigration->down();
             $servicePackageQuoteMigration->down();
             $serviceOperationalMigration->down();
@@ -291,6 +306,11 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
             $serviceOperationalMigration->up();
             $servicePackageQuoteMigration->up();
             $paidServiceMutationMigration->up();
+            $autoRenewAuthorityMigration->up();
+            $autoRenewConstraintsMigration->up();
+            $autoRenewPolicyGuardMigration->up();
+            $autoRenewAttemptGuardMigration->up();
+            $autoRenewCommercialGuardMigration->up();
         }
     }
 
