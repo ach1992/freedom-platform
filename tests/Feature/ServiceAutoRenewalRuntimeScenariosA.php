@@ -132,6 +132,7 @@ trait ServiceAutoRenewalRuntimeScenariosA
 
     public function test_unsafe_renewal_window_creates_no_financial_authority_and_recovers_after_configuration_is_safe(): void
     {
+        config()->set('auto_renew.max_retry_count', 1);
         $scenario = $this->scenario('unsafe-renewal-window');
         $this->enableWalletMethod('unsafe-renewal-window');
         $this->seed(WalletFinancialFoundationSeeder::class);
@@ -155,6 +156,20 @@ trait ServiceAutoRenewalRuntimeScenariosA
         self::assertNotNull($attempt->next_retry_at);
         self::assertNull($attempt->payment_intent_id);
         self::assertNull($attempt->purchase_settlement_id);
+        self::assertSame(0, DB::table('purchase_wallet_reservations')->count());
+        self::assertSame(0, DB::table('purchase_settlements')->where('provider_code', 'wallet')->count());
+
+        // Configuration deferrals must not consume the transient retry budget. Even with a budget
+        // of one, crossing another retry deadline stays recoverable instead of terminalizing the cycle.
+        $this->purchaseOrderClock->value = $this->purchaseOrderClock->value->modify('+16 minutes');
+        $stillUnsafe = $processor->processDue(10);
+        self::assertSame(1, $stillUnsafe->failed);
+        $deferred = DB::table('service_auto_renew_attempts')->first(['state', 'reason_code', 'retry_count', 'next_retry_at']);
+        self::assertNotNull($deferred);
+        self::assertSame(AutoRenewAttemptState::RetryPending->value, $deferred->state);
+        self::assertSame('renewal_window_unsafe', $deferred->reason_code);
+        self::assertSame(1, (int) $deferred->retry_count);
+        self::assertNotNull($deferred->next_retry_at);
         self::assertSame(0, DB::table('purchase_wallet_reservations')->count());
         self::assertSame(0, DB::table('purchase_settlements')->where('provider_code', 'wallet')->count());
 
