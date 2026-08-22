@@ -176,6 +176,38 @@ trait ServiceAutoRenewalStateOperations
         return $this->receiptById($attemptId, false);
     }
 
+    private function finishUnfinancializedFailure(int $attemptId, string $reasonCode): ?ServiceAutoRenewAttemptReceipt
+    {
+        $finished = $this->database->connection()->transaction(function (Connection $connection) use ($attemptId, $reasonCode): bool {
+            $attempt = $this->attemptOn($connection, $attemptId, true);
+            $current = AutoRenewAttemptState::from((string) $attempt->state);
+            if (! in_array($current, [
+                AutoRenewAttemptState::Pending,
+                AutoRenewAttemptState::RetryPending,
+                AutoRenewAttemptState::InsufficientWallet,
+            ], true)
+                || $attempt->payment_intent_id !== null
+                || $attempt->purchase_settlement_id !== null
+                || $attempt->provisioning_operation_id !== null) {
+                return false;
+            }
+
+            $connection->table('service_auto_renew_attempts')->where('id', $attemptId)->update([
+                'state' => AutoRenewAttemptState::Failed->value,
+                'reason_code' => $reasonCode,
+                'next_retry_at' => null,
+                'completed_at' => $this->timestamp(),
+                'updated_at' => $this->timestamp(),
+            ]);
+            $this->event($connection, $attemptId, $current->value, AutoRenewAttemptState::Failed, $reasonCode);
+            $this->notificationOn($connection, $attemptId, AutoRenewNotificationOutcome::Failure, $reasonCode);
+
+            return true;
+        }, 3);
+
+        return $finished ? $this->receiptById($attemptId, false) : null;
+    }
+
     private function recordSameStateEvent(int $attemptId, string $reasonCode): void
     {
         $this->database->connection()->transaction(function (Connection $connection) use ($attemptId, $reasonCode): void {
