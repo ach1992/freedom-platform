@@ -503,8 +503,11 @@ trait ServiceAutoRenewalCommercialOperations
             return $this->finishFailure($attemptId, 'renewal_mutation_failed');
         }
         if (in_array($provisioningState, [ProvisioningState::UncertainRemoteResult, ProvisioningState::NeedsReview], true)) {
-            $this->recordSameStateEvent($attemptId, 'mutation_reconciliation_required');
-            $this->notification($attemptId, AutoRenewNotificationOutcome::Failure, 'mutation_reconciliation_required');
+            $this->recordSameStateEvent(
+                $attemptId,
+                'mutation_reconciliation_required',
+                AutoRenewNotificationOutcome::Failure,
+            );
         }
 
         return $this->receiptById($attemptId, true);
