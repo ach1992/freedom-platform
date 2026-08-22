@@ -81,14 +81,42 @@ trait ServiceAutoRenewalBatchOperations
 
         $windowHours = $this->boundedConfigInt('auto_renew.window_hours', 24, 1, 720);
         $dueUntil = $this->clock->now()->modify('+'.$windowHours.' hours');
-        $candidateIds = $this->database->connection()->table('service_auto_renew_configurations')
-            ->where('enabled', true)
-            ->whereNotNull('observed_expires_at')
-            ->where('observed_expires_at', '<=', $this->databaseDateTime($dueUntil))
-            ->orderBy('observed_expires_at')
-            ->orderBy('id')
+        $candidateIds = $this->database->connection()->table('service_auto_renew_configurations as c')
+            ->leftJoin('service_auto_renew_attempts as a', function ($join): void {
+                $join->on('a.auto_renew_configuration_id', '=', 'c.id')
+                    ->on('a.configuration_version', '=', 'c.configuration_version')
+                    ->on('a.remote_identity_generation', '=', 'c.observed_remote_identity_generation')
+                    ->on('a.observed_expires_at', '=', 'c.observed_expires_at');
+            })
+            ->where('c.enabled', true)
+            ->whereNotNull('c.observed_expires_at')
+            ->where('c.observed_expires_at', '<=', $this->databaseDateTime($dueUntil))
+            ->where(function ($query): void {
+                $query->whereNull('a.id')
+                    ->orWhere(function ($attempt): void {
+                        $attempt->whereIn('a.state', [
+                            AutoRenewAttemptState::Pending->value,
+                            AutoRenewAttemptState::RetryPending->value,
+                            AutoRenewAttemptState::InsufficientWallet->value,
+                        ])
+                            ->whereNull('a.payment_intent_id')
+                            ->whereNull('a.purchase_settlement_id')
+                            ->whereNull('a.provisioning_operation_id')
+                            ->where(function ($ready): void {
+                                $ready->where('a.state', AutoRenewAttemptState::Pending->value)
+                                    ->orWhere(function ($retry): void {
+                                        $retry->whereIn('a.state', [
+                                            AutoRenewAttemptState::RetryPending->value,
+                                            AutoRenewAttemptState::InsufficientWallet->value,
+                                        ])->where('a.next_retry_at', '<=', $this->timestamp());
+                                    });
+                            });
+                    });
+            })
+            ->orderBy('c.observed_expires_at')
+            ->orderBy('c.id')
             ->limit($limit)
-            ->pluck('id')
+            ->pluck('c.id')
             ->map(static fn (mixed $id): int => (int) $id)
             ->all();
         $counters['candidates'] = count($candidateIds);

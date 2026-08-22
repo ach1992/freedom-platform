@@ -81,6 +81,56 @@ trait ServiceAutoRenewalRuntimeScenariosA
         self::assertSame(1, DB::table('ledger_transactions')->where('transaction_type', 'auto_renew_test_funding')->count());
     }
 
+    public function test_batch_limit_skips_terminal_and_future_retry_cycles_without_starving_actionable_service(): void
+    {
+        $this->enableWalletMethod('scheduler-fairness');
+        $this->seed(WalletFinancialFoundationSeeder::class);
+        $processor = $this->app->make(ServiceAutoRenewalProcessor::class);
+
+        $blocked = $this->scenario('scheduler-fairness-blocked');
+        $this->fundWallet($blocked['user_id'], 1_000_000, 'scheduler-fairness-blocked');
+        $pricingAuthority = $this->enableScenarioAgentRenewPricing($blocked, 500_000, 'scheduler-fairness-blocked');
+        $this->enableAutoRenew($blocked, 'scheduler-fairness-blocked');
+        $this->reviseScenarioAgentRenewPricing($blocked, $pricingAuthority, 600_000, 'scheduler-fairness-blocked-raised');
+        $blockedResult = $processor->processDue(10);
+        self::assertSame(1, $blockedResult->blocked);
+
+        $delayed = $this->scenario('scheduler-fairness-delayed');
+        $this->fundWallet($delayed['user_id'], 1, 'scheduler-fairness-delayed');
+        $this->enableAutoRenew($delayed, 'scheduler-fairness-delayed');
+        $delayedResult = $processor->processDue(10);
+        self::assertSame(1, $delayedResult->insufficientWallet);
+        $delayedAttempt = DB::table('service_auto_renew_attempts')
+            ->where('service_subscription_id', $delayed['service_id'])
+            ->first(['state', 'retry_count', 'next_retry_at']);
+        self::assertNotNull($delayedAttempt);
+        self::assertSame(AutoRenewAttemptState::InsufficientWallet->value, $delayedAttempt->state);
+        self::assertSame(1, (int) $delayedAttempt->retry_count);
+        self::assertNotNull($delayedAttempt->next_retry_at);
+
+        $actionable = $this->scenario('scheduler-fairness-actionable');
+        $this->fundWallet($actionable['user_id'], 600_000, 'scheduler-fairness-actionable');
+        $this->enableAutoRenew($actionable, 'scheduler-fairness-actionable');
+
+        $result = $processor->processDue(1);
+
+        self::assertSame(1, $result->candidates);
+        self::assertSame(1, $result->attempted);
+        self::assertSame(1, $result->queued);
+        self::assertSame(
+            AutoRenewAttemptState::MutationQueued->value,
+            DB::table('service_auto_renew_attempts')
+                ->where('service_subscription_id', $actionable['service_id'])
+                ->value('state'),
+        );
+        self::assertSame(
+            1,
+            (int) DB::table('service_auto_renew_attempts')
+                ->where('service_subscription_id', $delayed['service_id'])
+                ->value('retry_count'),
+        );
+    }
+
     public function test_retryable_insufficient_wallet_exhausts_configured_retry_budget(): void
     {
         config()->set('auto_renew.max_retry_count', 1);
