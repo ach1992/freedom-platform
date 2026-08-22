@@ -86,7 +86,8 @@ trait ServiceAutoRenewalRuntimeScenariosB
         $execution = $this->app->make(ServiceMutationExecutor::class)->execute($operationPublicId);
         self::assertSame(ProvisioningState::UncertainRemoteResult, $execution->state);
 
-        $processor->processDue(10);
+        $reconciliation = $processor->processDue(10);
+        self::assertGreaterThanOrEqual(1, $reconciliation->failed, 'Uncertain remote mutation must keep scheduler attention active.');
         $attempt = DB::table('service_auto_renew_attempts')->first(['state', 'reason_code', 'purchase_settlement_id', 'provisioning_operation_id']);
         self::assertNotNull($attempt);
         self::assertSame(AutoRenewAttemptState::MutationQueued->value, $attempt->state);
