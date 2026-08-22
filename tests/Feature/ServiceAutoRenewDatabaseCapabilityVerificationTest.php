@@ -161,6 +161,7 @@ SQL,
             'id', 'state', 'reason_code', 'provisioning_operation_id',
         ]);
         self::assertNotNull($attempt);
+        $attemptId = (int) $attempt->id;
         self::assertSame('mutation_queued', $attempt->state);
         self::assertNotNull($attempt->provisioning_operation_id);
         self::assertNotSame(
@@ -175,7 +176,7 @@ SQL,
         try {
             try {
                 $connection->table('service_auto_renew_attempts')
-                    ->where('id', (int) $attempt->id)
+                    ->where('id', $attemptId)
                     ->update([
                         'state' => 'succeeded',
                         'reason_code' => 'renewal_succeeded',
@@ -193,7 +194,7 @@ SQL,
             try {
                 $connection->table('service_auto_renew_notification_intents')->insert([
                     'public_id' => (string) Str::ulid(),
-                    'auto_renew_attempt_id' => (int) $attempt->id,
+                    'auto_renew_attempt_id' => $attemptId,
                     'outcome' => 'success',
                     'reason_code' => 'renewal_succeeded',
                     'created_at' => $this->purchaseOrderTimestamp(),
@@ -209,14 +210,14 @@ SQL,
             ServiceAutoRenewDatabaseAuthority::endRuntime($connection);
         }
 
-        $attempt = DB::table('service_auto_renew_attempts')->where('id', (int) $attempt->id)->first(['state', 'reason_code']);
+        $attempt = DB::table('service_auto_renew_attempts')->where('id', $attemptId)->first(['state', 'reason_code']);
         self::assertNotNull($attempt);
         self::assertSame('mutation_queued', $attempt->state);
         self::assertSame('mutation_queued', $attempt->reason_code);
         self::assertSame(
             0,
             DB::table('service_auto_renew_notification_intents')
-                ->where('auto_renew_attempt_id', (int) $attempt->id)
+                ->where('auto_renew_attempt_id', $attemptId)
                 ->where('outcome', 'success')
                 ->count(),
         );
