@@ -20,6 +20,7 @@ use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use Tests\TestCase;
 
 /** @requirement SVC-007 DAT-003 SEC-002 QUA-004 */
@@ -86,6 +87,59 @@ SQL,
             self::assertStringContainsString('Auto-renew database capability is invalid.', $exception->getMessage());
         } finally {
             ServiceAutoRenewDatabaseAuthority::clear(DB::connection());
+        }
+    }
+
+    public function test_valid_runtime_attempt_write_is_rejected_without_app_key_capability(): void
+    {
+        $scenario = $this->scenario('forged-runtime-capability');
+        $configuration = $this->enableAutoRenew($scenario, 'forged-runtime-capability');
+        $configRow = DB::table('service_auto_renew_configurations')
+            ->where('id', $configuration->configurationId)
+            ->first();
+        self::assertNotNull($configRow);
+        self::assertNotNull($configRow->observed_remote_identity_generation);
+        self::assertNotNull($configRow->observed_expires_at);
+        self::assertNotNull($configRow->observed_expiry_evidence_hash);
+        self::assertNotNull($configRow->observed_expiry_source);
+
+        $cycleKey = hash('sha256', implode('|', [
+            (string) $configuration->configurationId,
+            (string) $scenario['service_id'],
+            (string) $configuration->configurationVersion,
+            (string) $configRow->observed_remote_identity_generation,
+            (string) $configRow->observed_expires_at,
+        ]));
+        ServiceAutoRenewDatabaseAuthority::clear(DB::connection());
+
+        try {
+            DB::table('service_auto_renew_attempts')->insert([
+                'public_id' => (string) Str::ulid(),
+                'cycle_key' => $cycleKey,
+                'auto_renew_configuration_id' => $configuration->configurationId,
+                'service_subscription_id' => $scenario['service_id'],
+                'configuration_version' => $configuration->configurationVersion,
+                'remote_identity_generation' => (int) $configRow->observed_remote_identity_generation,
+                'observed_expires_at' => (string) $configRow->observed_expires_at,
+                'observed_expiry_evidence_hash' => (string) $configRow->observed_expiry_evidence_hash,
+                'observed_expiry_source' => (string) $configRow->observed_expiry_source,
+                'state' => 'pending',
+                'reason_code' => null,
+                'baseline_price_irr' => $configuration->acceptedPriceIrr,
+                'current_price_irr' => null,
+                'quote_id' => null,
+                'payment_eligibility_decision_id' => null,
+                'payment_intent_id' => null,
+                'purchase_settlement_id' => null,
+                'provisioning_operation_id' => null,
+                'correlation_id' => $this->purchaseOrderCorrelation('forged-runtime-capability-attempt'),
+                'completed_at' => null,
+                'created_at' => $this->purchaseOrderTimestamp(),
+                'updated_at' => $this->purchaseOrderTimestamp(),
+            ]);
+            self::fail('Valid-shaped runtime evidence must still require the app-key capability.');
+        } catch (QueryException $exception) {
+            self::assertStringContainsString('Auto-renew runtime database capability is invalid.', $exception->getMessage());
         }
     }
 }
