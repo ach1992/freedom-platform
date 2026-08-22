@@ -304,29 +304,18 @@ CREATE TRIGGER IF NOT EXISTS sarae_insert_authority_guard
 BEFORE INSERT ON service_auto_renew_attempt_events
 FOR EACH ROW
 BEGIN
-    DECLARE previous_sequence INT UNSIGNED DEFAULT 0;
-    DECLARE previous_to_state VARCHAR(32) DEFAULT NULL;
-
-    SELECT COALESCE(MAX(sequence), 0)
-      INTO previous_sequence
-      FROM service_auto_renew_attempt_events
-     WHERE auto_renew_attempt_id = NEW.auto_renew_attempt_id;
-
-    IF previous_sequence = 0 THEN
-        IF NEW.sequence <> 1 OR NEW.from_state IS NOT NULL THEN
-            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew attempt event sequence does not start from cycle authority.';
+    IF NEW.sequence = 1 THEN
+        IF NEW.from_state IS NOT NULL
+           OR NEW.to_state <> 'pending'
+           OR COALESCE(NEW.reason_code, '') <> 'cycle_claimed'
+           OR NEW.quote_id IS NOT NULL
+           OR NEW.payment_intent_id IS NOT NULL
+           OR NEW.purchase_settlement_id IS NOT NULL
+           OR NEW.provisioning_operation_id IS NOT NULL THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew initial attempt event must be the cycle-claim authority.';
         END IF;
-    ELSE
-        SELECT to_state
-          INTO previous_to_state
-          FROM service_auto_renew_attempt_events
-         WHERE auto_renew_attempt_id = NEW.auto_renew_attempt_id
-           AND sequence = previous_sequence
-         LIMIT 1;
-        IF NEW.sequence <> previous_sequence + 1
-           OR NOT (NEW.from_state <=> previous_to_state) THEN
-            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew attempt event sequence does not continue current audit authority.';
-        END IF;
+    ELSEIF NEW.sequence < 2 OR NEW.from_state IS NULL THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Auto-renew subsequent attempt event must have prior-state authority.';
     END IF;
 
     IF NOT EXISTS (
