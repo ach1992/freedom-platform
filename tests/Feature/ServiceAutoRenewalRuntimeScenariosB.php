@@ -219,6 +219,7 @@ trait ServiceAutoRenewalRuntimeScenariosB
             'created_at' => $this->purchaseOrderTimestamp(),
             'updated_at' => $this->purchaseOrderTimestamp(),
         ]);
+        $this->recordAutoRenewCycleClaimedEvent($attemptId);
         $intentId = (int) DB::table('payment_intents')->where('public_id', $intent->intentPublicId)->value('id');
         $settlementId = (int) DB::table('purchase_settlements')->where('public_id', $order->purchaseSettlementPublicId)->value('id');
         DB::table('service_auto_renew_attempts')->where('id', $attemptId)->update([
@@ -230,6 +231,23 @@ trait ServiceAutoRenewalRuntimeScenariosB
             'state' => AutoRenewAttemptState::Settled->value,
             'reason_code' => 'simulated_crash_after_capture',
             'updated_at' => $this->purchaseOrderTimestamp(),
+        ]);
+        $settledAttempt = DB::table('service_auto_renew_attempts')->where('id', $attemptId)->first([
+            'quote_id', 'payment_intent_id', 'purchase_settlement_id', 'provisioning_operation_id', 'correlation_id',
+        ]);
+        self::assertNotNull($settledAttempt);
+        DB::table('service_auto_renew_attempt_events')->insert([
+            'auto_renew_attempt_id' => $attemptId,
+            'sequence' => 2,
+            'from_state' => AutoRenewAttemptState::Pending->value,
+            'to_state' => AutoRenewAttemptState::Settled->value,
+            'reason_code' => 'simulated_crash_after_capture',
+            'quote_id' => $settledAttempt->quote_id,
+            'payment_intent_id' => $settledAttempt->payment_intent_id,
+            'purchase_settlement_id' => $settledAttempt->purchase_settlement_id,
+            'provisioning_operation_id' => $settledAttempt->provisioning_operation_id,
+            'correlation_id' => (string) $settledAttempt->correlation_id,
+            'created_at' => $this->purchaseOrderTimestamp(),
         ]);
 
         $capturedLedgerCount = DB::table('ledger_transactions')->count();
