@@ -208,6 +208,11 @@ trait ServiceAutoRenewalRuntimeScenariosA
         self::assertSame('retry_exhausted', $attempt->reason_code);
         self::assertSame(2, (int) $attempt->retry_count);
         self::assertNull($attempt->next_retry_at);
+        self::assertSame(
+            0,
+            DB::table('service_auto_renew_attempt_events')->where('reason_code', 'auto_renew_unexpected_failure')->count(),
+            'Retry exhaustion must come from the intended business path, not a swallowed runtime failure.',
+        );
         self::assertSame(1, DB::table('service_auto_renew_notification_intents')->where('outcome', 'failure')->count());
         self::assertSame(0, DB::table('purchase_settlements')->where('provider_code', 'wallet')->count());
     }
