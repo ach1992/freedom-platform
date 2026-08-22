@@ -35,14 +35,14 @@ return new class extends Migration
         }
 
         foreach ([
-            'sarp_cap_insert_guard',
-            'sarp_cap_update_guard',
-            'sarph_cap_insert_guard',
-            'sarc_cap_insert_guard',
-            'sarc_cap_update_guard',
-            'sarch_cap_insert_guard',
-        ] as $trigger) {
-            DB::unprepared("DROP TRIGGER IF EXISTS `{$trigger}`");
+            'DROP TRIGGER IF EXISTS `sarp_cap_insert_guard`',
+            'DROP TRIGGER IF EXISTS `sarp_cap_update_guard`',
+            'DROP TRIGGER IF EXISTS `sarph_cap_insert_guard`',
+            'DROP TRIGGER IF EXISTS `sarc_cap_insert_guard`',
+            'DROP TRIGGER IF EXISTS `sarc_cap_update_guard`',
+            'DROP TRIGGER IF EXISTS `sarch_cap_insert_guard`',
+        ] as $statement) {
+            DB::unprepared($statement);
         }
     }
 
