@@ -48,12 +48,21 @@ trait ServiceAutoRenewalRuntimeScenariosB
         );
         self::assertSame($firstConfiguration->configurationVersion + 1, $secondConfiguration->configurationVersion);
 
-        $processor->processDue(10);
+        $reconfigured = $processor->processDue(10);
 
+        self::assertSame(0, $reconfigured->failed, 'Routine supersession cleanup must not raise scheduler attention.');
         $oldAttempt = DB::table('service_auto_renew_attempts')->where('id', $oldAttemptId)->first(['state', 'reason_code']);
         self::assertNotNull($oldAttempt);
         self::assertSame(AutoRenewAttemptState::Failed->value, $oldAttempt->state);
         self::assertSame('configuration_superseded', $oldAttempt->reason_code);
+        self::assertSame(
+            0,
+            DB::table('service_auto_renew_notification_intents')
+                ->where('auto_renew_attempt_id', $oldAttemptId)
+                ->where('outcome', 'failure')
+                ->count(),
+            'Superseded unfinancialized cycles are audit retirement, not renewal failure notifications.',
+        );
         self::assertSame(0, DB::table('purchase_settlements')->where('provider_code', 'wallet')->count());
         self::assertSame(0, DB::table('purchase_wallet_reservations')->count());
         self::assertSame(1, DB::table('service_auto_renew_attempts')->where('configuration_version', $secondConfiguration->configurationVersion)->count());
