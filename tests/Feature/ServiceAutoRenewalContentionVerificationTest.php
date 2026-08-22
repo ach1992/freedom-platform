@@ -297,11 +297,12 @@ namespace Tests\Feature {
                     ->value('hold.status'),
             );
             self::assertSame(
-                1,
+                0,
                 DB::table('service_auto_renew_notification_intents')
                     ->where('auto_renew_attempt_id', $prepared['attempt_id'])
                     ->where('outcome', 'failure')
                     ->count(),
+                'A transient retry must remain audit-only until it becomes a real terminal/attention failure.',
             );
         }
 
@@ -443,6 +444,7 @@ namespace Tests\Feature {
                     'created_at' => $this->purchaseOrderTimestamp(),
                     'updated_at' => $this->purchaseOrderTimestamp(),
                 ]);
+                $this->recordAutoRenewCycleClaimedEvent($attemptId);
                 $intentId = (int) $connection->table('payment_intents')
                     ->where('public_id', $intent->intentPublicId)
                     ->value('id');
