@@ -47,11 +47,30 @@ trait ServiceAutoRenewalStateOperations
 
     private function scheduleRetry(int $attemptId, AutoRenewAttemptState $retryState, string $reasonCode): void
     {
+        $this->scheduleRetryWithBudget($attemptId, $retryState, $reasonCode, true);
+    }
+
+    private function scheduleConfigurationRetry(int $attemptId, string $reasonCode): void
+    {
+        $this->scheduleRetryWithBudget($attemptId, AutoRenewAttemptState::RetryPending, $reasonCode, false);
+    }
+
+    private function scheduleRetryWithBudget(
+        int $attemptId,
+        AutoRenewAttemptState $retryState,
+        string $reasonCode,
+        bool $consumeBudget,
+    ): void {
         if (! in_array($retryState, [AutoRenewAttemptState::RetryPending, AutoRenewAttemptState::InsufficientWallet], true)) {
             throw new RuntimeException('Auto-renew retry state is invalid.');
         }
 
-        $this->database->connection()->transaction(function (Connection $connection) use ($attemptId, $retryState, $reasonCode): void {
+        $this->database->connection()->transaction(function (Connection $connection) use (
+            $attemptId,
+            $retryState,
+            $reasonCode,
+            $consumeBudget,
+        ): void {
             $attempt = $this->attemptOn($connection, $attemptId, true);
             $current = AutoRenewAttemptState::from((string) $attempt->state);
             if ($current->isTerminal() || in_array($current, [AutoRenewAttemptState::Settled, AutoRenewAttemptState::MutationQueued], true)) {
@@ -64,8 +83,10 @@ trait ServiceAutoRenewalStateOperations
                 return;
             }
 
-            $retryCount = (int) $attempt->retry_count + 1;
-            if ($retryCount > $this->maxRetryCount()) {
+            $retryCount = $consumeBudget
+                ? (int) $attempt->retry_count + 1
+                : max(1, (int) $attempt->retry_count);
+            if ($consumeBudget && $retryCount > $this->maxRetryCount()) {
                 $connection->table('service_auto_renew_attempts')->where('id', $attemptId)->update([
                     'state' => AutoRenewAttemptState::Failed->value,
                     'reason_code' => 'retry_exhausted',
@@ -103,6 +124,10 @@ trait ServiceAutoRenewalStateOperations
                 $reasonCode,
             );
         }, 3);
+
+        if (! $consumeBudget) {
+            return;
+        }
 
         $attempt = $this->attempt($attemptId);
         if (AutoRenewAttemptState::from((string) $attempt->state) === AutoRenewAttemptState::Failed
