@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace App\Modules\Provisioning\Application;
 
 use App\Modules\Provisioning\Domain\AutoRenewAttemptState;
-use App\Modules\Provisioning\Domain\AutoRenewNotificationOutcome;
 use DateTimeImmutable;
 use DomainException;
 use Throwable;
@@ -234,7 +233,6 @@ trait ServiceAutoRenewalBatchOperations
             report($exception);
             $attempt = $existing ?? $this->ensureAttempt($facts);
             $this->scheduleRetry((int) $attempt->id, AutoRenewAttemptState::RetryPending, 'remote_observation_unavailable');
-            $this->notification((int) $attempt->id, AutoRenewNotificationOutcome::Failure, 'remote_observation_unavailable');
 
             return $this->receiptById((int) $attempt->id, $existing !== null);
         }
