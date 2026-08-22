@@ -120,14 +120,17 @@ trait ServiceAutoRenewalStateOperations
                 'updated_at' => $this->timestamp(),
             ]);
             $this->event($connection, $attemptId, $current->value, $retryState, $reasonCode);
-            $this->notificationOn(
-                $connection,
-                $attemptId,
-                $retryState === AutoRenewAttemptState::InsufficientWallet
-                    ? AutoRenewNotificationOutcome::InsufficientWallet
-                    : AutoRenewNotificationOutcome::Failure,
-                $reasonCode,
-            );
+            if ($retryState === AutoRenewAttemptState::InsufficientWallet) {
+                // Insufficient balance is a user-actionable blocking outcome. Ordinary transient
+                // retries stay auditable in attempt events but must not become user-facing renewal
+                // failure intents that can outlive the retry and contradict a later success.
+                $this->notificationOn(
+                    $connection,
+                    $attemptId,
+                    AutoRenewNotificationOutcome::InsufficientWallet,
+                    $reasonCode,
+                );
+            }
         }, 3);
     }
 
@@ -284,10 +287,9 @@ trait ServiceAutoRenewalStateOperations
                 $this->scheduleConfigurationRetry((int) $attempt->id, $reasonCode);
             }
 
-            // Retry scheduling owns its notification in the same locked transaction. Avoid a
-            // second out-of-transaction notification: a competing worker may have terminalized the
-            // attempt after scheduling returned, and that stale diagnostic must not create a false
-            // failure intent for a successful/blocked terminal result.
+            // Retry scheduling owns any applicable notification under the same row lock. Do not
+            // manufacture an out-of-transaction failure intent for a transient retry: a competing
+            // worker may already have recovered or terminalized the attempt.
             return $this->receiptById((int) $attempt->id, true);
         } catch (Throwable $exception) {
             report($exception);
