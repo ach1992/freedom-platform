@@ -29,6 +29,8 @@ final class AutoRenewTestPanelAdapter implements PanelAdapter
 
     public bool $throwOnUpdateExpiry = false;
 
+    public bool $definitiveFailureOnUpdateExpiry = false;
+
     /** @var array<string, RemoteServiceSnapshot> */
     private array $servicesByUsername = [];
 
@@ -166,6 +168,14 @@ final class AutoRenewTestPanelAdapter implements PanelAdapter
         $this->lastExpiryAt = $expiresAt;
         if ($this->throwOnUpdateExpiry) {
             throw new LogicException('Simulated auto-renew provider uncertainty after boundary entry.');
+        }
+        if ($this->definitiveFailureOnUpdateExpiry) {
+            return new PanelOperationResult(
+                PanelOperationOutcome::DefinitiveFailure,
+                null,
+                'test_update_expiry_rejected',
+                'Test expiry update was definitively rejected.',
+            );
         }
         foreach ($this->servicesByUsername as $username => $service) {
             if (hash_equals($service->remoteId, $remoteId)) {
