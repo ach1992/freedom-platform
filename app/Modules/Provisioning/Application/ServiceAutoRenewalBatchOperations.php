@@ -40,10 +40,10 @@ trait ServiceAutoRenewalBatchOperations
 
         foreach ($this->staleUnfinancializedAttemptIds($limit) as $attemptId) {
             try {
-                $receipt = $this->finishUnfinancializedFailure($attemptId, 'configuration_superseded');
-                if ($receipt !== null) {
-                    $this->countReceipt($receipt, $counters, false);
-                }
+                // Superseded unfinancialized attempts are lifecycle retirement, not a failed
+                // renewal. Keep their terminal audit state, but do not turn routine reconfiguration
+                // cleanup into scheduler attention/failure counters.
+                $this->finishUnfinancializedFailure($attemptId, 'configuration_superseded');
             } catch (Throwable $exception) {
                 report($exception);
                 $this->safeRecordAttemptEvent($attemptId, 'configuration_supersession_deferred');
@@ -52,10 +52,7 @@ trait ServiceAutoRenewalBatchOperations
         }
         foreach ($this->supersededCycleUnfinancializedAttemptIds($limit) as $attemptId) {
             try {
-                $receipt = $this->finishUnfinancializedFailure($attemptId, 'cycle_superseded');
-                if ($receipt !== null) {
-                    $this->countReceipt($receipt, $counters, false);
-                }
+                $this->finishUnfinancializedFailure($attemptId, 'cycle_superseded');
             } catch (Throwable $exception) {
                 report($exception);
                 $this->safeRecordAttemptEvent($attemptId, 'cycle_supersession_deferred');
