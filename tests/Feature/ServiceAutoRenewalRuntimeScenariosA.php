@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
-use App\Modules\Provisioning\Application\ServiceAutoRenewDatabaseAuthority;
 use App\Modules\Provisioning\Application\ServiceAutoRenewalProcessor;
+use App\Modules\Provisioning\Application\ServiceAutoRenewDatabaseAuthority;
 use App\Modules\Provisioning\Application\ServiceMutationExecutor;
 use App\Modules\Provisioning\Domain\AutoRenewAttemptState;
 use App\Modules\Provisioning\Domain\ProvisioningState;
