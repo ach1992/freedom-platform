@@ -12,6 +12,10 @@ require_once __DIR__.'/ServiceAutoRenewalRuntimeTestHelpers.php';
 
 use App\Modules\Provisioning\Application\ServiceAutoRenewalProcessor;
 use App\Modules\Provisioning\Application\ServiceNotificationThresholdService;
+use App\Modules\Wallet\Application\LedgerEntryDraft;
+use App\Modules\Wallet\Application\LedgerPostingService;
+use App\Modules\Wallet\Domain\IrrMoney;
+use App\Modules\Wallet\Domain\LedgerDirection;
 use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PanelsAccessFoundationSeeder;
@@ -106,7 +110,7 @@ final class ServiceNotificationRenewalIntentAuthorityTest extends TestCase
         $scenario = $this->scenario('notification-renewal-reset');
         $this->enableWalletMethod('notification-renewal-reset');
         $this->seed(WalletFinancialFoundationSeeder::class);
-        $this->fundWallet($scenario['user_id'], 1, 'notification-renewal-reset');
+        $walletId = $this->fundWallet($scenario['user_id'], 1, 'notification-renewal-reset');
         $this->enableAutoRenew($scenario, 'notification-renewal-reset');
 
         $renewals = $this->app->make(ServiceAutoRenewalProcessor::class);
@@ -122,7 +126,7 @@ final class ServiceNotificationRenewalIntentAuthorityTest extends TestCase
             ->value('id');
         self::assertGreaterThan(0, $stateId);
 
-        $this->fundWallet($scenario['user_id'], 600_000, 'notification-renewal-reset-recovery');
+        $this->topUpWallet($walletId, 600_000, 'notification-renewal-reset-recovery');
         $this->purchaseOrderClock->value = $this->purchaseOrderClock->value->modify('+16 minutes');
         $retry = $renewals->processDue(10);
         self::assertSame(1, $retry->queued);
@@ -141,5 +145,31 @@ final class ServiceNotificationRenewalIntentAuthorityTest extends TestCase
             ->where('service_subscription_id', $scenario['service_id'])
             ->where('notification_type', 'renewal_failure')
             ->count());
+    }
+
+    private function topUpWallet(int $walletId, int $amountIrr, string $suffix): void
+    {
+        $now = now('UTC');
+        $assetId = (int) DB::table('ledger_accounts')->insertGetId([
+            'code' => 'system.auto.renew.wallet.asset.'.$suffix,
+            'account_class' => 'asset',
+            'owner_user_id' => null,
+            'wallet_bucket' => null,
+            'currency' => 'IRR',
+            'is_active' => true,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $this->app->make(LedgerPostingService::class)->post(
+            'ledger.auto.renew.wallet.fund.'.$suffix.'.000001',
+            'auto_renew_test_funding',
+            $this->purchaseOrderCorrelation('auto-renew-wallet-fund-'.$suffix),
+            [
+                new LedgerEntryDraft($assetId, LedgerDirection::Debit, IrrMoney::positive($amountIrr)),
+                new LedgerEntryDraft($walletId, LedgerDirection::Credit, IrrMoney::positive($amountIrr)),
+            ],
+            'test_fixture',
+            'auto-renew-wallet-'.$suffix,
+        );
     }
 }
