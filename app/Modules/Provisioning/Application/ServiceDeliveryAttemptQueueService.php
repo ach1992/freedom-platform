@@ -17,7 +17,7 @@ use RuntimeException;
 /**
  * @phpstan-type ServiceRow object{id:int|string,public_id:string,service_target_id:int|string|null,remote_service_id:?string,provisioned_at:?string,lifecycle_state:string,lifecycle_version:int|string,remote_identity_generation:int|string,remote_deleted_at:?string}
  * @phpstan-type DeliveryAttemptRow object{id:int|string,public_id:string,service_subscription_id:int|string,purpose:string,request_key_hash:string,correlation_id:string,target_remote_identity_generation:int|string,target_lifecycle_version:int|string,outbox_event_id:string}
- * @phpstan-type NotificationStateRow object{id:int|string,service_subscription_id:int|string,state:string,latest_delivery_attempt_id:int|string|null,latest_retry_ordinal:int|string|null}
+ * @phpstan-type NotificationStateRow object{id:int|string,service_subscription_id:int|string,state:string,latest_delivery_attempt_id:int|string|null,latest_retry_ordinal:int|string|null,next_retry_at:?string}
  */
 final readonly class ServiceDeliveryAttemptQueueService
 {
@@ -121,6 +121,7 @@ final readonly class ServiceDeliveryAttemptQueueService
                 ->lockForUpdate()
                 ->first([
                     'id', 'service_subscription_id', 'state', 'latest_delivery_attempt_id', 'latest_retry_ordinal',
+                    'next_retry_at',
                 ]);
             if ($notification === null || $notification->state !== 'triggered') {
                 throw new DomainException('Service notification delivery requires one triggered notification state.');
@@ -145,6 +146,7 @@ final readonly class ServiceDeliveryAttemptQueueService
             if ($retryOrdinal !== $expectedOrdinal) {
                 throw new DomainException('Service notification retry ordinal is not the next deterministic attempt.');
             }
+            $this->assertNotificationRetryReady($connection, $notification, $retryOrdinal);
 
             $this->assertServiceReadyForDelivery($connection, $service);
             $attempt = $this->createAttempt(
@@ -296,6 +298,59 @@ final readonly class ServiceDeliveryAttemptQueueService
             return $this->attemptById($connection, $attemptId);
         } finally {
             $this->clearQueueAuthority($connection);
+        }
+    }
+
+    /** @param NotificationStateRow $notification */
+    private function assertNotificationRetryReady(
+        Connection $connection,
+        object $notification,
+        int $retryOrdinal,
+    ): void {
+        if ($retryOrdinal === 0) {
+            if ($notification->latest_delivery_attempt_id !== null
+                || $notification->latest_retry_ordinal !== null
+                || $notification->next_retry_at !== null) {
+                throw new DomainException('Initial Service notification delivery has conflicting retry evidence.');
+            }
+
+            return;
+        }
+
+        $previousAttemptId = $this->positiveDatabaseInt(
+            $notification->latest_delivery_attempt_id,
+            'Previous Service notification delivery attempt ID',
+        );
+        if ($notification->latest_retry_ordinal === null
+            || (int) $notification->latest_retry_ordinal !== $retryOrdinal - 1
+            || $notification->next_retry_at === null) {
+            throw new DomainException('Service notification retry is missing deterministic prior-attempt evidence.');
+        }
+
+        $dueAt = new \DateTimeImmutable($notification->next_retry_at, new \DateTimeZone('UTC'));
+        if ($dueAt > $this->clock->now()) {
+            throw new DomainException('Service notification retry backoff has not elapsed.');
+        }
+
+        /** @var object{id:int|string}|null $binding */
+        $binding = $connection->table('service_notification_delivery_bindings')
+            ->where('service_delivery_attempt_id', $previousAttemptId)
+            ->where('service_notification_state_id', (int) $notification->id)
+            ->where('retry_ordinal', $retryOrdinal - 1)
+            ->lockForUpdate()
+            ->first(['service_delivery_attempt_id as id']);
+        if ($binding === null) {
+            throw new DomainException('Service notification retry is not bound to the previous durable attempt.');
+        }
+
+        /** @var object{state:string,completed_at:?string}|null $effect */
+        $effect = $connection->table('service_delivery_effects')
+            ->where('service_delivery_attempt_id', $previousAttemptId)
+            ->where('service_subscription_id', (int) $notification->service_subscription_id)
+            ->lockForUpdate()
+            ->first(['state', 'completed_at']);
+        if ($effect === null || $effect->state !== 'failed_final' || $effect->completed_at === null) {
+            throw new DomainException('Service notification retry requires one completed failed delivery effect.');
         }
     }
 
