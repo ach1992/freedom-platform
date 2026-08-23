@@ -6,6 +6,7 @@ namespace App\Modules\Provisioning\Application;
 
 use App\Modules\AccessControl\Application\AdministratorPermissionAuthorizer;
 use App\Modules\Provisioning\Domain\ServiceDeliveryEffectState;
+use App\Modules\Provisioning\Domain\ServiceDeliveryPurpose;
 use App\Modules\Provisioning\Domain\ServiceNotificationState;
 use App\Modules\Provisioning\Domain\ServiceNotificationType;
 use App\Modules\Wallet\Application\WalletHoldService;
