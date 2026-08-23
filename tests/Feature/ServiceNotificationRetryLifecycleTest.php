@@ -36,6 +36,7 @@ use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use ReflectionMethod;
 use Tests\Support\CreatesBenefitCodeFixtures;
+use Tests\Support\RestoresServiceOperationalCapability;
 use Tests\TestCase;
 
 /** @requirement SVC-013 SVC-014 WAL-002 ARCH-004 DAT-003 DAT-004 SEC-008 QUA-004 QUA-007 QUA-010 */
@@ -43,6 +44,7 @@ final class ServiceNotificationRetryLifecycleTest extends TestCase
 {
     use CreatesBenefitCodeFixtures;
     use DatabaseTruncation;
+    use RestoresServiceOperationalCapability;
 
     private const BOT_ID = 770001;
 
@@ -59,9 +61,7 @@ final class ServiceNotificationRetryLifecycleTest extends TestCase
         config()->set('service_notifications.retry.low_balance.base_delay_seconds', 60);
         config()->set('service_notifications.retry.low_balance.max_delay_seconds', 300);
 
-        /** @var Migration $operationalMigration */
-        $operationalMigration = require database_path('migrations/2026_08_19_000140_enable_service_operational_authority.php');
-        $operationalMigration->up();
+        $this->restoreServiceOperationalCapabilitySingleton();
 
         /** @var Migration $cursorMigration */
         $cursorMigration = require database_path('migrations/2026_08_23_000210_enable_service_notification_scan_cursor.php');

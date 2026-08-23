@@ -30,6 +30,7 @@ use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Tests\Support\CreatesBenefitCodeFixtures;
+use Tests\Support\RestoresServiceOperationalCapability;
 use Tests\TestCase;
 
 /** @requirement SVC-013 SVC-014 WAL-002 DAT-003 QUA-004 */
@@ -37,6 +38,7 @@ final class ServiceNotificationBatchFairnessTest extends TestCase
 {
     use CreatesBenefitCodeFixtures;
     use DatabaseTruncation;
+    use RestoresServiceOperationalCapability;
 
     protected function setUp(): void
     {
@@ -44,9 +46,7 @@ final class ServiceNotificationBatchFairnessTest extends TestCase
         $this->seed();
         config()->set('service_notifications.low_balance_irr', 0);
 
-        /** @var Migration $operationalMigration */
-        $operationalMigration = require database_path('migrations/2026_08_19_000140_enable_service_operational_authority.php');
-        $operationalMigration->up();
+        $this->restoreServiceOperationalCapabilitySingleton();
 
         /** @var Migration $cursorMigration */
         $cursorMigration = require database_path('migrations/2026_08_23_000210_enable_service_notification_scan_cursor.php');

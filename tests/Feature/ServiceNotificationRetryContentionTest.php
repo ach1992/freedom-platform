@@ -82,7 +82,6 @@ namespace Tests\Feature {
     use App\Modules\Telegram\Application\ProtectedTelegramSendResult;
     use DateTimeImmutable;
     use DateTimeZone;
-    use Illuminate\Database\Migrations\Migration;
     use Illuminate\Foundation\Testing\DatabaseTruncation;
     use Illuminate\Support\Facades\Crypt;
     use Illuminate\Support\Facades\DB;
@@ -90,6 +89,7 @@ namespace Tests\Feature {
     use ReflectionMethod;
     use RuntimeException;
     use Tests\Support\CreatesBenefitCodeFixtures;
+    use Tests\Support\RestoresServiceOperationalCapability;
     use Tests\TestCase;
 
     /** @requirement SVC-013 SVC-014 ARCH-004 DAT-003 DAT-004 SEC-008 QUA-004 QUA-007 QUA-010 */
@@ -97,6 +97,7 @@ namespace Tests\Feature {
     {
         use CreatesBenefitCodeFixtures;
         use DatabaseTruncation;
+        use RestoresServiceOperationalCapability;
 
         private const BOT_ID = 770101;
 
@@ -109,9 +110,7 @@ namespace Tests\Feature {
             parent::setUp();
             $this->seed();
 
-            /** @var Migration $operationalMigration */
-            $operationalMigration = require database_path('migrations/2026_08_19_000140_enable_service_operational_authority.php');
-            $operationalMigration->up();
+            $this->restoreServiceOperationalCapabilitySingleton();
         }
 
         public function test_concurrent_retry_ordinal_converges_to_one_delivery_attempt_and_binding(): void
