@@ -196,6 +196,7 @@ final readonly class ServiceSynchronizationService
                 $result = $this->syncCandidate($runId, $service, $correlationId);
                 if (! $result['processed']) {
                     $skipped++;
+
                     continue;
                 }
                 $processed++;
