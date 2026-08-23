@@ -139,14 +139,57 @@ return new class extends Migration
 
     private function installDeliveryPurposeConstraint(): void
     {
-        DB::statement('ALTER TABLE service_delivery_attempts DROP CONSTRAINT service_delivery_attempts_purpose_chk');
-        DB::statement("ALTER TABLE service_delivery_attempts ADD CONSTRAINT service_delivery_attempts_purpose_chk CHECK (purpose IN ('initial','resend','notification'))");
+        $this->assertDeliveryPurposeValues(['initial', 'resend']);
+        $this->replaceDeliveryPurposeConstraint("purpose IN ('initial','resend','notification')");
     }
 
     private function restoreDeliveryPurposeConstraint(): void
     {
-        DB::statement('ALTER TABLE service_delivery_attempts DROP CONSTRAINT service_delivery_attempts_purpose_chk');
-        DB::statement("ALTER TABLE service_delivery_attempts ADD CONSTRAINT service_delivery_attempts_purpose_chk CHECK (purpose IN ('initial','resend'))");
+        $this->assertDeliveryPurposeValues(['initial', 'resend']);
+        $this->replaceDeliveryPurposeConstraint("purpose IN ('initial','resend')");
+    }
+
+    /** @param list<string> $allowed */
+    private function assertDeliveryPurposeValues(array $allowed): void
+    {
+        if (DB::table('service_delivery_attempts')->whereNotIn('purpose', $allowed)->exists()) {
+            throw new RuntimeException(
+                'Service notification migration cannot repair delivery purpose authority while unexpected Delivery Attempts exist.',
+            );
+        }
+    }
+
+    private function replaceDeliveryPurposeConstraint(string $checkClause): void
+    {
+        $prefix = 'ALTER TABLE service_delivery_attempts ';
+        if ($this->deliveryPurposeConstraintExists()) {
+            DB::statement(
+                $prefix.'DROP CONSTRAINT service_delivery_attempts_purpose_chk, '
+                .'ADD CONSTRAINT service_delivery_attempts_purpose_chk CHECK ('.$checkClause.')',
+            );
+
+            return;
+        }
+
+        DB::statement(
+            $prefix.'ADD CONSTRAINT service_delivery_attempts_purpose_chk CHECK ('.$checkClause.')',
+        );
+    }
+
+    private function deliveryPurposeConstraintExists(): bool
+    {
+        $row = DB::selectOne(
+            <<<'SQL'
+SELECT COUNT(*) AS aggregate
+FROM information_schema.TABLE_CONSTRAINTS
+WHERE CONSTRAINT_SCHEMA = DATABASE()
+  AND TABLE_NAME = 'service_delivery_attempts'
+  AND CONSTRAINT_NAME = 'service_delivery_attempts_purpose_chk'
+  AND CONSTRAINT_TYPE = 'CHECK'
+SQL,
+        );
+
+        return $row !== null && (int) $row->aggregate === 1;
     }
 
     private function installConstraints(): void
