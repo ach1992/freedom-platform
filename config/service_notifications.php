@@ -5,10 +5,10 @@ declare(strict_types=1);
 return [
     'interval_minutes' => env('SERVICE_NOTIFICATION_INTERVAL_MINUTES', 5),
     'batch_limit' => env('SERVICE_NOTIFICATION_BATCH_LIMIT', 50),
-    'expiry_threshold_days' => array_values(array_filter(array_map(
-        static fn (string $value): int => (int) trim($value),
+    'expiry_threshold_days' => array_values(array_map(
+        static fn (string $value): string => trim($value),
         explode(',', (string) env('SERVICE_NOTIFICATION_EXPIRY_DAYS', '7,3,1,0')),
-    ), static fn (int $value): bool => $value >= 0)),
+    )),
     // Product-specific financial threshold. Zero keeps low-balance warnings disabled until configured.
     'low_balance_irr' => env('SERVICE_NOTIFICATION_LOW_BALANCE_IRR', 0),
     'retry' => [
