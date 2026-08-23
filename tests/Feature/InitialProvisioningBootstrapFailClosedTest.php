@@ -102,9 +102,12 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
         $autoRenewCommercialGuardMigration = require database_path('migrations/2026_08_21_000230_guard_service_auto_renew_commercial_binding.php');
         /** @var Migration $autoRenewRuntimeCapabilityMigration */
         $autoRenewRuntimeCapabilityMigration = require database_path('migrations/2026_08_21_000235_require_service_auto_renew_runtime_capability.php');
+        /** @var Migration $serviceSyncMigration */
+        $serviceSyncMigration = require database_path('migrations/2026_08_23_000100_enable_service_sync_authority.php');
 
         try {
             // Remove newer descendant authorities before replaying the historical provisioning bootstrap chain.
+            $serviceSyncMigration->down();
             $autoRenewRuntimeCapabilityMigration->down();
             $autoRenewCommercialGuardMigration->down();
             $autoRenewAttemptGuardMigration->down();
@@ -319,6 +322,7 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
             $autoRenewAttemptGuardMigration->up();
             $autoRenewCommercialGuardMigration->up();
             $autoRenewRuntimeCapabilityMigration->up();
+            $serviceSyncMigration->up();
         }
     }
 
