@@ -16,6 +16,7 @@ use App\Modules\Provisioning\Application\ServiceMutationQueueService;
 use App\Modules\Provisioning\Application\ServiceOperationalContext;
 use App\Modules\Provisioning\Application\ServiceSynchronizationService;
 use App\Modules\Provisioning\Domain\ServiceMutationType;
+use Illuminate\Database\Migrations\Migration;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
@@ -32,6 +33,9 @@ final class ServiceSynchronizationMutationFenceTest extends TestCase
     {
         parent::setUp();
         $this->seed();
+        /** @var Migration $operationalMigration */
+        $operationalMigration = require database_path('migrations/2026_08_19_000140_enable_service_operational_authority.php');
+        $operationalMigration->up();
         config()->set('service_sync.lease_seconds', 120);
         config()->set('service_sync.severity.missing_remote', 'critical');
         config()->set('service_sync.severity.expired_local_active_remote', 'warning');
