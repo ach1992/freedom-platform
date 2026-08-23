@@ -465,6 +465,10 @@ final readonly class ServiceNotificationThresholdService
         if ($threshold === 0 || $threshold !== $spec['source_id']) {
             return false;
         }
+        $available = $this->availableWalletBalance((int) $service->user_id);
+        if ($available === null || $available >= $threshold) {
+            return false;
+        }
         $cycle = hash('sha256', implode('|', [
             'service-notification-low-balance-cycle-v1',
             (string) $service->id,
