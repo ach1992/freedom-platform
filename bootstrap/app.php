@@ -11,6 +11,7 @@ use App\Modules\Operations\Presentation\Console\DispatchOutboxCommand;
 use App\Modules\Operations\Presentation\Console\HealthCheckCommand;
 use App\Modules\Operations\Presentation\Console\RecordWorkerHeartbeatCommand;
 use App\Modules\Provisioning\Presentation\Console\ProcessServiceAutoRenewalsCommand;
+use App\Modules\Provisioning\Presentation\Console\ProcessServiceNotificationsCommand;
 use App\Modules\Provisioning\Presentation\Console\ProcessServiceSynchronizationsCommand;
 use App\Modules\Telegram\Presentation\Console\ConfigureTelegramWebhookCommand;
 use App\Modules\Telegram\Presentation\Console\RequeueTelegramUpdatesCommand;
@@ -46,6 +47,7 @@ return Application::configure(basePath: dirname(__DIR__))
         HealthCheckCommand::class,
         IssueInstallerTokenCommand::class,
         ProcessServiceAutoRenewalsCommand::class,
+        ProcessServiceNotificationsCommand::class,
         ProcessServiceSynchronizationsCommand::class,
         RecordWorkerHeartbeatCommand::class,
         WalletMaintenanceCommand::class,
