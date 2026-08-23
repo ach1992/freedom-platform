@@ -12,6 +12,7 @@ require_once __DIR__.'/ServiceAutoRenewalRuntimeTestHelpers.php';
 
 use App\Modules\Provisioning\Application\ServiceAutoRenewalProcessor;
 use App\Modules\Provisioning\Application\ServiceNotificationThresholdService;
+use App\Modules\Provisioning\Domain\AutoRenewAttemptState;
 use App\Modules\Wallet\Application\LedgerEntryDraft;
 use App\Modules\Wallet\Application\LedgerPostingService;
 use App\Modules\Wallet\Domain\IrrMoney;
@@ -21,9 +22,11 @@ use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PanelsAccessFoundationSeeder;
 use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
 use Database\Seeders\WalletFinancialFoundationSeeder;
+use Illuminate\Database\Connection;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\DB;
+use ReflectionMethod;
 use Tests\TestCase;
 
 /** @requirement SVC-007 SVC-013 SVC-014 WAL-002 DAT-003 DAT-004 QUA-004 */
@@ -80,9 +83,12 @@ final class ServiceNotificationRenewalIntentAuthorityTest extends TestCase
         self::assertSame('insufficient_wallet', $intent->attempt_state);
 
         $notifications = $this->app->make(ServiceNotificationThresholdService::class);
+        $lockOrder = [];
+        $this->captureRenewalLockOrder($lockOrder);
         $result = $notifications->processBatch(1);
         self::assertSame(1, $result->triggered);
         self::assertSame(1, $result->queued);
+        $this->assertAttemptBeforeServiceLock($lockOrder);
 
         $state = DB::table('service_notification_states')
             ->where('service_subscription_id', $scenario['service_id'])
@@ -137,14 +143,141 @@ final class ServiceNotificationRenewalIntentAuthorityTest extends TestCase
                 ->value('state'),
         );
 
+        $lockOrder = [];
+        $this->captureRenewalLockOrder($lockOrder);
         $expired = $notifications->processBatch(1);
         self::assertSame(0, $expired->triggered);
         self::assertSame(1, $expired->expired);
+        $this->assertAttemptBeforeServiceLock($lockOrder);
         self::assertSame('expired', DB::table('service_notification_states')->where('id', $stateId)->value('state'));
         self::assertSame(1, DB::table('service_notification_states')
             ->where('service_subscription_id', $scenario['service_id'])
             ->where('notification_type', 'renewal_failure')
             ->count());
+    }
+
+    public function test_stale_resolved_observation_cannot_expire_reactivated_same_renewal_episode(): void
+    {
+        $scenario = $this->scenario('notification-renewal-reactivation-race');
+        $this->enableWalletMethod('notification-renewal-reactivation-race');
+        $this->seed(WalletFinancialFoundationSeeder::class);
+        $this->fundWallet($scenario['user_id'], 1, 'notification-renewal-reactivation-race');
+        $this->enableAutoRenew($scenario, 'notification-renewal-reactivation-race');
+
+        $renewals = $this->app->make(ServiceAutoRenewalProcessor::class);
+        self::assertSame(1, $renewals->processDue(10)->insufficientWallet);
+        $attempt = DB::table('service_auto_renew_attempts')
+            ->where('service_subscription_id', $scenario['service_id'])
+            ->first(['id', 'state']);
+        self::assertNotNull($attempt);
+        self::assertSame(AutoRenewAttemptState::InsufficientWallet->value, $attempt->state);
+
+        $notifications = $this->app->make(ServiceNotificationThresholdService::class);
+        self::assertSame(1, $notifications->processBatch(1)->triggered);
+        $state = DB::table('service_notification_states')
+            ->where('service_subscription_id', $scenario['service_id'])
+            ->where('threshold_code', 'renewal_insufficient_wallet')
+            ->first(['id', 'episode_key_hash', 'source_id', 'state']);
+        self::assertNotNull($state);
+        self::assertSame('triggered', $state->state);
+        $intentId = (int) $state->source_id;
+        self::assertGreaterThan(0, $intentId);
+
+        // Simulate the observation that made this episode appear resolved. The scanner can carry
+        // that stale observation while #163 later returns the exact same durable attempt to the
+        // same insufficient-wallet outcome.
+        $this->forceAutoRenewRetryState(
+            $renewals,
+            (int) $attempt->id,
+            AutoRenewAttemptState::RetryPending,
+            'notification_test_retry_pending',
+        );
+        self::assertSame(
+            AutoRenewAttemptState::RetryPending->value,
+            DB::table('service_auto_renew_attempts')->where('id', (int) $attempt->id)->value('state'),
+        );
+
+        $this->forceAutoRenewRetryState(
+            $renewals,
+            (int) $attempt->id,
+            AutoRenewAttemptState::InsufficientWallet,
+            'notification_test_insufficient_again',
+        );
+        self::assertSame(
+            AutoRenewAttemptState::InsufficientWallet->value,
+            DB::table('service_auto_renew_attempts')->where('id', (int) $attempt->id)->value('state'),
+        );
+        self::assertSame(1, DB::table('service_auto_renew_notification_intents')
+            ->where('auto_renew_attempt_id', (int) $attempt->id)
+            ->where('outcome', 'insufficient_wallet')
+            ->where('id', $intentId)
+            ->count());
+
+        $service = DB::table('service_subscriptions')
+            ->where('id', $scenario['service_id'])
+            ->first([
+                'id', 'public_id', 'user_id', 'service_target_id', 'remote_service_id', 'provisioned_at',
+                'lifecycle_state', 'lifecycle_version', 'remote_identity_generation', 'mutation_generation',
+                'remote_deleted_at',
+            ]);
+        self::assertNotNull($service);
+
+        $expire = new ReflectionMethod($notifications, 'expireStaleTriggeredStates');
+        $lockOrder = [];
+        $this->captureRenewalLockOrder($lockOrder);
+        $expired = $expire->invoke($notifications, $service, []);
+
+        self::assertSame(0, $expired);
+        self::assertSame('triggered', DB::table('service_notification_states')->where('id', (int) $state->id)->value('state'));
+        self::assertSame($state->episode_key_hash, DB::table('service_notification_states')->where('id', (int) $state->id)->value('episode_key_hash'));
+        $this->assertAttemptBeforeServiceLock($lockOrder);
+    }
+
+    private function forceAutoRenewRetryState(
+        ServiceAutoRenewalProcessor $processor,
+        int $attemptId,
+        AutoRenewAttemptState $state,
+        string $reasonCode,
+    ): void {
+        $method = new ReflectionMethod($processor, 'scheduleRetryWithBudget');
+        $method->invoke($processor, $attemptId, $state, $reasonCode, true);
+    }
+
+    /** @param list<string> $lockOrder */
+    private function assertAttemptBeforeServiceLock(array $lockOrder): void
+    {
+        $attemptIndex = array_search('attempt', $lockOrder, true);
+        $serviceIndex = array_search('service', $lockOrder, true);
+        if (! is_int($attemptIndex) || ! is_int($serviceIndex)) {
+            self::fail(
+                'Expected auto-renew Attempt and Service Subscription FOR UPDATE locks: '
+                .json_encode($lockOrder, JSON_THROW_ON_ERROR),
+            );
+        }
+        self::assertTrue(
+            $attemptIndex < $serviceIndex,
+            'Renewal notification lock order must remain Attempt -> Service: '.json_encode($lockOrder, JSON_THROW_ON_ERROR),
+        );
+    }
+
+    /** @param list<string> $lockOrder */
+    private function captureRenewalLockOrder(array &$lockOrder): void
+    {
+        DB::connection()->beforeExecuting(static function (string $query, array $bindings, Connection $connection) use (&$lockOrder): void {
+            unset($bindings, $connection);
+            $sql = strtolower($query);
+            if (! str_contains($sql, 'for update')) {
+                return;
+            }
+            if (str_contains($sql, 'service_auto_renew_attempts')) {
+                $lockOrder[] = 'attempt';
+
+                return;
+            }
+            if (str_contains($sql, 'service_subscriptions')) {
+                $lockOrder[] = 'service';
+            }
+        });
     }
 
     private function topUpWallet(int $walletId, int $amountIrr, string $suffix): void

@@ -22,7 +22,8 @@ use RuntimeException;
 /**
  * @phpstan-type NotificationServiceRow object{id:int|string,public_id:string,user_id:int|string,service_target_id:int|string|null,remote_service_id:?string,provisioned_at:?string,lifecycle_state:string,lifecycle_version:int|string,remote_identity_generation:int|string,mutation_generation:int|string,remote_deleted_at:?string}
  * @phpstan-type NotificationSpec array{type:ServiceNotificationType,threshold:string,cycle:string,episode:string,source_type:string,source_id:?int,message:string}
- * @phpstan-type NotificationStateRow object{id:int|string,public_id:string,service_subscription_id:int|string,episode_key_hash:string,notification_type:string,threshold_code:string,state:string,latest_delivery_attempt_id:int|string|null,latest_retry_ordinal:int|string|null,next_retry_at:?string}
+ * @phpstan-type NotificationStateRow object{id:int|string,public_id:string,service_subscription_id:int|string,episode_key_hash:string,notification_type:string,threshold_code:string,cycle_key_hash:string,source_type:string,source_id:int|string|null,state:string,latest_delivery_attempt_id:int|string|null,latest_retry_ordinal:int|string|null,next_retry_at:?string}
+ * @phpstan-type AutoRenewAttemptAuthorityRow object{id:int|string,service_subscription_id:int|string,state:string}
  * @phpstan-type DeliveryEffectRow object{state:string,completed_at:?string,retry_after_seconds:int|string|null}
  */
 final readonly class ServiceNotificationThresholdService
@@ -320,6 +321,10 @@ final readonly class ServiceNotificationThresholdService
      */
     private function ensureTriggered(object $service, array $spec): ?array
     {
+        if ($spec['type'] === ServiceNotificationType::RenewalFailure) {
+            return $this->ensureRenewalTriggered($service, $spec);
+        }
+
         return $this->database->connection()->transaction(function (Connection $connection) use ($service, $spec): ?array {
             $locked = $this->lockedService($connection, (int) $service->id);
             if (! $this->sameServiceFacts($service, $locked)
@@ -327,69 +332,109 @@ final readonly class ServiceNotificationThresholdService
                 return null;
             }
 
-            /** @var object{id:int|string}|null $existing */
-            $existing = $connection->table('service_notification_states')
-                ->where('episode_key_hash', $spec['episode'])
-                ->lockForUpdate()
-                ->first(['id']);
-            if ($existing !== null) {
-                return [(int) $existing->id, false];
-            }
-
-            $correlationId = 'service-notification:trigger:'.substr($spec['episode'], 0, 24);
-            $timestamp = $this->timestamp();
-            ServiceNotificationDatabaseAuthority::create(
-                $connection,
-                (int) $locked->id,
-                $spec['episode'],
-                $spec['type']->value,
-                $spec['threshold'],
-                $spec['cycle'],
-                $spec['source_type'],
-                $spec['source_id'],
-                $timestamp,
-                $correlationId,
-                $spec['type'] === ServiceNotificationType::LowBalance
-                    ? $this->boundedConfigInt('service_notifications.low_balance_irr', 0, 1, PHP_INT_MAX)
-                    : null,
-            );
-            try {
-                $stateId = (int) $connection->table('service_notification_states')->insertGetId([
-                    'public_id' => (string) Str::ulid(),
-                    'service_subscription_id' => (int) $locked->id,
-                    'episode_key_hash' => $spec['episode'],
-                    'notification_type' => $spec['type']->value,
-                    'threshold_code' => $spec['threshold'],
-                    'cycle_key_hash' => $spec['cycle'],
-                    'source_type' => $spec['source_type'],
-                    'source_id' => $spec['source_id'],
-                    'state' => ServiceNotificationState::Triggered->value,
-                    'latest_delivery_attempt_id' => null,
-                    'latest_retry_ordinal' => null,
-                    'next_retry_at' => null,
-                    'triggered_at' => $timestamp,
-                    'notified_at' => null,
-                    'acknowledged_at' => null,
-                    'escalated_at' => null,
-                    'expired_at' => null,
-                    'last_correlation_id' => $correlationId,
-                    'updated_at' => $timestamp,
-                ]);
-                $this->insertEvent(
-                    $connection,
-                    $stateId,
-                    'triggered',
-                    null,
-                    ServiceNotificationState::Triggered->value,
-                    $correlationId,
-                    $timestamp,
-                );
-            } finally {
-                ServiceNotificationDatabaseAuthority::clear($connection);
-            }
-
-            return [$stateId, true];
+            return $this->createOrReuseTriggeredState($connection, $locked, $spec);
         }, 3);
+    }
+
+    /**
+     * @param  NotificationServiceRow  $service
+     * @param  NotificationSpec  $spec
+     * @return array{int,bool}|null
+     */
+    private function ensureRenewalTriggered(object $service, array $spec): ?array
+    {
+        if ($spec['source_type'] !== 'auto_renew_notification_intent' || $spec['source_id'] === null) {
+            return null;
+        }
+        $attemptId = $this->renewalAttemptIdForIntent($spec['source_id']);
+        if ($attemptId === null) {
+            return null;
+        }
+
+        return $this->database->connection()->transaction(function (Connection $connection) use ($service, $spec, $attemptId): ?array {
+            // #163 owns the canonical auto-renew lock order. Any notification path that needs
+            // both rows must follow Attempt -> Service rather than creating a Service -> Attempt
+            // inversion against auto-renew reconciliation/mutation completion.
+            $attempt = $this->lockedAutoRenewAttempt($connection, $attemptId);
+            $locked = $this->lockedService($connection, (int) $service->id);
+            if (! $this->sameServiceFacts($service, $locked)
+                || ! $this->renewalSourceStillAuthoritative($connection, $locked, $spec, $attempt)) {
+                return null;
+            }
+
+            return $this->createOrReuseTriggeredState($connection, $locked, $spec);
+        }, 3);
+    }
+
+    /**
+     * @param  NotificationServiceRow  $service
+     * @param  NotificationSpec  $spec
+     * @return array{int,bool}
+     */
+    private function createOrReuseTriggeredState(Connection $connection, object $service, array $spec): array
+    {
+        /** @var object{id:int|string}|null $existing */
+        $existing = $connection->table('service_notification_states')
+            ->where('episode_key_hash', $spec['episode'])
+            ->lockForUpdate()
+            ->first(['id']);
+        if ($existing !== null) {
+            return [(int) $existing->id, false];
+        }
+
+        $correlationId = 'service-notification:trigger:'.substr($spec['episode'], 0, 24);
+        $timestamp = $this->timestamp();
+        ServiceNotificationDatabaseAuthority::create(
+            $connection,
+            (int) $service->id,
+            $spec['episode'],
+            $spec['type']->value,
+            $spec['threshold'],
+            $spec['cycle'],
+            $spec['source_type'],
+            $spec['source_id'],
+            $timestamp,
+            $correlationId,
+            $spec['type'] === ServiceNotificationType::LowBalance
+                ? $this->boundedConfigInt('service_notifications.low_balance_irr', 0, 1, PHP_INT_MAX)
+                : null,
+        );
+        try {
+            $stateId = (int) $connection->table('service_notification_states')->insertGetId([
+                'public_id' => (string) Str::ulid(),
+                'service_subscription_id' => (int) $service->id,
+                'episode_key_hash' => $spec['episode'],
+                'notification_type' => $spec['type']->value,
+                'threshold_code' => $spec['threshold'],
+                'cycle_key_hash' => $spec['cycle'],
+                'source_type' => $spec['source_type'],
+                'source_id' => $spec['source_id'],
+                'state' => ServiceNotificationState::Triggered->value,
+                'latest_delivery_attempt_id' => null,
+                'latest_retry_ordinal' => null,
+                'next_retry_at' => null,
+                'triggered_at' => $timestamp,
+                'notified_at' => null,
+                'acknowledged_at' => null,
+                'escalated_at' => null,
+                'expired_at' => null,
+                'last_correlation_id' => $correlationId,
+                'updated_at' => $timestamp,
+            ]);
+            $this->insertEvent(
+                $connection,
+                $stateId,
+                'triggered',
+                null,
+                ServiceNotificationState::Triggered->value,
+                $correlationId,
+                $timestamp,
+            );
+        } finally {
+            ServiceNotificationDatabaseAuthority::clear($connection);
+        }
+
+        return [$stateId, true];
     }
 
     /**
@@ -420,45 +465,6 @@ final readonly class ServiceNotificationThresholdService
             $current = $this->expirySpecFromSnapshot($service, (int) $snapshot->id, $snapshot->remote_expires_at);
 
             return $current !== null && $this->sameSpecIdentity($current, $spec);
-        }
-
-        if ($spec['type'] === ServiceNotificationType::RenewalFailure) {
-            if ($spec['source_type'] !== 'auto_renew_notification_intent' || $spec['source_id'] === null) {
-                return false;
-            }
-            /** @var object{id:int|string,outcome:string,reason_code:string|null,attempt_state:string,service_subscription_id:int|string}|null $intent */
-            $intent = $connection->table('service_auto_renew_notification_intents as intent')
-                ->join('service_auto_renew_attempts as attempt', 'attempt.id', '=', 'intent.auto_renew_attempt_id')
-                ->where('intent.id', $spec['source_id'])
-                ->lockForUpdate()
-                ->first([
-                    'intent.id', 'intent.outcome', 'intent.reason_code', 'attempt.state as attempt_state',
-                    'attempt.service_subscription_id',
-                ]);
-            if ($intent === null
-                || (int) $intent->service_subscription_id !== (int) $service->id
-                || ! $this->renewalIntentStillApplicable($intent->outcome, $intent->attempt_state)) {
-                return false;
-            }
-            $threshold = 'renewal_'.$intent->outcome;
-            $cycle = hash('sha256', implode('|', [
-                'service-notification-renewal-cycle-v1',
-                (string) $service->id,
-                (string) $intent->id,
-                $intent->outcome,
-                (string) ($intent->reason_code ?? ''),
-            ]));
-            $current = [
-                'type' => ServiceNotificationType::RenewalFailure,
-                'threshold' => $threshold,
-                'cycle' => $cycle,
-                'episode' => $this->episodeKey($service, ServiceNotificationType::RenewalFailure, $threshold, $cycle),
-                'source_type' => 'auto_renew_notification_intent',
-                'source_id' => (int) $intent->id,
-                'message' => $this->renewalMessage($intent->outcome),
-            ];
-
-            return $this->sameSpecIdentity($current, $spec);
         }
 
         if ($spec['type'] !== ServiceNotificationType::LowBalance
@@ -809,6 +815,19 @@ final readonly class ServiceNotificationThresholdService
         ServiceNotificationState $next,
         string $correlationId,
     ): bool {
+        if ($next === ServiceNotificationState::Expired) {
+            $renewalLocator = $this->renewalExpirationLocator($stateId, $serviceId);
+            if ($renewalLocator !== null) {
+                return $this->transitionRenewalFailureToExpired(
+                    $stateId,
+                    $serviceId,
+                    $renewalLocator['source_id'],
+                    $renewalLocator['attempt_id'],
+                    $correlationId,
+                );
+            }
+        }
+
         return $this->database->connection()->transaction(function (Connection $connection) use (
             $stateId,
             $serviceId,
@@ -825,67 +844,273 @@ final readonly class ServiceNotificationThresholdService
             if ($state === null || $state->state === $next->value) {
                 return false;
             }
-
-            $current = ServiceNotificationState::tryFrom($state->state)
-                ?? throw new RuntimeException('Stored Service notification state is invalid.');
-            $allowed = ($current === ServiceNotificationState::Triggered
-                    && in_array($next, [ServiceNotificationState::Notified, ServiceNotificationState::Escalated, ServiceNotificationState::Expired], true))
-                || (in_array($current, [ServiceNotificationState::Notified, ServiceNotificationState::Escalated], true)
-                    && $next === ServiceNotificationState::Acknowledged);
-            if (! $allowed) {
-                return false;
-            }
             if ($next === ServiceNotificationState::Expired
-                && ! $this->canExpireTriggeredState($connection, $service, $state)) {
+                && $state->notification_type === ServiceNotificationType::RenewalFailure->value) {
+                // Renewal expiration must enter through transitionRenewalFailureToExpired(),
+                // which acquires the #163 Attempt lock before the Service lock.
                 return false;
             }
 
-            $timestamp = $this->timestamp();
-            $values = [
-                'state' => $next->value,
-                'next_retry_at' => null,
-                'last_correlation_id' => $correlationId,
-                'updated_at' => $timestamp,
-            ];
-            $values[match ($next) {
-                ServiceNotificationState::Notified => 'notified_at',
-                ServiceNotificationState::Acknowledged => 'acknowledged_at',
-                ServiceNotificationState::Escalated => 'escalated_at',
-                default => 'expired_at',
-            }] = $timestamp;
+            return $this->transitionLockedState($connection, $service, $state, $next, $correlationId, false);
+        }, 3);
+    }
 
-            ServiceNotificationDatabaseAuthority::transition(
+    private function transitionRenewalFailureToExpired(
+        int $stateId,
+        int $serviceId,
+        int $sourceId,
+        int $attemptId,
+        string $correlationId,
+    ): bool {
+        return $this->database->connection()->transaction(function (Connection $connection) use (
+            $stateId,
+            $serviceId,
+            $sourceId,
+            $attemptId,
+            $correlationId,
+        ): bool {
+            // Match #163: Attempt -> Service -> notification state.
+            $attempt = $this->lockedAutoRenewAttempt($connection, $attemptId);
+            $service = $this->lockedService($connection, $serviceId);
+            /** @var NotificationStateRow|null $state */
+            $state = $connection->table('service_notification_states')
+                ->where('id', $stateId)
+                ->where('service_subscription_id', $serviceId)
+                ->lockForUpdate()
+                ->first($this->stateColumns());
+            if ($state === null || $state->state === ServiceNotificationState::Expired->value) {
+                return false;
+            }
+            if ($state->state !== ServiceNotificationState::Triggered->value
+                || $state->notification_type !== ServiceNotificationType::RenewalFailure->value
+                || $state->source_type !== 'auto_renew_notification_intent'
+                || $state->source_id === null
+                || (int) $state->source_id !== $sourceId
+                || ! $this->canExpireRenewalFailureState($connection, $service, $state, $attempt)) {
+                return false;
+            }
+
+            return $this->transitionLockedState(
                 $connection,
-                $stateId,
-                $serviceId,
+                $service,
+                $state,
+                ServiceNotificationState::Expired,
+                $correlationId,
+                true,
+            );
+        }, 3);
+    }
+
+    /**
+     * @param  NotificationServiceRow  $service
+     * @param  NotificationStateRow  $state
+     */
+    private function transitionLockedState(
+        Connection $connection,
+        object $service,
+        object $state,
+        ServiceNotificationState $next,
+        string $correlationId,
+        bool $renewalExpirationRevalidated,
+    ): bool {
+        $current = ServiceNotificationState::tryFrom($state->state)
+            ?? throw new RuntimeException('Stored Service notification state is invalid.');
+        $allowed = ($current === ServiceNotificationState::Triggered
+                && in_array($next, [ServiceNotificationState::Notified, ServiceNotificationState::Escalated, ServiceNotificationState::Expired], true))
+            || (in_array($current, [ServiceNotificationState::Notified, ServiceNotificationState::Escalated], true)
+                && $next === ServiceNotificationState::Acknowledged);
+        if (! $allowed) {
+            return false;
+        }
+        if ($next === ServiceNotificationState::Expired
+            && $state->notification_type === ServiceNotificationType::RenewalFailure->value
+            && ! $renewalExpirationRevalidated) {
+            return false;
+        }
+        if ($next === ServiceNotificationState::Expired
+            && ! $this->canExpireTriggeredState($connection, $service, $state)) {
+            return false;
+        }
+
+        $timestamp = $this->timestamp();
+        $values = [
+            'state' => $next->value,
+            'next_retry_at' => null,
+            'last_correlation_id' => $correlationId,
+            'updated_at' => $timestamp,
+        ];
+        $values[match ($next) {
+            ServiceNotificationState::Notified => 'notified_at',
+            ServiceNotificationState::Acknowledged => 'acknowledged_at',
+            ServiceNotificationState::Escalated => 'escalated_at',
+            default => 'expired_at',
+        }] = $timestamp;
+
+        ServiceNotificationDatabaseAuthority::transition(
+            $connection,
+            (int) $state->id,
+            (int) $service->id,
+            $current->value,
+            $next->value,
+            $timestamp,
+            $correlationId,
+        );
+        try {
+            $updated = $connection->table('service_notification_states')
+                ->where('id', (int) $state->id)
+                ->where('state', $current->value)
+                ->update($values);
+            if ($updated !== 1) {
+                return false;
+            }
+            $this->insertEvent(
+                $connection,
+                (int) $state->id,
+                $next->value,
                 $current->value,
                 $next->value,
-                $timestamp,
                 $correlationId,
+                $timestamp,
             );
-            try {
-                $updated = $connection->table('service_notification_states')
-                    ->where('id', $stateId)
-                    ->where('state', $current->value)
-                    ->update($values);
-                if ($updated !== 1) {
-                    return false;
-                }
-                $this->insertEvent(
-                    $connection,
-                    $stateId,
-                    $next->value,
-                    $current->value,
-                    $next->value,
-                    $correlationId,
-                    $timestamp,
-                );
-            } finally {
-                ServiceNotificationDatabaseAuthority::clear($connection);
-            }
+        } finally {
+            ServiceNotificationDatabaseAuthority::clear($connection);
+        }
 
-            return true;
-        }, 3);
+        return true;
+    }
+
+    /** @return array{source_id:int,attempt_id:int}|null */
+    private function renewalExpirationLocator(int $stateId, int $serviceId): ?array
+    {
+        /** @var object{source_id:int|string,auto_renew_attempt_id:int|string}|null $locator */
+        $locator = $this->database->connection()->table('service_notification_states as state')
+            ->join('service_auto_renew_notification_intents as intent', 'intent.id', '=', 'state.source_id')
+            ->where('state.id', $stateId)
+            ->where('state.service_subscription_id', $serviceId)
+            ->where('state.notification_type', ServiceNotificationType::RenewalFailure->value)
+            ->where('state.source_type', 'auto_renew_notification_intent')
+            ->first(['state.source_id', 'intent.auto_renew_attempt_id']);
+        if ($locator === null) {
+            return null;
+        }
+
+        return [
+            'source_id' => (int) $locator->source_id,
+            'attempt_id' => (int) $locator->auto_renew_attempt_id,
+        ];
+    }
+
+    /**
+     * @param  NotificationServiceRow  $service
+     * @param  NotificationStateRow  $state
+     * @param  AutoRenewAttemptAuthorityRow  $attempt
+     */
+    private function canExpireRenewalFailureState(
+        Connection $connection,
+        object $service,
+        object $state,
+        object $attempt,
+    ): bool {
+        if ((int) $attempt->service_subscription_id !== (int) $service->id
+            || $state->source_id === null) {
+            return false;
+        }
+        /** @var object{id:int|string,auto_renew_attempt_id:int|string,outcome:string,reason_code:string|null}|null $intent */
+        $intent = $connection->table('service_auto_renew_notification_intents')
+            ->where('id', (int) $state->source_id)
+            ->first(['id', 'auto_renew_attempt_id', 'outcome', 'reason_code']);
+        if ($intent === null || (int) $intent->auto_renew_attempt_id !== (int) $attempt->id) {
+            return false;
+        }
+        $threshold = 'renewal_'.$intent->outcome;
+        $cycle = hash('sha256', implode('|', [
+            'service-notification-renewal-cycle-v1',
+            (string) $service->id,
+            (string) $intent->id,
+            $intent->outcome,
+            (string) ($intent->reason_code ?? ''),
+        ]));
+        $episode = $this->episodeKey($service, ServiceNotificationType::RenewalFailure, $threshold, $cycle);
+        if ($state->threshold_code !== $threshold
+            || ! hash_equals($cycle, $state->cycle_key_hash)
+            || ! hash_equals($episode, $state->episode_key_hash)) {
+            return false;
+        }
+
+        return ! $this->renewalIntentStillApplicable($intent->outcome, (string) $attempt->state);
+    }
+
+    /**
+     * @param  NotificationServiceRow  $service
+     * @param  NotificationSpec  $spec
+     * @param  AutoRenewAttemptAuthorityRow  $attempt
+     */
+    private function renewalSourceStillAuthoritative(
+        Connection $connection,
+        object $service,
+        array $spec,
+        object $attempt,
+    ): bool {
+        if ($spec['source_type'] !== 'auto_renew_notification_intent'
+            || $spec['source_id'] === null
+            || (int) $attempt->service_subscription_id !== (int) $service->id) {
+            return false;
+        }
+        /** @var object{id:int|string,auto_renew_attempt_id:int|string,outcome:string,reason_code:string|null}|null $intent */
+        $intent = $connection->table('service_auto_renew_notification_intents')
+            ->where('id', $spec['source_id'])
+            ->first(['id', 'auto_renew_attempt_id', 'outcome', 'reason_code']);
+        if ($intent === null
+            || (int) $intent->auto_renew_attempt_id !== (int) $attempt->id
+            || ! $this->renewalIntentStillApplicable($intent->outcome, (string) $attempt->state)) {
+            return false;
+        }
+        $threshold = 'renewal_'.$intent->outcome;
+        $cycle = hash('sha256', implode('|', [
+            'service-notification-renewal-cycle-v1',
+            (string) $service->id,
+            (string) $intent->id,
+            $intent->outcome,
+            (string) ($intent->reason_code ?? ''),
+        ]));
+        $current = [
+            'type' => ServiceNotificationType::RenewalFailure,
+            'threshold' => $threshold,
+            'cycle' => $cycle,
+            'episode' => $this->episodeKey($service, ServiceNotificationType::RenewalFailure, $threshold, $cycle),
+            'source_type' => 'auto_renew_notification_intent',
+            'source_id' => (int) $intent->id,
+            'message' => $this->renewalMessage($intent->outcome),
+        ];
+
+        return $this->sameSpecIdentity($current, $spec);
+    }
+
+    private function renewalAttemptIdForIntent(int $intentId): ?int
+    {
+        $attemptId = $this->database->connection()->table('service_auto_renew_notification_intents')
+            ->where('id', $intentId)
+            ->value('auto_renew_attempt_id');
+        if (! is_int($attemptId) && ! is_string($attemptId)) {
+            return null;
+        }
+
+        return (int) $attemptId;
+    }
+
+    /** @return AutoRenewAttemptAuthorityRow */
+    private function lockedAutoRenewAttempt(Connection $connection, int $attemptId): object
+    {
+        /** @var AutoRenewAttemptAuthorityRow|null $attempt */
+        $attempt = $connection->table('service_auto_renew_attempts')
+            ->where('id', $attemptId)
+            ->lockForUpdate()
+            ->first(['id', 'service_subscription_id', 'state']);
+        if ($attempt === null) {
+            throw new RuntimeException('Auto-renew attempt disappeared during notification processing.');
+        }
+
+        return $attempt;
     }
 
     /**
@@ -1179,7 +1404,8 @@ final readonly class ServiceNotificationThresholdService
     {
         return [
             'id', 'public_id', 'service_subscription_id', 'episode_key_hash', 'notification_type',
-            'threshold_code', 'state', 'latest_delivery_attempt_id', 'latest_retry_ordinal', 'next_retry_at',
+            'threshold_code', 'cycle_key_hash', 'source_type', 'source_id', 'state',
+            'latest_delivery_attempt_id', 'latest_retry_ordinal', 'next_retry_at',
         ];
     }
 
