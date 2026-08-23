@@ -10,8 +10,8 @@ require_once __DIR__.'/ServiceAutoRenewalAgentPricingTestSupport.php';
 require_once __DIR__.'/ServiceAutoRenewalRuntimeTestSupport.php';
 require_once __DIR__.'/ServiceAutoRenewalRuntimeTestHelpers.php';
 
-use App\Modules\Provisioning\Application\ServiceAutoRenewDatabaseAuthority;
 use App\Modules\Provisioning\Application\ServiceAutoRenewalProcessor;
+use App\Modules\Provisioning\Application\ServiceAutoRenewDatabaseAuthority;
 use App\Modules\Provisioning\Application\ServiceNotificationThresholdService;
 use App\Modules\Provisioning\Domain\AutoRenewAttemptState;
 use App\Modules\Wallet\Application\LedgerEntryDraft;
