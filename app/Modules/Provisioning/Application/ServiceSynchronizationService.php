@@ -33,6 +33,9 @@ final readonly class ServiceSynchronizationService
 {
     private const RESOLUTION_PERMISSION = 'services.repair';
 
+    /** @var list<string> */
+    private const TERMINAL_OPERATION_STATES = ['succeeded', 'failed_final', 'compensated'];
+
     public function __construct(
         private DatabaseManager $database,
         private Clock $clock,
@@ -233,6 +236,10 @@ final readonly class ServiceSynchronizationService
         }
 
         try {
+            if ($this->hasUnresolvedMutation((int) $service->id)) {
+                return ['processed' => false, 'anomalies' => 0, 'provider_failure' => false];
+            }
+
             $observation = $this->observeRemote($service);
             $anomalyCount = $this->persistSnapshotAndAnomalies(
                 $runId,
@@ -314,7 +321,10 @@ final readonly class ServiceSynchronizationService
 
             $locked = $this->eligibleServiceByIdOn($connection, (int) $service->id, true);
             if ($locked === null || ! $this->sameServiceFacts($service, $locked)) {
-                throw new DomainException('Service changed while synchronization evidence was being collected.');
+                return null;
+            }
+            if ($this->hasUnresolvedMutationOn($connection, (int) $locked->id)) {
+                return null;
             }
 
             /** @var SyncPreviousRow|null $previous */
@@ -612,6 +622,19 @@ final readonly class ServiceSynchronizationService
         } finally {
             ServiceSyncDatabaseAuthority::clear($connection);
         }
+    }
+
+    private function hasUnresolvedMutation(int $serviceId): bool
+    {
+        return $this->hasUnresolvedMutationOn($this->database->connection(), $serviceId);
+    }
+
+    private function hasUnresolvedMutationOn(Connection $connection, int $serviceId): bool
+    {
+        return $connection->table('provisioning_operations')
+            ->where('service_subscription_id', $serviceId)
+            ->whereNotIn('state', self::TERMINAL_OPERATION_STATES)
+            ->exists();
     }
 
     /** @return list<SyncServiceRow> */
