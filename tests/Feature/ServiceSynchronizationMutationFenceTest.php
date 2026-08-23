@@ -146,6 +146,14 @@ final class ServiceSynchronizationMutationFenceTest extends TestCase
         $userId = $this->benefitUser();
         $targetId = (int) DB::table('plan_offerings')->where('id', $offering['id'])->value('panel_service_target_id');
         $connectionId = (int) DB::table('panel_service_targets')->where('id', $targetId)->value('panel_connection_id');
+        $profileId = DB::table('panel_target_protocol_profiles')
+            ->where('panel_service_target_id', $targetId)
+            ->value('panel_protocol_profile_id');
+        self::assertNotNull($profileId);
+        DB::table('panel_protocol_profiles')->where('id', (int) $profileId)->update([
+            'host' => 'panel.example.com',
+            'updated_at' => now('UTC'),
+        ]);
         DB::table('panel_connections')->where('id', $connectionId)->update([
             'encrypted_credentials' => Crypt::encryptString(json_encode(['token' => 'service-sync-test'], JSON_THROW_ON_ERROR)),
             'base_url' => 'https://panel.example.com',
