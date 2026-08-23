@@ -15,8 +15,9 @@ use DomainException;
  * @phpstan-type SyncRemoteFacts array{disposition:string,status:?string,data_limit_bytes:?int,expires_at:?DateTimeImmutable}
  * @phpstan-type SyncPreviousFacts array{local_lifecycle_version:int|string,local_remote_identity_generation:int|string,local_mutation_generation:int|string,remote_status:string|null,remote_data_limit_bytes:int|string|null,remote_expires_at:string|null}
  * @phpstan-type SyncFinding array{type:ServiceSyncAnomalyType,severity:ServiceSyncAnomalySeverity}
+ *
+ * @requirement SVC-010 SVC-013 QUA-001 QUA-004
  */
-/** @requirement SVC-010 SVC-013 QUA-001 QUA-004 */
 final readonly class ServiceSyncAnomalyDetector
 {
     public function __construct(private Clock $clock) {}
