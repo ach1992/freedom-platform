@@ -367,7 +367,7 @@ namespace Tests\Feature {
         }
 
         /**
-         * @param list<array{notification_state_id:int,service_public_id:string,retry_ordinal:int,request_key:string,correlation_id:string,presentation_text:string}> $payloads
+         * @param  list<array{notification_state_id:int,service_public_id:string,retry_ordinal:int,request_key:string,correlation_id:string,presentation_text:string}>  $payloads
          * @return list<array<string,mixed>>
          */
         private function runConcurrent(array $payloads): array
@@ -444,6 +444,7 @@ namespace Tests\Feature {
                 foreach ($read as $stream) {
                     if ($stream === $worker['pipes'][2]) {
                         $stderr .= stream_get_contents($stream);
+
                         continue;
                     }
                     $line = fgets($stream);
