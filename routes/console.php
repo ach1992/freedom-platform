@@ -53,7 +53,14 @@ Schedule::command('services:auto-renew', [
     ->withoutOverlapping(30)
     ->onOneServer();
 
-$serviceSyncInterval = max(1, min(60, (int) config('service_sync.interval_minutes', 5)));
+$serviceSyncInterval = filter_var(
+    config('service_sync.interval_minutes', 5),
+    FILTER_VALIDATE_INT,
+    ['options' => ['min_range' => 1, 'max_range' => 60]],
+);
+if ($serviceSyncInterval === false || 60 % $serviceSyncInterval !== 0) {
+    throw new RuntimeException('Service sync interval minutes must be a divisor of 60 between 1 and 60.');
+}
 $serviceSyncCron = $serviceSyncInterval === 60 ? '0 * * * *' : '*/'.$serviceSyncInterval.' * * * *';
 Schedule::command('services:sync', [
     '--limit' => config('service_sync.batch_limit', 50),
@@ -66,7 +73,14 @@ Schedule::command('services:sync', [
     ->withoutOverlapping(30)
     ->onOneServer();
 
-$serviceNotificationInterval = max(1, min(60, (int) config('service_notifications.interval_minutes', 5)));
+$serviceNotificationInterval = filter_var(
+    config('service_notifications.interval_minutes', 5),
+    FILTER_VALIDATE_INT,
+    ['options' => ['min_range' => 1, 'max_range' => 60]],
+);
+if ($serviceNotificationInterval === false || 60 % $serviceNotificationInterval !== 0) {
+    throw new RuntimeException('Service notification interval minutes must be a divisor of 60 between 1 and 60.');
+}
 $serviceNotificationCron = $serviceNotificationInterval === 60
     ? '2 * * * *'
     : '*/'.$serviceNotificationInterval.' * * * *';
