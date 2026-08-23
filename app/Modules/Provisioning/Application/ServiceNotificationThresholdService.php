@@ -1359,7 +1359,18 @@ final readonly class ServiceNotificationThresholdService
                     'updated_at' => $timestamp,
                 ]);
                 if ($updated !== 1) {
-                    throw new RuntimeException('Service notification scan cursor lost its current authority.');
+                    // MariaDB reports zero changed rows for an exact no-op. Under the held row lock,
+                    // accept that only when the authoritative cursor postcondition already matches.
+                    /** @var object{last_service_subscription_id:int|string|null,updated_at:string}|null $currentCursor */
+                    $currentCursor = $connection->table('service_notification_scan_cursor')
+                        ->where('id', 1)
+                        ->first(['last_service_subscription_id', 'updated_at']);
+                    if ($updated !== 0
+                        || $currentCursor === null
+                        || (int) $currentCursor->last_service_subscription_id !== $nextServiceId
+                        || $currentCursor->updated_at !== $timestamp) {
+                        throw new RuntimeException('Service notification scan cursor lost its current authority.');
+                    }
                 }
             } finally {
                 ServiceNotificationDatabaseAuthority::clear($connection);
