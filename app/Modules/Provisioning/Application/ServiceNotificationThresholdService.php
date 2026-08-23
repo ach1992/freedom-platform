@@ -50,11 +50,8 @@ final readonly class ServiceNotificationThresholdService
         $escalated = 0;
         $expired = 0;
         $skipped = 0;
-        /** @var array<int,int|null> $walletCache */
-        $walletCache = [];
-
         foreach ($services as $service) {
-            $specs = $this->notificationSpecs($service, $walletCache);
+            $specs = $this->notificationSpecs($service);
             $activeEpisodes = [];
             foreach ($specs as $spec) {
                 $result = $this->ensureTriggered($service, $spec);
@@ -128,17 +125,16 @@ final readonly class ServiceNotificationThresholdService
 
     /**
      * @param  NotificationServiceRow  $service
-     * @param  array<int,int|null>  $walletCache
      * @return list<NotificationSpec>
      */
-    private function notificationSpecs(object $service, array &$walletCache): array
+    private function notificationSpecs(object $service): array
     {
         $specs = [];
         $expiry = $this->expirySpec($service);
         if ($expiry !== null) {
             $specs[] = $expiry;
         }
-        $lowBalance = $this->lowBalanceSpec($service, $walletCache);
+        $lowBalance = $this->lowBalanceSpec($service);
         if ($lowBalance !== null) {
             $specs[] = $lowBalance;
         }
@@ -206,21 +202,15 @@ final readonly class ServiceNotificationThresholdService
         ];
     }
 
-    /**
-     * @param  NotificationServiceRow  $service
-     * @param  array<int,int|null>  $walletCache
-     */
-    private function lowBalanceSpec(object $service, array &$walletCache): ?array
+    /** @param NotificationServiceRow $service */
+    private function lowBalanceSpec(object $service): ?array
     {
         $threshold = $this->boundedConfigInt('service_notifications.low_balance_irr', 0, 0, PHP_INT_MAX);
         if ($threshold === 0) {
             return null;
         }
         $userId = (int) $service->user_id;
-        if (! array_key_exists($userId, $walletCache)) {
-            $walletCache[$userId] = $this->availableWalletBalance($userId);
-        }
-        $available = $walletCache[$userId];
+        $available = $this->availableWalletBalance($userId);
         if ($available === null || $available >= $threshold) {
             return null;
         }
@@ -571,6 +561,14 @@ final readonly class ServiceNotificationThresholdService
         if ($effectState !== ServiceDeliveryEffectState::FailedFinal) {
             return 'waiting';
         }
+        if ($effect->retry_after_seconds !== null) {
+            return $this->transitionState(
+                (int) $state->id,
+                (int) $service->id,
+                ServiceNotificationState::Escalated,
+                'service-notification:provider-retry-fenced:'.substr($state->episode_key_hash, 0, 24),
+            ) ? 'escalated' : 'waiting';
+        }
 
         $ordinal = $state->latest_retry_ordinal === null ? 0 : (int) $state->latest_retry_ordinal;
         $type = ServiceNotificationType::tryFrom($state->notification_type)
@@ -589,8 +587,7 @@ final readonly class ServiceNotificationThresholdService
                 throw new RuntimeException('Failed notification delivery effect is missing completion evidence.');
             }
             $completedAt = new DateTimeImmutable($effect->completed_at, new DateTimeZone('UTC'));
-            $retryAfter = $effect->retry_after_seconds === null ? 0 : max(0, (int) $effect->retry_after_seconds);
-            $delay = max($retryAfter, $this->retryDelaySeconds($type, $ordinal));
+            $delay = $this->retryDelaySeconds($type, $ordinal);
             $this->scheduleRetry(
                 (int) $state->id,
                 (int) $service->id,
@@ -616,14 +613,18 @@ final readonly class ServiceNotificationThresholdService
     private function queueState(object $service, object $state, int $ordinal): string
     {
         $requestKey = 'service-notification:'.$state->public_id.':'.$ordinal;
-        $receipt = $this->delivery->queueNotification(
-            (int) $state->id,
-            (string) $service->public_id,
-            $ordinal,
-            $requestKey,
-            $requestKey,
-            $this->presentationFor($state),
-        );
+        try {
+            $receipt = $this->delivery->queueNotification(
+                (int) $state->id,
+                (string) $service->public_id,
+                $ordinal,
+                $requestKey,
+                $requestKey,
+                $this->presentationFor($state),
+            );
+        } catch (ServiceDeliveryTemporarilyBlockedException) {
+            return 'waiting';
+        }
 
         return $receipt->replayed ? 'waiting' : 'queued';
     }
@@ -866,28 +867,18 @@ final readonly class ServiceNotificationThresholdService
 
     private function availableWalletBalance(int $userId): ?int
     {
-        $accountIds = $this->database->connection()->table('ledger_accounts')
+        $accountId = $this->database->connection()->table('ledger_accounts')
             ->where('owner_user_id', $userId)
+            ->where('wallet_bucket', 'cash')
             ->where('account_class', 'liability')
             ->where('currency', 'IRR')
             ->where('is_active', true)
-            ->whereIn('wallet_bucket', ['cash', 'promotional'])
-            ->orderBy('id')
-            ->pluck('id');
-        if ($accountIds->isEmpty()) {
+            ->value('id');
+        if (! is_int($accountId) && ! is_string($accountId)) {
             return null;
         }
 
-        $available = 0;
-        foreach ($accountIds as $accountId) {
-            $balance = $this->wallet->balance($userId, (int) $accountId)->availableBalance->amount;
-            if ($balance > PHP_INT_MAX - $available) {
-                throw new RuntimeException('Wallet available balance exceeds supported notification range.');
-            }
-            $available += $balance;
-        }
-
-        return $available;
+        return $this->wallet->balance($userId, (int) $accountId)->availableBalance->amount;
     }
 
     /** @return list<int> */

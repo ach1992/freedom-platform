@@ -13,7 +13,9 @@ use App\Modules\Panels\Application\PanelCredentialPolicy;
 use App\Modules\Provisioning\Application\ProvisioningPanelAdapterResolver;
 use App\Modules\Provisioning\Application\ServiceImportService;
 use App\Modules\Provisioning\Application\ServiceNotificationThresholdService;
+use App\Modules\Provisioning\Application\ServiceMutationQueueService;
 use App\Modules\Provisioning\Application\ServiceOperationalContext;
+use App\Modules\Provisioning\Domain\ServiceMutationType;
 use App\Modules\Wallet\Application\LedgerEntryDraft;
 use App\Modules\Wallet\Application\LedgerPostingService;
 use App\Modules\Wallet\Domain\IrrMoney;
@@ -129,6 +131,76 @@ final class ServiceNotificationBatchFairnessTest extends TestCase
             ->count());
     }
 
+    public function test_promotional_balance_does_not_mask_low_cash_wallet(): void
+    {
+        config()->set('service_notifications.low_balance_irr', 500_000);
+        $fixture = $this->fixture();
+        $this->attachService($fixture, 1);
+
+        $assetId = $this->account('system.notification.cash-truth.asset', 'asset');
+        $cashId = $this->account(
+            'wallet.cash.notification.cash-truth.'.$fixture['user_id'],
+            'liability',
+            $fixture['user_id'],
+            'cash',
+        );
+        $promotionalId = $this->account(
+            'wallet.promotional.notification.cash-truth.'.$fixture['user_id'],
+            'liability',
+            $fixture['user_id'],
+            'promotional',
+        );
+        $this->fundWallet($assetId, $cashId, 100_000, 'cash-truth-cash');
+        $this->fundWallet($assetId, $promotionalId, 1_000_000, 'cash-truth-promotional');
+
+        $receipt = $this->app->make(ServiceNotificationThresholdService::class)->processBatch(1);
+
+        self::assertSame(1, $receipt->triggered);
+        self::assertSame(1, $receipt->queued);
+        self::assertSame(1, DB::table('service_notification_states')
+            ->where('notification_type', 'low_balance')
+            ->count());
+    }
+
+    public function test_temporary_delivery_blocker_is_isolated_per_service_in_batch(): void
+    {
+        config()->set('service_notifications.low_balance_irr', 500_000);
+        $fixture = $this->fixture();
+        $blockedServicePublicId = $this->attachService($fixture, 1);
+        $healthyServicePublicId = $this->attachService($fixture, 2);
+
+        $assetId = $this->account('system.notification.batch-isolation.asset', 'asset');
+        $cashId = $this->account(
+            'wallet.cash.notification.batch-isolation.'.$fixture['user_id'],
+            'liability',
+            $fixture['user_id'],
+            'cash',
+        );
+        $this->fundWallet($assetId, $cashId, 100_000, 'batch-isolation');
+
+        $this->app->make(ServiceMutationQueueService::class)->queue(
+            $blockedServicePublicId,
+            ServiceMutationType::ResetUsage,
+            'notification-batch-isolation-request',
+            'notification-batch-isolation-correlation',
+        );
+
+        $receipt = $this->app->make(ServiceNotificationThresholdService::class)->processBatch(2);
+        $blockedServiceId = (int) DB::table('service_subscriptions')->where('public_id', $blockedServicePublicId)->value('id');
+        $healthyServiceId = (int) DB::table('service_subscriptions')->where('public_id', $healthyServicePublicId)->value('id');
+
+        self::assertSame(2, $receipt->candidates);
+        self::assertSame(2, $receipt->triggered);
+        self::assertSame(1, $receipt->queued);
+        self::assertGreaterThanOrEqual(1, $receipt->skipped);
+        self::assertNull(DB::table('service_notification_states')
+            ->where('service_subscription_id', $blockedServiceId)
+            ->value('latest_delivery_attempt_id'));
+        self::assertNotNull(DB::table('service_notification_states')
+            ->where('service_subscription_id', $healthyServiceId)
+            ->value('latest_delivery_attempt_id'));
+    }
+
     /** @return array{owner_id:int,user_id:int,offering_id:int,target_id:int,adapter:ServiceOperationalPanelAdapter} */
     private function fixture(): array
     {
@@ -178,7 +250,7 @@ final class ServiceNotificationBatchFairnessTest extends TestCase
     }
 
     /** @param array{owner_id:int,user_id:int,offering_id:int,target_id:int,adapter:ServiceOperationalPanelAdapter} $fixture */
-    private function attachService(array $fixture, int $index): void
+    private function attachService(array $fixture, int $index): string
     {
         $remoteId = 'notification-fairness-'.$index;
         $expiresAt = new \DateTimeImmutable('+30 days', new \DateTimeZone('UTC'));
@@ -211,6 +283,8 @@ final class ServiceNotificationBatchFairnessTest extends TestCase
         );
         $attached = $imports->attach($preview->importPublicId, $context);
         self::assertNotNull($attached->serviceSubscriptionPublicId);
+
+        return $attached->serviceSubscriptionPublicId;
     }
 
     private function account(

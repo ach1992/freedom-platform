@@ -366,7 +366,7 @@ final readonly class ServiceDeliveryAttemptQueueService
             ->where('blocking_service_subscription_id', (int) $service->id)
             ->first(['id']);
         if ($blockingDelivery !== null) {
-            throw new DomainException('Service delivery is blocked by an in-flight, uncertain, or provider-directed retry boundary.');
+            throw new ServiceDeliveryTemporarilyBlockedException('Service delivery is blocked by an in-flight, uncertain, or provider-directed retry boundary.');
         }
 
         $activeMutation = $connection->table('provisioning_operations')
@@ -375,7 +375,7 @@ final readonly class ServiceDeliveryAttemptQueueService
             ->whereNotIn('state', self::TERMINAL_MUTATION_STATES)
             ->first(['id']);
         if ($activeMutation !== null) {
-            throw new DomainException('Service has an unresolved mutation operation and cannot accept delivery attempts.');
+            throw new ServiceDeliveryTemporarilyBlockedException('Service has an unresolved mutation operation and cannot accept delivery attempts.');
         }
     }
 

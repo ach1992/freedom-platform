@@ -12,6 +12,7 @@ use App\Modules\Panels\Application\PanelAdapterRegistry;
 use App\Modules\Panels\Application\PanelCredentialPolicy;
 use App\Modules\Provisioning\Application\ProvisioningPanelAdapterResolver;
 use App\Modules\Provisioning\Application\ServiceImportService;
+use App\Modules\Provisioning\Application\ServiceNotificationDatabaseAuthority;
 use App\Modules\Provisioning\Application\ServiceNotificationThresholdService;
 use App\Modules\Provisioning\Application\ServiceOperationalContext;
 use App\Modules\Provisioning\Application\ServiceSynchronizationService;
@@ -19,10 +20,12 @@ use App\Shared\Application\Clock;
 use DateTimeImmutable;
 use DateTimeZone;
 use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use Tests\Support\CreatesBenefitCodeFixtures;
 use Tests\TestCase;
 
@@ -168,6 +171,72 @@ final class ServiceNotificationThresholdAuthorityTest extends TestCase
         self::assertSame(1, DB::table('service_notification_states')
             ->where('notification_type', 'expiry')
             ->count());
+    }
+
+    public function test_fixed_notification_session_flags_cannot_forge_state_without_operational_capability(): void
+    {
+        $fixture = $this->fixture('forgery');
+        $servicePublicId = $this->attachService(
+            $fixture,
+            $this->snapshot(
+                'notification-forgery',
+                'notification-forgery-user',
+                $this->clock->value->modify('+30 days'),
+            ),
+            'forgery',
+        );
+        $serviceId = (int) DB::table('service_subscriptions')->where('public_id', $servicePublicId)->value('id');
+        $episode = hash('sha256', 'forged-notification-episode');
+        $cycle = hash('sha256', 'forged-notification-cycle');
+        $timestamp = $this->clock->value->format('Y-m-d H:i:s.u');
+        $correlationId = 'forged-service-notification';
+        $connection = DB::connection();
+        $connection->statement(
+            <<<'SQL'
+SET @app_service_operational_capability = 'forged',
+    @app_service_notification_authority = 'service_notification_create_v1',
+    @app_service_notification_service_id = ?,
+    @app_service_notification_episode_key = ?,
+    @app_service_notification_type = 'low_balance',
+    @app_service_notification_threshold_code = 'low_balance',
+    @app_service_notification_cycle_key = ?,
+    @app_service_notification_source_type = 'wallet_balance',
+    @app_service_notification_source_id = 500000,
+    @app_service_notification_timestamp = ?,
+    @app_service_notification_correlation_id = ?
+SQL,
+            [$serviceId, $episode, $cycle, $timestamp, $correlationId],
+        );
+
+        try {
+            $connection->table('service_notification_states')->insert([
+                'public_id' => (string) Str::ulid(),
+                'service_subscription_id' => $serviceId,
+                'episode_key_hash' => $episode,
+                'notification_type' => 'low_balance',
+                'threshold_code' => 'low_balance',
+                'cycle_key_hash' => $cycle,
+                'source_type' => 'wallet_balance',
+                'source_id' => 500000,
+                'state' => 'triggered',
+                'latest_delivery_attempt_id' => null,
+                'latest_retry_ordinal' => null,
+                'next_retry_at' => null,
+                'triggered_at' => $timestamp,
+                'notified_at' => null,
+                'acknowledged_at' => null,
+                'escalated_at' => null,
+                'expired_at' => null,
+                'last_correlation_id' => $correlationId,
+                'created_at' => $timestamp,
+                'updated_at' => $timestamp,
+            ]);
+            self::fail('Fixed Service notification session flags must not forge authority without the operational capability.');
+        } catch (QueryException) {
+            self::assertSame(0, DB::table('service_notification_states')->count());
+        } finally {
+            ServiceNotificationDatabaseAuthority::clear($connection);
+        }
     }
 
     /** @return array{owner_id:int,user_id:int,offering_id:int,target_id:int,adapter:ServiceOperationalPanelAdapter} */

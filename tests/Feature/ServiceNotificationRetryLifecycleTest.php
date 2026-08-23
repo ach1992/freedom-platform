@@ -165,6 +165,37 @@ final class ServiceNotificationRetryLifecycleTest extends TestCase
         self::assertCount(1, $this->sender->calls);
     }
 
+    public function test_provider_directed_retry_escalates_without_automatic_new_attempt(): void
+    {
+        $fixture = $this->fixture('retry-provider-directed');
+        $this->attachService($fixture, 'retry-provider-directed');
+        $this->fundLowWallet($fixture['user_id'], 'retry-provider-directed');
+        $this->insertTelegramAccount($fixture['user_id']);
+        $this->sender->result = new ProtectedTelegramSendResult(
+            ProtectedTelegramSendOutcome::RetryAfter,
+            'telegram_retry_after',
+            retryAfterSeconds: 60,
+        );
+
+        $notifications = $this->app->make(ServiceNotificationThresholdService::class);
+        self::assertSame(1, $notifications->processBatch(1)->queued);
+        $state = $this->notificationState();
+        $attemptPublicId = $this->attemptPublicId((int) $state->latest_delivery_attempt_id);
+
+        $failed = $this->app->make(ServiceDeliveryEffectExecutor::class)->execute($attemptPublicId);
+        self::assertSame(ServiceDeliveryEffectState::FailedFinal, $failed->state);
+        self::assertSame(60, (int) DB::table('service_delivery_effects')->value('retry_after_seconds'));
+        self::assertNotNull(DB::table('service_delivery_effects')->value('blocking_service_subscription_id'));
+
+        $reconciled = $notifications->processBatch(1);
+        self::assertSame(1, $reconciled->escalated);
+        $after = $this->notificationState();
+        self::assertSame('escalated', $after->state);
+        self::assertNull($after->next_retry_at);
+        self::assertSame(1, DB::table('service_delivery_attempts')->where('purpose', 'notification')->count());
+        self::assertCount(1, $this->sender->calls);
+    }
+
     public function test_interrupted_notification_sending_recovers_uncertain_without_blind_resend(): void
     {
         $fixture = $this->fixture('retry-interrupted');
