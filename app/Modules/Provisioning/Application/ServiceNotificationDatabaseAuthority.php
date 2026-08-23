@@ -13,18 +13,43 @@ final class ServiceNotificationDatabaseAuthority
 {
     private const CREATE = 'service_notification_create_v1';
 
-    private const UPDATE = 'service_notification_update_v1';
-
     private const BIND = 'service_notification_bind_v1';
 
-    public static function create(Connection $connection, int $serviceId, string $episodeKeyHash, string $correlationId): void
-    {
-        self::set($connection, self::CREATE, null, $serviceId, null, null, $episodeKeyHash, $correlationId);
-    }
+    private const SCHEDULE_RETRY = 'service_notification_schedule_retry_v1';
 
-    public static function update(Connection $connection, int $stateId, int $serviceId, string $correlationId): void
-    {
-        self::set($connection, self::UPDATE, $stateId, $serviceId, null, null, null, $correlationId);
+    private const TRANSITION = 'service_notification_transition_v1';
+
+    public static function create(
+        Connection $connection,
+        int $serviceId,
+        string $episodeKeyHash,
+        string $notificationType,
+        string $thresholdCode,
+        string $cycleKeyHash,
+        string $sourceType,
+        ?int $sourceId,
+        string $timestamp,
+        string $correlationId,
+    ): void {
+        self::set(
+            $connection,
+            self::CREATE,
+            null,
+            $serviceId,
+            null,
+            null,
+            $episodeKeyHash,
+            $notificationType,
+            $thresholdCode,
+            $cycleKeyHash,
+            $sourceType,
+            $sourceId,
+            null,
+            'triggered',
+            null,
+            $timestamp,
+            $correlationId,
+        );
     }
 
     public static function bind(
@@ -33,9 +58,87 @@ final class ServiceNotificationDatabaseAuthority
         int $serviceId,
         int $attemptId,
         int $retryOrdinal,
+        string $timestamp,
         string $correlationId,
     ): void {
-        self::set($connection, self::BIND, $stateId, $serviceId, $attemptId, $retryOrdinal, null, $correlationId);
+        self::set(
+            $connection,
+            self::BIND,
+            $stateId,
+            $serviceId,
+            $attemptId,
+            $retryOrdinal,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            'triggered',
+            'triggered',
+            null,
+            $timestamp,
+            $correlationId,
+        );
+    }
+
+    public static function scheduleRetry(
+        Connection $connection,
+        int $stateId,
+        int $serviceId,
+        string $nextRetryAt,
+        string $timestamp,
+        string $correlationId,
+    ): void {
+        self::set(
+            $connection,
+            self::SCHEDULE_RETRY,
+            $stateId,
+            $serviceId,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            'triggered',
+            'triggered',
+            $nextRetryAt,
+            $timestamp,
+            $correlationId,
+        );
+    }
+
+    public static function transition(
+        Connection $connection,
+        int $stateId,
+        int $serviceId,
+        string $fromState,
+        string $toState,
+        string $timestamp,
+        string $correlationId,
+    ): void {
+        self::set(
+            $connection,
+            self::TRANSITION,
+            $stateId,
+            $serviceId,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            $fromState,
+            $toState,
+            null,
+            $timestamp,
+            $correlationId,
+        );
     }
 
     public static function clear(Connection $connection): void
@@ -48,6 +151,15 @@ SET @app_service_notification_authority = NULL,
     @app_service_notification_attempt_id = NULL,
     @app_service_notification_retry_ordinal = NULL,
     @app_service_notification_episode_key = NULL,
+    @app_service_notification_type = NULL,
+    @app_service_notification_threshold_code = NULL,
+    @app_service_notification_cycle_key = NULL,
+    @app_service_notification_source_type = NULL,
+    @app_service_notification_source_id = NULL,
+    @app_service_notification_from_state = NULL,
+    @app_service_notification_to_state = NULL,
+    @app_service_notification_next_retry_at = NULL,
+    @app_service_notification_timestamp = NULL,
     @app_service_notification_correlation_id = NULL
 SQL);
             (new ServiceOperationalDatabaseCapability)->clear($connection);
@@ -65,13 +177,24 @@ SQL);
         ?int $attemptId,
         ?int $retryOrdinal,
         ?string $episodeKeyHash,
+        ?string $notificationType,
+        ?string $thresholdCode,
+        ?string $cycleKeyHash,
+        ?string $sourceType,
+        ?int $sourceId,
+        ?string $fromState,
+        ?string $toState,
+        ?string $nextRetryAt,
+        string $timestamp,
         string $correlationId,
     ): void {
-        if ($serviceId < 1 || $correlationId === '') {
+        if ($serviceId < 1 || $timestamp === '' || $correlationId === '') {
             throw new RuntimeException('Service notification database authority is incomplete.');
         }
-        if ($episodeKeyHash !== null && preg_match('/\A[0-9a-f]{64}\z/', $episodeKeyHash) !== 1) {
-            throw new RuntimeException('Service notification episode authority is invalid.');
+        foreach ([$episodeKeyHash, $cycleKeyHash] as $hash) {
+            if ($hash !== null && preg_match('/\A[0-9a-f]{64}\z/', $hash) !== 1) {
+                throw new RuntimeException('Service notification hash authority is invalid.');
+            }
         }
 
         (new ServiceOperationalDatabaseCapability)->apply($connection);
@@ -84,9 +207,35 @@ SET @app_service_notification_authority = ?,
     @app_service_notification_attempt_id = ?,
     @app_service_notification_retry_ordinal = ?,
     @app_service_notification_episode_key = ?,
+    @app_service_notification_type = ?,
+    @app_service_notification_threshold_code = ?,
+    @app_service_notification_cycle_key = ?,
+    @app_service_notification_source_type = ?,
+    @app_service_notification_source_id = ?,
+    @app_service_notification_from_state = ?,
+    @app_service_notification_to_state = ?,
+    @app_service_notification_next_retry_at = ?,
+    @app_service_notification_timestamp = ?,
     @app_service_notification_correlation_id = ?
 SQL,
-                [$authority, $stateId, $serviceId, $attemptId, $retryOrdinal, $episodeKeyHash, $correlationId],
+                [
+                    $authority,
+                    $stateId,
+                    $serviceId,
+                    $attemptId,
+                    $retryOrdinal,
+                    $episodeKeyHash,
+                    $notificationType,
+                    $thresholdCode,
+                    $cycleKeyHash,
+                    $sourceType,
+                    $sourceId,
+                    $fromState,
+                    $toState,
+                    $nextRetryAt,
+                    $timestamp,
+                    $correlationId,
+                ],
             );
         } catch (Throwable $exception) {
             self::disconnect($connection);
