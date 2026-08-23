@@ -744,6 +744,9 @@ final readonly class ServiceNotificationThresholdService
             if (! $allowed) {
                 return false;
             }
+            if ($next === ServiceNotificationState::Expired && ! $this->canExpireTriggeredState($connection, $state)) {
+                return false;
+            }
 
             $timestamp = $this->timestamp();
             $values = [
@@ -792,6 +795,28 @@ final readonly class ServiceNotificationThresholdService
 
             return true;
         }, 3);
+    }
+
+    /** @param  NotificationStateRow  $state */
+    private function canExpireTriggeredState(Connection $connection, object $state): bool
+    {
+        if ($state->latest_delivery_attempt_id === null) {
+            return true;
+        }
+
+        /** @var object{state:string}|null $effect */
+        $effect = $connection->table('service_delivery_effects')
+            ->where('service_delivery_attempt_id', (int) $state->latest_delivery_attempt_id)
+            ->lockForUpdate()
+            ->first(['state']);
+        if ($effect === null) {
+            return true;
+        }
+
+        $effectState = ServiceDeliveryEffectState::tryFrom($effect->state)
+            ?? throw new RuntimeException('Stored notification delivery effect state is invalid.');
+
+        return in_array($effectState, [ServiceDeliveryEffectState::Prepared, ServiceDeliveryEffectState::FailedFinal], true);
     }
 
     private function insertEvent(
