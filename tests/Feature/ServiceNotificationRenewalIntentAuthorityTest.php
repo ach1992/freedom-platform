@@ -184,7 +184,7 @@ final class ServiceNotificationRenewalIntentAuthorityTest extends TestCase
         self::assertGreaterThan(0, $intentId);
 
         // Simulate the observation that made this episode appear resolved. The scanner can carry
-        // that stale observation while #163 later returns the exact same durable attempt to the
+        // that stale observation while auto-renew later returns the exact same durable attempt to the
         // same insufficient-wallet outcome.
         $this->forceAutoRenewRetryState(
             $renewals,

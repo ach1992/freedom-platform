@@ -352,9 +352,9 @@ final readonly class ServiceNotificationThresholdService
         }
 
         return $this->database->connection()->transaction(function (Connection $connection) use ($service, $spec, $attemptId): ?array {
-            // #163 owns the canonical auto-renew lock order. Any notification path that needs
-            // both rows must follow Attempt -> Service rather than creating a Service -> Attempt
-            // inversion against auto-renew reconciliation/mutation completion.
+            // Auto-renew reconciliation and mutation completion acquire Attempt -> Service.
+            // Notification paths that need both rows must preserve that order rather than creating
+            // a Service -> Attempt inversion.
             $attempt = $this->lockedAutoRenewAttempt($connection, $attemptId);
             $locked = $this->lockedService($connection, (int) $service->id);
             if (! $this->sameServiceFacts($service, $locked)
@@ -847,7 +847,7 @@ final readonly class ServiceNotificationThresholdService
             if ($next === ServiceNotificationState::Expired
                 && $state->notification_type === ServiceNotificationType::RenewalFailure->value) {
                 // Renewal expiration must enter through transitionRenewalFailureToExpired(),
-                // which acquires the #163 Attempt lock before the Service lock.
+                // which acquires the auto-renew Attempt lock before the Service lock.
                 return false;
             }
 
@@ -869,7 +869,7 @@ final readonly class ServiceNotificationThresholdService
             $attemptId,
             $correlationId,
         ): bool {
-            // Match #163: Attempt -> Service -> notification state.
+            // Match the canonical auto-renew lock order: Attempt -> Service -> notification state.
             $attempt = $this->lockedAutoRenewAttempt($connection, $attemptId);
             $service = $this->lockedService($connection, $serviceId);
             /** @var NotificationStateRow|null $state */
