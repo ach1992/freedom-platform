@@ -542,14 +542,20 @@ SQL);
 
     private function dropGuards(): void
     {
-        foreach ([
-            'service_sync_runs_insert_guard', 'service_sync_runs_update_guard', 'service_sync_runs_delete_guard',
-            'service_sync_leases_insert_guard', 'service_sync_leases_update_guard', 'service_sync_leases_delete_guard',
-            'service_sync_snapshots_insert_guard', 'service_sync_snapshots_update_guard', 'service_sync_snapshots_delete_guard',
-            'service_sync_anomalies_insert_guard', 'service_sync_anomalies_update_guard', 'service_sync_anomalies_delete_guard',
-            'service_sync_events_insert_guard', 'service_sync_events_update_guard', 'service_sync_events_delete_guard',
-        ] as $trigger) {
-            DB::unprepared('DROP TRIGGER IF EXISTS `'.$trigger.'`');
-        }
+        DB::unprepared('DROP TRIGGER IF EXISTS `service_sync_runs_insert_guard`');
+        DB::unprepared('DROP TRIGGER IF EXISTS `service_sync_runs_update_guard`');
+        DB::unprepared('DROP TRIGGER IF EXISTS `service_sync_runs_delete_guard`');
+        DB::unprepared('DROP TRIGGER IF EXISTS `service_sync_leases_insert_guard`');
+        DB::unprepared('DROP TRIGGER IF EXISTS `service_sync_leases_update_guard`');
+        DB::unprepared('DROP TRIGGER IF EXISTS `service_sync_leases_delete_guard`');
+        DB::unprepared('DROP TRIGGER IF EXISTS `service_sync_snapshots_insert_guard`');
+        DB::unprepared('DROP TRIGGER IF EXISTS `service_sync_snapshots_update_guard`');
+        DB::unprepared('DROP TRIGGER IF EXISTS `service_sync_snapshots_delete_guard`');
+        DB::unprepared('DROP TRIGGER IF EXISTS `service_sync_anomalies_insert_guard`');
+        DB::unprepared('DROP TRIGGER IF EXISTS `service_sync_anomalies_update_guard`');
+        DB::unprepared('DROP TRIGGER IF EXISTS `service_sync_anomalies_delete_guard`');
+        DB::unprepared('DROP TRIGGER IF EXISTS `service_sync_events_insert_guard`');
+        DB::unprepared('DROP TRIGGER IF EXISTS `service_sync_events_update_guard`');
+        DB::unprepared('DROP TRIGGER IF EXISTS `service_sync_events_delete_guard`');
     }
 };
