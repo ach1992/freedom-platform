@@ -411,25 +411,29 @@ BEGIN
            OR NEW.updated_at <> @app_service_notification_timestamp
            OR NOT (
                (OLD.state = 'triggered' AND NEW.state = 'notified'
+                   AND OLD.notified_at IS NULL
                    AND NEW.notified_at = @app_service_notification_timestamp
-                   AND NOT (OLD.acknowledged_at <=> NEW.acknowledged_at)
-                   AND NOT (OLD.escalated_at <=> NEW.escalated_at)
-                   AND NOT (OLD.expired_at <=> NEW.expired_at))
+                   AND (OLD.acknowledged_at <=> NEW.acknowledged_at)
+                   AND (OLD.escalated_at <=> NEW.escalated_at)
+                   AND (OLD.expired_at <=> NEW.expired_at))
                OR (OLD.state = 'triggered' AND NEW.state = 'escalated'
+                   AND OLD.escalated_at IS NULL
                    AND NEW.escalated_at = @app_service_notification_timestamp
-                   AND NOT (OLD.notified_at <=> NEW.notified_at)
-                   AND NOT (OLD.acknowledged_at <=> NEW.acknowledged_at)
-                   AND NOT (OLD.expired_at <=> NEW.expired_at))
+                   AND (OLD.notified_at <=> NEW.notified_at)
+                   AND (OLD.acknowledged_at <=> NEW.acknowledged_at)
+                   AND (OLD.expired_at <=> NEW.expired_at))
                OR (OLD.state = 'triggered' AND NEW.state = 'expired'
+                   AND OLD.expired_at IS NULL
                    AND NEW.expired_at = @app_service_notification_timestamp
-                   AND NOT (OLD.notified_at <=> NEW.notified_at)
-                   AND NOT (OLD.acknowledged_at <=> NEW.acknowledged_at)
-                   AND NOT (OLD.escalated_at <=> NEW.escalated_at))
+                   AND (OLD.notified_at <=> NEW.notified_at)
+                   AND (OLD.acknowledged_at <=> NEW.acknowledged_at)
+                   AND (OLD.escalated_at <=> NEW.escalated_at))
                OR (OLD.state IN ('notified','escalated') AND NEW.state = 'acknowledged'
+                   AND OLD.acknowledged_at IS NULL
                    AND NEW.acknowledged_at = @app_service_notification_timestamp
-                   AND NOT (OLD.notified_at <=> NEW.notified_at)
-                   AND NOT (OLD.escalated_at <=> NEW.escalated_at)
-                   AND NOT (OLD.expired_at <=> NEW.expired_at))
+                   AND (OLD.notified_at <=> NEW.notified_at)
+                   AND (OLD.escalated_at <=> NEW.escalated_at)
+                   AND (OLD.expired_at <=> NEW.expired_at))
            ) THEN
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service notification exact state transition authority is invalid.';
         END IF;
