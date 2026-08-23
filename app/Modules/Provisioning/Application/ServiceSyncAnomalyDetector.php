@@ -33,11 +33,16 @@ final readonly class ServiceSyncAnomalyDetector
             return [];
         }
 
+        /** @var array<string, ServiceSyncAnomalyType> $types */
         $types = [];
+        $add = static function (ServiceSyncAnomalyType $type) use (&$types): void {
+            $types[$type->value] = $type;
+        };
+
         if ($remote['disposition'] === 'missing') {
-            $types[] = ServiceSyncAnomalyType::MissingRemote;
+            $add(ServiceSyncAnomalyType::MissingRemote);
         } elseif ($remote['disposition'] === 'identity_mismatch') {
-            $types[] = ServiceSyncAnomalyType::RemoteIdentityMismatch;
+            $add(ServiceSyncAnomalyType::RemoteIdentityMismatch);
         } elseif ($remote['disposition'] === 'present') {
             $status = $remote['status'];
             if ($status === null) {
@@ -46,37 +51,40 @@ final readonly class ServiceSyncAnomalyDetector
 
             if (($local['lifecycle_state'] === 'active' && $status !== 'active')
                 || ($local['lifecycle_state'] === 'suspended' && $status !== 'suspended')) {
-                $types[] = ServiceSyncAnomalyType::LifecycleMismatch;
+                $add(ServiceSyncAnomalyType::LifecycleMismatch);
+            }
+
+            $currentExpiry = $remote['expires_at'];
+            if ($currentExpiry !== null && $currentExpiry <= $this->clock->now() && $status === 'active') {
+                $add(ServiceSyncAnomalyType::ExpiredLocalActiveRemote);
             }
 
             if ($previous !== null && $this->sameAuthorityCycle($local, $previous)) {
                 $previousExpiry = $this->storedDateTime($previous['remote_expires_at']);
-                if ($previousExpiry !== null
-                    && $previousExpiry <= $this->clock->now()
-                    && $status === 'active') {
-                    $types[] = ServiceSyncAnomalyType::ExpiredLocalActiveRemote;
+                if ($previousExpiry !== null && $previousExpiry <= $this->clock->now() && $status === 'active') {
+                    $add(ServiceSyncAnomalyType::ExpiredLocalActiveRemote);
                 }
 
-                $currentExpiry = $remote['expires_at'];
                 $previousLimit = $previous['remote_data_limit_bytes'] === null ? null : (int) $previous['remote_data_limit_bytes'];
                 if (! $this->sameDateTime($previousExpiry, $currentExpiry)
                     || $previousLimit !== $remote['data_limit_bytes']) {
-                    $types[] = ServiceSyncAnomalyType::UnexpectedEntitlement;
+                    $add(ServiceSyncAnomalyType::UnexpectedEntitlement);
                 }
             }
         } else {
             throw new DomainException('Stored Service sync remote disposition is invalid.');
         }
 
-        $types = array_values(array_unique($types, SORT_REGULAR));
-
         return array_map(fn (ServiceSyncAnomalyType $type): array => [
             'type' => $type,
             'severity' => $this->severity($type),
-        ], $types);
+        ], array_values($types));
     }
 
-    /** @param SyncLocalFacts $local @param SyncPreviousFacts $previous */
+    /**
+     * @param SyncLocalFacts $local
+     * @param SyncPreviousFacts $previous
+     */
     private function sameAuthorityCycle(array $local, array $previous): bool
     {
         return (int) $previous['local_lifecycle_version'] === $local['lifecycle_version']

@@ -8,7 +8,7 @@ use App\Modules\Provisioning\Application\ServiceSyncAnomalyDetector;
 use App\Modules\Provisioning\Domain\ServiceSyncAnomalyType;
 use App\Shared\Application\Clock;
 use DateTimeImmutable;
-use PHPUnit\Framework\TestCase;
+use Tests\TestCase;
 
 /** @requirement SVC-010 SVC-013 QUA-001 */
 final class ServiceSyncAnomalyDetectorTest extends TestCase
@@ -52,6 +52,23 @@ final class ServiceSyncAnomalyDetectorTest extends TestCase
             [ServiceSyncAnomalyType::ExpiredLocalActiveRemote, ServiceSyncAnomalyType::UnexpectedEntitlement],
             array_column($findings, 'type'),
         );
+    }
+
+    public function test_expired_current_remote_state_is_detected_on_first_sync(): void
+    {
+        $detector = $this->detector('2026-08-23T00:00:00+00:00');
+        $findings = $detector->detect(
+            $this->local(),
+            [
+                'disposition' => 'present',
+                'status' => 'active',
+                'data_limit_bytes' => 1000,
+                'expires_at' => new DateTimeImmutable('2026-08-22T00:00:00+00:00'),
+            ],
+            null,
+        );
+
+        self::assertSame([ServiceSyncAnomalyType::ExpiredLocalActiveRemote], array_column($findings, 'type'));
     }
 
     public function test_new_local_mutation_generation_resets_entitlement_baseline(): void
