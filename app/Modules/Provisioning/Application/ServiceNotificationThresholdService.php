@@ -57,8 +57,12 @@ final readonly class ServiceNotificationThresholdService
             $specs = $this->notificationSpecs($service, $walletCache);
             $activeEpisodes = [];
             foreach ($specs as $spec) {
+                $result = $this->ensureTriggered($service, $spec);
+                if ($result === null) {
+                    continue;
+                }
                 $activeEpisodes[] = $spec['episode'];
-                [, $created] = $this->ensureTriggered($service, $spec);
+                [, $created] = $result;
                 if ($created) {
                     $triggered++;
                 }
@@ -142,25 +146,31 @@ final readonly class ServiceNotificationThresholdService
         return [...$specs, ...$this->renewalFailureSpecs($service)];
     }
 
-    /** @param NotificationServiceRow $service */
+    /** @param  NotificationServiceRow  $service */
     private function expirySpec(object $service): ?array
     {
-        /** @var object{id:int|string,remote_expires_at:string|null}|null $snapshot */
+        /** @var object{id:int|string,remote_disposition:string,remote_expires_at:string|null}|null $snapshot */
         $snapshot = $this->database->connection()->table('service_sync_snapshots')
             ->where('service_subscription_id', (int) $service->id)
-            ->where('remote_disposition', 'present')
             ->where('local_lifecycle_version', (int) $service->lifecycle_version)
             ->where('local_remote_identity_generation', (int) $service->remote_identity_generation)
             ->where('local_mutation_generation', (int) $service->mutation_generation)
-            ->whereNotNull('remote_expires_at')
             ->orderByDesc('observed_at')
             ->orderByDesc('id')
-            ->first(['id', 'remote_expires_at']);
-        if ($snapshot === null || $snapshot->remote_expires_at === null) {
+            ->first(['id', 'remote_disposition', 'remote_expires_at']);
+        if ($snapshot === null
+            || $snapshot->remote_disposition !== 'present'
+            || $snapshot->remote_expires_at === null) {
             return null;
         }
 
-        $expiresAt = new DateTimeImmutable($snapshot->remote_expires_at, new DateTimeZone('UTC'));
+        return $this->expirySpecFromSnapshot($service, (int) $snapshot->id, $snapshot->remote_expires_at);
+    }
+
+    /** @param  NotificationServiceRow  $service */
+    private function expirySpecFromSnapshot(object $service, int $snapshotId, string $remoteExpiresAt): ?array
+    {
+        $expiresAt = new DateTimeImmutable($remoteExpiresAt, new DateTimeZone('UTC'));
         $secondsRemaining = $expiresAt->getTimestamp() - $this->clock->now()->getTimestamp();
         $selectedDays = null;
         foreach ($this->expiryThresholdDays() as $days) {
@@ -189,7 +199,7 @@ final readonly class ServiceNotificationThresholdService
             'cycle' => $cycle,
             'episode' => $this->episodeKey($service, ServiceNotificationType::Expiry, $threshold, $cycle),
             'source_type' => 'service_sync_snapshot',
-            'source_id' => (int) $snapshot->id,
+            'source_id' => $snapshotId,
             'message' => $selectedDays === 0
                 ? 'Service expiry warning: your service has reached its recorded expiry time.'
                 : 'Service expiry warning: your service expires within '.$selectedDays.' day'.($selectedDays === 1 ? '' : 's').'.',
@@ -231,13 +241,14 @@ final readonly class ServiceNotificationThresholdService
             'cycle' => $cycle,
             'episode' => $this->episodeKey($service, ServiceNotificationType::LowBalance, $thresholdCode, $cycle),
             'source_type' => 'wallet_balance',
-            'source_id' => null,
+            'source_id' => $threshold,
             'message' => 'Wallet balance warning: your available wallet balance is below the configured renewal threshold.',
         ];
     }
 
-    /** @param NotificationServiceRow $service
-     *  @return list<NotificationSpec>
+    /**
+     * @param  NotificationServiceRow  $service
+     * @return list<NotificationSpec>
      */
     private function renewalFailureSpecs(object $service): array
     {
@@ -303,12 +314,17 @@ final readonly class ServiceNotificationThresholdService
     /**
      * @param  NotificationServiceRow  $service
      * @param  NotificationSpec  $spec
-     * @return array{int,bool}
+     * @return array{int,bool}|null
      */
-    private function ensureTriggered(object $service, array $spec): array
+    private function ensureTriggered(object $service, array $spec): ?array
     {
-        return $this->database->connection()->transaction(function (Connection $connection) use ($service, $spec): array {
-            $this->lockService($connection, (int) $service->id);
+        return $this->database->connection()->transaction(function (Connection $connection) use ($service, $spec): ?array {
+            $locked = $this->lockedService($connection, (int) $service->id);
+            if (! $this->sameServiceFacts($service, $locked)
+                || ! $this->sourceStillAuthoritative($connection, $locked, $spec)) {
+                return null;
+            }
+
             /** @var object{id:int|string}|null $existing */
             $existing = $connection->table('service_notification_states')
                 ->where('episode_key_hash', $spec['episode'])
@@ -322,14 +338,20 @@ final readonly class ServiceNotificationThresholdService
             $timestamp = $this->timestamp();
             ServiceNotificationDatabaseAuthority::create(
                 $connection,
-                (int) $service->id,
+                (int) $locked->id,
                 $spec['episode'],
+                $spec['type']->value,
+                $spec['threshold'],
+                $spec['cycle'],
+                $spec['source_type'],
+                $spec['source_id'],
+                $timestamp,
                 $correlationId,
             );
             try {
                 $stateId = (int) $connection->table('service_notification_states')->insertGetId([
                     'public_id' => (string) Str::ulid(),
-                    'service_subscription_id' => (int) $service->id,
+                    'service_subscription_id' => (int) $locked->id,
                     'episode_key_hash' => $spec['episode'],
                     'notification_type' => $spec['type']->value,
                     'threshold_code' => $spec['threshold'],
@@ -348,12 +370,6 @@ final readonly class ServiceNotificationThresholdService
                     'last_correlation_id' => $correlationId,
                     'updated_at' => $timestamp,
                 ]);
-            } finally {
-                ServiceNotificationDatabaseAuthority::clear($connection);
-            }
-
-            ServiceNotificationDatabaseAuthority::update($connection, $stateId, (int) $service->id, $correlationId);
-            try {
                 $this->insertEvent(
                     $connection,
                     $stateId,
@@ -371,8 +387,122 @@ final readonly class ServiceNotificationThresholdService
         }, 3);
     }
 
-    /** @param NotificationServiceRow $service
-     *  @param list<string> $activeEpisodes
+    /**
+     * @param  NotificationServiceRow  $service
+     * @param  NotificationSpec  $spec
+     */
+    private function sourceStillAuthoritative(Connection $connection, object $service, array $spec): bool
+    {
+        if ($spec['type'] === ServiceNotificationType::Expiry) {
+            if ($spec['source_type'] !== 'service_sync_snapshot' || $spec['source_id'] === null) {
+                return false;
+            }
+            /** @var object{id:int|string,remote_disposition:string,remote_expires_at:string|null}|null $snapshot */
+            $snapshot = $connection->table('service_sync_snapshots')
+                ->where('service_subscription_id', (int) $service->id)
+                ->where('local_lifecycle_version', (int) $service->lifecycle_version)
+                ->where('local_remote_identity_generation', (int) $service->remote_identity_generation)
+                ->where('local_mutation_generation', (int) $service->mutation_generation)
+                ->orderByDesc('observed_at')
+                ->orderByDesc('id')
+                ->first(['id', 'remote_disposition', 'remote_expires_at']);
+            if ($snapshot === null
+                || (int) $snapshot->id !== $spec['source_id']
+                || $snapshot->remote_disposition !== 'present'
+                || $snapshot->remote_expires_at === null) {
+                return false;
+            }
+            $current = $this->expirySpecFromSnapshot($service, (int) $snapshot->id, $snapshot->remote_expires_at);
+
+            return $current !== null && $this->sameSpecIdentity($current, $spec);
+        }
+
+        if ($spec['type'] === ServiceNotificationType::RenewalFailure) {
+            if ($spec['source_type'] !== 'auto_renew_notification_intent' || $spec['source_id'] === null) {
+                return false;
+            }
+            /** @var object{id:int|string,outcome:string,reason_code:string|null,attempt_state:string,service_subscription_id:int|string}|null $intent */
+            $intent = $connection->table('service_auto_renew_notification_intents as intent')
+                ->join('service_auto_renew_attempts as attempt', 'attempt.id', '=', 'intent.auto_renew_attempt_id')
+                ->where('intent.id', $spec['source_id'])
+                ->lockForUpdate()
+                ->first([
+                    'intent.id', 'intent.outcome', 'intent.reason_code', 'attempt.state as attempt_state',
+                    'attempt.service_subscription_id',
+                ]);
+            if ($intent === null
+                || (int) $intent->service_subscription_id !== (int) $service->id
+                || ! $this->renewalIntentStillApplicable($intent->outcome, $intent->attempt_state)) {
+                return false;
+            }
+            $threshold = 'renewal_'.$intent->outcome;
+            $cycle = hash('sha256', implode('|', [
+                'service-notification-renewal-cycle-v1',
+                (string) $service->id,
+                (string) $intent->id,
+                $intent->outcome,
+                (string) ($intent->reason_code ?? ''),
+            ]));
+            $current = [
+                'type' => ServiceNotificationType::RenewalFailure,
+                'threshold' => $threshold,
+                'cycle' => $cycle,
+                'episode' => $this->episodeKey($service, ServiceNotificationType::RenewalFailure, $threshold, $cycle),
+                'source_type' => 'auto_renew_notification_intent',
+                'source_id' => (int) $intent->id,
+                'message' => $this->renewalMessage($intent->outcome),
+            ];
+
+            return $this->sameSpecIdentity($current, $spec);
+        }
+
+        if ($spec['type'] !== ServiceNotificationType::LowBalance
+            || $spec['source_type'] !== 'wallet_balance'
+            || $spec['source_id'] === null) {
+            return false;
+        }
+        $threshold = $this->boundedConfigInt('service_notifications.low_balance_irr', 0, 0, PHP_INT_MAX);
+        if ($threshold === 0 || $threshold !== $spec['source_id']) {
+            return false;
+        }
+        $cycle = hash('sha256', implode('|', [
+            'service-notification-low-balance-cycle-v1',
+            (string) $service->id,
+            (string) $service->remote_identity_generation,
+            (string) $service->mutation_generation,
+            (string) $service->lifecycle_version,
+            (string) $threshold,
+        ]));
+        $current = [
+            'type' => ServiceNotificationType::LowBalance,
+            'threshold' => 'low_balance',
+            'cycle' => $cycle,
+            'episode' => $this->episodeKey($service, ServiceNotificationType::LowBalance, 'low_balance', $cycle),
+            'source_type' => 'wallet_balance',
+            'source_id' => $threshold,
+            'message' => 'Wallet balance warning: your available wallet balance is below the configured renewal threshold.',
+        ];
+
+        return $this->sameSpecIdentity($current, $spec);
+    }
+
+    /**
+     * @param  NotificationSpec  $left
+     * @param  NotificationSpec  $right
+     */
+    private function sameSpecIdentity(array $left, array $right): bool
+    {
+        return $left['type'] === $right['type']
+            && $left['threshold'] === $right['threshold']
+            && hash_equals($left['cycle'], $right['cycle'])
+            && hash_equals($left['episode'], $right['episode'])
+            && $left['source_type'] === $right['source_type']
+            && $left['source_id'] === $right['source_id'];
+    }
+
+    /**
+     * @param  NotificationServiceRow  $service
+     * @param  list<string>  $activeEpisodes
      */
     private function expireStaleTriggeredStates(object $service, array $activeEpisodes): int
     {
@@ -475,8 +605,9 @@ final readonly class ServiceNotificationThresholdService
         return $this->queueState($service, $state, $ordinal + 1);
     }
 
-    /** @param NotificationServiceRow $service
-     *  @param NotificationStateRow $state
+    /**
+     * @param  NotificationServiceRow  $service
+     * @param  NotificationStateRow  $state
      */
     private function queueState(object $service, object $state, int $ordinal): string
     {
@@ -493,7 +624,7 @@ final readonly class ServiceNotificationThresholdService
         return $receipt->replayed ? 'waiting' : 'queued';
     }
 
-    /** @param NotificationStateRow $state */
+    /** @param  NotificationStateRow  $state */
     private function presentationFor(object $state): string
     {
         $type = ServiceNotificationType::tryFrom($state->notification_type)
@@ -544,14 +675,22 @@ final readonly class ServiceNotificationThresholdService
             }
 
             $timestamp = $this->timestamp();
-            ServiceNotificationDatabaseAuthority::update($connection, $stateId, $serviceId, $correlationId);
+            $nextRetryAtValue = $this->databaseDateTime($nextRetryAt);
+            ServiceNotificationDatabaseAuthority::scheduleRetry(
+                $connection,
+                $stateId,
+                $serviceId,
+                $nextRetryAtValue,
+                $timestamp,
+                $correlationId,
+            );
             try {
                 $updated = $connection->table('service_notification_states')
                     ->where('id', $stateId)
                     ->where('state', ServiceNotificationState::Triggered->value)
                     ->whereNull('next_retry_at')
                     ->update([
-                        'next_retry_at' => $this->databaseDateTime($nextRetryAt),
+                        'next_retry_at' => $nextRetryAtValue,
                         'last_correlation_id' => $correlationId,
                         'updated_at' => $timestamp,
                     ]);
@@ -621,7 +760,15 @@ final readonly class ServiceNotificationThresholdService
                 ServiceNotificationState::Triggered => throw new RuntimeException('Triggered is not a terminal notification transition.'),
             }] = $timestamp;
 
-            ServiceNotificationDatabaseAuthority::update($connection, $stateId, $serviceId, $correlationId);
+            ServiceNotificationDatabaseAuthority::transition(
+                $connection,
+                $stateId,
+                $serviceId,
+                $current->value,
+                $next->value,
+                $timestamp,
+                $correlationId,
+            );
             try {
                 $updated = $connection->table('service_notification_states')
                     ->where('id', $stateId)
@@ -672,7 +819,7 @@ final readonly class ServiceNotificationThresholdService
         ]);
     }
 
-    /** @param NotificationServiceRow $service */
+    /** @param  NotificationServiceRow  $service */
     private function episodeKey(
         object $service,
         ServiceNotificationType $type,
@@ -786,10 +933,7 @@ final readonly class ServiceNotificationThresholdService
             ->whereIn('lifecycle_state', ['active', 'suspended'])
             ->orderBy('id')
             ->limit($limit)
-            ->get([
-                'id', 'public_id', 'user_id', 'lifecycle_state', 'lifecycle_version',
-                'remote_identity_generation', 'mutation_generation',
-            ])
+            ->get($this->serviceColumns())
             ->all();
 
         return $rows;
@@ -804,11 +948,48 @@ final readonly class ServiceNotificationThresholdService
         ];
     }
 
-    private function lockService(Connection $connection, int $serviceId): void
+    /** @return list<string> */
+    private function serviceColumns(): array
     {
-        if (! $connection->table('service_subscriptions')->where('id', $serviceId)->lockForUpdate()->exists()) {
+        return [
+            'id', 'public_id', 'user_id', 'lifecycle_state', 'lifecycle_version',
+            'remote_identity_generation', 'mutation_generation',
+        ];
+    }
+
+    /** @return NotificationServiceRow */
+    private function lockedService(Connection $connection, int $serviceId): object
+    {
+        /** @var NotificationServiceRow|null $service */
+        $service = $connection->table('service_subscriptions')
+            ->where('id', $serviceId)
+            ->lockForUpdate()
+            ->first($this->serviceColumns());
+        if ($service === null) {
             throw new RuntimeException('Service Subscription disappeared during notification processing.');
         }
+
+        return $service;
+    }
+
+    private function lockService(Connection $connection, int $serviceId): void
+    {
+        $this->lockedService($connection, $serviceId);
+    }
+
+    /**
+     * @param  NotificationServiceRow  $left
+     * @param  NotificationServiceRow  $right
+     */
+    private function sameServiceFacts(object $left, object $right): bool
+    {
+        return (int) $left->id === (int) $right->id
+            && $left->public_id === $right->public_id
+            && (int) $left->user_id === (int) $right->user_id
+            && $left->lifecycle_state === $right->lifecycle_state
+            && (int) $left->lifecycle_version === (int) $right->lifecycle_version
+            && (int) $left->remote_identity_generation === (int) $right->remote_identity_generation
+            && (int) $left->mutation_generation === (int) $right->mutation_generation;
     }
 
     private function timestamp(): string
