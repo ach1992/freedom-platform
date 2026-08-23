@@ -556,10 +556,17 @@ final readonly class ServiceDeliveryAttemptQueueService
         $connection->statement('SET @app_service_delivery_correlation_id = ?', [$correlationId]);
         $connection->statement('SET @app_service_delivery_attempt_public_id = ?', [$attemptPublicId]);
         $connection->statement('SET @app_service_delivery_outbox_event_id = ?', [$outboxEventId]);
+        if ($purpose === ServiceDeliveryPurpose::Notification) {
+            (new ServiceOperationalDatabaseCapability)->apply($connection);
+        }
     }
 
     private function clearQueueAuthority(Connection $connection): void
     {
+        $authority = $connection->selectOne('SELECT @app_service_delivery_purpose AS purpose');
+        $notificationAuthority = $authority !== null
+            && property_exists($authority, 'purpose')
+            && $authority->purpose === ServiceDeliveryPurpose::Notification->value;
         $connection->statement('SET @app_service_delivery_authority = NULL');
         $connection->statement('SET @app_service_delivery_service_id = NULL');
         $connection->statement('SET @app_service_delivery_purpose = NULL');
@@ -567,6 +574,9 @@ final readonly class ServiceDeliveryAttemptQueueService
         $connection->statement('SET @app_service_delivery_correlation_id = NULL');
         $connection->statement('SET @app_service_delivery_attempt_public_id = NULL');
         $connection->statement('SET @app_service_delivery_outbox_event_id = NULL');
+        if ($notificationAuthority) {
+            (new ServiceOperationalDatabaseCapability)->clear($connection);
+        }
     }
 
     private function assertUlid(string $value, string $label): void

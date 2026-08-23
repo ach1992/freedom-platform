@@ -14,6 +14,7 @@ use App\Modules\Provisioning\Application\ProvisioningPanelAdapterResolver;
 use App\Modules\Provisioning\Application\ServiceDeliveryEffectExecutor;
 use App\Modules\Provisioning\Application\ServiceImportService;
 use App\Modules\Provisioning\Application\ServiceNotificationThresholdService;
+use App\Modules\Provisioning\Application\ServiceOperationalDatabaseCapability;
 use App\Modules\Provisioning\Application\ServiceOperationalContext;
 use App\Modules\Provisioning\Domain\ServiceDeliveryEffectState;
 use App\Modules\Telegram\Application\Contracts\ProtectedTelegramDeliveryRuntime;
@@ -29,6 +30,7 @@ use App\Shared\Application\Clock;
 use DateTimeImmutable;
 use DateTimeZone;
 use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
@@ -163,6 +165,75 @@ final class ServiceNotificationRetryLifecycleTest extends TestCase
         self::assertSame('escalated', $this->notificationState()->state);
         self::assertSame(1, DB::table('service_delivery_attempts')->where('purpose', 'notification')->count());
         self::assertCount(1, $this->sender->calls);
+    }
+
+    public function test_fixed_effect_flags_cannot_forge_notification_provider_boundary_without_operational_capability(): void
+    {
+        $fixture = $this->fixture('retry-effect-forgery');
+        $this->attachService($fixture, 'retry-effect-forgery');
+        $this->fundLowWallet($fixture['user_id'], 'retry-effect-forgery');
+        $this->insertTelegramAccount($fixture['user_id']);
+
+        $notifications = $this->app->make(ServiceNotificationThresholdService::class);
+        self::assertSame(1, $notifications->processBatch(1)->queued);
+        $state = $this->notificationState();
+        $attemptPublicId = $this->attemptPublicId((int) $state->latest_delivery_attempt_id);
+        $executor = $this->app->make(ServiceDeliveryEffectExecutor::class);
+        $prepare = new ReflectionMethod($executor, 'prepare');
+        /** @var array{effect:object} $context */
+        $context = $prepare->invoke($executor, $attemptPublicId);
+        $effect = DB::table('service_delivery_effects')->where('id', (int) $context['effect']->id)->first();
+        self::assertNotNull($effect);
+        self::assertSame('prepared', $effect->state);
+
+        $connection = DB::connection();
+        $connection->statement(
+            <<<'SQL'
+SET @app_service_operational_capability = 'forged',
+    @app_service_delivery_effect_authority = 'service_delivery_effect_v1',
+    @app_service_delivery_effect_attempt_id = ?,
+    @app_service_delivery_effect_service_id = ?,
+    @app_service_delivery_effect_public_id = ?,
+    @app_service_delivery_effect_telegram_account_id = ?,
+    @app_service_delivery_effect_bot_id = ?,
+    @app_service_delivery_effect_telegram_user_id = ?
+SQL,
+            [
+                (int) $effect->service_delivery_attempt_id,
+                (int) $effect->service_subscription_id,
+                (string) $effect->public_id,
+                (int) $effect->telegram_account_id,
+                (int) $effect->telegram_bot_id,
+                (int) $effect->telegram_user_id,
+            ],
+        );
+
+        try {
+            $connection->table('service_delivery_effects')
+                ->where('id', (int) $effect->id)
+                ->update([
+                    'state' => 'sending',
+                    'state_version' => (int) $effect->state_version + 1,
+                    'provider_boundary_started_at' => now('UTC'),
+                    'updated_at' => now('UTC'),
+                ]);
+            self::fail('Fixed effect session flags must not forge a notification provider boundary.');
+        } catch (QueryException) {
+            self::assertSame('prepared', DB::table('service_delivery_effects')->where('id', (int) $effect->id)->value('state'));
+        } finally {
+            $connection->statement(
+                <<<'SQL'
+SET @app_service_delivery_effect_authority = NULL,
+    @app_service_delivery_effect_attempt_id = NULL,
+    @app_service_delivery_effect_service_id = NULL,
+    @app_service_delivery_effect_public_id = NULL,
+    @app_service_delivery_effect_telegram_account_id = NULL,
+    @app_service_delivery_effect_bot_id = NULL,
+    @app_service_delivery_effect_telegram_user_id = NULL
+SQL,
+            );
+            (new ServiceOperationalDatabaseCapability)->clear($connection);
+        }
     }
 
     public function test_provider_directed_retry_escalates_without_automatic_new_attempt(): void

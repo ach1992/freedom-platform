@@ -15,16 +15,21 @@ use App\Modules\Provisioning\Application\ServiceDeliveryAttemptQueueService;
 use App\Modules\Provisioning\Application\ServiceImportService;
 use App\Modules\Provisioning\Application\ServiceNotificationDatabaseAuthority;
 use App\Modules\Provisioning\Application\ServiceNotificationThresholdService;
+use App\Modules\Provisioning\Application\ServiceOperationalDatabaseCapability;
 use App\Modules\Provisioning\Application\ServiceOperationalContext;
 use App\Modules\Wallet\Application\LedgerEntryDraft;
 use App\Modules\Wallet\Application\LedgerPostingService;
 use App\Modules\Wallet\Domain\IrrMoney;
 use App\Modules\Wallet\Domain\LedgerDirection;
+use App\Shared\Application\OutboxPublisher;
+use App\Shared\Application\SafeOutboxPayload;
 use DomainException;
 use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use Tests\Support\CreatesBenefitCodeFixtures;
 use Tests\TestCase;
 
@@ -48,6 +53,92 @@ final class ServiceNotificationDeliveryQueueTest extends TestCase
         $cursorMigration = require database_path('migrations/2026_08_23_000210_enable_service_notification_scan_cursor.php');
         $cursorMigration->down();
         $cursorMigration->up();
+    }
+
+    public function test_fixed_delivery_flags_cannot_forge_notification_attempt_without_operational_capability(): void
+    {
+        $fixture = $this->fixture();
+        $this->attachService($fixture);
+        $service = DB::table('service_subscriptions')->first([
+            'id', 'remote_identity_generation', 'lifecycle_version',
+        ]);
+        self::assertNotNull($service);
+
+        $attemptPublicId = (string) Str::ulid();
+        $outboxEventId = (string) Str::uuid();
+        $correlationId = 'forged-notification-attempt';
+        $requestHash = hash('sha256', 'forged-notification-attempt-request');
+        $connection = DB::connection();
+
+        try {
+            $connection->transaction(function () use (
+                $connection,
+                $service,
+                $attemptPublicId,
+                $outboxEventId,
+                $correlationId,
+                $requestHash,
+            ): void {
+                $connection->statement(
+                    <<<'SQL'
+SET @app_service_operational_capability = 'forged',
+    @app_service_delivery_authority = 'service_delivery_queue_v1',
+    @app_service_delivery_service_id = ?,
+    @app_service_delivery_purpose = 'notification',
+    @app_service_delivery_request_hash = ?,
+    @app_service_delivery_correlation_id = ?,
+    @app_service_delivery_attempt_public_id = ?,
+    @app_service_delivery_outbox_event_id = ?
+SQL,
+                    [
+                        (int) $service->id,
+                        $requestHash,
+                        $correlationId,
+                        $attemptPublicId,
+                        $outboxEventId,
+                    ],
+                );
+                $published = $this->app->make(OutboxPublisher::class)->publish(
+                    $outboxEventId,
+                    ServiceDeliveryAttemptQueueService::OUTBOX_EVENT_KEY_PREFIX.$attemptPublicId,
+                    ServiceDeliveryAttemptQueueService::OUTBOX_EVENT_TYPE,
+                    ServiceDeliveryAttemptQueueService::OUTBOX_AGGREGATE_TYPE,
+                    $attemptPublicId,
+                    new SafeOutboxPayload(['service_delivery_attempt_public_id' => $attemptPublicId]),
+                    $correlationId,
+                );
+                self::assertSame($outboxEventId, $published);
+
+                $connection->table('service_delivery_attempts')->insert([
+                    'public_id' => $attemptPublicId,
+                    'service_subscription_id' => (int) $service->id,
+                    'purpose' => 'notification',
+                    'request_key_hash' => $requestHash,
+                    'correlation_id' => $correlationId,
+                    'target_remote_identity_generation' => (int) $service->remote_identity_generation,
+                    'target_lifecycle_version' => (int) $service->lifecycle_version,
+                    'outbox_event_id' => $outboxEventId,
+                    'created_at' => now('UTC'),
+                ]);
+            });
+            self::fail('Fixed delivery session flags must not forge a notification Delivery Attempt.');
+        } catch (QueryException) {
+            self::assertSame(0, DB::table('service_delivery_attempts')->where('purpose', 'notification')->count());
+            self::assertFalse(DB::table('outbox_messages')->where('id', $outboxEventId)->exists());
+        } finally {
+            $connection->statement(
+                <<<'SQL'
+SET @app_service_delivery_authority = NULL,
+    @app_service_delivery_service_id = NULL,
+    @app_service_delivery_purpose = NULL,
+    @app_service_delivery_request_hash = NULL,
+    @app_service_delivery_correlation_id = NULL,
+    @app_service_delivery_attempt_public_id = NULL,
+    @app_service_delivery_outbox_event_id = NULL
+SQL,
+            );
+            (new ServiceOperationalDatabaseCapability)->clear($connection);
+        }
     }
 
     public function test_notification_replay_is_exact_and_next_retry_cannot_bypass_durable_backoff_authority(): void

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Provisioning\Application;
 
 use App\Modules\Provisioning\Domain\ServiceDeliveryEffectState;
+use App\Modules\Provisioning\Domain\ServiceDeliveryPurpose;
 use DomainException;
 use Illuminate\Database\Connection;
 use Illuminate\Support\Str;
@@ -177,11 +178,17 @@ trait ServiceDeliveryEffectPersistence
         $connection->statement('SET @app_service_delivery_effect_telegram_account_id = ?', [(int) $account->id]);
         $connection->statement('SET @app_service_delivery_effect_bot_id = ?', [(int) $account->bot_id]);
         $connection->statement('SET @app_service_delivery_effect_telegram_user_id = ?', [(int) $account->telegram_user_id]);
+        if ($attempt->purpose === ServiceDeliveryPurpose::Notification->value) {
+            (new ServiceOperationalDatabaseCapability)->apply($connection);
+        }
     }
 
     /** @param DeliveryEffect $effect */
     private function setEffectAuthority(Connection $connection, object $effect): void
     {
+        $purpose = $connection->table('service_delivery_attempts')
+            ->where('id', (int) $effect->service_delivery_attempt_id)
+            ->value('purpose');
         $connection->statement('SET @app_service_delivery_effect_authority = ?', [self::EFFECT_AUTHORITY]);
         $connection->statement('SET @app_service_delivery_effect_attempt_id = ?', [(int) $effect->service_delivery_attempt_id]);
         $connection->statement('SET @app_service_delivery_effect_service_id = ?', [(int) $effect->service_subscription_id]);
@@ -189,10 +196,22 @@ trait ServiceDeliveryEffectPersistence
         $connection->statement('SET @app_service_delivery_effect_telegram_account_id = ?', [(int) $effect->telegram_account_id]);
         $connection->statement('SET @app_service_delivery_effect_bot_id = ?', [(int) $effect->telegram_bot_id]);
         $connection->statement('SET @app_service_delivery_effect_telegram_user_id = ?', [(int) $effect->telegram_user_id]);
+        if ($purpose === ServiceDeliveryPurpose::Notification->value) {
+            (new ServiceOperationalDatabaseCapability)->apply($connection);
+        }
     }
 
     private function clearEffectAuthority(Connection $connection): void
     {
+        $authority = $connection->selectOne('SELECT @app_service_delivery_effect_attempt_id AS attempt_id');
+        $attemptId = $authority !== null && property_exists($authority, 'attempt_id')
+            ? filter_var($authority->attempt_id, FILTER_VALIDATE_INT)
+            : false;
+        $notificationAuthority = $attemptId !== false
+            && $attemptId > 0
+            && $connection->table('service_delivery_attempts')
+                ->where('id', $attemptId)
+                ->value('purpose') === ServiceDeliveryPurpose::Notification->value;
         $connection->statement('SET @app_service_delivery_effect_authority = NULL');
         $connection->statement('SET @app_service_delivery_effect_attempt_id = NULL');
         $connection->statement('SET @app_service_delivery_effect_service_id = NULL');
@@ -200,6 +219,9 @@ trait ServiceDeliveryEffectPersistence
         $connection->statement('SET @app_service_delivery_effect_telegram_account_id = NULL');
         $connection->statement('SET @app_service_delivery_effect_bot_id = NULL');
         $connection->statement('SET @app_service_delivery_effect_telegram_user_id = NULL');
+        if ($notificationAuthority) {
+            (new ServiceOperationalDatabaseCapability)->clear($connection);
+        }
     }
 
     private function timestamp(): string

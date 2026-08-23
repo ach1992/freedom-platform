@@ -85,6 +85,7 @@ return new class extends Migration
 
         $this->installConstraints();
         $this->installGuards();
+        $this->installNotificationDeliveryCapabilityGuards();
     }
 
     public function down(): void
@@ -609,8 +610,73 @@ END
 SQL);
     }
 
+    private function installNotificationDeliveryCapabilityGuards(): void
+    {
+        DB::unprepared(<<<'SQL'
+CREATE OR REPLACE TRIGGER service_delivery_notification_attempt_capability_guard
+BEFORE INSERT ON service_delivery_attempts
+FOR EACH ROW
+BEGIN
+    IF NEW.purpose = 'notification' AND NOT EXISTS (
+        SELECT 1 FROM service_operational_authority_capability capability_row
+        WHERE capability_row.id = 1
+          AND BINARY capability_row.capability_hash = BINARY SHA2(COALESCE(@app_service_operational_capability, ''), 256)
+    ) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Notification Delivery Attempt requires the operational database capability.';
+    END IF;
+END
+SQL);
+
+        DB::unprepared(<<<'SQL'
+CREATE OR REPLACE TRIGGER service_delivery_notification_effect_insert_capability_guard
+BEFORE INSERT ON service_delivery_effects
+FOR EACH ROW
+BEGIN
+    DECLARE attempt_purpose VARCHAR(16) DEFAULT NULL;
+
+    SELECT purpose INTO attempt_purpose
+    FROM service_delivery_attempts
+    WHERE id = NEW.service_delivery_attempt_id
+    LIMIT 1;
+
+    IF attempt_purpose = 'notification' AND NOT EXISTS (
+        SELECT 1 FROM service_operational_authority_capability capability_row
+        WHERE capability_row.id = 1
+          AND BINARY capability_row.capability_hash = BINARY SHA2(COALESCE(@app_service_operational_capability, ''), 256)
+    ) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Notification delivery effect requires the operational database capability.';
+    END IF;
+END
+SQL);
+
+        DB::unprepared(<<<'SQL'
+CREATE OR REPLACE TRIGGER service_delivery_notification_effect_update_capability_guard
+BEFORE UPDATE ON service_delivery_effects
+FOR EACH ROW
+BEGIN
+    DECLARE attempt_purpose VARCHAR(16) DEFAULT NULL;
+
+    SELECT purpose INTO attempt_purpose
+    FROM service_delivery_attempts
+    WHERE id = OLD.service_delivery_attempt_id
+    LIMIT 1;
+
+    IF attempt_purpose = 'notification' AND NOT EXISTS (
+        SELECT 1 FROM service_operational_authority_capability capability_row
+        WHERE capability_row.id = 1
+          AND BINARY capability_row.capability_hash = BINARY SHA2(COALESCE(@app_service_operational_capability, ''), 256)
+    ) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Notification delivery effect update requires the operational database capability.';
+    END IF;
+END
+SQL);
+    }
+
     private function dropGuards(): void
     {
+        DB::unprepared('DROP TRIGGER IF EXISTS `service_delivery_notification_effect_update_capability_guard`');
+        DB::unprepared('DROP TRIGGER IF EXISTS `service_delivery_notification_effect_insert_capability_guard`');
+        DB::unprepared('DROP TRIGGER IF EXISTS `service_delivery_notification_attempt_capability_guard`');
         DB::unprepared('DROP TRIGGER IF EXISTS `service_notification_events_delete_guard`');
         DB::unprepared('DROP TRIGGER IF EXISTS `service_notification_events_update_guard`');
         DB::unprepared('DROP TRIGGER IF EXISTS `service_notification_events_insert_guard`');
