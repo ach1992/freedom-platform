@@ -18,10 +18,14 @@ return new class extends Migration
             'service_delivery_effects',
             'service_sync_snapshots',
             'service_auto_renew_notification_intents',
+            'ledger_accounts',
+            'ledger_entries',
+            'ledger_transactions',
+            'wallet_holds',
             'service_operational_authority_capability',
         ] as $table) {
             if (! Schema::hasTable($table)) {
-                throw new RuntimeException('Service notification authority requires the accepted Service, delivery, synchronization, and renewal foundations.');
+                throw new RuntimeException('Service notification authority requires the accepted Service, delivery, synchronization, renewal, and Wallet foundations.');
             }
         }
 
@@ -221,6 +225,11 @@ BEGIN
     DECLARE valid_source_count INT DEFAULT 0;
     DECLARE expected_cycle CHAR(64) DEFAULT NULL;
     DECLARE expected_threshold VARCHAR(64) DEFAULT NULL;
+    DECLARE low_balance_threshold BIGINT UNSIGNED DEFAULT 0;
+    DECLARE wallet_credit BIGINT UNSIGNED DEFAULT 0;
+    DECLARE wallet_debit BIGINT UNSIGNED DEFAULT 0;
+    DECLARE wallet_active_holds BIGINT UNSIGNED DEFAULT 0;
+    DECLARE wallet_available BIGINT DEFAULT 0;
 
     IF NOT EXISTS (
         SELECT 1 FROM service_operational_authority_capability capability_row
@@ -313,9 +322,11 @@ BEGIN
             SET valid_source_count = 0;
         END IF;
     ELSEIF NEW.notification_type = 'low_balance' THEN
+        SET low_balance_threshold = COALESCE(@app_service_notification_low_balance_threshold_irr, 0);
         IF NEW.source_type <> 'wallet_balance'
            OR NEW.source_id IS NULL OR NEW.source_id < 1
-           OR NEW.threshold_code <> 'low_balance' THEN
+           OR NEW.threshold_code <> 'low_balance'
+           OR low_balance_threshold < 1 THEN
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service low-balance notification source shape is invalid.';
         END IF;
 
@@ -326,14 +337,47 @@ BEGIN
                    service_row.remote_identity_generation,
                    service_row.mutation_generation,
                    service_row.lifecycle_version,
-                   NEW.source_id
+                   low_balance_threshold
                ), 256))
           INTO valid_source_count, expected_cycle
         FROM service_subscriptions service_row
+        JOIN ledger_accounts wallet_row ON wallet_row.id = NEW.source_id
         WHERE service_row.id = NEW.service_subscription_id
           AND service_row.provisioned_at IS NOT NULL
           AND service_row.remote_deleted_at IS NULL
-          AND service_row.lifecycle_state IN ('active','suspended');
+          AND service_row.lifecycle_state IN ('active','suspended')
+          AND wallet_row.owner_user_id = service_row.user_id
+          AND wallet_row.wallet_bucket = 'cash'
+          AND wallet_row.account_class = 'liability'
+          AND wallet_row.currency = 'IRR'
+          AND wallet_row.is_active = 1;
+
+        IF valid_source_count = 1 THEN
+            SELECT COALESCE(SUM(CASE WHEN entry_row.direction = 'credit' THEN entry_row.amount_irr ELSE 0 END), 0),
+                   COALESCE(SUM(CASE WHEN entry_row.direction = 'debit' THEN entry_row.amount_irr ELSE 0 END), 0)
+              INTO wallet_credit, wallet_debit
+            FROM ledger_entries entry_row
+            JOIN ledger_transactions transaction_row ON transaction_row.id = entry_row.ledger_transaction_id
+            WHERE entry_row.ledger_account_id = NEW.source_id
+              AND transaction_row.finalized_at IS NOT NULL;
+
+            SELECT COALESCE(SUM(hold_row.amount_irr), 0)
+              INTO wallet_active_holds
+            FROM wallet_holds hold_row
+            WHERE hold_row.ledger_account_id = NEW.source_id
+              AND hold_row.status = 'active';
+
+            IF wallet_debit > wallet_credit THEN
+                SET valid_source_count = 0;
+            ELSEIF wallet_active_holds > wallet_credit - wallet_debit THEN
+                SET valid_source_count = 0;
+            ELSE
+                SET wallet_available = wallet_credit - wallet_debit - wallet_active_holds;
+                IF wallet_available >= low_balance_threshold THEN
+                    SET valid_source_count = 0;
+                END IF;
+            END IF;
+        END IF;
     ELSE
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service notification type authority is invalid.';
     END IF;

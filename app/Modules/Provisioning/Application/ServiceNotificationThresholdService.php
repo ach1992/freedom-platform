@@ -143,7 +143,10 @@ final readonly class ServiceNotificationThresholdService
         return [...$specs, ...$this->renewalFailureSpecs($service)];
     }
 
-    /** @param  NotificationServiceRow  $service */
+    /**
+     * @param  NotificationServiceRow  $service
+     * @return NotificationSpec|null
+     */
     private function expirySpec(object $service): ?array
     {
         /** @var object{id:int|string,remote_disposition:string,remote_expires_at:string|null}|null $snapshot */
@@ -164,7 +167,10 @@ final readonly class ServiceNotificationThresholdService
         return $this->expirySpecFromSnapshot($service, (int) $snapshot->id, $snapshot->remote_expires_at);
     }
 
-    /** @param  NotificationServiceRow  $service */
+    /**
+     * @param  NotificationServiceRow  $service
+     * @return NotificationSpec|null
+     */
     private function expirySpecFromSnapshot(object $service, int $snapshotId, string $remoteExpiresAt): ?array
     {
         $expiresAt = new DateTimeImmutable($remoteExpiresAt, new DateTimeZone('UTC'));
@@ -203,7 +209,10 @@ final readonly class ServiceNotificationThresholdService
         ];
     }
 
-    /** @param NotificationServiceRow $service */
+    /**
+     * @param  NotificationServiceRow  $service
+     * @return NotificationSpec|null
+     */
     private function lowBalanceSpec(object $service): ?array
     {
         $threshold = $this->boundedConfigInt('service_notifications.low_balance_irr', 0, 0, PHP_INT_MAX);
@@ -211,8 +220,8 @@ final readonly class ServiceNotificationThresholdService
             return null;
         }
         $userId = (int) $service->user_id;
-        $available = $this->availableWalletBalance($userId);
-        if ($available === null || $available >= $threshold) {
+        $wallet = $this->cashWalletObservation($userId);
+        if ($wallet === null || $wallet['available_balance'] >= $threshold) {
             return null;
         }
 
@@ -232,7 +241,7 @@ final readonly class ServiceNotificationThresholdService
             'cycle' => $cycle,
             'episode' => $this->episodeKey($service, ServiceNotificationType::LowBalance, $thresholdCode, $cycle),
             'source_type' => 'wallet_balance',
-            'source_id' => $threshold,
+            'source_id' => $wallet['account_id'],
             'message' => 'Wallet balance warning: your available wallet balance is below the configured renewal threshold.',
         ];
     }
@@ -338,6 +347,9 @@ final readonly class ServiceNotificationThresholdService
                 $spec['source_id'],
                 $timestamp,
                 $correlationId,
+                $spec['type'] === ServiceNotificationType::LowBalance
+                    ? $this->boundedConfigInt('service_notifications.low_balance_irr', 0, 1, PHP_INT_MAX)
+                    : null,
             );
             try {
                 $stateId = (int) $connection->table('service_notification_states')->insertGetId([
@@ -453,11 +465,13 @@ final readonly class ServiceNotificationThresholdService
             return false;
         }
         $threshold = $this->boundedConfigInt('service_notifications.low_balance_irr', 0, 0, PHP_INT_MAX);
-        if ($threshold === 0 || $threshold !== $spec['source_id']) {
+        if ($threshold === 0) {
             return false;
         }
-        $available = $this->availableWalletBalance((int) $service->user_id);
-        if ($available === null || $available >= $threshold) {
+        $wallet = $this->cashWalletObservation((int) $service->user_id);
+        if ($wallet === null
+            || $wallet['account_id'] !== $spec['source_id']
+            || $wallet['available_balance'] >= $threshold) {
             return false;
         }
         $cycle = hash('sha256', implode('|', [
@@ -474,7 +488,7 @@ final readonly class ServiceNotificationThresholdService
             'cycle' => $cycle,
             'episode' => $this->episodeKey($service, ServiceNotificationType::LowBalance, 'low_balance', $cycle),
             'source_type' => 'wallet_balance',
-            'source_id' => $threshold,
+            'source_id' => $wallet['account_id'],
             'message' => 'Wallet balance warning: your available wallet balance is below the configured renewal threshold.',
         ];
 
@@ -765,8 +779,7 @@ final readonly class ServiceNotificationThresholdService
                 ServiceNotificationState::Notified => 'notified_at',
                 ServiceNotificationState::Acknowledged => 'acknowledged_at',
                 ServiceNotificationState::Escalated => 'escalated_at',
-                ServiceNotificationState::Expired => 'expired_at',
-                ServiceNotificationState::Triggered => throw new RuntimeException('Triggered is not a terminal notification transition.'),
+                default => 'expired_at',
             }] = $timestamp;
 
             ServiceNotificationDatabaseAuthority::transition(
@@ -866,7 +879,8 @@ final readonly class ServiceNotificationThresholdService
         ]));
     }
 
-    private function availableWalletBalance(int $userId): ?int
+    /** @return array{account_id:int,available_balance:int}|null */
+    private function cashWalletObservation(int $userId): ?array
     {
         $accountId = $this->database->connection()->table('ledger_accounts')
             ->where('owner_user_id', $userId)
@@ -879,7 +893,12 @@ final readonly class ServiceNotificationThresholdService
             return null;
         }
 
-        return $this->wallet->balance($userId, (int) $accountId)->availableBalance->amount;
+        $id = (int) $accountId;
+
+        return [
+            'account_id' => $id,
+            'available_balance' => $this->wallet->balance($userId, $id)->availableBalance->amount,
+        ];
     }
 
     /** @return list<int> */

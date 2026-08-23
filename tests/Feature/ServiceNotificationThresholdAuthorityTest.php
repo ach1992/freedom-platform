@@ -185,9 +185,37 @@ final class ServiceNotificationThresholdAuthorityTest extends TestCase
             ),
             'forgery',
         );
-        $serviceId = (int) DB::table('service_subscriptions')->where('public_id', $servicePublicId)->value('id');
-        $episode = hash('sha256', 'forged-notification-episode');
-        $cycle = hash('sha256', 'forged-notification-cycle');
+        $service = DB::table('service_subscriptions')->where('public_id', $servicePublicId)->first([
+            'id', 'remote_identity_generation', 'mutation_generation', 'lifecycle_version',
+        ]);
+        self::assertNotNull($service);
+        $threshold = 500_000;
+        $now = now('UTC');
+        $walletId = (int) DB::table('ledger_accounts')->insertGetId([
+            'code' => 'wallet.cash.notification.forgery.'.$fixture['user_id'],
+            'account_class' => 'liability',
+            'owner_user_id' => $fixture['user_id'],
+            'wallet_bucket' => 'cash',
+            'currency' => 'IRR',
+            'is_active' => true,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $cycle = hash('sha256', implode('|', [
+            'service-notification-low-balance-cycle-v1',
+            (string) $service->id,
+            (string) $service->remote_identity_generation,
+            (string) $service->mutation_generation,
+            (string) $service->lifecycle_version,
+            (string) $threshold,
+        ]));
+        $episode = hash('sha256', implode('|', [
+            'service-notification-episode-v1',
+            (string) $service->id,
+            'low_balance',
+            'low_balance',
+            $cycle,
+        ]));
         $timestamp = $this->clock->value->format('Y-m-d H:i:s.u');
         $correlationId = 'forged-service-notification';
         $connection = DB::connection();
@@ -201,23 +229,32 @@ SET @app_service_operational_capability = 'forged',
     @app_service_notification_threshold_code = 'low_balance',
     @app_service_notification_cycle_key = ?,
     @app_service_notification_source_type = 'wallet_balance',
-    @app_service_notification_source_id = 500000,
+    @app_service_notification_source_id = ?,
+    @app_service_notification_low_balance_threshold_irr = ?,
     @app_service_notification_timestamp = ?,
     @app_service_notification_correlation_id = ?
 SQL,
-            [$serviceId, $episode, $cycle, $timestamp, $correlationId],
+            [
+                (int) $service->id,
+                $episode,
+                $cycle,
+                $walletId,
+                $threshold,
+                $timestamp,
+                $correlationId,
+            ],
         );
 
         try {
             $connection->table('service_notification_states')->insert([
                 'public_id' => (string) Str::ulid(),
-                'service_subscription_id' => $serviceId,
+                'service_subscription_id' => (int) $service->id,
                 'episode_key_hash' => $episode,
                 'notification_type' => 'low_balance',
                 'threshold_code' => 'low_balance',
                 'cycle_key_hash' => $cycle,
                 'source_type' => 'wallet_balance',
-                'source_id' => 500000,
+                'source_id' => $walletId,
                 'state' => 'triggered',
                 'latest_delivery_attempt_id' => null,
                 'latest_retry_ordinal' => null,
@@ -228,7 +265,6 @@ SQL,
                 'escalated_at' => null,
                 'expired_at' => null,
                 'last_correlation_id' => $correlationId,
-                'created_at' => $timestamp,
                 'updated_at' => $timestamp,
             ]);
             self::fail('Fixed Service notification session flags must not forge authority without the operational capability.');

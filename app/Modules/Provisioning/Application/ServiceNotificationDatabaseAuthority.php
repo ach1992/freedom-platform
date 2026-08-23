@@ -32,7 +32,16 @@ final class ServiceNotificationDatabaseAuthority
         ?int $sourceId,
         string $timestamp,
         string $correlationId,
+        ?int $lowBalanceThresholdIrr = null,
     ): void {
+        if ($notificationType === 'low_balance') {
+            if ($sourceId === null || $sourceId < 1 || $lowBalanceThresholdIrr === null || $lowBalanceThresholdIrr < 1) {
+                throw new RuntimeException('Service low-balance notification authority is incomplete.');
+            }
+        } elseif ($lowBalanceThresholdIrr !== null) {
+            throw new RuntimeException('Service notification threshold authority is invalid for this notification type.');
+        }
+
         self::set(
             $connection,
             self::CREATE,
@@ -52,6 +61,15 @@ final class ServiceNotificationDatabaseAuthority
             $timestamp,
             $correlationId,
         );
+        try {
+            $connection->statement(
+                'SET @app_service_notification_low_balance_threshold_irr = ?',
+                [$lowBalanceThresholdIrr],
+            );
+        } catch (Throwable $exception) {
+            self::disconnect($connection);
+            throw $exception;
+        }
     }
 
     public static function bind(
@@ -184,6 +202,7 @@ SET @app_service_notification_authority = NULL,
     @app_service_notification_cycle_key = NULL,
     @app_service_notification_source_type = NULL,
     @app_service_notification_source_id = NULL,
+    @app_service_notification_low_balance_threshold_irr = NULL,
     @app_service_notification_from_state = NULL,
     @app_service_notification_to_state = NULL,
     @app_service_notification_next_retry_at = NULL,

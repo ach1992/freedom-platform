@@ -13,18 +13,22 @@ use App\Modules\Panels\Application\PanelCredentialPolicy;
 use App\Modules\Provisioning\Application\ProvisioningPanelAdapterResolver;
 use App\Modules\Provisioning\Application\ServiceImportService;
 use App\Modules\Provisioning\Application\ServiceMutationQueueService;
+use App\Modules\Provisioning\Application\ServiceNotificationDatabaseAuthority;
 use App\Modules\Provisioning\Application\ServiceNotificationThresholdService;
 use App\Modules\Provisioning\Application\ServiceOperationalContext;
 use App\Modules\Provisioning\Domain\ServiceMutationType;
 use App\Modules\Wallet\Application\LedgerEntryDraft;
 use App\Modules\Wallet\Application\LedgerPostingService;
+use App\Modules\Wallet\Application\WalletHoldService;
 use App\Modules\Wallet\Domain\IrrMoney;
 use App\Modules\Wallet\Domain\LedgerDirection;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use Tests\Support\CreatesBenefitCodeFixtures;
 use Tests\TestCase;
 
@@ -130,6 +134,63 @@ final class ServiceNotificationBatchFairnessTest extends TestCase
             ->count());
     }
 
+    public function test_later_service_observes_wallet_drop_in_same_batch_without_cross_service_cache(): void
+    {
+        config()->set('service_notifications.low_balance_irr', 500_000);
+        $fixture = $this->fixture();
+        $firstServicePublicId = $this->attachService($fixture, 1);
+        $secondServicePublicId = $this->attachService($fixture, 2);
+        $firstServiceId = (int) DB::table('service_subscriptions')->where('public_id', $firstServicePublicId)->value('id');
+        $secondServiceId = (int) DB::table('service_subscriptions')->where('public_id', $secondServicePublicId)->value('id');
+        self::assertLessThan($secondServiceId, $firstServiceId);
+
+        $assetId = $this->account('system.notification.balance-drop.asset', 'asset');
+        $cashId = $this->account(
+            'wallet.cash.notification.balance-drop.'.$fixture['user_id'],
+            'liability',
+            $fixture['user_id'],
+            'cash',
+        );
+        $this->fundWallet($assetId, $cashId, 600_000, 'balance-drop-initial');
+
+        $holdPlaced = false;
+        DB::listen(function (QueryExecuted $query) use (&$holdPlaced, $fixture, $cashId): void {
+            $sql = strtolower($query->sql);
+            if ($holdPlaced
+                || ! str_contains($sql, 'wallet_holds')
+                || ! str_contains($sql, 'sum')) {
+                return;
+            }
+
+            $holdPlaced = true;
+            DB::connection()->afterCommit(function () use ($fixture, $cashId): void {
+                $this->app->make(WalletHoldService::class)->place(
+                    'service-notification-balance-drop-hold',
+                    $fixture['user_id'],
+                    $cashId,
+                    IrrMoney::positive(200_000),
+                    'service_notification_test',
+                    'balance-drop',
+                    now('UTC')->addHour()->toDateTimeImmutable(),
+                );
+            });
+        });
+
+        $receipt = $this->app->make(ServiceNotificationThresholdService::class)->processBatch(2);
+
+        self::assertTrue($holdPlaced, 'The regression must reduce available cash after the first Service observation.');
+        self::assertSame(1, $receipt->triggered);
+        self::assertSame(1, $receipt->queued);
+        self::assertSame(0, DB::table('service_notification_states')
+            ->where('service_subscription_id', $firstServiceId)
+            ->where('notification_type', 'low_balance')
+            ->count());
+        self::assertSame(1, DB::table('service_notification_states')
+            ->where('service_subscription_id', $secondServiceId)
+            ->where('notification_type', 'low_balance')
+            ->count());
+    }
+
     public function test_promotional_balance_does_not_mask_low_cash_wallet(): void
     {
         config()->set('service_notifications.low_balance_irr', 500_000);
@@ -159,6 +220,93 @@ final class ServiceNotificationBatchFairnessTest extends TestCase
         self::assertSame(1, DB::table('service_notification_states')
             ->where('notification_type', 'low_balance')
             ->count());
+        self::assertSame($cashId, (int) DB::table('service_notification_states')
+            ->where('notification_type', 'low_balance')
+            ->value('source_id'));
+    }
+
+    public function test_database_authority_rejects_low_balance_state_when_cash_is_not_below_threshold(): void
+    {
+        $threshold = 500_000;
+        config()->set('service_notifications.low_balance_irr', $threshold);
+        $fixture = $this->fixture();
+        $servicePublicId = $this->attachService($fixture, 1);
+        $service = DB::table('service_subscriptions')->where('public_id', $servicePublicId)->first([
+            'id', 'remote_identity_generation', 'mutation_generation', 'lifecycle_version',
+        ]);
+        self::assertNotNull($service);
+
+        $assetId = $this->account('system.notification.source-proof.asset', 'asset');
+        $cashId = $this->account(
+            'wallet.cash.notification.source-proof.'.$fixture['user_id'],
+            'liability',
+            $fixture['user_id'],
+            'cash',
+        );
+        $this->fundWallet($assetId, $cashId, 600_000, 'source-proof-high-cash');
+
+        $cycle = hash('sha256', implode('|', [
+            'service-notification-low-balance-cycle-v1',
+            (string) $service->id,
+            (string) $service->remote_identity_generation,
+            (string) $service->mutation_generation,
+            (string) $service->lifecycle_version,
+            (string) $threshold,
+        ]));
+        $episode = hash('sha256', implode('|', [
+            'service-notification-episode-v1',
+            (string) $service->id,
+            'low_balance',
+            'low_balance',
+            $cycle,
+        ]));
+        $timestamp = now('UTC')->format('Y-m-d H:i:s.u');
+        $correlationId = 'service-notification-source-proof';
+        $connection = DB::connection();
+
+        ServiceNotificationDatabaseAuthority::create(
+            $connection,
+            (int) $service->id,
+            $episode,
+            'low_balance',
+            'low_balance',
+            $cycle,
+            'wallet_balance',
+            $cashId,
+            $timestamp,
+            $correlationId,
+            $threshold,
+        );
+        try {
+            $connection->table('service_notification_states')->insert([
+                'public_id' => (string) Str::ulid(),
+                'service_subscription_id' => (int) $service->id,
+                'episode_key_hash' => $episode,
+                'notification_type' => 'low_balance',
+                'threshold_code' => 'low_balance',
+                'cycle_key_hash' => $cycle,
+                'source_type' => 'wallet_balance',
+                'source_id' => $cashId,
+                'state' => 'triggered',
+                'latest_delivery_attempt_id' => null,
+                'latest_retry_ordinal' => null,
+                'next_retry_at' => null,
+                'triggered_at' => $timestamp,
+                'notified_at' => null,
+                'acknowledged_at' => null,
+                'escalated_at' => null,
+                'expired_at' => null,
+                'last_correlation_id' => $correlationId,
+                'updated_at' => $timestamp,
+            ]);
+            self::fail('Low-balance DB authority must reject a state when authoritative cash is not below threshold.');
+        } catch (QueryException) {
+            self::assertSame(0, DB::table('service_notification_states')
+                ->where('notification_type', 'low_balance')
+                ->count());
+        } finally {
+            ServiceNotificationDatabaseAuthority::clear($connection);
+        }
     }
 
     public function test_temporary_delivery_blocker_is_isolated_per_service_in_batch(): void

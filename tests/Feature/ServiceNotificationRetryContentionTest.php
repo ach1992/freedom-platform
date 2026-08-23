@@ -119,7 +119,7 @@ namespace Tests\Feature {
             $fixture = $this->fixture();
             $servicePublicId = $this->attachService($fixture);
             $service = DB::table('service_subscriptions')->where('public_id', $servicePublicId)->first([
-                'id', 'lifecycle_version', 'remote_identity_generation', 'mutation_generation',
+                'id', 'user_id', 'lifecycle_version', 'remote_identity_generation', 'mutation_generation',
             ]);
             self::assertNotNull($service);
             $stateId = $this->createTriggeredLowBalanceState($service);
@@ -187,10 +187,21 @@ namespace Tests\Feature {
             self::assertSame(1, (int) DB::table('service_notification_states')->where('id', $stateId)->value('latest_retry_ordinal'));
         }
 
-        /** @param object{id:int|string,lifecycle_version:int|string,remote_identity_generation:int|string,mutation_generation:int|string} $service */
+        /** @param object{id:int|string,user_id:int|string,lifecycle_version:int|string,remote_identity_generation:int|string,mutation_generation:int|string} $service */
         private function createTriggeredLowBalanceState(object $service): int
         {
             $threshold = 500_000;
+            $now = now('UTC');
+            $walletId = (int) DB::table('ledger_accounts')->insertGetId([
+                'code' => 'wallet.cash.notification.retry-contention.'.(int) $service->user_id,
+                'account_class' => 'liability',
+                'owner_user_id' => (int) $service->user_id,
+                'wallet_bucket' => 'cash',
+                'currency' => 'IRR',
+                'is_active' => true,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
             $cycle = hash('sha256', implode('|', [
                 'service-notification-low-balance-cycle-v1',
                 (string) $service->id,
@@ -218,9 +229,10 @@ namespace Tests\Feature {
                 'low_balance',
                 $cycle,
                 'wallet_balance',
-                $threshold,
+                $walletId,
                 $timestamp,
                 $correlationId,
+                $threshold,
             );
             try {
                 $stateId = (int) $connection->table('service_notification_states')->insertGetId([
@@ -231,7 +243,7 @@ namespace Tests\Feature {
                     'threshold_code' => 'low_balance',
                     'cycle_key_hash' => $cycle,
                     'source_type' => 'wallet_balance',
-                    'source_id' => $threshold,
+                    'source_id' => $walletId,
                     'state' => 'triggered',
                     'latest_delivery_attempt_id' => null,
                     'latest_retry_ordinal' => null,
@@ -242,7 +254,6 @@ namespace Tests\Feature {
                     'escalated_at' => null,
                     'expired_at' => null,
                     'last_correlation_id' => $correlationId,
-                    'created_at' => $timestamp,
                     'updated_at' => $timestamp,
                 ]);
                 $connection->table('service_notification_events')->insert([
