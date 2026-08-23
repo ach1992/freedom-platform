@@ -257,9 +257,11 @@ SQL,
         self::assertSame(ServiceDeliveryEffectState::FailedFinal, $failed->state);
         self::assertSame(60, (int) DB::table('service_delivery_effects')->value('retry_after_seconds'));
         self::assertNotNull(DB::table('service_delivery_effects')->value('blocking_service_subscription_id'));
+        config()->set('service_notifications.low_balance_irr', 50_000);
 
         $reconciled = $notifications->processBatch(1);
         self::assertSame(1, $reconciled->escalated);
+        self::assertSame(0, $reconciled->expired);
         $after = $this->notificationState();
         self::assertSame('escalated', $after->state);
         self::assertNull($after->next_retry_at);

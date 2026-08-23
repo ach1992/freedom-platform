@@ -834,17 +834,21 @@ final readonly class ServiceNotificationThresholdService
             return true;
         }
 
-        /** @var object{state:string}|null $effect */
+        /** @var object{state:string,retry_after_seconds:int|string|null}|null $effect */
         $effect = $connection->table('service_delivery_effects')
             ->where('service_delivery_attempt_id', (int) $state->latest_delivery_attempt_id)
             ->lockForUpdate()
-            ->first(['state']);
+            ->first(['state', 'retry_after_seconds']);
         if ($effect === null) {
             return true;
         }
 
         $effectState = ServiceDeliveryEffectState::tryFrom($effect->state)
             ?? throw new RuntimeException('Stored notification delivery effect state is invalid.');
+        if ($effectState === ServiceDeliveryEffectState::FailedFinal
+            && $effect->retry_after_seconds !== null) {
+            return false;
+        }
 
         return in_array($effectState, [ServiceDeliveryEffectState::Prepared, ServiceDeliveryEffectState::FailedFinal], true);
     }
