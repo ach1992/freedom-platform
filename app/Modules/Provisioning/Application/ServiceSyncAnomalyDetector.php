@@ -22,9 +22,9 @@ final readonly class ServiceSyncAnomalyDetector
     public function __construct(private Clock $clock) {}
 
     /**
-     * @param SyncLocalFacts $local
-     * @param SyncRemoteFacts $remote
-     * @param SyncPreviousFacts|null $previous
+     * @param  SyncLocalFacts  $local
+     * @param  SyncRemoteFacts  $remote
+     * @param  SyncPreviousFacts|null  $previous
      * @return list<SyncFinding>
      */
     public function detect(array $local, array $remote, ?array $previous): array
@@ -82,8 +82,8 @@ final readonly class ServiceSyncAnomalyDetector
     }
 
     /**
-     * @param SyncLocalFacts $local
-     * @param SyncPreviousFacts $previous
+     * @param  SyncLocalFacts  $local
+     * @param  SyncPreviousFacts  $previous
      */
     private function sameAuthorityCycle(array $local, array $previous): bool
     {

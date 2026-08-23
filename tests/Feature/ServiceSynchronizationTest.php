@@ -16,9 +16,11 @@ use App\Modules\Provisioning\Application\ServiceOperationalContext;
 use App\Modules\Provisioning\Application\ServiceSyncDatabaseAuthority;
 use App\Modules\Provisioning\Application\ServiceSynchronizationService;
 use App\Modules\Provisioning\Domain\ServiceSyncResolutionAction;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use Tests\Support\CreatesBenefitCodeFixtures;
 use Tests\TestCase;
 
@@ -151,6 +153,137 @@ final class ServiceSynchronizationTest extends TestCase
         self::assertSame(0, $receipt->processed);
         self::assertSame(1, $receipt->skipped);
         self::assertSame($lookupCount, count($fixture['adapter']->lookupTransactionLevels));
+    }
+
+    public function test_fixed_sync_session_flags_cannot_forge_run_without_operational_capability(): void
+    {
+        $connection = DB::connection();
+        $correlationId = 'forged-service-sync-run';
+        $connection->statement(
+            <<<'SQL'
+SET @app_service_operational_capability = 'forged',
+    @app_service_sync_authority = 'service_sync_run_create_v1',
+    @app_service_sync_correlation_id = ?
+SQL,
+            [$correlationId],
+        );
+
+        try {
+            $connection->table('service_sync_runs')->insert([
+                'public_id' => (string) Str::ulid(),
+                'run_key_hash' => hash('sha256', 'forged-run'),
+                'scope' => 'batch',
+                'service_subscription_id' => null,
+                'state' => 'running',
+                'candidate_count' => 0,
+                'processed_count' => 0,
+                'anomaly_count' => 0,
+                'failure_count' => 0,
+                'skipped_count' => 0,
+                'correlation_id' => $correlationId,
+                'started_at' => now('UTC'),
+                'completed_at' => null,
+            ]);
+            self::fail('Forged Service sync authority must not create a run.');
+        } catch (QueryException) {
+            self::assertSame(0, DB::table('service_sync_runs')->count());
+        } finally {
+            ServiceSyncDatabaseAuthority::clear($connection);
+        }
+    }
+
+    public function test_stale_worker_token_cannot_persist_snapshot_after_expired_lease_takeover(): void
+    {
+        $fixture = $this->syncFixture('stale-worker');
+        $remote = $this->snapshot('remote-stale-worker', 'sync-stale-worker', PanelServiceStatus::Active, null, 0, '+5 days');
+        $servicePublicId = $this->attachedService($fixture, $remote, 'stale-worker');
+        $service = DB::table('service_subscriptions')->where('public_id', $servicePublicId)->first();
+        self::assertNotNull($service);
+
+        $connection = DB::connection();
+        $runCorrelationId = 'service-sync-stale-worker-run';
+        ServiceSyncDatabaseAuthority::runCreate($connection, $runCorrelationId);
+        try {
+            $runId = (int) $connection->table('service_sync_runs')->insertGetId([
+                'public_id' => (string) Str::ulid(),
+                'run_key_hash' => hash('sha256', $runCorrelationId),
+                'scope' => 'service',
+                'service_subscription_id' => (int) $service->id,
+                'state' => 'running',
+                'candidate_count' => 0,
+                'processed_count' => 0,
+                'anomaly_count' => 0,
+                'failure_count' => 0,
+                'skipped_count' => 0,
+                'correlation_id' => $runCorrelationId,
+                'started_at' => now('UTC'),
+                'completed_at' => null,
+            ]);
+        } finally {
+            ServiceSyncDatabaseAuthority::clear($connection);
+        }
+
+        $staleToken = 'stale-worker-token';
+        ServiceSyncDatabaseAuthority::lease($connection, (int) $service->id, $staleToken);
+        try {
+            $connection->table('service_sync_leases')->insert([
+                'service_subscription_id' => (int) $service->id,
+                'lease_token_hash' => hash('sha256', $staleToken),
+                'claimed_at' => now('UTC')->subMinutes(3),
+                'expires_at' => now('UTC')->subMinutes(2),
+            ]);
+        } finally {
+            ServiceSyncDatabaseAuthority::clear($connection);
+        }
+
+        $currentToken = 'current-worker-token';
+        ServiceSyncDatabaseAuthority::lease($connection, (int) $service->id, $currentToken);
+        try {
+            $updated = $connection->table('service_sync_leases')
+                ->where('service_subscription_id', (int) $service->id)
+                ->update([
+                    'lease_token_hash' => hash('sha256', $currentToken),
+                    'claimed_at' => now('UTC'),
+                    'expires_at' => now('UTC')->addMinutes(2),
+                ]);
+            self::assertSame(1, $updated);
+        } finally {
+            ServiceSyncDatabaseAuthority::clear($connection);
+        }
+
+        ServiceSyncDatabaseAuthority::snapshot(
+            $connection,
+            $runId,
+            (int) $service->id,
+            $runCorrelationId,
+            $staleToken,
+        );
+        try {
+            $connection->table('service_sync_snapshots')->insert([
+                'public_id' => (string) Str::ulid(),
+                'service_sync_run_id' => $runId,
+                'service_subscription_id' => (int) $service->id,
+                'service_target_id' => (int) $service->service_target_id,
+                'local_lifecycle_state' => $service->lifecycle_state,
+                'local_lifecycle_version' => (int) $service->lifecycle_version,
+                'local_remote_identity_generation' => (int) $service->remote_identity_generation,
+                'local_mutation_generation' => (int) $service->mutation_generation,
+                'expected_remote_id_hash' => hash('sha256', (string) $service->remote_service_id),
+                'remote_disposition' => 'missing',
+                'remote_id_hash' => null,
+                'remote_status' => null,
+                'remote_data_limit_bytes' => null,
+                'remote_used_bytes' => null,
+                'remote_expires_at' => null,
+                'remote_canonical_hash' => null,
+                'observed_at' => now('UTC'),
+            ]);
+            self::fail('A stale Service sync worker must not persist evidence after lease takeover.');
+        } catch (QueryException) {
+            self::assertSame(0, DB::table('service_sync_snapshots')->where('service_sync_run_id', $runId)->count());
+        } finally {
+            ServiceSyncDatabaseAuthority::clear($connection);
+        }
     }
 
     public function test_resolution_is_permission_checked_replay_safe_and_does_not_mutate_service(): void

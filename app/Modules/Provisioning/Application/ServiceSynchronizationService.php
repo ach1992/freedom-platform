@@ -15,6 +15,7 @@ use DateTimeZone;
 use DomainException;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
+use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Str;
 use RuntimeException;
 use Throwable;
@@ -233,7 +234,16 @@ final readonly class ServiceSynchronizationService
 
         try {
             $observation = $this->observeRemote($service);
-            $anomalyCount = $this->persistSnapshotAndAnomalies($runId, $service, $observation, $correlationId);
+            $anomalyCount = $this->persistSnapshotAndAnomalies(
+                $runId,
+                $service,
+                $observation,
+                $correlationId,
+                $leaseToken,
+            );
+            if ($anomalyCount === null) {
+                return ['processed' => false, 'anomalies' => 0, 'provider_failure' => false];
+            }
 
             return [
                 'processed' => true,
@@ -270,14 +280,32 @@ final readonly class ServiceSynchronizationService
     }
 
     /** @param SyncServiceRow $service @param SyncObservation $observation */
-    private function persistSnapshotAndAnomalies(int $runId, object $service, array $observation, string $correlationId): int
-    {
+    private function persistSnapshotAndAnomalies(
+        int $runId,
+        object $service,
+        array $observation,
+        string $correlationId,
+        string $leaseToken,
+    ): ?int {
         return $this->database->connection()->transaction(function (Connection $connection) use (
             $runId,
             $service,
             $observation,
             $correlationId,
-        ): int {
+            $leaseToken,
+        ): ?int {
+            /** @var object{lease_token_hash:string,expires_at:string}|null $lease */
+            $lease = $connection->table('service_sync_leases')
+                ->where('service_subscription_id', (int) $service->id)
+                ->lockForUpdate()
+                ->first(['lease_token_hash', 'expires_at']);
+            $now = $this->clock->now()->setTimezone(new DateTimeZone('UTC'));
+            if ($lease === null
+                || ! hash_equals($lease->lease_token_hash, hash('sha256', $leaseToken))
+                || new DateTimeImmutable($lease->expires_at) <= $now) {
+                return null;
+            }
+
             $locked = $this->eligibleServiceByIdOn($connection, (int) $service->id, true);
             if ($locked === null || ! $this->sameServiceFacts($service, $locked)) {
                 throw new DomainException('Service changed while synchronization evidence was being collected.');
@@ -298,8 +326,14 @@ final readonly class ServiceSynchronizationService
                 ]);
 
             $remote = $observation['remote'];
-            $timestamp = $this->timestamp();
-            ServiceSyncDatabaseAuthority::snapshot($connection, $runId, (int) $locked->id, $correlationId);
+            $timestamp = $this->databaseDateTime($now);
+            ServiceSyncDatabaseAuthority::snapshot(
+                $connection,
+                $runId,
+                (int) $locked->id,
+                $correlationId,
+                $leaseToken,
+            );
             try {
                 $snapshotId = (int) $connection->table('service_sync_snapshots')->insertGetId([
                     'public_id' => (string) Str::ulid(),
@@ -610,7 +644,7 @@ final readonly class ServiceSynchronizationService
         return $query->first($this->serviceColumns('service'));
     }
 
-    private function eligibleServiceQuery(Connection $connection, string $alias)
+    private function eligibleServiceQuery(Connection $connection, string $alias): Builder
     {
         return $connection->table('service_subscriptions as '.$alias)
             ->whereNotNull($alias.'.provisioned_at')

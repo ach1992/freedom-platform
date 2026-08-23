@@ -137,6 +137,7 @@ return new class extends Migration
     private function installConstraints(): void
     {
         foreach ([
+            "ALTER TABLE service_sync_runs ADD CONSTRAINT service_sync_runs_key_chk CHECK (`run_key_hash` REGEXP '^[0-9a-f]{64}$')",
             "ALTER TABLE service_sync_runs ADD CONSTRAINT service_sync_runs_scope_chk CHECK (`scope` IN ('service','batch','full'))",
             "ALTER TABLE service_sync_runs ADD CONSTRAINT service_sync_runs_state_chk CHECK (`state` IN ('running','completed','completed_with_anomalies','failed'))",
             "ALTER TABLE service_sync_runs ADD CONSTRAINT service_sync_runs_shape_chk CHECK ((`scope` = 'service' AND `service_subscription_id` IS NOT NULL) OR (`scope` IN ('batch','full') AND `service_subscription_id` IS NULL))",
@@ -225,7 +226,7 @@ BEGIN
           AND BINARY capability_row.capability_hash = BINARY SHA2(COALESCE(@app_service_operational_capability, ''), 256)
     ) OR COALESCE(@app_service_sync_authority, '') <> 'service_sync_lease_v1'
        OR NEW.service_subscription_id <> COALESCE(@app_service_sync_service_id, 0)
-       OR BINARY NEW.lease_token_hash <> BINARY SHA2(COALESCE(@app_service_sync_correlation_id, ''), 256) THEN
+       OR BINARY NEW.lease_token_hash <> BINARY SHA2(COALESCE(@app_service_sync_lease_token, ''), 256) THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service sync lease creation authority is invalid.';
     END IF;
 END
@@ -243,7 +244,7 @@ BEGIN
     ) OR COALESCE(@app_service_sync_authority, '') <> 'service_sync_lease_v1'
        OR OLD.service_subscription_id <> NEW.service_subscription_id
        OR NEW.service_subscription_id <> COALESCE(@app_service_sync_service_id, 0)
-       OR BINARY NEW.lease_token_hash <> BINARY SHA2(COALESCE(@app_service_sync_correlation_id, ''), 256)
+       OR BINARY NEW.lease_token_hash <> BINARY SHA2(COALESCE(@app_service_sync_lease_token, ''), 256)
        OR OLD.expires_at >= CURRENT_TIMESTAMP(6) THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service sync lease takeover authority is invalid.';
     END IF;
@@ -261,7 +262,7 @@ BEGIN
           AND BINARY capability_row.capability_hash = BINARY SHA2(COALESCE(@app_service_operational_capability, ''), 256)
     ) OR COALESCE(@app_service_sync_authority, '') <> 'service_sync_lease_v1'
        OR OLD.service_subscription_id <> COALESCE(@app_service_sync_service_id, 0)
-       OR BINARY OLD.lease_token_hash <> BINARY SHA2(COALESCE(@app_service_sync_correlation_id, ''), 256) THEN
+       OR BINARY OLD.lease_token_hash <> BINARY SHA2(COALESCE(@app_service_sync_lease_token, ''), 256) THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service sync lease release authority is invalid.';
     END IF;
 END
@@ -274,6 +275,7 @@ FOR EACH ROW
 BEGIN
     DECLARE valid_service_count INT DEFAULT 0;
     DECLARE valid_run_count INT DEFAULT 0;
+    DECLARE valid_lease_count INT DEFAULT 0;
 
     IF NOT EXISTS (
         SELECT 1 FROM service_operational_authority_capability capability_row
@@ -290,6 +292,15 @@ BEGIN
     WHERE run_row.id = NEW.service_sync_run_id AND run_row.state = 'running';
     IF valid_run_count <> 1 THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service sync snapshot requires a live sync run.';
+    END IF;
+
+    SELECT COUNT(*) INTO valid_lease_count
+    FROM service_sync_leases lease_row
+    WHERE lease_row.service_subscription_id = NEW.service_subscription_id
+      AND BINARY lease_row.lease_token_hash = BINARY SHA2(COALESCE(@app_service_sync_lease_token, ''), 256)
+      AND lease_row.expires_at > CURRENT_TIMESTAMP(6);
+    IF valid_lease_count <> 1 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service sync snapshot requires the current unexpired Service lease.';
     END IF;
 
     SELECT COUNT(*) INTO valid_service_count
@@ -440,6 +451,10 @@ BEFORE INSERT ON service_sync_anomaly_events
 FOR EACH ROW
 BEGIN
     DECLARE valid_anomaly_count INT DEFAULT 0;
+    DECLARE current_state VARCHAR(24);
+    DECLARE current_occurrence_count INT;
+    DECLARE current_reason_code VARCHAR(64);
+
     IF NOT EXISTS (
         SELECT 1 FROM service_operational_authority_capability capability_row
         WHERE capability_row.id = 1
@@ -449,17 +464,32 @@ BEGIN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service sync anomaly event authority is invalid.';
     END IF;
 
-    SELECT COUNT(*) INTO valid_anomaly_count
+    SELECT COUNT(*), MAX(anomaly_row.state), MAX(anomaly_row.occurrence_count), MAX(anomaly_row.resolution_reason_code)
+      INTO valid_anomaly_count, current_state, current_occurrence_count, current_reason_code
     FROM service_sync_anomalies anomaly_row
     WHERE anomaly_row.id = NEW.service_sync_anomaly_id
       AND anomaly_row.service_subscription_id = COALESCE(@app_service_sync_service_id, 0);
-    IF valid_anomaly_count <> 1 THEN
+    IF valid_anomaly_count <> 1 OR BINARY NEW.to_state <> BINARY current_state OR NEW.occurrence_count <> current_occurrence_count THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service sync anomaly event binding is invalid.';
     END IF;
 
-    IF COALESCE(@app_service_sync_authority, '') = 'service_sync_resolution_v1'
-       AND NEW.actor_administrator_id <> COALESCE(@app_service_sync_actor_id, 0) THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service sync resolution event actor is invalid.';
+    IF COALESCE(@app_service_sync_authority, '') = 'service_sync_anomaly_v1' THEN
+        IF NEW.event_type NOT IN ('detected','seen')
+           OR NEW.service_sync_snapshot_id IS NULL
+           OR NEW.actor_administrator_id IS NOT NULL
+           OR NEW.reason_code IS NOT NULL
+           OR (NEW.event_type = 'detected' AND (NEW.from_state IS NOT NULL OR NEW.to_state <> 'open' OR NEW.occurrence_count <> 1))
+           OR (NEW.event_type = 'seen' AND (NEW.from_state IS NULL OR BINARY NEW.from_state <> BINARY NEW.to_state)) THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service sync anomaly observation event is invalid.';
+        END IF;
+    ELSE
+        IF NEW.event_type NOT IN ('resolved','manual_review','action_requested')
+           OR NEW.service_sync_snapshot_id IS NOT NULL
+           OR NEW.from_state <> 'open'
+           OR NEW.actor_administrator_id <> COALESCE(@app_service_sync_actor_id, 0)
+           OR BINARY COALESCE(NEW.reason_code, '') <> BINARY COALESCE(current_reason_code, '') THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service sync resolution event is invalid.';
+        END IF;
     END IF;
 END
 SQL);

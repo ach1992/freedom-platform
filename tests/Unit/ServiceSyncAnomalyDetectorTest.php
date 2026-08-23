@@ -97,7 +97,8 @@ final class ServiceSyncAnomalyDetectorTest extends TestCase
 
     private function detector(string $now): ServiceSyncAnomalyDetector
     {
-        $clock = new class(new DateTimeImmutable($now)) implements Clock {
+        $clock = new class(new DateTimeImmutable($now)) implements Clock
+        {
             public function __construct(private readonly DateTimeImmutable $now) {}
 
             public function now(): DateTimeImmutable
