@@ -10,6 +10,7 @@ require_once __DIR__.'/ServiceAutoRenewalAgentPricingTestSupport.php';
 require_once __DIR__.'/ServiceAutoRenewalRuntimeTestSupport.php';
 require_once __DIR__.'/ServiceAutoRenewalRuntimeTestHelpers.php';
 
+use App\Modules\Provisioning\Application\ServiceAutoRenewDatabaseAuthority;
 use App\Modules\Provisioning\Application\ServiceAutoRenewalProcessor;
 use App\Modules\Provisioning\Application\ServiceNotificationThresholdService;
 use App\Modules\Provisioning\Domain\AutoRenewAttemptState;
@@ -239,8 +240,15 @@ final class ServiceNotificationRenewalIntentAuthorityTest extends TestCase
         AutoRenewAttemptState $state,
         string $reasonCode,
     ): void {
-        $method = new ReflectionMethod($processor, 'scheduleRetryWithBudget');
-        $method->invoke($processor, $attemptId, $state, $reasonCode, true);
+        $connection = DB::connection();
+        ServiceAutoRenewDatabaseAuthority::beginRuntime($connection);
+
+        try {
+            $method = new ReflectionMethod($processor, 'scheduleRetryWithBudget');
+            $method->invoke($processor, $attemptId, $state, $reasonCode, true);
+        } finally {
+            ServiceAutoRenewDatabaseAuthority::endRuntime($connection);
+        }
     }
 
     /** @param list<string> $lockOrder */
