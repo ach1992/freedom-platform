@@ -12,6 +12,7 @@ use App\Modules\Panels\Application\PanelAdapterRegistry;
 use App\Modules\Panels\Application\PanelCredentialPolicy;
 use App\Modules\Provisioning\Application\ProvisioningPanelAdapterResolver;
 use App\Modules\Provisioning\Application\ServiceDeliveryEffectExecutor;
+use App\Modules\Provisioning\Application\ServiceDeliveryOutboxHandler;
 use App\Modules\Provisioning\Application\ServiceImportService;
 use App\Modules\Provisioning\Application\ServiceNotificationThresholdService;
 use App\Modules\Provisioning\Application\ServiceOperationalContext;
@@ -27,6 +28,8 @@ use App\Modules\Wallet\Application\LedgerPostingService;
 use App\Modules\Wallet\Domain\IrrMoney;
 use App\Modules\Wallet\Domain\LedgerDirection;
 use App\Shared\Application\Clock;
+use App\Shared\Application\OutboxDispatchOutcome;
+use App\Shared\Infrastructure\DatabaseOutboxDispatcher;
 use DateTimeImmutable;
 use DateTimeZone;
 use Illuminate\Database\Migrations\Migration;
@@ -234,6 +237,36 @@ SQL,
             );
             (new ServiceOperationalDatabaseCapability)->clear($connection);
         }
+    }
+
+    public function test_terminal_outbox_failure_without_effect_escalates_notification(): void
+    {
+        $fixture = $this->fixture('retry-outbox-review');
+        $this->attachService($fixture, 'retry-outbox-review');
+        $this->fundLowWallet($fixture['user_id'], 'retry-outbox-review');
+
+        $notifications = $this->app->make(ServiceNotificationThresholdService::class);
+        self::assertSame(1, $notifications->processBatch(1)->queued);
+        $state = $this->notificationState();
+        $attemptId = (int) $state->latest_delivery_attempt_id;
+        $outboxEventId = DB::table('service_delivery_attempts')->where('id', $attemptId)->value('outbox_event_id');
+        self::assertIsString($outboxEventId);
+        self::assertNotSame('', $outboxEventId);
+
+        $dispatch = $this->app->make(DatabaseOutboxDispatcher::class)->dispatchOne(
+            $this->app->make(ServiceDeliveryOutboxHandler::class),
+        );
+        self::assertNotNull($dispatch);
+        self::assertSame($outboxEventId, $dispatch->messageId);
+        self::assertSame(OutboxDispatchOutcome::DefinitiveFailure, $dispatch->outcome);
+        self::assertSame('review_required', DB::table('outbox_messages')->where('id', $outboxEventId)->value('dispatch_state'));
+        self::assertSame(0, DB::table('service_delivery_effects')->where('service_delivery_attempt_id', $attemptId)->count());
+        self::assertCount(0, $this->sender->calls);
+
+        $reconciled = $notifications->processBatch(1);
+        self::assertSame(1, $reconciled->escalated);
+        self::assertSame('escalated', $this->notificationState()->state);
+        self::assertSame(1, DB::table('service_delivery_attempts')->where('purpose', 'notification')->count());
     }
 
     public function test_provider_directed_retry_escalates_without_automatic_new_attempt(): void

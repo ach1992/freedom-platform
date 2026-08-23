@@ -552,7 +552,7 @@ final readonly class ServiceNotificationThresholdService
             ->where('service_delivery_attempt_id', (int) $state->latest_delivery_attempt_id)
             ->first(['state', 'completed_at', 'retry_after_seconds']);
         if ($effect === null) {
-            return 'waiting';
+            return $this->reconcileMissingDeliveryEffect($service, $state);
         }
 
         $effectState = ServiceDeliveryEffectState::tryFrom($effect->state)
@@ -619,6 +619,37 @@ final readonly class ServiceNotificationThresholdService
         }
 
         return $this->queueState($service, $state, $ordinal + 1);
+    }
+
+    /**
+     * @param  NotificationServiceRow  $service
+     * @param  NotificationStateRow  $state
+     */
+    private function reconcileMissingDeliveryEffect(object $service, object $state): string
+    {
+        /** @var object{dispatch_state:string}|null $outbox */
+        $outbox = $this->database->connection()->table('service_delivery_attempts as attempt')
+            ->join('outbox_messages as outbox', 'outbox.id', '=', 'attempt.outbox_event_id')
+            ->where('attempt.id', (int) $state->latest_delivery_attempt_id)
+            ->where('attempt.service_subscription_id', (int) $service->id)
+            ->where('attempt.purpose', ServiceDeliveryPurpose::Notification->value)
+            ->first(['outbox.dispatch_state']);
+        if ($outbox === null) {
+            throw new RuntimeException('Service notification Delivery Attempt lost its Outbox authority.');
+        }
+
+        return match ($outbox->dispatch_state) {
+            'pending', 'leased', 'retry' => 'waiting',
+            'review_required' => $this->transitionState(
+                (int) $state->id,
+                (int) $service->id,
+                ServiceNotificationState::Escalated,
+                'service-notification:outbox-review:'.substr($state->episode_key_hash, 0, 24),
+            ) ? 'escalated' : 'waiting',
+            'authority_pending' => throw new RuntimeException('Service notification Outbox command remained authority-pending after queue commit.'),
+            'processed' => throw new RuntimeException('Processed Service notification Outbox command is missing its Delivery Effect.'),
+            default => throw new RuntimeException('Stored Service notification Outbox dispatch state is invalid.'),
+        };
     }
 
     /**
