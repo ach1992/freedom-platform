@@ -14,14 +14,20 @@ use App\Modules\Provisioning\Application\ProvisioningPanelAdapterResolver;
 use App\Modules\Provisioning\Application\ServiceImportService;
 use App\Modules\Provisioning\Application\ServiceNotificationThresholdService;
 use App\Modules\Provisioning\Application\ServiceOperationalContext;
+use App\Modules\Wallet\Application\LedgerEntryDraft;
+use App\Modules\Wallet\Application\LedgerPostingService;
+use App\Modules\Wallet\Domain\IrrMoney;
+use App\Modules\Wallet\Domain\LedgerDirection;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use Tests\Support\CreatesBenefitCodeFixtures;
 use Tests\TestCase;
 
-/** @requirement SVC-013 SVC-014 DAT-003 QUA-004 */
+/** @requirement SVC-013 SVC-014 WAL-002 DAT-003 QUA-004 */
 final class ServiceNotificationBatchFairnessTest extends TestCase
 {
     use CreatesBenefitCodeFixtures;
@@ -32,6 +38,10 @@ final class ServiceNotificationBatchFairnessTest extends TestCase
         parent::setUp();
         $this->seed();
         config()->set('service_notifications.low_balance_irr', 0);
+
+        /** @var Migration $operationalMigration */
+        $operationalMigration = require database_path('migrations/2026_08_19_000140_enable_service_operational_authority.php');
+        $operationalMigration->up();
 
         /** @var Migration $cursorMigration */
         $cursorMigration = require database_path('migrations/2026_08_23_000210_enable_service_notification_scan_cursor.php');
@@ -73,6 +83,50 @@ final class ServiceNotificationBatchFairnessTest extends TestCase
             $observedCursorIds,
             'The bounded notification selector must visit every eligible Service before wrapping.',
         );
+    }
+
+    public function test_low_balance_is_revalidated_after_the_initial_observation_before_persistence(): void
+    {
+        config()->set('service_notifications.low_balance_irr', 500_000);
+        $fixture = $this->fixture();
+        $this->attachService($fixture, 1);
+
+        $assetId = $this->account('system.notification.balance.asset', 'asset');
+        $walletId = $this->account(
+            'wallet.cash.notification.'.$fixture['user_id'],
+            'liability',
+            $fixture['user_id'],
+            'cash',
+        );
+        $this->fundWallet($assetId, $walletId, 100_000, 'initial');
+
+        $fundedAfterObservation = false;
+        DB::listen(function (QueryExecuted $query) use (
+            &$fundedAfterObservation,
+            $assetId,
+            $walletId,
+        ): void {
+            $sql = strtolower($query->sql);
+            if ($fundedAfterObservation
+                || ! str_contains($sql, 'wallet_holds')
+                || ! str_contains($sql, 'sum')) {
+                return;
+            }
+
+            $fundedAfterObservation = true;
+            DB::connection()->afterCommit(function () use ($assetId, $walletId): void {
+                $this->fundWallet($assetId, $walletId, 600_000, 'after-observation');
+            });
+        });
+
+        $receipt = $this->app->make(ServiceNotificationThresholdService::class)->processBatch(1);
+
+        self::assertTrue($fundedAfterObservation, 'The regression must change balance after the initial low-balance observation.');
+        self::assertSame(0, $receipt->triggered);
+        self::assertSame(0, $receipt->queued);
+        self::assertSame(0, DB::table('service_notification_states')
+            ->where('notification_type', 'low_balance')
+            ->count());
     }
 
     /** @return array{owner_id:int,user_id:int,offering_id:int,target_id:int,adapter:ServiceOperationalPanelAdapter} */
@@ -149,5 +203,41 @@ final class ServiceNotificationBatchFairnessTest extends TestCase
         );
         $attached = $imports->attach($preview->importPublicId, $context);
         self::assertNotNull($attached->serviceSubscriptionPublicId);
+    }
+
+    private function account(
+        string $code,
+        string $class,
+        ?int $userId = null,
+        ?string $bucket = null,
+    ): int {
+        $now = now('UTC');
+
+        return (int) DB::table('ledger_accounts')->insertGetId([
+            'code' => $code,
+            'account_class' => $class,
+            'owner_user_id' => $userId,
+            'wallet_bucket' => $bucket,
+            'currency' => 'IRR',
+            'is_active' => true,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+    }
+
+    private function fundWallet(int $assetId, int $walletId, int $amount, string $suffix): void
+    {
+        $token = substr(hash('sha256', $suffix), 0, 24);
+        $this->app->make(LedgerPostingService::class)->post(
+            'ledger.notification.fund.'.$token,
+            'wallet_topup_capture',
+            'notification-fund-'.$token,
+            [
+                new LedgerEntryDraft($assetId, LedgerDirection::Debit, IrrMoney::positive($amount)),
+                new LedgerEntryDraft($walletId, LedgerDirection::Credit, IrrMoney::positive($amount)),
+            ],
+            'payment_intent',
+            'pi-notification-fund-'.$token,
+        );
     }
 }
