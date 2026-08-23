@@ -651,6 +651,12 @@ final readonly class ServiceSynchronizationService
             ->whereNotNull('service.remote_service_id')
             ->whereNull('service.remote_deleted_at')
             ->whereIn('service.lifecycle_state', ['active', 'suspended'])
+            ->whereNotExists(function (Builder $pending): void {
+                $pending->selectRaw('1')
+                    ->from('provisioning_operations as pending_operation')
+                    ->whereColumn('pending_operation.service_subscription_id', 'service.id')
+                    ->whereNotIn('pending_operation.state', self::TERMINAL_OPERATION_STATES);
+            })
             ->orderByRaw('latest_sync.last_observed_at IS NOT NULL')
             ->orderBy('latest_sync.last_observed_at')
             ->orderBy('service.id');
