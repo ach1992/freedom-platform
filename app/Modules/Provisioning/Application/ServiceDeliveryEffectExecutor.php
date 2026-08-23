@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace App\Modules\Provisioning\Application;
 
 use App\Modules\Provisioning\Domain\ServiceDeliveryEffectState;
+use App\Modules\Provisioning\Domain\ServiceDeliveryPurpose;
 use App\Modules\Telegram\Application\Contracts\ProtectedTelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\ProtectedTelegramMessageSender;
+use App\Modules\Telegram\Application\ProtectedTelegramPresentation;
 use App\Modules\Telegram\Application\ProtectedTelegramSendOutcome;
 use App\Modules\Telegram\Application\ProtectedTelegramSendResult;
 use App\Shared\Application\Clock;
@@ -18,7 +20,7 @@ use RuntimeException;
 use Throwable;
 
 /**
- * @phpstan-type DeliveryAttempt object{id:int|string,public_id:string,service_subscription_id:int|string,correlation_id:string,target_remote_identity_generation:int|string,target_lifecycle_version:int|string}
+ * @phpstan-type DeliveryAttempt object{id:int|string,public_id:string,service_subscription_id:int|string,purpose:string,correlation_id:string,target_remote_identity_generation:int|string,target_lifecycle_version:int|string}
  * @phpstan-type DeliveryService object{id:int|string,public_id:string,user_id:int|string,service_target_id:int|string|null,remote_service_id:?string,provisioned_at:?string,lifecycle_state:string,lifecycle_version:int|string,remote_identity_generation:int|string,remote_deleted_at:?string}
  * @phpstan-type TelegramAccount object{id:int|string,user_id:int|string,bot_id:int|string,telegram_user_id:int|string,is_bot:int|string|bool}
  * @phpstan-type DeliveryEffect object{id:int|string,public_id:string,service_delivery_attempt_id:int|string,service_subscription_id:int|string,telegram_account_id:int|string,telegram_bot_id:int|string,telegram_user_id:int|string,state:string,state_version:int|string,provider_boundary_started_at:?string,completed_at:?string,telegram_message_id:int|string|null,result_code:?string,retry_after_seconds:int|string|null}
@@ -44,7 +46,7 @@ final readonly class ServiceDeliveryEffectExecutor
         private ProtectedServiceDeliveryPresentationFactory $presentations,
     ) {}
 
-    /** @requirement SVC-002 SVC-014 PRV-002 PRV-003 ARCH-004 DAT-003 SEC-002 SEC-008 INT-001 INT-002 OPS-003 QUA-001 QUA-004 */
+    /** @requirement SVC-002 SVC-013 SVC-014 PRV-002 PRV-003 ARCH-004 DAT-003 SEC-002 SEC-008 INT-001 INT-002 OPS-003 QUA-001 QUA-004 */
     public function execute(string $attemptPublicId): ServiceDeliveryExecutionReceipt
     {
         $this->assertUlid($attemptPublicId);
@@ -63,23 +65,37 @@ final readonly class ServiceDeliveryEffectExecutor
             throw new DomainException('Service delivery effect is not safely executable.');
         }
 
-        try {
-            $targetId = $this->positiveDatabaseInt($context['service']->service_target_id, 'Service target ID');
-            $remoteServiceId = $this->requiredString($context['service']->remote_service_id, 'Remote Service ID');
-            $adapter = $this->adapters->resolve($targetId);
-            $artifacts = $adapter->getDeliveryArtifacts($remoteServiceId);
-        } catch (Throwable) {
-            // No Telegram provider boundary has been crossed. Common Outbox retry is safe.
-            return $this->receipt($context['attempt'], $context['effect'], false);
+        $purpose = ServiceDeliveryPurpose::tryFrom($context['attempt']->purpose)
+            ?? throw new RuntimeException('Stored Service delivery purpose is invalid.');
+        if ($purpose === ServiceDeliveryPurpose::Notification) {
+            try {
+                $presentation = $this->notificationPresentation((int) $context['attempt']->id);
+            } catch (Throwable) {
+                return $this->finalizePreparedFailure(
+                    $context['effect'],
+                    'notification_presentation_unavailable',
+                );
+            }
+        } else {
+            try {
+                $targetId = $this->positiveDatabaseInt($context['service']->service_target_id, 'Service target ID');
+                $remoteServiceId = $this->requiredString($context['service']->remote_service_id, 'Remote Service ID');
+                $adapter = $this->adapters->resolve($targetId);
+                $artifacts = $adapter->getDeliveryArtifacts($remoteServiceId);
+            } catch (Throwable) {
+                // No Telegram provider boundary has been crossed. Common Outbox retry is safe.
+                return $this->receipt($context['attempt'], $context['effect'], false);
+            }
+
+            $presentation = $this->presentations->make($artifacts);
+            if ($presentation === null) {
+                return $this->finalizePreparedFailure(
+                    $context['effect'],
+                    'delivery_text_unavailable',
+                );
+            }
         }
 
-        $presentation = $this->presentations->make($artifacts);
-        if ($presentation === null) {
-            return $this->finalizePreparedFailure(
-                $context['effect'],
-                'delivery_text_unavailable',
-            );
-        }
         if ($presentation->isText() && mb_strlen($presentation->text()) > 4096) {
             return $this->finalizePreparedFailure(
                 $context['effect'],
@@ -206,6 +222,20 @@ final readonly class ServiceDeliveryEffectExecutor
 
             return compact('attempt', 'service', 'account', 'effect');
         }, 3);
+    }
+
+    private function notificationPresentation(int $attemptId): ProtectedTelegramPresentation
+    {
+        /** @var object{presentation_text:string,presentation_hash:string}|null $binding */
+        $binding = $this->database->connection()->table('service_notification_delivery_bindings')
+            ->where('service_delivery_attempt_id', $attemptId)
+            ->first(['presentation_text', 'presentation_hash']);
+        if ($binding === null
+            || ! hash_equals($binding->presentation_hash, hash('sha256', $binding->presentation_text))) {
+            throw new RuntimeException('Service notification presentation evidence is invalid.');
+        }
+
+        return ProtectedTelegramPresentation::plainText($binding->presentation_text);
     }
 
     /**
