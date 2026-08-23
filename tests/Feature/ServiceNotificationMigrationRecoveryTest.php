@@ -42,6 +42,9 @@ final class ServiceNotificationMigrationRecoveryTest extends TestCase
             self::assertTrue(Schema::hasTable('service_notification_states'));
             self::assertTrue(Schema::hasTable('service_notification_delivery_bindings'));
             self::assertTrue(Schema::hasTable('service_notification_events'));
+            self::assertSame(1, $this->triggerCount('service_delivery_notification_attempt_capability_guard'));
+            self::assertSame(1, $this->triggerCount('service_delivery_notification_effect_insert_capability_guard'));
+            self::assertSame(1, $this->triggerCount('service_delivery_notification_effect_update_capability_guard'));
         } finally {
             if (! Schema::hasTable('service_notification_states')) {
                 $this->migration->up();
@@ -59,6 +62,9 @@ final class ServiceNotificationMigrationRecoveryTest extends TestCase
             self::assertStringContainsString("'initial'", $clause);
             self::assertStringContainsString("'resend'", $clause);
             self::assertStringNotContainsString("'notification'", $clause);
+            self::assertSame(0, $this->triggerCount('service_delivery_notification_attempt_capability_guard'));
+            self::assertSame(0, $this->triggerCount('service_delivery_notification_effect_insert_capability_guard'));
+            self::assertSame(0, $this->triggerCount('service_delivery_notification_effect_update_capability_guard'));
         } finally {
             $this->migration->up();
         }
