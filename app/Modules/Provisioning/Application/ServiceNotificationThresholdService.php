@@ -15,6 +15,7 @@ use DateTimeZone;
 use DomainException;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
+use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Str;
 use RuntimeException;
 
@@ -1015,7 +1016,7 @@ final readonly class ServiceNotificationThresholdService
         }, 3);
     }
 
-    private function eligibleCandidateQuery(Connection $connection): \Illuminate\Database\Query\Builder
+    private function eligibleCandidateQuery(Connection $connection): Builder
     {
         return $connection->table('service_subscriptions')
             ->whereNotNull('provisioned_at')
