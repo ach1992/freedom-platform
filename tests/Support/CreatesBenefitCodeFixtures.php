@@ -35,15 +35,15 @@ trait CreatesBenefitCodeFixtures
     }
 
     /** @return array{id:int,product_id:int,server_id:int} */
-    protected function benefitOffering(string $suffix = 'benefit'): array
+    protected function benefitOffering(string $suffix = 'benefit', ?string $protocolHost = null): array
     {
-        return $this->usageOffering(suffix: $suffix);
+        return $this->usageOffering(suffix: $suffix, protocolHost: $protocolHost);
     }
 
     /** @return array{id:int,product_id:int,server_id:int} */
-    protected function activeBenefitOffering(string $suffix = 'benefit'): array
+    protected function activeBenefitOffering(string $suffix = 'benefit', ?string $protocolHost = null): array
     {
-        $offering = $this->benefitOffering($suffix);
+        $offering = $this->benefitOffering($suffix, $protocolHost);
         $now = now('UTC');
 
         /** @var object{panel_service_target_id:int|string,version:int|string}|null $offeringRow */

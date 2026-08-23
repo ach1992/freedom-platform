@@ -415,7 +415,7 @@ SQL);
             'reason_code' => 'authoritative_non_paid_source',
             'reason' => null,
             'correlation_id' => $correlationId,
-            'request_fingerprint' => $authorization->request_payload_hash,
+            'request_fingerprint' => hash('sha256', $authorization->public_id.':'.$authorization->request_payload_hash),
             'created_at' => $this->timestamp(),
         ]);
     }
