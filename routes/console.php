@@ -69,10 +69,7 @@ Schedule::command('services:sync', [
 $serviceNotificationInterval = max(1, min(60, (int) config('service_notifications.interval_minutes', 5)));
 $serviceNotificationCron = $serviceNotificationInterval === 60
     ? '2 * * * *'
-    : '2-'.$serviceNotificationInterval.'/'.($serviceNotificationInterval).' * * * *';
-if ($serviceNotificationInterval !== 60) {
-    $serviceNotificationCron = '*/'.$serviceNotificationInterval.' * * * *';
-}
+    : '*/'.$serviceNotificationInterval.' * * * *';
 Schedule::command('services:notifications', [
     '--limit' => config('service_notifications.batch_limit', 50),
     '--json' => true,
