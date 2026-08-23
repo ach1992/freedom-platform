@@ -149,7 +149,7 @@ return new class extends Migration
         $this->replaceDeliveryPurposeConstraint("purpose IN ('initial','resend')");
     }
 
-    /** @param list<string> $allowed */
+    /** @param  list<string>  $allowed */
     private function assertDeliveryPurposeValues(array $allowed): void
     {
         if (DB::table('service_delivery_attempts')->whereNotIn('purpose', $allowed)->exists()) {
@@ -217,7 +217,9 @@ CREATE OR REPLACE TRIGGER service_notification_states_insert_guard
 BEFORE INSERT ON service_notification_states
 FOR EACH ROW
 BEGIN
-    DECLARE valid_service_count INT DEFAULT 0;
+    DECLARE valid_source_count INT DEFAULT 0;
+    DECLARE expected_cycle CHAR(64) DEFAULT NULL;
+    DECLARE expected_threshold VARCHAR(64) DEFAULT NULL;
 
     IF NOT EXISTS (
         SELECT 1 FROM service_operational_authority_capability capability_row
@@ -226,7 +228,14 @@ BEGIN
     ) OR COALESCE(@app_service_notification_authority, '') <> 'service_notification_create_v1'
        OR NEW.service_subscription_id <> COALESCE(@app_service_notification_service_id, 0)
        OR BINARY NEW.episode_key_hash <> BINARY COALESCE(@app_service_notification_episode_key, '')
+       OR BINARY NEW.notification_type <> BINARY COALESCE(@app_service_notification_type, '')
+       OR BINARY NEW.threshold_code <> BINARY COALESCE(@app_service_notification_threshold_code, '')
+       OR BINARY NEW.cycle_key_hash <> BINARY COALESCE(@app_service_notification_cycle_key, '')
+       OR BINARY NEW.source_type <> BINARY COALESCE(@app_service_notification_source_type, '')
+       OR NOT (NEW.source_id <=> @app_service_notification_source_id)
        OR BINARY NEW.last_correlation_id <> BINARY COALESCE(@app_service_notification_correlation_id, '')
+       OR NEW.triggered_at <> @app_service_notification_timestamp
+       OR NEW.updated_at <> @app_service_notification_timestamp
        OR NEW.state <> 'triggered'
        OR NEW.latest_delivery_attempt_id IS NOT NULL OR NEW.latest_retry_ordinal IS NOT NULL
        OR NEW.next_retry_at IS NOT NULL OR NEW.notified_at IS NOT NULL OR NEW.acknowledged_at IS NOT NULL
@@ -234,15 +243,110 @@ BEGIN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service notification state creation authority is invalid.';
     END IF;
 
-    SELECT COUNT(*) INTO valid_service_count
-    FROM service_subscriptions service_row
-    WHERE service_row.id = NEW.service_subscription_id
-      AND service_row.provisioned_at IS NOT NULL
-      AND service_row.remote_deleted_at IS NULL
-      AND service_row.lifecycle_state IN ('active','suspended');
+    IF NEW.notification_type = 'expiry' THEN
+        IF NEW.source_type <> 'service_sync_snapshot'
+           OR NEW.source_id IS NULL
+           OR NEW.threshold_code NOT IN ('expiry_due','expiry_1d','expiry_3d','expiry_7d') THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service expiry notification source shape is invalid.';
+        END IF;
 
-    IF valid_service_count <> 1 THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service notification state requires one live provisioned Service.';
+        SELECT COUNT(*),
+               MAX(SHA2(CONCAT_WS('|',
+                   'service-notification-expiry-cycle-v1',
+                   service_row.id,
+                   service_row.remote_identity_generation,
+                   service_row.mutation_generation,
+                   service_row.lifecycle_version,
+                   DATE_FORMAT(snapshot_row.remote_expires_at, '%Y-%m-%d %H:%i:%s.%f')
+               ), 256))
+          INTO valid_source_count, expected_cycle
+        FROM service_sync_snapshots snapshot_row
+        JOIN service_subscriptions service_row ON service_row.id = snapshot_row.service_subscription_id
+        WHERE snapshot_row.id = NEW.source_id
+          AND snapshot_row.service_subscription_id = NEW.service_subscription_id
+          AND snapshot_row.remote_disposition = 'present'
+          AND snapshot_row.remote_expires_at IS NOT NULL
+          AND snapshot_row.local_lifecycle_version = service_row.lifecycle_version
+          AND snapshot_row.local_remote_identity_generation = service_row.remote_identity_generation
+          AND snapshot_row.local_mutation_generation = service_row.mutation_generation
+          AND service_row.provisioned_at IS NOT NULL
+          AND service_row.remote_deleted_at IS NULL
+          AND service_row.lifecycle_state IN ('active','suspended')
+          AND NOT EXISTS (
+              SELECT 1
+              FROM service_sync_snapshots newer_snapshot
+              WHERE newer_snapshot.service_subscription_id = snapshot_row.service_subscription_id
+                AND newer_snapshot.local_lifecycle_version = snapshot_row.local_lifecycle_version
+                AND newer_snapshot.local_remote_identity_generation = snapshot_row.local_remote_identity_generation
+                AND newer_snapshot.local_mutation_generation = snapshot_row.local_mutation_generation
+                AND (
+                    newer_snapshot.observed_at > snapshot_row.observed_at
+                    OR (newer_snapshot.observed_at = snapshot_row.observed_at AND newer_snapshot.id > snapshot_row.id)
+                )
+          );
+    ELSEIF NEW.notification_type = 'renewal_failure' THEN
+        IF NEW.source_type <> 'auto_renew_notification_intent' OR NEW.source_id IS NULL THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service renewal notification source shape is invalid.';
+        END IF;
+
+        SELECT COUNT(*),
+               MAX(CONCAT('renewal_', intent_row.outcome)),
+               MAX(SHA2(CONCAT_WS('|',
+                   'service-notification-renewal-cycle-v1',
+                   attempt_row.service_subscription_id,
+                   intent_row.id,
+                   intent_row.outcome,
+                   COALESCE(intent_row.reason_code, '')
+               ), 256))
+          INTO valid_source_count, expected_threshold, expected_cycle
+        FROM service_auto_renew_notification_intents intent_row
+        JOIN service_auto_renew_attempts attempt_row ON attempt_row.id = intent_row.auto_renew_attempt_id
+        WHERE intent_row.id = NEW.source_id
+          AND attempt_row.service_subscription_id = NEW.service_subscription_id
+          AND (
+              (intent_row.outcome = 'insufficient_wallet' AND attempt_row.state = 'insufficient_wallet')
+              OR (intent_row.outcome = 'price_change_blocked' AND attempt_row.state = 'price_change_blocked')
+              OR (intent_row.outcome = 'failure' AND attempt_row.state = 'failed')
+          );
+        IF BINARY NEW.threshold_code <> BINARY COALESCE(expected_threshold, '') THEN
+            SET valid_source_count = 0;
+        END IF;
+    ELSEIF NEW.notification_type = 'low_balance' THEN
+        IF NEW.source_type <> 'wallet_balance'
+           OR NEW.source_id IS NULL OR NEW.source_id < 1
+           OR NEW.threshold_code <> 'low_balance' THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service low-balance notification source shape is invalid.';
+        END IF;
+
+        SELECT COUNT(*),
+               MAX(SHA2(CONCAT_WS('|',
+                   'service-notification-low-balance-cycle-v1',
+                   service_row.id,
+                   service_row.remote_identity_generation,
+                   service_row.mutation_generation,
+                   service_row.lifecycle_version,
+                   NEW.source_id
+               ), 256))
+          INTO valid_source_count, expected_cycle
+        FROM service_subscriptions service_row
+        WHERE service_row.id = NEW.service_subscription_id
+          AND service_row.provisioned_at IS NOT NULL
+          AND service_row.remote_deleted_at IS NULL
+          AND service_row.lifecycle_state IN ('active','suspended');
+    ELSE
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service notification type authority is invalid.';
+    END IF;
+
+    IF valid_source_count <> 1
+       OR BINARY NEW.cycle_key_hash <> BINARY COALESCE(expected_cycle, '')
+       OR BINARY NEW.episode_key_hash <> BINARY SHA2(CONCAT_WS('|',
+           'service-notification-episode-v1',
+           NEW.service_subscription_id,
+           NEW.notification_type,
+           NEW.threshold_code,
+           NEW.cycle_key_hash
+       ), 256) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service notification source evidence is invalid.';
     END IF;
 END
 SQL);
@@ -281,17 +385,53 @@ BEGIN
            OR NOT (OLD.escalated_at <=> NEW.escalated_at)
            OR NOT (OLD.expired_at <=> NEW.expired_at)
            OR (OLD.latest_retry_ordinal IS NULL AND NEW.latest_retry_ordinal <> 0)
-           OR (OLD.latest_retry_ordinal IS NOT NULL AND NEW.latest_retry_ordinal <> OLD.latest_retry_ordinal + 1) THEN
+           OR (OLD.latest_retry_ordinal IS NOT NULL AND NEW.latest_retry_ordinal <> OLD.latest_retry_ordinal + 1)
+           OR NEW.updated_at < OLD.updated_at THEN
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service notification delivery binding transition is invalid.';
         END IF;
-    ELSEIF COALESCE(@app_service_notification_authority, '') = 'service_notification_update_v1' THEN
-        IF NOT (OLD.latest_delivery_attempt_id <=> NEW.latest_delivery_attempt_id)
+    ELSEIF COALESCE(@app_service_notification_authority, '') = 'service_notification_schedule_retry_v1' THEN
+        IF OLD.state <> 'triggered' OR NEW.state <> 'triggered'
+           OR NOT (OLD.latest_delivery_attempt_id <=> NEW.latest_delivery_attempt_id)
            OR NOT (OLD.latest_retry_ordinal <=> NEW.latest_retry_ordinal)
+           OR NEW.next_retry_at <> @app_service_notification_next_retry_at
+           OR NEW.next_retry_at IS NULL
+           OR NOT (OLD.notified_at <=> NEW.notified_at)
+           OR NOT (OLD.acknowledged_at <=> NEW.acknowledged_at)
+           OR NOT (OLD.escalated_at <=> NEW.escalated_at)
+           OR NOT (OLD.expired_at <=> NEW.expired_at)
+           OR NEW.updated_at <> @app_service_notification_timestamp THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service notification retry schedule authority is invalid.';
+        END IF;
+    ELSEIF COALESCE(@app_service_notification_authority, '') = 'service_notification_transition_v1' THEN
+        IF BINARY OLD.state <> BINARY COALESCE(@app_service_notification_from_state, '')
+           OR BINARY NEW.state <> BINARY COALESCE(@app_service_notification_to_state, '')
+           OR NOT (OLD.latest_delivery_attempt_id <=> NEW.latest_delivery_attempt_id)
+           OR NOT (OLD.latest_retry_ordinal <=> NEW.latest_retry_ordinal)
+           OR NEW.next_retry_at IS NOT NULL
+           OR NEW.updated_at <> @app_service_notification_timestamp
            OR NOT (
-               (OLD.state = 'triggered' AND NEW.state IN ('triggered','notified','escalated','expired'))
-               OR (OLD.state IN ('notified','escalated') AND NEW.state = 'acknowledged')
+               (OLD.state = 'triggered' AND NEW.state = 'notified'
+                   AND NEW.notified_at = @app_service_notification_timestamp
+                   AND NOT (OLD.acknowledged_at <=> NEW.acknowledged_at)
+                   AND NOT (OLD.escalated_at <=> NEW.escalated_at)
+                   AND NOT (OLD.expired_at <=> NEW.expired_at))
+               OR (OLD.state = 'triggered' AND NEW.state = 'escalated'
+                   AND NEW.escalated_at = @app_service_notification_timestamp
+                   AND NOT (OLD.notified_at <=> NEW.notified_at)
+                   AND NOT (OLD.acknowledged_at <=> NEW.acknowledged_at)
+                   AND NOT (OLD.expired_at <=> NEW.expired_at))
+               OR (OLD.state = 'triggered' AND NEW.state = 'expired'
+                   AND NEW.expired_at = @app_service_notification_timestamp
+                   AND NOT (OLD.notified_at <=> NEW.notified_at)
+                   AND NOT (OLD.acknowledged_at <=> NEW.acknowledged_at)
+                   AND NOT (OLD.escalated_at <=> NEW.escalated_at))
+               OR (OLD.state IN ('notified','escalated') AND NEW.state = 'acknowledged'
+                   AND NEW.acknowledged_at = @app_service_notification_timestamp
+                   AND NOT (OLD.notified_at <=> NEW.notified_at)
+                   AND NOT (OLD.escalated_at <=> NEW.escalated_at)
+                   AND NOT (OLD.expired_at <=> NEW.expired_at))
            ) THEN
-            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service notification state transition is invalid.';
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service notification exact state transition authority is invalid.';
         END IF;
     ELSE
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service notification state update authority is invalid.';
@@ -377,9 +517,11 @@ BEGIN
         WHERE capability_row.id = 1
           AND BINARY capability_row.capability_hash = BINARY SHA2(COALESCE(@app_service_operational_capability, ''), 256)
     ) OR COALESCE(@app_service_notification_authority, '') NOT IN (
-        'service_notification_update_v1','service_notification_bind_v1'
-    ) OR NEW.service_notification_state_id <> COALESCE(@app_service_notification_state_id, 0)
-       OR BINARY NEW.correlation_id <> BINARY COALESCE(@app_service_notification_correlation_id, '') THEN
+        'service_notification_create_v1',
+        'service_notification_bind_v1',
+        'service_notification_schedule_retry_v1',
+        'service_notification_transition_v1'
+    ) OR BINARY NEW.correlation_id <> BINARY COALESCE(@app_service_notification_correlation_id, '') THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service notification event authority is invalid.';
     END IF;
 
@@ -397,17 +539,49 @@ BEGIN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service notification event state or sequence is invalid.';
     END IF;
 
-    IF NEW.event_type = 'delivery_queued' THEN
+    IF COALESCE(@app_service_notification_authority, '') = 'service_notification_create_v1' THEN
+        IF NEW.sequence <> 1
+           OR NEW.event_type <> 'triggered'
+           OR NEW.from_state IS NOT NULL
+           OR NEW.to_state <> 'triggered'
+           OR NEW.service_delivery_attempt_id IS NOT NULL
+           OR NEW.retry_ordinal IS NOT NULL
+           OR NEW.created_at <> @app_service_notification_timestamp THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service notification trigger event authority is invalid.';
+        END IF;
+    ELSEIF COALESCE(@app_service_notification_authority, '') = 'service_notification_bind_v1' THEN
         SELECT COUNT(*) INTO valid_delivery_count
         FROM service_notification_delivery_bindings binding_row
         WHERE binding_row.service_notification_state_id = NEW.service_notification_state_id
           AND binding_row.service_delivery_attempt_id = NEW.service_delivery_attempt_id
-          AND binding_row.retry_ordinal = NEW.retry_ordinal;
-        IF valid_delivery_count <> 1 THEN
-            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service notification delivery event requires the exact delivery binding.';
+          AND binding_row.retry_ordinal = NEW.retry_ordinal
+          AND binding_row.created_at = NEW.created_at;
+        IF NEW.event_type <> 'delivery_queued'
+           OR NEW.from_state <> 'triggered'
+           OR NEW.to_state <> 'triggered'
+           OR NEW.service_delivery_attempt_id <> COALESCE(@app_service_notification_attempt_id, 0)
+           OR NEW.retry_ordinal <> COALESCE(@app_service_notification_retry_ordinal, 65535)
+           OR valid_delivery_count <> 1 THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service notification delivery event authority is invalid.';
         END IF;
-    ELSEIF NEW.service_delivery_attempt_id IS NOT NULL OR NEW.retry_ordinal IS NOT NULL THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service notification non-delivery events cannot bind a Delivery Attempt.';
+    ELSEIF COALESCE(@app_service_notification_authority, '') = 'service_notification_schedule_retry_v1' THEN
+        IF NEW.event_type <> 'retry_scheduled'
+           OR NEW.from_state <> 'triggered'
+           OR NEW.to_state <> 'triggered'
+           OR NEW.service_delivery_attempt_id IS NOT NULL
+           OR NEW.retry_ordinal IS NOT NULL
+           OR NEW.created_at <> @app_service_notification_timestamp THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service notification retry event authority is invalid.';
+        END IF;
+    ELSE
+        IF BINARY NEW.event_type <> BINARY COALESCE(@app_service_notification_to_state, '')
+           OR BINARY NEW.from_state <> BINARY COALESCE(@app_service_notification_from_state, '')
+           OR BINARY NEW.to_state <> BINARY COALESCE(@app_service_notification_to_state, '')
+           OR NEW.service_delivery_attempt_id IS NOT NULL
+           OR NEW.retry_ordinal IS NOT NULL
+           OR NEW.created_at <> @app_service_notification_timestamp THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service notification transition event authority is invalid.';
+        END IF;
     END IF;
 END
 SQL);
