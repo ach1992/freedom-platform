@@ -189,6 +189,7 @@ final readonly class ServiceDeliveryEffectExecutor
             }
 
             $this->assertCurrentAuthority($connection, $attempt, $service);
+            $this->assertCurrentNotificationAuthority($connection, $attempt);
             $account = $this->telegramAccount($connection, $service);
 
             $effect = $this->effectByAttemptId($connection, (int) $attempt->id, true);
@@ -238,6 +239,27 @@ final readonly class ServiceDeliveryEffectExecutor
         return ProtectedTelegramPresentation::plainText($binding->presentation_text);
     }
 
+    /** @param  DeliveryAttempt  $attempt */
+    private function assertCurrentNotificationAuthority(Connection $connection, object $attempt): void
+    {
+        if ($attempt->purpose !== ServiceDeliveryPurpose::Notification->value) {
+            return;
+        }
+
+        /** @var object{service_notification_state_id:int|string}|null $binding */
+        $binding = $connection->table('service_notification_delivery_bindings as binding')
+            ->join('service_notification_states as state', 'state.id', '=', 'binding.service_notification_state_id')
+            ->where('binding.service_delivery_attempt_id', (int) $attempt->id)
+            ->where('state.service_subscription_id', (int) $attempt->service_subscription_id)
+            ->where('state.state', 'triggered')
+            ->whereColumn('state.latest_delivery_attempt_id', 'binding.service_delivery_attempt_id')
+            ->lockForUpdate()
+            ->first(['binding.service_notification_state_id']);
+        if ($binding === null) {
+            throw new DomainException('Service notification Delivery Attempt lost current threshold authority.');
+        }
+    }
+
     /**
      * @param  DeliveryEffect  $locator
      * @return DeliveryEffect
@@ -262,6 +284,7 @@ final readonly class ServiceDeliveryEffectExecutor
             }
 
             $this->assertCurrentAuthority($connection, $attempt, $service);
+            $this->assertCurrentNotificationAuthority($connection, $attempt);
             $account = $this->telegramAccount($connection, $service);
             $this->assertEffectRecipient($effect, $account);
 
