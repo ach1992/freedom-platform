@@ -117,15 +117,16 @@ final class ServiceSynchronizationTest extends TestCase
     public function test_entitlement_change_in_same_authority_cycle_is_anomaly_but_usage_change_is_not(): void
     {
         $fixture = $this->syncFixture('entitlement');
-        $remote = $this->snapshot('remote-entitlement', 'sync-entitlement', PanelServiceStatus::Active, 10_000, 100, '+30 days');
+        $expiry = (new \DateTimeImmutable('+30 days', new \DateTimeZone('UTC')))->format(DATE_ATOM);
+        $remote = $this->snapshot('remote-entitlement', 'sync-entitlement', PanelServiceStatus::Active, 10_000, 100, $expiry);
         $servicePublicId = $this->attachedService($fixture, $remote, 'entitlement');
         $service = $this->app->make(ServiceSynchronizationService::class);
         self::assertSame(0, $service->syncOne($servicePublicId)->anomalies);
 
-        $fixture['adapter']->seed($this->snapshot('remote-entitlement', 'sync-entitlement', PanelServiceStatus::Active, 10_000, 900, '+30 days'));
+        $fixture['adapter']->seed($this->snapshot('remote-entitlement', 'sync-entitlement', PanelServiceStatus::Active, 10_000, 900, $expiry));
         self::assertSame(0, $service->syncOne($servicePublicId)->anomalies, 'Normal usage growth must not be treated as entitlement drift.');
 
-        $fixture['adapter']->seed($this->snapshot('remote-entitlement', 'sync-entitlement', PanelServiceStatus::Active, 20_000, 900, '+30 days'));
+        $fixture['adapter']->seed($this->snapshot('remote-entitlement', 'sync-entitlement', PanelServiceStatus::Active, 20_000, 900, $expiry));
         $receipt = $service->syncOne($servicePublicId);
         self::assertSame(1, $receipt->anomalies);
         self::assertTrue(DB::table('service_sync_anomalies')->where('classification', 'unexpected_entitlement')->exists());
