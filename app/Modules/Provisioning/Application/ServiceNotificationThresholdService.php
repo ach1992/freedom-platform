@@ -20,7 +20,7 @@ use Illuminate\Support\Str;
 use RuntimeException;
 
 /**
- * @phpstan-type NotificationServiceRow object{id:int|string,public_id:string,user_id:int|string,lifecycle_state:string,lifecycle_version:int|string,remote_identity_generation:int|string,mutation_generation:int|string}
+ * @phpstan-type NotificationServiceRow object{id:int|string,public_id:string,user_id:int|string,service_target_id:int|string|null,remote_service_id:?string,provisioned_at:?string,lifecycle_state:string,lifecycle_version:int|string,remote_identity_generation:int|string,mutation_generation:int|string,remote_deleted_at:?string}
  * @phpstan-type NotificationSpec array{type:ServiceNotificationType,threshold:string,cycle:string,episode:string,source_type:string,source_id:?int,message:string}
  * @phpstan-type NotificationStateRow object{id:int|string,public_id:string,service_subscription_id:int|string,episode_key_hash:string,notification_type:string,threshold_code:string,state:string,latest_delivery_attempt_id:int|string|null,latest_retry_ordinal:int|string|null,next_retry_at:?string}
  * @phpstan-type DeliveryEffectRow object{state:string,completed_at:?string,retry_after_seconds:int|string|null}
@@ -52,7 +52,9 @@ final readonly class ServiceNotificationThresholdService
         $expired = 0;
         $skipped = 0;
         foreach ($services as $service) {
-            $specs = $this->notificationSpecs($service);
+            $specs = $this->isThresholdEligible($service)
+                ? $this->notificationSpecs($service)
+                : [];
             $activeEpisodes = [];
             foreach ($specs as $spec) {
                 $result = $this->ensureTriggered($service, $spec);
@@ -910,7 +912,8 @@ final readonly class ServiceNotificationThresholdService
      */
     private function canExpireTriggeredState(Connection $connection, object $service, object $state): bool
     {
-        if ($state->notification_type === ServiceNotificationType::LowBalance->value) {
+        if ($this->isThresholdEligible($service)
+            && $state->notification_type === ServiceNotificationType::LowBalance->value) {
             $current = $this->lowBalanceSpec($service);
             if ($current !== null && hash_equals($current['episode'], $state->episode_key_hash)) {
                 return false;
@@ -1143,11 +1146,32 @@ final readonly class ServiceNotificationThresholdService
     private function eligibleCandidateQuery(Connection $connection): Builder
     {
         return $connection->table('service_subscriptions')
-            ->whereNotNull('provisioned_at')
-            ->whereNotNull('service_target_id')
-            ->whereNotNull('remote_service_id')
-            ->whereNull('remote_deleted_at')
-            ->whereIn('lifecycle_state', ['active', 'suspended']);
+            ->where(function (Builder $query): void {
+                $query->where(function (Builder $eligible): void {
+                    $eligible->whereNotNull('provisioned_at')
+                        ->whereNotNull('service_target_id')
+                        ->whereNotNull('remote_service_id')
+                        ->whereNull('remote_deleted_at')
+                        ->whereIn('lifecycle_state', ['active', 'suspended']);
+                })->orWhereExists(function (Builder $triggered): void {
+                    $triggered->selectRaw('1')
+                        ->from('service_notification_states as notification_state')
+                        ->whereColumn('notification_state.service_subscription_id', 'service_subscriptions.id')
+                        ->where('notification_state.state', ServiceNotificationState::Triggered->value);
+                });
+            });
+    }
+
+    /** @param  NotificationServiceRow  $service */
+    private function isThresholdEligible(object $service): bool
+    {
+        return $service->provisioned_at !== null
+            && $service->service_target_id !== null
+            && (int) $service->service_target_id > 0
+            && is_string($service->remote_service_id)
+            && $service->remote_service_id !== ''
+            && $service->remote_deleted_at === null
+            && in_array($service->lifecycle_state, ['active', 'suspended'], true);
     }
 
     /** @return list<string> */
@@ -1163,8 +1187,8 @@ final readonly class ServiceNotificationThresholdService
     private function serviceColumns(): array
     {
         return [
-            'id', 'public_id', 'user_id', 'lifecycle_state', 'lifecycle_version',
-            'remote_identity_generation', 'mutation_generation',
+            'id', 'public_id', 'user_id', 'service_target_id', 'remote_service_id', 'provisioned_at',
+            'lifecycle_state', 'lifecycle_version', 'remote_identity_generation', 'mutation_generation', 'remote_deleted_at',
         ];
     }
 
@@ -1197,6 +1221,10 @@ final readonly class ServiceNotificationThresholdService
         return (int) $left->id === (int) $right->id
             && $left->public_id === $right->public_id
             && (int) $left->user_id === (int) $right->user_id
+            && (int) ($left->service_target_id ?? 0) === (int) ($right->service_target_id ?? 0)
+            && $left->remote_service_id === $right->remote_service_id
+            && $left->provisioned_at === $right->provisioned_at
+            && $left->remote_deleted_at === $right->remote_deleted_at
             && $left->lifecycle_state === $right->lifecycle_state
             && (int) $left->lifecycle_version === (int) $right->lifecycle_version
             && (int) $left->remote_identity_generation === (int) $right->remote_identity_generation

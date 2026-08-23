@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 require_once __DIR__.'/ServiceOperationalPanelAdapter.php';
+require_once __DIR__.'/ServiceDeliveryEffectTestDoubles.php';
 
 use App\Modules\Panels\Application\Contracts\PanelServiceStatus;
 use App\Modules\Panels\Application\Contracts\RemoteServiceSnapshot;
@@ -12,6 +13,7 @@ use App\Modules\Panels\Application\PanelAdapterRegistry;
 use App\Modules\Panels\Application\PanelCredentialPolicy;
 use App\Modules\Provisioning\Application\ProvisioningPanelAdapterResolver;
 use App\Modules\Provisioning\Application\ServiceImportService;
+use App\Modules\Provisioning\Application\ServiceMutationExecutor;
 use App\Modules\Provisioning\Application\ServiceMutationQueueService;
 use App\Modules\Provisioning\Application\ServiceNotificationDatabaseAuthority;
 use App\Modules\Provisioning\Application\ServiceNotificationThresholdService;
@@ -22,6 +24,8 @@ use App\Modules\Wallet\Application\LedgerPostingService;
 use App\Modules\Wallet\Application\WalletHoldService;
 use App\Modules\Wallet\Domain\IrrMoney;
 use App\Modules\Wallet\Domain\LedgerDirection;
+use App\Modules\Telegram\Application\ProtectedTelegramSendOutcome;
+use App\Modules\Telegram\Application\ProtectedTelegramSendResult;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\QueryException;
@@ -359,6 +363,57 @@ final class ServiceNotificationBatchFairnessTest extends TestCase
         } finally {
             ServiceNotificationDatabaseAuthority::clear($connection);
         }
+    }
+
+    public function test_retired_service_with_triggered_notification_remains_reconciliation_candidate(): void
+    {
+        config()->set('service_notifications.low_balance_irr', 500_000);
+        $fixture = $this->fixture();
+        $servicePublicId = $this->attachService($fixture, 1);
+
+        $assetId = $this->account('system.notification.retired-reconciliation.asset', 'asset');
+        $cashId = $this->account(
+            'wallet.cash.notification.retired-reconciliation.'.$fixture['user_id'],
+            'liability',
+            $fixture['user_id'],
+            'cash',
+        );
+        $this->fundWallet($assetId, $cashId, 100_000, 'retired-reconciliation');
+
+        $notifications = $this->app->make(ServiceNotificationThresholdService::class);
+        $initial = $notifications->processBatch(1);
+        self::assertSame(1, $initial->triggered);
+        self::assertSame(1, $initial->queued);
+
+        $provider = new ServiceDeliveryEffectTestDoubles(
+            'https://subscription.example.test/notification-retired-reconciliation',
+            new ProtectedTelegramSendResult(ProtectedTelegramSendOutcome::Success, 'unused_notification_sender', messageId: 1),
+        );
+        $this->app->instance(
+            PanelAdapterRegistry::class,
+            new PanelAdapterRegistry([$provider], $this->app->make(PanelCredentialPolicy::class)),
+        );
+        $this->app->forgetInstance(ProvisioningPanelAdapterResolver::class);
+        $this->app->forgetInstance(ServiceMutationExecutor::class);
+
+        $mutation = $this->app->make(ServiceMutationQueueService::class)->queue(
+            $servicePublicId,
+            ServiceMutationType::Delete,
+            'notification-retired-reconciliation-delete',
+            'notification-retired-reconciliation-correlation',
+        );
+        $this->app->make(ServiceMutationExecutor::class)->execute($mutation->operationPublicId);
+        self::assertSame('retired', DB::table('service_subscriptions')->where('public_id', $servicePublicId)->value('lifecycle_state'));
+        self::assertNotNull(DB::table('service_subscriptions')->where('public_id', $servicePublicId)->value('remote_deleted_at'));
+
+        $reconciled = $notifications->processBatch(1);
+        self::assertSame(1, $reconciled->candidates);
+        self::assertSame(0, $reconciled->triggered);
+        self::assertSame(1, $reconciled->expired);
+        self::assertSame('expired', DB::table('service_notification_states')
+            ->where('service_subscription_id', (int) DB::table('service_subscriptions')->where('public_id', $servicePublicId)->value('id'))
+            ->value('state'));
+        self::assertSame(1, DB::table('service_delivery_attempts')->where('purpose', 'notification')->count());
     }
 
     public function test_temporary_delivery_blocker_is_isolated_per_service_in_batch(): void
