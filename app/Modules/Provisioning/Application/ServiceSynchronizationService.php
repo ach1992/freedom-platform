@@ -26,8 +26,9 @@ use Throwable;
  * @phpstan-type SyncPreviousRow object{local_lifecycle_version:int|string,local_remote_identity_generation:int|string,local_mutation_generation:int|string,remote_status:string|null,remote_data_limit_bytes:int|string|null,remote_expires_at:string|null}
  * @phpstan-type SyncCandidateResult array{processed:bool,anomalies:int,provider_failure:bool}
  * @phpstan-type SyncAnomalyRow object{id:int|string,public_id:string,service_subscription_id:int|string,classification:string,severity:string,state:string,occurrence_count:int|string,resolution_action:?string,resolution_actor_administrator_id:int|string|null,resolution_request_hash:?string,resolution_reason_code:?string,resolution_reason:?string,resolution_correlation_id:?string,service_public_id:string}
+ *
+ * @requirement SVC-001 SVC-010 SVC-013 PRV-003 ARCH-003 ARCH-004 DAT-003 DAT-004 SEC-002 QUA-004
  */
-/** @requirement SVC-001 SVC-010 SVC-013 PRV-003 ARCH-003 ARCH-004 DAT-003 DAT-004 SEC-002 QUA-004 */
 final readonly class ServiceSynchronizationService
 {
     private const RESOLUTION_PERMISSION = 'services.repair';
@@ -123,12 +124,7 @@ final readonly class ServiceSynchronizationService
                 ServiceSyncResolutionAction::FlagManualReview => 'manual_review',
                 ServiceSyncResolutionAction::Reprovision => 'action_requested',
             };
-            $eventType = match ($nextState) {
-                'resolved' => 'resolved',
-                'manual_review' => 'manual_review',
-                'action_requested' => 'action_requested',
-                default => throw new RuntimeException('Service sync resolution state is invalid.'),
-            };
+            $eventType = $nextState;
             $timestamp = $this->timestamp();
 
             ServiceSyncDatabaseAuthority::resolution(
