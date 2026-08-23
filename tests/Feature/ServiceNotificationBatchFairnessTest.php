@@ -134,6 +134,58 @@ final class ServiceNotificationBatchFairnessTest extends TestCase
             ->count());
     }
 
+    public function test_low_balance_expiration_revalidates_wallet_after_initial_high_observation(): void
+    {
+        config()->set('service_notifications.low_balance_irr', 500_000);
+        $fixture = $this->fixture();
+        $this->attachService($fixture, 1);
+
+        $assetId = $this->account('system.notification.expiration-revalidation.asset', 'asset');
+        $cashId = $this->account(
+            'wallet.cash.notification.expiration-revalidation.'.$fixture['user_id'],
+            'liability',
+            $fixture['user_id'],
+            'cash',
+        );
+        $this->fundWallet($assetId, $cashId, 100_000, 'expiration-revalidation-initial');
+
+        $initial = $this->app->make(ServiceNotificationThresholdService::class)->processBatch(1);
+        self::assertSame(1, $initial->triggered);
+        self::assertSame(1, $initial->queued);
+
+        $this->fundWallet($assetId, $cashId, 500_000, 'expiration-revalidation-high');
+        $holdPlaced = false;
+        DB::listen(function (QueryExecuted $query) use (&$holdPlaced, $fixture, $cashId): void {
+            $sql = strtolower($query->sql);
+            if ($holdPlaced
+                || ! str_contains($sql, 'wallet_holds')
+                || ! str_contains($sql, 'sum')) {
+                return;
+            }
+
+            $holdPlaced = true;
+            DB::connection()->afterCommit(function () use ($fixture, $cashId): void {
+                $this->app->make(WalletHoldService::class)->place(
+                    'service-notification-expiration-revalidation-hold',
+                    $fixture['user_id'],
+                    $cashId,
+                    IrrMoney::positive(200_000),
+                    'service_notification_test',
+                    'expiration-revalidation',
+                    now('UTC')->addHour()->toDateTimeImmutable(),
+                );
+            });
+        });
+
+        $receipt = $this->app->make(ServiceNotificationThresholdService::class)->processBatch(1);
+
+        self::assertTrue($holdPlaced, 'The regression must lower available cash after the initial high-balance observation.');
+        self::assertSame(0, $receipt->expired);
+        self::assertSame('triggered', DB::table('service_notification_states')
+            ->where('notification_type', 'low_balance')
+            ->value('state'));
+    }
+
     public function test_later_service_observes_wallet_drop_in_same_batch_without_cross_service_cache(): void
     {
         config()->set('service_notifications.low_balance_irr', 500_000);

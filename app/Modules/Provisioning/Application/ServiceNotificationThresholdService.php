@@ -744,7 +744,7 @@ final readonly class ServiceNotificationThresholdService
             $next,
             $correlationId,
         ): bool {
-            $this->lockService($connection, $serviceId);
+            $service = $this->lockedService($connection, $serviceId);
             /** @var NotificationStateRow|null $state */
             $state = $connection->table('service_notification_states')
                 ->where('id', $stateId)
@@ -764,7 +764,8 @@ final readonly class ServiceNotificationThresholdService
             if (! $allowed) {
                 return false;
             }
-            if ($next === ServiceNotificationState::Expired && ! $this->canExpireTriggeredState($connection, $state)) {
+            if ($next === ServiceNotificationState::Expired
+                && ! $this->canExpireTriggeredState($connection, $service, $state)) {
                 return false;
             }
 
@@ -816,9 +817,19 @@ final readonly class ServiceNotificationThresholdService
         }, 3);
     }
 
-    /** @param  NotificationStateRow  $state */
-    private function canExpireTriggeredState(Connection $connection, object $state): bool
+    /**
+     * @param  NotificationServiceRow  $service
+     * @param  NotificationStateRow  $state
+     */
+    private function canExpireTriggeredState(Connection $connection, object $service, object $state): bool
     {
+        if ($state->notification_type === ServiceNotificationType::LowBalance->value) {
+            $current = $this->lowBalanceSpec($service);
+            if ($current !== null && hash_equals($current['episode'], $state->episode_key_hash)) {
+                return false;
+            }
+        }
+
         if ($state->latest_delivery_attempt_id === null) {
             return true;
         }
