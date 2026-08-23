@@ -16,6 +16,8 @@ return new class extends Migration
             throw new RuntimeException('Service synchronization authority requires the operational database capability foundation.');
         }
 
+        $this->resetInterruptedInstallIfSafe();
+
         if (! Schema::hasTable('service_sync_runs')) {
             Schema::create('service_sync_runs', function (Blueprint $table): void {
                 $table->bigIncrements('id');
@@ -132,6 +134,40 @@ return new class extends Migration
         Schema::dropIfExists('service_sync_snapshots');
         Schema::dropIfExists('service_sync_leases');
         Schema::dropIfExists('service_sync_runs');
+    }
+
+    private function resetInterruptedInstallIfSafe(): void
+    {
+        $tables = [
+            'service_sync_runs',
+            'service_sync_leases',
+            'service_sync_snapshots',
+            'service_sync_anomalies',
+            'service_sync_anomaly_events',
+        ];
+        $existing = array_values(array_filter(
+            $tables,
+            static fn (string $table): bool => Schema::hasTable($table),
+        ));
+        if ($existing === []) {
+            return;
+        }
+
+        foreach ($existing as $table) {
+            if (DB::table($table)->exists()) {
+                throw new RuntimeException(
+                    'Service synchronization authority migration cannot repair an interrupted install after authority rows exist.',
+                );
+            }
+        }
+
+        // MariaDB commits DDL per statement. If a previous attempt stopped after creating only
+        // part of this new, still-empty authority surface, remove that unused partial surface and
+        // rebuild it from the beginning instead of failing forever on duplicate DDL/constraints.
+        $this->dropGuards();
+        foreach (array_reverse($tables) as $table) {
+            Schema::dropIfExists($table);
+        }
     }
 
     private function installConstraints(): void
