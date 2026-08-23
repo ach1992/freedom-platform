@@ -79,10 +79,14 @@ trait CreatesPromotionUsageFixtures
     }
 
     /** @return array{id:int,product_id:int,server_id:int} */
-    protected function usageOffering(int $basePriceIrr = 1_000_000, bool $discountEligible = true, string $suffix = 'usage'): array
-    {
+    protected function usageOffering(
+        int $basePriceIrr = 1_000_000,
+        bool $discountEligible = true,
+        string $suffix = 'usage',
+        ?string $protocolHost = null,
+    ): array {
         $ownerId = $this->usageAdministrator();
-        $dependencies = $this->usageOfferingDependencies($suffix);
+        $dependencies = $this->usageOfferingDependencies($suffix, $protocolHost);
         $service = $this->app->make(PlanOfferingService::class);
         $code = 'usage-offering-'.substr(hash('sha256', $suffix.Str::random(6)), 0, 12);
         $created = $service->create(
@@ -201,7 +205,7 @@ trait CreatesPromotionUsageFixtures
     }
 
     /** @return array{product_id:int,server_id:int,target_id:int,tag_id:int,profile_ids:list<int>} */
-    private function usageOfferingDependencies(string $suffix): array
+    private function usageOfferingDependencies(string $suffix, ?string $protocolHost = null): array
     {
         $now = now('UTC');
         $token = substr(hash('sha256', $suffix.Str::random(6)), 0, 10);
@@ -292,7 +296,7 @@ trait CreatesPromotionUsageFixtures
             'protocol_family' => 'vless',
             'transport' => 'ws',
             'security_layer' => 'tls',
-            'host' => null,
+            'host' => $protocolHost,
             'sni' => null,
             'path' => '/usage',
             'port' => 443,

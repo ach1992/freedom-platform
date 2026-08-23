@@ -16,6 +16,7 @@ use App\Modules\Provisioning\Application\ServiceOperationalContext;
 use App\Modules\Provisioning\Application\ServiceSyncDatabaseAuthority;
 use App\Modules\Provisioning\Application\ServiceSynchronizationService;
 use App\Modules\Provisioning\Domain\ServiceSyncResolutionAction;
+use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\Crypt;
@@ -34,6 +35,9 @@ final class ServiceSynchronizationTest extends TestCase
     {
         parent::setUp();
         $this->seed();
+        /** @var Migration $operationalMigration */
+        $operationalMigration = require database_path('migrations/2026_08_19_000140_enable_service_operational_authority.php');
+        $operationalMigration->up();
         config()->set('service_sync.lease_seconds', 120);
         config()->set('service_sync.severity.missing_remote', 'critical');
         config()->set('service_sync.severity.expired_local_active_remote', 'warning');
@@ -113,15 +117,16 @@ final class ServiceSynchronizationTest extends TestCase
     public function test_entitlement_change_in_same_authority_cycle_is_anomaly_but_usage_change_is_not(): void
     {
         $fixture = $this->syncFixture('entitlement');
-        $remote = $this->snapshot('remote-entitlement', 'sync-entitlement', PanelServiceStatus::Active, 10_000, 100, '+30 days');
+        $expiry = (new \DateTimeImmutable('+30 days', new \DateTimeZone('UTC')))->format(DATE_ATOM);
+        $remote = $this->snapshot('remote-entitlement', 'sync-entitlement', PanelServiceStatus::Active, 10_000, 100, $expiry);
         $servicePublicId = $this->attachedService($fixture, $remote, 'entitlement');
         $service = $this->app->make(ServiceSynchronizationService::class);
         self::assertSame(0, $service->syncOne($servicePublicId)->anomalies);
 
-        $fixture['adapter']->seed($this->snapshot('remote-entitlement', 'sync-entitlement', PanelServiceStatus::Active, 10_000, 900, '+30 days'));
+        $fixture['adapter']->seed($this->snapshot('remote-entitlement', 'sync-entitlement', PanelServiceStatus::Active, 10_000, 900, $expiry));
         self::assertSame(0, $service->syncOne($servicePublicId)->anomalies, 'Normal usage growth must not be treated as entitlement drift.');
 
-        $fixture['adapter']->seed($this->snapshot('remote-entitlement', 'sync-entitlement', PanelServiceStatus::Active, 20_000, 900, '+30 days'));
+        $fixture['adapter']->seed($this->snapshot('remote-entitlement', 'sync-entitlement', PanelServiceStatus::Active, 20_000, 900, $expiry));
         $receipt = $service->syncOne($servicePublicId);
         self::assertSame(1, $receipt->anomalies);
         self::assertTrue(DB::table('service_sync_anomalies')->where('classification', 'unexpected_entitlement')->exists());
@@ -370,7 +375,7 @@ SQL,
     /** @return array{owner_id:int,user_id:int,offering_id:int,target_id:int,adapter:ServiceOperationalPanelAdapter} */
     private function syncFixture(string $suffix): array
     {
-        $offering = $this->activeBenefitOffering('service-sync-'.$suffix);
+        $offering = $this->activeBenefitOffering('service-sync-'.$suffix, 'panel.example.com');
         $ownerId = $this->benefitOwner();
         $userId = $this->benefitUser();
         $targetId = (int) DB::table('plan_offerings')->where('id', $offering['id'])->value('panel_service_target_id');
