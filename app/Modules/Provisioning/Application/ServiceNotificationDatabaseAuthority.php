@@ -58,7 +58,6 @@ final class ServiceNotificationDatabaseAuthority
         int $serviceId,
         int $attemptId,
         int $retryOrdinal,
-        string $timestamp,
         string $correlationId,
     ): void {
         self::set(
@@ -77,7 +76,7 @@ final class ServiceNotificationDatabaseAuthority
             'triggered',
             'triggered',
             null,
-            $timestamp,
+            null,
             $correlationId,
         );
     }
@@ -185,10 +184,10 @@ SQL);
         ?string $fromState,
         ?string $toState,
         ?string $nextRetryAt,
-        string $timestamp,
+        ?string $timestamp,
         string $correlationId,
     ): void {
-        if ($serviceId < 1 || $timestamp === '' || $correlationId === '') {
+        if ($serviceId < 1 || $correlationId === '') {
             throw new RuntimeException('Service notification database authority is incomplete.');
         }
         foreach ([$episodeKeyHash, $cycleKeyHash] as $hash) {
