@@ -949,19 +949,85 @@ final readonly class ServiceNotificationThresholdService
     /** @return list<NotificationServiceRow> */
     private function candidateServices(int $limit): array
     {
-        /** @var list<NotificationServiceRow> $rows */
-        $rows = $this->database->connection()->table('service_subscriptions')
+        return $this->database->connection()->transaction(function (Connection $connection) use ($limit): array {
+            /** @var object{last_service_subscription_id:int|string|null}|null $cursor */
+            $cursor = $connection->table('service_notification_scan_cursor')
+                ->where('id', 1)
+                ->lockForUpdate()
+                ->first(['last_service_subscription_id']);
+            if ($cursor === null) {
+                throw new RuntimeException('Service notification scan cursor is unavailable.');
+            }
+
+            $lastServiceId = $cursor->last_service_subscription_id === null
+                ? null
+                : (int) $cursor->last_service_subscription_id;
+            $firstQuery = $this->eligibleCandidateQuery($connection);
+            if ($lastServiceId !== null) {
+                $firstQuery->where('id', '>', $lastServiceId);
+            }
+
+            /** @var list<NotificationServiceRow> $rows */
+            $rows = $firstQuery
+                ->orderBy('id')
+                ->limit($limit)
+                ->get($this->serviceColumns())
+                ->all();
+
+            if ($lastServiceId !== null && count($rows) < $limit) {
+                $remaining = $limit - count($rows);
+                /** @var list<NotificationServiceRow> $wrapped */
+                $wrapped = $this->eligibleCandidateQuery($connection)
+                    ->where('id', '<=', $lastServiceId)
+                    ->orderBy('id')
+                    ->limit($remaining)
+                    ->get($this->serviceColumns())
+                    ->all();
+                $rows = [...$rows, ...$wrapped];
+            }
+
+            if ($rows === []) {
+                return [];
+            }
+
+            $nextServiceId = (int) $rows[array_key_last($rows)]->id;
+            $timestamp = $this->timestamp();
+            ServiceNotificationDatabaseAuthority::cursor(
+                $connection,
+                $lastServiceId,
+                $nextServiceId,
+                $timestamp,
+            );
+            try {
+                $update = $connection->table('service_notification_scan_cursor')->where('id', 1);
+                if ($lastServiceId === null) {
+                    $update->whereNull('last_service_subscription_id');
+                } else {
+                    $update->where('last_service_subscription_id', $lastServiceId);
+                }
+                $updated = $update->update([
+                    'last_service_subscription_id' => $nextServiceId,
+                    'updated_at' => $timestamp,
+                ]);
+                if ($updated !== 1) {
+                    throw new RuntimeException('Service notification scan cursor lost its current authority.');
+                }
+            } finally {
+                ServiceNotificationDatabaseAuthority::clear($connection);
+            }
+
+            return $rows;
+        }, 3);
+    }
+
+    private function eligibleCandidateQuery(Connection $connection): \Illuminate\Database\Query\Builder
+    {
+        return $connection->table('service_subscriptions')
             ->whereNotNull('provisioned_at')
             ->whereNotNull('service_target_id')
             ->whereNotNull('remote_service_id')
             ->whereNull('remote_deleted_at')
-            ->whereIn('lifecycle_state', ['active', 'suspended'])
-            ->orderBy('id')
-            ->limit($limit)
-            ->get($this->serviceColumns())
-            ->all();
-
-        return $rows;
+            ->whereIn('lifecycle_state', ['active', 'suspended']);
     }
 
     /** @return list<string> */
