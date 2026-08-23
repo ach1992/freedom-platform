@@ -16,6 +16,7 @@ use App\Modules\Provisioning\Application\ServiceOperationalContext;
 use App\Modules\Provisioning\Application\ServiceSyncDatabaseAuthority;
 use App\Modules\Provisioning\Application\ServiceSynchronizationService;
 use App\Modules\Provisioning\Domain\ServiceSyncResolutionAction;
+use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\Crypt;
@@ -34,6 +35,9 @@ final class ServiceSynchronizationTest extends TestCase
     {
         parent::setUp();
         $this->seed();
+        /** @var Migration $operationalMigration */
+        $operationalMigration = require database_path('migrations/2026_08_19_000140_enable_service_operational_authority.php');
+        $operationalMigration->up();
         config()->set('service_sync.lease_seconds', 120);
         config()->set('service_sync.severity.missing_remote', 'critical');
         config()->set('service_sync.severity.expired_local_active_remote', 'warning');
