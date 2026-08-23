@@ -334,8 +334,8 @@ BEGIN
         WHERE capability_row.id = 1
           AND BINARY capability_row.capability_hash = BINARY SHA2(COALESCE(@app_service_operational_capability, ''), 256)
     ) OR COALESCE(@app_service_notification_authority, '') NOT IN (
-        'service_notification_create_v1','service_notification_update_v1','service_notification_bind_v1'
-    ) OR NEW.service_notification_state_id <> COALESCE(@app_service_notification_state_id, NEW.service_notification_state_id)
+        'service_notification_update_v1','service_notification_bind_v1'
+    ) OR NEW.service_notification_state_id <> COALESCE(@app_service_notification_state_id, 0)
        OR BINARY NEW.correlation_id <> BINARY COALESCE(@app_service_notification_correlation_id, '') THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service notification event authority is invalid.';
     END IF;
