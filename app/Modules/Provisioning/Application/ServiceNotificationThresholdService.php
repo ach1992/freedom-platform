@@ -552,11 +552,14 @@ final readonly class ServiceNotificationThresholdService
             ->where('service_delivery_attempt_id', (int) $state->latest_delivery_attempt_id)
             ->first(['state', 'completed_at', 'retry_after_seconds']);
         if ($effect === null) {
-            return $this->reconcileMissingDeliveryEffect($service, $state);
+            return $this->reconcileNonTerminalDeliveryOutbox($service, $state);
         }
 
         $effectState = ServiceDeliveryEffectState::tryFrom($effect->state)
             ?? throw new RuntimeException('Stored notification delivery effect state is invalid.');
+        if ($effectState === ServiceDeliveryEffectState::Prepared) {
+            return $this->reconcileNonTerminalDeliveryOutbox($service, $state);
+        }
         if ($effectState === ServiceDeliveryEffectState::Succeeded) {
             return $this->transitionState(
                 (int) $state->id,
@@ -625,20 +628,16 @@ final readonly class ServiceNotificationThresholdService
      * @param  NotificationServiceRow  $service
      * @param  NotificationStateRow  $state
      */
-    private function reconcileMissingDeliveryEffect(object $service, object $state): string
+    private function reconcileNonTerminalDeliveryOutbox(object $service, object $state): string
     {
-        /** @var object{dispatch_state:string}|null $outbox */
-        $outbox = $this->database->connection()->table('service_delivery_attempts as attempt')
-            ->join('outbox_messages as outbox', 'outbox.id', '=', 'attempt.outbox_event_id')
-            ->where('attempt.id', (int) $state->latest_delivery_attempt_id)
-            ->where('attempt.service_subscription_id', (int) $service->id)
-            ->where('attempt.purpose', ServiceDeliveryPurpose::Notification->value)
-            ->first(['outbox.dispatch_state']);
-        if ($outbox === null) {
-            throw new RuntimeException('Service notification Delivery Attempt lost its Outbox authority.');
-        }
+        $dispatchState = $this->notificationOutboxDispatchState(
+            $this->database->connection(),
+            $service,
+            $state,
+            false,
+        );
 
-        return match ($outbox->dispatch_state) {
+        return match ($dispatchState) {
             'pending', 'leased', 'retry' => 'waiting',
             'review_required' => $this->transitionState(
                 (int) $state->id,
@@ -647,9 +646,48 @@ final readonly class ServiceNotificationThresholdService
                 'service-notification:outbox-review:'.substr($state->episode_key_hash, 0, 24),
             ) ? 'escalated' : 'waiting',
             'authority_pending' => throw new RuntimeException('Service notification Outbox command remained authority-pending after queue commit.'),
-            'processed' => throw new RuntimeException('Processed Service notification Outbox command is missing its Delivery Effect.'),
+            'processed' => throw new RuntimeException('Processed Service notification Outbox command does not have a terminal Delivery Effect.'),
             default => throw new RuntimeException('Stored Service notification Outbox dispatch state is invalid.'),
         };
+    }
+
+    /**
+     * @param  NotificationServiceRow  $service
+     * @param  NotificationStateRow  $state
+     */
+    private function notificationOutboxDispatchState(
+        Connection $connection,
+        object $service,
+        object $state,
+        bool $lock,
+    ): string {
+        /** @var object{outbox_event_id:string}|null $attempt */
+        $attempt = $connection->table('service_delivery_attempts')
+            ->where('id', (int) $state->latest_delivery_attempt_id)
+            ->where('service_subscription_id', (int) $service->id)
+            ->where('purpose', ServiceDeliveryPurpose::Notification->value)
+            ->first(['outbox_event_id']);
+        if ($attempt === null || $attempt->outbox_event_id === '') {
+            throw new RuntimeException('Service notification Delivery Attempt lost its Outbox authority.');
+        }
+
+        $query = $connection->table('outbox_messages')->where('id', $attempt->outbox_event_id);
+        if ($lock) {
+            $query->lockForUpdate();
+        }
+
+        /** @var object{dispatch_state:string}|null $outbox */
+        $outbox = $query->first(['dispatch_state']);
+        if ($outbox === null) {
+            throw new RuntimeException('Service notification Delivery Attempt lost its Outbox authority.');
+        }
+        if (! in_array($outbox->dispatch_state, [
+            'authority_pending', 'pending', 'leased', 'retry', 'processed', 'review_required',
+        ], true)) {
+            throw new RuntimeException('Stored Service notification Outbox dispatch state is invalid.');
+        }
+
+        return $outbox->dispatch_state;
     }
 
     /**
@@ -852,6 +890,24 @@ final readonly class ServiceNotificationThresholdService
      * @param  NotificationServiceRow  $service
      * @param  NotificationStateRow  $state
      */
+    private function canExpireAgainstNotificationOutbox(
+        Connection $connection,
+        object $service,
+        object $state,
+    ): bool {
+        return match ($this->notificationOutboxDispatchState($connection, $service, $state, true)) {
+            'pending', 'leased', 'retry' => true,
+            'review_required' => false,
+            'authority_pending' => throw new RuntimeException('Service notification Outbox command remained authority-pending after queue commit.'),
+            'processed' => throw new RuntimeException('Processed Service notification Outbox command does not have a terminal Delivery Effect.'),
+            default => throw new RuntimeException('Stored Service notification Outbox dispatch state is invalid.'),
+        };
+    }
+
+    /**
+     * @param  NotificationServiceRow  $service
+     * @param  NotificationStateRow  $state
+     */
     private function canExpireTriggeredState(Connection $connection, object $service, object $state): bool
     {
         if ($state->notification_type === ServiceNotificationType::LowBalance->value) {
@@ -871,17 +927,20 @@ final readonly class ServiceNotificationThresholdService
             ->lockForUpdate()
             ->first(['state', 'retry_after_seconds']);
         if ($effect === null) {
-            return true;
+            return $this->canExpireAgainstNotificationOutbox($connection, $service, $state);
         }
 
         $effectState = ServiceDeliveryEffectState::tryFrom($effect->state)
             ?? throw new RuntimeException('Stored notification delivery effect state is invalid.');
+        if ($effectState === ServiceDeliveryEffectState::Prepared) {
+            return $this->canExpireAgainstNotificationOutbox($connection, $service, $state);
+        }
         if ($effectState === ServiceDeliveryEffectState::FailedFinal
             && $effect->retry_after_seconds !== null) {
             return false;
         }
 
-        return in_array($effectState, [ServiceDeliveryEffectState::Prepared, ServiceDeliveryEffectState::FailedFinal], true);
+        return $effectState === ServiceDeliveryEffectState::FailedFinal;
     }
 
     private function insertEvent(

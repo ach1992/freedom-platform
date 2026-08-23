@@ -29,9 +29,12 @@ use App\Modules\Wallet\Domain\IrrMoney;
 use App\Modules\Wallet\Domain\LedgerDirection;
 use App\Shared\Application\Clock;
 use App\Shared\Application\OutboxDispatchOutcome;
+use App\Shared\Application\OutboxMessage;
+use App\Shared\Application\OutboxMessageHandler;
 use App\Shared\Infrastructure\DatabaseOutboxDispatcher;
 use DateTimeImmutable;
 use DateTimeZone;
+use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
@@ -262,11 +265,64 @@ SQL,
         self::assertSame('review_required', DB::table('outbox_messages')->where('id', $outboxEventId)->value('dispatch_state'));
         self::assertSame(0, DB::table('service_delivery_effects')->where('service_delivery_attempt_id', $attemptId)->count());
         self::assertCount(0, $this->sender->calls);
+        config()->set('service_notifications.low_balance_irr', 50_000);
 
         $reconciled = $notifications->processBatch(1);
         self::assertSame(1, $reconciled->escalated);
+        self::assertSame(0, $reconciled->expired);
         self::assertSame('escalated', $this->notificationState()->state);
         self::assertSame(1, DB::table('service_delivery_attempts')->where('purpose', 'notification')->count());
+    }
+
+    public function test_prepared_effect_escalates_when_outbox_retry_is_exhausted(): void
+    {
+        $fixture = $this->fixture('retry-prepared-outbox-review');
+        $this->attachService($fixture, 'retry-prepared-outbox-review');
+        $this->fundLowWallet($fixture['user_id'], 'retry-prepared-outbox-review');
+        $this->insertTelegramAccount($fixture['user_id']);
+
+        $notifications = $this->app->make(ServiceNotificationThresholdService::class);
+        self::assertSame(1, $notifications->processBatch(1)->queued);
+        $state = $this->notificationState();
+        $attemptId = (int) $state->latest_delivery_attempt_id;
+        $attemptPublicId = $this->attemptPublicId($attemptId);
+        $outboxEventId = DB::table('service_delivery_attempts')->where('id', $attemptId)->value('outbox_event_id');
+        self::assertIsString($outboxEventId);
+        self::assertNotSame('', $outboxEventId);
+
+        $executor = $this->app->make(ServiceDeliveryEffectExecutor::class);
+        $prepare = new ReflectionMethod($executor, 'prepare');
+        /** @var array{effect:object} $context */
+        $context = $prepare->invoke($executor, $attemptPublicId);
+        self::assertSame('prepared', DB::table('service_delivery_effects')->where('id', (int) $context['effect']->id)->value('state'));
+
+        $dispatcher = new DatabaseOutboxDispatcher(
+            $this->app->make(DatabaseManager::class),
+            $this->clock,
+            60,
+            1,
+        );
+        $dispatch = $dispatcher->dispatchOne(new class implements OutboxMessageHandler
+        {
+            public function handle(OutboxMessage $message): OutboxDispatchOutcome
+            {
+                return OutboxDispatchOutcome::RetryableFailure;
+            }
+        });
+        self::assertNotNull($dispatch);
+        self::assertSame($outboxEventId, $dispatch->messageId);
+        self::assertSame(OutboxDispatchOutcome::RetryableFailure, $dispatch->outcome);
+        self::assertSame('review_required', DB::table('outbox_messages')->where('id', $outboxEventId)->value('dispatch_state'));
+        self::assertSame('prepared', DB::table('service_delivery_effects')->where('id', (int) $context['effect']->id)->value('state'));
+        self::assertCount(0, $this->sender->calls);
+        config()->set('service_notifications.low_balance_irr', 50_000);
+
+        $reconciled = $notifications->processBatch(1);
+        self::assertSame(1, $reconciled->escalated);
+        self::assertSame(0, $reconciled->expired);
+        self::assertSame('escalated', $this->notificationState()->state);
+        self::assertSame(1, DB::table('service_delivery_attempts')->where('purpose', 'notification')->count());
+        self::assertCount(0, $this->sender->calls);
     }
 
     public function test_provider_directed_retry_escalates_without_automatic_new_attempt(): void
