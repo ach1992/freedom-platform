@@ -286,6 +286,56 @@ SQL,
         }
     }
 
+    public function test_anomaly_event_cannot_bind_to_foreign_snapshot_evidence(): void
+    {
+        $anomalyFixture = $this->syncFixture('event-binding-anomaly');
+        $anomalyRemote = $this->snapshot('remote-event-anomaly', 'sync-event-anomaly', PanelServiceStatus::Active, null, 0, '+5 days');
+        $anomalyServicePublicId = $this->attachedService($anomalyFixture, $anomalyRemote, 'event-binding-anomaly');
+        $anomalyFixture['adapter']->remove('remote-event-anomaly');
+        $this->app->make(ServiceSynchronizationService::class)->syncOne($anomalyServicePublicId);
+        $anomaly = DB::table('service_sync_anomalies')->where('classification', 'missing_remote')->first();
+        self::assertNotNull($anomaly);
+
+        $foreignFixture = $this->syncFixture('event-binding-foreign');
+        $foreignRemote = $this->snapshot('remote-event-foreign', 'sync-event-foreign', PanelServiceStatus::Active, null, 0, '+5 days');
+        $foreignServicePublicId = $this->attachedService($foreignFixture, $foreignRemote, 'event-binding-foreign');
+        $foreignReceipt = $this->app->make(ServiceSynchronizationService::class)->syncOne($foreignServicePublicId);
+        $foreignSnapshot = DB::table('service_sync_snapshots')->where('service_sync_run_id', $foreignReceipt->runId)->first();
+        $foreignRun = DB::table('service_sync_runs')->where('id', $foreignReceipt->runId)->first();
+        self::assertNotNull($foreignSnapshot);
+        self::assertNotNull($foreignRun);
+
+        $connection = DB::connection();
+        ServiceSyncDatabaseAuthority::anomaly(
+            $connection,
+            (int) $foreignSnapshot->service_sync_run_id,
+            (int) $anomaly->service_subscription_id,
+            (string) $foreignRun->correlation_id,
+        );
+        try {
+            $connection->table('service_sync_anomaly_events')->insert([
+                'service_sync_anomaly_id' => (int) $anomaly->id,
+                'service_sync_snapshot_id' => (int) $foreignSnapshot->id,
+                'event_type' => 'seen',
+                'from_state' => $anomaly->state,
+                'to_state' => $anomaly->state,
+                'occurrence_count' => (int) $anomaly->occurrence_count,
+                'actor_administrator_id' => null,
+                'reason_code' => null,
+                'correlation_id' => (string) $foreignRun->correlation_id,
+                'created_at' => now('UTC'),
+            ]);
+            self::fail('Service sync anomaly events must not bind to foreign snapshot evidence.');
+        } catch (QueryException) {
+            self::assertSame(0, DB::table('service_sync_anomaly_events')
+                ->where('service_sync_anomaly_id', (int) $anomaly->id)
+                ->where('service_sync_snapshot_id', (int) $foreignSnapshot->id)
+                ->count());
+        } finally {
+            ServiceSyncDatabaseAuthority::clear($connection);
+        }
+    }
+
     public function test_resolution_is_permission_checked_replay_safe_and_does_not_mutate_service(): void
     {
         $fixture = $this->syncFixture('resolution');
