@@ -15,6 +15,7 @@ use App\Modules\Panels\Application\Contracts\SensitiveDeliveryArtifacts;
 use App\Modules\Panels\Application\Exceptions\AuthoritativePanelLookupUnavailable;
 use App\Modules\Panels\Application\PanelAdapterSession;
 use App\Modules\Panels\Domain\PanelProviderType;
+use Closure;
 use Illuminate\Support\Facades\DB;
 use LogicException;
 
@@ -27,6 +28,8 @@ final class ServiceOperationalPanelAdapter implements PanelAdapter
     public array $lookupTransactionLevels = [];
 
     public bool $lookupUnavailable = false;
+
+    public ?Closure $afterLookup = null;
 
     public function seed(RemoteServiceSnapshot $snapshot): void
     {
@@ -54,6 +57,10 @@ final class ServiceOperationalPanelAdapter implements PanelAdapter
         if ($this->lookupUnavailable) {
             throw new AuthoritativePanelLookupUnavailable('Test authoritative lookup is unavailable.');
         }
+
+        $afterLookup = $this->afterLookup;
+        $this->afterLookup = null;
+        $afterLookup?->__invoke();
 
         return $this->services[$remoteId] ?? null;
     }
