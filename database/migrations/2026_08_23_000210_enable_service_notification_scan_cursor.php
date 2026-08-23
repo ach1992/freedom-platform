@@ -51,9 +51,10 @@ return new class extends Migration
         $rows = DB::table('service_notification_scan_cursor')
             ->orderBy('id')
             ->get(['id', 'last_service_subscription_id']);
-        if ($rows->count() === 1
-            && (int) $rows[0]->id === 1
-            && $rows[0]->last_service_subscription_id === null) {
+        if ($rows->isEmpty()
+            || ($rows->count() === 1
+                && (int) $rows[0]->id === 1
+                && $rows[0]->last_service_subscription_id === null)) {
             $this->dropGuards();
             Schema::drop('service_notification_scan_cursor');
 
