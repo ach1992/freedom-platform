@@ -8,4 +8,5 @@ enum ServiceDeliveryPurpose: string
 {
     case Initial = 'initial';
     case Resend = 'resend';
+    case Notification = 'notification';
 }
