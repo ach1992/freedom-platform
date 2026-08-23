@@ -52,3 +52,15 @@ Schedule::command('services:auto-renew', [
     // ample headroom for the bounded 50-Service batch to finish normally.
     ->withoutOverlapping(30)
     ->onOneServer();
+
+$serviceSyncInterval = max(1, min(60, (int) config('service_sync.interval_minutes', 5)));
+Schedule::command('services:sync', [
+    '--limit' => config('service_sync.batch_limit', 50),
+    '--json' => true,
+])
+    ->name('services.sync')
+    ->cron('*/'.$serviceSyncInterval.' * * * *')
+    // Keep the overlap TTL bounded so a terminated sync process cannot suppress future observation
+    // for a day. Per-Service leases remain the durable concurrency fence for manual/concurrent runs.
+    ->withoutOverlapping(30)
+    ->onOneServer();
