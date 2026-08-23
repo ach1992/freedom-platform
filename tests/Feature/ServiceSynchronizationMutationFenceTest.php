@@ -99,6 +99,41 @@ final class ServiceSynchronizationMutationFenceTest extends TestCase
         self::assertSame($anomalyCount, DB::table('service_sync_anomalies')->count());
     }
 
+    public function test_batch_selection_does_not_starve_healthy_service_behind_unresolved_mutation(): void
+    {
+        $fixture = $this->syncFixture('batch-fairness');
+        $blockedServicePublicId = $this->attachedService(
+            $fixture,
+            $this->snapshot('remote-batch-blocked', 'sync-batch-blocked', PanelServiceStatus::Active),
+            'batch-blocked',
+        );
+        $healthyServicePublicId = $this->attachedService(
+            $fixture,
+            $this->snapshot('remote-batch-healthy', 'sync-batch-healthy', PanelServiceStatus::Active),
+            'batch-healthy',
+        );
+
+        $this->app->make(ServiceMutationQueueService::class)->queue(
+            $blockedServicePublicId,
+            ServiceMutationType::ResetUsage,
+            'service-sync-batch-blocked-request',
+            'service-sync-batch-blocked-correlation',
+        );
+
+        $receipt = $this->app->make(ServiceSynchronizationService::class)->processBatch(1);
+        $healthyServiceId = (int) DB::table('service_subscriptions')->where('public_id', $healthyServicePublicId)->value('id');
+
+        self::assertSame(1, $receipt->candidates);
+        self::assertSame(1, $receipt->processed);
+        self::assertSame(0, $receipt->skipped);
+        self::assertSame(0, $receipt->anomalies);
+        self::assertSame(0, $receipt->failures);
+        self::assertTrue(DB::table('service_sync_snapshots')
+            ->where('service_sync_run_id', $receipt->runId)
+            ->where('service_subscription_id', $healthyServiceId)
+            ->exists());
+    }
+
     /** @return array{owner_id:int,user_id:int,offering_id:int,target_id:int,adapter:ServiceOperationalPanelAdapter} */
     private function syncFixture(string $suffix): array
     {
