@@ -123,7 +123,7 @@ final readonly class ServiceDeliveryAttemptQueueService
                     'id', 'service_subscription_id', 'state', 'latest_delivery_attempt_id', 'latest_retry_ordinal',
                     'next_retry_at',
                 ]);
-            if ($notification === null || $notification->state !== 'triggered') {
+            if ($notification === null) {
                 throw new DomainException('Service notification delivery requires one triggered notification state.');
             }
 
@@ -138,6 +138,10 @@ final readonly class ServiceDeliveryAttemptQueueService
                 );
 
                 return $this->receipt($service, $replayed, true);
+            }
+
+            if ($notification->state !== 'triggered') {
+                throw new DomainException('Service notification delivery requires one triggered notification state.');
             }
 
             $expectedOrdinal = $notification->latest_retry_ordinal === null
