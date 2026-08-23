@@ -12,10 +12,15 @@ use Throwable;
 final class ServiceSyncDatabaseAuthority
 {
     private const RUN_CREATE = 'service_sync_run_create_v1';
+
     private const RUN_FINALIZE = 'service_sync_run_finalize_v1';
+
     private const LEASE = 'service_sync_lease_v1';
+
     private const SNAPSHOT = 'service_sync_snapshot_v1';
+
     private const ANOMALY = 'service_sync_anomaly_v1';
+
     private const RESOLUTION = 'service_sync_resolution_v1';
 
     public static function runCreate(Connection $connection, string $correlationId): void
