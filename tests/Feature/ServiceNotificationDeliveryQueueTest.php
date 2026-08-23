@@ -13,6 +13,7 @@ use App\Modules\Panels\Application\PanelCredentialPolicy;
 use App\Modules\Provisioning\Application\ProvisioningPanelAdapterResolver;
 use App\Modules\Provisioning\Application\ServiceDeliveryAttemptQueueService;
 use App\Modules\Provisioning\Application\ServiceImportService;
+use App\Modules\Provisioning\Application\ServiceNotificationDatabaseAuthority;
 use App\Modules\Provisioning\Application\ServiceNotificationThresholdService;
 use App\Modules\Provisioning\Application\ServiceOperationalContext;
 use App\Modules\Wallet\Application\LedgerEntryDraft;
@@ -123,6 +124,86 @@ final class ServiceNotificationDeliveryQueueTest extends TestCase
             ->count());
     }
 
+    public function test_exact_notification_attempt_replays_after_notification_reaches_terminal_state(): void
+    {
+        $fixture = $this->fixture();
+        $this->attachService($fixture);
+
+        $assetId = $this->account('system.notification.terminal-replay.asset', 'asset');
+        $walletId = $this->account(
+            'wallet.cash.notification.terminal-replay.'.$fixture['user_id'],
+            'liability',
+            $fixture['user_id'],
+            'cash',
+        );
+        $this->fundWallet($assetId, $walletId, 100_000);
+
+        $run = $this->app->make(ServiceNotificationThresholdService::class)->processBatch(1);
+        self::assertSame(1, $run->triggered);
+        self::assertSame(1, $run->queued);
+
+        $state = DB::table('service_notification_states')
+            ->where('notification_type', 'low_balance')
+            ->first([
+                'id', 'public_id', 'service_subscription_id', 'latest_delivery_attempt_id', 'latest_retry_ordinal',
+            ]);
+        self::assertNotNull($state);
+        self::assertNotNull($state->latest_delivery_attempt_id);
+        self::assertSame(0, (int) $state->latest_retry_ordinal);
+
+        $attemptPublicId = (string) DB::table('service_delivery_attempts')
+            ->where('id', (int) $state->latest_delivery_attempt_id)
+            ->value('public_id');
+        self::assertNotSame('', $attemptPublicId);
+
+        $this->transitionNotificationToNotified(
+            (int) $state->id,
+            (int) $state->service_subscription_id,
+        );
+        self::assertSame('notified', DB::table('service_notification_states')
+            ->where('id', (int) $state->id)
+            ->value('state'));
+
+        $servicePublicId = (string) DB::table('service_subscriptions')
+            ->where('id', (int) $state->service_subscription_id)
+            ->value('public_id');
+        $requestKey = 'service-notification:'.$state->public_id.':0';
+        $presentation = 'Wallet balance warning: your available wallet balance is below the configured renewal threshold.';
+        $queue = $this->app->make(ServiceDeliveryAttemptQueueService::class);
+
+        $replay = $queue->queueNotification(
+            (int) $state->id,
+            $servicePublicId,
+            0,
+            $requestKey,
+            $requestKey,
+            $presentation,
+        );
+        self::assertTrue($replay->replayed);
+        self::assertSame($attemptPublicId, $replay->attemptPublicId);
+
+        try {
+            $queue->queueNotification(
+                (int) $state->id,
+                $servicePublicId,
+                1,
+                'service-notification:'.$state->public_id.':1',
+                'service-notification:'.$state->public_id.':1',
+                $presentation,
+            );
+            self::fail('A terminal notification must not admit a new Delivery Attempt.');
+        } catch (DomainException $exception) {
+            self::assertSame(
+                'Service notification delivery requires one triggered notification state.',
+                $exception->getMessage(),
+            );
+        }
+
+        self::assertSame(1, DB::table('service_delivery_attempts')
+            ->where('purpose', 'notification')
+            ->count());
+    }
+
     /** @return array{owner_id:int,user_id:int,offering_id:int,target_id:int,adapter:ServiceOperationalPanelAdapter} */
     private function fixture(): array
     {
@@ -196,6 +277,53 @@ final class ServiceNotificationDeliveryQueueTest extends TestCase
         );
         $attached = $imports->attach($preview->importPublicId, $context);
         self::assertNotNull($attached->serviceSubscriptionPublicId);
+    }
+
+    private function transitionNotificationToNotified(int $stateId, int $serviceId): void
+    {
+        $connection = DB::connection();
+        $timestamp = now('UTC')->format('Y-m-d H:i:s.u');
+        $correlationId = 'notification-terminal-replay-0001';
+        ServiceNotificationDatabaseAuthority::transition(
+            $connection,
+            $stateId,
+            $serviceId,
+            'triggered',
+            'notified',
+            $timestamp,
+            $correlationId,
+        );
+        try {
+            $updated = $connection->table('service_notification_states')
+                ->where('id', $stateId)
+                ->where('service_subscription_id', $serviceId)
+                ->where('state', 'triggered')
+                ->update([
+                    'state' => 'notified',
+                    'next_retry_at' => null,
+                    'notified_at' => $timestamp,
+                    'last_correlation_id' => $correlationId,
+                    'updated_at' => $timestamp,
+                ]);
+            self::assertSame(1, $updated);
+
+            $sequence = (int) $connection->table('service_notification_events')
+                ->where('service_notification_state_id', $stateId)
+                ->max('sequence') + 1;
+            $connection->table('service_notification_events')->insert([
+                'service_notification_state_id' => $stateId,
+                'sequence' => $sequence,
+                'event_type' => 'notified',
+                'from_state' => 'triggered',
+                'to_state' => 'notified',
+                'service_delivery_attempt_id' => null,
+                'retry_ordinal' => null,
+                'correlation_id' => $correlationId,
+                'created_at' => $timestamp,
+            ]);
+        } finally {
+            ServiceNotificationDatabaseAuthority::clear($connection);
+        }
     }
 
     private function account(
