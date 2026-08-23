@@ -19,6 +19,8 @@ final class ServiceNotificationDatabaseAuthority
 
     private const TRANSITION = 'service_notification_transition_v1';
 
+    private const CURSOR = 'service_notification_cursor_v1';
+
     public static function create(
         Connection $connection,
         int $serviceId,
@@ -140,6 +142,33 @@ final class ServiceNotificationDatabaseAuthority
         );
     }
 
+    public static function cursor(
+        Connection $connection,
+        ?int $previousServiceId,
+        int $nextServiceId,
+        string $timestamp,
+    ): void {
+        if ($nextServiceId < 1 || $timestamp === '') {
+            throw new RuntimeException('Service notification cursor authority is incomplete.');
+        }
+
+        (new ServiceOperationalDatabaseCapability)->apply($connection);
+        try {
+            $connection->statement(
+                <<<'SQL'
+SET @app_service_notification_authority = ?,
+    @app_service_notification_cursor_previous_id = ?,
+    @app_service_notification_cursor_next_id = ?,
+    @app_service_notification_timestamp = ?
+SQL,
+                [self::CURSOR, $previousServiceId, $nextServiceId, $timestamp],
+            );
+        } catch (Throwable $exception) {
+            self::disconnect($connection);
+            throw $exception;
+        }
+    }
+
     public static function clear(Connection $connection): void
     {
         try {
@@ -158,6 +187,8 @@ SET @app_service_notification_authority = NULL,
     @app_service_notification_from_state = NULL,
     @app_service_notification_to_state = NULL,
     @app_service_notification_next_retry_at = NULL,
+    @app_service_notification_cursor_previous_id = NULL,
+    @app_service_notification_cursor_next_id = NULL,
     @app_service_notification_timestamp = NULL,
     @app_service_notification_correlation_id = NULL
 SQL);
