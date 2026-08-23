@@ -221,7 +221,10 @@ final readonly class ServiceSynchronizationService
         );
     }
 
-    /** @param SyncServiceRow $service @return SyncCandidateResult */
+    /**
+     * @param  SyncServiceRow  $service
+     * @return SyncCandidateResult
+     */
     private function syncCandidate(int $runId, object $service, string $correlationId): array
     {
         $leaseToken = $this->acquireLease((int) $service->id);
@@ -252,7 +255,10 @@ final readonly class ServiceSynchronizationService
         }
     }
 
-    /** @param SyncServiceRow $service @return SyncObservation */
+    /**
+     * @param  SyncServiceRow  $service
+     * @return SyncObservation
+     */
     private function observeRemote(object $service): array
     {
         $connection = $this->database->connection();
@@ -276,7 +282,10 @@ final readonly class ServiceSynchronizationService
         ];
     }
 
-    /** @param SyncServiceRow $service @param SyncObservation $observation */
+    /**
+     * @param  SyncServiceRow  $service
+     * @param  SyncObservation  $observation
+     */
     private function persistSnapshotAndAnomalies(
         int $runId,
         object $service,
@@ -321,6 +330,14 @@ final readonly class ServiceSynchronizationService
                     'local_lifecycle_version', 'local_remote_identity_generation', 'local_mutation_generation',
                     'remote_status', 'remote_data_limit_bytes', 'remote_expires_at',
                 ]);
+            $previousFacts = $previous === null ? null : [
+                'local_lifecycle_version' => $previous->local_lifecycle_version,
+                'local_remote_identity_generation' => $previous->local_remote_identity_generation,
+                'local_mutation_generation' => $previous->local_mutation_generation,
+                'remote_status' => $previous->remote_status,
+                'remote_data_limit_bytes' => $previous->remote_data_limit_bytes,
+                'remote_expires_at' => $previous->remote_expires_at,
+            ];
 
             $remote = $observation['remote'];
             $timestamp = $this->databaseDateTime($now);
@@ -368,7 +385,7 @@ final readonly class ServiceSynchronizationService
                     'data_limit_bytes' => $remote?->dataLimitBytes,
                     'expires_at' => $remote?->expiresAt,
                 ],
-                $previous === null ? null : (array) $previous,
+                $previousFacts,
             );
 
             foreach ($findings as $finding) {
@@ -388,7 +405,9 @@ final readonly class ServiceSynchronizationService
         }, 3);
     }
 
-    /** @param SyncServiceRow $service */
+    /**
+     * @param  SyncServiceRow  $service
+     */
     private function recordAnomaly(
         Connection $connection,
         int $runId,
@@ -625,9 +644,12 @@ final readonly class ServiceSynchronizationService
     /** @return SyncServiceRow|null */
     private function eligibleServiceByPublicId(string $publicId): ?object
     {
-        return $this->eligibleServiceQuery($this->database->connection(), 'service')
+        /** @var SyncServiceRow|null $row */
+        $row = $this->eligibleServiceQuery($this->database->connection(), 'service')
             ->where('service.public_id', $publicId)
             ->first($this->serviceColumns('service'));
+
+        return $row;
     }
 
     /** @return SyncServiceRow|null */
@@ -638,7 +660,10 @@ final readonly class ServiceSynchronizationService
             $query->lockForUpdate();
         }
 
-        return $query->first($this->serviceColumns('service'));
+        /** @var SyncServiceRow|null $row */
+        $row = $query->first($this->serviceColumns('service'));
+
+        return $row;
     }
 
     private function eligibleServiceQuery(Connection $connection, string $alias): Builder
@@ -661,7 +686,10 @@ final readonly class ServiceSynchronizationService
         ];
     }
 
-    /** @param SyncServiceRow $left @param SyncServiceRow $right */
+    /**
+     * @param  SyncServiceRow  $left
+     * @param  SyncServiceRow  $right
+     */
     private function sameServiceFacts(object $left, object $right): bool
     {
         return (int) $left->id === (int) $right->id
