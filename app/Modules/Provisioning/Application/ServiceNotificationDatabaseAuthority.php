@@ -17,7 +17,9 @@ final class ServiceNotificationDatabaseAuthority
 
     private const SCHEDULE_RETRY = 'service_notification_schedule_retry_v1';
 
-    private const TRANSITION = 'service_notification_transition_v1';
+    private const TRANSITION = 'service_notification_terminal_v2';
+
+    private const ACKNOWLEDGE = 'service_notification_acknowledge_v1';
 
     private const CURSOR = 'service_notification_cursor_v1';
 
@@ -136,9 +138,20 @@ final class ServiceNotificationDatabaseAuthority
         int $serviceId,
         string $fromState,
         string $toState,
+        string $cause,
         string $timestamp,
         string $correlationId,
     ): void {
+        if (! in_array($cause, [
+            'delivery_succeeded',
+            'delivery_uncertain',
+            'provider_retry_fenced',
+            'retry_exhausted',
+            'outbox_review_required',
+            'source_invalidated',
+        ], true)) {
+            throw new RuntimeException('Service notification transition cause is invalid.');
+        }
         self::set(
             $connection,
             self::TRANSITION,
@@ -158,6 +171,63 @@ final class ServiceNotificationDatabaseAuthority
             $timestamp,
             $correlationId,
         );
+        try {
+            $connection->statement('SET @app_service_notification_transition_cause = ?', [$cause]);
+        } catch (Throwable $exception) {
+            self::disconnect($connection);
+            throw $exception;
+        }
+    }
+
+    public static function acknowledge(
+        Connection $connection,
+        int $stateId,
+        int $serviceId,
+        string $fromState,
+        int $actorAdministratorId,
+        string $requestHash,
+        string $reasonCode,
+        string $reason,
+        string $timestamp,
+        string $correlationId,
+    ): void {
+        if ($actorAdministratorId < 1
+            || preg_match('/\\A[0-9a-f]{64}\\z/', $requestHash) !== 1
+            || $reasonCode === ''
+            || $reason === '') {
+            throw new RuntimeException('Service notification acknowledgment authority is incomplete.');
+        }
+        self::set(
+            $connection,
+            self::ACKNOWLEDGE,
+            $stateId,
+            $serviceId,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            $fromState,
+            'acknowledged',
+            null,
+            $timestamp,
+            $correlationId,
+        );
+        try {
+            $connection->statement(<<<'SQL'
+SET @app_service_notification_transition_cause = 'administrator_acknowledgment',
+    @app_service_notification_actor_administrator_id = ?,
+    @app_service_notification_request_hash = ?,
+    @app_service_notification_reason_code = ?,
+    @app_service_notification_reason = ?
+SQL, [$actorAdministratorId, $requestHash, $reasonCode, $reason]);
+        } catch (Throwable $exception) {
+            self::disconnect($connection);
+            throw $exception;
+        }
     }
 
     public static function cursor(
@@ -209,7 +279,12 @@ SET @app_service_notification_authority = NULL,
     @app_service_notification_cursor_previous_id = NULL,
     @app_service_notification_cursor_next_id = NULL,
     @app_service_notification_timestamp = NULL,
-    @app_service_notification_correlation_id = NULL
+    @app_service_notification_correlation_id = NULL,
+    @app_service_notification_transition_cause = NULL,
+    @app_service_notification_actor_administrator_id = NULL,
+    @app_service_notification_request_hash = NULL,
+    @app_service_notification_reason_code = NULL,
+    @app_service_notification_reason = NULL
 SQL);
             (new ServiceOperationalDatabaseCapability)->clear($connection);
         } catch (Throwable $exception) {

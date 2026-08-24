@@ -16,9 +16,9 @@ use RuntimeException;
 use Throwable;
 
 /**
- * @phpstan-type ServiceRow object{id:int|string,public_id:string,service_target_id:int|string|null,remote_service_id:?string,provisioned_at:?string,lifecycle_state:string,lifecycle_version:int|string,remote_identity_generation:int|string,remote_deleted_at:?string}
+ * @phpstan-type ServiceRow object{id:int|string,public_id:string,user_id:int|string,service_target_id:int|string|null,remote_service_id:?string,provisioned_at:?string,lifecycle_state:string,lifecycle_version:int|string,remote_identity_generation:int|string,mutation_generation:int|string,remote_deleted_at:?string}
  * @phpstan-type DeliveryAttemptRow object{id:int|string,public_id:string,service_subscription_id:int|string,purpose:string,request_key_hash:string,correlation_id:string,target_remote_identity_generation:int|string,target_lifecycle_version:int|string,outbox_event_id:string}
- * @phpstan-type NotificationStateRow object{id:int|string,service_subscription_id:int|string,state:string,latest_delivery_attempt_id:int|string|null,latest_retry_ordinal:int|string|null,next_retry_at:?string}
+ * @phpstan-type NotificationStateRow object{id:int|string,service_subscription_id:int|string,episode_key_hash:string,notification_type:string,threshold_code:string,cycle_key_hash:string,source_type:string,source_id:int|string|null,state:string,latest_delivery_attempt_id:int|string|null,latest_retry_ordinal:int|string|null,next_retry_at:?string}
  */
 final readonly class ServiceDeliveryAttemptQueueService
 {
@@ -37,6 +37,7 @@ final readonly class ServiceDeliveryAttemptQueueService
         private DatabaseManager $database,
         private Clock $clock,
         private OutboxPublisher $outbox,
+        private ServiceNotificationSourceAuthority $notificationSources,
     ) {}
 
     /** @requirement SVC-002 SVC-014 ARCH-003 ARCH-004 DAT-003 SEC-002 SEC-008 QUA-004 QUA-007 QUA-010 */
@@ -104,6 +105,15 @@ final readonly class ServiceDeliveryAttemptQueueService
         $requestKeyHash = $this->requestKeyHash($requestKey);
         $this->assertToken($correlationId, 'Service delivery correlation ID', 8, 64);
         $presentationHash = hash('sha256', $presentationText);
+        $existingAttempt = $this->database->connection()->table('service_delivery_attempts as attempt')
+            ->join('service_notification_delivery_bindings as binding', 'binding.service_delivery_attempt_id', '=', 'attempt.id')
+            ->where('binding.service_notification_state_id', $notificationStateId)
+            ->where('binding.retry_ordinal', $retryOrdinal)
+            ->where('attempt.request_key_hash', $requestKeyHash)
+            ->first(['attempt.id']);
+        $sourceLocator = $existingAttempt === null
+            ? $this->notificationSources->locatorForState($this->database->connection(), $notificationStateId)
+            : null;
 
         return $this->database->connection()->transaction(function (Connection $connection) use (
             $notificationStateId,
@@ -113,7 +123,11 @@ final readonly class ServiceDeliveryAttemptQueueService
             $correlationId,
             $presentationText,
             $presentationHash,
+            $sourceLocator,
         ): ServiceDeliveryAttemptReceipt {
+            $sourceLock = $sourceLocator === null
+                ? null
+                : $this->notificationSources->lockBeforeService($connection, $sourceLocator);
             $service = $this->lockedService($connection, $servicePublicId);
             /** @var NotificationStateRow|null $notification */
             $notification = $connection->table('service_notification_states')
@@ -121,11 +135,12 @@ final readonly class ServiceDeliveryAttemptQueueService
                 ->where('service_subscription_id', (int) $service->id)
                 ->lockForUpdate()
                 ->first([
-                    'id', 'service_subscription_id', 'state', 'latest_delivery_attempt_id', 'latest_retry_ordinal',
-                    'next_retry_at',
+                    'id', 'service_subscription_id', 'episode_key_hash', 'notification_type', 'threshold_code',
+                    'cycle_key_hash', 'source_type', 'source_id', 'state', 'latest_delivery_attempt_id',
+                    'latest_retry_ordinal', 'next_retry_at',
                 ]);
             if ($notification === null) {
-                throw new DomainException('Service notification delivery requires one triggered notification state.');
+                throw new ServiceNotificationCandidateInvalidatedException('Service notification delivery state no longer exists.');
             }
 
             $replayed = $this->attemptByRequestHash($connection, (int) $service->id, $requestKeyHash, true);
@@ -142,18 +157,31 @@ final readonly class ServiceDeliveryAttemptQueueService
             }
 
             if ($notification->state !== 'triggered') {
-                throw new DomainException('Service notification delivery requires one triggered notification state.');
+                throw new ServiceNotificationCandidateInvalidatedException('Service notification delivery state is no longer triggered.');
             }
 
             $expectedOrdinal = $notification->latest_retry_ordinal === null
                 ? 0
                 : (int) $notification->latest_retry_ordinal + 1;
             if ($retryOrdinal !== $expectedOrdinal) {
-                throw new DomainException('Service notification retry ordinal is not the next deterministic attempt.');
+                throw new ServiceNotificationCandidateInvalidatedException('Service notification retry ordinal changed before queueing.');
             }
+            if ($sourceLock === null) {
+                throw new RuntimeException('New Service notification delivery lost its source-lock authority.');
+            }
+            $this->notificationSources->assertCurrent($connection, $service, $notification, $sourceLock);
             $this->assertNotificationRetryReady($connection, $notification, $retryOrdinal);
 
-            $this->assertServiceReadyForDelivery($connection, $service);
+            try {
+                $this->assertServiceReadyForDelivery($connection, $service);
+            } catch (ServiceDeliveryTemporarilyBlockedException $exception) {
+                throw $exception;
+            } catch (DomainException $exception) {
+                throw new ServiceNotificationCandidateInvalidatedException(
+                    'Service notification candidate is no longer deliverable.',
+                    previous: $exception,
+                );
+            }
             $attempt = $this->createAttempt(
                 $connection,
                 $service,
@@ -438,8 +466,8 @@ final readonly class ServiceDeliveryAttemptQueueService
             ->where('public_id', $publicId)
             ->lockForUpdate()
             ->first([
-                'id', 'public_id', 'service_target_id', 'remote_service_id', 'provisioned_at',
-                'lifecycle_state', 'lifecycle_version', 'remote_identity_generation', 'remote_deleted_at',
+                'id', 'public_id', 'user_id', 'service_target_id', 'remote_service_id', 'provisioned_at',
+                'lifecycle_state', 'lifecycle_version', 'remote_identity_generation', 'mutation_generation', 'remote_deleted_at',
             ]);
         if ($row === null) {
             throw new DomainException('Service Subscription does not exist.');

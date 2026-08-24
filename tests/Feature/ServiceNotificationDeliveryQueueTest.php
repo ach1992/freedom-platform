@@ -189,6 +189,8 @@ SQL,
         self::assertTrue($replay->replayed);
         self::assertSame((string) $attempt->public_id, $replay->attemptPublicId);
 
+        $this->fundWallet($assetId, $walletId, 500_000, '0002');
+
         try {
             $queue->queueNotification(
                 (int) $state->id,
@@ -201,7 +203,7 @@ SQL,
             self::fail('A next notification ordinal must not bypass failed-effect and durable backoff authority.');
         } catch (DomainException $exception) {
             self::assertSame(
-                'Service notification retry is missing deterministic prior-attempt evidence.',
+                'Service low-balance notification source is no longer authoritative.',
                 $exception->getMessage(),
             );
         }
@@ -215,7 +217,7 @@ SQL,
             ->count());
     }
 
-    public function test_exact_notification_attempt_replays_after_notification_reaches_terminal_state(): void
+    public function test_notification_cannot_be_marked_notified_without_canonical_success_effect(): void
     {
         $fixture = $this->fixture();
         $this->attachService($fixture);
@@ -242,57 +244,37 @@ SQL,
         self::assertNotNull($state->latest_delivery_attempt_id);
         self::assertSame(0, (int) $state->latest_retry_ordinal);
 
-        $attemptPublicId = (string) DB::table('service_delivery_attempts')
-            ->where('id', (int) $state->latest_delivery_attempt_id)
-            ->value('public_id');
-        self::assertNotSame('', $attemptPublicId);
-
-        $this->transitionNotificationToNotified(
+        $connection = DB::connection();
+        $timestamp = now('UTC')->format('Y-m-d H:i:s.u');
+        $correlationId = 'notification-causal-evidence-0001';
+        ServiceNotificationDatabaseAuthority::transition(
+            $connection,
             (int) $state->id,
             (int) $state->service_subscription_id,
+            'triggered',
+            'notified',
+            'delivery_succeeded',
+            $timestamp,
+            $correlationId,
         );
-        self::assertSame('notified', DB::table('service_notification_states')
-            ->where('id', (int) $state->id)
-            ->value('state'));
-
-        $servicePublicId = (string) DB::table('service_subscriptions')
-            ->where('id', (int) $state->service_subscription_id)
-            ->value('public_id');
-        $requestKey = 'service-notification:'.$state->public_id.':0';
-        $presentation = 'Wallet balance warning: your available wallet balance is below the configured renewal threshold.';
-        $queue = $this->app->make(ServiceDeliveryAttemptQueueService::class);
-
-        $replay = $queue->queueNotification(
-            (int) $state->id,
-            $servicePublicId,
-            0,
-            $requestKey,
-            $requestKey,
-            $presentation,
-        );
-        self::assertTrue($replay->replayed);
-        self::assertSame($attemptPublicId, $replay->attemptPublicId);
-
         try {
-            $queue->queueNotification(
-                (int) $state->id,
-                $servicePublicId,
-                1,
-                'service-notification:'.$state->public_id.':1',
-                'service-notification:'.$state->public_id.':1',
-                $presentation,
-            );
-            self::fail('A terminal notification must not admit a new Delivery Attempt.');
-        } catch (DomainException $exception) {
-            self::assertSame(
-                'Service notification delivery requires one triggered notification state.',
-                $exception->getMessage(),
-            );
+            $connection->table('service_notification_states')
+                ->where('id', (int) $state->id)
+                ->update([
+                    'state' => 'notified',
+                    'next_retry_at' => null,
+                    'notified_at' => $timestamp,
+                    'last_correlation_id' => $correlationId,
+                    'updated_at' => $timestamp,
+                ]);
+            self::fail('Notification truth must require its exact canonical successful Delivery Effect.');
+        } catch (QueryException) {
+            self::assertSame('triggered', DB::table('service_notification_states')
+                ->where('id', (int) $state->id)
+                ->value('state'));
+        } finally {
+            ServiceNotificationDatabaseAuthority::clear($connection);
         }
-
-        self::assertSame(1, DB::table('service_delivery_attempts')
-            ->where('purpose', 'notification')
-            ->count());
     }
 
     /** @return array{owner_id:int,user_id:int,offering_id:int,target_id:int,adapter:ServiceOperationalPanelAdapter} */
@@ -370,52 +352,6 @@ SQL,
         self::assertNotNull($attached->serviceSubscriptionPublicId);
     }
 
-    private function transitionNotificationToNotified(int $stateId, int $serviceId): void
-    {
-        $connection = DB::connection();
-        $timestamp = now('UTC')->format('Y-m-d H:i:s.u');
-        $correlationId = 'notification-terminal-replay-0001';
-        ServiceNotificationDatabaseAuthority::transition(
-            $connection,
-            $stateId,
-            $serviceId,
-            'triggered',
-            'notified',
-            $timestamp,
-            $correlationId,
-        );
-        try {
-            $updated = $connection->table('service_notification_states')
-                ->where('id', $stateId)
-                ->where('service_subscription_id', $serviceId)
-                ->where('state', 'triggered')
-                ->update([
-                    'state' => 'notified',
-                    'next_retry_at' => null,
-                    'notified_at' => $timestamp,
-                    'last_correlation_id' => $correlationId,
-                    'updated_at' => $timestamp,
-                ]);
-            self::assertSame(1, $updated);
-
-            $sequence = (int) $connection->table('service_notification_events')
-                ->where('service_notification_state_id', $stateId)
-                ->max('sequence') + 1;
-            $connection->table('service_notification_events')->insert([
-                'service_notification_state_id' => $stateId,
-                'sequence' => $sequence,
-                'event_type' => 'notified',
-                'from_state' => 'triggered',
-                'to_state' => 'notified',
-                'service_delivery_attempt_id' => null,
-                'retry_ordinal' => null,
-                'correlation_id' => $correlationId,
-                'created_at' => $timestamp,
-            ]);
-        } finally {
-            ServiceNotificationDatabaseAuthority::clear($connection);
-        }
-    }
 
     private function account(
         string $code,
@@ -437,18 +373,18 @@ SQL,
         ]);
     }
 
-    private function fundWallet(int $assetId, int $walletId, int $amount): void
+    private function fundWallet(int $assetId, int $walletId, int $amount, string $suffix = '0001'): void
     {
         $this->app->make(LedgerPostingService::class)->post(
-            'ledger.notification.queue.fund.0001',
+            'ledger.notification.queue.fund.'.$suffix,
             'wallet_topup_capture',
-            'notification-queue-fund-0001',
+            'notification-queue-fund-'.$suffix,
             [
                 new LedgerEntryDraft($assetId, LedgerDirection::Debit, IrrMoney::positive($amount)),
                 new LedgerEntryDraft($walletId, LedgerDirection::Credit, IrrMoney::positive($amount)),
             ],
             'payment_intent',
-            'pi-notification-queue-fund-0001',
+            'pi-notification-queue-fund-'.$suffix,
         );
     }
 }

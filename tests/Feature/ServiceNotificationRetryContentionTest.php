@@ -243,6 +243,7 @@ namespace Tests\Feature {
                     'cycle_key_hash' => $cycle,
                     'source_type' => 'wallet_balance',
                     'source_id' => $walletId,
+                    'low_balance_threshold_irr' => $threshold,
                     'state' => 'triggered',
                     'latest_delivery_attempt_id' => null,
                     'latest_retry_ordinal' => null,

@@ -24,6 +24,7 @@ use App\Modules\Telegram\Application\ProtectedTelegramSendResult;
 use App\Modules\Wallet\Application\LedgerEntryDraft;
 use App\Modules\Wallet\Application\LedgerPostingService;
 use App\Modules\Wallet\Application\WalletHoldService;
+use DomainException;
 use App\Modules\Wallet\Domain\IrrMoney;
 use App\Modules\Wallet\Domain\LedgerDirection;
 use Illuminate\Database\Events\QueryExecuted;
@@ -94,6 +95,26 @@ final class ServiceNotificationBatchFairnessTest extends TestCase
         );
     }
 
+    public function test_invalid_global_configuration_aborts_before_cursor_advances(): void
+    {
+        $fixture = $this->fixture();
+        $this->attachService($fixture, 1);
+        $before = DB::table('service_notification_scan_cursor')
+            ->where('id', 1)
+            ->value('last_service_subscription_id');
+        config()->set('service_notifications.low_balance_irr', -1);
+
+        try {
+            $this->app->make(ServiceNotificationThresholdService::class)->processBatch(1);
+            self::fail('Invalid global notification configuration must fail before candidate selection.');
+        } catch (DomainException $exception) {
+            self::assertStringContainsString('service_notifications.low_balance_irr', $exception->getMessage());
+        }
+
+        self::assertSame($before, DB::table('service_notification_scan_cursor')
+            ->where('id', 1)
+            ->value('last_service_subscription_id'));
+    }
     public function test_low_balance_is_revalidated_after_the_initial_observation_before_persistence(): void
     {
         config()->set('service_notifications.low_balance_irr', 500_000);
@@ -343,6 +364,7 @@ final class ServiceNotificationBatchFairnessTest extends TestCase
                 'cycle_key_hash' => $cycle,
                 'source_type' => 'wallet_balance',
                 'source_id' => $cashId,
+                'low_balance_threshold_irr' => $threshold,
                 'state' => 'triggered',
                 'latest_delivery_attempt_id' => null,
                 'latest_retry_ordinal' => null,
@@ -455,10 +477,82 @@ final class ServiceNotificationBatchFairnessTest extends TestCase
             ->value('latest_delivery_attempt_id'));
     }
 
-    /** @return array{owner_id:int,user_id:int,offering_id:int,target_id:int,adapter:ServiceOperationalPanelAdapter} */
-    private function fixture(): array
+    public function test_source_invalidated_first_service_does_not_starve_healthy_second_service(): void
     {
-        $offering = $this->activeBenefitOffering('service-notification-fairness', 'panel.example.com');
+        config()->set('service_notifications.low_balance_irr', 500_000);
+        $invalidatedFixture = $this->fixture('candidate-invalidated-first');
+        $invalidatedServicePublicId = $this->attachService($invalidatedFixture, 1);
+        $healthyFixture = $this->fixture('candidate-invalidated-second');
+        $healthyServicePublicId = $this->attachService($healthyFixture, 2);
+        self::assertNotSame($invalidatedFixture['user_id'], $healthyFixture['user_id']);
+
+        $invalidatedAssetId = $this->account('system.notification.invalidated-first.asset', 'asset');
+        $invalidatedWalletId = $this->account(
+            'wallet.cash.notification.invalidated-first.'.$invalidatedFixture['user_id'],
+            'liability',
+            $invalidatedFixture['user_id'],
+            'cash',
+        );
+        $healthyAssetId = $this->account('system.notification.healthy-second.asset', 'asset');
+        $healthyWalletId = $this->account(
+            'wallet.cash.notification.healthy-second.'.$healthyFixture['user_id'],
+            'liability',
+            $healthyFixture['user_id'],
+            'cash',
+        );
+        $this->fundWallet($invalidatedAssetId, $invalidatedWalletId, 100_000, 'invalidated-first-low');
+        $this->fundWallet($healthyAssetId, $healthyWalletId, 100_000, 'healthy-second-low');
+
+        $fundedAfterTrigger = false;
+        DB::listen(function (QueryExecuted $query) use (
+            &$fundedAfterTrigger,
+            $invalidatedAssetId,
+            $invalidatedWalletId,
+        ): void {
+            if ($fundedAfterTrigger
+                || ! str_contains(strtolower($query->sql), 'service_notification_states')
+                || ! str_contains(strtolower($query->sql), 'insert')) {
+                return;
+            }
+
+            $fundedAfterTrigger = true;
+            DB::connection()->afterCommit(function () use ($invalidatedAssetId, $invalidatedWalletId): void {
+                $this->fundWallet(
+                    $invalidatedAssetId,
+                    $invalidatedWalletId,
+                    500_000,
+                    'invalidated-first-after-trigger',
+                );
+            });
+        });
+
+        $receipt = $this->app->make(ServiceNotificationThresholdService::class)->processBatch(2);
+        $invalidatedServiceId = (int) DB::table('service_subscriptions')
+            ->where('public_id', $invalidatedServicePublicId)
+            ->value('id');
+        $healthyServiceId = (int) DB::table('service_subscriptions')
+            ->where('public_id', $healthyServicePublicId)
+            ->value('id');
+
+        self::assertTrue($fundedAfterTrigger, 'The regression must invalidate the first source after trigger commit.');
+        self::assertSame(2, $receipt->candidates);
+        self::assertSame(2, $receipt->triggered);
+        self::assertSame(1, $receipt->queued);
+        self::assertGreaterThanOrEqual(1, $receipt->skipped);
+        self::assertNull(DB::table('service_notification_states')
+            ->where('service_subscription_id', $invalidatedServiceId)
+            ->where('notification_type', 'low_balance')
+            ->value('latest_delivery_attempt_id'));
+        self::assertNotNull(DB::table('service_notification_states')
+            ->where('service_subscription_id', $healthyServiceId)
+            ->where('notification_type', 'low_balance')
+            ->value('latest_delivery_attempt_id'));
+    }
+
+    /** @return array{owner_id:int,user_id:int,offering_id:int,target_id:int,adapter:ServiceOperationalPanelAdapter} */
+    private function fixture(string $suffix = 'fairness'): array
+    {
+        $offering = $this->activeBenefitOffering('service-notification-'.$suffix, 'panel.example.com');
         $ownerId = $this->benefitOwner();
         $userId = $this->benefitUser();
         $targetId = (int) DB::table('plan_offerings')->where('id', $offering['id'])->value('panel_service_target_id');

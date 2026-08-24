@@ -23,6 +23,7 @@ return new class extends Migration
             'ledger_transactions',
             'wallet_holds',
             'service_operational_authority_capability',
+            'administrators',
         ] as $table) {
             if (! Schema::hasTable($table)) {
                 throw new RuntimeException('Service notification authority requires the accepted Service, delivery, synchronization, renewal, and Wallet foundations.');
@@ -43,6 +44,7 @@ return new class extends Migration
             $table->char('cycle_key_hash', 64);
             $table->string('source_type', 32);
             $table->unsignedBigInteger('source_id')->nullable();
+            $table->unsignedBigInteger('low_balance_threshold_irr')->nullable();
             $table->string('state', 24);
             $table->foreignId('latest_delivery_attempt_id')->nullable();
             $table->foreign('latest_delivery_attempt_id', 'sns_attempt_fk')->references('id')->on('service_delivery_attempts')->restrictOnDelete();
@@ -82,9 +84,16 @@ return new class extends Migration
             $table->foreignId('service_delivery_attempt_id')->nullable();
             $table->foreign('service_delivery_attempt_id', 'sne_attempt_fk')->references('id')->on('service_delivery_attempts')->restrictOnDelete();
             $table->unsignedSmallInteger('retry_ordinal')->nullable();
+            $table->string('transition_cause', 32)->nullable();
+            $table->foreignId('actor_administrator_id')->nullable();
+            $table->foreign('actor_administrator_id', 'sne_actor_fk')->references('id')->on('administrators')->restrictOnDelete();
+            $table->char('request_hash', 64)->nullable();
+            $table->string('reason_code', 64)->nullable();
+            $table->string('reason', 1000)->nullable();
             $table->string('correlation_id', 64);
             $table->dateTime('created_at', 6);
             $table->unique(['service_notification_state_id', 'sequence'], 'sne_state_sequence_uq');
+            $table->unique(['service_notification_state_id', 'request_hash'], 'sne_state_request_uq');
         });
 
         $this->installConstraints();
@@ -206,10 +215,13 @@ SQL,
             "ALTER TABLE service_notification_states ADD CONSTRAINT sns_correlation_chk CHECK (last_correlation_id REGEXP '^[A-Za-z0-9_.:-]{8,64}$')",
             'ALTER TABLE service_notification_states ADD CONSTRAINT sns_attempt_retry_chk CHECK ((latest_delivery_attempt_id IS NULL AND latest_retry_ordinal IS NULL) OR (latest_delivery_attempt_id IS NOT NULL AND latest_retry_ordinal IS NOT NULL))',
             "ALTER TABLE service_notification_delivery_bindings ADD CONSTRAINT sndb_hash_chk CHECK (presentation_hash REGEXP '^[0-9a-f]{64}$' AND CHAR_LENGTH(presentation_text) BETWEEN 1 AND 4096)",
+            "ALTER TABLE service_notification_states ADD CONSTRAINT sns_low_balance_threshold_chk CHECK ((notification_type = 'low_balance' AND low_balance_threshold_irr IS NOT NULL AND low_balance_threshold_irr > 0) OR (notification_type <> 'low_balance' AND low_balance_threshold_irr IS NULL))",
             "ALTER TABLE service_notification_events ADD CONSTRAINT sne_type_chk CHECK (event_type IN ('triggered','delivery_queued','retry_scheduled','notified','acknowledged','escalated','expired'))",
             "ALTER TABLE service_notification_events ADD CONSTRAINT sne_state_chk CHECK ((from_state IS NULL OR from_state IN ('triggered','notified','acknowledged','escalated','expired')) AND to_state IN ('triggered','notified','acknowledged','escalated','expired'))",
             "ALTER TABLE service_notification_events ADD CONSTRAINT sne_correlation_chk CHECK (correlation_id REGEXP '^[A-Za-z0-9_.:-]{8,64}$')",
             'ALTER TABLE service_notification_events ADD CONSTRAINT sne_attempt_retry_chk CHECK ((service_delivery_attempt_id IS NULL AND retry_ordinal IS NULL) OR (service_delivery_attempt_id IS NOT NULL AND retry_ordinal IS NOT NULL))',
+            "ALTER TABLE service_notification_events ADD CONSTRAINT sne_cause_chk CHECK (transition_cause IS NULL OR transition_cause IN ('delivery_succeeded','delivery_uncertain','provider_retry_fenced','retry_exhausted','outbox_review_required','source_invalidated','administrator_acknowledgment'))",
+            "ALTER TABLE service_notification_events ADD CONSTRAINT sne_ack_evidence_chk CHECK ((event_type = 'acknowledged' AND transition_cause = 'administrator_acknowledgment' AND actor_administrator_id IS NOT NULL AND request_hash REGEXP '^[0-9a-f]{64}$' AND CHAR_LENGTH(TRIM(reason_code)) BETWEEN 1 AND 64 AND CHAR_LENGTH(TRIM(reason)) BETWEEN 1 AND 1000) OR (event_type <> 'acknowledged' AND actor_administrator_id IS NULL AND request_hash IS NULL AND reason_code IS NULL AND reason IS NULL))",
         ] as $statement) {
             DB::statement($statement);
         }
@@ -245,6 +257,7 @@ BEGIN
        OR NOT (NEW.source_id <=> @app_service_notification_source_id)
        OR BINARY NEW.last_correlation_id <> BINARY COALESCE(@app_service_notification_correlation_id, '')
        OR NEW.triggered_at <> @app_service_notification_timestamp
+       OR NOT (NEW.low_balance_threshold_irr <=> @app_service_notification_low_balance_threshold_irr)
        OR NEW.updated_at <> @app_service_notification_timestamp
        OR NEW.state <> 'triggered'
        OR NEW.latest_delivery_attempt_id IS NOT NULL OR NEW.latest_retry_ordinal IS NOT NULL
@@ -401,6 +414,14 @@ CREATE OR REPLACE TRIGGER service_notification_states_update_guard
 BEFORE UPDATE ON service_notification_states
 FOR EACH ROW
 BEGIN
+    DECLARE valid_terminal_count INT DEFAULT 0;
+    DECLARE current_source_count INT DEFAULT 0;
+    DECLARE current_remote_expires_at DATETIME(6) DEFAULT NULL;
+    DECLARE wallet_credit BIGINT UNSIGNED DEFAULT 0;
+    DECLARE wallet_debit BIGINT UNSIGNED DEFAULT 0;
+    DECLARE wallet_active_holds BIGINT UNSIGNED DEFAULT 0;
+    DECLARE wallet_available BIGINT DEFAULT 0;
+
     IF NOT EXISTS (
         SELECT 1 FROM service_operational_authority_capability capability_row
         WHERE capability_row.id = 1
@@ -416,6 +437,7 @@ BEGIN
        OR BINARY OLD.cycle_key_hash <> BINARY NEW.cycle_key_hash
        OR BINARY OLD.source_type <> BINARY NEW.source_type
        OR NOT (OLD.source_id <=> NEW.source_id)
+       OR NOT (OLD.low_balance_threshold_irr <=> NEW.low_balance_threshold_irr)
        OR OLD.triggered_at <> NEW.triggered_at THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service notification state identity is immutable.';
     END IF;
@@ -447,7 +469,7 @@ BEGIN
            OR NEW.updated_at <> @app_service_notification_timestamp THEN
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service notification retry schedule authority is invalid.';
         END IF;
-    ELSEIF COALESCE(@app_service_notification_authority, '') = 'service_notification_transition_v1' THEN
+    ELSEIF COALESCE(@app_service_notification_authority, '') = 'service_notification_terminal_v2' THEN
         IF BINARY OLD.state <> BINARY COALESCE(@app_service_notification_from_state, '')
            OR BINARY NEW.state <> BINARY COALESCE(@app_service_notification_to_state, '')
            OR NOT (OLD.latest_delivery_attempt_id <=> NEW.latest_delivery_attempt_id)
@@ -456,31 +478,197 @@ BEGIN
            OR NEW.updated_at <> @app_service_notification_timestamp
            OR NOT (
                (OLD.state = 'triggered' AND NEW.state = 'notified'
+                   AND COALESCE(@app_service_notification_transition_cause, '') = 'delivery_succeeded'
                    AND OLD.notified_at IS NULL
                    AND NEW.notified_at = @app_service_notification_timestamp
                    AND (OLD.acknowledged_at <=> NEW.acknowledged_at)
                    AND (OLD.escalated_at <=> NEW.escalated_at)
                    AND (OLD.expired_at <=> NEW.expired_at))
                OR (OLD.state = 'triggered' AND NEW.state = 'escalated'
+                   AND COALESCE(@app_service_notification_transition_cause, '') IN (
+                       'delivery_uncertain','provider_retry_fenced','retry_exhausted','outbox_review_required'
+                   )
                    AND OLD.escalated_at IS NULL
                    AND NEW.escalated_at = @app_service_notification_timestamp
                    AND (OLD.notified_at <=> NEW.notified_at)
                    AND (OLD.acknowledged_at <=> NEW.acknowledged_at)
                    AND (OLD.expired_at <=> NEW.expired_at))
                OR (OLD.state = 'triggered' AND NEW.state = 'expired'
+                   AND COALESCE(@app_service_notification_transition_cause, '') = 'source_invalidated'
                    AND OLD.expired_at IS NULL
                    AND NEW.expired_at = @app_service_notification_timestamp
                    AND (OLD.notified_at <=> NEW.notified_at)
                    AND (OLD.acknowledged_at <=> NEW.acknowledged_at)
                    AND (OLD.escalated_at <=> NEW.escalated_at))
-               OR (OLD.state IN ('notified','escalated') AND NEW.state = 'acknowledged'
-                   AND OLD.acknowledged_at IS NULL
-                   AND NEW.acknowledged_at = @app_service_notification_timestamp
-                   AND (OLD.notified_at <=> NEW.notified_at)
-                   AND (OLD.escalated_at <=> NEW.escalated_at)
-                   AND (OLD.expired_at <=> NEW.expired_at))
            ) THEN
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service notification exact state transition authority is invalid.';
+        END IF;
+        IF NEW.state = 'notified' THEN
+            SELECT COUNT(*) INTO valid_terminal_count
+            FROM service_notification_delivery_bindings binding_row
+            JOIN service_delivery_attempts attempt_row ON attempt_row.id = binding_row.service_delivery_attempt_id
+            JOIN service_delivery_effects effect_row ON effect_row.service_delivery_attempt_id = attempt_row.id
+            WHERE binding_row.service_notification_state_id = OLD.id
+              AND binding_row.service_delivery_attempt_id = OLD.latest_delivery_attempt_id
+              AND binding_row.retry_ordinal = OLD.latest_retry_ordinal
+              AND attempt_row.service_subscription_id = OLD.service_subscription_id
+              AND BINARY attempt_row.purpose = BINARY 'notification'
+              AND effect_row.service_subscription_id = OLD.service_subscription_id
+              AND BINARY effect_row.state = BINARY 'succeeded'
+              AND effect_row.completed_at IS NOT NULL
+              AND effect_row.telegram_message_id IS NOT NULL
+              AND BINARY effect_row.result_code = BINARY 'telegram_success';
+        ELSEIF NEW.state = 'escalated' AND COALESCE(@app_service_notification_transition_cause, '') = 'outbox_review_required' THEN
+            SELECT COUNT(*) INTO valid_terminal_count
+            FROM service_notification_delivery_bindings binding_row
+            JOIN service_delivery_attempts attempt_row ON attempt_row.id = binding_row.service_delivery_attempt_id
+            JOIN outbox_messages outbox_row ON outbox_row.id = attempt_row.outbox_event_id
+            WHERE binding_row.service_notification_state_id = OLD.id
+              AND binding_row.service_delivery_attempt_id = OLD.latest_delivery_attempt_id
+              AND binding_row.retry_ordinal = OLD.latest_retry_ordinal
+              AND attempt_row.service_subscription_id = OLD.service_subscription_id
+              AND BINARY attempt_row.purpose = BINARY 'notification'
+              AND BINARY outbox_row.dispatch_state = BINARY 'review_required';
+        ELSEIF NEW.state = 'escalated' THEN
+            SELECT COUNT(*) INTO valid_terminal_count
+            FROM service_notification_delivery_bindings binding_row
+            JOIN service_delivery_attempts attempt_row ON attempt_row.id = binding_row.service_delivery_attempt_id
+            JOIN service_delivery_effects effect_row ON effect_row.service_delivery_attempt_id = attempt_row.id
+            WHERE binding_row.service_notification_state_id = OLD.id
+              AND binding_row.service_delivery_attempt_id = OLD.latest_delivery_attempt_id
+              AND binding_row.retry_ordinal = OLD.latest_retry_ordinal
+              AND attempt_row.service_subscription_id = OLD.service_subscription_id
+              AND BINARY attempt_row.purpose = BINARY 'notification'
+              AND effect_row.service_subscription_id = OLD.service_subscription_id
+              AND effect_row.completed_at IS NOT NULL
+              AND (
+                  (COALESCE(@app_service_notification_transition_cause, '') = 'delivery_uncertain'
+                      AND BINARY effect_row.state = BINARY 'uncertain')
+                  OR (COALESCE(@app_service_notification_transition_cause, '') = 'provider_retry_fenced'
+                      AND BINARY effect_row.state = BINARY 'failed_final' AND effect_row.retry_after_seconds IS NOT NULL)
+                  OR (COALESCE(@app_service_notification_transition_cause, '') = 'retry_exhausted'
+                      AND BINARY effect_row.state = BINARY 'failed_final' AND effect_row.retry_after_seconds IS NULL)
+              );
+        ELSEIF NEW.state = 'expired' THEN
+            IF OLD.notification_type = 'low_balance' THEN
+                SELECT COUNT(*) INTO current_source_count
+                FROM service_subscriptions service_row
+                JOIN ledger_accounts wallet_row ON wallet_row.id = OLD.source_id
+                WHERE service_row.id = OLD.service_subscription_id
+                  AND service_row.provisioned_at IS NOT NULL
+                  AND service_row.remote_deleted_at IS NULL
+                  AND service_row.lifecycle_state IN ('active','suspended')
+                  AND wallet_row.owner_user_id = service_row.user_id
+                  AND wallet_row.wallet_bucket = 'cash'
+                  AND wallet_row.account_class = 'liability'
+                  AND wallet_row.currency = 'IRR'
+                  AND wallet_row.is_active = 1;
+                IF current_source_count = 0 THEN
+                    SET valid_terminal_count = 1;
+                ELSE
+                    SELECT COALESCE(SUM(CASE WHEN entry_row.direction = 'credit' THEN entry_row.amount_irr ELSE 0 END), 0),
+                           COALESCE(SUM(CASE WHEN entry_row.direction = 'debit' THEN entry_row.amount_irr ELSE 0 END), 0)
+                      INTO wallet_credit, wallet_debit
+                    FROM ledger_entries entry_row
+                    JOIN ledger_transactions transaction_row ON transaction_row.id = entry_row.ledger_transaction_id
+                    WHERE entry_row.ledger_account_id = OLD.source_id
+                      AND transaction_row.finalized_at IS NOT NULL;
+                    SELECT COALESCE(SUM(hold_row.amount_irr), 0) INTO wallet_active_holds
+                    FROM wallet_holds hold_row
+                    WHERE hold_row.ledger_account_id = OLD.source_id AND hold_row.status = 'active';
+                    IF wallet_debit <= wallet_credit
+                       AND wallet_active_holds <= wallet_credit - wallet_debit THEN
+                        SET wallet_available = wallet_credit - wallet_debit - wallet_active_holds;
+                        IF wallet_available >= OLD.low_balance_threshold_irr THEN
+                            SET valid_terminal_count = 1;
+                        END IF;
+                    END IF;
+                END IF;
+            ELSEIF OLD.notification_type = 'renewal_failure' THEN
+                SELECT COUNT(*) INTO current_source_count
+                FROM service_auto_renew_notification_intents intent_row
+                JOIN service_auto_renew_attempts attempt_row ON attempt_row.id = intent_row.auto_renew_attempt_id
+                WHERE intent_row.id = OLD.source_id
+                  AND attempt_row.service_subscription_id = OLD.service_subscription_id
+                  AND BINARY CONCAT('renewal_', intent_row.outcome) = BINARY OLD.threshold_code
+                  AND BINARY SHA2(CONCAT_WS('|',
+                      'service-notification-renewal-cycle-v1',
+                      attempt_row.service_subscription_id,
+                      intent_row.id,
+                      intent_row.outcome,
+                      COALESCE(intent_row.reason_code, '')
+                  ), 256) = BINARY OLD.cycle_key_hash
+                  AND (
+                      (intent_row.outcome = 'insufficient_wallet' AND attempt_row.state = 'insufficient_wallet')
+                      OR (intent_row.outcome = 'price_change_blocked' AND attempt_row.state = 'price_change_blocked')
+                      OR (intent_row.outcome = 'failure' AND attempt_row.state = 'failed')
+                  );
+                IF current_source_count = 0 THEN
+                    SET valid_terminal_count = 1;
+                END IF;
+            ELSEIF OLD.notification_type = 'expiry' THEN
+                SELECT COUNT(*), MAX(snapshot_row.remote_expires_at)
+                  INTO current_source_count, current_remote_expires_at
+                FROM service_sync_snapshots snapshot_row
+                JOIN service_subscriptions service_row ON service_row.id = snapshot_row.service_subscription_id
+                WHERE snapshot_row.service_subscription_id = OLD.service_subscription_id
+                  AND snapshot_row.remote_disposition = 'present'
+                  AND snapshot_row.remote_expires_at IS NOT NULL
+                  AND snapshot_row.local_lifecycle_version = service_row.lifecycle_version
+                  AND snapshot_row.local_remote_identity_generation = service_row.remote_identity_generation
+                  AND snapshot_row.local_mutation_generation = service_row.mutation_generation
+                  AND service_row.provisioned_at IS NOT NULL
+                  AND service_row.remote_deleted_at IS NULL
+                  AND service_row.lifecycle_state IN ('active','suspended')
+                  AND BINARY SHA2(CONCAT_WS('|',
+                      'service-notification-expiry-cycle-v1',
+                      service_row.id,
+                      service_row.remote_identity_generation,
+                      service_row.mutation_generation,
+                      service_row.lifecycle_version,
+                      DATE_FORMAT(snapshot_row.remote_expires_at, '%Y-%m-%d %H:%i:%s.%f')
+                  ), 256) = BINARY OLD.cycle_key_hash
+                  AND NOT EXISTS (
+                      SELECT 1 FROM service_sync_snapshots newer_snapshot
+                      WHERE newer_snapshot.service_subscription_id = snapshot_row.service_subscription_id
+                        AND newer_snapshot.local_lifecycle_version = snapshot_row.local_lifecycle_version
+                        AND newer_snapshot.local_remote_identity_generation = snapshot_row.local_remote_identity_generation
+                        AND newer_snapshot.local_mutation_generation = snapshot_row.local_mutation_generation
+                        AND (newer_snapshot.observed_at > snapshot_row.observed_at
+                            OR (newer_snapshot.observed_at = snapshot_row.observed_at AND newer_snapshot.id > snapshot_row.id))
+                  );
+                IF current_source_count = 0
+                   OR (OLD.threshold_code = 'expiry_7d' AND current_remote_expires_at <= @app_service_notification_timestamp + INTERVAL 3 DAY)
+                   OR (OLD.threshold_code = 'expiry_3d' AND current_remote_expires_at <= @app_service_notification_timestamp + INTERVAL 1 DAY)
+                   OR (OLD.threshold_code = 'expiry_1d' AND current_remote_expires_at <= @app_service_notification_timestamp) THEN
+                    SET valid_terminal_count = 1;
+                END IF;
+            END IF;
+        END IF;
+        IF valid_terminal_count <> 1 THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service notification terminal transition causal evidence is invalid.';
+        END IF;
+    ELSEIF COALESCE(@app_service_notification_authority, '') = 'service_notification_acknowledge_v1' THEN
+        SELECT COUNT(*) INTO valid_terminal_count
+        FROM administrators administrator_row
+        WHERE administrator_row.id = COALESCE(@app_service_notification_actor_administrator_id, 0)
+          AND BINARY administrator_row.status = BINARY 'active';
+        IF BINARY OLD.state <> BINARY COALESCE(@app_service_notification_from_state, '')
+           OR OLD.state NOT IN ('notified','escalated') OR NEW.state <> 'acknowledged'
+           OR COALESCE(@app_service_notification_transition_cause, '') <> 'administrator_acknowledgment'
+           OR valid_terminal_count <> 1
+           OR COALESCE(@app_service_notification_request_hash, '') NOT REGEXP '^[0-9a-f]{64}$'
+           OR COALESCE(@app_service_notification_reason_code, '') = ''
+           OR COALESCE(@app_service_notification_reason, '') = ''
+           OR NOT (OLD.latest_delivery_attempt_id <=> NEW.latest_delivery_attempt_id)
+           OR NOT (OLD.latest_retry_ordinal <=> NEW.latest_retry_ordinal)
+           OR NEW.next_retry_at IS NOT NULL
+           OR NEW.acknowledged_at <> @app_service_notification_timestamp
+           OR NEW.updated_at <> @app_service_notification_timestamp
+           OR NOT (OLD.notified_at <=> NEW.notified_at)
+           OR NOT (OLD.escalated_at <=> NEW.escalated_at)
+           OR NOT (OLD.expired_at <=> NEW.expired_at) THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service notification acknowledgment authority is invalid.';
         END IF;
     ELSE
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service notification state update authority is invalid.';
@@ -558,6 +746,8 @@ BEFORE INSERT ON service_notification_events
 FOR EACH ROW
 BEGIN
     DECLARE current_state VARCHAR(24) DEFAULT NULL;
+    DECLARE current_attempt_id BIGINT UNSIGNED DEFAULT NULL;
+    DECLARE current_retry_ordinal INT DEFAULT NULL;
     DECLARE expected_sequence INT DEFAULT 1;
     DECLARE valid_delivery_count INT DEFAULT 0;
 
@@ -569,12 +759,21 @@ BEGIN
         'service_notification_create_v1',
         'service_notification_bind_v1',
         'service_notification_schedule_retry_v1',
-        'service_notification_transition_v1'
+        'service_notification_terminal_v2',
+        'service_notification_acknowledge_v1'
     ) OR BINARY NEW.correlation_id <> BINARY COALESCE(@app_service_notification_correlation_id, '') THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service notification event authority is invalid.';
     END IF;
 
-    SELECT state_row.state INTO current_state
+    IF COALESCE(@app_service_notification_authority, '') IN (
+        'service_notification_create_v1','service_notification_bind_v1','service_notification_schedule_retry_v1'
+    ) AND (NEW.transition_cause IS NOT NULL OR NEW.actor_administrator_id IS NOT NULL
+        OR NEW.request_hash IS NOT NULL OR NEW.reason_code IS NOT NULL OR NEW.reason IS NOT NULL) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service notification non-terminal event evidence is invalid.';
+    END IF;
+
+    SELECT state_row.state, state_row.latest_delivery_attempt_id, state_row.latest_retry_ordinal
+    INTO current_state, current_attempt_id, current_retry_ordinal
     FROM service_notification_states state_row
     WHERE state_row.id = NEW.service_notification_state_id
       AND state_row.service_subscription_id = COALESCE(@app_service_notification_service_id, 0)
@@ -622,14 +821,31 @@ BEGIN
            OR NEW.created_at <> @app_service_notification_timestamp THEN
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service notification retry event authority is invalid.';
         END IF;
-    ELSE
+    ELSEIF COALESCE(@app_service_notification_authority, '') = 'service_notification_terminal_v2' THEN
         IF BINARY NEW.event_type <> BINARY COALESCE(@app_service_notification_to_state, '')
            OR BINARY NEW.from_state <> BINARY COALESCE(@app_service_notification_from_state, '')
            OR BINARY NEW.to_state <> BINARY COALESCE(@app_service_notification_to_state, '')
-           OR NEW.service_delivery_attempt_id IS NOT NULL
-           OR NEW.retry_ordinal IS NOT NULL
+           OR NOT (NEW.service_delivery_attempt_id <=> current_attempt_id)
+           OR NOT (NEW.retry_ordinal <=> current_retry_ordinal)
+           OR BINARY COALESCE(NEW.transition_cause, '') <> BINARY COALESCE(@app_service_notification_transition_cause, '')
+           OR NEW.actor_administrator_id IS NOT NULL OR NEW.request_hash IS NOT NULL
+           OR NEW.reason_code IS NOT NULL OR NEW.reason IS NOT NULL
            OR NEW.created_at <> @app_service_notification_timestamp THEN
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service notification transition event authority is invalid.';
+        END IF;
+    ELSE
+        IF BINARY NEW.event_type <> BINARY 'acknowledged'
+           OR BINARY NEW.from_state <> BINARY COALESCE(@app_service_notification_from_state, '')
+           OR BINARY NEW.to_state <> BINARY 'acknowledged'
+           OR NOT (NEW.service_delivery_attempt_id <=> current_attempt_id)
+           OR NOT (NEW.retry_ordinal <=> current_retry_ordinal)
+           OR BINARY COALESCE(NEW.transition_cause, '') <> BINARY 'administrator_acknowledgment'
+           OR NEW.actor_administrator_id <> COALESCE(@app_service_notification_actor_administrator_id, 0)
+           OR BINARY NEW.request_hash <> BINARY COALESCE(@app_service_notification_request_hash, '')
+           OR BINARY NEW.reason_code <> BINARY COALESCE(@app_service_notification_reason_code, '')
+           OR BINARY NEW.reason <> BINARY COALESCE(@app_service_notification_reason, '')
+           OR NEW.created_at <> @app_service_notification_timestamp THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service notification acknowledgment event authority is invalid.';
         END IF;
     END IF;
 END

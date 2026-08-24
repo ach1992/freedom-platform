@@ -15,6 +15,8 @@ use App\Modules\Provisioning\Application\ServiceDeliveryAttemptQueueService;
 use App\Modules\Provisioning\Application\ServiceDeliveryEffectExecutor;
 use App\Modules\Provisioning\Application\ServiceDeliveryOutboxHandler;
 use App\Modules\Provisioning\Application\ServiceImportService;
+use App\Modules\Provisioning\Application\ServiceNotificationCandidateInvalidatedException;
+use App\Modules\Provisioning\Application\ServiceNotificationDatabaseAuthority;
 use App\Modules\Provisioning\Application\ServiceNotificationThresholdService;
 use App\Modules\Provisioning\Application\ServiceOperationalContext;
 use App\Modules\Provisioning\Application\ServiceOperationalDatabaseCapability;
@@ -35,6 +37,7 @@ use App\Shared\Application\OutboxMessageHandler;
 use App\Shared\Infrastructure\DatabaseOutboxDispatcher;
 use DateTimeImmutable;
 use DateTimeZone;
+use DomainException;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\Migrations\Migration;
@@ -110,6 +113,11 @@ final class ServiceNotificationRetryLifecycleTest extends TestCase
         $failed = $this->app->make(ServiceDeliveryEffectExecutor::class)->execute($firstAttemptPublicId);
         self::assertSame(ServiceDeliveryEffectState::FailedFinal, $failed->state);
         self::assertCount(1, $this->sender->calls);
+        $this->assertNotifiedTransitionRejected(
+            (int) $state->id,
+            (int) $state->service_subscription_id,
+            'failed-current-attempt',
+        );
 
         $scheduled = $notifications->processBatch(1);
         self::assertSame(0, $scheduled->queued);
@@ -133,6 +141,11 @@ final class ServiceNotificationRetryLifecycleTest extends TestCase
         self::assertSame(2, DB::table('service_notification_delivery_bindings')->count());
 
         $retryAttemptPublicId = $this->attemptPublicId((int) $retryState->latest_delivery_attempt_id);
+        $this->assertNotifiedTransitionRejected(
+            (int) $retryState->id,
+            (int) $retryState->service_subscription_id,
+            'stale-failed-attempt',
+        );
         self::assertNotSame($firstAttemptPublicId, $retryAttemptPublicId);
         $this->sender->result = new ProtectedTelegramSendResult(
             ProtectedTelegramSendOutcome::Success,
@@ -154,6 +167,25 @@ final class ServiceNotificationRetryLifecycleTest extends TestCase
         self::assertSame(1, $completed->notified);
         self::assertSame('notified', $this->notificationState()->state);
 
+        $notifiedEvent = DB::table('service_notification_events')
+            ->where('service_notification_state_id', (int) $retryState->id)
+            ->where('event_type', 'notified')
+            ->first([
+                'transition_cause',
+                'service_delivery_attempt_id',
+                'retry_ordinal',
+            ]);
+        self::assertNotNull($notifiedEvent);
+        self::assertSame('delivery_succeeded', $notifiedEvent->transition_cause);
+        self::assertSame(
+            (int) $retryState->latest_delivery_attempt_id,
+            (int) $notifiedEvent->service_delivery_attempt_id,
+        );
+        self::assertSame(
+            (int) $retryState->latest_retry_ordinal,
+            (int) $notifiedEvent->retry_ordinal,
+        );
+
         $notifiedState = DB::table('service_notification_states')
             ->where('notification_type', 'low_balance')
             ->first(['id', 'public_id', 'state']);
@@ -168,19 +200,141 @@ final class ServiceNotificationRetryLifecycleTest extends TestCase
             $fixture['owner_id'],
         );
         self::assertTrue($notifications->acknowledge((string) $notifiedState->public_id, $acknowledgement));
+        DB::disconnect();
+        self::assertTrue($notifications->acknowledge((string) $notifiedState->public_id, $acknowledgement));
         self::assertSame('acknowledged', $this->notificationState()->state);
+
+        $conflict = new ServiceOperationalContext(
+            'notification-ack-conflict-'.substr(hash('sha256', 'operation:retry-success'), 0, 24),
+            'notification-ack-conflict-correlation',
+            'service_notification_ack_test',
+            'A conflicting acknowledgment must not reuse durable authority.',
+            $fixture['owner_id'],
+        );
+        try {
+            $notifications->acknowledge((string) $notifiedState->public_id, $conflict);
+            self::fail('Conflicting acknowledgment context must fail closed.');
+        } catch (DomainException $exception) {
+            self::assertStringContainsString('conflicts with durable acknowledgment evidence', $exception->getMessage());
+        }
 
         $acknowledgedEvent = DB::table('service_notification_events')
             ->where('service_notification_state_id', (int) $notifiedState->id)
+            ->where('event_type', 'acknowledged')
             ->orderByDesc('id')
-            ->first(['event_type', 'from_state', 'to_state', 'correlation_id']);
+            ->first(['event_type', 'from_state', 'to_state', 'transition_cause', 'actor_administrator_id', 'request_hash', 'reason_code', 'reason', 'correlation_id']);
         self::assertNotNull($acknowledgedEvent);
+        self::assertSame(1, DB::table('service_notification_events')
+            ->where('service_notification_state_id', (int) $notifiedState->id)
+            ->where('event_type', 'acknowledged')
+            ->count());
         self::assertSame('acknowledged', $acknowledgedEvent->event_type);
         self::assertSame('notified', $acknowledgedEvent->from_state);
         self::assertSame('acknowledged', $acknowledgedEvent->to_state);
+        self::assertSame('administrator_acknowledgment', $acknowledgedEvent->transition_cause);
+        self::assertSame($fixture['owner_id'], (int) $acknowledgedEvent->actor_administrator_id);
+        self::assertSame($acknowledgement->requestHash(), $acknowledgedEvent->request_hash);
+        self::assertSame($acknowledgement->reasonCode, $acknowledgedEvent->reason_code);
+        self::assertSame($acknowledgement->reason, $acknowledgedEvent->reason);
         self::assertSame($acknowledgement->correlationId, $acknowledgedEvent->correlation_id);
     }
 
+    public function test_noncanonical_success_effect_cannot_create_terminal_notification_truth(): void
+    {
+        $fixture = $this->fixture('noncanonical-success');
+        $this->attachService($fixture, 'noncanonical-success');
+        $this->fundLowWallet($fixture['user_id'], 'noncanonical-success');
+        $this->insertTelegramAccount($fixture['user_id']);
+
+        $notifications = $this->app->make(ServiceNotificationThresholdService::class);
+        self::assertSame(1, $notifications->processBatch(1)->queued);
+        $state = $this->notificationState();
+        $attemptPublicId = $this->attemptPublicId((int) $state->latest_delivery_attempt_id);
+        $executor = $this->app->make(ServiceDeliveryEffectExecutor::class);
+        $prepare = new ReflectionMethod($executor, 'prepare');
+        /** @var array{effect:object} $context */
+        $context = $prepare->invoke($executor, $attemptPublicId);
+        $boundary = new ReflectionMethod($executor, 'enterProviderBoundary');
+        /** @var object $sending */
+        $sending = $boundary->invoke($executor, $context['effect']);
+        $connection = DB::connection();
+        $setAuthority = new ReflectionMethod($executor, 'setEffectAuthority');
+        $clearAuthority = new ReflectionMethod($executor, 'clearEffectAuthority');
+        $setAuthority->invoke($executor, $connection, $sending);
+        try {
+            $connection->table('service_delivery_effects')
+                ->where('id', (int) $sending->id)
+                ->where('state', 'sending')
+                ->where('state_version', (int) $sending->state_version)
+                ->update([
+                    'state' => 'succeeded',
+                    'state_version' => (int) $sending->state_version + 1,
+                    'completed_at' => $this->clock->value->format('Y-m-d H:i:s.u'),
+                    'telegram_message_id' => 9901,
+                    'result_code' => 'notification_retry_test_success',
+                    'retry_after_seconds' => null,
+                    'updated_at' => $this->clock->value->format('Y-m-d H:i:s.u'),
+                ]);
+            self::fail('Noncanonical Telegram success evidence must fail at the Delivery Effect boundary.');
+        } catch (QueryException) {
+            self::assertSame('sending', DB::table('service_delivery_effects')
+                ->where('id', (int) $sending->id)
+                ->value('state'));
+        } finally {
+            $clearAuthority->invoke($executor, $connection);
+        }
+
+        $this->assertNotifiedTransitionRejected(
+            (int) $state->id,
+            (int) $state->service_subscription_id,
+            'noncanonical-effect',
+        );
+        self::assertSame('triggered', DB::table('service_notification_states')
+            ->where('id', (int) $state->id)
+            ->value('state'));
+    }
+
+    public function test_wallet_source_is_revalidated_immediately_before_provider_entry(): void
+    {
+        $fixture = $this->fixture('provider-source-fence');
+        $this->attachService($fixture, 'provider-source-fence');
+        $this->fundLowWallet($fixture['user_id'], 'provider-source-fence');
+        $this->insertTelegramAccount($fixture['user_id']);
+
+        $notifications = $this->app->make(ServiceNotificationThresholdService::class);
+        self::assertSame(1, $notifications->processBatch(1)->queued);
+        $state = $this->notificationState();
+        $attemptPublicId = $this->attemptPublicId((int) $state->latest_delivery_attempt_id);
+
+        $assetId = (int) DB::table('ledger_accounts')
+            ->where('code', 'system.notification.retry.asset.provider-source-fence')
+            ->value('id');
+        $walletId = (int) DB::table('ledger_accounts')
+            ->where('code', 'wallet.cash.notification.retry.provider-source-fence.'.$fixture['user_id'])
+            ->value('id');
+        $this->app->make(LedgerPostingService::class)->post(
+            'ledger.notification.retry.fund.provider-source-fence.0002',
+            'wallet_topup_capture',
+            'notification-retry-provider-source-fence-0002',
+            [
+                new LedgerEntryDraft($assetId, LedgerDirection::Debit, IrrMoney::positive(500_000)),
+                new LedgerEntryDraft($walletId, LedgerDirection::Credit, IrrMoney::positive(500_000)),
+            ],
+            'payment_intent',
+            'pi-notification-retry-provider-source-fence-0002',
+        );
+
+        try {
+            $this->app->make(ServiceDeliveryEffectExecutor::class)->execute($attemptPublicId);
+            self::fail('A stale low-balance episode must not cross the Telegram provider boundary.');
+        } catch (ServiceNotificationCandidateInvalidatedException $exception) {
+            self::assertStringContainsString('no longer authoritative', $exception->getMessage());
+        }
+        self::assertCount(0, $this->sender->calls);
+        self::assertSame('prepared', DB::table('service_delivery_effects')
+            ->where('service_delivery_attempt_id', (int) $state->latest_delivery_attempt_id)
+            ->value('state'));
+    }
     public function test_retry_budget_exhaustion_escalates_without_creating_another_delivery_attempt(): void
     {
         config()->set('service_notifications.retry.low_balance.max_retries', 0);
@@ -675,12 +829,51 @@ SQL,
         ]);
     }
 
-    /** @return object{id:int|string,state:string,latest_delivery_attempt_id:int|string|null,latest_retry_ordinal:int|string|null,next_retry_at:?string} */
+    private function assertNotifiedTransitionRejected(int $stateId, int $serviceId, string $suffix): void
+    {
+        $connection = DB::connection();
+        $timestamp = $this->clock->value->format('Y-m-d H:i:s.u');
+        $correlationId = 'notification-terminal-reject-'.substr(hash('sha256', $suffix), 0, 24);
+        ServiceNotificationDatabaseAuthority::transition(
+            $connection,
+            $stateId,
+            $serviceId,
+            'triggered',
+            'notified',
+            'delivery_succeeded',
+            $timestamp,
+            $correlationId,
+        );
+        try {
+            $connection->table('service_notification_states')
+                ->where('id', $stateId)
+                ->where('state', 'triggered')
+                ->update([
+                    'state' => 'notified',
+                    'next_retry_at' => null,
+                    'notified_at' => $timestamp,
+                    'last_correlation_id' => $correlationId,
+                    'updated_at' => $timestamp,
+                ]);
+            self::fail('Terminal notification truth must reject missing, stale, or noncanonical success evidence.');
+        } catch (QueryException) {
+            self::assertSame('triggered', DB::table('service_notification_states')
+                ->where('id', $stateId)
+                ->value('state'));
+        } finally {
+            ServiceNotificationDatabaseAuthority::clear($connection);
+        }
+    }
+
+    /** @return object{id:int|string,service_subscription_id:int|string,state:string,latest_delivery_attempt_id:int|string|null,latest_retry_ordinal:int|string|null,next_retry_at:?string} */
     private function notificationState(): object
     {
         $state = DB::table('service_notification_states')
             ->where('notification_type', 'low_balance')
-            ->first(['id', 'state', 'latest_delivery_attempt_id', 'latest_retry_ordinal', 'next_retry_at']);
+            ->first([
+                'id', 'service_subscription_id', 'state', 'latest_delivery_attempt_id',
+                'latest_retry_ordinal', 'next_retry_at',
+            ]);
         self::assertNotNull($state);
 
         return $state;

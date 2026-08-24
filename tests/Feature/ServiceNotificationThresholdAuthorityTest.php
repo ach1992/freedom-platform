@@ -20,6 +20,7 @@ use App\Shared\Application\Clock;
 use DateTimeImmutable;
 use DateTimeZone;
 use DomainException;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
@@ -156,6 +157,61 @@ final class ServiceNotificationThresholdAuthorityTest extends TestCase
         self::assertNotSame((int) $sevenDay->source_id, (int) $threeDay->source_id);
     }
 
+    public function test_newer_semantically_equivalent_snapshot_preserves_queue_authority(): void
+    {
+        $fixture = $this->fixture('expiry-equivalent-snapshot');
+        $remoteId = 'notification-expiry-equivalent-snapshot';
+        $snapshot = $this->snapshot(
+            $remoteId,
+            'notification-expiry-equivalent-snapshot-user',
+            $this->clock->value->modify('+3 days'),
+        );
+        $servicePublicId = $this->attachService(
+            $fixture,
+            $snapshot,
+            'expiry-equivalent-snapshot',
+        );
+        $sync = $this->app->make(ServiceSynchronizationService::class);
+        self::assertSame(1, $sync->syncOne($servicePublicId)->processed);
+
+        $syncedAfterTrigger = false;
+        DB::listen(function (QueryExecuted $query) use (
+            &$syncedAfterTrigger,
+            $sync,
+            $servicePublicId,
+        ): void {
+            if ($syncedAfterTrigger
+                || ! str_contains(strtolower($query->sql), 'service_notification_states')
+                || ! str_contains(strtolower($query->sql), 'insert')) {
+                return;
+            }
+
+            $syncedAfterTrigger = true;
+            DB::connection()->afterCommit(function () use ($sync, $servicePublicId): void {
+                self::assertSame(1, $sync->syncOne($servicePublicId)->processed);
+            });
+        });
+
+        $receipt = $this->app->make(ServiceNotificationThresholdService::class)->processBatch(1);
+        self::assertTrue($syncedAfterTrigger, 'The regression must record a newer snapshot after trigger creation.');
+        self::assertSame(1, $receipt->triggered);
+        self::assertSame(1, $receipt->queued);
+
+        $state = DB::table('service_notification_states')
+            ->where('notification_type', 'expiry')
+            ->first(['source_id', 'latest_delivery_attempt_id']);
+        self::assertNotNull($state);
+        self::assertNotNull($state->latest_delivery_attempt_id);
+        $latestSnapshotId = (int) DB::table('service_sync_snapshots')
+            ->where('service_subscription_id', (int) DB::table('service_subscriptions')
+                ->where('public_id', $servicePublicId)
+                ->value('id'))
+            ->orderByDesc('observed_at')
+            ->orderByDesc('id')
+            ->value('id');
+        self::assertNotSame((int) $state->source_id, $latestSnapshotId);
+    }
+
     public function test_latest_unavailable_snapshot_suppresses_older_present_expiry_evidence(): void
     {
         $fixture = $this->fixture('expiry-unavailable');
@@ -285,6 +341,7 @@ SQL,
                 'cycle_key_hash' => $cycle,
                 'source_type' => 'wallet_balance',
                 'source_id' => $walletId,
+                'low_balance_threshold_irr' => $threshold,
                 'state' => 'triggered',
                 'latest_delivery_attempt_id' => null,
                 'latest_retry_ordinal' => null,

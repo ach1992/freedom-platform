@@ -90,7 +90,7 @@ trait ServiceDeliveryEffectPersistence
         /** @var DeliveryService|null $row */
         $row = $query->first([
             'id', 'public_id', 'user_id', 'service_target_id', 'remote_service_id', 'provisioned_at',
-            'lifecycle_state', 'lifecycle_version', 'remote_identity_generation', 'remote_deleted_at',
+            'lifecycle_state', 'lifecycle_version', 'remote_identity_generation', 'mutation_generation', 'remote_deleted_at',
         ]);
         if ($row === null) {
             throw new RuntimeException('Service Subscription disappeared during delivery execution.');
