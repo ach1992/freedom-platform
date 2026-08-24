@@ -7,9 +7,9 @@ This file defines the durable working rules for humans and AI agents. Chat histo
 Do not use one document as authority for every kind of truth:
 
 1. **Version 1 product scope and non-negotiable product/security/correctness requirements:** `docs/specification/master-execution-prompt.md`, with stable IDs indexed in `docs/01-authoritative-requirements.md`.
-2. **Repository execution, branch, review, validation, and Agent rules:** this file and `CONTRIBUTING.md`.
+2. **Repository execution, branch, review, and Agent rules:** this file and `CONTRIBUTING.md`.
 3. **Current phase, backlog, priority, dependency, blocker, PR/review, and CI state:** live GitHub, starting from Program Issue `#3` and Draft integration PR `#6`.
-4. **Durable architecture/security/testing/operations rules:** canonical references linked from `docs/README.md`.
+4. **Durable architecture/security/testing/execution-infrastructure/operations rules:** canonical references linked from `docs/README.md`.
 5. **Historical implementation context:** Git/PR/Issue/workflow history.
 
 The master specification is not a live task board. Historical instructions in it to create execution ledgers, mutable traceability matrices, per-phase status/evidence files, or similar coordination artifacts are superseded by this repository operating model; they must not be used to recreate retired documentation. This does **not** weaken any product, security, financial-integrity, provider, runtime, testing, restore, or release requirement.
@@ -33,17 +33,20 @@ Never push product work directly to `main` or `develop/v1.0.0-completion`, rewri
 
 ## Execution access
 
-GitHub is the project's source location and current-state authority. Do not assume the Owner keeps another authoritative checkout on a personal machine, server, or staging host.
+GitHub is the project's source location and current-state authority. Execution capability does not change that authority.
 
-- **Normal Master execution:** the active ChatGPT Master self-executes dependency-safe READY work through the connected GitHub integration and repository-native GitHub capabilities whenever they can perform the task safely.
-- **Persistent MCP workspace (when connected):** discover and reuse `AI_Server_Agent` for the repo-scoped checkout `/srv/ai-workspace/freedom-platform` as unprivileged user `aiworker`. Its Git remote uses SSH alias `github-freedom-platform`. Use it for ordinary repository editing, Git, diagnostics, and supported local commands; it is execution state only, never project authority. Never read or expose the backing SSH private key. Operational details and safety boundaries are in `docs/09-deployment-runbook.md`.
-- **Authoritative runtime validation:** required PHP/Composer/MariaDB/Redis and repository CI evidence runs through reviewed GitHub Actions on an owner-controlled self-hosted runner selected by labels `[self-hosted, Linux, X64, freedom-staging, php84]` unless an exact task explicitly establishes equivalent evidence elsewhere. Runner display names are operational GitHub inventory, not part of the durable repository contract. An Actions checkout is transient execution state, not a second project source.
-- **External Workers:** delegation is optional, not the default. Use an external coding/review Worker only when isolation, safe parallelism, specialist review, or a capability unavailable to the Master materially justifies it. Any Worker must publish all durable work back to GitHub for Master verification.
-- **No Codex dependency:** repository-linked Codex Cloud may be used only as an optional external Worker when explicitly useful; it is not the normal or required execution path.
-- **GitHub-native capability rule:** prefer the connected GitHub integration and existing reviewed repository workflows. Do not invent a personal local checkout, PAT relay, or generic remote shell merely for convenience.
-- **Secrets:** existing secret identifiers, their workflow consumers/reserved status, GitHub Environment use, and provider/readiness entrypoints are documented in `docs/09-deployment-runbook.md`. Never ask the Owner to paste secret values into Chat.
+The canonical map for the connected GitHub integration, `AI_Server_Agent` workspace, GitHub Actions self-hosted runners, external Workers, staging/deployment targets, toolchain ownership, and runner add/replace/quarantine/remove/qualification is [`docs/development/execution-infrastructure.md`](docs/development/execution-infrastructure.md).
 
-Detailed capability routing is in `CONTRIBUTING.md`; CI execution is in `docs/06-test-strategy.md`.
+Agents must follow these boundaries regardless of which execution path is available:
+
+- prefer an already-supported capability over inventing a new PAT relay, personal checkout, generic remote shell, or duplicate automation path;
+- execution workspaces/checkouts are not project authority; durable work returns to GitHub;
+- do not read/expose credentials merely because a connector/server can access them;
+- use GitHub Actions for authoritative repository CI/runtime evidence when real PHP/Docker/MariaDB/Redis execution is required;
+- runner display names and physical hosts are operational inventory, not workflow dependencies;
+- external Workers are optional capacity, never project authority.
+
+Detailed development routing is in `CONTRIBUTING.md`; test/CI semantics are in `docs/06-test-strategy.md`; privileged deployment/runtime operations are in `docs/09-deployment-runbook.md`.
 
 ## Task contract
 
@@ -113,32 +116,25 @@ Use prepared ORM/query-builder paths, validation, output escaping, least privile
 
 For every change:
 
-1. read the task Issue and relevant canonical docs;
+1. read the task Issue and only the canonical docs relevant to the decision;
 2. inspect current implementation/tests before adding a concept;
 3. make the smallest reliable change;
-4. define and add behavior-focused success/failure/security/concurrency tests only where they provide signal;
-5. run the appropriate checks in `CONTRIBUTING.md`/`docs/06-test-strategy.md` through the available reviewed execution path;
+4. add behavior-focused success/failure/security/concurrency tests only where they provide signal;
+5. run the applicable checks from `docs/06-test-strategy.md` through a supported execution path from `docs/development/execution-infrastructure.md`;
 6. never weaken checks to manufacture a pass;
-7. keep live progress in GitHub, not new handoff/status/evidence documents;
-8. capture future-useful follow-up work as an actionable Issue rather than burying it in a completion narrative;
+7. keep live progress in GitHub, not new handoff/status/evidence/infrastructure-inventory documents;
+8. capture future-useful follow-up work as an actionable Issue rather than burying it in completion prose;
 9. verify the live GitHub object/ref after every repository mutation.
 
 ## CI
 
-Every executing GitHub Actions job runs on the owner-controlled self-hosted runner:
-
-```yaml
-runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
-```
-
-GitHub-hosted runners are not a fallback. Exact runtime and quality requirements are in `docs/06-test-strategy.md`.
+Every executing GitHub Actions job runs on an owner-controlled self-hosted runner. The exact workflow `runs-on` selector is the routing authority; runner capability/lifecycle rules live in `docs/development/execution-infrastructure.md` and test/CI semantics live in `docs/06-test-strategy.md`.
 
 CI is risk-based and signal-driven. `.github/workflows/ci.yml` computes independent validation needs from the complete diff instead of treating every non-doc change as one all-or-nothing suite.
 
 - Secret scanning remains mandatory for every executing CI revision.
 - Repository/planning checks run when their canonical control/document surfaces change; they are not ceremonial application-test prerequisites.
 - PHP style/static/architecture, dependency/license policy, MariaDB/Redis integration, Docker/runtime validation and operational-entrypoint validation are selected independently when the changed behavior can affect those contracts.
-- The bounded read-only `staging-readiness.yml` workflow may use control-plane validation without application DB tests only while its static read-only contract proves that it remains manual, secret-free and non-mutating. Other workflow/control changes are never broadly allowlisted by directory.
 - MariaDB `10.11` is the mandatory normal integration target when application/database semantics are affected. It is not started for a change that independent validation proves cannot affect those semantics.
 - Unknown/ambiguous paths fail safely to the strongest validation plan. Removing an application/control prerequisite never downgrades validation.
 - Draft PRs stay quiet. Marking a PR Ready triggers validation on the current revision. Superseded safe runs are cancelled; guarded external-effect workflows retain non-cancellation where interruption would itself be unsafe.
@@ -148,9 +144,11 @@ Reuse green evidence when the tested resulting tree has not materially changed. 
 
 ## Documentation and evidence
 
-Do not create per-task handoff, overlay, current-state, risk, traceability, or evidence documents. Durable rules belong in an existing canonical document. Dynamic state belongs in GitHub.
+Documentation topology and ownership are canonical in `docs/README.md`. One kind of durable truth has one owner; other files link to it instead of copying it.
 
-Task-level implementation history is preserved by commits, PRs, Issues, reviews, and CI. `evidence/` is reserved for release-candidate/release records that have a real retention need.
+Do not create per-task handoff, overlay, current-state, risk, traceability, infrastructure-inventory, or evidence documents. Dynamic task/runner/CI state belongs in GitHub and operational systems; task history belongs in commits, PRs, Issues, reviews, and CI.
+
+`evidence/` is reserved for release-candidate/release records that have a real retention need.
 
 ## Human approval
 
