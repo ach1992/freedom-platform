@@ -1245,8 +1245,8 @@ final readonly class ServiceNotificationThresholdService
         $thresholds = [];
         foreach ($raw as $value) {
             $validated = filter_var($value, FILTER_VALIDATE_INT, ['options' => ['min_range' => 0, 'max_range' => 365]]);
-            if ($validated === false) {
-                throw new DomainException('Service notification expiry thresholds must be integers from 0 to 365 days.');
+            if ($validated === false || ! in_array((int) $validated, [0, 1, 3, 7], true)) {
+                throw new DomainException('Service notification expiry thresholds must be selected from 0, 1, 3, or 7 days.');
             }
             $thresholds[] = (int) $validated;
         }
