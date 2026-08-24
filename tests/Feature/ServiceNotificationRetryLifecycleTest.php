@@ -153,6 +153,32 @@ final class ServiceNotificationRetryLifecycleTest extends TestCase
         $completed = $notifications->processBatch(1);
         self::assertSame(1, $completed->notified);
         self::assertSame('notified', $this->notificationState()->state);
+
+        $notifiedState = DB::table('service_notification_states')
+            ->where('notification_type', 'low_balance')
+            ->first(['id', 'public_id', 'state']);
+        self::assertNotNull($notifiedState);
+        self::assertSame('notified', $notifiedState->state);
+
+        $acknowledgement = new ServiceOperationalContext(
+            'notification-ack-'.substr(hash('sha256', 'operation:retry-success'), 0, 32),
+            'notification-ack-correlation-'.substr(hash('sha256', 'retry-success'), 0, 24),
+            'service_notification_ack_test',
+            'Acknowledge a delivered Service notification in lifecycle coverage.',
+            $fixture['owner_id'],
+        );
+        self::assertTrue($notifications->acknowledge((string) $notifiedState->public_id, $acknowledgement));
+        self::assertSame('acknowledged', $this->notificationState()->state);
+
+        $acknowledgedEvent = DB::table('service_notification_events')
+            ->where('service_notification_state_id', (int) $notifiedState->id)
+            ->orderByDesc('id')
+            ->first(['event_type', 'from_state', 'to_state', 'correlation_id']);
+        self::assertNotNull($acknowledgedEvent);
+        self::assertSame('acknowledged', $acknowledgedEvent->event_type);
+        self::assertSame('notified', $acknowledgedEvent->from_state);
+        self::assertSame('acknowledged', $acknowledgedEvent->to_state);
+        self::assertSame($acknowledgement->correlationId, $acknowledgedEvent->correlation_id);
     }
 
     public function test_retry_budget_exhaustion_escalates_without_creating_another_delivery_attempt(): void
