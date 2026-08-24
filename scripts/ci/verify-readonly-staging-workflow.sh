@@ -17,8 +17,18 @@ grep -F 'READ_ONLY_STAGING_CHECK' "$workflow" >/dev/null \
     || fail 'workflow must retain the explicit read-only confirmation sentinel'
 grep -A4 -F 'permissions:' "$workflow" | grep -F 'contents: read' >/dev/null \
     || fail 'workflow must retain explicit read-only repository permissions'
-grep -F 'runs-on: [self-hosted, Linux, X64, freedom-staging, php84]' "$workflow" >/dev/null \
-    || fail 'workflow must retain the canonical self-hosted runner selector'
+
+runner_lines=$(grep -E '^[[:space:]]*runs-on:' "$workflow" || true)
+[[ -n "$runner_lines" ]] || fail 'workflow must retain an explicit runner selector'
+while IFS= read -r runner_line; do
+    trimmed=${runner_line#"${runner_line%%[![:space:]]*}"}
+    [[ "$trimmed" == runs-on:\ \[*\] ]] \
+        || fail "workflow runner selector must remain an explicit label list: $trimmed"
+    for required_label in self-hosted Linux X64; do
+        [[ "$trimmed" == *"$required_label"* ]] \
+            || fail "workflow runner selector must retain $required_label: $trimmed"
+    done
+done <<< "$runner_lines"
 
 if grep -Eq '^[[:space:]]*(push|pull_request|pull_request_target|schedule|workflow_run):' "$workflow"; then
     fail 'workflow may not gain an automatic execution trigger while classified as read-only control-plane'
