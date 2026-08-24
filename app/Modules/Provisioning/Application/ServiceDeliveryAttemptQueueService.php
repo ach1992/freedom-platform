@@ -13,10 +13,12 @@ use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Support\Str;
 use RuntimeException;
+use Throwable;
 
 /**
- * @phpstan-type ServiceRow object{id:int|string,public_id:string,service_target_id:int|string|null,remote_service_id:?string,provisioned_at:?string,lifecycle_state:string,lifecycle_version:int|string,remote_identity_generation:int|string,remote_deleted_at:?string}
+ * @phpstan-type ServiceRow object{id:int|string,public_id:string,user_id:int|string,service_target_id:int|string|null,remote_service_id:?string,provisioned_at:?string,lifecycle_state:string,lifecycle_version:int|string,remote_identity_generation:int|string,mutation_generation:int|string,remote_deleted_at:?string}
  * @phpstan-type DeliveryAttemptRow object{id:int|string,public_id:string,service_subscription_id:int|string,purpose:string,request_key_hash:string,correlation_id:string,target_remote_identity_generation:int|string,target_lifecycle_version:int|string,outbox_event_id:string}
+ * @phpstan-type NotificationStateRow object{id:int|string,service_subscription_id:int|string,episode_key_hash:string,notification_type:string,threshold_code:string,cycle_key_hash:string,source_type:string,source_id:int|string|null,low_balance_threshold_irr:int|string|null,max_retries:int|string,state:string,latest_delivery_attempt_id:int|string|null,latest_retry_ordinal:int|string|null,next_retry_at:?string}
  */
 final readonly class ServiceDeliveryAttemptQueueService
 {
@@ -35,6 +37,7 @@ final readonly class ServiceDeliveryAttemptQueueService
         private DatabaseManager $database,
         private Clock $clock,
         private OutboxPublisher $outbox,
+        private ServiceNotificationSourceAuthority $notificationSources,
     ) {}
 
     /** @requirement SVC-002 SVC-014 ARCH-003 ARCH-004 DAT-003 SEC-002 SEC-008 QUA-004 QUA-007 QUA-010 */
@@ -44,6 +47,9 @@ final readonly class ServiceDeliveryAttemptQueueService
         string $requestKey,
         string $correlationId,
     ): ServiceDeliveryAttemptReceipt {
+        if ($purpose === ServiceDeliveryPurpose::Notification) {
+            throw new DomainException('Notification delivery requires a durable notification binding.');
+        }
         $this->assertUlid($servicePublicId, 'Service public ID');
         $requestKeyHash = $this->requestKeyHash($requestKey);
         $this->assertToken($correlationId, 'Service delivery correlation ID', 8, 64);
@@ -67,91 +73,395 @@ final readonly class ServiceDeliveryAttemptQueueService
                 return $this->receipt($service, $replayed, true);
             }
 
-            $this->assertServiceDeliverable($service);
-            $blockingDelivery = $connection->table('service_delivery_effects')
-                ->where('blocking_service_subscription_id', (int) $service->id)
-                ->first(['id']);
-            if ($blockingDelivery !== null) {
-                throw new DomainException('Service delivery is blocked by an in-flight, uncertain, or provider-directed retry boundary.');
-            }
+            $this->assertServiceReadyForDelivery($connection, $service);
+            $attempt = $this->createAttempt(
+                $connection,
+                $service,
+                $purpose,
+                $requestKeyHash,
+                $correlationId,
+            );
 
-            $activeMutation = $connection->table('provisioning_operations')
+            return $this->receipt($service, $attempt, false);
+        }, 3);
+    }
+
+    /** @requirement SVC-013 SVC-014 ARCH-003 ARCH-004 DAT-003 SEC-002 SEC-008 QUA-004 QUA-007 QUA-010 */
+    public function queueNotification(
+        int $notificationStateId,
+        string $servicePublicId,
+        int $retryOrdinal,
+        string $requestKey,
+        string $correlationId,
+        string $presentationText,
+    ): ServiceDeliveryAttemptReceipt {
+        if ($notificationStateId < 1 || $retryOrdinal < 0 || $retryOrdinal > 100) {
+            throw new DomainException('Service notification delivery identity is invalid.');
+        }
+        if ($presentationText === '' || mb_strlen($presentationText) > 4096) {
+            throw new DomainException('Service notification presentation is invalid.');
+        }
+        $this->assertUlid($servicePublicId, 'Service public ID');
+        $requestKeyHash = $this->requestKeyHash($requestKey);
+        $this->assertToken($correlationId, 'Service delivery correlation ID', 8, 64);
+        $presentationHash = hash('sha256', $presentationText);
+        $existingAttempt = $this->database->connection()->table('service_delivery_attempts as attempt')
+            ->join('service_notification_delivery_bindings as binding', 'binding.service_delivery_attempt_id', '=', 'attempt.id')
+            ->where('binding.service_notification_state_id', $notificationStateId)
+            ->where('binding.retry_ordinal', $retryOrdinal)
+            ->where('attempt.request_key_hash', $requestKeyHash)
+            ->first(['attempt.id']);
+        $sourceLocator = $existingAttempt === null
+            ? $this->notificationSources->locatorForState($this->database->connection(), $notificationStateId)
+            : null;
+
+        return $this->database->connection()->transaction(function (Connection $connection) use (
+            $notificationStateId,
+            $servicePublicId,
+            $retryOrdinal,
+            $requestKeyHash,
+            $correlationId,
+            $presentationText,
+            $presentationHash,
+            $sourceLocator,
+        ): ServiceDeliveryAttemptReceipt {
+            $sourceLock = $sourceLocator === null
+                ? null
+                : $this->notificationSources->lockBeforeService($connection, $sourceLocator);
+            $service = $this->lockedService($connection, $servicePublicId);
+            /** @var NotificationStateRow|null $notification */
+            $notification = $connection->table('service_notification_states')
+                ->where('id', $notificationStateId)
                 ->where('service_subscription_id', (int) $service->id)
-                ->where('operation_type', '<>', 'initial_provision')
-                ->whereNotIn('state', self::TERMINAL_MUTATION_STATES)
-                ->first(['id']);
-            if ($activeMutation !== null) {
-                throw new DomainException('Service has an unresolved mutation operation and cannot accept delivery attempts.');
+                ->lockForUpdate()
+                ->first([
+                    'id', 'service_subscription_id', 'episode_key_hash', 'notification_type', 'threshold_code',
+                    'cycle_key_hash', 'source_type', 'source_id', 'low_balance_threshold_irr', 'max_retries', 'state', 'latest_delivery_attempt_id',
+                    'latest_retry_ordinal', 'next_retry_at',
+                ]);
+            if ($notification === null) {
+                throw new ServiceNotificationCandidateInvalidatedException('Service notification delivery state no longer exists.');
             }
 
-            $remoteIdentityGeneration = $this->positiveDatabaseInt(
-                $service->remote_identity_generation,
-                'Service remote identity generation',
-            );
-            $lifecycleVersion = $this->nonNegativeDatabaseInt(
-                $service->lifecycle_version,
-                'Service lifecycle version',
-            );
-            $attemptPublicId = (string) Str::ulid();
-            $outboxEventId = (string) Str::uuid();
-            $timestamp = $this->timestamp();
+            $replayed = $this->attemptByRequestHash($connection, (int) $service->id, $requestKeyHash, true);
+            if ($replayed !== null) {
+                $this->assertNotificationReplay(
+                    $connection,
+                    $replayed,
+                    $notificationStateId,
+                    $retryOrdinal,
+                    $presentationHash,
+                );
+
+                return $this->receipt($service, $replayed, true);
+            }
+
+            if ($notification->state !== 'triggered') {
+                throw new ServiceNotificationCandidateInvalidatedException('Service notification delivery state is no longer triggered.');
+            }
+
+            $expectedOrdinal = $notification->latest_retry_ordinal === null
+                ? 0
+                : (int) $notification->latest_retry_ordinal + 1;
+            if ($retryOrdinal !== $expectedOrdinal) {
+                throw new ServiceNotificationCandidateInvalidatedException('Service notification retry ordinal changed before queueing.');
+            }
+            $maxRetries = filter_var($notification->max_retries, FILTER_VALIDATE_INT, [
+                'options' => ['min_range' => 0, 'max_range' => 10],
+            ]);
+            if ($maxRetries === false || $retryOrdinal > (int) $maxRetries) {
+                throw new ServiceNotificationCandidateInvalidatedException('Service notification retry ceiling no longer permits queueing.');
+            }
+            if ($sourceLock === null) {
+                throw new RuntimeException('New Service notification delivery lost its source-lock authority.');
+            }
+            $this->notificationSources->assertCurrent($connection, $service, $notification, $sourceLock);
+            $this->assertNotificationRetryReady($connection, $notification, $retryOrdinal);
 
             try {
-                $this->setQueueAuthority(
-                    $connection,
-                    (int) $service->id,
-                    $purpose,
-                    $requestKeyHash,
-                    $correlationId,
-                    $attemptPublicId,
-                    $outboxEventId,
+                $this->assertServiceReadyForDelivery($connection, $service);
+            } catch (ServiceDeliveryTemporarilyBlockedException $exception) {
+                throw $exception;
+            } catch (DomainException $exception) {
+                throw new ServiceNotificationCandidateInvalidatedException(
+                    'Service notification candidate is no longer deliverable.',
+                    previous: $exception,
                 );
-
-                $publishedEventId = $this->outbox->publish(
-                    $outboxEventId,
-                    self::OUTBOX_EVENT_KEY_PREFIX.$attemptPublicId,
-                    self::OUTBOX_EVENT_TYPE,
-                    self::OUTBOX_AGGREGATE_TYPE,
-                    $attemptPublicId,
-                    new SafeOutboxPayload([
-                        'service_delivery_attempt_public_id' => $attemptPublicId,
-                    ]),
-                    $correlationId,
-                );
-                if (! hash_equals($outboxEventId, $publishedEventId)) {
-                    throw new RuntimeException('Service delivery Outbox event identity was unexpectedly replayed.');
-                }
-
-                $attemptId = (int) $connection->table('service_delivery_attempts')->insertGetId([
-                    'public_id' => $attemptPublicId,
-                    'service_subscription_id' => $this->positiveDatabaseInt($service->id, 'Service Subscription ID'),
-                    'purpose' => $purpose->value,
-                    'request_key_hash' => $requestKeyHash,
-                    'correlation_id' => $correlationId,
-                    'target_remote_identity_generation' => $remoteIdentityGeneration,
-                    'target_lifecycle_version' => $lifecycleVersion,
-                    'outbox_event_id' => $outboxEventId,
-                    'created_at' => $timestamp,
-                ]);
-
-                $released = $connection->table('outbox_messages')
-                    ->where('id', $outboxEventId)
-                    ->where('dispatch_state', 'authority_pending')
-                    ->update([
-                        'dispatch_state' => 'pending',
-                        'updated_at' => $timestamp,
-                    ]);
-                if ($released !== 1) {
-                    throw new RuntimeException('Service delivery Outbox command did not release from queue authority.');
-                }
-
-                $attempt = $this->attemptById($connection, $attemptId);
-
-                return $this->receipt($service, $attempt, false);
-            } finally {
-                $this->clearQueueAuthority($connection);
             }
+            $attempt = $this->createAttempt(
+                $connection,
+                $service,
+                ServiceDeliveryPurpose::Notification,
+                $requestKeyHash,
+                $correlationId,
+                function (int $attemptId, string $timestamp) use (
+                    $connection,
+                    $notificationStateId,
+                    $retryOrdinal,
+                    $correlationId,
+                    $presentationText,
+                    $presentationHash,
+                ): void {
+                    ServiceNotificationDatabaseAuthority::bind(
+                        $connection,
+                        $notificationStateId,
+                        (int) $connection->table('service_notification_states')
+                            ->where('id', $notificationStateId)
+                            ->value('service_subscription_id'),
+                        $attemptId,
+                        $retryOrdinal,
+                        $correlationId,
+                    );
+                    try {
+                        $updated = $connection->table('service_notification_states')
+                            ->where('id', $notificationStateId)
+                            ->where('state', 'triggered')
+                            ->update([
+                                'latest_delivery_attempt_id' => $attemptId,
+                                'latest_retry_ordinal' => $retryOrdinal,
+                                'next_retry_at' => null,
+                                'last_correlation_id' => $correlationId,
+                                'updated_at' => $timestamp,
+                            ]);
+                        if ($updated !== 1) {
+                            throw new RuntimeException('Service notification state lost its triggered delivery authority.');
+                        }
+
+                        $connection->table('service_notification_delivery_bindings')->insert([
+                            'service_delivery_attempt_id' => $attemptId,
+                            'service_notification_state_id' => $notificationStateId,
+                            'retry_ordinal' => $retryOrdinal,
+                            'presentation_text' => $presentationText,
+                            'presentation_hash' => $presentationHash,
+                            'created_at' => $timestamp,
+                        ]);
+                        $this->insertNotificationEvent(
+                            $connection,
+                            $notificationStateId,
+                            'delivery_queued',
+                            'triggered',
+                            'triggered',
+                            $attemptId,
+                            $retryOrdinal,
+                            $correlationId,
+                            $timestamp,
+                        );
+                    } finally {
+                        ServiceNotificationDatabaseAuthority::clear($connection);
+                    }
+                },
+            );
+
+            return $this->receipt($service, $attempt, false);
         }, 3);
+    }
+
+    /**
+     * @param  ServiceRow  $service
+     * @param  null|callable(int,string):void  $beforeRelease
+     * @return DeliveryAttemptRow
+     */
+    private function createAttempt(
+        Connection $connection,
+        object $service,
+        ServiceDeliveryPurpose $purpose,
+        string $requestKeyHash,
+        string $correlationId,
+        ?callable $beforeRelease = null,
+    ): object {
+        $remoteIdentityGeneration = $this->positiveDatabaseInt(
+            $service->remote_identity_generation,
+            'Service remote identity generation',
+        );
+        $lifecycleVersion = $this->nonNegativeDatabaseInt(
+            $service->lifecycle_version,
+            'Service lifecycle version',
+        );
+        $attemptPublicId = (string) Str::ulid();
+        $outboxEventId = (string) Str::uuid();
+        $timestamp = $this->timestamp();
+
+        try {
+            $this->setQueueAuthority(
+                $connection,
+                (int) $service->id,
+                $purpose,
+                $requestKeyHash,
+                $correlationId,
+                $attemptPublicId,
+                $outboxEventId,
+            );
+
+            $publishedEventId = $this->outbox->publish(
+                $outboxEventId,
+                self::OUTBOX_EVENT_KEY_PREFIX.$attemptPublicId,
+                self::OUTBOX_EVENT_TYPE,
+                self::OUTBOX_AGGREGATE_TYPE,
+                $attemptPublicId,
+                new SafeOutboxPayload([
+                    'service_delivery_attempt_public_id' => $attemptPublicId,
+                ]),
+                $correlationId,
+            );
+            if (! hash_equals($outboxEventId, $publishedEventId)) {
+                throw new RuntimeException('Service delivery Outbox event identity was unexpectedly replayed.');
+            }
+
+            $attemptId = (int) $connection->table('service_delivery_attempts')->insertGetId([
+                'public_id' => $attemptPublicId,
+                'service_subscription_id' => $this->positiveDatabaseInt($service->id, 'Service Subscription ID'),
+                'purpose' => $purpose->value,
+                'request_key_hash' => $requestKeyHash,
+                'correlation_id' => $correlationId,
+                'target_remote_identity_generation' => $remoteIdentityGeneration,
+                'target_lifecycle_version' => $lifecycleVersion,
+                'outbox_event_id' => $outboxEventId,
+                'created_at' => $timestamp,
+            ]);
+
+            if ($beforeRelease !== null) {
+                $beforeRelease($attemptId, $timestamp);
+            }
+
+            $released = $connection->table('outbox_messages')
+                ->where('id', $outboxEventId)
+                ->where('dispatch_state', 'authority_pending')
+                ->update([
+                    'dispatch_state' => 'pending',
+                    'updated_at' => $timestamp,
+                ]);
+            if ($released !== 1) {
+                throw new RuntimeException('Service delivery Outbox command did not release from queue authority.');
+            }
+
+            return $this->attemptById($connection, $attemptId);
+        } finally {
+            $this->clearQueueAuthority($connection);
+        }
+    }
+
+    /** @param NotificationStateRow $notification */
+    private function assertNotificationRetryReady(
+        Connection $connection,
+        object $notification,
+        int $retryOrdinal,
+    ): void {
+        if ($retryOrdinal === 0) {
+            if ($notification->latest_delivery_attempt_id !== null
+                || $notification->latest_retry_ordinal !== null
+                || $notification->next_retry_at !== null) {
+                throw new DomainException('Initial Service notification delivery has conflicting retry evidence.');
+            }
+
+            return;
+        }
+
+        $previousAttemptId = $this->positiveDatabaseInt(
+            $notification->latest_delivery_attempt_id,
+            'Previous Service notification delivery attempt ID',
+        );
+        if ($notification->latest_retry_ordinal === null
+            || (int) $notification->latest_retry_ordinal !== $retryOrdinal - 1
+            || $notification->next_retry_at === null) {
+            throw new DomainException('Service notification retry is missing deterministic prior-attempt evidence.');
+        }
+
+        $dueAt = new \DateTimeImmutable($notification->next_retry_at, new \DateTimeZone('UTC'));
+        if ($dueAt > $this->clock->now()) {
+            throw new DomainException('Service notification retry backoff has not elapsed.');
+        }
+
+        /** @var object{id:int|string}|null $binding */
+        $binding = $connection->table('service_notification_delivery_bindings')
+            ->where('service_delivery_attempt_id', $previousAttemptId)
+            ->where('service_notification_state_id', (int) $notification->id)
+            ->where('retry_ordinal', $retryOrdinal - 1)
+            ->lockForUpdate()
+            ->first(['service_delivery_attempt_id as id']);
+        if ($binding === null) {
+            throw new DomainException('Service notification retry is not bound to the previous durable attempt.');
+        }
+
+        /** @var object{state:string,completed_at:?string}|null $effect */
+        $effect = $connection->table('service_delivery_effects')
+            ->where('service_delivery_attempt_id', $previousAttemptId)
+            ->where('service_subscription_id', (int) $notification->service_subscription_id)
+            ->lockForUpdate()
+            ->first(['state', 'completed_at']);
+        if ($effect === null || $effect->state !== 'failed_final' || $effect->completed_at === null) {
+            throw new DomainException('Service notification retry requires one completed failed delivery effect.');
+        }
+    }
+
+    /** @param ServiceRow $service */
+    private function assertServiceReadyForDelivery(Connection $connection, object $service): void
+    {
+        $this->assertServiceDeliverable($service);
+        $blockingDelivery = $connection->table('service_delivery_effects')
+            ->where('blocking_service_subscription_id', (int) $service->id)
+            ->first(['id']);
+        if ($blockingDelivery !== null) {
+            throw new ServiceDeliveryTemporarilyBlockedException('Service delivery is blocked by an in-flight, uncertain, or provider-directed retry boundary.');
+        }
+
+        $activeMutation = $connection->table('provisioning_operations')
+            ->where('service_subscription_id', (int) $service->id)
+            ->where('operation_type', '<>', 'initial_provision')
+            ->whereNotIn('state', self::TERMINAL_MUTATION_STATES)
+            ->first(['id']);
+        if ($activeMutation !== null) {
+            throw new ServiceDeliveryTemporarilyBlockedException('Service has an unresolved mutation operation and cannot accept delivery attempts.');
+        }
+    }
+
+    /** @param DeliveryAttemptRow $attempt */
+    private function assertNotificationReplay(
+        Connection $connection,
+        object $attempt,
+        int $notificationStateId,
+        int $retryOrdinal,
+        string $presentationHash,
+    ): void {
+        if ($attempt->purpose !== ServiceDeliveryPurpose::Notification->value) {
+            throw new DomainException('Service notification delivery request identity conflicts with another delivery purpose.');
+        }
+        /** @var object{service_notification_state_id:int|string,retry_ordinal:int|string,presentation_hash:string}|null $binding */
+        $binding = $connection->table('service_notification_delivery_bindings')
+            ->where('service_delivery_attempt_id', (int) $attempt->id)
+            ->first(['service_notification_state_id', 'retry_ordinal', 'presentation_hash']);
+        if ($binding === null
+            || (int) $binding->service_notification_state_id !== $notificationStateId
+            || (int) $binding->retry_ordinal !== $retryOrdinal
+            || ! hash_equals($binding->presentation_hash, $presentationHash)) {
+            throw new DomainException('Service notification delivery replay conflicts with durable notification evidence.');
+        }
+    }
+
+    private function insertNotificationEvent(
+        Connection $connection,
+        int $stateId,
+        string $eventType,
+        ?string $fromState,
+        string $toState,
+        ?int $attemptId,
+        ?int $retryOrdinal,
+        string $correlationId,
+        string $timestamp,
+    ): void {
+        $sequence = (int) $connection->table('service_notification_events')
+            ->where('service_notification_state_id', $stateId)
+            ->max('sequence') + 1;
+        $connection->table('service_notification_events')->insert([
+            'service_notification_state_id' => $stateId,
+            'sequence' => $sequence,
+            'event_type' => $eventType,
+            'from_state' => $fromState,
+            'to_state' => $toState,
+            'service_delivery_attempt_id' => $attemptId,
+            'retry_ordinal' => $retryOrdinal,
+            'correlation_id' => $correlationId,
+            'created_at' => $timestamp,
+        ]);
     }
 
     /** @return ServiceRow */
@@ -162,8 +472,8 @@ final readonly class ServiceDeliveryAttemptQueueService
             ->where('public_id', $publicId)
             ->lockForUpdate()
             ->first([
-                'id', 'public_id', 'service_target_id', 'remote_service_id', 'provisioned_at',
-                'lifecycle_state', 'lifecycle_version', 'remote_identity_generation', 'remote_deleted_at',
+                'id', 'public_id', 'user_id', 'service_target_id', 'remote_service_id', 'provisioned_at',
+                'lifecycle_state', 'lifecycle_version', 'remote_identity_generation', 'mutation_generation', 'remote_deleted_at',
             ]);
         if ($row === null) {
             throw new DomainException('Service Subscription does not exist.');
@@ -281,10 +591,27 @@ final readonly class ServiceDeliveryAttemptQueueService
         $connection->statement('SET @app_service_delivery_correlation_id = ?', [$correlationId]);
         $connection->statement('SET @app_service_delivery_attempt_public_id = ?', [$attemptPublicId]);
         $connection->statement('SET @app_service_delivery_outbox_event_id = ?', [$outboxEventId]);
+        if ($purpose === ServiceDeliveryPurpose::Notification) {
+            (new ServiceOperationalDatabaseCapability)->apply($connection);
+        }
     }
 
     private function clearQueueAuthority(Connection $connection): void
     {
+        try {
+            $this->clearQueueAuthoritySession($connection);
+        } catch (Throwable $exception) {
+            $this->disconnect($connection);
+            throw $exception;
+        }
+    }
+
+    private function clearQueueAuthoritySession(Connection $connection): void
+    {
+        $authority = $connection->selectOne('SELECT @app_service_delivery_purpose AS purpose');
+        $notificationAuthority = $authority !== null
+            && property_exists($authority, 'purpose')
+            && $authority->purpose === ServiceDeliveryPurpose::Notification->value;
         $connection->statement('SET @app_service_delivery_authority = NULL');
         $connection->statement('SET @app_service_delivery_service_id = NULL');
         $connection->statement('SET @app_service_delivery_purpose = NULL');
@@ -292,6 +619,20 @@ final readonly class ServiceDeliveryAttemptQueueService
         $connection->statement('SET @app_service_delivery_correlation_id = NULL');
         $connection->statement('SET @app_service_delivery_attempt_public_id = NULL');
         $connection->statement('SET @app_service_delivery_outbox_event_id = NULL');
+        if ($notificationAuthority) {
+            (new ServiceOperationalDatabaseCapability)->clear($connection);
+        }
+    }
+
+    private function disconnect(Connection $connection): void
+    {
+        try {
+            $connection->disconnect();
+        } catch (Throwable) {
+            $connection->setPdo(null);
+            $connection->setReadPdo(null);
+            $connection->setDirectPdo(null);
+        }
     }
 
     private function assertUlid(string $value, string $label): void

@@ -58,6 +58,22 @@ final readonly class WalletHoldService
         });
     }
 
+    /**
+     * Return authoritative hold-aware balance while retaining the Wallet account lock
+     * in the caller's transaction.
+     */
+    public function balanceOnLockedAccount(
+        Connection $connection,
+        int $ownerUserId,
+        int $ledgerAccountId,
+    ): WalletBalanceSnapshot {
+        $this->assertPositiveId($ownerUserId, 'Wallet owner user ID');
+        $this->assertPositiveId($ledgerAccountId, 'Wallet ledger account ID');
+        $this->lockWalletAccount($connection, $ownerUserId, $ledgerAccountId);
+
+        return $this->balanceLocked($connection, $ledgerAccountId);
+    }
+
     /** @requirement WAL-002 DAT-002 DAT-003 DAT-004 QUA-001 */
     public function place(
         string $holdKey,
