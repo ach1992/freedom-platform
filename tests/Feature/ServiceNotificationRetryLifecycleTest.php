@@ -133,12 +133,15 @@ final class ServiceNotificationRetryLifecycleTest extends TestCase
         self::assertNotSame($firstAttemptPublicId, $retryAttemptPublicId);
         $this->sender->result = new ProtectedTelegramSendResult(
             ProtectedTelegramSendOutcome::Success,
-            'notification_retry_test_success',
+            'telegram_success',
             messageId: 9001,
         );
         $succeeded = $this->app->make(ServiceDeliveryEffectExecutor::class)->execute($retryAttemptPublicId);
         self::assertSame(ServiceDeliveryEffectState::Succeeded, $succeeded->state);
         self::assertCount(2, $this->sender->calls);
+        self::assertSame('telegram_success', DB::table('service_delivery_effects')
+            ->where('service_delivery_attempt_id', (int) $retryState->latest_delivery_attempt_id)
+            ->value('result_code'));
 
         $replay = $this->app->make(ServiceDeliveryEffectExecutor::class)->execute($retryAttemptPublicId);
         self::assertTrue($replay->replayed);
