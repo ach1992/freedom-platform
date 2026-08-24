@@ -19,6 +19,7 @@ use App\Modules\Provisioning\Application\ServiceSynchronizationService;
 use App\Shared\Application\Clock;
 use DateTimeImmutable;
 use DateTimeZone;
+use DomainException;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
@@ -66,6 +67,35 @@ final class ServiceNotificationThresholdAuthorityTest extends TestCase
     {
         Carbon::setTestNow();
         parent::tearDown();
+    }
+
+    public function test_expiry_threshold_configuration_rejects_values_outside_the_accepted_set(): void
+    {
+        $fixture = $this->fixture('unsupported-expiry-threshold');
+        $servicePublicId = $this->attachService(
+            $fixture,
+            $this->snapshot(
+                'notification-unsupported-expiry-threshold',
+                'notification-unsupported-expiry-threshold-user',
+                $this->clock->value->modify('+14 days'),
+            ),
+            'unsupported-expiry-threshold',
+        );
+        self::assertSame(1, $this->app->make(ServiceSynchronizationService::class)->syncOne($servicePublicId)->processed);
+
+        config()->set('service_notifications.expiry_threshold_days', [14]);
+
+        try {
+            $this->app->make(ServiceNotificationThresholdService::class)->processBatch(1);
+            self::fail('Unsupported Service notification expiry thresholds must fail closed.');
+        } catch (DomainException $exception) {
+            self::assertSame(
+                'Service notification expiry thresholds must be selected from 0, 1, 3, or 7 days.',
+                $exception->getMessage(),
+            );
+        }
+        self::assertSame(0, DB::table('service_notification_states')->count());
+        self::assertSame(0, DB::table('service_delivery_attempts')->where('purpose', 'notification')->count());
     }
 
     public function test_expiry_threshold_is_inclusive_and_resets_on_new_authoritative_expiry_cycle(): void
