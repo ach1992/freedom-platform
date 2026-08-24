@@ -43,7 +43,7 @@ Ordinary unprivileged Git/edit/diagnostic commands may use this workspace. Host-
 
 GitHub Actions is the authoritative reviewed runtime/CI path for repository jobs that need real PHP/Composer/Docker/MariaDB/Redis execution.
 
-Runner **display names are inventory**, never a workflow contract. Jobs route by labels. The exact `runs-on` selector in the workflow revision is authoritative; do not copy its custom label strings into multiple documents.
+Runner **display names are inventory**, never a workflow contract. Jobs route by labels. The exact `runs-on` selector in the workflow revision is authoritative; do not copy its custom label strings into multiple documents. Do not use runner display names as routing dependencies.
 
 A label is a capability claim, not proof. A runner receives a workload capability label only after qualification for that workload.
 
