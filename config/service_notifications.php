@@ -9,6 +9,8 @@ return [
         static fn (string $value): string => trim($value),
         explode(',', (string) env('SERVICE_NOTIFICATION_EXPIRY_DAYS', '7,3,1,0')),
     )),
+    // New expiry episodes bind this value durably; later config changes do not rewrite existing authority.
+    'expiry_snapshot_max_age_seconds' => env('SERVICE_NOTIFICATION_EXPIRY_SNAPSHOT_MAX_AGE_SECONDS', 1800),
     // Product-specific financial threshold. Zero keeps low-balance warnings disabled until configured.
     'low_balance_irr' => env('SERVICE_NOTIFICATION_LOW_BALANCE_IRR', 0),
     'retry' => [

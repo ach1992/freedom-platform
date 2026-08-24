@@ -245,7 +245,7 @@ final readonly class ServiceNotificationThresholdService
      */
     private function expirySpec(object $service): ?array
     {
-        /** @var object{id:int|string,remote_disposition:string,remote_expires_at:string|null}|null $snapshot */
+        /** @var object{id:int|string,remote_disposition:string,remote_expires_at:string|null,observed_at:string}|null $snapshot */
         $snapshot = $this->database->connection()->table('service_sync_snapshots')
             ->where('service_subscription_id', (int) $service->id)
             ->where('local_lifecycle_version', (int) $service->lifecycle_version)
@@ -253,10 +253,15 @@ final readonly class ServiceNotificationThresholdService
             ->where('local_mutation_generation', (int) $service->mutation_generation)
             ->orderByDesc('observed_at')
             ->orderByDesc('id')
-            ->first(['id', 'remote_disposition', 'remote_expires_at']);
+            ->first(['id', 'remote_disposition', 'remote_expires_at', 'observed_at']);
         if ($snapshot === null
             || $snapshot->remote_disposition !== 'present'
-            || $snapshot->remote_expires_at === null) {
+            || $snapshot->remote_expires_at === null
+            || ! ServiceNotificationExpiryFreshnessPolicy::isFresh(
+                $snapshot->observed_at,
+                $this->clock->now(),
+                ServiceNotificationExpiryFreshnessPolicy::configuredMaxAgeSeconds(),
+            )) {
             return null;
         }
 
@@ -527,6 +532,12 @@ final readonly class ServiceNotificationThresholdService
         $correlationId = 'service-notification:trigger:'.substr($spec['episode'], 0, 24);
         $timestamp = $this->timestamp();
         $maxRetries = $this->maxRetries($spec['type']);
+        $lowBalanceThresholdIrr = $spec['type'] === ServiceNotificationType::LowBalance
+            ? $this->boundedConfigInt('service_notifications.low_balance_irr', 0, 1, PHP_INT_MAX)
+            : null;
+        $expirySnapshotMaxAgeSeconds = $spec['type'] === ServiceNotificationType::Expiry
+            ? ServiceNotificationExpiryFreshnessPolicy::configuredMaxAgeSeconds()
+            : null;
         ServiceNotificationDatabaseAuthority::create(
             $connection,
             (int) $service->id,
@@ -539,9 +550,8 @@ final readonly class ServiceNotificationThresholdService
             $timestamp,
             $correlationId,
             $maxRetries,
-            $spec['type'] === ServiceNotificationType::LowBalance
-                ? $this->boundedConfigInt('service_notifications.low_balance_irr', 0, 1, PHP_INT_MAX)
-                : null,
+            $lowBalanceThresholdIrr,
+            $expirySnapshotMaxAgeSeconds,
         );
         try {
             $stateId = (int) $connection->table('service_notification_states')->insertGetId([
@@ -553,9 +563,8 @@ final readonly class ServiceNotificationThresholdService
                 'cycle_key_hash' => $spec['cycle'],
                 'source_type' => $spec['source_type'],
                 'source_id' => $spec['source_id'],
-                'low_balance_threshold_irr' => $spec['type'] === ServiceNotificationType::LowBalance
-                    ? $this->boundedConfigInt('service_notifications.low_balance_irr', 0, 1, PHP_INT_MAX)
-                    : null,
+                'low_balance_threshold_irr' => $lowBalanceThresholdIrr,
+                'expiry_snapshot_max_age_seconds' => $expirySnapshotMaxAgeSeconds,
                 'max_retries' => $maxRetries,
                 'state' => ServiceNotificationState::Triggered->value,
                 'latest_delivery_attempt_id' => null,
@@ -595,7 +604,7 @@ final readonly class ServiceNotificationThresholdService
             if ($spec['source_type'] !== 'service_sync_snapshot' || $spec['source_id'] === null) {
                 return false;
             }
-            /** @var object{id:int|string,remote_disposition:string,remote_expires_at:string|null}|null $snapshot */
+            /** @var object{id:int|string,remote_disposition:string,remote_expires_at:string|null,observed_at:string}|null $snapshot */
             $snapshot = $connection->table('service_sync_snapshots')
                 ->where('service_subscription_id', (int) $service->id)
                 ->where('local_lifecycle_version', (int) $service->lifecycle_version)
@@ -603,11 +612,16 @@ final readonly class ServiceNotificationThresholdService
                 ->where('local_mutation_generation', (int) $service->mutation_generation)
                 ->orderByDesc('observed_at')
                 ->orderByDesc('id')
-                ->first(['id', 'remote_disposition', 'remote_expires_at']);
+                ->first(['id', 'remote_disposition', 'remote_expires_at', 'observed_at']);
             if ($snapshot === null
                 || (int) $snapshot->id !== $spec['source_id']
                 || $snapshot->remote_disposition !== 'present'
-                || $snapshot->remote_expires_at === null) {
+                || $snapshot->remote_expires_at === null
+                || ! ServiceNotificationExpiryFreshnessPolicy::isFresh(
+                    $snapshot->observed_at,
+                    $this->clock->now(),
+                    ServiceNotificationExpiryFreshnessPolicy::configuredMaxAgeSeconds(),
+                )) {
                 return false;
             }
             $current = $this->expirySpecFromSnapshot($service, (int) $snapshot->id, $snapshot->remote_expires_at);
@@ -874,7 +888,7 @@ final readonly class ServiceNotificationThresholdService
                 $requestKey,
                 $this->presentationFor($state),
             );
-        } catch (ServiceDeliveryTemporarilyBlockedException) {
+        } catch (ServiceDeliveryTemporarilyBlockedException|ServiceNotificationCandidateInvalidatedException) {
             return 'waiting';
         }
 
@@ -1619,6 +1633,7 @@ final readonly class ServiceNotificationThresholdService
     private function validateConfiguration(): void
     {
         $this->expiryThresholdDays();
+        ServiceNotificationExpiryFreshnessPolicy::configuredMaxAgeSeconds();
         $this->boundedConfigInt('service_notifications.low_balance_irr', 0, 0, PHP_INT_MAX);
         foreach (ServiceNotificationType::cases() as $type) {
             $this->maxRetries($type);

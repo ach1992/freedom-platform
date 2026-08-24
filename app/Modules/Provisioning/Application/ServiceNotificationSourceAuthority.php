@@ -222,7 +222,13 @@ final readonly class ServiceNotificationSourceAuthority
         if ($state->source_type !== 'service_sync_snapshot') {
             throw new RuntimeException('Stored Service expiry notification source type is invalid.');
         }
-        /** @var object{remote_disposition:string,remote_expires_at:?string}|null $snapshot */
+        $maxAgeSeconds = ServiceNotificationExpiryFreshnessPolicy::storedMaxAgeSeconds(
+            $connection->table('service_notification_states')
+                ->where('id', (int) $state->id)
+                ->where('service_subscription_id', (int) $service->id)
+                ->value('expiry_snapshot_max_age_seconds'),
+        );
+        /** @var object{remote_disposition:string,remote_expires_at:?string,observed_at:string}|null $snapshot */
         $snapshot = $connection->table('service_sync_snapshots')
             ->where('service_subscription_id', (int) $service->id)
             ->where('local_lifecycle_version', (int) $service->lifecycle_version)
@@ -231,7 +237,7 @@ final readonly class ServiceNotificationSourceAuthority
             ->orderByDesc('observed_at')
             ->orderByDesc('id')
             ->lockForUpdate()
-            ->first(['remote_disposition', 'remote_expires_at']);
+            ->first(['remote_disposition', 'remote_expires_at', 'observed_at']);
         if ($snapshot === null || $snapshot->remote_disposition !== 'present' || $snapshot->remote_expires_at === null) {
             throw new ServiceNotificationCandidateInvalidatedException('Service expiry notification snapshot is no longer authoritative.');
         }
@@ -248,6 +254,9 @@ final readonly class ServiceNotificationSourceAuthority
         $this->assertIdentity($service, $state, ServiceNotificationType::Expiry, $state->threshold_code, $cycle);
 
         $now = $this->clock->now();
+        if (! ServiceNotificationExpiryFreshnessPolicy::isFresh($snapshot->observed_at, $now, $maxAgeSeconds)) {
+            throw new ServiceNotificationCandidateInvalidatedException('Service expiry notification snapshot is temporally stale.');
+        }
         $crossedNextBoundary = match ($state->threshold_code) {
             'expiry_7d' => $expiresAt <= $now->modify('+3 days'),
             'expiry_3d' => $expiresAt <= $now->modify('+1 day'),

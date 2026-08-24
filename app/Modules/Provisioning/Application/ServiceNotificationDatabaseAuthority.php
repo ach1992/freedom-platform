@@ -36,6 +36,7 @@ final class ServiceNotificationDatabaseAuthority
         string $correlationId,
         int $maxRetries,
         ?int $lowBalanceThresholdIrr = null,
+        ?int $expirySnapshotMaxAgeSeconds = null,
     ): void {
         if ($maxRetries < 0 || $maxRetries > 10) {
             throw new RuntimeException('Service notification retry ceiling is invalid.');
@@ -46,6 +47,14 @@ final class ServiceNotificationDatabaseAuthority
             }
         } elseif ($lowBalanceThresholdIrr !== null) {
             throw new RuntimeException('Service notification threshold authority is invalid for this notification type.');
+        }
+        if ($notificationType === 'expiry') {
+            if ($sourceId === null || $sourceId < 1 || $expirySnapshotMaxAgeSeconds === null) {
+                throw new RuntimeException('Service expiry notification freshness authority is incomplete.');
+            }
+            ServiceNotificationExpiryFreshnessPolicy::storedMaxAgeSeconds($expirySnapshotMaxAgeSeconds);
+        } elseif ($expirySnapshotMaxAgeSeconds !== null) {
+            throw new RuntimeException('Service expiry freshness authority is invalid for this notification type.');
         }
 
         self::set(
@@ -69,8 +78,12 @@ final class ServiceNotificationDatabaseAuthority
         );
         try {
             $connection->statement(
-                'SET @app_service_notification_max_retries = ?, @app_service_notification_low_balance_threshold_irr = ?',
-                [$maxRetries, $lowBalanceThresholdIrr],
+                <<<'SQL'
+SET @app_service_notification_max_retries = ?,
+    @app_service_notification_low_balance_threshold_irr = ?,
+    @app_service_notification_expiry_snapshot_max_age_seconds = ?
+SQL,
+                [$maxRetries, $lowBalanceThresholdIrr, $expirySnapshotMaxAgeSeconds],
             );
         } catch (Throwable $exception) {
             self::disconnect($connection);
@@ -277,6 +290,7 @@ SET @app_service_notification_authority = NULL,
     @app_service_notification_source_type = NULL,
     @app_service_notification_source_id = NULL,
     @app_service_notification_low_balance_threshold_irr = NULL,
+    @app_service_notification_expiry_snapshot_max_age_seconds = NULL,
     @app_service_notification_max_retries = NULL,
     @app_service_notification_from_state = NULL,
     @app_service_notification_to_state = NULL,

@@ -40,6 +40,8 @@ final class ServiceNotificationMigrationRecoveryTest extends TestCase
             self::assertSame(1, $this->constraintCount());
             self::assertStringContainsString("'notification'", $this->constraintClause());
             self::assertTrue(Schema::hasTable('service_notification_states'));
+            self::assertTrue(Schema::hasColumn('service_notification_states', 'expiry_snapshot_max_age_seconds'));
+            self::assertSame(1, $this->namedConstraintCount('service_notification_states', 'sns_expiry_freshness_chk'));
             self::assertTrue(Schema::hasTable('service_notification_delivery_bindings'));
             self::assertTrue(Schema::hasTable('service_notification_events'));
             self::assertSame(1, $this->triggerCount('service_delivery_notification_attempt_capability_guard'));
@@ -135,15 +137,21 @@ final class ServiceNotificationMigrationRecoveryTest extends TestCase
 
     private function constraintCount(): int
     {
+        return $this->namedConstraintCount('service_delivery_attempts', 'service_delivery_attempts_purpose_chk');
+    }
+
+    private function namedConstraintCount(string $table, string $constraint): int
+    {
         $row = DB::selectOne(
             <<<'SQL'
 SELECT COUNT(*) AS aggregate
 FROM information_schema.TABLE_CONSTRAINTS
 WHERE CONSTRAINT_SCHEMA = DATABASE()
-  AND TABLE_NAME = 'service_delivery_attempts'
-  AND CONSTRAINT_NAME = 'service_delivery_attempts_purpose_chk'
+  AND TABLE_NAME = ?
+  AND CONSTRAINT_NAME = ?
   AND CONSTRAINT_TYPE = 'CHECK'
 SQL,
+            [$table, $constraint],
         );
 
         return $row === null ? 0 : (int) $row->aggregate;

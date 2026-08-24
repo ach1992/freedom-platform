@@ -45,6 +45,7 @@ return new class extends Migration
             $table->string('source_type', 32);
             $table->unsignedBigInteger('source_id')->nullable();
             $table->unsignedBigInteger('low_balance_threshold_irr')->nullable();
+            $table->unsignedInteger('expiry_snapshot_max_age_seconds')->nullable();
             $table->unsignedSmallInteger('max_retries');
             $table->string('state', 24);
             $table->foreignId('latest_delivery_attempt_id')->nullable();
@@ -217,6 +218,7 @@ SQL,
             'ALTER TABLE service_notification_states ADD CONSTRAINT sns_attempt_retry_chk CHECK ((latest_delivery_attempt_id IS NULL AND latest_retry_ordinal IS NULL) OR (latest_delivery_attempt_id IS NOT NULL AND latest_retry_ordinal IS NOT NULL))',
             "ALTER TABLE service_notification_delivery_bindings ADD CONSTRAINT sndb_hash_chk CHECK (presentation_hash REGEXP '^[0-9a-f]{64}$' AND CHAR_LENGTH(presentation_text) BETWEEN 1 AND 4096)",
             "ALTER TABLE service_notification_states ADD CONSTRAINT sns_low_balance_threshold_chk CHECK ((notification_type = 'low_balance' AND low_balance_threshold_irr IS NOT NULL AND low_balance_threshold_irr > 0) OR (notification_type <> 'low_balance' AND low_balance_threshold_irr IS NULL))",
+            "ALTER TABLE service_notification_states ADD CONSTRAINT sns_expiry_freshness_chk CHECK ((notification_type = 'expiry' AND expiry_snapshot_max_age_seconds BETWEEN 60 AND 86400) OR (notification_type <> 'expiry' AND expiry_snapshot_max_age_seconds IS NULL))",
             'ALTER TABLE service_notification_states ADD CONSTRAINT sns_max_retries_chk CHECK (max_retries BETWEEN 0 AND 10)',
             "ALTER TABLE service_notification_events ADD CONSTRAINT sne_type_chk CHECK (event_type IN ('triggered','delivery_queued','retry_scheduled','notified','acknowledged','escalated','expired'))",
             "ALTER TABLE service_notification_events ADD CONSTRAINT sne_state_chk CHECK ((from_state IS NULL OR from_state IN ('triggered','notified','acknowledged','escalated','expired')) AND to_state IN ('triggered','notified','acknowledged','escalated','expired'))",
@@ -260,6 +262,7 @@ BEGIN
        OR BINARY NEW.last_correlation_id <> BINARY COALESCE(@app_service_notification_correlation_id, '')
        OR NEW.triggered_at <> @app_service_notification_timestamp
        OR NOT (NEW.low_balance_threshold_irr <=> @app_service_notification_low_balance_threshold_irr)
+       OR NOT (NEW.expiry_snapshot_max_age_seconds <=> @app_service_notification_expiry_snapshot_max_age_seconds)
        OR NEW.max_retries <> COALESCE(@app_service_notification_max_retries, 65535)
        OR NEW.updated_at <> @app_service_notification_timestamp
        OR NEW.state <> 'triggered'
@@ -272,6 +275,7 @@ BEGIN
     IF NEW.notification_type = 'expiry' THEN
         IF NEW.source_type <> 'service_sync_snapshot'
            OR NEW.source_id IS NULL
+           OR NEW.expiry_snapshot_max_age_seconds NOT BETWEEN 60 AND 86400
            OR NEW.threshold_code NOT IN ('expiry_due','expiry_1d','expiry_3d','expiry_7d') THEN
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service expiry notification source shape is invalid.';
         END IF;
@@ -295,6 +299,8 @@ BEGIN
           AND snapshot_row.local_lifecycle_version = service_row.lifecycle_version
           AND snapshot_row.local_remote_identity_generation = service_row.remote_identity_generation
           AND snapshot_row.local_mutation_generation = service_row.mutation_generation
+          AND snapshot_row.observed_at <= NEW.triggered_at
+          AND snapshot_row.observed_at >= TIMESTAMPADD(SECOND, -NEW.expiry_snapshot_max_age_seconds, NEW.triggered_at)
           AND service_row.provisioned_at IS NOT NULL
           AND service_row.remote_deleted_at IS NULL
           AND service_row.lifecycle_state IN ('active','suspended')
@@ -441,6 +447,7 @@ BEGIN
        OR BINARY OLD.source_type <> BINARY NEW.source_type
        OR NOT (OLD.source_id <=> NEW.source_id)
        OR NOT (OLD.low_balance_threshold_irr <=> NEW.low_balance_threshold_irr)
+       OR NOT (OLD.expiry_snapshot_max_age_seconds <=> NEW.expiry_snapshot_max_age_seconds)
        OR OLD.max_retries <> NEW.max_retries
        OR OLD.triggered_at <> NEW.triggered_at THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service notification state identity is immutable.';
@@ -699,6 +706,7 @@ BEFORE INSERT ON service_notification_delivery_bindings
 FOR EACH ROW
 BEGIN
     DECLARE valid_binding_count INT DEFAULT 0;
+    DECLARE valid_freshness_count INT DEFAULT 0;
 
     IF NOT EXISTS (
         SELECT 1 FROM service_operational_authority_capability capability_row
@@ -726,6 +734,51 @@ BEGIN
 
     IF valid_binding_count <> 1 THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service notification delivery binding must match the current notification Delivery Attempt.';
+    END IF;
+
+    SELECT COUNT(*) INTO valid_freshness_count
+    FROM service_notification_states state_row
+    JOIN service_subscriptions service_row ON service_row.id = state_row.service_subscription_id
+    WHERE state_row.id = NEW.service_notification_state_id
+      AND (
+          state_row.notification_type <> 'expiry'
+          OR EXISTS (
+              SELECT 1
+              FROM service_sync_snapshots snapshot_row
+              WHERE snapshot_row.service_subscription_id = state_row.service_subscription_id
+                AND snapshot_row.remote_disposition = 'present'
+                AND snapshot_row.remote_expires_at IS NOT NULL
+                AND snapshot_row.local_lifecycle_version = service_row.lifecycle_version
+                AND snapshot_row.local_remote_identity_generation = service_row.remote_identity_generation
+                AND snapshot_row.local_mutation_generation = service_row.mutation_generation
+                AND state_row.expiry_snapshot_max_age_seconds BETWEEN 60 AND 86400
+                AND snapshot_row.observed_at <= NEW.created_at
+                AND snapshot_row.observed_at >= TIMESTAMPADD(SECOND, -state_row.expiry_snapshot_max_age_seconds, NEW.created_at)
+                AND BINARY SHA2(CONCAT_WS('|',
+                    'service-notification-expiry-cycle-v1',
+                    service_row.id,
+                    service_row.remote_identity_generation,
+                    service_row.mutation_generation,
+                    service_row.lifecycle_version,
+                    DATE_FORMAT(snapshot_row.remote_expires_at, '%Y-%m-%d %H:%i:%s.%f')
+                ), 256) = BINARY state_row.cycle_key_hash
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM service_sync_snapshots newer_snapshot
+                    WHERE newer_snapshot.service_subscription_id = snapshot_row.service_subscription_id
+                      AND newer_snapshot.local_lifecycle_version = snapshot_row.local_lifecycle_version
+                      AND newer_snapshot.local_remote_identity_generation = snapshot_row.local_remote_identity_generation
+                      AND newer_snapshot.local_mutation_generation = snapshot_row.local_mutation_generation
+                      AND (
+                          newer_snapshot.observed_at > snapshot_row.observed_at
+                          OR (newer_snapshot.observed_at = snapshot_row.observed_at AND newer_snapshot.id > snapshot_row.id)
+                      )
+                )
+          )
+      );
+
+    IF valid_freshness_count <> 1 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service notification delivery binding freshness authority is invalid.';
     END IF;
 END
 SQL);
@@ -923,6 +976,7 @@ BEFORE UPDATE ON service_delivery_effects
 FOR EACH ROW
 BEGIN
     DECLARE attempt_purpose VARCHAR(16) DEFAULT NULL;
+    DECLARE valid_notification_freshness_count INT DEFAULT 0;
 
     SELECT purpose INTO attempt_purpose
     FROM service_delivery_attempts
@@ -935,6 +989,60 @@ BEGIN
           AND BINARY capability_row.capability_hash = BINARY SHA2(COALESCE(@app_service_operational_capability, ''), 256)
     ) THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Notification delivery effect update requires the operational database capability.';
+    END IF;
+
+    IF attempt_purpose = 'notification'
+       AND OLD.state = 'prepared'
+       AND NEW.state = 'sending' THEN
+        SELECT COUNT(*) INTO valid_notification_freshness_count
+        FROM service_notification_delivery_bindings binding_row
+        JOIN service_notification_states state_row ON state_row.id = binding_row.service_notification_state_id
+        JOIN service_subscriptions service_row ON service_row.id = state_row.service_subscription_id
+        WHERE binding_row.service_delivery_attempt_id = OLD.service_delivery_attempt_id
+          AND state_row.state = 'triggered'
+          AND (
+              state_row.notification_type <> 'expiry'
+              OR (
+                  NEW.provider_boundary_started_at IS NOT NULL
+                  AND EXISTS (
+                      SELECT 1
+                      FROM service_sync_snapshots snapshot_row
+                      WHERE snapshot_row.service_subscription_id = state_row.service_subscription_id
+                        AND snapshot_row.remote_disposition = 'present'
+                        AND snapshot_row.remote_expires_at IS NOT NULL
+                        AND snapshot_row.local_lifecycle_version = service_row.lifecycle_version
+                        AND snapshot_row.local_remote_identity_generation = service_row.remote_identity_generation
+                        AND snapshot_row.local_mutation_generation = service_row.mutation_generation
+                        AND state_row.expiry_snapshot_max_age_seconds BETWEEN 60 AND 86400
+                        AND snapshot_row.observed_at <= NEW.provider_boundary_started_at
+                        AND snapshot_row.observed_at >= TIMESTAMPADD(SECOND, -state_row.expiry_snapshot_max_age_seconds, NEW.provider_boundary_started_at)
+                        AND BINARY SHA2(CONCAT_WS('|',
+                            'service-notification-expiry-cycle-v1',
+                            service_row.id,
+                            service_row.remote_identity_generation,
+                            service_row.mutation_generation,
+                            service_row.lifecycle_version,
+                            DATE_FORMAT(snapshot_row.remote_expires_at, '%Y-%m-%d %H:%i:%s.%f')
+                        ), 256) = BINARY state_row.cycle_key_hash
+                        AND NOT EXISTS (
+                            SELECT 1
+                            FROM service_sync_snapshots newer_snapshot
+                            WHERE newer_snapshot.service_subscription_id = snapshot_row.service_subscription_id
+                              AND newer_snapshot.local_lifecycle_version = snapshot_row.local_lifecycle_version
+                              AND newer_snapshot.local_remote_identity_generation = snapshot_row.local_remote_identity_generation
+                              AND newer_snapshot.local_mutation_generation = snapshot_row.local_mutation_generation
+                              AND (
+                                  newer_snapshot.observed_at > snapshot_row.observed_at
+                                  OR (newer_snapshot.observed_at = snapshot_row.observed_at AND newer_snapshot.id > snapshot_row.id)
+                              )
+                        )
+                  )
+              )
+          );
+
+        IF valid_notification_freshness_count <> 1 THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Notification delivery provider freshness authority is invalid.';
+        END IF;
     END IF;
 END
 SQL);
