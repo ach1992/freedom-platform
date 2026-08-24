@@ -10,6 +10,7 @@ use DomainException;
 use Illuminate\Database\Connection;
 use Illuminate\Support\Str;
 use RuntimeException;
+use Throwable;
 
 /**
  * @phpstan-type DeliveryAttempt object{id:int|string,public_id:string,service_subscription_id:int|string,purpose:string,correlation_id:string,target_remote_identity_generation:int|string,target_lifecycle_version:int|string}
@@ -203,6 +204,16 @@ trait ServiceDeliveryEffectPersistence
 
     private function clearEffectAuthority(Connection $connection): void
     {
+        try {
+            $this->clearEffectAuthoritySession($connection);
+        } catch (Throwable $exception) {
+            $this->disconnect($connection);
+            throw $exception;
+        }
+    }
+
+    private function clearEffectAuthoritySession(Connection $connection): void
+    {
         $authority = $connection->selectOne('SELECT @app_service_delivery_effect_attempt_id AS attempt_id');
         $attemptId = $authority !== null && property_exists($authority, 'attempt_id')
             ? filter_var($authority->attempt_id, FILTER_VALIDATE_INT)
@@ -221,6 +232,17 @@ trait ServiceDeliveryEffectPersistence
         $connection->statement('SET @app_service_delivery_effect_telegram_user_id = NULL');
         if ($notificationAuthority) {
             (new ServiceOperationalDatabaseCapability)->clear($connection);
+        }
+    }
+
+    private function disconnect(Connection $connection): void
+    {
+        try {
+            $connection->disconnect();
+        } catch (Throwable) {
+            $connection->setPdo(null);
+            $connection->setReadPdo(null);
+            $connection->setDirectPdo(null);
         }
     }
 

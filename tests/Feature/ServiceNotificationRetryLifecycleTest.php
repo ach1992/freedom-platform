@@ -11,6 +11,7 @@ use App\Modules\Panels\Application\Contracts\RemoteServiceSnapshot;
 use App\Modules\Panels\Application\PanelAdapterRegistry;
 use App\Modules\Panels\Application\PanelCredentialPolicy;
 use App\Modules\Provisioning\Application\ProvisioningPanelAdapterResolver;
+use App\Modules\Provisioning\Application\ServiceDeliveryAttemptQueueService;
 use App\Modules\Provisioning\Application\ServiceDeliveryEffectExecutor;
 use App\Modules\Provisioning\Application\ServiceDeliveryOutboxHandler;
 use App\Modules\Provisioning\Application\ServiceImportService;
@@ -34,6 +35,7 @@ use App\Shared\Application\OutboxMessageHandler;
 use App\Shared\Infrastructure\DatabaseOutboxDispatcher;
 use DateTimeImmutable;
 use DateTimeZone;
+use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\QueryException;
@@ -41,6 +43,7 @@ use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use ReflectionMethod;
+use RuntimeException;
 use Tests\Support\CreatesBenefitCodeFixtures;
 use Tests\Support\RestoresServiceOperationalCapability;
 use Tests\TestCase;
@@ -412,6 +415,110 @@ SQL,
         self::assertSame(1, $reconciled->escalated);
         self::assertSame('escalated', $this->notificationState()->state);
         self::assertSame(1, DB::table('service_delivery_attempts')->where('purpose', 'notification')->count());
+    }
+
+    public function test_notification_queue_cleanup_query_failure_disconnects_privileged_session_and_rolls_back_attempt(): void
+    {
+        $fixture = $this->fixture('retry-queue-cleanup-fault');
+        $this->attachService($fixture, 'retry-queue-cleanup-fault');
+        $this->fundLowWallet($fixture['user_id'], 'retry-queue-cleanup-fault');
+        $this->insertTelegramAccount($fixture['user_id']);
+
+        $connection = DB::connection();
+        $before = $connection->selectOne('SELECT CONNECTION_ID() AS connection_id');
+        self::assertNotNull($before);
+        $beforeConnectionId = (int) $before->connection_id;
+
+        $cleanupInterrupted = false;
+        $connection->beforeExecuting(function (string $query, array $bindings, Connection $db) use (&$cleanupInterrupted): void {
+            unset($bindings, $db);
+            if ($cleanupInterrupted || ! str_contains(strtolower($query), 'select @app_service_delivery_purpose as purpose')) {
+                return;
+            }
+
+            $cleanupInterrupted = true;
+            throw new RuntimeException('Injected notification queue cleanup query failure.');
+        });
+
+        try {
+            $this->app->make(ServiceNotificationThresholdService::class)->processBatch(1);
+            self::fail('Queue cleanup fault must propagate after invalidating the privileged connection.');
+        } catch (RuntimeException $exception) {
+            self::assertSame('Injected notification queue cleanup query failure.', $exception->getMessage());
+        }
+        self::assertTrue($cleanupInterrupted);
+
+        $after = $connection->selectOne(
+            'SELECT CONNECTION_ID() AS connection_id, @app_service_operational_capability AS capability, @app_service_delivery_authority AS delivery_authority, @app_service_delivery_purpose AS delivery_purpose',
+        );
+        self::assertNotNull($after);
+        self::assertNotSame($beforeConnectionId, (int) $after->connection_id);
+        self::assertNull($after->capability);
+        self::assertNull($after->delivery_authority);
+        self::assertNull($after->delivery_purpose);
+        self::assertSame(0, DB::table('service_delivery_attempts')->where('purpose', 'notification')->count());
+        self::assertSame(0, DB::table('service_delivery_effects')->count());
+        self::assertSame(0, DB::table('service_notification_delivery_bindings')->count());
+        self::assertSame(0, DB::table('outbox_messages')
+            ->where('event_type', ServiceDeliveryAttemptQueueService::OUTBOX_EVENT_TYPE)
+            ->count());
+
+        $state = $this->notificationState();
+        self::assertSame('triggered', $state->state);
+        self::assertNull($state->latest_delivery_attempt_id);
+        self::assertNull($state->latest_retry_ordinal);
+    }
+
+    public function test_notification_effect_cleanup_query_failure_disconnects_privileged_session_and_rolls_back_effect(): void
+    {
+        $fixture = $this->fixture('retry-effect-cleanup-fault');
+        $this->attachService($fixture, 'retry-effect-cleanup-fault');
+        $this->fundLowWallet($fixture['user_id'], 'retry-effect-cleanup-fault');
+        $this->insertTelegramAccount($fixture['user_id']);
+
+        $notifications = $this->app->make(ServiceNotificationThresholdService::class);
+        self::assertSame(1, $notifications->processBatch(1)->queued);
+        $state = $this->notificationState();
+        $attemptId = (int) $state->latest_delivery_attempt_id;
+        $attemptPublicId = $this->attemptPublicId($attemptId);
+
+        $connection = DB::connection();
+        $before = $connection->selectOne('SELECT CONNECTION_ID() AS connection_id');
+        self::assertNotNull($before);
+        $beforeConnectionId = (int) $before->connection_id;
+
+        $cleanupInterrupted = false;
+        $connection->beforeExecuting(function (string $query, array $bindings, Connection $db) use (&$cleanupInterrupted): void {
+            unset($bindings, $db);
+            if ($cleanupInterrupted || ! str_contains(strtolower($query), 'select @app_service_delivery_effect_attempt_id as attempt_id')) {
+                return;
+            }
+
+            $cleanupInterrupted = true;
+            throw new RuntimeException('Injected notification effect cleanup query failure.');
+        });
+
+        try {
+            $this->app->make(ServiceDeliveryEffectExecutor::class)->execute($attemptPublicId);
+            self::fail('Effect cleanup fault must propagate after invalidating the privileged connection.');
+        } catch (RuntimeException $exception) {
+            self::assertSame('Injected notification effect cleanup query failure.', $exception->getMessage());
+        }
+        self::assertTrue($cleanupInterrupted);
+
+        $after = $connection->selectOne(
+            'SELECT CONNECTION_ID() AS connection_id, @app_service_operational_capability AS capability, @app_service_delivery_effect_authority AS effect_authority, @app_service_delivery_effect_attempt_id AS effect_attempt_id',
+        );
+        self::assertNotNull($after);
+        self::assertNotSame($beforeConnectionId, (int) $after->connection_id);
+        self::assertNull($after->capability);
+        self::assertNull($after->effect_authority);
+        self::assertNull($after->effect_attempt_id);
+        self::assertSame(1, DB::table('service_delivery_attempts')->where('id', $attemptId)->count());
+        self::assertSame(0, DB::table('service_delivery_effects')->where('service_delivery_attempt_id', $attemptId)->count());
+        self::assertSame(1, DB::table('service_notification_delivery_bindings')
+            ->where('service_delivery_attempt_id', $attemptId)
+            ->count());
     }
 
     /** @return array{owner_id:int,user_id:int,offering_id:int,target_id:int,adapter:ServiceOperationalPanelAdapter} */

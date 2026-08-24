@@ -13,6 +13,7 @@ use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Support\Str;
 use RuntimeException;
+use Throwable;
 
 /**
  * @phpstan-type ServiceRow object{id:int|string,public_id:string,service_target_id:int|string|null,remote_service_id:?string,provisioned_at:?string,lifecycle_state:string,lifecycle_version:int|string,remote_identity_generation:int|string,remote_deleted_at:?string}
@@ -563,6 +564,16 @@ final readonly class ServiceDeliveryAttemptQueueService
 
     private function clearQueueAuthority(Connection $connection): void
     {
+        try {
+            $this->clearQueueAuthoritySession($connection);
+        } catch (Throwable $exception) {
+            $this->disconnect($connection);
+            throw $exception;
+        }
+    }
+
+    private function clearQueueAuthoritySession(Connection $connection): void
+    {
         $authority = $connection->selectOne('SELECT @app_service_delivery_purpose AS purpose');
         $notificationAuthority = $authority !== null
             && property_exists($authority, 'purpose')
@@ -576,6 +587,17 @@ final readonly class ServiceDeliveryAttemptQueueService
         $connection->statement('SET @app_service_delivery_outbox_event_id = NULL');
         if ($notificationAuthority) {
             (new ServiceOperationalDatabaseCapability)->clear($connection);
+        }
+    }
+
+    private function disconnect(Connection $connection): void
+    {
+        try {
+            $connection->disconnect();
+        } catch (Throwable) {
+            $connection->setPdo(null);
+            $connection->setReadPdo(null);
+            $connection->setDirectPdo(null);
         }
     }
 
