@@ -34,8 +34,12 @@ final class ServiceNotificationDatabaseAuthority
         ?int $sourceId,
         string $timestamp,
         string $correlationId,
+        int $maxRetries,
         ?int $lowBalanceThresholdIrr = null,
     ): void {
+        if ($maxRetries < 0 || $maxRetries > 10) {
+            throw new RuntimeException('Service notification retry ceiling is invalid.');
+        }
         if ($notificationType === 'low_balance') {
             if ($sourceId === null || $sourceId < 1 || $lowBalanceThresholdIrr === null || $lowBalanceThresholdIrr < 1) {
                 throw new RuntimeException('Service low-balance notification authority is incomplete.');
@@ -65,8 +69,8 @@ final class ServiceNotificationDatabaseAuthority
         );
         try {
             $connection->statement(
-                'SET @app_service_notification_low_balance_threshold_irr = ?',
-                [$lowBalanceThresholdIrr],
+                'SET @app_service_notification_max_retries = ?, @app_service_notification_low_balance_threshold_irr = ?',
+                [$maxRetries, $lowBalanceThresholdIrr],
             );
         } catch (Throwable $exception) {
             self::disconnect($connection);
@@ -273,6 +277,7 @@ SET @app_service_notification_authority = NULL,
     @app_service_notification_source_type = NULL,
     @app_service_notification_source_id = NULL,
     @app_service_notification_low_balance_threshold_irr = NULL,
+    @app_service_notification_max_retries = NULL,
     @app_service_notification_from_state = NULL,
     @app_service_notification_to_state = NULL,
     @app_service_notification_next_retry_at = NULL,

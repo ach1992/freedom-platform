@@ -360,6 +360,73 @@ final class ServiceNotificationRetryLifecycleTest extends TestCase
         self::assertCount(1, $this->sender->calls);
     }
 
+    public function test_retry_ceiling_is_immutable_and_database_rejects_premature_exhaustion(): void
+    {
+        $fixture = $this->fixture('retry-ceiling-authority');
+        $this->attachService($fixture, 'retry-ceiling-authority');
+        $this->fundLowWallet($fixture['user_id'], 'retry-ceiling-authority');
+        $this->insertTelegramAccount($fixture['user_id']);
+
+        $notifications = $this->app->make(ServiceNotificationThresholdService::class);
+        self::assertSame(1, $notifications->processBatch(1)->queued);
+        $state = $this->notificationState();
+        self::assertSame(2, (int) DB::table('service_notification_states')
+            ->where('id', (int) $state->id)
+            ->value('max_retries'));
+
+        $attemptPublicId = $this->attemptPublicId((int) $state->latest_delivery_attempt_id);
+        self::assertSame(
+            ServiceDeliveryEffectState::FailedFinal,
+            $this->app->make(ServiceDeliveryEffectExecutor::class)->execute($attemptPublicId)->state,
+        );
+
+        $connection = DB::connection();
+        $timestamp = $this->clock->value->format('Y-m-d H:i:s.u');
+        $correlationId = 'notification-premature-exhaustion-reject';
+        ServiceNotificationDatabaseAuthority::transition(
+            $connection,
+            (int) $state->id,
+            (int) $state->service_subscription_id,
+            'triggered',
+            'escalated',
+            'retry_exhausted',
+            $timestamp,
+            $correlationId,
+        );
+        try {
+            $connection->table('service_notification_states')
+                ->where('id', (int) $state->id)
+                ->where('state', 'triggered')
+                ->update([
+                    'state' => 'escalated',
+                    'next_retry_at' => null,
+                    'escalated_at' => $timestamp,
+                    'last_correlation_id' => $correlationId,
+                    'updated_at' => $timestamp,
+                ]);
+            self::fail('Retry exhaustion must be rejected before the immutable per-state ceiling is reached.');
+        } catch (QueryException) {
+            self::assertSame('triggered', DB::table('service_notification_states')
+                ->where('id', (int) $state->id)
+                ->value('state'));
+        } finally {
+            ServiceNotificationDatabaseAuthority::clear($connection);
+        }
+
+        // Runtime policy changes affect future states only; they cannot lower this state's durable ceiling.
+        config()->set('service_notifications.retry.low_balance.max_retries', 0);
+        $reconciled = $notifications->processBatch(1);
+        self::assertSame(0, $reconciled->escalated);
+        $after = DB::table('service_notification_states')
+            ->where('id', (int) $state->id)
+            ->first(['state', 'max_retries', 'latest_retry_ordinal', 'next_retry_at']);
+        self::assertNotNull($after);
+        self::assertSame('triggered', $after->state);
+        self::assertSame(2, (int) $after->max_retries);
+        self::assertSame(0, (int) $after->latest_retry_ordinal);
+        self::assertNotNull($after->next_retry_at);
+    }
+
     public function test_fixed_effect_flags_cannot_forge_notification_provider_boundary_without_operational_capability(): void
     {
         $fixture = $this->fixture('retry-effect-forgery');

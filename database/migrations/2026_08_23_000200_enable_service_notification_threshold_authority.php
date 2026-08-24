@@ -45,6 +45,7 @@ return new class extends Migration
             $table->string('source_type', 32);
             $table->unsignedBigInteger('source_id')->nullable();
             $table->unsignedBigInteger('low_balance_threshold_irr')->nullable();
+            $table->unsignedSmallInteger('max_retries');
             $table->string('state', 24);
             $table->foreignId('latest_delivery_attempt_id')->nullable();
             $table->foreign('latest_delivery_attempt_id', 'sns_attempt_fk')->references('id')->on('service_delivery_attempts')->restrictOnDelete();
@@ -216,6 +217,7 @@ SQL,
             'ALTER TABLE service_notification_states ADD CONSTRAINT sns_attempt_retry_chk CHECK ((latest_delivery_attempt_id IS NULL AND latest_retry_ordinal IS NULL) OR (latest_delivery_attempt_id IS NOT NULL AND latest_retry_ordinal IS NOT NULL))',
             "ALTER TABLE service_notification_delivery_bindings ADD CONSTRAINT sndb_hash_chk CHECK (presentation_hash REGEXP '^[0-9a-f]{64}$' AND CHAR_LENGTH(presentation_text) BETWEEN 1 AND 4096)",
             "ALTER TABLE service_notification_states ADD CONSTRAINT sns_low_balance_threshold_chk CHECK ((notification_type = 'low_balance' AND low_balance_threshold_irr IS NOT NULL AND low_balance_threshold_irr > 0) OR (notification_type <> 'low_balance' AND low_balance_threshold_irr IS NULL))",
+            'ALTER TABLE service_notification_states ADD CONSTRAINT sns_max_retries_chk CHECK (max_retries BETWEEN 0 AND 10)',
             "ALTER TABLE service_notification_events ADD CONSTRAINT sne_type_chk CHECK (event_type IN ('triggered','delivery_queued','retry_scheduled','notified','acknowledged','escalated','expired'))",
             "ALTER TABLE service_notification_events ADD CONSTRAINT sne_state_chk CHECK ((from_state IS NULL OR from_state IN ('triggered','notified','acknowledged','escalated','expired')) AND to_state IN ('triggered','notified','acknowledged','escalated','expired'))",
             "ALTER TABLE service_notification_events ADD CONSTRAINT sne_correlation_chk CHECK (correlation_id REGEXP '^[A-Za-z0-9_.:-]{8,64}$')",
@@ -547,7 +549,10 @@ BEGIN
                   OR (COALESCE(@app_service_notification_transition_cause, '') = 'provider_retry_fenced'
                       AND BINARY effect_row.state = BINARY 'failed_final' AND effect_row.retry_after_seconds IS NOT NULL)
                   OR (COALESCE(@app_service_notification_transition_cause, '') = 'retry_exhausted'
-                      AND BINARY effect_row.state = BINARY 'failed_final' AND effect_row.retry_after_seconds IS NULL)
+                      AND BINARY effect_row.state = BINARY 'failed_final'
+                      AND effect_row.retry_after_seconds IS NULL
+                      AND OLD.latest_retry_ordinal IS NOT NULL
+                      AND OLD.latest_retry_ordinal >= OLD.max_retries)
               );
         ELSEIF NEW.state = 'expired' THEN
             IF OLD.notification_type = 'low_balance' THEN

@@ -27,6 +27,7 @@ use App\Modules\Wallet\Application\WalletHoldService;
 use App\Modules\Wallet\Domain\IrrMoney;
 use App\Modules\Wallet\Domain\LedgerDirection;
 use DomainException;
+use Illuminate\Database\Connection;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\QueryException;
@@ -34,6 +35,7 @@ use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use ReflectionMethod;
 use Tests\Support\CreatesBenefitCodeFixtures;
 use Tests\Support\RestoresServiceOperationalCapability;
 use Tests\TestCase;
@@ -353,6 +355,7 @@ final class ServiceNotificationBatchFairnessTest extends TestCase
             $cashId,
             $timestamp,
             $correlationId,
+            2,
             $threshold,
         );
         try {
@@ -366,6 +369,7 @@ final class ServiceNotificationBatchFairnessTest extends TestCase
                 'source_type' => 'wallet_balance',
                 'source_id' => $cashId,
                 'low_balance_threshold_irr' => $threshold,
+                'max_retries' => 2,
                 'state' => 'triggered',
                 'latest_delivery_attempt_id' => null,
                 'latest_retry_ordinal' => null,
@@ -386,6 +390,52 @@ final class ServiceNotificationBatchFairnessTest extends TestCase
         } finally {
             ServiceNotificationDatabaseAuthority::clear($connection);
         }
+    }
+
+    public function test_low_balance_policy_drift_preserves_durable_episode_with_wallet_before_service_lock_order(): void
+    {
+        config()->set('service_notifications.low_balance_irr', 500_000);
+        $fixture = $this->fixture('low-balance-policy-drift');
+        $servicePublicId = $this->attachService($fixture, 1);
+        $assetId = $this->account('system.notification.low-balance-policy-drift.asset', 'asset');
+        $cashId = $this->account(
+            'wallet.cash.notification.low-balance-policy-drift.'.$fixture['user_id'],
+            'liability',
+            $fixture['user_id'],
+            'cash',
+        );
+        $this->fundWallet($assetId, $cashId, 100_000, 'low-balance-policy-drift');
+
+        $notifications = $this->app->make(ServiceNotificationThresholdService::class);
+        $initial = $notifications->processBatch(1);
+        self::assertSame(1, $initial->triggered);
+        self::assertSame(1, $initial->queued);
+
+        $serviceId = (int) DB::table('service_subscriptions')->where('public_id', $servicePublicId)->value('id');
+        $state = DB::table('service_notification_states')
+            ->where('service_subscription_id', $serviceId)
+            ->where('notification_type', 'low_balance')
+            ->first(['id', 'state', 'episode_key_hash', 'low_balance_threshold_irr']);
+        self::assertNotNull($state);
+        self::assertSame('triggered', $state->state);
+        self::assertSame(500_000, (int) $state->low_balance_threshold_irr);
+
+        // Lowering the policy threshold makes the current scanner omit this episode, but it must
+        // not rewrite the durable 500k episode while the Wallet is still below its stored threshold.
+        config()->set('service_notifications.low_balance_irr', 50_000);
+        $lockOrder = [];
+        $this->captureLowBalanceExpirationLockOrder($lockOrder);
+        $reconciled = $notifications->processBatch(1);
+
+        self::assertSame(0, $reconciled->expired);
+        self::assertSame('triggered', DB::table('service_notification_states')
+            ->where('id', (int) $state->id)
+            ->value('state'));
+        self::assertSame(1, DB::table('service_notification_states')
+            ->where('service_subscription_id', $serviceId)
+            ->where('notification_type', 'low_balance')
+            ->count());
+        $this->assertWalletBeforeServiceLock($lockOrder);
     }
 
     public function test_retired_service_with_triggered_notification_remains_reconciliation_candidate(): void
@@ -548,6 +598,43 @@ final class ServiceNotificationBatchFairnessTest extends TestCase
             ->where('service_subscription_id', $healthyServiceId)
             ->where('notification_type', 'low_balance')
             ->value('latest_delivery_attempt_id'));
+    }
+
+    /** @param list<string> $lockOrder */
+    private function assertWalletBeforeServiceLock(array $lockOrder): void
+    {
+        $walletIndex = array_search('wallet', $lockOrder, true);
+        $serviceIndex = array_search('service', $lockOrder, true);
+        if (! is_int($walletIndex) || ! is_int($serviceIndex)) {
+            self::fail(
+                'Expected Wallet and Service Subscription FOR UPDATE locks: '
+                .json_encode($lockOrder, JSON_THROW_ON_ERROR),
+            );
+        }
+        self::assertTrue(
+            $walletIndex < $serviceIndex,
+            'Low-balance expiration lock order must remain Wallet -> Service: '.json_encode($lockOrder, JSON_THROW_ON_ERROR),
+        );
+    }
+
+    /** @param list<string> $lockOrder */
+    private function captureLowBalanceExpirationLockOrder(array &$lockOrder): void
+    {
+        DB::connection()->beforeExecuting(static function (string $query, array $bindings, Connection $connection) use (&$lockOrder): void {
+            unset($bindings, $connection);
+            $sql = strtolower($query);
+            if (! str_contains($sql, 'for update')) {
+                return;
+            }
+            if (str_contains($sql, 'ledger_accounts')) {
+                $lockOrder[] = 'wallet';
+
+                return;
+            }
+            if (str_contains($sql, 'service_subscriptions')) {
+                $lockOrder[] = 'service';
+            }
+        });
     }
 
     /** @return array{owner_id:int,user_id:int,offering_id:int,target_id:int,adapter:ServiceOperationalPanelAdapter} */

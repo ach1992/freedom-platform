@@ -12,6 +12,8 @@ require_once __DIR__.'/ServiceAutoRenewalRuntimeTestHelpers.php';
 
 use App\Modules\Provisioning\Application\ServiceAutoRenewalProcessor;
 use App\Modules\Provisioning\Application\ServiceAutoRenewDatabaseAuthority;
+use App\Modules\Provisioning\Application\ServiceNotificationCandidateInvalidatedException;
+use App\Modules\Provisioning\Application\ServiceNotificationSourceAuthority;
 use App\Modules\Provisioning\Application\ServiceNotificationThresholdService;
 use App\Modules\Provisioning\Domain\AutoRenewAttemptState;
 use App\Modules\Wallet\Application\LedgerEntryDraft;
@@ -24,6 +26,7 @@ use Database\Seeders\PanelsAccessFoundationSeeder;
 use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
 use Database\Seeders\WalletFinancialFoundationSeeder;
 use Illuminate\Database\Connection;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\DB;
@@ -110,6 +113,87 @@ final class ServiceNotificationRenewalIntentAuthorityTest extends TestCase
             ->where('service_notification_state_id', (int) $state->id)
             ->where('service_delivery_attempt_id', (int) $state->latest_delivery_attempt_id)
             ->count());
+    }
+
+    public function test_renewal_source_change_after_trigger_is_rejected_before_queue(): void
+    {
+        $scenario = $this->scenario('notification-renewal-queue-source-change');
+        $this->enableWalletMethod('notification-renewal-queue-source-change');
+        $this->seed(WalletFinancialFoundationSeeder::class);
+        $this->fundWallet($scenario['user_id'], 1, 'notification-renewal-queue-source-change');
+        $this->enableAutoRenew($scenario, 'notification-renewal-queue-source-change');
+
+        $renewals = $this->app->make(ServiceAutoRenewalProcessor::class);
+        self::assertSame(1, $renewals->processDue(10)->insufficientWallet);
+        $attemptId = (int) DB::table('service_auto_renew_attempts')
+            ->where('service_subscription_id', $scenario['service_id'])
+            ->value('id');
+        self::assertGreaterThan(0, $attemptId);
+
+        $changedAfterTrigger = false;
+        DB::listen(function (QueryExecuted $query) use (
+            &$changedAfterTrigger,
+            $renewals,
+            $attemptId,
+        ): void {
+            if ($changedAfterTrigger
+                || ! str_contains(strtolower($query->sql), 'service_notification_states')
+                || ! str_contains(strtolower($query->sql), 'insert')) {
+                return;
+            }
+
+            $changedAfterTrigger = true;
+            DB::connection()->afterCommit(function () use ($renewals, $attemptId): void {
+                $this->forceAutoRenewRetryState(
+                    $renewals,
+                    $attemptId,
+                    AutoRenewAttemptState::RetryPending,
+                    'notification_queue_source_changed',
+                );
+            });
+        });
+
+        $receipt = $this->app->make(ServiceNotificationThresholdService::class)->processBatch(1);
+        self::assertTrue($changedAfterTrigger);
+        self::assertSame(1, $receipt->triggered);
+        self::assertSame(0, $receipt->queued);
+        self::assertGreaterThanOrEqual(1, $receipt->skipped);
+        self::assertNull(DB::table('service_notification_states')
+            ->where('service_subscription_id', $scenario['service_id'])
+            ->where('notification_type', 'renewal_failure')
+            ->value('latest_delivery_attempt_id'));
+    }
+
+    public function test_renewal_source_change_after_queue_is_rejected_at_provider_source_boundary(): void
+    {
+        $scenario = $this->scenario('notification-renewal-provider-source-change');
+        $this->enableWalletMethod('notification-renewal-provider-source-change');
+        $this->seed(WalletFinancialFoundationSeeder::class);
+        $this->fundWallet($scenario['user_id'], 1, 'notification-renewal-provider-source-change');
+        $this->enableAutoRenew($scenario, 'notification-renewal-provider-source-change');
+
+        $renewals = $this->app->make(ServiceAutoRenewalProcessor::class);
+        self::assertSame(1, $renewals->processDue(10)->insufficientWallet);
+        $attemptId = (int) DB::table('service_auto_renew_attempts')
+            ->where('service_subscription_id', $scenario['service_id'])
+            ->value('id');
+        self::assertGreaterThan(0, $attemptId);
+
+        self::assertSame(1, $this->app->make(ServiceNotificationThresholdService::class)->processBatch(1)->queued);
+        $deliveryAttemptId = (int) DB::table('service_notification_states')
+            ->where('service_subscription_id', $scenario['service_id'])
+            ->where('notification_type', 'renewal_failure')
+            ->value('latest_delivery_attempt_id');
+        self::assertGreaterThan(0, $deliveryAttemptId);
+
+        $this->forceAutoRenewRetryState(
+            $renewals,
+            $attemptId,
+            AutoRenewAttemptState::RetryPending,
+            'notification_provider_source_changed',
+        );
+
+        $this->assertProviderSourceAuthorityRejectsAttempt($deliveryAttemptId);
     }
 
     public function test_notification_expires_when_durable_renewal_intent_no_longer_matches_attempt_state(): void
@@ -232,6 +316,36 @@ final class ServiceNotificationRenewalIntentAuthorityTest extends TestCase
         self::assertSame('triggered', DB::table('service_notification_states')->where('id', (int) $state->id)->value('state'));
         self::assertSame($state->episode_key_hash, DB::table('service_notification_states')->where('id', (int) $state->id)->value('episode_key_hash'));
         $this->assertAttemptBeforeServiceLock($lockOrder);
+    }
+
+    private function assertProviderSourceAuthorityRejectsAttempt(int $attemptId): void
+    {
+        $authority = $this->app->make(ServiceNotificationSourceAuthority::class);
+        $locator = $authority->locatorForDeliveryAttempt(DB::connection(), $attemptId);
+        self::assertNotNull($locator);
+
+        try {
+            DB::connection()->transaction(function (Connection $connection) use ($authority, $locator): void {
+                $sourceLock = $authority->lockBeforeService($connection, $locator);
+                $service = $connection->table('service_subscriptions')
+                    ->where('id', $locator['service_subscription_id'])
+                    ->lockForUpdate()
+                    ->first(['id', 'user_id', 'lifecycle_version', 'remote_identity_generation', 'mutation_generation']);
+                $state = $connection->table('service_notification_states')
+                    ->where('id', $locator['notification_state_id'])
+                    ->lockForUpdate()
+                    ->first([
+                        'id', 'service_subscription_id', 'episode_key_hash', 'notification_type', 'threshold_code',
+                        'cycle_key_hash', 'source_type', 'source_id', 'low_balance_threshold_irr',
+                    ]);
+                self::assertNotNull($service);
+                self::assertNotNull($state);
+                $authority->assertCurrent($connection, $service, $state, $sourceLock);
+            }, 3);
+            self::fail('Changed renewal source must be rejected at the provider source boundary.');
+        } catch (ServiceNotificationCandidateInvalidatedException) {
+            self::assertTrue(true);
+        }
     }
 
     private function forceAutoRenewRetryState(

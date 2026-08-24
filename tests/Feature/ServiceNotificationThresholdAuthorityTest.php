@@ -12,7 +12,9 @@ use App\Modules\Panels\Application\PanelAdapterRegistry;
 use App\Modules\Panels\Application\PanelCredentialPolicy;
 use App\Modules\Provisioning\Application\ProvisioningPanelAdapterResolver;
 use App\Modules\Provisioning\Application\ServiceImportService;
+use App\Modules\Provisioning\Application\ServiceNotificationCandidateInvalidatedException;
 use App\Modules\Provisioning\Application\ServiceNotificationDatabaseAuthority;
+use App\Modules\Provisioning\Application\ServiceNotificationSourceAuthority;
 use App\Modules\Provisioning\Application\ServiceNotificationThresholdService;
 use App\Modules\Provisioning\Application\ServiceOperationalContext;
 use App\Modules\Provisioning\Application\ServiceSynchronizationService;
@@ -20,6 +22,7 @@ use App\Shared\Application\Clock;
 use DateTimeImmutable;
 use DateTimeZone;
 use DomainException;
+use Illuminate\Database\Connection;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\QueryException;
@@ -157,6 +160,43 @@ final class ServiceNotificationThresholdAuthorityTest extends TestCase
         self::assertNotSame((int) $sevenDay->source_id, (int) $threeDay->source_id);
     }
 
+    public function test_expiry_policy_drift_does_not_expire_a_still_authoritative_durable_episode(): void
+    {
+        $fixture = $this->fixture('expiry-policy-drift');
+        $servicePublicId = $this->attachService(
+            $fixture,
+            $this->snapshot(
+                'notification-expiry-policy-drift',
+                'notification-expiry-policy-drift-user',
+                $this->clock->value->modify('+7 days'),
+            ),
+            'expiry-policy-drift',
+        );
+        self::assertSame(1, $this->app->make(ServiceSynchronizationService::class)->syncOne($servicePublicId)->processed);
+
+        $notifications = $this->app->make(ServiceNotificationThresholdService::class);
+        $initial = $notifications->processBatch(1);
+        self::assertSame(1, $initial->triggered);
+        self::assertSame(1, $initial->queued);
+        $state = DB::table('service_notification_states')
+            ->where('notification_type', 'expiry')
+            ->where('threshold_code', 'expiry_7d')
+            ->first(['id', 'state', 'cycle_key_hash']);
+        self::assertNotNull($state);
+        self::assertSame('triggered', $state->state);
+
+        config()->set('service_notifications.expiry_threshold_days', [3, 1, 0]);
+        $reconciled = $notifications->processBatch(1);
+
+        self::assertSame(0, $reconciled->expired);
+        self::assertSame('triggered', DB::table('service_notification_states')
+            ->where('id', (int) $state->id)
+            ->value('state'));
+        self::assertSame(1, DB::table('service_notification_states')
+            ->where('notification_type', 'expiry')
+            ->count());
+    }
+
     public function test_newer_semantically_equivalent_snapshot_preserves_queue_authority(): void
     {
         $fixture = $this->fixture('expiry-equivalent-snapshot');
@@ -210,6 +250,92 @@ final class ServiceNotificationThresholdAuthorityTest extends TestCase
             ->orderByDesc('id')
             ->value('id');
         self::assertNotSame((int) $state->source_id, $latestSnapshotId);
+    }
+
+    public function test_expiry_source_change_after_trigger_is_rejected_before_queue(): void
+    {
+        $fixture = $this->fixture('expiry-queue-source-change');
+        $remoteId = 'notification-expiry-queue-source-change';
+        $servicePublicId = $this->attachService(
+            $fixture,
+            $this->snapshot(
+                $remoteId,
+                'notification-expiry-queue-source-change-user',
+                $this->clock->value->modify('+3 days'),
+            ),
+            'expiry-queue-source-change',
+        );
+        $sync = $this->app->make(ServiceSynchronizationService::class);
+        self::assertSame(1, $sync->syncOne($servicePublicId)->processed);
+
+        $changedAfterTrigger = false;
+        DB::listen(function (QueryExecuted $query) use (
+            &$changedAfterTrigger,
+            $fixture,
+            $remoteId,
+            $sync,
+            $servicePublicId,
+        ): void {
+            if ($changedAfterTrigger
+                || ! str_contains(strtolower($query->sql), 'service_notification_states')
+                || ! str_contains(strtolower($query->sql), 'insert')) {
+                return;
+            }
+
+            $changedAfterTrigger = true;
+            DB::connection()->afterCommit(function () use ($fixture, $remoteId, $sync, $servicePublicId): void {
+                $fixture['adapter']->seed($this->snapshot(
+                    $remoteId,
+                    'notification-expiry-queue-source-change-user',
+                    $this->clock->value->modify('+10 days'),
+                ));
+                self::assertSame(1, $sync->syncOne($servicePublicId)->processed);
+            });
+        });
+
+        $receipt = $this->app->make(ServiceNotificationThresholdService::class)->processBatch(1);
+        self::assertTrue($changedAfterTrigger);
+        self::assertSame(1, $receipt->triggered);
+        self::assertSame(0, $receipt->queued);
+        self::assertGreaterThanOrEqual(1, $receipt->skipped);
+        $state = DB::table('service_notification_states')
+            ->where('notification_type', 'expiry')
+            ->first(['id', 'state', 'latest_delivery_attempt_id']);
+        self::assertNotNull($state);
+        self::assertSame('triggered', $state->state);
+        self::assertNull($state->latest_delivery_attempt_id);
+    }
+
+    public function test_expiry_source_change_after_queue_is_rejected_at_provider_source_boundary(): void
+    {
+        $fixture = $this->fixture('expiry-provider-source-change');
+        $remoteId = 'notification-expiry-provider-source-change';
+        $servicePublicId = $this->attachService(
+            $fixture,
+            $this->snapshot(
+                $remoteId,
+                'notification-expiry-provider-source-change-user',
+                $this->clock->value->modify('+3 days'),
+            ),
+            'expiry-provider-source-change',
+        );
+        $sync = $this->app->make(ServiceSynchronizationService::class);
+        self::assertSame(1, $sync->syncOne($servicePublicId)->processed);
+        self::assertSame(1, $this->app->make(ServiceNotificationThresholdService::class)->processBatch(1)->queued);
+
+        $attemptId = (int) DB::table('service_notification_states')
+            ->where('notification_type', 'expiry')
+            ->value('latest_delivery_attempt_id');
+        self::assertGreaterThan(0, $attemptId);
+
+        $fixture['adapter']->seed($this->snapshot(
+            $remoteId,
+            'notification-expiry-provider-source-change-user',
+            $this->clock->value->modify('+10 days'),
+        ));
+        self::assertSame(1, $sync->syncOne($servicePublicId)->processed);
+
+        $this->assertProviderSourceAuthorityRejectsAttempt($attemptId);
     }
 
     public function test_latest_unavailable_snapshot_suppresses_older_present_expiry_evidence(): void
@@ -317,6 +443,7 @@ SET @app_service_operational_capability = 'forged',
     @app_service_notification_source_type = 'wallet_balance',
     @app_service_notification_source_id = ?,
     @app_service_notification_low_balance_threshold_irr = ?,
+    @app_service_notification_max_retries = 2,
     @app_service_notification_timestamp = ?,
     @app_service_notification_correlation_id = ?
 SQL,
@@ -342,6 +469,7 @@ SQL,
                 'source_type' => 'wallet_balance',
                 'source_id' => $walletId,
                 'low_balance_threshold_irr' => $threshold,
+                'max_retries' => 2,
                 'state' => 'triggered',
                 'latest_delivery_attempt_id' => null,
                 'latest_retry_ordinal' => null,
@@ -363,6 +491,36 @@ SQL,
     }
 
     /** @return array{owner_id:int,user_id:int,offering_id:int,target_id:int,adapter:ServiceOperationalPanelAdapter} */
+    private function assertProviderSourceAuthorityRejectsAttempt(int $attemptId): void
+    {
+        $authority = $this->app->make(ServiceNotificationSourceAuthority::class);
+        $locator = $authority->locatorForDeliveryAttempt(DB::connection(), $attemptId);
+        self::assertNotNull($locator);
+
+        try {
+            DB::connection()->transaction(function (Connection $connection) use ($authority, $locator): void {
+                $sourceLock = $authority->lockBeforeService($connection, $locator);
+                $service = $connection->table('service_subscriptions')
+                    ->where('id', $locator['service_subscription_id'])
+                    ->lockForUpdate()
+                    ->first(['id', 'user_id', 'lifecycle_version', 'remote_identity_generation', 'mutation_generation']);
+                $state = $connection->table('service_notification_states')
+                    ->where('id', $locator['notification_state_id'])
+                    ->lockForUpdate()
+                    ->first([
+                        'id', 'service_subscription_id', 'episode_key_hash', 'notification_type', 'threshold_code',
+                        'cycle_key_hash', 'source_type', 'source_id', 'low_balance_threshold_irr',
+                    ]);
+                self::assertNotNull($service);
+                self::assertNotNull($state);
+                $authority->assertCurrent($connection, $service, $state, $sourceLock);
+            }, 3);
+            self::fail('Changed expiry source must be rejected at the provider source boundary.');
+        } catch (ServiceNotificationCandidateInvalidatedException) {
+            self::assertTrue(true);
+        }
+    }
+
     private function fixture(string $suffix): array
     {
         $offering = $this->activeBenefitOffering('service-notification-'.$suffix, 'panel.example.com');

@@ -24,7 +24,7 @@ use Throwable;
  * @phpstan-type DeliveryService object{id:int|string,public_id:string,user_id:int|string,service_target_id:int|string|null,remote_service_id:?string,provisioned_at:?string,lifecycle_state:string,lifecycle_version:int|string,remote_identity_generation:int|string,mutation_generation:int|string,remote_deleted_at:?string}
  * @phpstan-type TelegramAccount object{id:int|string,user_id:int|string,bot_id:int|string,telegram_user_id:int|string,is_bot:int|string|bool}
  * @phpstan-type DeliveryEffect object{id:int|string,public_id:string,service_delivery_attempt_id:int|string,service_subscription_id:int|string,telegram_account_id:int|string,telegram_bot_id:int|string,telegram_user_id:int|string,state:string,state_version:int|string,provider_boundary_started_at:?string,completed_at:?string,telegram_message_id:int|string|null,result_code:?string,retry_after_seconds:int|string|null}
- * @phpstan-type NotificationSourceState object{id:int|string,service_subscription_id:int|string,episode_key_hash:string,notification_type:string,threshold_code:string,cycle_key_hash:string,source_type:string,source_id:int|string|null,state:string,latest_delivery_attempt_id:int|string|null,latest_retry_ordinal:int|string|null}
+ * @phpstan-type NotificationSourceState object{id:int|string,service_subscription_id:int|string,episode_key_hash:string,notification_type:string,threshold_code:string,cycle_key_hash:string,source_type:string,source_id:int|string|null,low_balance_threshold_irr:int|string|null,state:string,latest_delivery_attempt_id:int|string|null,latest_retry_ordinal:int|string|null}
  * @phpstan-type DeliveryContext array{attempt:DeliveryAttempt,service:DeliveryService,account:TelegramAccount,effect:DeliveryEffect}
  */
 final readonly class ServiceDeliveryEffectExecutor
@@ -243,7 +243,10 @@ final readonly class ServiceDeliveryEffectExecutor
         return ProtectedTelegramPresentation::plainText($binding->presentation_text);
     }
 
-    /** @param DeliveryAttempt $attempt @return NotificationSourceState|null */
+    /**
+     * @param  DeliveryAttempt  $attempt
+     * @return NotificationSourceState|null
+     */
     private function assertCurrentNotificationAuthority(Connection $connection, object $attempt): ?object
     {
         if ($attempt->purpose !== ServiceDeliveryPurpose::Notification->value) {
@@ -261,7 +264,7 @@ final readonly class ServiceDeliveryEffectExecutor
             ->first([
                 'state.id', 'state.service_subscription_id', 'state.episode_key_hash', 'state.notification_type',
                 'state.threshold_code', 'state.cycle_key_hash', 'state.source_type', 'state.source_id',
-                'state.state', 'state.latest_delivery_attempt_id', 'state.latest_retry_ordinal',
+                'state.low_balance_threshold_irr', 'state.state', 'state.latest_delivery_attempt_id', 'state.latest_retry_ordinal',
             ]);
         if ($binding === null) {
             throw new DomainException('Service notification Delivery Attempt lost current threshold authority.');

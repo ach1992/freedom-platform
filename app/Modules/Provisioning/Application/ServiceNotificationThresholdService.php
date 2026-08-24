@@ -9,6 +9,7 @@ use App\Modules\Provisioning\Domain\ServiceDeliveryEffectState;
 use App\Modules\Provisioning\Domain\ServiceDeliveryPurpose;
 use App\Modules\Provisioning\Domain\ServiceNotificationState;
 use App\Modules\Provisioning\Domain\ServiceNotificationType;
+use App\Modules\Wallet\Application\WalletBalanceSnapshot;
 use App\Modules\Wallet\Application\WalletHoldService;
 use App\Shared\Application\Clock;
 use DateTimeImmutable;
@@ -23,7 +24,7 @@ use RuntimeException;
 /**
  * @phpstan-type NotificationServiceRow object{id:int|string,public_id:string,user_id:int|string,service_target_id:int|string|null,remote_service_id:?string,provisioned_at:?string,lifecycle_state:string,lifecycle_version:int|string,remote_identity_generation:int|string,mutation_generation:int|string,remote_deleted_at:?string}
  * @phpstan-type NotificationSpec array{type:ServiceNotificationType,threshold:string,cycle:string,episode:string,source_type:string,source_id:?int,message:string}
- * @phpstan-type NotificationStateRow object{id:int|string,public_id:string,service_subscription_id:int|string,episode_key_hash:string,notification_type:string,threshold_code:string,cycle_key_hash:string,source_type:string,source_id:int|string|null,low_balance_threshold_irr:int|string|null,state:string,latest_delivery_attempt_id:int|string|null,latest_retry_ordinal:int|string|null,next_retry_at:?string}
+ * @phpstan-type NotificationStateRow object{id:int|string,public_id:string,service_subscription_id:int|string,episode_key_hash:string,notification_type:string,threshold_code:string,cycle_key_hash:string,source_type:string,source_id:int|string|null,low_balance_threshold_irr:int|string|null,max_retries:int|string,state:string,latest_delivery_attempt_id:int|string|null,latest_retry_ordinal:int|string|null,next_retry_at:?string}
  * @phpstan-type AutoRenewAttemptAuthorityRow object{id:int|string,service_subscription_id:int|string,state:string}
  * @phpstan-type DeliveryEffectRow object{state:string,completed_at:?string,retry_after_seconds:int|string|null}
  */
@@ -525,6 +526,7 @@ final readonly class ServiceNotificationThresholdService
 
         $correlationId = 'service-notification:trigger:'.substr($spec['episode'], 0, 24);
         $timestamp = $this->timestamp();
+        $maxRetries = $this->maxRetries($spec['type']);
         ServiceNotificationDatabaseAuthority::create(
             $connection,
             (int) $service->id,
@@ -536,6 +538,7 @@ final readonly class ServiceNotificationThresholdService
             $spec['source_id'],
             $timestamp,
             $correlationId,
+            $maxRetries,
             $spec['type'] === ServiceNotificationType::LowBalance
                 ? $this->boundedConfigInt('service_notifications.low_balance_irr', 0, 1, PHP_INT_MAX)
                 : null,
@@ -553,6 +556,7 @@ final readonly class ServiceNotificationThresholdService
                 'low_balance_threshold_irr' => $spec['type'] === ServiceNotificationType::LowBalance
                     ? $this->boundedConfigInt('service_notifications.low_balance_irr', 0, 1, PHP_INT_MAX)
                     : null,
+                'max_retries' => $maxRetries,
                 'state' => ServiceNotificationState::Triggered->value,
                 'latest_delivery_attempt_id' => null,
                 'latest_retry_ordinal' => null,
@@ -747,7 +751,13 @@ final readonly class ServiceNotificationThresholdService
         $ordinal = $state->latest_retry_ordinal === null ? 0 : (int) $state->latest_retry_ordinal;
         $type = ServiceNotificationType::tryFrom($state->notification_type)
             ?? throw new RuntimeException('Stored Service notification type is invalid.');
-        if ($ordinal >= $this->maxRetries($type)) {
+        $maxRetries = filter_var($state->max_retries, FILTER_VALIDATE_INT, [
+            'options' => ['min_range' => 0, 'max_range' => 10],
+        ]);
+        if ($maxRetries === false) {
+            throw new RuntimeException('Stored Service notification retry ceiling is invalid.');
+        }
+        if ($ordinal >= (int) $maxRetries) {
             return $this->transitionState(
                 (int) $state->id,
                 (int) $service->id,
@@ -978,6 +988,18 @@ final readonly class ServiceNotificationThresholdService
                     $correlationId,
                 );
             }
+
+            $lowBalanceLocator = $this->lowBalanceExpirationLocator($stateId, $serviceId);
+            if ($lowBalanceLocator !== null) {
+                return $this->transitionLowBalanceToExpired(
+                    $stateId,
+                    $serviceId,
+                    $lowBalanceLocator['source_id'],
+                    $lowBalanceLocator['user_id'],
+                    $cause,
+                    $correlationId,
+                );
+            }
         }
 
         return $this->database->connection()->transaction(function (Connection $connection) use (
@@ -998,13 +1020,71 @@ final readonly class ServiceNotificationThresholdService
                 return false;
             }
             if ($next === ServiceNotificationState::Expired
-                && $state->notification_type === ServiceNotificationType::RenewalFailure->value) {
-                // Renewal expiration must enter through transitionRenewalFailureToExpired(),
-                // which acquires the auto-renew Attempt lock before the Service lock.
+                && in_array($state->notification_type, [
+                    ServiceNotificationType::LowBalance->value,
+                    ServiceNotificationType::RenewalFailure->value,
+                ], true)) {
+                // Source-specific expiration must acquire Wallet/renewal authority before Service.
                 return false;
             }
 
             return $this->transitionLockedState($connection, $service, $state, $next, $cause, $correlationId, false);
+        }, 3);
+    }
+
+    private function transitionLowBalanceToExpired(
+        int $stateId,
+        int $serviceId,
+        int $sourceId,
+        int $expectedUserId,
+        string $cause,
+        string $correlationId,
+    ): bool {
+        return $this->database->connection()->transaction(function (Connection $connection) use (
+            $stateId,
+            $serviceId,
+            $sourceId,
+            $expectedUserId,
+            $cause,
+            $correlationId,
+        ): bool {
+            // Wallet mutation and notification queue/provider paths acquire Wallet before Service.
+            // Preserve that same order while proving that a low-balance source became stale.
+            $walletBalance = null;
+            try {
+                $walletBalance = $this->wallet->balanceOnLockedAccount($connection, $expectedUserId, $sourceId);
+            } catch (DomainException) {
+                // Missing, inactive, or no-longer-owned Wallet authority is itself source invalidation.
+            }
+
+            $service = $this->lockedService($connection, $serviceId);
+            /** @var NotificationStateRow|null $state */
+            $state = $connection->table('service_notification_states')
+                ->where('id', $stateId)
+                ->where('service_subscription_id', $serviceId)
+                ->lockForUpdate()
+                ->first($this->stateColumns());
+            if ($state === null || $state->state === ServiceNotificationState::Expired->value) {
+                return false;
+            }
+            if ($state->state !== ServiceNotificationState::Triggered->value
+                || $state->notification_type !== ServiceNotificationType::LowBalance->value
+                || $state->source_type !== 'wallet_balance'
+                || $state->source_id === null
+                || (int) $state->source_id !== $sourceId
+                || ! $this->canExpireLowBalanceState($service, $state, $expectedUserId, $walletBalance)) {
+                return false;
+            }
+
+            return $this->transitionLockedState(
+                $connection,
+                $service,
+                $state,
+                ServiceNotificationState::Expired,
+                $cause,
+                $correlationId,
+                true,
+            );
         }, 3);
     }
 
@@ -1068,7 +1148,7 @@ final readonly class ServiceNotificationThresholdService
         ServiceNotificationState $next,
         string $cause,
         string $correlationId,
-        bool $renewalExpirationRevalidated,
+        bool $sourceExpirationRevalidated,
     ): bool {
         $current = ServiceNotificationState::tryFrom($state->state)
             ?? throw new RuntimeException('Stored Service notification state is invalid.');
@@ -1077,14 +1157,14 @@ final readonly class ServiceNotificationThresholdService
         if (! $allowed) {
             return false;
         }
-        if ($next === ServiceNotificationState::Expired
-            && $state->notification_type === ServiceNotificationType::RenewalFailure->value
-            && ! $renewalExpirationRevalidated) {
-            return false;
-        }
-        if ($next === ServiceNotificationState::Expired
-            && ! $this->canExpireTriggeredState($connection, $service, $state)) {
-            return false;
+        if ($next === ServiceNotificationState::Expired) {
+            if ($sourceExpirationRevalidated) {
+                if (! $this->canExpireAgainstDeliveryState($connection, $service, $state)) {
+                    return false;
+                }
+            } elseif (! $this->canExpireTriggeredState($connection, $service, $state)) {
+                return false;
+            }
         }
 
         $timestamp = $this->timestamp();
@@ -1096,7 +1176,6 @@ final readonly class ServiceNotificationThresholdService
         ];
         $values[match ($next) {
             ServiceNotificationState::Notified => 'notified_at',
-            ServiceNotificationState::Acknowledged => 'acknowledged_at',
             ServiceNotificationState::Escalated => 'escalated_at',
             default => 'expired_at',
         }] = $timestamp;
@@ -1157,6 +1236,74 @@ final readonly class ServiceNotificationThresholdService
             'source_id' => (int) $locator->source_id,
             'attempt_id' => (int) $locator->auto_renew_attempt_id,
         ];
+    }
+
+    /** @return array{source_id:int,user_id:int}|null */
+    private function lowBalanceExpirationLocator(int $stateId, int $serviceId): ?array
+    {
+        /** @var object{source_type:string,source_id:int|string|null,user_id:int|string}|null $locator */
+        $locator = $this->database->connection()->table('service_notification_states as state')
+            ->join('service_subscriptions as service', 'service.id', '=', 'state.service_subscription_id')
+            ->where('state.id', $stateId)
+            ->where('state.service_subscription_id', $serviceId)
+            ->where('state.notification_type', ServiceNotificationType::LowBalance->value)
+            ->first(['state.source_type', 'state.source_id', 'service.user_id']);
+        if ($locator === null) {
+            return null;
+        }
+        if ($locator->source_type !== 'wallet_balance'
+            || $locator->source_id === null
+            || (int) $locator->source_id < 1
+            || (int) $locator->user_id < 1) {
+            throw new RuntimeException('Stored Service low-balance notification source locator is invalid.');
+        }
+
+        return [
+            'source_id' => (int) $locator->source_id,
+            'user_id' => (int) $locator->user_id,
+        ];
+    }
+
+    /**
+     * @param  NotificationServiceRow  $service
+     * @param  NotificationStateRow  $state
+     */
+    private function canExpireLowBalanceState(
+        object $service,
+        object $state,
+        int $expectedUserId,
+        ?WalletBalanceSnapshot $walletBalance,
+    ): bool {
+        if ($state->low_balance_threshold_irr === null) {
+            throw new RuntimeException('Stored Service low-balance notification threshold evidence is missing.');
+        }
+        $threshold = filter_var($state->low_balance_threshold_irr, FILTER_VALIDATE_INT, [
+            'options' => ['min_range' => 1, 'max_range' => PHP_INT_MAX],
+        ]);
+        if ($threshold === false) {
+            throw new RuntimeException('Stored Service low-balance notification threshold evidence is invalid.');
+        }
+        if ((int) $service->user_id !== $expectedUserId
+            || $service->provisioned_at === null
+            || $service->remote_deleted_at !== null
+            || ! in_array($service->lifecycle_state, ['active', 'suspended'], true)
+            || $walletBalance === null) {
+            return true;
+        }
+
+        $cycle = hash('sha256', implode('|', [
+            'service-notification-low-balance-cycle-v1',
+            (string) $service->id,
+            (string) $service->remote_identity_generation,
+            (string) $service->mutation_generation,
+            (string) $service->lifecycle_version,
+            (string) (int) $threshold,
+        ]));
+        if (! hash_equals($state->cycle_key_hash, $cycle)) {
+            return true;
+        }
+
+        return $walletBalance->availableBalance->amount >= (int) $threshold;
     }
 
     /**
@@ -1281,7 +1428,9 @@ final readonly class ServiceNotificationThresholdService
         object $service,
         object $state,
     ): bool {
-        return match ($this->notificationOutboxDispatchState($connection, $service, $state, true)) {
+        // State is already locked. Keep Delivery/Outbox observations non-locking so expiration
+        // never inverts provider order (Effect -> notification state) or dispatcher Outbox locks.
+        return match ($this->notificationOutboxDispatchState($connection, $service, $state, false)) {
             'pending', 'leased', 'retry' => true,
             'review_required' => false,
             'authority_pending' => throw new RuntimeException('Service notification Outbox command remained authority-pending after queue commit.'),
@@ -1296,29 +1445,84 @@ final readonly class ServiceNotificationThresholdService
      */
     private function canExpireTriggeredState(Connection $connection, object $service, object $state): bool
     {
-        if (($state->notification_type === ServiceNotificationType::LowBalance->value
-                && $this->boundedConfigInt('service_notifications.low_balance_irr', 0, 0, PHP_INT_MAX) === 0)
-            || ($state->notification_type === ServiceNotificationType::Expiry->value
-                && $this->expiryThresholdDays() === [])) {
+        if ($state->notification_type !== ServiceNotificationType::Expiry->value
+            || ! $this->canExpireExpirySource($connection, $service, $state)) {
             return false;
         }
 
-        if ($this->isThresholdEligible($service)
-            && $state->notification_type === ServiceNotificationType::LowBalance->value) {
-            $current = $this->lowBalanceSpec($service);
-            if ($current !== null && hash_equals($current['episode'], $state->episode_key_hash)) {
-                return false;
-            }
+        return $this->canExpireAgainstDeliveryState($connection, $service, $state);
+    }
+
+    /**
+     * @param  NotificationServiceRow  $service
+     * @param  NotificationStateRow  $state
+     */
+    private function canExpireExpirySource(Connection $connection, object $service, object $state): bool
+    {
+        if ($state->source_type !== 'service_sync_snapshot') {
+            throw new RuntimeException('Stored Service expiry notification source type is invalid.');
+        }
+        if ($service->provisioned_at === null
+            || $service->remote_deleted_at !== null
+            || ! in_array($service->lifecycle_state, ['active', 'suspended'], true)) {
+            return true;
         }
 
+        /** @var object{remote_disposition:string,remote_expires_at:?string}|null $snapshot */
+        $snapshot = $connection->table('service_sync_snapshots')
+            ->where('service_subscription_id', (int) $service->id)
+            ->where('local_lifecycle_version', (int) $service->lifecycle_version)
+            ->where('local_remote_identity_generation', (int) $service->remote_identity_generation)
+            ->where('local_mutation_generation', (int) $service->mutation_generation)
+            ->orderByDesc('observed_at')
+            ->orderByDesc('id')
+            ->lockForUpdate()
+            ->first(['remote_disposition', 'remote_expires_at']);
+        if ($snapshot === null
+            || $snapshot->remote_disposition !== 'present'
+            || $snapshot->remote_expires_at === null) {
+            return true;
+        }
+
+        $expiresAt = new DateTimeImmutable($snapshot->remote_expires_at, new DateTimeZone('UTC'));
+        $cycle = hash('sha256', implode('|', [
+            'service-notification-expiry-cycle-v1',
+            (string) $service->id,
+            (string) $service->remote_identity_generation,
+            (string) $service->mutation_generation,
+            (string) $service->lifecycle_version,
+            $expiresAt->format('Y-m-d H:i:s.u'),
+        ]));
+        if (! hash_equals($state->cycle_key_hash, $cycle)) {
+            return true;
+        }
+
+        $now = $this->clock->now();
+
+        return match ($state->threshold_code) {
+            'expiry_7d' => $expiresAt <= $now->modify('+3 days'),
+            'expiry_3d' => $expiresAt <= $now->modify('+1 day'),
+            'expiry_1d' => $expiresAt <= $now,
+            'expiry_due' => false,
+            default => throw new RuntimeException('Stored Service expiry notification threshold is invalid.'),
+        };
+    }
+
+    /**
+     * @param  NotificationServiceRow  $service
+     * @param  NotificationStateRow  $state
+     */
+    private function canExpireAgainstDeliveryState(Connection $connection, object $service, object $state): bool
+    {
         if ($state->latest_delivery_attempt_id === null) {
             return true;
         }
 
         /** @var object{state:string,retry_after_seconds:int|string|null}|null $effect */
+        // The notification state lock is the provider/source serialization fence. Do not lock
+        // the Delivery Effect after it: provider entry acquires Effect before notification state.
         $effect = $connection->table('service_delivery_effects')
             ->where('service_delivery_attempt_id', (int) $state->latest_delivery_attempt_id)
-            ->lockForUpdate()
             ->first(['state', 'retry_after_seconds']);
         if ($effect === null) {
             return $this->canExpireAgainstNotificationOutbox($connection, $service, $state);
@@ -1603,7 +1807,7 @@ final readonly class ServiceNotificationThresholdService
     {
         return [
             'id', 'public_id', 'service_subscription_id', 'episode_key_hash', 'notification_type',
-            'threshold_code', 'cycle_key_hash', 'source_type', 'source_id', 'low_balance_threshold_irr', 'state',
+            'threshold_code', 'cycle_key_hash', 'source_type', 'source_id', 'low_balance_threshold_irr', 'max_retries', 'state',
             'latest_delivery_attempt_id', 'latest_retry_ordinal', 'next_retry_at',
         ];
     }

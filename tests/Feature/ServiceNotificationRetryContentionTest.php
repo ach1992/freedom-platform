@@ -231,6 +231,7 @@ namespace Tests\Feature {
                 $walletId,
                 $timestamp,
                 $correlationId,
+                2,
                 $threshold,
             );
             try {
@@ -244,6 +245,7 @@ namespace Tests\Feature {
                     'source_type' => 'wallet_balance',
                     'source_id' => $walletId,
                     'low_balance_threshold_irr' => $threshold,
+                    'max_retries' => 2,
                     'state' => 'triggered',
                     'latest_delivery_attempt_id' => null,
                     'latest_retry_ordinal' => null,

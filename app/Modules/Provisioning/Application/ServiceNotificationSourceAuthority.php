@@ -24,10 +24,30 @@ use RuntimeException;
  *     preliminary_user_id:int,
  *     renewal_attempt_id:?int
  * }
+ * @phpstan-type SourceLocatorStateRow object{
+ *     notification_state_id:int|string|null,
+ *     service_subscription_id:int|string,
+ *     notification_type:string|null,
+ *     source_type:string|null,
+ *     source_id:int|string|null,
+ *     preliminary_user_id:int|string|null,
+ *     renewal_attempt_id:int|string|null
+ * }
+ * @phpstan-type DeliverySourceLocatorRow object{
+ *     purpose:string,
+ *     notification_state_id:int|string|null,
+ *     service_subscription_id:int|string,
+ *     notification_type:string|null,
+ *     source_type:string|null,
+ *     source_id:int|string|null,
+ *     preliminary_user_id:int|string|null,
+ *     renewal_attempt_id:int|string|null
+ * }
+ * @phpstan-type RenewalAttemptRow object{id:int|string,service_subscription_id:int|string,state:string}
  * @phpstan-type SourceLock array{
  *     locator:SourceLocator,
  *     wallet_balance:?WalletBalanceSnapshot,
- *     renewal_attempt:?object
+ *     renewal_attempt:?RenewalAttemptRow
  * }
  * @phpstan-type NotificationSourceState object{
  *     id:int|string,
@@ -37,7 +57,8 @@ use RuntimeException;
  *     threshold_code:string,
  *     cycle_key_hash:string,
  *     source_type:string,
- *     source_id:int|string|null
+ *     source_id:int|string|null,
+ *     low_balance_threshold_irr:int|string|null
  * }
  * @phpstan-type NotificationSourceService object{
  *     id:int|string,
@@ -57,7 +78,7 @@ final readonly class ServiceNotificationSourceAuthority
     /** @return SourceLocator */
     public function locatorForState(Connection $connection, int $notificationStateId): array
     {
-        /** @var object|null $row */
+        /** @var SourceLocatorStateRow|null $row */
         $row = $connection->table('service_notification_states as state')
             ->join('service_subscriptions as service', 'service.id', '=', 'state.service_subscription_id')
             ->leftJoin('service_auto_renew_notification_intents as intent', function ($join): void {
@@ -84,7 +105,7 @@ final readonly class ServiceNotificationSourceAuthority
     /** @return SourceLocator|null */
     public function locatorForDeliveryAttempt(Connection $connection, int $deliveryAttemptId): ?array
     {
-        /** @var object|null $row */
+        /** @var DeliverySourceLocatorRow|null $row */
         $row = $connection->table('service_delivery_attempts as attempt')
             ->leftJoin('service_notification_delivery_bindings as binding', 'binding.service_delivery_attempt_id', '=', 'attempt.id')
             ->leftJoin('service_notification_states as state', 'state.id', '=', 'binding.service_notification_state_id')
@@ -145,6 +166,7 @@ final readonly class ServiceNotificationSourceAuthority
             if ($locator['renewal_attempt_id'] === null) {
                 throw new ServiceNotificationCandidateInvalidatedException('Service renewal notification intent lost its Attempt authority.');
             }
+            /** @var RenewalAttemptRow|null $renewalAttempt */
             $renewalAttempt = $connection->table('service_auto_renew_attempts')
                 ->where('id', $locator['renewal_attempt_id'])
                 ->lockForUpdate()
@@ -214,10 +236,6 @@ final readonly class ServiceNotificationSourceAuthority
             throw new ServiceNotificationCandidateInvalidatedException('Service expiry notification snapshot is no longer authoritative.');
         }
 
-        $threshold = $this->expiryThresholdCode($snapshot->remote_expires_at);
-        if ($threshold === null) {
-            throw new ServiceNotificationCandidateInvalidatedException('Service expiry notification is no longer inside an enabled threshold.');
-        }
         $expiresAt = new DateTimeImmutable($snapshot->remote_expires_at, new DateTimeZone('UTC'));
         $cycle = hash('sha256', implode('|', [
             'service-notification-expiry-cycle-v1',
@@ -227,7 +245,19 @@ final readonly class ServiceNotificationSourceAuthority
             (string) $service->lifecycle_version,
             $expiresAt->format('Y-m-d H:i:s.u'),
         ]));
-        $this->assertIdentity($service, $state, ServiceNotificationType::Expiry, $threshold, $cycle);
+        $this->assertIdentity($service, $state, ServiceNotificationType::Expiry, $state->threshold_code, $cycle);
+
+        $now = $this->clock->now();
+        $crossedNextBoundary = match ($state->threshold_code) {
+            'expiry_7d' => $expiresAt <= $now->modify('+3 days'),
+            'expiry_3d' => $expiresAt <= $now->modify('+1 day'),
+            'expiry_1d' => $expiresAt <= $now,
+            'expiry_due' => false,
+            default => throw new RuntimeException('Stored Service expiry notification threshold is invalid.'),
+        };
+        if ($crossedNextBoundary) {
+            throw new ServiceNotificationCandidateInvalidatedException('Service expiry notification crossed its durable episode boundary.');
+        }
     }
 
     /**
@@ -244,10 +274,17 @@ final readonly class ServiceNotificationSourceAuthority
         if ($state->source_type !== 'wallet_balance' || $sourceLock['wallet_balance'] === null) {
             throw new RuntimeException('Stored Service low-balance notification source type is invalid.');
         }
-        $threshold = $this->boundedConfigInt('service_notifications.low_balance_irr', 0, 0, PHP_INT_MAX);
-        if ($threshold === 0
-            || (int) $service->user_id !== $sourceLock['locator']['preliminary_user_id']
-            || $sourceLock['wallet_balance']->availableBalance->amount >= $threshold) {
+        if ($state->low_balance_threshold_irr === null) {
+            throw new RuntimeException('Stored Service low-balance notification threshold evidence is missing.');
+        }
+        $threshold = filter_var($state->low_balance_threshold_irr, FILTER_VALIDATE_INT, [
+            'options' => ['min_range' => 1, 'max_range' => PHP_INT_MAX],
+        ]);
+        if ($threshold === false) {
+            throw new RuntimeException('Stored Service low-balance notification threshold evidence is invalid.');
+        }
+        if ((int) $service->user_id !== $sourceLock['locator']['preliminary_user_id']
+            || $sourceLock['wallet_balance']->availableBalance->amount >= (int) $threshold) {
             throw new ServiceNotificationCandidateInvalidatedException('Service low-balance notification source is no longer authoritative.');
         }
         $activeCashWalletId = $connection->table('ledger_accounts')
@@ -268,7 +305,7 @@ final readonly class ServiceNotificationSourceAuthority
             (string) $service->remote_identity_generation,
             (string) $service->mutation_generation,
             (string) $service->lifecycle_version,
-            (string) $threshold,
+            (string) (int) $threshold,
         ]));
         $this->assertIdentity($service, $state, ServiceNotificationType::LowBalance, 'low_balance', $cycle);
     }
@@ -338,53 +375,10 @@ final readonly class ServiceNotificationSourceAuthority
         }
     }
 
-    private function expiryThresholdCode(string $remoteExpiresAt): ?string
-    {
-        $expiresAt = new DateTimeImmutable($remoteExpiresAt, new DateTimeZone('UTC'));
-        $secondsRemaining = $expiresAt->getTimestamp() - $this->clock->now()->getTimestamp();
-        foreach ($this->expiryThresholdDays() as $days) {
-            if ($secondsRemaining <= $days * 86400) {
-                return $days === 0 ? 'expiry_due' : 'expiry_'.$days.'d';
-            }
-        }
-
-        return null;
-    }
-
-    /** @return list<int> */
-    private function expiryThresholdDays(): array
-    {
-        $raw = config('service_notifications.expiry_threshold_days', [7, 3, 1, 0]);
-        if (! is_array($raw)) {
-            throw new DomainException('Service notification expiry thresholds must be an array.');
-        }
-        $thresholds = [];
-        foreach ($raw as $value) {
-            $validated = filter_var($value, FILTER_VALIDATE_INT, ['options' => ['min_range' => 0, 'max_range' => 365]]);
-            if ($validated === false || ! in_array((int) $validated, [0, 1, 3, 7], true)) {
-                throw new DomainException('Service notification expiry thresholds must be selected from 0, 1, 3, or 7 days.');
-            }
-            $thresholds[] = (int) $validated;
-        }
-        $thresholds = array_values(array_unique($thresholds));
-        sort($thresholds, SORT_NUMERIC);
-
-        return $thresholds;
-    }
-
-    private function boundedConfigInt(string $key, int $default, int $minimum, int $maximum): int
-    {
-        $validated = filter_var(config($key, $default), FILTER_VALIDATE_INT, [
-            'options' => ['min_range' => $minimum, 'max_range' => $maximum],
-        ]);
-        if ($validated === false) {
-            throw new DomainException($key.' is outside its supported range.');
-        }
-
-        return (int) $validated;
-    }
-
-    /** @return SourceLocator */
+    /**
+     * @param  SourceLocatorStateRow|DeliverySourceLocatorRow  $row
+     * @return SourceLocator
+     */
     private function normalizeLocator(object $row): array
     {
         foreach (['notification_state_id', 'service_subscription_id', 'source_id', 'preliminary_user_id'] as $field) {
