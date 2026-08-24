@@ -6,8 +6,8 @@
          stopOnError="true"
 >
     <testsuites>
-        <testsuite name="Notification lifecycle diagnostics">
-            <file>tests/Feature/ServiceNotificationRetryLifecycleTest.php</file>
+        <testsuite name="Service synchronization diagnostics">
+            <file>tests/Feature/ServiceSynchronizationTest.php</file>
         </testsuite>
     </testsuites>
     <source>
