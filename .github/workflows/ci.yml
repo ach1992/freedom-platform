@@ -55,7 +55,7 @@ jobs:
   preflight:
     name: Repository preflight
     if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.draft == false) }}
-    runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
+    runs-on: [self-hosted, Linux, X64, freedom-ci-core]
     outputs:
       profile: ${{ steps.plan.outputs.profile }}
       project_control: ${{ steps.plan.outputs.project_control }}
@@ -251,7 +251,7 @@ jobs:
     name: PHP style and static architecture
     needs: preflight
     if: ${{ needs.preflight.outputs.static_analysis == 'true' || (needs.preflight.outputs.style == 'true' && needs.preflight.outputs.integration != 'true') }}
-    runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
+    runs-on: [self-hosted, Linux, X64, freedom-ci-php]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -302,7 +302,7 @@ jobs:
     name: Dependency and license policy
     needs: preflight
     if: ${{ needs.preflight.outputs.dependencies == 'true' }}
-    runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
+    runs-on: [self-hosted, Linux, X64, freedom-ci-php]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -338,7 +338,7 @@ jobs:
     name: MariaDB 10.11 and Redis tests
     needs: preflight
     if: ${{ needs.preflight.outputs.integration == 'true' }}
-    runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
+    runs-on: [self-hosted, Linux, X64, freedom-ci-integration]
     env:
       MARIADB_VERSION: '10.11'
       COMPOSE_PROJECT_NAME: freedom-platform-ci-${{ github.run_id }}
@@ -434,7 +434,7 @@ jobs:
     name: Operational syntax and entrypoints
     needs: preflight
     if: ${{ needs.preflight.outputs.operations == 'true' }}
-    runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
+    runs-on: [self-hosted, Linux, X64, freedom-ci-php]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -489,7 +489,7 @@ jobs:
     name: Secret scan
     # A filtered workflow_dispatch is diagnostic-only; every pull-request run still scans its changed history.
     if: ${{ (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.draft == false)) && !(github.event_name == 'workflow_dispatch' && inputs.phpunit_filter != '') }}
-    runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
+    runs-on: [self-hosted, Linux, X64, freedom-ci-core]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
