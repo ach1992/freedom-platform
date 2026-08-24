@@ -361,9 +361,9 @@ SQL,
             ->where('id', (int) $after->id)
             ->first(['episode_key_hash', 'last_correlation_id']);
         self::assertNotNull($correlation);
-        $expectedCorrelationId = 'service-notification:provider-retry-fenced:'
-            .substr((string) $correlation->episode_key_hash, 0, 21);
-        self::assertSame(64, strlen($expectedCorrelationId));
+        $expectedCorrelationId = 'service-notification:provider-fenced:'
+            .substr((string) $correlation->episode_key_hash, 0, 24);
+        self::assertSame(61, strlen($expectedCorrelationId));
         self::assertSame($expectedCorrelationId, $correlation->last_correlation_id);
         self::assertSame($expectedCorrelationId, DB::table('service_notification_events')
             ->where('service_notification_state_id', (int) $after->id)
