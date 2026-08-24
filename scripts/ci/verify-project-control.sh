@@ -7,6 +7,26 @@ fail() {
     exit 1
 }
 
+selector_has_label() {
+    local selector=$1
+    local required=$2
+    local body label
+    local -a labels
+
+    body=${selector#runs-on: }
+    body=${body#\[}
+    body=${body%\]}
+    IFS=',' read -r -a labels <<< "$body"
+
+    for label in "${labels[@]}"; do
+        label=${label#"${label%%[![:space:]]*}"}
+        label=${label%"${label##*[![:space:]]}"}
+        [[ "$label" == "$required" ]] && return 0
+    done
+
+    return 1
+}
+
 required_files=(
     README.md
     AGENTS.md
@@ -162,8 +182,8 @@ for workflow in "${workflow_files[@]}"; do
         [[ "$trimmed" == runs-on:\ \[*\] ]] \
             || fail "workflow runner selector must be an explicit label list: $workflow: $trimmed"
         for required_label in self-hosted Linux X64; do
-            [[ "$trimmed" == *"$required_label"* ]] \
-                || fail "workflow runner selector must retain $required_label: $workflow: $trimmed"
+            selector_has_label "$trimmed" "$required_label" \
+                || fail "workflow runner selector must retain exact label $required_label: $workflow: $trimmed"
         done
         found_runner=true
     done < <(grep -E '^[[:space:]]*runs-on:' "$workflow" || true)
