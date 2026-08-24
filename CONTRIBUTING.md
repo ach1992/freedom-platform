@@ -1,5 +1,7 @@
 # Contributing
 
+This file owns the repository's **development workflow**: branches, Issues/PRs, review/integration behavior, and how to select authoritative validation. Execution tools/hosts are deliberately documented elsewhere so changing infrastructure does not require editing the development process in several places.
+
 ## Workflow
 
 1. Read `AGENTS.md`, Program Issue `#3`, and the GitHub Issue for the task.
@@ -15,45 +17,21 @@ When a temporary branch appears no longer needed, the Master reports its name to
 
 Do not insert a human checkpoint between ordinary reversible steps. When the current objective is authorized and READY work exists, continue implementation, targeted validation, PR maintenance, self-review/correction, and dependency-safe follow-on task selection. Stop only for a real blocker/decision/capability boundary or for the specific action that is explicitly approval-gated.
 
-## Execution boundaries and access routing
+## Execution and validation routing
 
-The project deliberately separates GitHub control, runtime execution, and deployment operations. GitHub remains the project source of truth in every case.
+Use [`docs/development/execution-infrastructure.md`](docs/development/execution-infrastructure.md) for the canonical boundaries and lifecycle of the connected GitHub integration, `AI_Server_Agent` workspace, GitHub Actions self-hosted runners, external Workers, and staging/deployment targets.
 
-| Boundary | Use it for | Important behavior |
-|---|---|---|
-| ChatGPT Master + connected GitHub integration | Normal project control: Issues, PRs, refs, repository files, reviews, branch/PR maintenance, and Actions evidence exposed by the connected App | This is the default source/control path. Verify every mutation from live GitHub. It does not reveal secret values. |
-| Dedicated AI Server MCP workspace | Persistent repo checkout via `AI_Server_Agent` for unprivileged Git/edit/diagnostic/local-command work in `/srv/ai-workspace/freedom-platform` when connected | Reuse it before asking the Owner to recreate shell access. Run as `aiworker`; repo Git uses SSH alias `github-freedom-platform`. The workspace is not project authority and its SSH private key must never be read/exposed. See `docs/09-deployment-runbook.md`. |
-| GitHub Actions self-hosted runner | Authoritative shell/runtime execution, repository CI, MariaDB/Redis integration validation, and reviewed operational/readiness workflows | Workflows create transient checkouts for the exact GitHub revision. They are not a second project source and must not become a generic chat-to-shell interface. |
-| External coding/review Worker | Optional delegated implementation/review when isolation, safe parallelism, specialist expertise, or a missing Master capability materially helps | Not a default prerequisite. Durable work must return to GitHub for Master verification. Codex Cloud is only one possible optional Worker, not the normal execution path. |
-| Deployment/staging target | Target-like runtime/readiness and explicitly authorized deployment/provider operations | Runtime state is not source state. Never treat a deployed tree as a developer checkout or hidden project copy. |
+Use [`docs/06-test-strategy.md`](docs/06-test-strategy.md) for the canonical validation plan, evidence freshness, reproducible verification commands, MariaDB/Redis requirements, and CI failure policy.
 
-The self-hosted runner contract is label- and toolchain-based:
+Use [`docs/09-deployment-runbook.md`](docs/09-deployment-runbook.md) only for deployment, backup/restore, update/rollback, protected Environments, and privileged/live runtime operations.
 
-```yaml
-runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
-```
+A capability being technically reachable does not change its authority/safety boundary. GitHub remains project truth; execution workspaces and runner checkouts remain execution state.
 
-Runner display names are operational GitHub inventory, not durable repository contract. Replacing a runner host/name does not require repository changes as long as the required labels and validated toolchain remain satisfied.
+### GitHub Actions and secrets
 
-Exact CI/runtime requirements are owned by `docs/06-test-strategy.md`. Staging/provider workflow and secret interfaces are owned by `docs/09-deployment-runbook.md`.
+Workflow YAML for the exact revision is authoritative for job `permissions:`, `runs-on`, secrets and Environment use. Do not infer permissions or runner capability from repository defaults, a runner display name, or historical runs.
 
-### Master self-execution and Worker delegation
-
-The active ChatGPT Master should perform normal reversible READY work itself when the connected GitHub integration, the repo-scoped `AI_Server_Agent` workspace, or repository-native automation exposes the required capability. Do not route broad work to Codex Cloud merely because earlier documentation used it as the default working tree.
-
-Delegate only when there is a concrete benefit: independent review, isolation of risky experiments, safe parallelism, specialist capability, or an execution capability that the Master cannot obtain through GitHub/MCP/Actions. A Worker never becomes the project source of truth and never merges its own high-risk work.
-
-### GitHub Actions and repository permissions
-
-Repository-level Actions settings may permit read/write automation, but the workflow YAML for the exact revision is authoritative for each job's effective `GITHUB_TOKEN` scope. Existing CI/readiness/provider workflows intentionally declare narrow permissions. A workflow that genuinely needs mutation must request the smallest explicit permission needed.
-
-Never infer that a job can push merely because repository defaults are permissive, and never weaken a workflow's `permissions:` block just to bypass a missing execution path.
-
-### Secrets
-
-Secret values are write-only operational state. Do not ask the Owner to paste a PAT, SSH key, password, provider key, bot token, `.env`, or other secret into Chat. Existing secret **identifiers**, which workflows consume them, and which are currently reserved/unconsumed are documented in `docs/09-deployment-runbook.md`.
-
-When a workflow says a required secret is missing/invalid, ask the Owner only to create or rotate that exact identifier in GitHub Settings. Do not request its value for debugging.
+Secret values are write-only operational state. Never request or paste a PAT, SSH key, password, provider key, bot token, `.env`, registration/remove token, or other secret into Chat, Git, Issues, PRs, logs, screenshots, or repository evidence.
 
 ## Task and PR contracts
 
@@ -67,19 +45,17 @@ Sensitive paths are assigned in `.github/CODEOWNERS`. CODEOWNERS identifies inte
 
 High/Critical work involving financial integrity, authorization, security controls, provider semantics, schema, deployment/release behavior, secrets, or irreversible operations requires independent review and explicit Owner approval before merge unless that exact merge/action was already authorized. This gate does not by itself block reversible implementation, testing, review preparation, or continuation to another dependency-safe READY task.
 
-### Independent review relay
+## Independent review relay
 
-When independent review is required, the only permitted project dispatch mechanism is an **Owner-relayed fresh ChatGPT chat**.
+When independent review is required, the permitted project dispatch mechanism is an **Owner-relayed fresh ChatGPT chat**.
 
-1. The authoring Master completes the applicable exact-head validation and effective-diff self-review, then gives the Owner one ready-to-paste `INDEPENDENT REVIEW CHAT` prompt.
-2. The prompt must identify the repository/PR or change, exact integration target/base SHA, exact candidate HEAD SHA, owning Issue/contract and acceptance criteria, risk level, material review boundaries/invariants, and current validation evidence tied to that exact candidate.
-3. The Owner opens a new ChatGPT chat and pastes that prompt. That fresh chat is the independent reviewer context. It should review read-only and return the exact candidate SHA reviewed, a verdict of `APPROVE` or `CHANGES_REQUIRED`, and evidence-backed findings classified as `BLOCKER`, `REQUIRED`, or `OPTIONAL`.
-4. The Owner relays the complete review result back to the authoring Master. The Master reconciles every finding and refreshes candidate/target/CI/review freshness before relying on the review or performing integration.
-5. Candidate, target, contract, or material effective-diff drift invalidates the affected independent review. The Master must give the Owner a new prompt for another fresh ChatGPT chat; do not reuse a stale verdict.
+1. The authoring Master completes applicable exact-head validation and effective-diff self-review, then gives the Owner one ready-to-paste `INDEPENDENT REVIEW CHAT` prompt.
+2. The prompt identifies the repository/PR/change, exact integration target/base SHA, exact candidate HEAD SHA, owning Issue/contract and acceptance criteria, risk level, material review boundaries/invariants, and validation evidence tied to that exact candidate.
+3. The Owner opens a new ChatGPT chat and pastes the prompt. That fresh chat reviews read-only and returns the exact candidate SHA reviewed, a verdict of `APPROVE` or `CHANGES_REQUIRED`, and evidence-backed findings classified as `BLOCKER`, `REQUIRED`, or `OPTIONAL`.
+4. The Owner relays the complete review result back to the authoring Master. The Master reconciles every finding and refreshes candidate/target/CI/review freshness before relying on the review or integrating.
+5. Candidate, target, contract, or material effective-diff drift invalidates the affected independent review; generate a new exact review packet rather than reusing a stale verdict.
 
-The Master must **not** request or add reviewers through GitHub, invoke GitHub Copilot PR review, dispatch an external review agent/tool/service, or request independent review through any other platform. Do not treat an earlier platform-native review request as precedent for future work. Self-review remains required where applicable but never counts as independent review.
-
-If repository or platform protection ever independently requires a native approval object, treat that as a separate integration gate. Do not fabricate, bypass, or automatically request that approval; surface the exact gate to the Owner while preserving the Owner-relayed fresh-ChatGPT independent review rule above.
+Do not request GitHub/Copilot reviewers or dispatch independent review through another agent/service merely to satisfy this repository rule. If repository/platform protection independently requires a native approval object, treat that as a separate integration gate and surface it without fabricating or bypassing it.
 
 ## Merge method
 
@@ -89,20 +65,9 @@ Merge style never substitutes for review or the applicable green CI tier.
 - Preserve multiple implementation commits with **merge** or **rebase** only when those boundaries are intentional, reviewable, and useful for later audit/debugging.
 - Never rewrite shared long-lived history merely to make it look tidy.
 
-## Reproducible execution prerequisites
+## Repository bootstrap
 
-These prerequisites describe any reviewed execution environment that needs to run the repository; they are **not** an assumption that the Owner maintains a local checkout.
-
-- Git
-- Docker + Compose
-- PHP 8.4 with project extensions, or the repository CI PHP environment
-- Composer 2.10.x
-
-Never use production/staging secrets or real customer data in a development/test execution environment.
-
-## Bootstrap commands
-
-When a reviewed Actions/Worker environment needs a repository runtime:
+When a reviewed execution environment needs a repository runtime, the base toolchain is defined by the execution-infrastructure and test-strategy references. A normal application bootstrap is:
 
 ```bash
 composer install --no-interaction --prefer-dist --no-progress --no-scripts
@@ -111,89 +76,18 @@ cp .env.example .env
 php artisan key:generate
 ```
 
-Use development-only database, Redis, Telegram, SMS, panel, and payment values. Prefer deterministic fakes unless the task explicitly owns a controlled integration test.
+Use development-only database, Redis, Telegram, SMS, panel, and payment values. Prefer deterministic fakes unless the task explicitly owns a controlled integration test. Never use production/staging secrets or real customer data in a development/test execution environment.
 
-## Verification commands
+## Verification
 
-Repository/project-control checks:
+Select the narrowest safe verification plan from [`docs/06-test-strategy.md`](docs/06-test-strategy.md). That document and the current workflow/source own executable commands and CI semantics; do not maintain another copied command matrix here.
 
-```bash
-bash scripts/ci/verify-planning.sh
-bash scripts/ci/verify-project-control.sh
-```
+`composer test:quick` is fast feedback only and does not prove migrations, constraints, triggers, locking, or concurrency. MariaDB 10.11 remains the mandatory normal integration target when application/database semantics are affected; additional versions are explicit compatibility evidence, not an automatic per-PR matrix.
 
-Static/application policy:
+## Coding and architecture
 
-```bash
-php vendor/bin/pint --test
-php -d memory_limit=1G vendor/bin/phpstan analyse --no-progress --memory-limit=1G
-composer validate --strict --no-check-publish
-bash scripts/ci/forbidden-patterns.sh
-bash scripts/ci/architecture.sh
-```
-
-Dependencies:
-
-```bash
-composer audit --locked --abandoned=fail
-bash scripts/ci/licenses.sh
-```
-
-Fast application feedback (SQLite; not database-engine acceptance evidence):
-
-```bash
-composer test:quick
-```
-
-Primary disposable integration suite (MariaDB 10.11 + authenticated Redis):
-
-```bash
-composer test:integration
-```
-
-When a task or release needs additional compatibility evidence, override the database version explicitly, for example:
-
-```bash
-MARIADB_VERSION=11.4 composer test:integration
-```
-
-`composer test:quick` is not acceptance evidence for migrations, constraints, triggers, locking, or concurrency. Those behaviors require MariaDB. MariaDB 10.11 is the mandatory normal CI target; additional versions are compatibility goals, not an automatic per-PR matrix.
-
-## GitHub Actions tiers
-
-The workflow selects the narrowest safe validation plan and uses only the owner-controlled self-hosted runner. Secret scanning is always retained; other job domains are selected independently from the affected behavior.
-
-- Documentation/governance changes run only their relevant planning/project-control checks plus the secret scan.
-- Bounded control-plane changes run explicit workflow/control contract checks plus the secret scan. `staging-readiness.yml` is the only current read-only workflow with a narrow static contract; there is no directory-wide workflow allowlist.
-- PHP application/config/schema changes run the relevant style/static/architecture checks and the MariaDB 10.11 + Redis suite. Test-only changes keep test style + integration but do not rerun unrelated PHPStan/architecture analysis.
-- Composer dependency/lock changes add Composer validation, audit/license policy and the application checks they can affect. Docker/runtime changes add Docker contract validation and integration. Operational/deployment entrypoints use their own syntax/entrypoint checks rather than pretending an unrelated DB suite validates them.
-- Unknown or mixed paths accumulate the strongest applicable checks; unclassified paths fail safe to the full validation plan.
-
-Superseded safe PR/read-only runs are cancelled. CI also rejects a PR run that starts after its recorded base/head has already drifted; immediately before integration, the Master still refreshes exact candidate, target, mergeability and applicable checks.
-
-Routine successful PR runs rely on workflow/check results as evidence. Diagnostic artifacts are retained on failure, and intentional manual/release runs may retain artifacts when they have a real consumer; do not upload large success artifacts by default merely to create evidence.
-
-Draft PRs do not consume self-hosted-runner jobs automatically. Mark a PR Ready when validation should run. Draft PR `#6` stays quiet while `develop` receives already-reviewed task merges; before final release review it must be intentionally validated.
-
-Do not rerun an unchanged green revision merely because it was merged without content edits into the unchanged intended base. If base/content changes invalidate the result, validate again. For a clearly transient infrastructure failure, rerun only failed work when possible. A deterministic failure must be fixed, not repeatedly rerun.
-
-## Coding and architecture rules
-
-- `declare(strict_types=1);`
-- typed PHP and dependency injection
-- modular Domain / Application / Infrastructure / Presentation direction
-- cross-module orchestration through explicit Application contracts
-- no new cross-module Domain dependency/architecture exception merely for convenience
-- refactor for cohesion, coupling, reuse, transaction boundaries, testability, or expected change — never because a file is simply large
-- integer IRR and fixed-precision crypto; no monetary float
-- authorization at execution time
-- transactional/idempotent durable effects
-- no swallowed `Throwable`
-- no direct secrets or sensitive payloads in logs, jobs, events, or evidence
-- no editing historical migrations to change already-accepted behavior
+Repository architecture/correctness rules are canonical in `AGENTS.md` and `docs/05-architecture-overview.md`. Follow the owning module and preserve accepted behavior outside task scope. Do not create a second coding-rule catalog here.
 
 ## Documentation
 
-Do not create a new document for task status, handoff, risk notes, traceability, or test evidence. Put live state and review evidence in GitHub. Update a canonical document only when a durable product/engineering rule changes.
-
-See `docs/README.md` for the intentionally small documentation set.
+Durable documentation ownership and the intentionally small documentation set are defined by [`docs/README.md`](docs/README.md). Live state belongs in GitHub; task history belongs in Git/Issues/PRs/CI. Update the canonical owner of a rule instead of adding a compensating copy elsewhere.
