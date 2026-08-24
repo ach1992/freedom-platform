@@ -9,6 +9,26 @@ fail() {
     exit 1
 }
 
+selector_has_label() {
+    local selector=$1
+    local required=$2
+    local body label
+    local -a labels
+
+    body=${selector#runs-on: }
+    body=${body#\[}
+    body=${body%\]}
+    IFS=',' read -r -a labels <<< "$body"
+
+    for label in "${labels[@]}"; do
+        label=${label#"${label%%[![:space:]]*}"}
+        label=${label%"${label##*[![:space:]]}"}
+        [[ "$label" == "$required" ]] && return 0
+    done
+
+    return 1
+}
+
 test -s "$workflow" || fail "workflow is missing or empty: $workflow"
 
 grep -F 'workflow_dispatch:' "$workflow" >/dev/null \
@@ -25,8 +45,8 @@ while IFS= read -r runner_line; do
     [[ "$trimmed" == runs-on:\ \[*\] ]] \
         || fail "workflow runner selector must remain an explicit label list: $trimmed"
     for required_label in self-hosted Linux X64; do
-        [[ "$trimmed" == *"$required_label"* ]] \
-            || fail "workflow runner selector must retain $required_label: $trimmed"
+        selector_has_label "$trimmed" "$required_label" \
+            || fail "workflow runner selector must retain exact label $required_label: $trimmed"
     done
 done <<< "$runner_lines"
 
