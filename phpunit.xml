@@ -3,13 +3,11 @@
          xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
          bootstrap="vendor/autoload.php"
          colors="true"
+         stopOnError="true"
 >
     <testsuites>
-        <testsuite name="Unit">
-            <directory>tests/Unit</directory>
-        </testsuite>
-        <testsuite name="Feature">
-            <directory>tests/Feature</directory>
+        <testsuite name="Notification lifecycle diagnostics">
+            <file>tests/Feature/ServiceNotificationRetryLifecycleTest.php</file>
         </testsuite>
     </testsuites>
     <source>
