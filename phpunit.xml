@@ -6,8 +6,11 @@
          stopOnError="true"
 >
     <testsuites>
-        <testsuite name="Service synchronization diagnostics">
-            <file>tests/Feature/ServiceSynchronizationTest.php</file>
+        <testsuite name="Unit">
+            <directory>tests/Unit</directory>
+        </testsuite>
+        <testsuite name="Feature">
+            <directory>tests/Feature</directory>
         </testsuite>
     </testsuites>
     <source>
