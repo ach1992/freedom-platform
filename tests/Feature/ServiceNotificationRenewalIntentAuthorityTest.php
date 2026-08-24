@@ -117,11 +117,11 @@ final class ServiceNotificationRenewalIntentAuthorityTest extends TestCase
 
     public function test_renewal_source_change_after_trigger_is_rejected_before_queue(): void
     {
-        $scenario = $this->scenario('notification-renewal-queue-source-change');
-        $this->enableWalletMethod('notification-renewal-queue-source-change');
+        $scenario = $this->scenario('notif-renew-queue-source');
+        $this->enableWalletMethod('notif-renew-queue-source');
         $this->seed(WalletFinancialFoundationSeeder::class);
-        $this->fundWallet($scenario['user_id'], 1, 'notification-renewal-queue-source-change');
-        $this->enableAutoRenew($scenario, 'notification-renewal-queue-source-change');
+        $this->fundWallet($scenario['user_id'], 1, 'notif-renew-queue-source');
+        $this->enableAutoRenew($scenario, 'notif-renew-queue-source');
 
         $renewals = $this->app->make(ServiceAutoRenewalProcessor::class);
         self::assertSame(1, $renewals->processDue(10)->insufficientWallet);
@@ -166,11 +166,11 @@ final class ServiceNotificationRenewalIntentAuthorityTest extends TestCase
 
     public function test_renewal_source_change_after_queue_is_rejected_at_provider_source_boundary(): void
     {
-        $scenario = $this->scenario('notification-renewal-provider-source-change');
-        $this->enableWalletMethod('notification-renewal-provider-source-change');
+        $scenario = $this->scenario('notif-renew-provider-source');
+        $this->enableWalletMethod('notif-renew-provider-source');
         $this->seed(WalletFinancialFoundationSeeder::class);
-        $this->fundWallet($scenario['user_id'], 1, 'notification-renewal-provider-source-change');
-        $this->enableAutoRenew($scenario, 'notification-renewal-provider-source-change');
+        $this->fundWallet($scenario['user_id'], 1, 'notif-renew-provider-source');
+        $this->enableAutoRenew($scenario, 'notif-renew-provider-source');
 
         $renewals = $this->app->make(ServiceAutoRenewalProcessor::class);
         self::assertSame(1, $renewals->processDue(10)->insufficientWallet);
