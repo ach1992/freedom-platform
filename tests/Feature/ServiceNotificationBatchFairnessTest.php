@@ -24,9 +24,9 @@ use App\Modules\Telegram\Application\ProtectedTelegramSendResult;
 use App\Modules\Wallet\Application\LedgerEntryDraft;
 use App\Modules\Wallet\Application\LedgerPostingService;
 use App\Modules\Wallet\Application\WalletHoldService;
-use DomainException;
 use App\Modules\Wallet\Domain\IrrMoney;
 use App\Modules\Wallet\Domain\LedgerDirection;
+use DomainException;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\QueryException;
@@ -115,6 +115,7 @@ final class ServiceNotificationBatchFairnessTest extends TestCase
             ->where('id', 1)
             ->value('last_service_subscription_id'));
     }
+
     public function test_low_balance_is_revalidated_after_the_initial_observation_before_persistence(): void
     {
         config()->set('service_notifications.low_balance_irr', 500_000);

@@ -280,6 +280,7 @@ final readonly class ServiceDeliveryEffectExecutor
             $this->database->connection(),
             (int) $locator->service_delivery_attempt_id,
         );
+
         return $this->database->connection()->transaction(function (Connection $connection) use ($locator, $sourceLocator): object {
             $sourceLock = $sourceLocator === null ? null : $this->notificationSources->lockBeforeService($connection, $sourceLocator);
             // Source-specific locks precede Service where required (Wallet account or renewal Attempt);

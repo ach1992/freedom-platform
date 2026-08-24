@@ -335,6 +335,7 @@ final class ServiceNotificationRetryLifecycleTest extends TestCase
             ->where('service_delivery_attempt_id', (int) $state->latest_delivery_attempt_id)
             ->value('state'));
     }
+
     public function test_retry_budget_exhaustion_escalates_without_creating_another_delivery_attempt(): void
     {
         config()->set('service_notifications.retry.low_balance.max_retries', 0);

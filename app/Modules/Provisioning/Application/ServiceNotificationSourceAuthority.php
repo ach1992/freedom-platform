@@ -192,8 +192,8 @@ final readonly class ServiceNotificationSourceAuthority
     }
 
     /**
-     * @param NotificationSourceService $service
-     * @param NotificationSourceState $state
+     * @param  NotificationSourceService  $service
+     * @param  NotificationSourceState  $state
      */
     private function assertExpiryCurrent(Connection $connection, object $service, object $state): void
     {
@@ -231,9 +231,9 @@ final readonly class ServiceNotificationSourceAuthority
     }
 
     /**
-     * @param NotificationSourceService $service
-     * @param NotificationSourceState $state
-     * @param SourceLock $sourceLock
+     * @param  NotificationSourceService  $service
+     * @param  NotificationSourceState  $state
+     * @param  SourceLock  $sourceLock
      */
     private function assertLowBalanceCurrent(
         Connection $connection,
@@ -274,9 +274,9 @@ final readonly class ServiceNotificationSourceAuthority
     }
 
     /**
-     * @param NotificationSourceService $service
-     * @param NotificationSourceState $state
-     * @param SourceLock $sourceLock
+     * @param  NotificationSourceService  $service
+     * @param  NotificationSourceState  $state
+     * @param  SourceLock  $sourceLock
      */
     private function assertRenewalCurrent(
         Connection $connection,
@@ -314,8 +314,8 @@ final readonly class ServiceNotificationSourceAuthority
     }
 
     /**
-     * @param NotificationSourceService $service
-     * @param NotificationSourceState $state
+     * @param  NotificationSourceService  $service
+     * @param  NotificationSourceState  $state
      */
     private function assertIdentity(
         object $service,

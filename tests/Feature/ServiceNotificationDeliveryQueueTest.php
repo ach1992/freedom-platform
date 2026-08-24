@@ -352,7 +352,6 @@ SQL,
         self::assertNotNull($attached->serviceSubscriptionPublicId);
     }
 
-
     private function account(
         string $code,
         string $class,
