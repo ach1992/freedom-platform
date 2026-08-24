@@ -19,7 +19,7 @@ jobs:
   pasarguard:
     name: PasarGuard v5.2.1 read-only readiness
     if: ${{ github.ref_name == 'develop/v1.0.0-completion' && inputs.confirm == 'READ_ONLY_PROVIDER_CHECK' }}
-    runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
+    runs-on: [self-hosted, Linux, X64, freedom-provider-acceptance]
     timeout-minutes: 5
     env:
       PHP_ROOT: /www/server/php/84

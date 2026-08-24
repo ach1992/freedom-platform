@@ -25,7 +25,7 @@ jobs:
     if: ${{ github.ref_name == 'develop/v1.0.0-completion' && inputs.confirm == 'MUTATE_DISPOSABLE_PASARGUARD_V5_2_1' }}
     environment:
       name: provider-live-acceptance
-    runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
+    runs-on: [self-hosted, Linux, X64, freedom-provider-acceptance]
     timeout-minutes: 10
     env:
       PHP_ROOT: /www/server/php/84
