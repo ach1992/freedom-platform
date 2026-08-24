@@ -7,6 +7,26 @@ fail() {
     exit 1
 }
 
+selector_has_label() {
+    local selector=$1
+    local required=$2
+    local body label
+    local -a labels
+
+    body=${selector#runs-on: }
+    body=${body#\[}
+    body=${body%\]}
+    IFS=',' read -r -a labels <<< "$body"
+
+    for label in "${labels[@]}"; do
+        label=${label#"${label%%[![:space:]]*}"}
+        label=${label%"${label##*[![:space:]]}"}
+        [[ "$label" == "$required" ]] && return 0
+    done
+
+    return 1
+}
+
 required_files=(
     README.md
     AGENTS.md
@@ -21,6 +41,7 @@ required_files=(
     docs/07-security-threat-model.md
     docs/08-data-classification.md
     docs/09-deployment-runbook.md
+    docs/development/execution-infrastructure.md
     docs/development/repository-map.md
     evidence/README.md
     .github/CODEOWNERS
@@ -37,7 +58,7 @@ for path in "${required_files[@]}"; do
     test -s "$path" || fail "required canonical file is missing or empty: $path"
 done
 
-# Recovery must start from durable repository rules and live GitHub, not a mutable status snapshot.
+# Recovery must start from durable repository rules and live GitHub, not mutable status/inventory snapshots.
 for entry in AGENTS.md CONTRIBUTING.md docs/README.md; do
     grep -F "$entry" README.md >/dev/null \
         || fail "README.md does not link required entry point: $entry"
@@ -58,6 +79,20 @@ grep -F 'no implementation status' docs/01-authoritative-requirements.md >/dev/n
     || fail 'requirement index must not contain mutable implementation status'
 grep -F 'not a per-task archive' evidence/README.md >/dev/null \
     || fail 'evidence policy must reject per-task repository evidence'
+
+# Execution infrastructure has one canonical owner; surrounding docs must route to it instead of copying lifecycle rules.
+for entry in README.md AGENTS.md CONTRIBUTING.md docs/06-test-strategy.md docs/09-deployment-runbook.md docs/README.md docs/development/repository-map.md; do
+    grep -F 'execution-infrastructure.md' "$entry" >/dev/null \
+        || fail "$entry does not route execution/tool/runner questions to the canonical execution-infrastructure document"
+done
+grep -F 'runner display names' docs/development/execution-infrastructure.md >/dev/null \
+    || fail 'execution-infrastructure document must reject runner-name routing dependencies'
+grep -F 'Add or replace a runner' docs/development/execution-infrastructure.md >/dev/null \
+    || fail 'execution-infrastructure document must define runner onboarding/replacement'
+grep -F 'Quarantine a runner' docs/development/execution-infrastructure.md >/dev/null \
+    || fail 'execution-infrastructure document must define runner quarantine'
+grep -F 'Remove a runner' docs/development/execution-infrastructure.md >/dev/null \
+    || fail 'execution-infrastructure document must define runner removal'
 
 # Task/PR templates enforce a useful minimum without requiring ceremonial N/A sections.
 for label in 'Parent / requirements' 'Goal / outcome' 'Dependencies / base rule' 'Scope' 'Acceptance criteria' 'Validation strategy' 'Change risk' 'Initial state'; do
@@ -103,6 +138,7 @@ while IFS= read -r path; do
         docs/07-security-threat-model.md|\
         docs/08-data-classification.md|\
         docs/09-deployment-runbook.md|\
+        docs/development/execution-infrastructure.md|\
         docs/development/repository-map.md|\
         docs/specification/master-execution-prompt.md|\
         docs/adr/*.md)
@@ -123,18 +159,18 @@ shopt -u nullglob
 # Canonical navigation must not point back to retired status/traceability/evidence material.
 if grep -RIE --include='*.md' \
     'PROJECT_STATUS\.md|docs/project-status\.json|current-traceability-overlay|continuation-handoff|phase-[0-9].*traceability|evidence/0\.[0-9]|docs/(00|02|10|11|12|13|14|15|16|17|18|19)-' \
-    README.md AGENTS.md CONTRIBUTING.md docs/README.md docs/0[1-9]-*.md docs/development/repository-map.md \
+    README.md AGENTS.md CONTRIBUTING.md docs/README.md docs/0[1-9]-*.md docs/development/*.md \
     >/dev/null; then
     fail 'canonical documentation references retired status/planning/traceability/evidence material'
 fi
 
-# Every executing workflow is self-hosted-only. No GitHub-hosted fallback is accepted.
+# Every executing workflow is self-hosted Linux/x64. Custom capability labels are owned by each workflow's
+# runs-on selector and may differ by workload; the verifier must not couple all jobs to one custom-label set.
 shopt -s nullglob
 workflow_files=(.github/workflows/*.yml .github/workflows/*.yaml)
 shopt -u nullglob
 ((${#workflow_files[@]} > 0)) || fail 'repository contains no GitHub Actions workflows'
 
-expected_runner_selector='runs-on: [self-hosted, Linux, X64, freedom-staging, php84]'
 for workflow in "${workflow_files[@]}"; do
     if grep -Eq 'Historical - Disabled|disabled/historical-workflow|docs/development/staging-workflow-inventory\.md' "$workflow"; then
         fail "historical disabled workflow stub remains in active tree: $workflow"
@@ -143,8 +179,12 @@ for workflow in "${workflow_files[@]}"; do
     found_runner=false
     while IFS= read -r runner_line; do
         trimmed="${runner_line#"${runner_line%%[![:space:]]*}"}"
-        [[ "$trimmed" == "$expected_runner_selector" ]] \
-            || fail "workflow must use canonical self-hosted runner selector: $workflow: $trimmed"
+        [[ "$trimmed" == runs-on:\ \[*\] ]] \
+            || fail "workflow runner selector must be an explicit label list: $workflow: $trimmed"
+        for required_label in self-hosted Linux X64; do
+            selector_has_label "$trimmed" "$required_label" \
+                || fail "workflow runner selector must retain exact label $required_label: $workflow: $trimmed"
+        done
         found_runner=true
     done < <(grep -E '^[[:space:]]*runs-on:' "$workflow" || true)
 

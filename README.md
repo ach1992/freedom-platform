@@ -7,22 +7,24 @@ Telegram-first commerce and lifecycle-management platform for VPN/proxy subscrip
 For development or project recovery, use this order:
 
 1. [`AGENTS.md`](AGENTS.md) — repository authority, safety rules, branch/PR policy, and delivery model.
-2. [`CONTRIBUTING.md`](CONTRIBUTING.md) — GitHub-only execution routing and canonical verification commands.
+2. [`CONTRIBUTING.md`](CONTRIBUTING.md) — development workflow, Issue/PR/review conventions, and links to the owning execution/validation references.
 3. [Program Issue #3](https://github.com/ach1992/freedom-platform/issues/3) — live Version 1 phase/backlog/dependency state.
 4. [Draft integration PR #6](https://github.com/ach1992/freedom-platform/pull/6) — live integration head toward `main`.
-5. [`docs/README.md`](docs/README.md) — index of durable product, architecture, security, testing, and operations references.
+5. [`docs/README.md`](docs/README.md) — index of durable product, architecture, security, testing, execution-infrastructure, and operations references.
 
-GitHub is authoritative for current phase/task priority, dependencies, blockers, branches, PRs, reviews, CI, and repository source. Do not maintain a repository status snapshot that duplicates this state. A replacement manager or developer should be able to recover current work from the sources above without chat history.
+GitHub is authoritative for current phase/task priority, dependencies, blockers, branches, PRs, reviews, CI, repository source, and live runner inventory. Do not maintain repository status or infrastructure-inventory snapshots that duplicate this state. A replacement manager or developer should be able to recover current work from the sources above without chat history.
 
 ## Execution model
 
 The project is maintained from GitHub. No Owner-managed local checkout or server checkout is assumed to exist or to contain project truth.
 
-- The active ChatGPT Master normally self-executes dependency-safe READY work through the connected GitHub integration and repository-native automation.
-- External coding Workers are optional capacity only when isolation, safe parallelism, specialist review, or a missing capability materially justifies delegation. Codex Cloud is not a required or default execution path.
-- Commands that require an actual runtime, MariaDB, Redis, or repository shell execute through reviewed GitHub Actions on the owner-controlled self-hosted runner. Workflow checkouts are transient execution workspaces, not an alternative source of truth.
+- Durable changes and current delivery state live in GitHub.
+- Real runtime/CI commands execute through supported execution capabilities rather than an invented local environment.
+- Execution workspaces, runner checkouts, and deployed trees are never alternative project sources of truth.
 - Every repository mutation is verified against live GitHub state after the write.
-- When a temporary branch appears no longer needed, the Master reports its name to the Owner; branch cleanup remains Owner-operated.
+- Branch cleanup remains Owner-operated.
+
+The canonical map for GitHub integration, `AI_Server_Agent`, GitHub Actions self-hosted runners, external Workers, toolchain ownership, and runner lifecycle is [`docs/development/execution-infrastructure.md`](docs/development/execution-infrastructure.md). Required test/CI semantics are in [`docs/06-test-strategy.md`](docs/06-test-strategy.md); deployment/live operations are in [`docs/09-deployment-runbook.md`](docs/09-deployment-runbook.md).
 
 ## Product authority
 
@@ -50,7 +52,7 @@ A task, implementation shortcut, old design note, or governance cleanup cannot s
 - do not refactor solely because a class/file is large;
 - add new capabilities behind the owning module/Application contract instead of spreading cross-module Domain dependencies;
 - no new architecture-boundary exception is accepted merely to make a task easier;
-- keep task contracts and validation proportional to change risk; do not create ceremony that does not improve implementation, review, recovery, or release safety.
+- keep task contracts, validation, documentation, and tooling proportional to the value/risk they control; do not create ceremony or duplicated knowledge that slows future work.
 
 ## Non-negotiable invariants
 

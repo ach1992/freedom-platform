@@ -1,28 +1,18 @@
 # Testing and CI Contract
 
-This document defines durable verification requirements. Live run IDs, test counts, artifacts, current failures, runner availability, and repository setting state belong in GitHub.
+This document defines durable verification requirements: which checks are required, what they prove, and when evidence must be refreshed. Live run IDs, test counts, current failures, runner inventory, and repository setting state belong in GitHub.
+
+Execution tools and self-hosted runner provisioning/qualification/lifecycle are owned by [`development/execution-infrastructure.md`](development/execution-infrastructure.md).
 
 ## Execution model
 
 GitHub is the project source of truth. No Owner-maintained local or server checkout is assumed.
 
-The active ChatGPT Master normally self-executes repository work through the connected GitHub integration. Runtime commands execute through reviewed GitHub Actions on the owner-controlled self-hosted runner. External Workers are optional when isolation, parallelism, specialist review, or a missing capability materially justifies delegation; Codex Cloud is not a required/default execution path.
+Runtime commands execute through reviewed GitHub Actions on owner-controlled self-hosted runners. An Actions checkout is transient execution state for an exact GitHub revision, not a second source repository.
 
-An Actions checkout is transient execution state for an exact GitHub revision, not a second source repository.
+The exact `runs-on` selector in each workflow revision is authoritative for runner routing. The runner selected for a job must satisfy the execution-infrastructure qualification contract, and the workflow/toolchain checks must validate its effective environment. GitHub-hosted runners are not a fallback.
 
-## Mandatory CI environment
-
-Every executing GitHub Actions job uses:
-
-```yaml
-runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
-```
-
-The runner must provide PHP 8.4, Composer 2.10.x, Docker/Compose, Git, Bash, `jq`, required PHP extensions, and a compatible coverage driver when coverage is intentionally requested. Repository workflows validate the effective toolchain; runner labels alone are not evidence.
-
-GitHub-hosted runners are not a fallback.
-
-## Using the runner
+## Using CI
 
 - A non-Draft PR targeting `develop/v1.0.0-completion` triggers the applicable CI tier.
 - Draft PRs stay quiet until marked Ready for review.
@@ -50,7 +40,7 @@ CI classifies the complete PR diff into independent validation needs. The profil
 | operational/deployment entrypoints | shell/PHP operational syntax/entrypoint validation; separate High/Critical review/release gates still apply |
 | unknown/unclassified | fail safe to every normal validation domain |
 
-`.github/workflows/staging-readiness.yml` is the only current workflow intentionally classified as bounded read-only control plane. Its verifier requires manual dispatch, read-only token permissions, no secrets/protected environment, the canonical runner selector, an allowlisted action surface and no known runtime/host mutation commands. The verifier itself has adversarial tests. No wildcard `.github/workflows/*` downgrade exists.
+`.github/workflows/staging-readiness.yml` is the only current workflow intentionally classified as bounded read-only control plane. Its verifier requires manual dispatch, read-only token permissions, no secrets/protected environment, the current repository runner selector, an allowlisted action surface and no known runtime/host mutation commands. The verifier itself has adversarial tests. No wildcard `.github/workflows/*` downgrade exists.
 
 Changes to the CI classifier/workflow are self-modifying control-plane changes: representative classifier cases and verifier-abuse cases run independently of the classifier result. A CI-policy change does not manufacture a MariaDB run when the effective diff cannot affect application/database behavior; conversely any application/schema/database-affecting diff still requires MariaDB 10.11.
 
@@ -101,6 +91,8 @@ MARIADB_VERSION=11.4 composer test:integration
 ```
 
 `composer test:quick` is fast feedback only. MariaDB is required for migrations, constraints, triggers, locking, and concurrency acceptance.
+
+The executable PHP/Composer runner contract is enforced by `scripts/ci/bootstrap-self-hosted-toolchain.sh`; do not duplicate its exact extension/version checks here.
 
 ## Test design rules
 

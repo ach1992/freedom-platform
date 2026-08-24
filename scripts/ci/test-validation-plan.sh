@@ -94,7 +94,7 @@ mutations = {
     'automatic_trigger': lambda s: s.replace('on:\n  workflow_dispatch:', 'on:\n  push:\n  workflow_dispatch:', 1),
     'write_permission': lambda s: s.replace('contents: read', 'contents: write', 1),
     'secret': lambda s: s.replace('set -euo pipefail', "set -euo pipefail\n          echo '${{ secrets.RUNTIME_ROOT }}'", 1),
-    'environment': lambda s: s.replace('runs-on: [self-hosted, Linux, X64, freedom-staging, php84]', 'environment: production\n    runs-on: [self-hosted, Linux, X64, freedom-staging, php84]', 1),
+    'environment': lambda s: s.replace('    runs-on:', '    environment: production\n    runs-on:', 1),
     'checkout_action': lambda s: s.replace('steps:\n      - name: Validate read-only contract', 'steps:\n      - uses: actions/checkout@deadbeef\n      - name: Validate read-only contract', 1),
     'sudo': lambda s: s.replace('set -euo pipefail', 'set -euo pipefail\n          sudo true', 1),
     'docker_mutation': lambda s: s.replace('set -euo pipefail', 'set -euo pipefail\n          docker compose up -d', 1),

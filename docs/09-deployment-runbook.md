@@ -2,27 +2,19 @@
 
 Target environment: Ubuntu/aaPanel/OpenLiteSpeed, PHP 8.4, MariaDB, authenticated Redis.
 
-This document is a safety contract, not proof that every described capability currently exists. Execute operational actions only when the owning task/release authorizes them and the implementation exists on the exact GitHub revision.
+This document is the canonical safety contract for **deployment and privileged/live runtime operations**. It is not the owner of development tooling, self-hosted runner lifecycle, or CI semantics.
 
-## Source and execution topology
+- Development execution tools, `AI_Server_Agent`, self-hosted runners and their lifecycle: [`development/execution-infrastructure.md`](development/execution-infrastructure.md).
+- Required CI/testing semantics: [`06-test-strategy.md`](06-test-strategy.md).
+- Current source/task/PR/run state: live GitHub.
 
-GitHub is the only project/source-of-truth location assumed by the repository. A persistent execution checkout may exist for the Master, but it is never a second source of project authority and is not required for recovery.
-
-- **ChatGPT Master + connected GitHub integration** is the normal project-control path for repository state and supported GitHub mutations.
-- **Dedicated AI Server MCP workspace (when connected)** is the preferred persistent checkout for repository editing, Git operations, diagnostics, and local commands that its installed toolchain can safely support. The connector is `AI_Server_Agent`; the normal unprivileged workspace is `/srv/ai-workspace/freedom-platform` owned/used by `aiworker`. Its repository remote uses the repo-scoped SSH alias `github-freedom-platform` for `ach1992/freedom-platform`. Future Masters should discover and reuse this connector/workspace before asking the Owner to recreate repository shell access. The SSH private key and other credential values remain server-side operational state: never read, print, copy into Chat, or commit them.
-- **GitHub Actions** remains the authoritative reviewed CI/runtime validation path on an owner-controlled self-hosted runner selected by labels `[self-hosted, Linux, X64, freedom-staging, php84]`, including the required PHP/Composer/MariaDB/Redis validation unless an exact task explicitly establishes equivalent evidence elsewhere. Runner display names and host inventory are live GitHub operational state, not durable repository contract. Workflow checkouts are transient and are not another source repository.
-- **External Workers** are optional. Use one only when isolation, safe parallelism, specialist review, or a missing Master capability materially justifies delegation. Codex Cloud is not a required/default workspace. Durable results must return to GitHub.
-- **Deployment/staging targets** are runtime infrastructure, not developer checkouts and not project recovery sources.
-
-The MCP workspace is execution/cache state only. Durable changes must be committed and pushed to GitHub; PRs, Issues, refs, reviews, and exact-revision CI remain authoritative. Use `AI_Server_Agent.run_command` for ordinary unprivileged project work when available. Do not use MCP/root operations to change host packages, services, firewall/networking, users, deployment state, or production/provider state merely for development convenience; those operations keep their normal task/release/approval gates.
-
-Use `CONTRIBUTING.md` for capability routing and `docs/06-test-strategy.md` for CI/runtime validation.
+A deployed tree, staging host, persistent execution workspace, or Actions checkout is never a second project source of truth. Execute operational actions only when the owning task/release authorizes them and the implementation exists on the exact GitHub revision.
 
 ## GitHub repository Environments
 
-GitHub repository Environments are operational approval/secret boundaries consumed by workflows using `environment:`. They are separate from the transient Actions checkout and from any optional external Worker environment.
+GitHub repository Environments are operational approval/secret boundaries consumed by workflows using `environment:`. They are separate from Actions runner infrastructure and from transient checkouts.
 
-A workflow referencing an Environment does not prove that reviewers, wait timers, or deployment-branch restrictions are configured. Immediately before any privileged/live use, verify both the exact workflow source and the live Environment protection settings. Missing/unreadable protection settings must be treated as unknown or absent for the decision that depends on them, not silently assumed safe.
+A workflow referencing an Environment does not prove that reviewers, wait timers, or deployment-branch restrictions are configured. Immediately before privileged/live use, verify both the exact workflow source and the live Environment protection settings. Missing/unreadable protection settings must be treated as unknown or absent for the decision that depends on them, not silently assumed safe.
 
 The guarded provider mutation definition references GitHub Environment `provider-live-acceptance`. Its workflow source and live GitHub settings are jointly authoritative for current branch/approval restrictions.
 
@@ -49,25 +41,15 @@ The current workflow/source revision is authoritative for whether an identifier 
 
 Prefer repository-scoped `GITHUB_TOKEN` for repository-local Actions operations. Introduce another credential type only when a concrete capability cannot be provided safely by `GITHUB_TOKEN`.
 
-## Workflow definitions and activation state
+## Operational workflow definitions and activation state
 
-The paths below are the repository's intended workflow definitions on the revision where they exist. **File existence on `develop` or a task branch is not proof of a currently registered/dispatchable standing workflow.** Before any manual or automated invocation, verify the current default-branch workflow tree, GitHub Actions registration/state, exact source revision, and owning Task/Release authorization.
+Workflow source on the exact revision plus current GitHub registration/state are jointly authoritative. **A workflow file existing only on `develop` or a task branch is code under review, not proof of a standing dispatchable capability.** Historical registry entries whose source is absent from the current default-branch tree are history/navigation only.
 
-Historical Actions registry entries whose workflow files are absent from the current default-branch tree are history/navigation, not execution authority.
-
-### CI
-
-`.github/workflows/ci.yml`
-
-- self-hosted-only;
-- Draft PRs stay quiet;
-- CONTROL tier covers allowlisted documentation/governance-only diffs;
-- FULL tier covers source/runtime/workflow/unknown changes and MariaDB 10.11 + authenticated Redis validation;
-- the definition supports manual `workflow_dispatch`; use it only when current GitHub registration exposes it and verify the resulting exact `head_sha` before consuming the evidence.
+Normal repository CI is owned by `.github/workflows/ci.yml` and `docs/06-test-strategy.md`; this runbook does not duplicate its validation tiers or runner selector.
 
 ### Staging Readiness
 
-`.github/workflows/staging-readiness.yml` defines a manual read-only runtime readiness path where/when it is registered. It must not become a general remote shell or project checkout.
+`.github/workflows/staging-readiness.yml` defines a manual read-only runtime readiness path where/when it is registered. It must remain bounded, non-mutating, and must not become a general remote shell or project checkout.
 
 ### Provider Readiness - Read Only
 
