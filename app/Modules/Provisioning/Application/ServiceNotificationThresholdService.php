@@ -593,7 +593,7 @@ final readonly class ServiceNotificationThresholdService
                 (int) $state->id,
                 (int) $service->id,
                 ServiceNotificationState::Escalated,
-                'service-notification:provider-retry-fenced:'.substr($state->episode_key_hash, 0, 24),
+                'service-notification:provider-retry-fenced:'.substr($state->episode_key_hash, 0, 21),
             ) ? 'escalated' : 'waiting';
         }
 
