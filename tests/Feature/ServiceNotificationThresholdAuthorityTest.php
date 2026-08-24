@@ -306,6 +306,42 @@ final class ServiceNotificationThresholdAuthorityTest extends TestCase
         self::assertNull($state->latest_delivery_attempt_id);
     }
 
+    public function test_semantically_equivalent_expiry_snapshot_preserves_provider_source_authority(): void
+    {
+        $fixture = $this->fixture('expiry-provider-equivalent');
+        $remoteId = 'notification-expiry-provider-equivalent';
+        $snapshot = $this->snapshot(
+            $remoteId,
+            'notification-expiry-provider-equivalent-user',
+            $this->clock->value->modify('+3 days'),
+        );
+        $servicePublicId = $this->attachService($fixture, $snapshot, 'expiry-provider-equivalent');
+        $sync = $this->app->make(ServiceSynchronizationService::class);
+        self::assertSame(1, $sync->syncOne($servicePublicId)->processed);
+        self::assertSame(1, $this->app->make(ServiceNotificationThresholdService::class)->processBatch(1)->queued);
+
+        $attemptId = (int) DB::table('service_notification_states')
+            ->where('notification_type', 'expiry')
+            ->value('latest_delivery_attempt_id');
+        self::assertGreaterThan(0, $attemptId);
+        $originalSourceId = (int) DB::table('service_notification_states')
+            ->where('notification_type', 'expiry')
+            ->value('source_id');
+
+        $fixture['adapter']->seed($snapshot);
+        self::assertSame(1, $sync->syncOne($servicePublicId)->processed);
+        $latestSnapshotId = (int) DB::table('service_sync_snapshots')
+            ->where('service_subscription_id', (int) DB::table('service_subscriptions')
+                ->where('public_id', $servicePublicId)
+                ->value('id'))
+            ->orderByDesc('observed_at')
+            ->orderByDesc('id')
+            ->value('id');
+        self::assertNotSame($originalSourceId, $latestSnapshotId);
+
+        $this->assertProviderSourceAuthorityAcceptsAttempt($attemptId);
+    }
+
     public function test_expiry_source_change_after_queue_is_rejected_at_provider_source_boundary(): void
     {
         $fixture = $this->fixture('expiry-provider-source-change');
@@ -490,7 +526,31 @@ SQL,
         }
     }
 
-    /** @return array{owner_id:int,user_id:int,offering_id:int,target_id:int,adapter:ServiceOperationalPanelAdapter} */
+    private function assertProviderSourceAuthorityAcceptsAttempt(int $attemptId): void
+    {
+        $authority = $this->app->make(ServiceNotificationSourceAuthority::class);
+        $locator = $authority->locatorForDeliveryAttempt(DB::connection(), $attemptId);
+        self::assertNotNull($locator);
+
+        DB::connection()->transaction(function (Connection $connection) use ($authority, $locator): void {
+            $sourceLock = $authority->lockBeforeService($connection, $locator);
+            $service = $connection->table('service_subscriptions')
+                ->where('id', $locator['service_subscription_id'])
+                ->lockForUpdate()
+                ->first(['id', 'user_id', 'lifecycle_version', 'remote_identity_generation', 'mutation_generation']);
+            $state = $connection->table('service_notification_states')
+                ->where('id', $locator['notification_state_id'])
+                ->lockForUpdate()
+                ->first([
+                    'id', 'service_subscription_id', 'episode_key_hash', 'notification_type', 'threshold_code',
+                    'cycle_key_hash', 'source_type', 'source_id', 'low_balance_threshold_irr',
+                ]);
+            self::assertNotNull($service);
+            self::assertNotNull($state);
+            $authority->assertCurrent($connection, $service, $state, $sourceLock);
+        }, 3);
+    }
+
     private function assertProviderSourceAuthorityRejectsAttempt(int $attemptId): void
     {
         $authority = $this->app->make(ServiceNotificationSourceAuthority::class);
@@ -521,6 +581,7 @@ SQL,
         }
     }
 
+    /** @return array{owner_id:int,user_id:int,offering_id:int,target_id:int,adapter:ServiceOperationalPanelAdapter} */
     private function fixture(string $suffix): array
     {
         $offering = $this->activeBenefitOffering('service-notification-'.$suffix, 'panel.example.com');

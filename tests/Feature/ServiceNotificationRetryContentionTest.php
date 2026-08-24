@@ -4,9 +4,89 @@ declare(strict_types=1);
 
 namespace {
     use App\Modules\Provisioning\Application\ServiceDeliveryAttemptQueueService;
+    use App\Modules\Provisioning\Application\ServiceNotificationThresholdService;
+    use App\Modules\Provisioning\Domain\ServiceNotificationState;
     use Illuminate\Contracts\Console\Kernel;
+    use Illuminate\Database\Connection;
+    use Illuminate\Support\Facades\DB;
+    use ReflectionMethod;
 
     require_once dirname(__DIR__, 2).'/vendor/autoload.php';
+
+    if (PHP_SAPI === 'cli' && ($argv[1] ?? null) === '--service-notification-expiration-contention-worker') {
+        $app = require dirname(__DIR__, 2).'/bootstrap/app.php';
+        $app->make(Kernel::class)->bootstrap();
+        $decoded = base64_decode($argv[2] ?? '', true);
+        if ($decoded === false) {
+            fwrite(STDERR, "Invalid worker payload encoding.\n");
+            exit(2);
+        }
+
+        try {
+            /** @var array{notification_state_id:int,service_id:int} $payload */
+            $payload = json_decode($decoded, true, flags: JSON_THROW_ON_ERROR);
+        } catch (JsonException $exception) {
+            fwrite(STDERR, 'Invalid worker payload: '.$exception->getMessage()."\n");
+            exit(2);
+        }
+
+        $reportedLock = false;
+        DB::connection()->beforeExecuting(static function (
+            string $query,
+            array $bindings,
+            Connection $connection,
+        ) use (&$reportedLock): void {
+            unset($bindings, $connection);
+            if ($reportedLock || ! str_contains(strtolower($query), 'for update')) {
+                return;
+            }
+
+            $sql = strtolower($query);
+            if (str_contains($sql, 'ledger_accounts')) {
+                $reportedLock = true;
+                echo "LOCK_ATTEMPT:wallet\n";
+                flush();
+
+                return;
+            }
+            if (str_contains($sql, 'service_subscriptions')) {
+                $reportedLock = true;
+                echo "LOCK_ATTEMPT:service\n";
+                flush();
+            }
+        });
+
+        echo "READY\n";
+        flush();
+        if (fgets(STDIN) === false) {
+            fwrite(STDERR, "Worker barrier was not released.\n");
+            exit(2);
+        }
+
+        try {
+            $notifications = $app->make(ServiceNotificationThresholdService::class);
+            $transition = new ReflectionMethod($notifications, 'transitionState');
+            $expired = (bool) $transition->invoke(
+                $notifications,
+                $payload['notification_state_id'],
+                $payload['service_id'],
+                ServiceNotificationState::Expired,
+                'source_invalidated',
+                'service-notification:contention-expiration',
+            );
+            echo json_encode([
+                'ok' => true,
+                'expired' => $expired,
+            ], JSON_THROW_ON_ERROR)."\n";
+        } catch (Throwable $exception) {
+            echo json_encode([
+                'ok' => false,
+                'exception' => $exception::class,
+                'message' => $exception->getMessage(),
+            ], JSON_THROW_ON_ERROR)."\n";
+        }
+        exit(0);
+    }
 
     if (PHP_SAPI === 'cli' && ($argv[1] ?? null) === '--service-notification-retry-contention-worker') {
         $app = require dirname(__DIR__, 2).'/bootstrap/app.php';
@@ -184,6 +264,70 @@ namespace Tests\Feature {
                 ->where('retry_ordinal', 1)
                 ->count());
             self::assertSame(1, (int) DB::table('service_notification_states')->where('id', $stateId)->value('latest_retry_ordinal'));
+        }
+
+        public function test_low_balance_expiration_waits_on_wallet_before_service_without_deadlock(): void
+        {
+            $fixture = $this->fixture();
+            $servicePublicId = $this->attachService($fixture);
+            $service = DB::table('service_subscriptions')->where('public_id', $servicePublicId)->first([
+                'id', 'user_id', 'lifecycle_version', 'remote_identity_generation', 'mutation_generation',
+            ]);
+            self::assertNotNull($service);
+            $stateId = $this->createTriggeredLowBalanceState($service);
+            $walletId = (int) DB::table('service_notification_states')->where('id', $stateId)->value('source_id');
+            self::assertGreaterThan(0, $walletId);
+
+            $connection = DB::connection();
+            $worker = null;
+            $connection->beginTransaction();
+            try {
+                $wallet = $connection->table('ledger_accounts')
+                    ->where('id', $walletId)
+                    ->lockForUpdate()
+                    ->first(['id']);
+                self::assertNotNull($wallet);
+                $connection->statement('SET SESSION innodb_lock_wait_timeout = 2');
+
+                $worker = $this->startExpirationWorker([
+                    'notification_state_id' => $stateId,
+                    'service_id' => (int) $service->id,
+                ]);
+                self::assertSame(
+                    "LOCK_ATTEMPT:wallet\n",
+                    $this->readLine($worker, 'first lock attempt', 0),
+                    'Expiration must attempt the Wallet lock before the Service lock.',
+                );
+
+                // If expiration had already locked Service and then waited on Wallet, this query
+                // would hit the two-second session lock timeout and prove the old deadlock cycle.
+                $lockedService = $connection->table('service_subscriptions')
+                    ->where('id', (int) $service->id)
+                    ->lockForUpdate()
+                    ->first(['id']);
+                self::assertNotNull($lockedService);
+                $connection->commit();
+
+                $resultLine = $this->readLine($worker, 'expiration result', 0);
+                /** @var array<string,mixed> $result */
+                $result = json_decode($resultLine, true, flags: JSON_THROW_ON_ERROR);
+                self::assertTrue((bool) ($result['ok'] ?? false), json_encode($result, JSON_THROW_ON_ERROR));
+                self::assertFalse((bool) ($result['expired'] ?? true));
+                self::assertSame('triggered', DB::table('service_notification_states')->where('id', $stateId)->value('state'));
+
+                $stderr = stream_get_contents($worker['pipes'][2]);
+                fclose($worker['pipes'][1]);
+                fclose($worker['pipes'][2]);
+                self::assertSame(0, proc_close($worker['process']), $stderr);
+                $worker = null;
+            } finally {
+                if ($connection->transactionLevel() > 0) {
+                    $connection->rollBack();
+                }
+                if ($worker !== null) {
+                    $this->terminateWorkers([$worker]);
+                }
+            }
         }
 
         /** @param object{id:int|string,user_id:int|string,lifecycle_version:int|string,remote_identity_generation:int|string,mutation_generation:int|string} $service */
@@ -369,6 +513,44 @@ namespace Tests\Feature {
                 'created_at' => $now,
                 'updated_at' => $now,
             ]);
+        }
+
+        /**
+         * @param  array{notification_state_id:int,service_id:int}  $payload
+         * @return array{process:resource,pipes:array{0:resource,1:resource,2:resource}}
+         */
+        private function startExpirationWorker(array $payload): array
+        {
+            $pipes = [];
+            $process = proc_open([
+                PHP_BINARY,
+                '-d',
+                'pcov.enabled=0',
+                __FILE__,
+                '--service-notification-expiration-contention-worker',
+                base64_encode(json_encode($payload, JSON_THROW_ON_ERROR)),
+            ], [
+                0 => ['pipe', 'r'],
+                1 => ['pipe', 'w'],
+                2 => ['pipe', 'w'],
+            ], $pipes, dirname(__DIR__, 2));
+            if (! is_resource($process)) {
+                throw new RuntimeException('Unable to start Service notification expiration contention worker.');
+            }
+            /** @var array{0:resource,1:resource,2:resource} $pipes */
+            stream_set_blocking($pipes[1], false);
+            stream_set_blocking($pipes[2], false);
+            $worker = ['process' => $process, 'pipes' => $pipes];
+            if ($this->readLine($worker, 'readiness', 0) !== "READY\n") {
+                $this->terminateWorkers([$worker]);
+                throw new RuntimeException('Service notification expiration contention worker returned an invalid readiness marker.');
+            }
+
+            fwrite($pipes[0], "GO\n");
+            fflush($pipes[0]);
+            fclose($pipes[0]);
+
+            return $worker;
         }
 
         /**
