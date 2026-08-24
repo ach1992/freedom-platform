@@ -21,6 +21,7 @@ required_files=(
     docs/07-security-threat-model.md
     docs/08-data-classification.md
     docs/09-deployment-runbook.md
+    docs/development/execution-infrastructure.md
     docs/development/repository-map.md
     evidence/README.md
     .github/CODEOWNERS
@@ -37,7 +38,7 @@ for path in "${required_files[@]}"; do
     test -s "$path" || fail "required canonical file is missing or empty: $path"
 done
 
-# Recovery must start from durable repository rules and live GitHub, not a mutable status snapshot.
+# Recovery must start from durable repository rules and live GitHub, not mutable status/inventory snapshots.
 for entry in AGENTS.md CONTRIBUTING.md docs/README.md; do
     grep -F "$entry" README.md >/dev/null \
         || fail "README.md does not link required entry point: $entry"
@@ -58,6 +59,20 @@ grep -F 'no implementation status' docs/01-authoritative-requirements.md >/dev/n
     || fail 'requirement index must not contain mutable implementation status'
 grep -F 'not a per-task archive' evidence/README.md >/dev/null \
     || fail 'evidence policy must reject per-task repository evidence'
+
+# Execution infrastructure has one canonical owner; surrounding docs must route to it instead of copying lifecycle rules.
+for entry in README.md AGENTS.md CONTRIBUTING.md docs/06-test-strategy.md docs/09-deployment-runbook.md docs/README.md docs/development/repository-map.md; do
+    grep -F 'execution-infrastructure.md' "$entry" >/dev/null \
+        || fail "$entry does not route execution/tool/runner questions to the canonical execution-infrastructure document"
+done
+grep -F 'runner display names' docs/development/execution-infrastructure.md >/dev/null \
+    || fail 'execution-infrastructure document must reject runner-name routing dependencies'
+grep -F 'Add or replace a runner' docs/development/execution-infrastructure.md >/dev/null \
+    || fail 'execution-infrastructure document must define runner onboarding/replacement'
+grep -F 'Quarantine a runner' docs/development/execution-infrastructure.md >/dev/null \
+    || fail 'execution-infrastructure document must define runner quarantine'
+grep -F 'Remove a runner' docs/development/execution-infrastructure.md >/dev/null \
+    || fail 'execution-infrastructure document must define runner removal'
 
 # Task/PR templates enforce a useful minimum without requiring ceremonial N/A sections.
 for label in 'Parent / requirements' 'Goal / outcome' 'Dependencies / base rule' 'Scope' 'Acceptance criteria' 'Validation strategy' 'Change risk' 'Initial state'; do
@@ -103,6 +118,7 @@ while IFS= read -r path; do
         docs/07-security-threat-model.md|\
         docs/08-data-classification.md|\
         docs/09-deployment-runbook.md|\
+        docs/development/execution-infrastructure.md|\
         docs/development/repository-map.md|\
         docs/specification/master-execution-prompt.md|\
         docs/adr/*.md)
@@ -123,7 +139,7 @@ shopt -u nullglob
 # Canonical navigation must not point back to retired status/traceability/evidence material.
 if grep -RIE --include='*.md' \
     'PROJECT_STATUS\.md|docs/project-status\.json|current-traceability-overlay|continuation-handoff|phase-[0-9].*traceability|evidence/0\.[0-9]|docs/(00|02|10|11|12|13|14|15|16|17|18|19)-' \
-    README.md AGENTS.md CONTRIBUTING.md docs/README.md docs/0[1-9]-*.md docs/development/repository-map.md \
+    README.md AGENTS.md CONTRIBUTING.md docs/README.md docs/0[1-9]-*.md docs/development/*.md \
     >/dev/null; then
     fail 'canonical documentation references retired status/planning/traceability/evidence material'
 fi
