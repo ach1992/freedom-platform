@@ -144,13 +144,13 @@ if grep -RIE --include='*.md' \
     fail 'canonical documentation references retired status/planning/traceability/evidence material'
 fi
 
-# Every executing workflow is self-hosted-only. No GitHub-hosted fallback is accepted.
+# Every executing workflow is self-hosted Linux/x64. Custom capability labels are owned by each workflow's
+# runs-on selector and may differ by workload; the verifier must not couple all jobs to one custom-label set.
 shopt -s nullglob
 workflow_files=(.github/workflows/*.yml .github/workflows/*.yaml)
 shopt -u nullglob
 ((${#workflow_files[@]} > 0)) || fail 'repository contains no GitHub Actions workflows'
 
-expected_runner_selector='runs-on: [self-hosted, Linux, X64, freedom-staging, php84]'
 for workflow in "${workflow_files[@]}"; do
     if grep -Eq 'Historical - Disabled|disabled/historical-workflow|docs/development/staging-workflow-inventory\.md' "$workflow"; then
         fail "historical disabled workflow stub remains in active tree: $workflow"
@@ -159,8 +159,12 @@ for workflow in "${workflow_files[@]}"; do
     found_runner=false
     while IFS= read -r runner_line; do
         trimmed="${runner_line#"${runner_line%%[![:space:]]*}"}"
-        [[ "$trimmed" == "$expected_runner_selector" ]] \
-            || fail "workflow must use canonical self-hosted runner selector: $workflow: $trimmed"
+        [[ "$trimmed" == runs-on:\ \[*\] ]] \
+            || fail "workflow runner selector must be an explicit label list: $workflow: $trimmed"
+        for required_label in self-hosted Linux X64; do
+            [[ "$trimmed" == *"$required_label"* ]] \
+                || fail "workflow runner selector must retain $required_label: $workflow: $trimmed"
+        done
         found_runner=true
     done < <(grep -E '^[[:space:]]*runs-on:' "$workflow" || true)
 
