@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace App\Modules\Provisioning\Application;
 
 use App\Modules\Provisioning\Domain\ServiceDeliveryEffectState;
+use App\Modules\Provisioning\Domain\ServiceDeliveryPurpose;
 use App\Modules\Telegram\Application\Contracts\ProtectedTelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\ProtectedTelegramMessageSender;
+use App\Modules\Telegram\Application\ProtectedTelegramPresentation;
 use App\Modules\Telegram\Application\ProtectedTelegramSendOutcome;
 use App\Modules\Telegram\Application\ProtectedTelegramSendResult;
 use App\Shared\Application\Clock;
@@ -18,10 +20,11 @@ use RuntimeException;
 use Throwable;
 
 /**
- * @phpstan-type DeliveryAttempt object{id:int|string,public_id:string,service_subscription_id:int|string,correlation_id:string,target_remote_identity_generation:int|string,target_lifecycle_version:int|string}
- * @phpstan-type DeliveryService object{id:int|string,public_id:string,user_id:int|string,service_target_id:int|string|null,remote_service_id:?string,provisioned_at:?string,lifecycle_state:string,lifecycle_version:int|string,remote_identity_generation:int|string,remote_deleted_at:?string}
+ * @phpstan-type DeliveryAttempt object{id:int|string,public_id:string,service_subscription_id:int|string,purpose:string,correlation_id:string,target_remote_identity_generation:int|string,target_lifecycle_version:int|string}
+ * @phpstan-type DeliveryService object{id:int|string,public_id:string,user_id:int|string,service_target_id:int|string|null,remote_service_id:?string,provisioned_at:?string,lifecycle_state:string,lifecycle_version:int|string,remote_identity_generation:int|string,mutation_generation:int|string,remote_deleted_at:?string}
  * @phpstan-type TelegramAccount object{id:int|string,user_id:int|string,bot_id:int|string,telegram_user_id:int|string,is_bot:int|string|bool}
  * @phpstan-type DeliveryEffect object{id:int|string,public_id:string,service_delivery_attempt_id:int|string,service_subscription_id:int|string,telegram_account_id:int|string,telegram_bot_id:int|string,telegram_user_id:int|string,state:string,state_version:int|string,provider_boundary_started_at:?string,completed_at:?string,telegram_message_id:int|string|null,result_code:?string,retry_after_seconds:int|string|null}
+ * @phpstan-type NotificationSourceState object{id:int|string,service_subscription_id:int|string,episode_key_hash:string,notification_type:string,threshold_code:string,cycle_key_hash:string,source_type:string,source_id:int|string|null,low_balance_threshold_irr:int|string|null,state:string,latest_delivery_attempt_id:int|string|null,latest_retry_ordinal:int|string|null}
  * @phpstan-type DeliveryContext array{attempt:DeliveryAttempt,service:DeliveryService,account:TelegramAccount,effect:DeliveryEffect}
  */
 final readonly class ServiceDeliveryEffectExecutor
@@ -42,9 +45,10 @@ final readonly class ServiceDeliveryEffectExecutor
         private ProtectedTelegramDeliveryRuntime $telegram,
         private ProtectedTelegramMessageSender $sender,
         private ProtectedServiceDeliveryPresentationFactory $presentations,
+        private ServiceNotificationSourceAuthority $notificationSources,
     ) {}
 
-    /** @requirement SVC-002 SVC-014 PRV-002 PRV-003 ARCH-004 DAT-003 SEC-002 SEC-008 INT-001 INT-002 OPS-003 QUA-001 QUA-004 */
+    /** @requirement SVC-002 SVC-013 SVC-014 PRV-002 PRV-003 ARCH-004 DAT-003 SEC-002 SEC-008 INT-001 INT-002 OPS-003 QUA-001 QUA-004 */
     public function execute(string $attemptPublicId): ServiceDeliveryExecutionReceipt
     {
         $this->assertUlid($attemptPublicId);
@@ -63,23 +67,37 @@ final readonly class ServiceDeliveryEffectExecutor
             throw new DomainException('Service delivery effect is not safely executable.');
         }
 
-        try {
-            $targetId = $this->positiveDatabaseInt($context['service']->service_target_id, 'Service target ID');
-            $remoteServiceId = $this->requiredString($context['service']->remote_service_id, 'Remote Service ID');
-            $adapter = $this->adapters->resolve($targetId);
-            $artifacts = $adapter->getDeliveryArtifacts($remoteServiceId);
-        } catch (Throwable) {
-            // No Telegram provider boundary has been crossed. Common Outbox retry is safe.
-            return $this->receipt($context['attempt'], $context['effect'], false);
+        $purpose = ServiceDeliveryPurpose::tryFrom($context['attempt']->purpose)
+            ?? throw new RuntimeException('Stored Service delivery purpose is invalid.');
+        if ($purpose === ServiceDeliveryPurpose::Notification) {
+            try {
+                $presentation = $this->notificationPresentation((int) $context['attempt']->id);
+            } catch (Throwable) {
+                return $this->finalizePreparedFailure(
+                    $context['effect'],
+                    'notification_presentation_unavailable',
+                );
+            }
+        } else {
+            try {
+                $targetId = $this->positiveDatabaseInt($context['service']->service_target_id, 'Service target ID');
+                $remoteServiceId = $this->requiredString($context['service']->remote_service_id, 'Remote Service ID');
+                $adapter = $this->adapters->resolve($targetId);
+                $artifacts = $adapter->getDeliveryArtifacts($remoteServiceId);
+            } catch (Throwable) {
+                // No Telegram provider boundary has been crossed. Common Outbox retry is safe.
+                return $this->receipt($context['attempt'], $context['effect'], false);
+            }
+
+            $presentation = $this->presentations->make($artifacts);
+            if ($presentation === null) {
+                return $this->finalizePreparedFailure(
+                    $context['effect'],
+                    'delivery_text_unavailable',
+                );
+            }
         }
 
-        $presentation = $this->presentations->make($artifacts);
-        if ($presentation === null) {
-            return $this->finalizePreparedFailure(
-                $context['effect'],
-                'delivery_text_unavailable',
-            );
-        }
         if ($presentation->isText() && mb_strlen($presentation->text()) > 4096) {
             return $this->finalizePreparedFailure(
                 $context['effect'],
@@ -89,6 +107,8 @@ final readonly class ServiceDeliveryEffectExecutor
 
         try {
             $sending = $this->enterProviderBoundary($context['effect']);
+        } catch (ServiceNotificationCandidateInvalidatedException $exception) {
+            throw $exception;
         } catch (DomainException) {
             return $this->finalizePreparedFailure(
                 $context['effect'],
@@ -173,6 +193,7 @@ final readonly class ServiceDeliveryEffectExecutor
             }
 
             $this->assertCurrentAuthority($connection, $attempt, $service);
+            $this->assertCurrentNotificationAuthority($connection, $attempt);
             $account = $this->telegramAccount($connection, $service);
 
             $effect = $this->effectByAttemptId($connection, (int) $attempt->id, true);
@@ -208,15 +229,66 @@ final readonly class ServiceDeliveryEffectExecutor
         }, 3);
     }
 
+    private function notificationPresentation(int $attemptId): ProtectedTelegramPresentation
+    {
+        /** @var object{presentation_text:string,presentation_hash:string}|null $binding */
+        $binding = $this->database->connection()->table('service_notification_delivery_bindings')
+            ->where('service_delivery_attempt_id', $attemptId)
+            ->first(['presentation_text', 'presentation_hash']);
+        if ($binding === null
+            || ! hash_equals($binding->presentation_hash, hash('sha256', $binding->presentation_text))) {
+            throw new RuntimeException('Service notification presentation evidence is invalid.');
+        }
+
+        return ProtectedTelegramPresentation::plainText($binding->presentation_text);
+    }
+
+    /**
+     * @param  DeliveryAttempt  $attempt
+     * @return NotificationSourceState|null
+     */
+    private function assertCurrentNotificationAuthority(Connection $connection, object $attempt): ?object
+    {
+        if ($attempt->purpose !== ServiceDeliveryPurpose::Notification->value) {
+            return null;
+        }
+
+        /** @var NotificationSourceState|null $binding */
+        $binding = $connection->table('service_notification_delivery_bindings as binding')
+            ->join('service_notification_states as state', 'state.id', '=', 'binding.service_notification_state_id')
+            ->where('binding.service_delivery_attempt_id', (int) $attempt->id)
+            ->where('state.service_subscription_id', (int) $attempt->service_subscription_id)
+            ->where('state.state', 'triggered')
+            ->whereColumn('state.latest_delivery_attempt_id', 'binding.service_delivery_attempt_id')
+            ->lockForUpdate()
+            ->first([
+                'state.id', 'state.service_subscription_id', 'state.episode_key_hash', 'state.notification_type',
+                'state.threshold_code', 'state.cycle_key_hash', 'state.source_type', 'state.source_id',
+                'state.low_balance_threshold_irr', 'state.state', 'state.latest_delivery_attempt_id', 'state.latest_retry_ordinal',
+            ]);
+        if ($binding === null) {
+            throw new DomainException('Service notification Delivery Attempt lost current threshold authority.');
+        }
+
+        return $binding;
+    }
+
     /**
      * @param  DeliveryEffect  $locator
      * @return DeliveryEffect
      */
     private function enterProviderBoundary(object $locator): object
     {
-        return $this->database->connection()->transaction(function (Connection $connection) use ($locator): object {
-            // Resolve immutable identities without locks, then acquire Service -> Attempt -> Effect.
-            // This matches queue authority and prevents service/attempt lock-order inversion.
+        $sourceLocator = $this->notificationSources->locatorForDeliveryAttempt(
+            $this->database->connection(),
+            (int) $locator->service_delivery_attempt_id,
+        );
+
+        return $this->database->connection()->transaction(function (Connection $connection) use ($locator, $sourceLocator): object {
+            $sourceLock = $sourceLocator === null ? null : $this->notificationSources->lockBeforeService($connection, $sourceLocator);
+            // Source-specific locks precede Service where required (Wallet account or renewal Attempt);
+            // after that, acquire Service -> Attempt -> Effect. This matches queue authority and
+            // prevents service/attempt lock-order inversion.
             $effectLocator = $this->effectById($connection, (int) $locator->id, false);
             $attemptLocator = $this->attemptById($connection, (int) $effectLocator->service_delivery_attempt_id, false);
             $service = $this->serviceById($connection, (int) $attemptLocator->service_subscription_id, true);
@@ -232,6 +304,11 @@ final readonly class ServiceDeliveryEffectExecutor
             }
 
             $this->assertCurrentAuthority($connection, $attempt, $service);
+            $notification = $this->assertCurrentNotificationAuthority($connection, $attempt);
+            if ($notification !== null) {
+                $sourceLock ?? throw new RuntimeException('Notification provider boundary lost source-lock authority.');
+                $this->notificationSources->assertCurrent($connection, $service, $notification, $sourceLock);
+            }
             $account = $this->telegramAccount($connection, $service);
             $this->assertEffectRecipient($effect, $account);
 

@@ -72,3 +72,25 @@ Schedule::command('services:sync', [
     // for a day. Per-Service leases remain the durable concurrency fence for manual/concurrent runs.
     ->withoutOverlapping(30)
     ->onOneServer();
+
+$serviceNotificationInterval = filter_var(
+    config('service_notifications.interval_minutes', 5),
+    FILTER_VALIDATE_INT,
+    ['options' => ['min_range' => 1, 'max_range' => 60]],
+);
+if ($serviceNotificationInterval === false || 60 % $serviceNotificationInterval !== 0) {
+    throw new RuntimeException('Service notification interval minutes must be a divisor of 60 between 1 and 60.');
+}
+$serviceNotificationCron = $serviceNotificationInterval === 60
+    ? '2 * * * *'
+    : '*/'.$serviceNotificationInterval.' * * * *';
+Schedule::command('services:notifications', [
+    '--limit' => config('service_notifications.batch_limit', 50),
+    '--json' => true,
+])
+    ->name('services.notifications')
+    ->cron($serviceNotificationCron)
+    // Delivery effects are separately idempotent and provider-fenced. This lock only prevents
+    // duplicate threshold scans and is intentionally bounded after abnormal process termination.
+    ->withoutOverlapping(30)
+    ->onOneServer();
