@@ -9,7 +9,6 @@ namespace {
     use Illuminate\Contracts\Console\Kernel;
     use Illuminate\Database\Connection;
     use Illuminate\Support\Facades\DB;
-    use ReflectionMethod;
 
     require_once dirname(__DIR__, 2).'/vendor/autoload.php';
 
