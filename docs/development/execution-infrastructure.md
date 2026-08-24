@@ -32,10 +32,11 @@ It does not make Chat state authoritative, does not expose secret values, and do
 When `AI_Server_Agent` is connected, reuse the repository-scoped workspace before asking the Owner to recreate shell access:
 
 - workspace: `/srv/ai-workspace/freedom-platform`;
-- normal user: `aiworker`;
-- repository remote alias: `github-freedom-platform`.
+- normal user: `aiworker`.
 
 The workspace is persistent execution/cache state, not project authority. Durable changes must return to GitHub. Never read or expose its SSH private key or other credentials.
+
+Use the repository's currently configured Git remote after verifying it. Remote names, SSH host aliases, and credential wiring are workspace-operational state and are not a durable project contract.
 
 Ordinary unprivileged Git/edit/diagnostic commands may use this workspace. Host-wide package/service/firewall/user changes, production/deployment mutation, credential changes, or other privileged operations retain their normal authorization and safety gates.
 
@@ -45,7 +46,7 @@ GitHub Actions is the authoritative reviewed runtime/CI path for repository jobs
 
 Runner **display names are inventory**, never a workflow contract. Jobs route by labels. The exact `runs-on` selector in the workflow revision is authoritative; do not copy its custom label strings into multiple documents. Do not use runner display names as routing dependencies.
 
-A label is a capability claim, not proof. A runner receives a workload capability label only after qualification for that workload.
+A label is a capability claim, not proof. A runner receives a workload capability label only after qualification for that workload. A runner does not need to support every workload.
 
 ### External coding/review workers
 
@@ -59,16 +60,16 @@ Deployment/staging hosts are runtime targets, not developer checkouts or project
 
 ## Toolchain ownership
 
-Avoid maintaining a handwritten copy of executable tool requirements when the repository already verifies them.
+Avoid maintaining a handwritten copy of executable tool requirements when the repository already verifies them. A runner needs only the tools/runtime required by the workload capabilities it claims; do not install a database daemon, Docker daemon, PHP runtime, or other privileged capability merely to make all runners identical.
 
-A runner intended for current repository CI needs, at minimum:
+Common expectations for current self-hosted jobs are supported 64-bit Linux/x64, Git, Bash, `jq`, outbound access required by the pinned Actions/dependency sources, and sufficient filesystem capacity for the intended workload.
 
-- supported 64-bit Linux/x64 for the current workflows;
-- Git and Bash;
-- `jq`;
-- Docker Engine with Compose;
-- the PHP/Composer environment accepted by `scripts/ci/bootstrap-self-hosted-toolchain.sh`;
-- enough filesystem capacity for transient checkouts, Composer dependencies, Docker state, and diagnostic artifacts.
+Additional requirements are capability-scoped:
+
+- **Repository-control / secret-scan work:** use the exact current workflow as authority. Current repository preflight can validate a changed Docker Compose contract with `docker compose ... config`, so a compatible Docker CLI/Compose parser is required when that path can route to the host; that check alone does not require access to a Docker daemon or permission to start containers. Pinned Actions may also bring their own executable tooling.
+- **PHP/static/dependency/operational work:** requires the PHP/Composer environment accepted by `scripts/ci/bootstrap-self-hosted-toolchain.sh` plus only the commands used by the current job definitions.
+- **Database integration work:** requires the accepted PHP/Composer contract plus Docker Engine/daemon access and Compose sufficient to create and remove the repository's disposable MariaDB/Redis dependencies safely.
+- **Staging-runtime / provider-acceptance work:** the exact workflow revision owns any additional host topology, network, trust, secret, approval, or tool requirements. Do not infer those capabilities from ordinary CI eligibility.
 
 The bootstrap script is authoritative for exact PHP 8.4 extensions, PCOV mode, Composer version, JIT state, and runtime paths. If those executable requirements change, update the script and tests first; documentation should describe the boundary rather than duplicate every checked value.
 
@@ -82,32 +83,33 @@ A self-hosted runner executes repository workflow code on the host. Treat runner
 - do not expose a general-purpose root shell through a workflow;
 - do not make untrusted/fork PR code automatically execute on an owner-controlled runner;
 - use only the workflow permissions/secrets/environments needed by that exact job;
+- grant Docker/daemon, host mount, network, secret, or privileged access only when the claimed workload explicitly requires it and the host trust boundary permits it;
 - do not treat a registration token, remove token, PAT, SSH key, `.env`, or other credential as documentation/evidence.
 
 ## Runner capability qualification
 
 Hardware eligibility is workload-based, not provider-, hostname-, CPU-model-, or vCPU-count-based. The pool does not require identical hardware and every registered runner does not need to qualify for every job.
 
-For the current normal application/database integration workload:
+For the current database-integration workload:
 
-- **Memory:** 2 GiB physical RAM is the minimum; 4 GiB or more is preferred when unrelated services share the host. Swap is safety headroom, not normal capacity.
+- **Memory:** maintain enough physical-memory headroom to complete the representative suite without sustained swap or memory pressure. About 2 GiB is the current practical lower bound observed for this workload, while 4 GiB or more is preferred when unrelated services share the host; these values are diagnostic guidance, not independent proof of capability.
 - **CPU:** per-core performance matters because material parts of the suite are single-threaded. Nominal vCPU count alone is not qualification evidence.
 - **Storage:** stable synchronous-write latency matters more than headline sequential throughput.
 - **Safety margin:** the complete MariaDB 10.11 + authenticated Redis integration suite must pass under normal host load with at least one-third of the existing workflow timeout remaining.
 - **Stability:** success must not depend on stale CI containers, accumulated workspace state, sustained swap pressure, abnormal CPU steal, or competing workload spikes.
 
-A machine that does not meet integration qualification may still receive lighter workload capability labels if it separately satisfies those jobs.
+The unchanged representative workload is the definitive integration-qualification gate. Synthetic benchmarks and nominal hardware thresholds are diagnostic evidence only. A machine that does not meet integration qualification may still receive lighter workload capability labels if it separately satisfies those jobs.
 
 Do not weaken tests, durability, or timeouts to make a host appear qualified.
 
 ## Add or replace a runner
 
 1. **Determine intended capability.** Inspect current workflow `runs-on` selectors and decide which workload classes the host should support. Do not copy labels from an old host by habit.
-2. **Prepare the host.** Create/use a dedicated unprivileged service account and install the current base/toolchain requirements above.
+2. **Prepare only the required boundary.** Create/use a dedicated unprivileged service account and install the base/tool requirements needed by the intended workload. Do not grant Docker/privileged/runtime access merely because another capability uses it.
 3. **Register using current GitHub instructions.** Open repository **Settings -> Actions -> Runners -> New self-hosted runner**, choose the actual OS/architecture, and run the download/configuration commands GitHub displays. The runner release and registration token are live/time-sensitive values and must not be persisted in docs, Chat, Issues, or PRs.
 4. **Choose an operational display name.** Use a unique human-readable name only for inventory. Workflows must not depend on it.
 5. **Install the runner as a service.** On systemd Linux use the runner package's `svc.sh` interface from its installation directory and verify it runs as the intended unprivileged account and returns after reboot.
-6. **Qualify before normal routing.** Verify toolchain, Docker access and host resources, then run controlled representative validation for the intended workload. Keep the host out of normal stronger-capability routing until it passes.
+6. **Qualify before normal routing.** Verify the exact toolchain, daemon/runtime access (only when that workload requires it), resource headroom, trust/network boundary, and representative validation for the intended capability. Keep the host out of stronger-capability routing until it passes.
 7. **Assign only proven custom capability labels.** Preserve truthful default OS/architecture labels and add only the exact current custom labels required by workflows the host has qualified to execute.
 8. **Verify routing and completion.** Run the narrowest safe repository validation that proves the intended job can land on and complete on the host with the required safety margin.
 
@@ -136,9 +138,9 @@ Do not hard-pin a workflow to another runner display name as a workaround.
 
 ## Requalification and health failures
 
-Requalify after a material VM resize/migration, storage-class change, OS/toolchain rebuild, repeated timeout, or other evidence that may invalidate the runner's claimed capability.
+Requalify after a material VM resize/migration, storage-class change, OS/toolchain rebuild, repeated timeout, trust/network change relevant to the claimed capability, or other evidence that may invalidate the runner's capability claim.
 
-When the same exact repository revision behaves materially differently across runners, investigate infrastructure before changing product code. Compare only decision-relevant signals such as CPU performance/steal, memory/swap pressure, synchronous storage latency, Docker/stale CI resources, and competing workloads.
+When the same exact repository revision behaves materially differently across runners, investigate infrastructure before changing product code. Compare only decision-relevant signals such as CPU performance/steal, memory/swap pressure, synchronous storage latency, Docker/stale CI resources when applicable, and competing workloads.
 
 Clean only resources proven to belong to finished CI work and only while no job is active. A repeated timeout is not a reason to increase timeout, skip tests, or blindly rerun unchanged work.
 
@@ -149,6 +151,7 @@ Keep these as live operational/GitHub state instead of durable documentation:
 - current runner count, display names, hostnames, IP addresses, cloud providers/plans, online/offline/busy state;
 - current custom-label assignments and which physical host has them;
 - registration/remove tokens, runner package download URLs, PATs, SSH keys and secret values;
+- local Git remote names, SSH host aliases, credential wiring and other replaceable workspace configuration;
 - transient performance measurements, current CI run IDs/test counts/failures and diagnostic snapshots;
 - temporary repair/quarantine status.
 
