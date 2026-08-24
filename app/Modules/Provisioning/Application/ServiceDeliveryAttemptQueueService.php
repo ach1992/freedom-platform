@@ -18,7 +18,7 @@ use Throwable;
 /**
  * @phpstan-type ServiceRow object{id:int|string,public_id:string,user_id:int|string,service_target_id:int|string|null,remote_service_id:?string,provisioned_at:?string,lifecycle_state:string,lifecycle_version:int|string,remote_identity_generation:int|string,mutation_generation:int|string,remote_deleted_at:?string}
  * @phpstan-type DeliveryAttemptRow object{id:int|string,public_id:string,service_subscription_id:int|string,purpose:string,request_key_hash:string,correlation_id:string,target_remote_identity_generation:int|string,target_lifecycle_version:int|string,outbox_event_id:string}
- * @phpstan-type NotificationStateRow object{id:int|string,service_subscription_id:int|string,episode_key_hash:string,notification_type:string,threshold_code:string,cycle_key_hash:string,source_type:string,source_id:int|string|null,low_balance_threshold_irr:int|string|null,state:string,latest_delivery_attempt_id:int|string|null,latest_retry_ordinal:int|string|null,next_retry_at:?string}
+ * @phpstan-type NotificationStateRow object{id:int|string,service_subscription_id:int|string,episode_key_hash:string,notification_type:string,threshold_code:string,cycle_key_hash:string,source_type:string,source_id:int|string|null,low_balance_threshold_irr:int|string|null,max_retries:int|string,state:string,latest_delivery_attempt_id:int|string|null,latest_retry_ordinal:int|string|null,next_retry_at:?string}
  */
 final readonly class ServiceDeliveryAttemptQueueService
 {
@@ -136,7 +136,7 @@ final readonly class ServiceDeliveryAttemptQueueService
                 ->lockForUpdate()
                 ->first([
                     'id', 'service_subscription_id', 'episode_key_hash', 'notification_type', 'threshold_code',
-                    'cycle_key_hash', 'source_type', 'source_id', 'low_balance_threshold_irr', 'state', 'latest_delivery_attempt_id',
+                    'cycle_key_hash', 'source_type', 'source_id', 'low_balance_threshold_irr', 'max_retries', 'state', 'latest_delivery_attempt_id',
                     'latest_retry_ordinal', 'next_retry_at',
                 ]);
             if ($notification === null) {
@@ -165,6 +165,12 @@ final readonly class ServiceDeliveryAttemptQueueService
                 : (int) $notification->latest_retry_ordinal + 1;
             if ($retryOrdinal !== $expectedOrdinal) {
                 throw new ServiceNotificationCandidateInvalidatedException('Service notification retry ordinal changed before queueing.');
+            }
+            $maxRetries = filter_var($notification->max_retries, FILTER_VALIDATE_INT, [
+                'options' => ['min_range' => 0, 'max_range' => 10],
+            ]);
+            if ($maxRetries === false || $retryOrdinal > (int) $maxRetries) {
+                throw new ServiceNotificationCandidateInvalidatedException('Service notification retry ceiling no longer permits queueing.');
             }
             if ($sourceLock === null) {
                 throw new RuntimeException('New Service notification delivery lost its source-lock authority.');

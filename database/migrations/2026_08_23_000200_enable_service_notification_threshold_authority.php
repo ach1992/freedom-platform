@@ -260,6 +260,7 @@ BEGIN
        OR BINARY NEW.last_correlation_id <> BINARY COALESCE(@app_service_notification_correlation_id, '')
        OR NEW.triggered_at <> @app_service_notification_timestamp
        OR NOT (NEW.low_balance_threshold_irr <=> @app_service_notification_low_balance_threshold_irr)
+       OR NEW.max_retries <> COALESCE(@app_service_notification_max_retries, 65535)
        OR NEW.updated_at <> @app_service_notification_timestamp
        OR NEW.state <> 'triggered'
        OR NEW.latest_delivery_attempt_id IS NOT NULL OR NEW.latest_retry_ordinal IS NOT NULL
@@ -440,6 +441,7 @@ BEGIN
        OR BINARY OLD.source_type <> BINARY NEW.source_type
        OR NOT (OLD.source_id <=> NEW.source_id)
        OR NOT (OLD.low_balance_threshold_irr <=> NEW.low_balance_threshold_irr)
+       OR OLD.max_retries <> NEW.max_retries
        OR OLD.triggered_at <> NEW.triggered_at THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service notification state identity is immutable.';
     END IF;
@@ -455,6 +457,7 @@ BEGIN
            OR NOT (OLD.expired_at <=> NEW.expired_at)
            OR (OLD.latest_retry_ordinal IS NULL AND NEW.latest_retry_ordinal <> 0)
            OR (OLD.latest_retry_ordinal IS NOT NULL AND NEW.latest_retry_ordinal <> OLD.latest_retry_ordinal + 1)
+           OR NEW.latest_retry_ordinal > OLD.max_retries
            OR NEW.updated_at < OLD.updated_at THEN
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service notification delivery binding transition is invalid.';
         END IF;
@@ -552,7 +555,7 @@ BEGIN
                       AND BINARY effect_row.state = BINARY 'failed_final'
                       AND effect_row.retry_after_seconds IS NULL
                       AND OLD.latest_retry_ordinal IS NOT NULL
-                      AND OLD.latest_retry_ordinal >= OLD.max_retries)
+                      AND OLD.latest_retry_ordinal = OLD.max_retries)
               );
         ELSEIF NEW.state = 'expired' THEN
             IF OLD.notification_type = 'low_balance' THEN

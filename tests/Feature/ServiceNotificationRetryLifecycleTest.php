@@ -382,6 +382,35 @@ final class ServiceNotificationRetryLifecycleTest extends TestCase
 
         $connection = DB::connection();
         $timestamp = $this->clock->value->format('Y-m-d H:i:s.u');
+        $immutabilityCorrelationId = 'notification-retry-ceiling-immutable';
+        $retryAt = $this->clock->value->modify('+120 seconds')->format('Y-m-d H:i:s.u');
+        ServiceNotificationDatabaseAuthority::scheduleRetry(
+            $connection,
+            (int) $state->id,
+            (int) $state->service_subscription_id,
+            $retryAt,
+            $timestamp,
+            $immutabilityCorrelationId,
+        );
+        try {
+            $connection->table('service_notification_states')
+                ->where('id', (int) $state->id)
+                ->update([
+                    'max_retries' => 1,
+                    'next_retry_at' => $retryAt,
+                    'last_correlation_id' => $immutabilityCorrelationId,
+                    'updated_at' => $timestamp,
+                ]);
+            self::fail('The per-state Service notification retry ceiling must be immutable.');
+        } catch (QueryException) {
+            self::assertSame(2, (int) DB::table('service_notification_states')
+                ->where('id', (int) $state->id)
+                ->value('max_retries'));
+        } finally {
+            ServiceNotificationDatabaseAuthority::clear($connection);
+        }
+
+        $timestamp = $this->clock->value->format('Y-m-d H:i:s.u');
         $correlationId = 'notification-premature-exhaustion-reject';
         ServiceNotificationDatabaseAuthority::transition(
             $connection,

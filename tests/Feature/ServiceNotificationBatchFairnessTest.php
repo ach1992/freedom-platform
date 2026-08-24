@@ -304,7 +304,7 @@ final class ServiceNotificationBatchFairnessTest extends TestCase
             ->value('source_id'));
     }
 
-    public function test_database_authority_rejects_low_balance_state_when_cash_is_not_below_threshold(): void
+    public function test_database_authority_binds_retry_ceiling_and_rejects_invalid_low_balance_source(): void
     {
         $threshold = 500_000;
         config()->set('service_notifications.low_balance_irr', $threshold);
@@ -322,8 +322,6 @@ final class ServiceNotificationBatchFairnessTest extends TestCase
             $fixture['user_id'],
             'cash',
         );
-        $this->fundWallet($assetId, $cashId, 600_000, 'source-proof-high-cash');
-
         $cycle = hash('sha256', implode('|', [
             'service-notification-low-balance-cycle-v1',
             (string) $service->id,
@@ -343,6 +341,52 @@ final class ServiceNotificationBatchFairnessTest extends TestCase
         $correlationId = 'service-notification-source-proof';
         $connection = DB::connection();
 
+        ServiceNotificationDatabaseAuthority::create(
+            $connection,
+            (int) $service->id,
+            $episode,
+            'low_balance',
+            'low_balance',
+            $cycle,
+            'wallet_balance',
+            $cashId,
+            $timestamp,
+            $correlationId,
+            2,
+            $threshold,
+        );
+        try {
+            $connection->table('service_notification_states')->insert([
+                'public_id' => (string) Str::ulid(),
+                'service_subscription_id' => (int) $service->id,
+                'episode_key_hash' => $episode,
+                'notification_type' => 'low_balance',
+                'threshold_code' => 'low_balance',
+                'cycle_key_hash' => $cycle,
+                'source_type' => 'wallet_balance',
+                'source_id' => $cashId,
+                'low_balance_threshold_irr' => $threshold,
+                'max_retries' => 3,
+                'state' => 'triggered',
+                'latest_delivery_attempt_id' => null,
+                'latest_retry_ordinal' => null,
+                'next_retry_at' => null,
+                'triggered_at' => $timestamp,
+                'notified_at' => null,
+                'acknowledged_at' => null,
+                'escalated_at' => null,
+                'expired_at' => null,
+                'last_correlation_id' => $correlationId,
+                'updated_at' => $timestamp,
+            ]);
+            self::fail('State creation must bind the immutable retry ceiling supplied by database authority.');
+        } catch (QueryException) {
+            self::assertSame(0, DB::table('service_notification_states')->count());
+        } finally {
+            ServiceNotificationDatabaseAuthority::clear($connection);
+        }
+
+        $this->fundWallet($assetId, $cashId, 600_000, 'source-proof-high-cash');
         ServiceNotificationDatabaseAuthority::create(
             $connection,
             (int) $service->id,
