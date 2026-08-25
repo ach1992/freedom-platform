@@ -7,9 +7,14 @@ namespace App\Modules\Telegram\Infrastructure;
 use App\Modules\Telegram\Application\Contracts\ProtectedTelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\ProtectedTelegramMessageSender;
 use App\Modules\Telegram\Application\Contracts\TelegramBotApi;
+use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\TelegramInteractionHandler;
+use App\Modules\Telegram\Application\Contracts\TelegramMutationTransport;
+use App\Modules\Telegram\Application\TelegramDeliveryOperationExecutor;
+use App\Modules\Telegram\Application\TelegramDeliveryOutboxHandler;
 use App\Modules\Telegram\Application\TelegramInteractionHandlerRegistry;
 use App\Modules\Telegram\Application\TelegramInteractionPolicy;
+use App\Shared\Application\OutboxEventHandler;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Http\Client\Factory;
@@ -54,6 +59,10 @@ final class TelegramServiceProvider extends ServiceProvider
             fn (Application $application): ProtectedTelegramDeliveryRuntime => $application->make(TelegramRuntimeConfiguration::class),
         );
         $this->app->singleton(
+            TelegramDeliveryRuntime::class,
+            fn (Application $application): TelegramDeliveryRuntime => $application->make(TelegramRuntimeConfiguration::class),
+        );
+        $this->app->singleton(
             TelegramBotApi::class,
             fn (Application $application): TelegramBotApi => new HttpTelegramBotApi(
                 $application->make(Factory::class),
@@ -67,5 +76,19 @@ final class TelegramServiceProvider extends ServiceProvider
                 $application->make(TelegramRuntimeConfiguration::class),
             ),
         );
+        $this->app->singleton(
+            TelegramMutationTransport::class,
+            fn (Application $application): TelegramMutationTransport => new HttpTelegramMutationTransport(
+                $application->make(Factory::class),
+                $application->make(TelegramRuntimeConfiguration::class),
+            ),
+        );
+        $this->app->singleton(
+            TelegramDeliveryOutboxHandler::class,
+            fn (Application $application): TelegramDeliveryOutboxHandler => new TelegramDeliveryOutboxHandler(
+                fn (): TelegramDeliveryOperationExecutor => $application->make(TelegramDeliveryOperationExecutor::class),
+            ),
+        );
+        $this->app->tag([TelegramDeliveryOutboxHandler::class], OutboxEventHandler::class);
     }
 }
