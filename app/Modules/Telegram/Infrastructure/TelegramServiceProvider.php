@@ -7,6 +7,9 @@ namespace App\Modules\Telegram\Infrastructure;
 use App\Modules\Telegram\Application\Contracts\ProtectedTelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\ProtectedTelegramMessageSender;
 use App\Modules\Telegram\Application\Contracts\TelegramBotApi;
+use App\Modules\Telegram\Application\Contracts\TelegramInteractionHandler;
+use App\Modules\Telegram\Application\TelegramInteractionHandlerRegistry;
+use App\Modules\Telegram\Application\TelegramInteractionPolicy;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Http\Client\Factory;
@@ -28,6 +31,23 @@ final class TelegramServiceProvider extends ServiceProvider
                     is_string($applicationUrl) ? $applicationUrl : '',
                 );
             },
+        );
+        $this->app->singleton(
+            TelegramInteractionPolicy::class,
+            function (Application $application): TelegramInteractionPolicy {
+                $repository = $application->make(Repository::class);
+
+                return new TelegramInteractionPolicy(
+                    (int) $repository->get('telegram.interaction_session_ttl_seconds', 1800),
+                    (int) $repository->get('telegram.interaction_callback_ttl_seconds', 900),
+                );
+            },
+        );
+        $this->app->singleton(
+            TelegramInteractionHandlerRegistry::class,
+            fn (Application $application): TelegramInteractionHandlerRegistry => new TelegramInteractionHandlerRegistry(
+                $application->tagged(TelegramInteractionHandler::class),
+            ),
         );
         $this->app->singleton(
             ProtectedTelegramDeliveryRuntime::class,

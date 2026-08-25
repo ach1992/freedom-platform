@@ -4,8 +4,14 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Modules\Telegram\Application\Contracts\TelegramInteractionHandler;
+use App\Modules\Telegram\Application\TelegramInteractionAction;
+use App\Modules\Telegram\Application\TelegramInteractionDispatcher;
+use App\Modules\Telegram\Application\TelegramInteractionHandlerRegistry;
+use App\Modules\Telegram\Application\TelegramInteractionSessionService;
 use App\Modules\Telegram\Application\TelegramUpdateProcessor;
 use Illuminate\Contracts\Encryption\StringEncrypter;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
@@ -22,6 +28,10 @@ final class TelegramUpdateProcessorTest extends TestCase
     {
         parent::setUp();
         $this->seed();
+        if (DB::connection()->getDriverName() === 'mysql') {
+            $migration = require database_path('migrations/2026_08_25_000100_enable_telegram_interaction_authority.php');
+            $migration->up();
+        }
         Queue::fake();
         config([
             'app.url' => 'https://bot.example.test',
@@ -72,6 +82,302 @@ final class TelegramUpdateProcessorTest extends TestCase
             'telegram_user_id' => 9100,
             'username' => 'renamed_user',
         ]);
+    }
+
+    public function test_processed_update_routes_one_restart_safe_interaction_transition_without_duplicate_replay(): void
+    {
+        $this->accept($this->payload(3050, 9150, 'interaction_user', '/start'));
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $processor->process('123456789', 3050);
+
+        $account = DB::table('telegram_accounts')->where('telegram_user_id', 9150)->first(['id', 'user_id']);
+        self::assertNotNull($account);
+        $sessions = $this->app->make(TelegramInteractionSessionService::class);
+        $session = $sessions->start(
+            (int) $account->id,
+            'customer.processor_test',
+            'awaiting_input',
+            [],
+            'processor-test-session-start',
+        );
+
+        $handler = new class($sessions) implements TelegramInteractionHandler
+        {
+            public int $calls = 0;
+
+            public function __construct(private readonly TelegramInteractionSessionService $sessions) {}
+
+            public function flow(): string
+            {
+                return 'customer.processor_test';
+            }
+
+            public function handle(TelegramInteractionAction $action): void
+            {
+                $this->calls++;
+                $this->sessions->transition(
+                    $action->sessionPublicId,
+                    $action->sessionVersion,
+                    'processed',
+                    [],
+                    $action->requestKey,
+                );
+            }
+        };
+        $this->app->instance(TelegramInteractionHandlerRegistry::class, new TelegramInteractionHandlerRegistry([$handler]));
+        $this->app->forgetInstance(TelegramInteractionDispatcher::class);
+        $this->app->forgetInstance(TelegramUpdateProcessor::class);
+
+        $this->accept($this->payload(3051, 9150, 'interaction_user', 'next'));
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $processor->process('123456789', 3051);
+        $processor->process('123456789', 3051);
+
+        self::assertSame(1, $handler->calls);
+        $active = $sessions->activeForAccount((int) $account->id);
+        self::assertNotNull($active);
+        self::assertSame($session->publicId, $active->publicId);
+        self::assertSame('processed', $active->state);
+        self::assertSame(2, $active->version);
+        self::assertSame(2, DB::table('telegram_interaction_transitions')->count());
+        $this->assertDatabaseHas('processed_telegram_updates', [
+            'bot_id' => '123456789',
+            'update_id' => 3051,
+            'state' => 'processed',
+            'attempt_count' => 1,
+        ]);
+    }
+
+    public function test_failed_message_and_back_retries_remain_bound_to_the_original_session(): void
+    {
+        $this->accept($this->payload(3060, 9160, 'retry_user', '/start'));
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $processor->process('123456789', 3060);
+
+        $account = DB::table('telegram_accounts')->where('telegram_user_id', 9160)->first(['id']);
+        self::assertNotNull($account);
+        $sessions = $this->app->make(TelegramInteractionSessionService::class);
+        $handler = new class($sessions) implements TelegramInteractionHandler
+        {
+            /** @var list<TelegramInteractionAction> */
+            public array $actions = [];
+
+            public bool $throwAfterMutation = false;
+
+            public string $mutation = 'complete';
+
+            public function __construct(private readonly TelegramInteractionSessionService $sessions) {}
+
+            public function flow(): string
+            {
+                return 'customer.processor_retry';
+            }
+
+            public function handle(TelegramInteractionAction $action): void
+            {
+                $this->actions[] = $action;
+                if ($this->mutation === 'transition') {
+                    $this->sessions->transition(
+                        $action->sessionPublicId,
+                        $action->sessionVersion,
+                        'advanced_by_message',
+                        ['phase' => 'advanced'],
+                        $action->requestKey,
+                    );
+                } else {
+                    $this->sessions->complete(
+                        $action->sessionPublicId,
+                        $action->sessionVersion,
+                        $action->requestKey,
+                    );
+                }
+
+                if ($this->throwAfterMutation) {
+                    $this->throwAfterMutation = false;
+                    throw new RuntimeException('simulated-after-interaction-mutation');
+                }
+            }
+        };
+        $this->app->instance(TelegramInteractionHandlerRegistry::class, new TelegramInteractionHandlerRegistry([$handler]));
+        $this->app->forgetInstance(TelegramInteractionDispatcher::class);
+        $this->app->forgetInstance(TelegramUpdateProcessor::class);
+
+        foreach ([
+            ['update_id' => 3061, 'text' => 'next', 'kind' => 'message'],
+            ['update_id' => 3062, 'text' => '/back', 'kind' => 'back'],
+        ] as $case) {
+            $original = $sessions->start(
+                (int) $account->id,
+                'customer.processor_retry',
+                'original_'.$case['kind'],
+                ['source' => $case['kind']],
+                'processor-retry-start-'.$case['kind'],
+            );
+
+            $this->accept($this->payload($case['update_id'], 9160, 'retry_user', $case['text']));
+            $handler->mutation = $case['kind'] === 'message' ? 'transition' : 'complete';
+            $handler->throwAfterMutation = true;
+            try {
+                $this->app->make(TelegramUpdateProcessor::class)->process('123456789', $case['update_id']);
+                self::fail('The simulated post-terminal crash must keep the durable update retryable.');
+            } catch (RuntimeException $exception) {
+                self::assertSame('Telegram update processing failed.', $exception->getMessage());
+            }
+
+            $this->assertDatabaseHas('processed_telegram_updates', [
+                'update_id' => $case['update_id'],
+                'state' => 'failed',
+                'attempt_count' => 1,
+            ]);
+            if ($case['kind'] === 'message') {
+                $advanced = $sessions->activeForAccount((int) $account->id);
+                self::assertNotNull($advanced);
+                self::assertSame($original->publicId, $advanced->publicId);
+                self::assertSame(2, $advanced->version);
+                self::assertSame('advanced_by_message', $advanced->state);
+                $sessions->complete($original->publicId, 2, 'processor-retry-message-free-account');
+            }
+            $binding = DB::table('telegram_interaction_update_bindings')
+                ->where('bot_id', '123456789')
+                ->where('update_id', $case['update_id'])
+                ->first();
+            self::assertNotNull($binding);
+            self::assertSame($case['kind'], $binding->kind);
+            self::assertSame(1, (int) $binding->session_version);
+            self::assertSame(
+                (int) DB::table('telegram_interaction_sessions')->where('public_id', $original->publicId)->value('id'),
+                (int) $binding->telegram_interaction_session_id,
+            );
+
+            $later = $sessions->start(
+                (int) $account->id,
+                'customer.processor_retry',
+                'later_'.$case['kind'],
+                ['source' => 'later'],
+                'processor-retry-later-'.$case['kind'],
+            );
+
+            $this->app->make(TelegramUpdateProcessor::class)->process('123456789', $case['update_id']);
+
+            $first = $handler->actions[count($handler->actions) - 2];
+            $recovered = $handler->actions[count($handler->actions) - 1];
+            self::assertSame($original->publicId, $first->sessionPublicId);
+            self::assertSame($original->publicId, $recovered->sessionPublicId);
+            self::assertSame(1, $recovered->sessionVersion);
+            self::assertSame('original_'.$case['kind'], $recovered->sessionState);
+            self::assertSame(['source' => $case['kind']], $recovered->sessionPayload);
+            self::assertTrue($recovered->replayed);
+
+            $stillLater = $sessions->activeForAccount((int) $account->id);
+            self::assertNotNull($stillLater);
+            self::assertSame($later->publicId, $stillLater->publicId);
+            self::assertSame(1, $stillLater->version);
+            $this->assertDatabaseHas('processed_telegram_updates', [
+                'update_id' => $case['update_id'],
+                'state' => 'processed',
+                'attempt_count' => 2,
+            ]);
+
+            try {
+                DB::table('telegram_interaction_update_bindings')
+                    ->where('bot_id', '123456789')
+                    ->where('update_id', $case['update_id'])
+                    ->update(['kind' => 'cancel']);
+                self::fail('Durable Telegram interaction update bindings must be immutable.');
+            } catch (QueryException) {
+                // Expected.
+            }
+
+            $sessions->complete($later->publicId, 1, 'processor-retry-cleanup-'.$case['kind']);
+        }
+    }
+
+    public function test_cancel_without_a_session_is_durably_bound_as_a_noop_before_a_later_session_exists(): void
+    {
+        $this->accept($this->payload(3070, 9170, 'cancel_retry_user', '/start'));
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $processor->process('123456789', 3070);
+        $account = DB::table('telegram_accounts')->where('telegram_user_id', 9170)->first(['id']);
+        self::assertNotNull($account);
+
+        $this->accept($this->payload(3071, 9170, 'cancel_retry_user', '/cancel'));
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER telegram_update_test_fail_processed_3071
+BEFORE UPDATE ON processed_telegram_updates
+FOR EACH ROW
+BEGIN
+    IF OLD.bot_id = '123456789' AND OLD.update_id = 3071 AND NEW.state = 'processed' THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'simulated-post-dispatch-failure';
+    END IF;
+END
+SQL);
+        try {
+            try {
+                $processor->process('123456789', 3071);
+                self::fail('The simulated post-dispatch failure must leave the no-op cancel update retryable.');
+            } catch (RuntimeException $exception) {
+                self::assertSame('Telegram update processing failed.', $exception->getMessage());
+            }
+        } finally {
+            DB::unprepared('DROP TRIGGER IF EXISTS telegram_update_test_fail_processed_3071');
+        }
+
+        $this->assertDatabaseHas('processed_telegram_updates', [
+            'bot_id' => '123456789',
+            'update_id' => 3071,
+            'state' => 'failed',
+            'attempt_count' => 1,
+        ]);
+        $binding = DB::table('telegram_interaction_update_bindings')
+            ->where('bot_id', '123456789')
+            ->where('update_id', 3071)
+            ->first();
+        self::assertNotNull($binding);
+        self::assertSame('cancel', $binding->kind);
+        self::assertNull($binding->telegram_interaction_session_id);
+        self::assertNull($binding->session_version);
+
+        $forgedBinding = get_object_vars($binding);
+        unset($forgedBinding['id']);
+        $forgedBinding['update_id'] = 3072;
+        $forgedBinding['request_hash'] = str_repeat('f', 64);
+        try {
+            DB::table('telegram_interaction_update_bindings')->insert($forgedBinding);
+            self::fail('Direct SQL must not forge Telegram interaction update bindings.');
+        } catch (QueryException) {
+            // Expected.
+        }
+        try {
+            DB::table('telegram_interaction_update_bindings')->where('id', $binding->id)->delete();
+            self::fail('Durable Telegram interaction update bindings must be non-deletable.');
+        } catch (QueryException) {
+            // Expected.
+        }
+
+        $sessions = $this->app->make(TelegramInteractionSessionService::class);
+        $later = $sessions->start(
+            (int) $account->id,
+            'customer.cancel_retry',
+            'safe_later_session',
+            [],
+            'cancel-retry-later-session',
+        );
+
+        $processor->process('123456789', 3071);
+
+        $active = $sessions->activeForAccount((int) $account->id);
+        self::assertNotNull($active);
+        self::assertSame($later->publicId, $active->publicId);
+        self::assertSame(1, $active->version);
+        $this->assertDatabaseHas('processed_telegram_updates', [
+            'update_id' => 3071,
+            'state' => 'processed',
+            'attempt_count' => 2,
+        ]);
+        self::assertSame(1, DB::table('telegram_interaction_update_bindings')
+            ->where('bot_id', '123456789')
+            ->where('update_id', 3071)
+            ->count());
     }
 
     public function test_unknown_update_is_processed_without_creating_identity(): void
