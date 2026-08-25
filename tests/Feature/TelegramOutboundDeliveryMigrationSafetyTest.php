@@ -69,7 +69,7 @@ final class TelegramOutboundDeliveryMigrationSafetyTest extends TestCase
         $this->assertReentryFailsForDurableIncompleteSurface();
         self::assertFalse(Schema::hasTable('telegram_delivery_authority_capability'));
 
-        $transport = new MigrationSafetyTransport();
+        $transport = new MigrationSafetyTransport;
         $this->handleForgedMessage($forged, $transport);
         self::assertSame(0, $transport->attempts);
     }
@@ -86,7 +86,7 @@ final class TelegramOutboundDeliveryMigrationSafetyTest extends TestCase
         $this->assertReentryFailsForDurableIncompleteSurface();
         self::assertSame(0, (int) DB::table('telegram_delivery_authority_capability')->where('id', 1)->value('schema_version'));
 
-        $transport = new MigrationSafetyTransport();
+        $transport = new MigrationSafetyTransport;
         $this->handleForgedMessage($forged, $transport);
         self::assertSame(0, $transport->attempts);
     }
@@ -128,7 +128,7 @@ SET @app_telegram_delivery_capability = ?,
     @app_telegram_delivery_target_message_id = ?,
     @app_telegram_delivery_outbox_event_id = ?
 SQL, [
-            (new TelegramDeliveryDatabaseCapability())->value(),
+            (new TelegramDeliveryDatabaseCapability)->value(),
             (string) $operation->public_id,
             (string) $operation->request_key_hash,
             (string) $operation->request_fingerprint,
@@ -175,10 +175,8 @@ SQL);
 
         $migration = $this->migration();
         $reflection = new ReflectionClass($migration);
-        $reflection->getMethod('createCapabilityTable')->invoke(
-            $migration,
-            (new TelegramDeliveryDatabaseCapability())->expectedHash(),
-        );
+        $createCapability = $reflection->getMethod('createCapabilityTable');
+        $createCapability->invoke($migration, (new TelegramDeliveryDatabaseCapability)->expectedHash());
 
         try {
             DB::table('telegram_delivery_authority_capability')->where('id', 1)->update([
@@ -241,7 +239,7 @@ CREATE TABLE telegram_delivery_authority_capability (
 SQL);
         DB::table('telegram_delivery_authority_capability')->insert([
             'id' => 1,
-            'capability_hash' => (new TelegramDeliveryDatabaseCapability())->expectedHash(),
+            'capability_hash' => (new TelegramDeliveryDatabaseCapability)->expectedHash(),
             'created_at' => '2026-08-25 12:00:00.000000',
         ]);
 
@@ -266,7 +264,7 @@ CREATE TABLE telegram_delivery_authority_capability (
 SQL);
         DB::table('telegram_delivery_authority_capability')->insert([
             'id' => 1,
-            'capability_hash' => (new TelegramDeliveryDatabaseCapability())->expectedHash(),
+            'capability_hash' => (new TelegramDeliveryDatabaseCapability)->expectedHash(),
             'created_at' => '2026-08-25 12:00:00.000000',
         ]);
         $this->forgeDurableAuthority('legacy-capability-durable');
@@ -307,7 +305,7 @@ CREATE TABLE telegram_delivery_authority_capability (
     created_at DATETIME(6) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 SQL);
-        $expected = (new TelegramDeliveryDatabaseCapability())->expectedHash();
+        $expected = (new TelegramDeliveryDatabaseCapability)->expectedHash();
         DB::table('telegram_delivery_authority_capability')->insert([
             ['id' => 1, 'capability_hash' => $expected, 'schema_version' => 0, 'activated_at' => null, 'created_at' => '2026-08-25 12:00:00.000000'],
             ['id' => 2, 'capability_hash' => $expected, 'schema_version' => 0, 'activated_at' => null, 'created_at' => '2026-08-25 12:00:00.000000'],
@@ -483,7 +481,7 @@ SQL);
             $this->clock,
             $this->runtime,
             $transport,
-            new TelegramDeliveryDatabaseCapability(),
+            new TelegramDeliveryDatabaseCapability,
         );
         $handler = new TelegramDeliveryOutboxHandler(static fn (): TelegramDeliveryOperationExecutor => $executor);
         $handler->handle(new OutboxMessage(
@@ -507,14 +505,15 @@ SQL);
             $this->clock,
             new DatabaseOutboxPublisher($database, $this->clock),
             $this->runtime,
-            new TelegramDeliveryDatabaseCapability(),
+            new TelegramDeliveryDatabaseCapability,
         );
     }
 
     private function runMigrationUp(): void
     {
         $migration = $this->migration();
-        (new ReflectionClass($migration))->getMethod('up')->invoke($migration);
+        $method = (new ReflectionClass($migration))->getMethod('up');
+        $method->invoke($migration);
     }
 
     private function migration(): object
