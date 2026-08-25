@@ -318,12 +318,12 @@ final readonly class TelegramDeliveryOperationExecutor
 
     private function clearEffectAuthority(Connection $connection): void
     {
-        foreach (['authority', 'public_id', 'expected_version'] as $suffix) {
-            try {
-                $connection->statement('SET @app_telegram_delivery_effect_'.$suffix.' = NULL');
-            } catch (Throwable) {
-                // Preserve the original failure.
-            }
+        try {
+            $connection->statement('SET @app_telegram_delivery_effect_authority = NULL');
+            $connection->statement('SET @app_telegram_delivery_effect_public_id = NULL');
+            $connection->statement('SET @app_telegram_delivery_effect_expected_version = NULL');
+        } catch (Throwable) {
+            // Preserve the original failure.
         }
     }
 
