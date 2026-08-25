@@ -632,9 +632,11 @@ final class ServiceDeliveryEffectAuthorityTest extends TestCase
         );
         $this->insertTelegramAccount($scenario['user_id']);
 
-        DB::table('outbox_messages')->update([
-            'available_at' => '2037-01-01 00:00:00.000000',
-        ]);
+        DB::table('outbox_messages')
+            ->where('event_type', 'provisioning.initial.requested')
+            ->update([
+                'available_at' => '2037-01-01 00:00:00.000000',
+            ]);
 
         $attempt = $this->deliveryQueue()->queue(
             $scenario['service_public_id'],
