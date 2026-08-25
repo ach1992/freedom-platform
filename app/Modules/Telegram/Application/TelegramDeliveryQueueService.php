@@ -291,15 +291,20 @@ final readonly class TelegramDeliveryQueueService
 
     private function clearQueueAuthority(Connection $connection): void
     {
-        foreach ([
-            'authority', 'public_id', 'request_hash', 'fingerprint', 'correlation_id', 'action', 'bot_id',
-            'recipient_chat_id', 'target_message_id', 'presentation_hash', 'outbox_event_id',
-        ] as $suffix) {
-            try {
-                $connection->statement('SET @app_telegram_delivery_'.$suffix.' = NULL');
-            } catch (Throwable) {
-                // Preserve the original failure; the connection is discarded by the test/runtime on fatal DB errors.
-            }
+        try {
+            $connection->statement('SET @app_telegram_delivery_authority = NULL');
+            $connection->statement('SET @app_telegram_delivery_public_id = NULL');
+            $connection->statement('SET @app_telegram_delivery_request_hash = NULL');
+            $connection->statement('SET @app_telegram_delivery_fingerprint = NULL');
+            $connection->statement('SET @app_telegram_delivery_correlation_id = NULL');
+            $connection->statement('SET @app_telegram_delivery_action = NULL');
+            $connection->statement('SET @app_telegram_delivery_bot_id = NULL');
+            $connection->statement('SET @app_telegram_delivery_recipient_chat_id = NULL');
+            $connection->statement('SET @app_telegram_delivery_target_message_id = NULL');
+            $connection->statement('SET @app_telegram_delivery_presentation_hash = NULL');
+            $connection->statement('SET @app_telegram_delivery_outbox_event_id = NULL');
+        } catch (Throwable) {
+            // Preserve the original failure; the connection is discarded by the test/runtime on fatal DB errors.
         }
     }
 
