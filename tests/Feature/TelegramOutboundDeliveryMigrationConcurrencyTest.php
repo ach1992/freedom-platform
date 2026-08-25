@@ -127,7 +127,7 @@ namespace Tests\Feature {
                         $session = $connection->selectOne('SELECT CONNECTION_ID() AS connection_id', [], false);
                         self::assertNotNull($session);
                         $killedConnectionId = (int) $session->connection_id;
-                        $killer->unprepared('KILL CONNECTION '.$killedConnectionId);
+                        $killer->getPdo()->exec('KILL CONNECTION '.$killedConnectionId);
 
                         // Without the migration's fail-closed reconnector this
                         // statement would transparently reconnect and execute
@@ -142,10 +142,12 @@ namespace Tests\Feature {
                 self::assertIsInt($killedConnectionId);
                 $probeExisted = Schema::hasTable('telegram_delivery_reconnect_probe');
 
-                // The lock vanished with the killed session, so a distinct live
-                // session can now acquire it. This proves there is no stale lock
-                // hiding an unlocked continuation.
-                $acquired = $killer->selectOne('SELECT GET_LOCK(?, 0) AS acquired', [$lockName], false);
+                // The lock is released when the killed session is fully torn down.
+                // MariaDB may complete that teardown asynchronously after KILL
+                // returns, so use a bounded acquisition timeout rather than a
+                // racy zero-timeout probe. This still proves there is no stale
+                // lock hiding an unlocked continuation.
+                $acquired = $killer->selectOne('SELECT GET_LOCK(?, 5) AS acquired', [$lockName], false);
                 self::assertNotNull($acquired);
                 self::assertSame(1, (int) $acquired->acquired);
                 $released = $killer->selectOne('SELECT RELEASE_LOCK(?) AS released', [$lockName], false);
