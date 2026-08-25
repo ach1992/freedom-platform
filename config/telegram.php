@@ -9,6 +9,8 @@ return [
     'max_body_bytes' => (int) env('TELEGRAM_WEBHOOK_MAX_BODY_BYTES', 1_048_576),
     'queue' => env('TELEGRAM_WEBHOOK_QUEUE', 'telegram-ingress'),
     'processing_lease_seconds' => (int) env('TELEGRAM_PROCESSING_LEASE_SECONDS', 120),
+    'interaction_session_ttl_seconds' => (int) env('TELEGRAM_INTERACTION_SESSION_TTL_SECONDS', 1800),
+    'interaction_callback_ttl_seconds' => (int) env('TELEGRAM_INTERACTION_CALLBACK_TTL_SECONDS', 900),
     'api_base_url' => 'https://api.telegram.org',
     'api_timeout_seconds' => (int) env('TELEGRAM_API_TIMEOUT_SECONDS', 15),
 ];

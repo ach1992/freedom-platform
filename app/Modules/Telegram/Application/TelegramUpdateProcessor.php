@@ -18,6 +18,7 @@ final readonly class TelegramUpdateProcessor
         private DatabaseManager $database,
         private StringEncrypter $encrypter,
         private TelegramIdentitySynchronizer $identitySynchronizer,
+        private TelegramInteractionDispatcher $interactionDispatcher,
         private TelegramRuntimeConfiguration $configuration,
     ) {}
 
@@ -46,7 +47,8 @@ final readonly class TelegramUpdateProcessor
                 throw new RuntimeException('Telegram update identifier does not match the stored payload.');
             }
 
-            $this->identitySynchronizer->synchronize($botId, $updateId, $payload);
+            $userId = $this->identitySynchronizer->synchronize($botId, $updateId, $payload);
+            $this->interactionDispatcher->dispatch($botId, $updateId, $userId, $payload);
             $now = now('UTC')->format('Y-m-d H:i:s.u');
 
             $this->database->connection()->table('processed_telegram_updates')
