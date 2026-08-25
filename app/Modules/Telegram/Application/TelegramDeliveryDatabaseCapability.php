@@ -46,6 +46,7 @@ final readonly class TelegramDeliveryDatabaseCapability
         string $outboxEventId,
         Closure $operation,
     ): mixed {
+        $this->assertReady($connection);
         $armed = false;
 
         try {
@@ -100,6 +101,7 @@ SQL, [
         int $expectedVersion,
         Closure $operation,
     ): mixed {
+        $this->assertReady($connection);
         $armed = false;
 
         try {
@@ -130,6 +132,25 @@ SQL, [
             return $operation();
         } finally {
             $this->clearOrDisconnect($connection, $armed);
+        }
+    }
+
+    private function assertReady(Connection $connection): void
+    {
+        try {
+            $capability = $connection->table('telegram_delivery_authority_capability')
+                ->where('id', 1)
+                ->first(['capability_hash', 'schema_version', 'activated_at']);
+        } catch (Throwable $exception) {
+            throw new RuntimeException('Telegram delivery database authority is not fully activated.', 0, $exception);
+        }
+
+        if ($capability === null
+            || ! is_string($capability->capability_hash)
+            || ! hash_equals($this->expectedHash(), $capability->capability_hash)
+            || (int) $capability->schema_version !== 1
+            || $capability->activated_at === null) {
+            throw new RuntimeException('Telegram delivery database authority is not fully activated.');
         }
     }
 
