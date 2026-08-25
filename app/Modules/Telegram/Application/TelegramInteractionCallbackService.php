@@ -94,8 +94,6 @@ final readonly class TelegramInteractionCallbackService
             }
 
             /** @var IssueSessionRow|null $session */
-            /** @var AcceptSessionRow|null $session */
-            /** @var AcceptSessionRow|null $session */
             $session = $connection->table('telegram_interaction_sessions as sessions')
                 ->join('telegram_accounts as accounts', 'accounts.id', '=', 'sessions.telegram_account_id')
                 ->where('sessions.public_id', $sessionPublicId)
