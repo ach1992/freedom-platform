@@ -187,11 +187,16 @@ final class TelegramInteractionAuthorityTest extends TestCase
         self::assertSame($issued->token, $issueReplay->token);
         self::assertSame($issued->publicId, $issueReplay->publicId);
 
-        DB::table('telegram_accounts')->where('id', $owner['telegram_account_id'])->update([
-            'user_id' => $other['user_id'],
-            'bot_id' => 777777,
-            'telegram_user_id' => 999991,
-        ]);
+        try {
+            DB::table('telegram_accounts')->where('id', $owner['telegram_account_id'])->update([
+                'user_id' => $other['user_id'],
+                'bot_id' => 777777,
+                'telegram_user_id' => 999991,
+            ]);
+            self::fail('An active interaction must prevent direct parent Telegram identity retargeting.');
+        } catch (QueryException) {
+            // Expected: the interaction authority freezes actor identity while the session is active.
+        }
         $identitySnapshot = DB::table('telegram_interaction_sessions')
             ->where('public_id', $session->publicId)
             ->first(['user_id', 'bot_id', 'telegram_user_id']);
@@ -434,6 +439,10 @@ final class TelegramInteractionAuthorityTest extends TestCase
             ->where('TRIGGER_SCHEMA', DB::getDatabaseName())
             ->where('TRIGGER_NAME', 'like', 'telegram_interaction_%')
             ->count());
+        self::assertTrue(DB::table('information_schema.TRIGGERS')
+            ->where('TRIGGER_SCHEMA', DB::getDatabaseName())
+            ->where('TRIGGER_NAME', 'telegram_accounts_interaction_identity_update_guard')
+            ->exists());
         self::assertSame(18, DB::table('information_schema.TABLE_CONSTRAINTS')
             ->where('CONSTRAINT_SCHEMA', DB::getDatabaseName())
             ->whereIn('TABLE_NAME', [

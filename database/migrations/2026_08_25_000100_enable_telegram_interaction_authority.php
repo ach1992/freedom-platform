@@ -160,8 +160,8 @@ return new class extends Migration
             'telegram_interaction_capability_insert_guard',
             'telegram_interaction_capability_update_guard',
             'telegram_interaction_capability_delete_guard',
-            'telegram_interaction_sessions_insert_guard',
-            'telegram_interaction_sessions_update_guard',
+            'telegram_accounts_interaction_identity_update_guard',
+            'telegram_interaction_sessions_insert_guard',            'telegram_interaction_sessions_update_guard',
             'telegram_interaction_sessions_delete_guard',
             'telegram_interaction_transitions_insert_guard',
             'telegram_interaction_transitions_update_guard',
@@ -282,6 +282,22 @@ SQL);
 
     private function installGuards(): void
     {
+        DB::unprepared(<<<'SQL'
+CREATE OR REPLACE TRIGGER telegram_accounts_interaction_identity_update_guard
+BEFORE UPDATE ON telegram_accounts
+FOR EACH ROW
+BEGIN
+    IF (OLD.user_id <> NEW.user_id OR OLD.bot_id <> NEW.bot_id OR OLD.telegram_user_id <> NEW.telegram_user_id)
+       AND EXISTS (
+           SELECT 1 FROM telegram_interaction_sessions session_row
+           WHERE session_row.active_telegram_account_id = OLD.id
+             AND session_row.status = 'active'
+       ) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Telegram account identity cannot change while interaction authority is active.';
+    END IF;
+END
+SQL);
+
         DB::unprepared(<<<'SQL'
 CREATE OR REPLACE TRIGGER telegram_interaction_sessions_insert_guard
 BEFORE INSERT ON telegram_interaction_sessions
@@ -472,6 +488,7 @@ SQL);
 
     private function dropGuards(): void
     {
+        DB::unprepared('DROP TRIGGER IF EXISTS telegram_accounts_interaction_identity_update_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS telegram_interaction_callbacks_delete_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS telegram_interaction_callbacks_update_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS telegram_interaction_callbacks_insert_guard');
