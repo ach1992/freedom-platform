@@ -58,6 +58,9 @@ return new class extends Migration
                 $table->bigIncrements('id');
                 $table->ulid('public_id')->unique();
                 $table->foreignId('telegram_account_id')->constrained('telegram_accounts')->restrictOnDelete();
+                $table->foreignId('user_id')->constrained()->restrictOnDelete();
+                $table->unsignedBigInteger('bot_id');
+                $table->unsignedBigInteger('telegram_user_id');
                 $table->unsignedBigInteger('active_telegram_account_id')->nullable()->unique();
                 $table->foreign('active_telegram_account_id', 'telegram_interaction_active_account_fk')
                     ->references('id')->on('telegram_accounts')->restrictOnDelete();
@@ -72,6 +75,7 @@ return new class extends Migration
                 $table->dateTime('created_at', 6);
                 $table->dateTime('updated_at', 6);
                 $table->index(['telegram_account_id', 'created_at'], 'telegram_interaction_session_account_idx');
+                $table->index(['bot_id', 'telegram_user_id'], 'telegram_interaction_session_actor_idx');
                 $table->index(['status', 'expires_at'], 'telegram_interaction_session_status_expiry_idx');
             });
         }
@@ -287,6 +291,12 @@ BEGIN
         SELECT 1 FROM telegram_interaction_authority_capability capability_row
         WHERE capability_row.id = 1
           AND BINARY capability_row.capability_hash = BINARY SHA2(COALESCE(@app_telegram_interaction_capability, ''), 256)
+    ) OR NOT EXISTS (
+        SELECT 1 FROM telegram_accounts account_row
+        WHERE account_row.id = NEW.telegram_account_id
+          AND account_row.user_id = NEW.user_id
+          AND account_row.bot_id = NEW.bot_id
+          AND account_row.telegram_user_id = NEW.telegram_user_id
     ) OR COALESCE(@app_telegram_interaction_authority, '') <> 'session_start_v1'
        OR NEW.telegram_account_id <> COALESCE(@app_telegram_interaction_account_id, 0)
        OR NEW.active_telegram_account_id <> NEW.telegram_account_id
@@ -311,7 +321,9 @@ BEGIN
        OR OLD.version <> COALESCE(@app_telegram_interaction_expected_version, 0)
        OR NEW.version <> OLD.version + 1
        OR OLD.id <> NEW.id OR BINARY OLD.public_id <> BINARY NEW.public_id
-       OR OLD.telegram_account_id <> NEW.telegram_account_id OR BINARY OLD.flow <> BINARY NEW.flow
+       OR OLD.telegram_account_id <> NEW.telegram_account_id
+       OR OLD.user_id <> NEW.user_id OR OLD.bot_id <> NEW.bot_id OR OLD.telegram_user_id <> NEW.telegram_user_id
+       OR BINARY OLD.flow <> BINARY NEW.flow
        OR OLD.created_at <> NEW.created_at
        OR BINARY NEW.payload_hash <> BINARY SHA2(CAST(NEW.payload AS CHAR), 256) THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Telegram interaction session update authority is invalid.';

@@ -17,7 +17,7 @@ use InvalidArgumentException;
 use RuntimeException;
 
 /**
- * @phpstan-type SessionRow object{id:int|string,public_id:string,telegram_account_id:int|string,active_telegram_account_id:int|string|null,flow:string,state:string,status:string,payload:string,payload_hash:string,version:int|string,expires_at:string,terminal_at:string|null,user_id:int|string}
+ * @phpstan-type SessionRow object{id:int|string,public_id:string,telegram_account_id:int|string,active_telegram_account_id:int|string|null,user_id:int|string,bot_id:int|string,telegram_user_id:int|string,flow:string,state:string,status:string,payload:string,payload_hash:string,version:int|string,expires_at:string,terminal_at:string|null}
  * @phpstan-type TransitionReplayRow object{command_hash:string,to_version:int|string,to_state:string,to_status:string,to_payload:string,to_expires_at:string,public_id:string,telegram_account_id:int|string,flow:string,user_id:int|string}
  */
 final readonly class TelegramInteractionSessionService
@@ -73,7 +73,7 @@ final readonly class TelegramInteractionSessionService
             $account = $connection->table('telegram_accounts')
                 ->where('id', $telegramAccountId)
                 ->lockForUpdate()
-                ->first(['id', 'user_id']);
+                ->first(['id', 'user_id', 'bot_id', 'telegram_user_id']);
             if ($account === null) {
                 throw new DomainException('Telegram interaction account does not exist.');
             }
@@ -105,6 +105,9 @@ final readonly class TelegramInteractionSessionService
                     'public_id' => $publicId,
                     'telegram_account_id' => $telegramAccountId,
                     'active_telegram_account_id' => $telegramAccountId,
+                    'user_id' => (int) $account->user_id,
+                    'bot_id' => (int) $account->bot_id,
+                    'telegram_user_id' => (int) $account->telegram_user_id,
                     'flow' => $flow,
                     'state' => $state,
                     'status' => TelegramInteractionSessionStatus::Active->value,
@@ -281,9 +284,7 @@ final readonly class TelegramInteractionSessionService
             }
 
             /** @var SessionRow|null $session */
-            /** @var SessionRow|null $session */
             $session = $connection->table('telegram_interaction_sessions as sessions')
-                ->join('telegram_accounts as accounts', 'accounts.id', '=', 'sessions.telegram_account_id')
                 ->where('sessions.active_telegram_account_id', $telegramAccountId)
                 ->lockForUpdate()
                 ->first($this->sessionColumns());
@@ -357,9 +358,7 @@ final readonly class TelegramInteractionSessionService
 
         return $connection->transaction(function () use ($connection, $telegramAccountId): ?TelegramInteractionSessionReceipt {
             /** @var SessionRow|null $session */
-            /** @var SessionRow|null $session */
             $session = $connection->table('telegram_interaction_sessions as sessions')
-                ->join('telegram_accounts as accounts', 'accounts.id', '=', 'sessions.telegram_account_id')
                 ->where('sessions.active_telegram_account_id', $telegramAccountId)
                 ->lockForUpdate()
                 ->first($this->sessionColumns());
@@ -457,7 +456,6 @@ final readonly class TelegramInteractionSessionService
     {
         /** @var SessionRow|null $session */
         $session = $connection->table('telegram_interaction_sessions as sessions')
-            ->join('telegram_accounts as accounts', 'accounts.id', '=', 'sessions.telegram_account_id')
             ->where('sessions.active_telegram_account_id', $telegramAccountId)
             ->lockForUpdate()
             ->first($this->sessionColumns());
@@ -509,7 +507,6 @@ final readonly class TelegramInteractionSessionService
     {
         /** @var SessionRow|null $session */
         $session = $connection->table('telegram_interaction_sessions as sessions')
-            ->join('telegram_accounts as accounts', 'accounts.id', '=', 'sessions.telegram_account_id')
             ->where('sessions.public_id', $publicId)
             ->lockForUpdate()
             ->first($this->sessionColumns());
@@ -578,7 +575,6 @@ final readonly class TelegramInteractionSessionService
         /** @var TransitionReplayRow|null $transition */
         $transition = $connection->table('telegram_interaction_transitions as transitions')
             ->join('telegram_interaction_sessions as sessions', 'sessions.id', '=', 'transitions.telegram_interaction_session_id')
-            ->join('telegram_accounts as accounts', 'accounts.id', '=', 'sessions.telegram_account_id')
             ->where('transitions.request_hash', $requestHash)
             ->first([
                 'transitions.command_hash',
@@ -590,7 +586,7 @@ final readonly class TelegramInteractionSessionService
                 'sessions.public_id',
                 'sessions.telegram_account_id',
                 'sessions.flow',
-                'accounts.user_id',
+                'sessions.user_id',
             ]);
         if ($transition === null) {
             return null;
@@ -638,6 +634,9 @@ final readonly class TelegramInteractionSessionService
             'sessions.public_id',
             'sessions.telegram_account_id',
             'sessions.active_telegram_account_id',
+            'sessions.user_id',
+            'sessions.bot_id',
+            'sessions.telegram_user_id',
             'sessions.flow',
             'sessions.state',
             'sessions.status',
@@ -646,7 +645,6 @@ final readonly class TelegramInteractionSessionService
             'sessions.version',
             'sessions.expires_at',
             'sessions.terminal_at',
-            'accounts.user_id',
         ];
     }
 

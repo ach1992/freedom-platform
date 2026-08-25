@@ -20,9 +20,9 @@ use RuntimeException;
 
 /**
  * @phpstan-type CallbackRow object{id:int|string,public_id:string,telegram_interaction_session_id:int|string,telegram_account_id:int|string,session_version:int|string,issue_request_hash:string,issue_command_hash:string,token_hash:string,token_ciphertext:string,action:string,action_payload:string,action_payload_hash:string,state:string,accepted_update_id:int|string|null,accepted_at:string|null,completed_at:string|null,expires_at:string,created_at:string,updated_at:string}
- * @phpstan-type IssueSessionRow object{id:int|string,public_id:string,telegram_account_id:int|string,active_telegram_account_id:int|string|null,flow:string,state:string,status:string,payload:string,version:int|string,expires_at:string,user_id:int|string}
- * @phpstan-type AcceptSessionRow object{id:int|string,public_id:string,telegram_account_id:int|string,active_telegram_account_id:int|string|null,flow:string,state:string,status:string,payload:string,version:int|string,expires_at:string,user_id:int|string,bot_id:int|string,telegram_user_id:int|string}
- * @phpstan-type ReceiptSessionRow object{public_id:string,telegram_account_id:int|string,flow:string,state:string,payload:string,user_id:int|string}
+ * @phpstan-type IssueSessionRow object{id:int|string,public_id:string,telegram_account_id:int|string,active_telegram_account_id:int|string|null,user_id:int|string,bot_id:int|string,telegram_user_id:int|string,flow:string,state:string,status:string,payload:string,version:int|string,expires_at:string}
+ * @phpstan-type AcceptSessionRow object{id:int|string,public_id:string,telegram_account_id:int|string,active_telegram_account_id:int|string|null,user_id:int|string,bot_id:int|string,telegram_user_id:int|string,flow:string,state:string,status:string,payload:string,version:int|string,expires_at:string}
+ * @phpstan-type ReceiptSessionRow object{public_id:string,telegram_account_id:int|string,user_id:int|string,flow:string,state:string,payload:string}
  */
 final readonly class TelegramInteractionCallbackService
 {
@@ -95,7 +95,6 @@ final readonly class TelegramInteractionCallbackService
 
             /** @var IssueSessionRow|null $session */
             $session = $connection->table('telegram_interaction_sessions as sessions')
-                ->join('telegram_accounts as accounts', 'accounts.id', '=', 'sessions.telegram_account_id')
                 ->where('sessions.public_id', $sessionPublicId)
                 ->lockForUpdate()
                 ->first([
@@ -103,13 +102,15 @@ final readonly class TelegramInteractionCallbackService
                     'sessions.public_id',
                     'sessions.telegram_account_id',
                     'sessions.active_telegram_account_id',
+                    'sessions.user_id',
+                    'sessions.bot_id',
+                    'sessions.telegram_user_id',
                     'sessions.flow',
                     'sessions.state',
                     'sessions.status',
                     'sessions.payload',
                     'sessions.version',
                     'sessions.expires_at',
-                    'accounts.user_id',
                 ]);
             if ($session === null) {
                 throw new DomainException('Telegram callback session does not exist.');
@@ -221,7 +222,6 @@ final readonly class TelegramInteractionCallbackService
 
             /** @var AcceptSessionRow|null $session */
             $session = $connection->table('telegram_interaction_sessions as sessions')
-                ->join('telegram_accounts as accounts', 'accounts.id', '=', 'sessions.telegram_account_id')
                 ->where('sessions.id', (int) $callback->telegram_interaction_session_id)
                 ->lockForUpdate()
                 ->first([
@@ -229,15 +229,15 @@ final readonly class TelegramInteractionCallbackService
                     'sessions.public_id',
                     'sessions.telegram_account_id',
                     'sessions.active_telegram_account_id',
+                    'sessions.user_id',
+                    'sessions.bot_id',
+                    'sessions.telegram_user_id',
                     'sessions.flow',
                     'sessions.state',
                     'sessions.status',
                     'sessions.payload',
                     'sessions.version',
                     'sessions.expires_at',
-                    'accounts.user_id',
-                    'accounts.bot_id',
-                    'accounts.telegram_user_id',
                 ]);
             if ($session === null
                 || (int) $callback->telegram_account_id !== (int) $session->telegram_account_id
@@ -358,15 +358,14 @@ final readonly class TelegramInteractionCallbackService
     ): TelegramInteractionCallbackReceipt {
         /** @var ReceiptSessionRow|null $session */
         $session = $connection->table('telegram_interaction_sessions as sessions')
-            ->join('telegram_accounts as accounts', 'accounts.id', '=', 'sessions.telegram_account_id')
             ->where('sessions.id', (int) $callback->telegram_interaction_session_id)
             ->first([
                 'sessions.public_id',
                 'sessions.telegram_account_id',
+                'sessions.user_id',
                 'sessions.flow',
                 'sessions.state',
                 'sessions.payload',
-                'accounts.user_id',
             ]);
         if ($session === null) {
             throw new RuntimeException('Telegram callback session persistence is invalid.');

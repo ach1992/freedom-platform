@@ -187,6 +187,19 @@ final class TelegramInteractionAuthorityTest extends TestCase
         self::assertSame($issued->token, $issueReplay->token);
         self::assertSame($issued->publicId, $issueReplay->publicId);
 
+        DB::table('telegram_accounts')->where('id', $owner['telegram_account_id'])->update([
+            'user_id' => $other['user_id'],
+            'bot_id' => 777777,
+            'telegram_user_id' => 999991,
+        ]);
+        $identitySnapshot = DB::table('telegram_interaction_sessions')
+            ->where('public_id', $session->publicId)
+            ->first(['user_id', 'bot_id', 'telegram_user_id']);
+        self::assertNotNull($identitySnapshot);
+        self::assertSame($owner['user_id'], (int) $identitySnapshot->user_id);
+        self::assertSame(123456, (int) $identitySnapshot->bot_id);
+        self::assertSame($owner['telegram_user_id'], (int) $identitySnapshot->telegram_user_id);
+
         foreach ([
             ['123456', $other['telegram_user_id'], $issued->token, 5001],
             ['654321', $owner['telegram_user_id'], $issued->token, 5002],
@@ -202,6 +215,7 @@ final class TelegramInteractionAuthorityTest extends TestCase
 
         $accepted = $callbacks->accept('123456', $owner['telegram_user_id'], $issued->token, 5010);
         self::assertTrue($accepted->accepted);
+        self::assertSame($owner['user_id'], $accepted->userId);
         self::assertSame(5010, $accepted->acceptedUpdateId);
         self::assertFalse($accepted->completed);
         self::assertFalse($accepted->replayed);
