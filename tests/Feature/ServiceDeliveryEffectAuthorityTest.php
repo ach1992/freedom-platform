@@ -37,6 +37,7 @@ use App\Modules\Telegram\Infrastructure\HttpProtectedTelegramMessageSender;
 use App\Modules\Telegram\Infrastructure\TelegramRuntimeConfiguration;
 use App\Shared\Application\OutboxDispatchOutcome;
 use App\Shared\Application\OutboxMessage;
+use App\Shared\Application\OutboxRuntime;
 use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PanelsAccessFoundationSeeder;
@@ -617,6 +618,53 @@ final class ServiceDeliveryEffectAuthorityTest extends TestCase
         } catch (DomainException) {
             // Expected.
         }
+    }
+
+    public function test_outbox_runtime_routes_delivery_uncertainty_to_review_without_blind_redelivery(): void
+    {
+        $scenario = $this->provisionedScenario(
+            'effect-runtime-uncertain',
+            'https://subscription.example.test/runtime-uncertain',
+            new ProtectedTelegramSendResult(
+                ProtectedTelegramSendOutcome::UncertainResult,
+                'telegram_transport_uncertain',
+            ),
+        );
+        $this->insertTelegramAccount($scenario['user_id']);
+
+        DB::table('outbox_messages')->update([
+            'available_at' => '2037-01-01 00:00:00.000000',
+        ]);
+
+        $attempt = $this->deliveryQueue()->queue(
+            $scenario['service_public_id'],
+            ServiceDeliveryPurpose::Resend,
+            'request-effect-runtime-uncertain-0001',
+            'correlation-effect-runtime-uncertain-0001',
+        );
+
+        $runtime = $this->app->make(OutboxRuntime::class);
+        $first = $runtime->dispatchBatch(1);
+
+        self::assertSame(1, $first->examined);
+        self::assertSame(1, $first->uncertainResult);
+        self::assertSame(1, $first->reviewRequired);
+        self::assertCount(1, $scenario['doubles']->sendCalls);
+        self::assertSame(ServiceDeliveryEffectState::Uncertain->value, DB::table('service_delivery_effects')
+            ->where('service_delivery_attempt_id', (int) DB::table('service_delivery_attempts')->where('public_id', $attempt->attemptPublicId)->value('id'))
+            ->value('state'));
+        $this->assertDatabaseHas('outbox_messages', [
+            'id' => $attempt->outboxEventId,
+            'dispatch_state' => 'review_required',
+            'review_reason' => OutboxDispatchOutcome::UncertainResult->value,
+            'attempts' => 1,
+        ]);
+
+        $second = $runtime->dispatchBatch(1);
+
+        self::assertSame(0, $second->examined);
+        self::assertSame(1, $second->reviewRequired);
+        self::assertCount(1, $scenario['doubles']->sendCalls);
     }
 
     public function test_interrupted_sending_recovers_uncertain_without_sender_call(): void
