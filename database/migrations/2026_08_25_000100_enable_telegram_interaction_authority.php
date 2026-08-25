@@ -32,7 +32,7 @@ return new class extends Migration
 
     public function down(): void
     {
-        foreach (['telegram_interaction_callbacks', 'telegram_interaction_transitions', 'telegram_interaction_sessions'] as $table) {
+        foreach (['telegram_interaction_callbacks', 'telegram_interaction_update_bindings', 'telegram_interaction_transitions', 'telegram_interaction_sessions'] as $table) {
             if (Schema::hasTable($table) && DB::table($table)->exists()) {
                 throw new RuntimeException('Cannot roll back Telegram interaction authority while durable interaction state exists.');
             }
@@ -40,6 +40,7 @@ return new class extends Migration
 
         $this->dropGuards();
         Schema::dropIfExists('telegram_interaction_callbacks');
+        Schema::dropIfExists('telegram_interaction_update_bindings');
         Schema::dropIfExists('telegram_interaction_transitions');
         Schema::dropIfExists('telegram_interaction_sessions');
 
@@ -103,6 +104,26 @@ return new class extends Migration
             });
         }
 
+        if (! Schema::hasTable('telegram_interaction_update_bindings')) {
+            Schema::create('telegram_interaction_update_bindings', function (Blueprint $table): void {
+                $table->bigIncrements('id');
+                $table->string('bot_id', 64);
+                $table->unsignedBigInteger('update_id');
+                $table->foreignId('telegram_account_id')->constrained('telegram_accounts')->restrictOnDelete();
+                $table->foreignId('user_id')->constrained()->restrictOnDelete();
+                $table->unsignedBigInteger('telegram_user_id');
+                $table->string('kind', 16);
+                $table->char('request_hash', 64);
+                $table->foreignId('telegram_interaction_session_id')->nullable()
+                    ->constrained('telegram_interaction_sessions', indexName: 'telegram_interaction_update_binding_session_fk')
+                    ->restrictOnDelete();
+                $table->unsignedBigInteger('session_version')->nullable();
+                $table->dateTime('created_at', 6);
+                $table->unique(['bot_id', 'update_id'], 'telegram_interaction_update_binding_update_unique');
+                $table->index(['telegram_interaction_session_id', 'session_version'], 'telegram_interaction_update_binding_session_version_idx');
+            });
+        }
+
         if (! Schema::hasTable('telegram_interaction_callbacks')) {
             Schema::create('telegram_interaction_callbacks', function (Blueprint $table): void {
                 $table->bigIncrements('id');
@@ -141,6 +162,7 @@ return new class extends Migration
         foreach ([
             'telegram_interaction_sessions',
             'telegram_interaction_transitions',
+            'telegram_interaction_update_bindings',
             'telegram_interaction_callbacks',
             'telegram_interaction_authority_capability',
         ] as $table) {
@@ -161,11 +183,15 @@ return new class extends Migration
             'telegram_interaction_capability_update_guard',
             'telegram_interaction_capability_delete_guard',
             'telegram_accounts_interaction_identity_update_guard',
-            'telegram_interaction_sessions_insert_guard',            'telegram_interaction_sessions_update_guard',
+            'telegram_interaction_sessions_insert_guard',
+            'telegram_interaction_sessions_update_guard',
             'telegram_interaction_sessions_delete_guard',
             'telegram_interaction_transitions_insert_guard',
             'telegram_interaction_transitions_update_guard',
             'telegram_interaction_transitions_delete_guard',
+            'telegram_interaction_update_bindings_insert_guard',
+            'telegram_interaction_update_bindings_update_guard',
+            'telegram_interaction_update_bindings_delete_guard',
             'telegram_interaction_callbacks_insert_guard',
             'telegram_interaction_callbacks_update_guard',
             'telegram_interaction_callbacks_delete_guard',
@@ -173,32 +199,70 @@ return new class extends Migration
         $triggers = DB::table('information_schema.TRIGGERS')
             ->where('TRIGGER_SCHEMA', DB::getDatabaseName())
             ->whereIn('TRIGGER_NAME', $triggerNames)
-            ->count();
-        if ($triggers !== count($triggerNames)) {
+            ->pluck('TRIGGER_NAME')
+            ->map(static fn (mixed $name): string => (string) $name)
+            ->all();
+        sort($triggerNames);
+        sort($triggers);
+        if ($triggers !== $triggerNames) {
             return false;
         }
 
-        $checkCount = DB::table('information_schema.TABLE_CONSTRAINTS')
+        $checkNames = [
+            'telegram_interaction_capability_singleton_chk',
+            'telegram_interaction_capability_hash_chk',
+            'telegram_interaction_session_name_chk',
+            'telegram_interaction_session_status_chk',
+            'telegram_interaction_session_shape_chk',
+            'telegram_interaction_session_payload_chk',
+            'telegram_interaction_session_version_chk',
+            'telegram_interaction_session_expiry_chk',
+            'telegram_interaction_transition_hash_chk',
+            'telegram_interaction_transition_type_chk',
+            'telegram_interaction_transition_status_chk',
+            'telegram_interaction_transition_shape_chk',
+            'telegram_interaction_transition_payload_chk',
+            'telegram_interaction_update_binding_bot_chk',
+            'telegram_interaction_update_binding_kind_chk',
+            'telegram_interaction_update_binding_hash_chk',
+            'telegram_interaction_update_binding_shape_chk',
+            'telegram_interaction_callback_hash_chk',
+            'telegram_interaction_callback_action_chk',
+            'telegram_interaction_callback_payload_chk',
+            'telegram_interaction_callback_state_chk',
+            'telegram_interaction_callback_shape_chk',
+            'telegram_interaction_callback_version_chk',
+            'telegram_interaction_callback_expiry_chk',
+        ];
+        $checks = DB::table('information_schema.TABLE_CONSTRAINTS')
             ->where('CONSTRAINT_SCHEMA', DB::getDatabaseName())
             ->whereIn('TABLE_NAME', [
+                'telegram_interaction_authority_capability',
                 'telegram_interaction_sessions',
                 'telegram_interaction_transitions',
+                'telegram_interaction_update_bindings',
                 'telegram_interaction_callbacks',
             ])
             ->where('CONSTRAINT_TYPE', 'CHECK')
-            ->where('CONSTRAINT_NAME', 'like', 'telegram_interaction_%')
-            ->count();
+            ->whereIn('CONSTRAINT_NAME', $checkNames)
+            ->pluck('CONSTRAINT_NAME')
+            ->map(static fn (mixed $name): string => (string) $name)
+            ->all();
+        sort($checkNames);
+        sort($checks);
 
-        return $checkCount === 18;
+        return $checks === $checkNames;
     }
 
     private function resetInterruptedInstallIfSafe(): void
     {
-        $tables = [
+        $durableTables = [
             'telegram_interaction_callbacks',
+            'telegram_interaction_update_bindings',
             'telegram_interaction_transitions',
             'telegram_interaction_sessions',
         ];
+        $tables = $durableTables;
         if (DB::connection()->getDriverName() === 'mysql') {
             $tables[] = 'telegram_interaction_authority_capability';
         }
@@ -208,8 +272,8 @@ return new class extends Migration
             return;
         }
 
-        foreach ($existing as $table) {
-            if (DB::table($table)->exists()) {
+        foreach ($durableTables as $table) {
+            if (Schema::hasTable($table) && DB::table($table)->exists()) {
                 throw new RuntimeException('Telegram interaction authority migration cannot repair an incomplete authority surface after durable rows exist.');
             }
         }
@@ -268,6 +332,10 @@ SQL);
             "ALTER TABLE telegram_interaction_transitions ADD CONSTRAINT telegram_interaction_transition_status_chk CHECK (`to_status` IN ('active','cancelled','completed','expired'))",
             "ALTER TABLE telegram_interaction_transitions ADD CONSTRAINT telegram_interaction_transition_shape_chk CHECK (`to_version` = `from_version` + 1 AND ((`transition_type` = 'start' AND `from_version` = 0 AND `from_state` IS NULL AND `to_status` = 'active') OR (`transition_type` = 'transition' AND `from_version` >= 1 AND `from_state` IS NOT NULL AND `to_status` = 'active') OR (`transition_type` = 'cancel' AND `to_status` = 'cancelled') OR (`transition_type` = 'complete' AND `to_status` = 'completed') OR (`transition_type` = 'expire' AND `to_status` = 'expired')))",
             "ALTER TABLE telegram_interaction_transitions ADD CONSTRAINT telegram_interaction_transition_payload_chk CHECK (JSON_VALID(`to_payload`) = 1 AND JSON_TYPE(`to_payload`) = 'OBJECT' AND OCTET_LENGTH(`to_payload`) <= 4096)",
+            "ALTER TABLE telegram_interaction_update_bindings ADD CONSTRAINT telegram_interaction_update_binding_bot_chk CHECK (`bot_id` REGEXP '^[1-9][0-9]{5,19}$')",
+            "ALTER TABLE telegram_interaction_update_bindings ADD CONSTRAINT telegram_interaction_update_binding_kind_chk CHECK (`kind` IN ('message','back','cancel'))",
+            "ALTER TABLE telegram_interaction_update_bindings ADD CONSTRAINT telegram_interaction_update_binding_hash_chk CHECK (`request_hash` REGEXP '^[0-9a-f]{64}$')",
+            'ALTER TABLE telegram_interaction_update_bindings ADD CONSTRAINT telegram_interaction_update_binding_shape_chk CHECK ((`telegram_interaction_session_id` IS NULL AND `session_version` IS NULL) OR (`telegram_interaction_session_id` IS NOT NULL AND `session_version` >= 1))',
             "ALTER TABLE telegram_interaction_callbacks ADD CONSTRAINT telegram_interaction_callback_hash_chk CHECK (`issue_request_hash` REGEXP '^[0-9a-f]{64}$' AND `issue_command_hash` REGEXP '^[0-9a-f]{64}$' AND `token_hash` REGEXP '^[0-9a-f]{64}$' AND `action_payload_hash` REGEXP '^[0-9a-f]{64}$')",
             "ALTER TABLE telegram_interaction_callbacks ADD CONSTRAINT telegram_interaction_callback_action_chk CHECK (`action` REGEXP '^[a-z][a-z0-9_.-]{0,63}$')",
             "ALTER TABLE telegram_interaction_callbacks ADD CONSTRAINT telegram_interaction_callback_payload_chk CHECK (JSON_VALID(`action_payload`) = 1 AND JSON_TYPE(`action_payload`) = 'OBJECT' AND OCTET_LENGTH(`action_payload`) <= 4096)",
@@ -406,6 +474,52 @@ SQL);
         DB::unprepared("CREATE OR REPLACE TRIGGER telegram_interaction_transitions_delete_guard BEFORE DELETE ON telegram_interaction_transitions FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Telegram interaction transition history is non-deletable.'; END");
 
         DB::unprepared(<<<'SQL'
+CREATE OR REPLACE TRIGGER telegram_interaction_update_bindings_insert_guard
+BEFORE INSERT ON telegram_interaction_update_bindings
+FOR EACH ROW
+BEGIN
+    DECLARE matching_session_count INT DEFAULT 0;
+
+    IF NEW.telegram_interaction_session_id IS NOT NULL THEN
+        SELECT COUNT(*) INTO matching_session_count
+        FROM telegram_interaction_sessions session_row
+        WHERE session_row.id = NEW.telegram_interaction_session_id
+          AND session_row.telegram_account_id = NEW.telegram_account_id
+          AND session_row.user_id = NEW.user_id
+          AND session_row.telegram_user_id = NEW.telegram_user_id
+          AND CAST(session_row.bot_id AS CHAR) = NEW.bot_id
+          AND session_row.active_telegram_account_id = NEW.telegram_account_id
+          AND session_row.status = 'active'
+          AND session_row.version = NEW.session_version;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM telegram_interaction_authority_capability capability_row
+        WHERE capability_row.id = 1
+          AND BINARY capability_row.capability_hash = BINARY SHA2(COALESCE(@app_telegram_interaction_capability, ''), 256)
+    ) OR NOT EXISTS (
+        SELECT 1 FROM telegram_accounts account_row
+        WHERE account_row.id = NEW.telegram_account_id
+          AND account_row.user_id = NEW.user_id
+          AND account_row.telegram_user_id = NEW.telegram_user_id
+          AND CAST(account_row.bot_id AS CHAR) = NEW.bot_id
+    ) OR COALESCE(@app_telegram_interaction_authority, '') <> 'update_bind_v1'
+       OR NEW.telegram_account_id <> COALESCE(@app_telegram_interaction_account_id, 0)
+       OR NEW.update_id <> COALESCE(@app_telegram_interaction_update_id, 0)
+       OR BINARY NEW.request_hash <> BINARY COALESCE(@app_telegram_interaction_request_hash, '')
+       OR NOT (NEW.telegram_interaction_session_id <=> @app_telegram_interaction_session_id)
+       OR NOT (NEW.session_version <=> @app_telegram_interaction_expected_version)
+       OR ((NEW.telegram_interaction_session_id IS NULL AND matching_session_count <> 0)
+           OR (NEW.telegram_interaction_session_id IS NOT NULL AND matching_session_count <> 1)) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Telegram interaction update binding authority is invalid.';
+    END IF;
+END
+SQL);
+
+        DB::unprepared("CREATE OR REPLACE TRIGGER telegram_interaction_update_bindings_update_guard BEFORE UPDATE ON telegram_interaction_update_bindings FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Telegram interaction update bindings are immutable.'; END");
+        DB::unprepared("CREATE OR REPLACE TRIGGER telegram_interaction_update_bindings_delete_guard BEFORE DELETE ON telegram_interaction_update_bindings FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Telegram interaction update bindings are non-deletable.'; END");
+
+        DB::unprepared(<<<'SQL'
 CREATE OR REPLACE TRIGGER telegram_interaction_callbacks_insert_guard
 BEFORE INSERT ON telegram_interaction_callbacks
 FOR EACH ROW
@@ -492,6 +606,9 @@ SQL);
         DB::unprepared('DROP TRIGGER IF EXISTS telegram_interaction_callbacks_delete_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS telegram_interaction_callbacks_update_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS telegram_interaction_callbacks_insert_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS telegram_interaction_update_bindings_delete_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS telegram_interaction_update_bindings_update_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS telegram_interaction_update_bindings_insert_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS telegram_interaction_transitions_delete_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS telegram_interaction_transitions_update_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS telegram_interaction_transitions_insert_guard');

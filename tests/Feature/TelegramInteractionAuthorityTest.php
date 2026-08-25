@@ -5,12 +5,14 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Modules\Telegram\Application\Contracts\TelegramInteractionHandler;
+use App\Modules\Telegram\Application\TelegramIdentitySynchronizer;
 use App\Modules\Telegram\Application\TelegramInteractionAction;
 use App\Modules\Telegram\Application\TelegramInteractionCallbackService;
 use App\Modules\Telegram\Application\TelegramInteractionDispatcher;
 use App\Modules\Telegram\Application\TelegramInteractionHandlerRegistry;
 use App\Modules\Telegram\Application\TelegramInteractionRejected;
 use App\Modules\Telegram\Application\TelegramInteractionSessionService;
+use App\Modules\Telegram\Application\TelegramInteractionUpdateBindingService;
 use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
 use App\Modules\Telegram\Domain\TelegramInteractionDispatchStatus;
 use App\Modules\Telegram\Domain\TelegramInteractionSessionStatus;
@@ -430,12 +432,292 @@ final class TelegramInteractionAuthorityTest extends TestCase
         self::assertCount(4, $handler->actions);
     }
 
+    public function test_accepted_callback_recovers_original_snapshot_after_session_advance_and_callback_expiry(): void
+    {
+        $account = $this->account('callback-recovery', 123456, 920001);
+        $sessions = $this->sessions();
+        $session = $sessions->start(
+            $account['telegram_account_id'],
+            'customer.callback_recovery',
+            'original_state',
+            ['phase' => 'original'],
+            'callback-recovery-session',
+        );
+        $callback = $this->callbacks()->issue(
+            $session->publicId,
+            1,
+            'recovery.advance',
+            ['choice' => 'safe'],
+            'callback-recovery-issue',
+            30,
+        );
+
+        $handler = new class($sessions) implements TelegramInteractionHandler
+        {
+            /** @var list<TelegramInteractionAction> */
+            public array $actions = [];
+
+            public bool $throwAfterAdvance = true;
+
+            public function __construct(private readonly TelegramInteractionSessionService $sessions) {}
+
+            public function flow(): string
+            {
+                return 'customer.callback_recovery';
+            }
+
+            public function handle(TelegramInteractionAction $action): void
+            {
+                $this->actions[] = $action;
+                $this->sessions->transition(
+                    $action->sessionPublicId,
+                    $action->sessionVersion,
+                    'advanced_state',
+                    ['phase' => 'advanced'],
+                    $action->requestKey.':advance',
+                );
+
+                if ($this->throwAfterAdvance) {
+                    $this->throwAfterAdvance = false;
+                    throw new RuntimeException('simulated-after-callback-advance');
+                }
+            }
+        };
+        $this->app->instance(TelegramInteractionHandlerRegistry::class, new TelegramInteractionHandlerRegistry([$handler]));
+        $dispatcher = $this->dispatcher();
+
+        try {
+            $dispatcher->dispatch('123456', 7010, $account['user_id'], [
+                'callback_query' => ['data' => $callback->token],
+            ]);
+            self::fail('The simulated callback crash must leave the accepted callback retryable.');
+        } catch (RuntimeException $exception) {
+            self::assertSame('simulated-after-callback-advance', $exception->getMessage());
+        }
+
+        self::assertSame('accepted', DB::table('telegram_interaction_callbacks')
+            ->where('public_id', $callback->publicId)
+            ->value('state'));
+        $advanced = $sessions->activeForAccount($account['telegram_account_id']);
+        self::assertNotNull($advanced);
+        self::assertSame(2, $advanced->version);
+        self::assertSame('advanced_state', $advanced->state);
+
+        $differentUpdate = $dispatcher->dispatch('123456', 7011, $account['user_id'], [
+            'callback_query' => ['data' => $callback->token],
+        ]);
+        self::assertSame(TelegramInteractionDispatchStatus::Replayed, $differentUpdate->status);
+        self::assertCount(1, $handler->actions);
+
+        $this->clock->advance('+31 seconds');
+        $recovered = $dispatcher->dispatch('123456', 7010, $account['user_id'], [
+            'callback_query' => ['data' => $callback->token],
+        ]);
+        self::assertSame(TelegramInteractionDispatchStatus::Handled, $recovered->status);
+        self::assertCount(2, $handler->actions);
+        self::assertSame($handler->actions[0]->requestKey, $handler->actions[1]->requestKey);
+        self::assertSame($session->publicId, $handler->actions[1]->sessionPublicId);
+        self::assertSame(1, $handler->actions[1]->sessionVersion);
+        self::assertSame('original_state', $handler->actions[1]->sessionState);
+        self::assertSame(['phase' => 'original'], $handler->actions[1]->sessionPayload);
+        self::assertTrue($handler->actions[1]->replayed);
+        self::assertSame('completed', DB::table('telegram_interaction_callbacks')
+            ->where('public_id', $callback->publicId)
+            ->value('state'));
+
+        $completedReplay = $dispatcher->dispatch('123456', 7012, $account['user_id'], [
+            'callback_query' => ['data' => $callback->token],
+        ]);
+        self::assertSame(TelegramInteractionDispatchStatus::Replayed, $completedReplay->status);
+        self::assertCount(2, $handler->actions);
+    }
+
+    public function test_accepted_callback_recovers_after_handler_terminalizes_the_session(): void
+    {
+        $account = $this->account('callback-terminal-recovery', 123456, 920002);
+        $sessions = $this->sessions();
+        $session = $sessions->start(
+            $account['telegram_account_id'],
+            'customer.callback_terminal',
+            'confirm',
+            ['phase' => 'terminal-original'],
+            'callback-terminal-session',
+        );
+        $callback = $this->callbacks()->issue(
+            $session->publicId,
+            1,
+            'recovery.complete',
+            [],
+            'callback-terminal-issue',
+        );
+
+        $handler = new class($sessions) implements TelegramInteractionHandler
+        {
+            /** @var list<TelegramInteractionAction> */
+            public array $actions = [];
+
+            public bool $throwAfterComplete = true;
+
+            public function __construct(private readonly TelegramInteractionSessionService $sessions) {}
+
+            public function flow(): string
+            {
+                return 'customer.callback_terminal';
+            }
+
+            public function handle(TelegramInteractionAction $action): void
+            {
+                $this->actions[] = $action;
+                $this->sessions->complete(
+                    $action->sessionPublicId,
+                    $action->sessionVersion,
+                    $action->requestKey.':session-complete',
+                );
+
+                if ($this->throwAfterComplete) {
+                    $this->throwAfterComplete = false;
+                    throw new RuntimeException('simulated-after-callback-terminal');
+                }
+            }
+        };
+        $this->app->instance(TelegramInteractionHandlerRegistry::class, new TelegramInteractionHandlerRegistry([$handler]));
+        $dispatcher = $this->dispatcher();
+
+        try {
+            $dispatcher->dispatch('123456', 7020, $account['user_id'], [
+                'callback_query' => ['data' => $callback->token],
+            ]);
+            self::fail('The simulated terminal callback crash must leave the accepted callback retryable.');
+        } catch (RuntimeException $exception) {
+            self::assertSame('simulated-after-callback-terminal', $exception->getMessage());
+        }
+        self::assertNull($sessions->activeForAccount($account['telegram_account_id']));
+        self::assertSame('accepted', DB::table('telegram_interaction_callbacks')
+            ->where('public_id', $callback->publicId)
+            ->value('state'));
+
+        $differentUpdate = $dispatcher->dispatch('123456', 7021, $account['user_id'], [
+            'callback_query' => ['data' => $callback->token],
+        ]);
+        self::assertSame(TelegramInteractionDispatchStatus::Replayed, $differentUpdate->status);
+        self::assertCount(1, $handler->actions);
+
+        $recovered = $dispatcher->dispatch('123456', 7020, $account['user_id'], [
+            'callback_query' => ['data' => $callback->token],
+        ]);
+        self::assertSame(TelegramInteractionDispatchStatus::Handled, $recovered->status);
+        self::assertCount(2, $handler->actions);
+        self::assertSame('confirm', $handler->actions[1]->sessionState);
+        self::assertSame(['phase' => 'terminal-original'], $handler->actions[1]->sessionPayload);
+        self::assertTrue($handler->actions[1]->replayed);
+        self::assertSame('completed', DB::table('telegram_interaction_callbacks')
+            ->where('public_id', $callback->publicId)
+            ->value('state'));
+    }
+
+    public function test_active_session_allows_routine_telegram_identity_metadata_synchronization(): void
+    {
+        $account = $this->account('identity-metadata', 123456, 920003);
+        $session = $this->sessions()->start(
+            $account['telegram_account_id'],
+            'customer.identity_metadata',
+            'active',
+            [],
+            'identity-metadata-session',
+        );
+
+        $userId = $this->app->make(TelegramIdentitySynchronizer::class)->synchronize('123456', 7030, [
+            'message' => [
+                'from' => [
+                    'id' => $account['telegram_user_id'],
+                    'is_bot' => false,
+                    'username' => 'metadata_changed',
+                    'language_code' => 'en',
+                ],
+                'text' => 'hello',
+            ],
+        ]);
+
+        self::assertSame($account['user_id'], $userId);
+        $this->assertDatabaseHas('telegram_accounts', [
+            'id' => $account['telegram_account_id'],
+            'username' => 'metadata_changed',
+            'language_code' => 'en',
+        ]);
+        $snapshot = DB::table('telegram_interaction_sessions')->where('public_id', $session->publicId)->first([
+            'user_id', 'bot_id', 'telegram_user_id', 'version',
+        ]);
+        self::assertNotNull($snapshot);
+        self::assertSame($account['user_id'], (int) $snapshot->user_id);
+        self::assertSame(123456, (int) $snapshot->bot_id);
+        self::assertSame($account['telegram_user_id'], (int) $snapshot->telegram_user_id);
+        self::assertSame(1, (int) $snapshot->version);
+    }
+
+    public function test_migration_repairs_partial_zero_data_surface_even_with_capability_singleton(): void
+    {
+        DB::unprepared('DROP TRIGGER IF EXISTS telegram_interaction_update_bindings_delete_guard');
+        self::assertSame(1, DB::table('telegram_interaction_authority_capability')->count());
+        self::assertSame(0, DB::table('telegram_interaction_sessions')->count());
+        self::assertSame(0, DB::table('telegram_interaction_transitions')->count());
+        self::assertSame(0, DB::table('telegram_interaction_update_bindings')->count());
+        self::assertSame(0, DB::table('telegram_interaction_callbacks')->count());
+
+        $migration = require database_path('migrations/2026_08_25_000100_enable_telegram_interaction_authority.php');
+        $migration->up();
+
+        self::assertSame(1, DB::table('telegram_interaction_authority_capability')->count());
+        self::assertTrue(DB::table('information_schema.TRIGGERS')
+            ->where('TRIGGER_SCHEMA', DB::getDatabaseName())
+            ->where('TRIGGER_NAME', 'telegram_interaction_update_bindings_delete_guard')
+            ->exists());
+    }
+
+    public function test_migration_refuses_destructive_partial_repair_after_durable_interaction_state_exists(): void
+    {
+        $account = $this->account('migration-durable', 123456, 920004);
+        $this->sessions()->start(
+            $account['telegram_account_id'],
+            'customer.migration_durable',
+            'active',
+            [],
+            'migration-durable-session',
+        );
+        DB::unprepared('DROP TRIGGER IF EXISTS telegram_interaction_update_bindings_delete_guard');
+        $migration = require database_path('migrations/2026_08_25_000100_enable_telegram_interaction_authority.php');
+
+        try {
+            $migration->up();
+            self::fail('Partial interaction authority must not be destructively rebuilt after durable state exists.');
+        } catch (RuntimeException $exception) {
+            self::assertSame(
+                'Telegram interaction authority migration cannot repair an incomplete authority surface after durable rows exist.',
+                $exception->getMessage(),
+            );
+        } finally {
+            DB::statement('SET FOREIGN_KEY_CHECKS=0');
+            try {
+                foreach ([
+                    'telegram_interaction_callbacks',
+                    'telegram_interaction_update_bindings',
+                    'telegram_interaction_transitions',
+                    'telegram_interaction_sessions',
+                ] as $table) {
+                    DB::statement('TRUNCATE TABLE '.$table);
+                }
+            } finally {
+                DB::statement('SET FOREIGN_KEY_CHECKS=1');
+            }
+            $migration->up();
+        }
+    }
+
     public function test_migration_reentry_detects_complete_authority_without_duplicate_constraints(): void
     {
         $migration = require database_path('migrations/2026_08_25_000100_enable_telegram_interaction_authority.php');
         $migration->up();
 
-        self::assertSame(12, DB::table('information_schema.TRIGGERS')
+        self::assertSame(15, DB::table('information_schema.TRIGGERS')
             ->where('TRIGGER_SCHEMA', DB::getDatabaseName())
             ->where('TRIGGER_NAME', 'like', 'telegram_interaction_%')
             ->count());
@@ -443,11 +725,13 @@ final class TelegramInteractionAuthorityTest extends TestCase
             ->where('TRIGGER_SCHEMA', DB::getDatabaseName())
             ->where('TRIGGER_NAME', 'telegram_accounts_interaction_identity_update_guard')
             ->exists());
-        self::assertSame(18, DB::table('information_schema.TABLE_CONSTRAINTS')
+        self::assertSame(24, DB::table('information_schema.TABLE_CONSTRAINTS')
             ->where('CONSTRAINT_SCHEMA', DB::getDatabaseName())
             ->whereIn('TABLE_NAME', [
+                'telegram_interaction_authority_capability',
                 'telegram_interaction_sessions',
                 'telegram_interaction_transitions',
+                'telegram_interaction_update_bindings',
                 'telegram_interaction_callbacks',
             ])
             ->where('CONSTRAINT_TYPE', 'CHECK')
@@ -523,6 +807,7 @@ final class TelegramInteractionAuthorityTest extends TestCase
             TelegramInteractionCallbackService::class,
             TelegramInteractionDispatcher::class,
             TelegramInteractionHandlerRegistry::class,
+            TelegramInteractionUpdateBindingService::class,
         ] as $service) {
             $this->app->forgetInstance($service);
         }

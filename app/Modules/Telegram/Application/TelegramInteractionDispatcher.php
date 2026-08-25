@@ -16,6 +16,7 @@ final readonly class TelegramInteractionDispatcher
         private DatabaseManager $database,
         private TelegramInteractionSessionService $sessions,
         private TelegramInteractionCallbackService $callbacks,
+        private TelegramInteractionUpdateBindingService $updateBindings,
         private TelegramInteractionHandlerRegistry $handlers,
     ) {}
 
@@ -55,51 +56,70 @@ final readonly class TelegramInteractionDispatcher
         if (mb_strlen($text) > 4096) {
             return new TelegramInteractionDispatchResult(TelegramInteractionDispatchStatus::Rejected);
         }
+
         $trimmed = trim($text);
-        if (preg_match('/\A\/cancel(?:@[A-Za-z0-9_]+)?\z/u', $trimmed) === 1) {
-            $session = $this->sessions->cancelActive(
-                (int) $account->id,
-                $this->updateRequestKey($botId, $updateId, 'cancel'),
+        $isCancel = preg_match('/\A\/cancel(?:@[A-Za-z0-9_]+)?\z/u', $trimmed) === 1;
+        $isBack = preg_match('/\A\/back(?:@[A-Za-z0-9_]+)?\z/u', $trimmed) === 1;
+        $kind = $isCancel ? 'cancel' : ($isBack ? 'back' : 'message');
+        $requestKey = $this->updateRequestKey($botId, $updateId, $kind);
+        $binding = $this->updateBindings->bind(
+            $botId,
+            $updateId,
+            (int) $account->id,
+            $kind,
+            $requestKey,
+        );
+
+        if ($isCancel) {
+            if ($binding->sessionPublicId === null || $binding->sessionVersion === null) {
+                return new TelegramInteractionDispatchResult(TelegramInteractionDispatchStatus::Ignored);
+            }
+
+            $session = $this->sessions->cancel(
+                $binding->sessionPublicId,
+                $binding->sessionVersion,
+                $requestKey,
             );
 
             return new TelegramInteractionDispatchResult(
-                $session === null ? TelegramInteractionDispatchStatus::Ignored : TelegramInteractionDispatchStatus::Cancelled,
-                $session?->publicId,
+                TelegramInteractionDispatchStatus::Cancelled,
+                $session->publicId,
             );
         }
 
-        $session = $this->sessions->activeForAccount((int) $account->id);
-        if ($session === null) {
+        if ($binding->sessionPublicId === null
+            || $binding->flow === null
+            || $binding->sessionState === null
+            || $binding->sessionVersion === null) {
             return new TelegramInteractionDispatchResult(TelegramInteractionDispatchStatus::Ignored);
         }
 
-        $handler = $this->handlers->forFlow($session->flow);
+        $handler = $this->handlers->forFlow($binding->flow);
         if ($handler === null) {
             throw new RuntimeException('Telegram interaction session has no registered handler.');
         }
 
-        $isBack = preg_match('/\A\/back(?:@[A-Za-z0-9_]+)?\z/u', $trimmed) === 1;
         $handler->handle(new TelegramInteractionAction(
             $isBack ? TelegramInteractionActionKind::Back : TelegramInteractionActionKind::Message,
-            $this->updateRequestKey($botId, $updateId, $isBack ? 'back' : 'message'),
+            $requestKey,
             $botId,
             $updateId,
-            $session->telegramAccountId,
-            $session->userId,
-            (int) $account->telegram_user_id,
-            $session->publicId,
-            $session->flow,
-            $session->state,
-            $session->version,
-            $session->payload,
+            $binding->telegramAccountId,
+            $binding->userId,
+            $binding->telegramUserId,
+            $binding->sessionPublicId,
+            $binding->flow,
+            $binding->sessionState,
+            $binding->sessionVersion,
+            $binding->sessionPayload,
             $isBack ? null : $text,
             null,
             null,
             [],
-            false,
+            $binding->replayed,
         ));
 
-        return new TelegramInteractionDispatchResult(TelegramInteractionDispatchStatus::Handled, $session->publicId);
+        return new TelegramInteractionDispatchResult(TelegramInteractionDispatchStatus::Handled, $binding->sessionPublicId);
     }
 
     /** @param array<string, mixed> $callbackQuery */

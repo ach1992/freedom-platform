@@ -246,6 +246,17 @@ final readonly class TelegramInteractionCallbackService
                 throw new TelegramInteractionRejected('Telegram callback actor binding is invalid.');
             }
 
+            $state = (string) $callback->state;
+            if ($state === 'completed') {
+                return $this->receiptFromRows($connection, $callback, $session, $token, true);
+            }
+            if ($state === 'accepted') {
+                return $this->receiptFromRows($connection, $callback, $session, $token, true);
+            }
+            if ($state !== 'pending') {
+                throw new TelegramInteractionRejected('Telegram callback state is invalid.');
+            }
+
             $now = $this->clock->now();
             if ((string) $session->status !== TelegramInteractionSessionStatus::Active->value
                 || $session->active_telegram_account_id === null
@@ -253,17 +264,6 @@ final readonly class TelegramInteractionCallbackService
                 || $this->parseTime((string) $session->expires_at) <= $now
                 || $this->parseTime((string) $callback->expires_at) <= $now) {
                 throw new TelegramInteractionRejected('Telegram callback authority is stale or expired.');
-            }
-
-            $state = (string) $callback->state;
-            if ($state === 'completed') {
-                return $this->receiptFromRows($callback, $session, $token, true);
-            }
-            if ($state === 'accepted') {
-                return $this->receiptFromRows($callback, $session, $token, true);
-            }
-            if ($state !== 'pending') {
-                throw new TelegramInteractionRejected('Telegram callback state is invalid.');
             }
 
             $updated = $this->databaseCapability->run(
@@ -298,7 +298,7 @@ final readonly class TelegramInteractionCallbackService
                 throw new RuntimeException('Telegram callback acceptance persistence is unavailable.');
             }
 
-            return $this->receiptFromRows($acceptedCallback, $session, $token, false);
+            return $this->receiptFromRows($connection, $acceptedCallback, $session, $token, false);
         }, 3);
     }
 
@@ -371,7 +371,7 @@ final readonly class TelegramInteractionCallbackService
             throw new RuntimeException('Telegram callback session persistence is invalid.');
         }
 
-        return $this->receiptFromRows($callback, $session, $token, $replayed);
+        return $this->receiptFromRows($connection, $callback, $session, $token, $replayed);
     }
 
     /**
@@ -379,12 +379,20 @@ final readonly class TelegramInteractionCallbackService
      * @param  ReceiptSessionRow  $session
      */
     private function receiptFromRows(
+        Connection $connection,
         object $callback,
         object $session,
         string $token,
         bool $replayed,
     ): TelegramInteractionCallbackReceipt {
         $state = (string) $callback->state;
+        $snapshot = $connection->table('telegram_interaction_transitions')
+            ->where('telegram_interaction_session_id', (int) $callback->telegram_interaction_session_id)
+            ->where('to_version', (int) $callback->session_version)
+            ->first(['to_state', 'to_payload']);
+        if ($snapshot === null) {
+            throw new RuntimeException('Telegram callback interaction snapshot is unavailable.');
+        }
 
         return new TelegramInteractionCallbackReceipt(
             (string) $callback->public_id,
@@ -394,9 +402,9 @@ final readonly class TelegramInteractionCallbackService
             (int) $session->telegram_account_id,
             (int) $session->user_id,
             (string) $session->flow,
-            (string) $session->state,
+            (string) $snapshot->to_state,
             (int) $callback->session_version,
-            $this->payloadFromJson((string) $session->payload),
+            $this->payloadFromJson((string) $snapshot->to_payload),
             (string) $callback->action,
             $this->payloadFromJson((string) $callback->action_payload),
             $this->parseTime((string) $callback->expires_at),

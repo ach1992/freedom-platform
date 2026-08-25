@@ -309,6 +309,51 @@ final readonly class TelegramInteractionSessionService
         }, 3);
     }
 
+    public function cancel(
+        string $sessionPublicId,
+        int $expectedVersion,
+        string $requestKey,
+    ): TelegramInteractionSessionReceipt {
+        $this->assertPublicId($sessionPublicId);
+        if ($expectedVersion < 1) {
+            throw new InvalidArgumentException('Telegram interaction expected version must be positive.');
+        }
+        $requestHash = $this->requestHash($requestKey);
+        $commandHash = $this->commandHash(['cancel', $sessionPublicId, (string) $expectedVersion]);
+        $connection = $this->database->connection();
+
+        return $connection->transaction(function () use (
+            $connection,
+            $sessionPublicId,
+            $expectedVersion,
+            $requestHash,
+            $commandHash,
+        ): TelegramInteractionSessionReceipt {
+            $replay = $this->replay($connection, $requestHash, $commandHash);
+            if ($replay !== null) {
+                return $replay;
+            }
+
+            $session = $this->lockSession($connection, $sessionPublicId);
+            $this->assertActiveSession($session);
+            if ($this->expireLockedSessionIfNeeded($connection, $session)) {
+                throw new DomainException('Telegram interaction session has expired.');
+            }
+            if ((int) $session->version !== $expectedVersion) {
+                throw new DomainException('Telegram interaction session version is stale.');
+            }
+
+            return $this->terminalize(
+                $connection,
+                $session,
+                TelegramInteractionSessionStatus::Cancelled,
+                'cancel',
+                $requestHash,
+                $commandHash,
+            );
+        }, 3);
+    }
+
     public function complete(
         string $sessionPublicId,
         int $expectedVersion,
