@@ -138,18 +138,13 @@ SQL, [
     private function assertReady(Connection $connection): void
     {
         try {
-            $capability = $connection->table('telegram_delivery_authority_capability')
-                ->where('id', 1)
-                ->first(['capability_hash', 'schema_version', 'activated_at']);
+            $ready = (new TelegramDeliveryDatabaseAuthoritySurfaceV1)
+                ->isReady($connection, $this->expectedHash());
         } catch (Throwable $exception) {
             throw new RuntimeException('Telegram delivery database authority is not fully activated.', 0, $exception);
         }
 
-        if ($capability === null
-            || ! is_string($capability->capability_hash)
-            || ! hash_equals($this->expectedHash(), $capability->capability_hash)
-            || (int) $capability->schema_version !== 1
-            || $capability->activated_at === null) {
+        if (! $ready) {
             throw new RuntimeException('Telegram delivery database authority is not fully activated.');
         }
     }

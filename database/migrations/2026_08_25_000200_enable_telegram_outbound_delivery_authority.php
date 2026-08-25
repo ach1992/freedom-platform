@@ -2,7 +2,9 @@
 
 declare(strict_types=1);
 
+use App\Modules\Telegram\Application\TelegramDeliveryDatabaseAuthoritySurfaceV1;
 use Illuminate\Database\Connection;
+use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
@@ -10,43 +12,6 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
-    private const REQUIRED_TRIGGERS = [
-        'telegram_delivery_capability_insert_guard',
-        'telegram_delivery_capability_update_guard',
-        'telegram_delivery_capability_delete_guard',
-        'outbox_telegram_delivery_envelope_insert_guard',
-        'telegram_delivery_operations_insert_guard',
-        'telegram_delivery_operations_update_guard',
-        'telegram_delivery_operations_delete_guard',
-        'outbox_telegram_delivery_envelope_update_guard',
-        'outbox_telegram_delivery_envelope_delete_guard',
-    ];
-
-    private const REQUIRED_CHECKS = [
-        'telegram_delivery_capability_singleton_chk',
-        'telegram_delivery_capability_hash_chk',
-        'telegram_delivery_capability_schema_version_chk',
-        'telegram_delivery_capability_activation_chk',
-        'telegram_delivery_operations_public_chk',
-        'telegram_delivery_operations_request_hash_chk',
-        'telegram_delivery_operations_fingerprint_chk',
-        'telegram_delivery_operations_correlation_chk',
-        'telegram_delivery_operations_action_chk',
-        'telegram_delivery_operations_bot_chk',
-        'telegram_delivery_operations_recipient_chk',
-        'telegram_delivery_operations_request_shape_chk',
-        'telegram_delivery_operations_state_chk',
-        'telegram_delivery_operations_state_version_chk',
-        'telegram_delivery_operations_attempts_chk',
-        'telegram_delivery_operations_result_shape_chk',
-    ];
-
-    private const REQUIRED_UNIQUE_INDEXES = [
-        'telegram_delivery_operations_public_unique',
-        'telegram_delivery_operations_request_unique',
-        'telegram_delivery_operations_outbox_unique',
-    ];
-
     /** @requirement ARCH-003 ARCH-004 DAT-003 SEC-002 SEC-008 OPS-003 QUA-004 QUA-007 QUA-010 */
     public function up(): void
     {
@@ -54,7 +19,8 @@ return new class extends Migration
             throw new RuntimeException('Telegram outbound delivery authority requires the common Transactional Outbox.');
         }
 
-        if (DB::connection()->getDriverName() !== 'mysql') {
+        $connection = DB::connection();
+        if ($connection->getDriverName() !== 'mysql') {
             if (! Schema::hasTable('telegram_delivery_operations')) {
                 $this->createPortableTable();
             }
@@ -62,81 +28,74 @@ return new class extends Migration
             return;
         }
 
-        if ($this->authorityReady()) {
-            return;
-        }
+        $this->withInstallationLock($connection, function () use ($connection): void {
+            if ($this->authorityReady($connection)) {
+                return;
+            }
 
-        $this->resetInterruptedInstallIfSafe();
+            $this->resetInterruptedInstallIfSafe($connection);
 
-        // Keep the authority disabled until every table/guard/constraint is installed.
-        // The capability row starts at schema_version=0 and every mutation trigger
-        // requires schema_version=1, which is activated only as the final step.
-        $this->createCapabilityTable($this->capabilityHash());
-        $this->installCapabilityGuards();
-        $this->createOutboxInsertGuard();
-        $this->createTable();
-        $this->createOperationInsertGuard();
-        $this->createOperationUpdateGuard();
-        $this->createOperationDeleteGuard();
-        $this->createOutboxUpdateGuard();
-        $this->createOutboxDeleteGuard();
+            // Keep the authority disabled until every table/guard/constraint is installed.
+            // The capability row starts at schema_version=0 and every mutation trigger
+            // requires schema_version=1, which is activated only as the final step.
+            $this->createCapabilityTable($this->capabilityHash());
+            $this->installCapabilityGuards();
+            $this->createOutboxInsertGuard();
+            $this->createTable();
+            $this->createOperationInsertGuard();
+            $this->createOperationUpdateGuard();
+            $this->createOperationDeleteGuard();
+            $this->createOutboxUpdateGuard();
+            $this->createOutboxDeleteGuard();
 
-        if ($this->durableAuthorityExists()) {
-            throw new RuntimeException('Telegram delivery authority cannot activate after durable rows appeared during incomplete installation.');
-        }
+            if ($this->durableAuthorityExists()) {
+                throw new RuntimeException('Telegram delivery authority cannot activate after durable rows appeared during incomplete installation.');
+            }
 
-        $this->activateAuthority();
+            $this->activateAuthority($connection);
 
-        if (! $this->authorityReady()) {
-            throw new RuntimeException('Telegram delivery authority installation did not reach the complete activated surface.');
-        }
+            if (! $this->authorityReady($connection)) {
+                throw new RuntimeException('Telegram delivery authority installation did not reach the complete activated surface.');
+            }
+        });
     }
 
     public function down(): void
     {
-        if ($this->durableAuthorityExists()) {
-            throw new RuntimeException('Cannot roll back Telegram outbound delivery authority while durable authority exists.');
+        $connection = DB::connection();
+        if ($connection->getDriverName() !== 'mysql') {
+            if ($this->durableAuthorityExists()) {
+                throw new RuntimeException('Cannot roll back Telegram outbound delivery authority while durable authority exists.');
+            }
+
+            Schema::dropIfExists('telegram_delivery_operations');
+
+            return;
         }
 
-        $this->dropGuards();
-        Schema::dropIfExists('telegram_delivery_operations');
-        Schema::dropIfExists('telegram_delivery_authority_capability');
+        $this->withInstallationLock($connection, function (): void {
+            if ($this->durableAuthorityExists()) {
+                throw new RuntimeException('Cannot roll back Telegram outbound delivery authority while durable authority exists.');
+            }
+
+            $this->dropGuards();
+            Schema::dropIfExists('telegram_delivery_operations');
+            Schema::dropIfExists('telegram_delivery_authority_capability');
+        });
     }
 
-    private function authorityReady(): bool
+    private function authorityReady(Connection $connection): bool
     {
-        if (! Schema::hasTable('telegram_delivery_operations')
-            || ! Schema::hasTable('telegram_delivery_authority_capability')
-            || ! $this->capabilityTableHasCurrentShape()) {
-            return false;
-        }
-
-        $rows = DB::table('telegram_delivery_authority_capability')->get([
-            'id', 'capability_hash', 'schema_version', 'activated_at',
-        ]);
-        if ($rows->count() !== 1) {
-            return false;
-        }
-
-        $capability = $rows->first();
-        if ((int) $capability->id !== 1
-            || ! is_string($capability->capability_hash)
-            || ! hash_equals($this->capabilityHash(), $capability->capability_hash)
-            || (int) $capability->schema_version !== 1
-            || $capability->activated_at === null) {
-            return false;
-        }
-
-        return $this->requiredTriggersPresent()
-            && $this->requiredChecksPresent()
-            && $this->requiredUniqueIndexesPresent();
+        return (new TelegramDeliveryDatabaseAuthoritySurfaceV1)
+            ->isReady($connection, $this->capabilityHash());
     }
 
-    private function resetInterruptedInstallIfSafe(): void
+    private function resetInterruptedInstallIfSafe(Connection $connection): void
     {
+        $surface = new TelegramDeliveryDatabaseAuthoritySurfaceV1;
         $hasOperationTable = Schema::hasTable('telegram_delivery_operations');
         $hasCapabilityTable = Schema::hasTable('telegram_delivery_authority_capability');
-        $hasDeliveryTriggers = $this->presentRequiredTriggers() !== [];
+        $hasDeliveryTriggers = $surface->presentRequiredTriggers($connection) !== [];
         $hasDurableAuthority = $this->durableAuthorityExists();
 
         if (! $hasOperationTable && ! $hasCapabilityTable && ! $hasDeliveryTriggers && ! $hasDurableAuthority) {
@@ -148,7 +107,7 @@ return new class extends Migration
         }
 
         if ($hasCapabilityTable) {
-            if (! $this->capabilityTableHasCurrentShape()) {
+            if (! $surface->capabilityTableHasCurrentShape($connection)) {
                 $this->dropGuards();
                 Schema::dropIfExists('telegram_delivery_operations');
                 Schema::dropIfExists('telegram_delivery_authority_capability');
@@ -185,17 +144,6 @@ return new class extends Migration
         Schema::dropIfExists('telegram_delivery_authority_capability');
     }
 
-    private function capabilityTableHasCurrentShape(): bool
-    {
-        return Schema::hasColumns('telegram_delivery_authority_capability', [
-            'id',
-            'capability_hash',
-            'schema_version',
-            'activated_at',
-            'created_at',
-        ]);
-    }
-
     private function durableAuthorityExists(): bool
     {
         if (Schema::hasTable('telegram_delivery_operations')
@@ -208,67 +156,69 @@ return new class extends Migration
             ->exists();
     }
 
-    /** @return list<string> */
-    private function presentRequiredTriggers(): array
+    /**
+     * @template T
+     *
+     * @param  Closure():T  $operation
+     * @return T
+     */
+    private function withInstallationLock(Connection $connection, Closure $operation): mixed
     {
-        /** @var list<string> $triggers */
-        $triggers = DB::table('information_schema.TRIGGERS')
-            ->where('TRIGGER_SCHEMA', DB::getDatabaseName())
-            ->whereIn('TRIGGER_NAME', self::REQUIRED_TRIGGERS)
-            ->pluck('TRIGGER_NAME')
-            ->map(static fn (mixed $name): string => (string) $name)
-            ->values()
-            ->all();
+        $lockName = TelegramDeliveryDatabaseAuthoritySurfaceV1::installationLockName($connection);
+        $acquired = $connection->selectOne('SELECT GET_LOCK(?, 0) AS acquired', [$lockName], false);
+        if ($acquired === null || (int) ($acquired->acquired ?? 0) !== 1) {
+            throw new RuntimeException('Telegram delivery authority installation lock is already held by another migration runner.');
+        }
 
-        return $triggers;
+        // The advisory lock is owned by this exact MariaDB session. Laravel's
+        // normal lost-connection handling reconnects and retries queries, which
+        // would silently continue this DDL state machine on a new session after
+        // the server had already released GET_LOCK. Disable that behavior until
+        // RELEASE_LOCK completes so any session loss aborts the installation.
+        $connection->setReconnector(static function (Connection $connection): never {
+            throw new RuntimeException('Telegram delivery authority installation database session was lost while the installation lock was held.');
+        });
+
+        try {
+            try {
+                return $operation();
+            } finally {
+                try {
+                    $released = $connection->selectOne('SELECT RELEASE_LOCK(?) AS released', [$lockName], false);
+                } catch (Throwable $exception) {
+                    $this->disconnect($connection);
+                    throw new RuntimeException('Telegram delivery authority installation lock cleanup failed.', 0, $exception);
+                }
+
+                if ($released === null || (int) ($released->released ?? 0) !== 1) {
+                    $this->disconnect($connection);
+                    throw new RuntimeException('Telegram delivery authority installation lock cleanup failed.');
+                }
+            }
+        } finally {
+            $this->restoreDefaultReconnector($connection);
+        }
     }
 
-    private function requiredTriggersPresent(): bool
+    private function restoreDefaultReconnector(Connection $connection): void
     {
-        $expected = self::REQUIRED_TRIGGERS;
-        $actual = $this->presentRequiredTriggers();
-        sort($expected);
-        sort($actual);
+        $database = app(DatabaseManager::class);
 
-        return $actual === $expected;
-    }
+        // Mirror Laravel DatabaseManager's default per-connection reconnector.
+        // Restore it only after the advisory-lock critical section is over.
+        $connection->setReconnector(static function (Connection $connection) use ($database): void {
+            $name = $connection->getNameWithReadWriteType();
+            if (! is_string($name) || $name === '') {
+                throw new RuntimeException('Telegram delivery database connection name is unavailable for reconnect.');
+            }
 
-    private function requiredChecksPresent(): bool
-    {
-        $expected = self::REQUIRED_CHECKS;
-        $actual = DB::table('information_schema.TABLE_CONSTRAINTS')
-            ->where('CONSTRAINT_SCHEMA', DB::getDatabaseName())
-            ->whereIn('TABLE_NAME', [
-                'telegram_delivery_authority_capability',
-                'telegram_delivery_operations',
-            ])
-            ->where('CONSTRAINT_TYPE', 'CHECK')
-            ->whereIn('CONSTRAINT_NAME', $expected)
-            ->pluck('CONSTRAINT_NAME')
-            ->map(static fn (mixed $name): string => (string) $name)
-            ->all();
-        sort($expected);
-        sort($actual);
+            $reconnected = $database->reconnect($name);
+            if (! $reconnected instanceof Connection) {
+                throw new RuntimeException('Telegram delivery database connection could not be restored.');
+            }
 
-        return $actual === $expected;
-    }
-
-    private function requiredUniqueIndexesPresent(): bool
-    {
-        $expected = self::REQUIRED_UNIQUE_INDEXES;
-        $actual = DB::table('information_schema.STATISTICS')
-            ->where('TABLE_SCHEMA', DB::getDatabaseName())
-            ->where('TABLE_NAME', 'telegram_delivery_operations')
-            ->where('NON_UNIQUE', 0)
-            ->whereIn('INDEX_NAME', $expected)
-            ->distinct()
-            ->pluck('INDEX_NAME')
-            ->map(static fn (mixed $name): string => (string) $name)
-            ->all();
-        sort($expected);
-        sort($actual);
-
-        return $actual === $expected;
+            $connection->setPdo($reconnected->getRawPdo());
+        });
     }
 
     private function installCapabilityGuards(): void
@@ -295,9 +245,8 @@ SQL);
         DB::unprepared("CREATE OR REPLACE TRIGGER telegram_delivery_capability_delete_guard BEFORE DELETE ON telegram_delivery_authority_capability FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Telegram delivery database capability is immutable.'; END");
     }
 
-    private function activateAuthority(): void
+    private function activateAuthority(Connection $connection): void
     {
-        $connection = DB::connection();
         $armed = false;
 
         DB::statement('ALTER TABLE telegram_delivery_authority_capability DROP CONSTRAINT telegram_delivery_capability_schema_version_chk');

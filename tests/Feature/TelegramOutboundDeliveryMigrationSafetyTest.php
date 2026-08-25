@@ -7,6 +7,7 @@ namespace Tests\Feature;
 use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\TelegramMutationTransport;
 use App\Modules\Telegram\Application\NonRestrictedTelegramPresentation;
+use App\Modules\Telegram\Application\TelegramDeliveryDatabaseAuthoritySurfaceV1;
 use App\Modules\Telegram\Application\TelegramDeliveryDatabaseCapability;
 use App\Modules\Telegram\Application\TelegramDeliveryOperationExecutor;
 use App\Modules\Telegram\Application\TelegramDeliveryOutboxHandler;
@@ -17,6 +18,7 @@ use App\Modules\Telegram\Application\TelegramMutationResult;
 use App\Modules\Telegram\Domain\TelegramDeliveryAction;
 use App\Shared\Application\Clock;
 use App\Shared\Application\OutboxMessage;
+use App\Shared\Infrastructure\DatabaseOutboxDispatcher;
 use App\Shared\Infrastructure\DatabaseOutboxPublisher;
 use DateTimeImmutable;
 use Illuminate\Database\DatabaseManager;
@@ -192,6 +194,57 @@ SQL);
         self::assertNotNull($capability);
         self::assertSame(0, (int) $capability->schema_version);
         self::assertNull($capability->activated_at);
+    }
+
+    public function test_database_installation_lock_serializes_concurrent_runners_before_any_reset_decision(): void
+    {
+        $this->dropDeliveryGuards();
+        DB::table('telegram_delivery_authority_capability')->where('id', 1)->update([
+            'schema_version' => 0,
+            'activated_at' => null,
+        ]);
+
+        $database = app(DatabaseManager::class);
+        $defaultConnection = config('database.default');
+        self::assertIsString($defaultConnection);
+        $connectionConfig = config('database.connections.'.$defaultConnection);
+        self::assertIsArray($connectionConfig);
+        config(['database.connections.telegram_migration_contender' => $connectionConfig]);
+        $contender = $database->connection('telegram_migration_contender');
+
+        $primaryId = DB::connection()->selectOne('SELECT CONNECTION_ID() AS connection_id');
+        $contenderId = $contender->selectOne('SELECT CONNECTION_ID() AS connection_id');
+        self::assertNotNull($primaryId);
+        self::assertNotNull($contenderId);
+        self::assertNotSame((int) $primaryId->connection_id, (int) $contenderId->connection_id);
+
+        $lockName = TelegramDeliveryDatabaseAuthoritySurfaceV1::installationLockName($contender);
+        $acquired = $contender->selectOne('SELECT GET_LOCK(?, 0) AS acquired', [$lockName]);
+        self::assertNotNull($acquired);
+        self::assertSame(1, (int) $acquired->acquired);
+
+        try {
+            try {
+                $this->runMigrationUp();
+                self::fail('A concurrent migration runner must not enter the Telegram authority state machine.');
+            } catch (RuntimeException $exception) {
+                self::assertStringContainsString('installation lock is already held', $exception->getMessage());
+            }
+
+            self::assertSame(0, (int) DB::table('telegram_delivery_authority_capability')->where('id', 1)->value('schema_version'));
+            self::assertSame(0, $this->deliveryTriggerCount());
+            self::assertTrue(Schema::hasTable('telegram_delivery_operations'));
+        } finally {
+            $released = $contender->selectOne('SELECT RELEASE_LOCK(?) AS released', [$lockName]);
+            self::assertNotNull($released);
+            self::assertSame(1, (int) $released->released);
+            $database->purge('telegram_migration_contender');
+        }
+
+        $this->runMigrationUp();
+        self::assertSame(1, (int) DB::table('telegram_delivery_authority_capability')->where('id', 1)->value('schema_version'));
+        self::assertSame(9, $this->deliveryTriggerCount());
+        self::assertTrue($this->surfaceReady());
     }
 
     public function test_zero_data_interrupted_install_rebuilds_and_activates_complete_surface(): void
@@ -370,6 +423,7 @@ SQL);
             self::assertStringContainsString('activated authority surface is incomplete', $exception->getMessage());
         }
 
+        self::assertRuntimeFenceRejectsPartialSurface('missing-check');
         self::assertFalse(DB::table('information_schema.TABLE_CONSTRAINTS')
             ->where('CONSTRAINT_SCHEMA', DB::getDatabaseName())
             ->where('TABLE_NAME', 'telegram_delivery_operations')
@@ -388,6 +442,7 @@ SQL);
             self::assertStringContainsString('activated authority surface is incomplete', $exception->getMessage());
         }
 
+        self::assertRuntimeFenceRejectsPartialSurface('missing-index');
         self::assertFalse(DB::table('information_schema.STATISTICS')
             ->where('TABLE_SCHEMA', DB::getDatabaseName())
             ->where('TABLE_NAME', 'telegram_delivery_operations')
@@ -408,7 +463,56 @@ SQL);
             self::assertStringContainsString('activated authority surface is incomplete', $exception->getMessage());
         }
 
+        self::assertRuntimeFenceRejectsPartialSurface('missing-guard');
         self::assertSame(8, $this->deliveryTriggerCount());
+    }
+
+    public function test_activated_marker_with_missing_insert_guards_cannot_send_forged_rows_even_after_dispatcher_reentry(): void
+    {
+        DB::unprepared('DROP TRIGGER IF EXISTS outbox_telegram_delivery_envelope_insert_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS telegram_delivery_operations_insert_guard');
+        self::assertSame(1, (int) DB::table('telegram_delivery_authority_capability')->where('id', 1)->value('schema_version'));
+        self::assertFalse($this->surfaceReady());
+
+        $forged = $this->forgeDurableAuthority('activated-partial-runtime');
+        $transport = new MigrationSafetyTransport;
+        $executor = new TelegramDeliveryOperationExecutor(
+            app(DatabaseManager::class),
+            $this->clock,
+            $this->runtime,
+            $transport,
+            new TelegramDeliveryDatabaseCapability,
+        );
+        $handler = new TelegramDeliveryOutboxHandler(static fn (): TelegramDeliveryOperationExecutor => $executor);
+        $dispatcher = new DatabaseOutboxDispatcher(app(DatabaseManager::class), $this->clock, 60, 2);
+
+        self::assertNotNull($dispatcher->dispatchOne($handler));
+        self::assertSame(0, $transport->attempts);
+        $this->assertDatabaseHas('telegram_delivery_operations', [
+            'public_id' => $forged->public_id,
+            'state' => 'prepared',
+            'provider_attempts' => 0,
+        ]);
+        $this->assertDatabaseHas('outbox_messages', [
+            'id' => $forged->outbox_event_id,
+            'dispatch_state' => 'retry',
+            'attempts' => 1,
+        ]);
+
+        $this->clock->advance('+5 seconds');
+        self::assertNotNull($dispatcher->dispatchOne($handler));
+        self::assertSame(0, $transport->attempts);
+        $this->assertDatabaseHas('telegram_delivery_operations', [
+            'public_id' => $forged->public_id,
+            'state' => 'prepared',
+            'provider_attempts' => 0,
+        ]);
+        $this->assertDatabaseHas('outbox_messages', [
+            'id' => $forged->outbox_event_id,
+            'dispatch_state' => 'review_required',
+            'review_reason' => 'retry_exhausted',
+            'attempts' => 2,
+        ]);
     }
 
     /** @return object{public_id:string,outbox_event_id:string,correlation_id:string} */
@@ -461,6 +565,38 @@ SQL);
             'outbox_event_id' => $outboxEventId,
             'correlation_id' => $correlationId,
         ];
+    }
+
+    private function surfaceReady(): bool
+    {
+        return (new TelegramDeliveryDatabaseAuthoritySurfaceV1)->isReady(
+            DB::connection(),
+            (new TelegramDeliveryDatabaseCapability)->expectedHash(),
+        );
+    }
+
+    private function assertRuntimeFenceRejectsPartialSurface(string $suffix): void
+    {
+        self::assertFalse($this->surfaceReady());
+
+        try {
+            $this->queue()->queue(
+                TelegramDeliveryAction::Send,
+                900180,
+                null,
+                NonRestrictedTelegramPresentation::plainText('partial surface runtime fence'),
+                'migration-runtime-fence-'.$suffix,
+                'correlation-runtime-fence-179',
+            );
+            self::fail('Runtime must reject an activated marker when the database authority surface is incomplete.');
+        } catch (RuntimeException $exception) {
+            self::assertStringContainsString('database authority is not fully activated', $exception->getMessage());
+        }
+
+        self::assertSame(0, DB::table('telegram_delivery_operations')->count());
+        self::assertSame(0, DB::table('outbox_messages')
+            ->whereRaw('LOWER(event_type) = ?', [TelegramDeliveryQueueService::OUTBOX_EVENT_TYPE])
+            ->count());
     }
 
     private function assertReentryFailsForDurableIncompleteSurface(): void
@@ -549,28 +685,23 @@ SQL);
     {
         return (int) DB::table('information_schema.TRIGGERS')
             ->where('TRIGGER_SCHEMA', DB::getDatabaseName())
-            ->whereIn('TRIGGER_NAME', [
-                'telegram_delivery_capability_insert_guard',
-                'telegram_delivery_capability_update_guard',
-                'telegram_delivery_capability_delete_guard',
-                'outbox_telegram_delivery_envelope_insert_guard',
-                'telegram_delivery_operations_insert_guard',
-                'telegram_delivery_operations_update_guard',
-                'telegram_delivery_operations_delete_guard',
-                'outbox_telegram_delivery_envelope_update_guard',
-                'outbox_telegram_delivery_envelope_delete_guard',
-            ])
+            ->whereIn('TRIGGER_NAME', TelegramDeliveryDatabaseAuthoritySurfaceV1::REQUIRED_TRIGGERS)
             ->count();
     }
 }
 
-final readonly class MigrationSafetyClock implements Clock
+final class MigrationSafetyClock implements Clock
 {
     public function __construct(private DateTimeImmutable $now) {}
 
     public function now(): DateTimeImmutable
     {
         return $this->now;
+    }
+
+    public function advance(string $modifier): void
+    {
+        $this->now = $this->now->modify($modifier);
     }
 }
 

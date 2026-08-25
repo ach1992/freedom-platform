@@ -26,7 +26,7 @@ final readonly class InstallerArtisanProcessRunner implements InstallerFinalizat
 
     public function migrate(): void
     {
-        $this->run('migrations', ['migrate', '--force', '--no-ansi', '--no-interaction']);
+        $this->run('migrations', ['migrate', '--force', '--isolated=1', '--no-ansi', '--no-interaction']);
     }
 
     public function cacheConfiguration(): void

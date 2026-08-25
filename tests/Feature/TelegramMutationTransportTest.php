@@ -86,7 +86,7 @@ final class TelegramMutationTransportTest extends TestCase
         Http::assertSentCount(1);
     }
 
-    public function test_explicit_server_rejection_is_retryable_and_permanent_rejection_is_final(): void
+    public function test_server_failure_is_uncertain_and_permanent_rejection_is_final(): void
     {
         Http::fakeSequence()
             ->push(['ok' => false, 'error_code' => 502], 502)
@@ -99,9 +99,29 @@ final class TelegramMutationTransportTest extends TestCase
             NonRestrictedTelegramPresentation::plainText('message'),
         );
 
-        self::assertSame(TelegramMutationOutcome::RetryableFailure, $this->transport()->mutate($request)->outcome);
+        $serverFailure = $this->transport()->mutate($request);
+        self::assertSame(TelegramMutationOutcome::UncertainResult, $serverFailure->outcome);
+        self::assertSame('telegram_http_server_error_uncertain', $serverFailure->resultCode);
         self::assertSame(TelegramMutationOutcome::DefinitiveFailure, $this->transport()->mutate($request)->outcome);
         Http::assertSentCount(2);
+    }
+
+    public function test_ok_false_with_non_error_http_status_is_uncertain(): void
+    {
+        Http::fake([
+            '*' => Http::response(['ok' => false, 'error_code' => 403], 200),
+        ]);
+
+        $result = $this->transport()->mutate(new TelegramMutationRequest(
+            TelegramDeliveryAction::Send,
+            900001,
+            null,
+            NonRestrictedTelegramPresentation::plainText('message'),
+        ));
+
+        self::assertSame(TelegramMutationOutcome::UncertainResult, $result->outcome);
+        self::assertSame('telegram_error_status_ambiguous', $result->resultCode);
+        Http::assertSentCount(1);
     }
 
     public function test_timeout_and_edit_target_mismatch_are_uncertain_after_one_attempt(): void

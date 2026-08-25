@@ -106,7 +106,7 @@ final readonly class TelegramDeliveryOperationExecutor
 
             [$state, $completed] = match ($result->outcome) {
                 TelegramMutationOutcome::Success => [TelegramDeliveryOperationState::Succeeded, true],
-                TelegramMutationOutcome::RetryableFailure => [TelegramDeliveryOperationState::Retryable, false],
+                TelegramMutationOutcome::DefinitiveNoEffectRetryable => [TelegramDeliveryOperationState::Retryable, false],
                 TelegramMutationOutcome::DefinitiveFailure => [TelegramDeliveryOperationState::FailedFinal, true],
                 TelegramMutationOutcome::RetryAfter => [TelegramDeliveryOperationState::ReviewRequired, true],
                 TelegramMutationOutcome::UncertainResult => [TelegramDeliveryOperationState::Uncertain, true],

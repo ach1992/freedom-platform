@@ -97,6 +97,10 @@ final readonly class HttpTelegramMutationTransport implements TelegramMutationTr
             return $this->uncertain('telegram_response_ambiguous');
         }
 
+        if ($response->serverError()) {
+            return $this->uncertain('telegram_http_server_error_uncertain');
+        }
+
         $parameters = $decoded['parameters'] ?? null;
         $retryAfterPresent = is_array($parameters) && array_key_exists('retry_after', $parameters);
         $retryAfter = $retryAfterPresent ? $parameters['retry_after'] : null;
@@ -124,10 +128,10 @@ final readonly class HttpTelegramMutationTransport implements TelegramMutationTr
         }
 
         if ($errorCode >= 500) {
-            return new TelegramMutationResult(
-                TelegramMutationOutcome::RetryableFailure,
-                'telegram_api_error_'.$errorCode,
-            );
+            return $this->uncertain('telegram_api_error_'.$errorCode.'_uncertain');
+        }
+        if (! $response->clientError()) {
+            return $this->uncertain('telegram_error_status_ambiguous');
         }
 
         return new TelegramMutationResult(

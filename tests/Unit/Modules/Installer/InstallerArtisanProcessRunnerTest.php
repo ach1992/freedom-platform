@@ -24,7 +24,7 @@ final class InstallerArtisanProcessRunnerTest extends TestCase
 
             $this->assertSame([
                 'config:clear --no-ansi --no-interaction',
-                'migrate --force --no-ansi --no-interaction',
+                'migrate --force --isolated=1 --no-ansi --no-interaction',
                 'config:cache --no-ansi --no-interaction',
             ], file($logPath, FILE_IGNORE_NEW_LINES));
         } finally {

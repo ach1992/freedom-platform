@@ -16,6 +16,8 @@ use App\Modules\Telegram\Application\TelegramMutationRequest;
 use App\Modules\Telegram\Application\TelegramMutationResult;
 use App\Modules\Telegram\Domain\TelegramDeliveryAction;
 use App\Modules\Telegram\Domain\TelegramDeliveryOperationState;
+use App\Modules\Telegram\Infrastructure\HttpTelegramMutationTransport;
+use App\Modules\Telegram\Infrastructure\TelegramRuntimeConfiguration;
 use App\Shared\Application\Clock;
 use App\Shared\Application\OutboxDispatchOutcome;
 use App\Shared\Application\OutboxMessage;
@@ -27,7 +29,9 @@ use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
+use Illuminate\Http\Client\Factory;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use ReflectionClass;
 use RuntimeException;
 use Tests\TestCase;
@@ -200,10 +204,10 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
         self::assertSame(1, $transport->attempts);
     }
 
-    public function test_definite_retryable_rejection_uses_common_outbox_backoff_then_can_succeed(): void
+    public function test_authoritatively_definite_no_effect_retryable_outcome_uses_common_outbox_backoff_then_can_succeed(): void
     {
         $transport = new RecordingTelegramMutationTransport([
-            new TelegramMutationResult(TelegramMutationOutcome::RetryableFailure, 'telegram_api_error_502'),
+            new TelegramMutationResult(TelegramMutationOutcome::DefinitiveNoEffectRetryable, 'telegram_definite_no_effect_retryable'),
             new TelegramMutationResult(TelegramMutationOutcome::Success, 'telegram_success', messageId: 702),
         ], DB::getFacadeRoot());
         $created = $this->queue()->queue(
@@ -223,7 +227,7 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
             'public_id' => $created->publicId,
             'state' => 'retryable',
             'provider_attempts' => 1,
-            'result_code' => 'telegram_api_error_502',
+            'result_code' => 'telegram_definite_no_effect_retryable',
         ]);
         $this->assertDatabaseHas('outbox_messages', [
             'id' => $created->outboxEventId,
@@ -247,6 +251,53 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
             'attempts' => 2,
         ]);
         self::assertSame(2, $transport->attempts);
+    }
+
+    public function test_http_5xx_is_uncertain_and_never_crosses_provider_boundary_twice(): void
+    {
+        Http::fakeSequence()
+            ->push(['ok' => false, 'error_code' => 502], 502)
+            ->push(['ok' => true, 'result' => ['message_id' => 703]], 200);
+
+        $created = $this->queue()->queue(
+            TelegramDeliveryAction::Send,
+            900015,
+            null,
+            NonRestrictedTelegramPresentation::plainText('server failure is ambiguous'),
+            'telegram-http-5xx-request',
+            'correlation-http-5xx-179',
+        );
+        $executor = $this->executor($this->httpTransport());
+        $handler = $this->handler($executor);
+        $dispatcher = $this->dispatcher();
+
+        $first = $dispatcher->dispatchOne($handler);
+        self::assertNotNull($first);
+        $this->assertDatabaseHas('telegram_delivery_operations', [
+            'public_id' => $created->publicId,
+            'state' => 'uncertain',
+            'provider_attempts' => 1,
+            'result_code' => 'telegram_http_server_error_uncertain',
+        ]);
+        $this->assertDatabaseHas('outbox_messages', [
+            'id' => $created->outboxEventId,
+            'dispatch_state' => 'review_required',
+            'review_reason' => 'uncertain_result',
+            'attempts' => 1,
+        ]);
+        Http::assertSentCount(1);
+
+        $this->clock->advance('+1 day');
+        self::assertNull($dispatcher->dispatchOne($handler));
+        self::assertSame(
+            TelegramDeliveryOperationState::Uncertain,
+            $executor->recover($created->publicId, $created->outboxEventId, 'correlation-http-5xx-179'),
+        );
+        self::assertSame(
+            TelegramDeliveryOperationState::Uncertain,
+            $executor->execute($created->publicId, $created->outboxEventId, 'correlation-http-5xx-179')->state,
+        );
+        Http::assertSentCount(1);
     }
 
     public function test_provider_retry_after_is_quarantined_and_never_retried_early_or_blindly(): void
@@ -688,7 +739,7 @@ SQL);
         );
     }
 
-    private function executor(RecordingTelegramMutationTransport $transport): TelegramDeliveryOperationExecutor
+    private function executor(TelegramMutationTransport $transport): TelegramDeliveryOperationExecutor
     {
         return new TelegramDeliveryOperationExecutor(
             app(DatabaseManager::class),
@@ -696,6 +747,24 @@ SQL);
             $this->runtime,
             $transport,
             new TelegramDeliveryDatabaseCapability,
+        );
+    }
+
+    private function httpTransport(): HttpTelegramMutationTransport
+    {
+        return new HttpTelegramMutationTransport(
+            $this->app->make(Factory::class),
+            new TelegramRuntimeConfiguration(
+                botToken: '123456:abcdefghijklmnopqrstuvwxyzABCDE',
+                botId: '123456',
+                webhookSecret: str_repeat('w', 32),
+                webhookUrl: 'https://example.test/api/telegram/webhook',
+                maximumBodyBytes: 1_048_576,
+                queue: 'telegram-ingress',
+                processingLeaseSeconds: 120,
+                apiBaseUrl: 'https://api.telegram.org',
+                apiTimeoutSeconds: 15,
+            ),
         );
     }
 
