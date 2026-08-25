@@ -7,6 +7,7 @@ namespace Tests\Feature;
 use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\TelegramMutationTransport;
 use App\Modules\Telegram\Application\NonRestrictedTelegramPresentation;
+use App\Modules\Telegram\Application\TelegramDeliveryDatabaseCapability;
 use App\Modules\Telegram\Application\TelegramDeliveryOperationExecutor;
 use App\Modules\Telegram\Application\TelegramDeliveryOutboxHandler;
 use App\Modules\Telegram\Application\TelegramDeliveryQueueService;
@@ -16,15 +17,19 @@ use App\Modules\Telegram\Application\TelegramMutationResult;
 use App\Modules\Telegram\Domain\TelegramDeliveryAction;
 use App\Modules\Telegram\Domain\TelegramDeliveryOperationState;
 use App\Shared\Application\Clock;
+use App\Shared\Application\OutboxDispatchOutcome;
+use App\Shared\Application\OutboxMessage;
 use App\Shared\Infrastructure\DatabaseOutboxDispatcher;
 use App\Shared\Infrastructure\DatabaseOutboxPublisher;
 use DateTimeImmutable;
 use DomainException;
+use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\DB;
 use ReflectionClass;
+use RuntimeException;
 use Tests\TestCase;
 
 /** @requirement ARCH-003 ARCH-004 DAT-003 SEC-002 SEC-008 OPS-003 QUA-001 QUA-004 QUA-007 QUA-010 */
@@ -43,6 +48,9 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
         if (DB::connection()->getDriverName() !== 'mysql') {
             $this->markTestSkipped('Telegram outbound delivery authority verification requires MariaDB/MySQL.');
         }
+
+        $migration = require database_path('migrations/2026_08_25_000200_enable_telegram_outbound_delivery_authority.php');
+        $migration->up();
 
         $this->clock = new TelegramOutboundTestClock(new DateTimeImmutable('2026-08-25T12:00:00+00:00'));
         $this->runtime = new TelegramOutboundTestRuntime('123456');
@@ -185,8 +193,8 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
             'attempts' => 1,
         ]);
 
-        $recovered = $executor->recover($created->publicId);
-        $again = $executor->execute($created->publicId);
+        $recovered = $executor->recover($created->publicId, $created->outboxEventId, 'correlation-success-179');
+        $again = $executor->execute($created->publicId, $created->outboxEventId, 'correlation-success-179');
         self::assertSame(TelegramDeliveryOperationState::Succeeded, $recovered);
         self::assertSame(TelegramDeliveryOperationState::Succeeded, $again->state);
         self::assertSame(1, $transport->attempts);
@@ -309,7 +317,7 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
             'dispatch_state' => 'review_required',
             'review_reason' => 'uncertain_result',
         ]);
-        self::assertSame(TelegramDeliveryOperationState::Uncertain, $executor->recover($created->publicId));
+        self::assertSame(TelegramDeliveryOperationState::Uncertain, $executor->recover($created->publicId, $created->outboxEventId, 'correlation-uncertain-179'));
         self::assertSame(1, $transport->attempts);
 
         $crashCreated = $this->queue()->queue(
@@ -327,7 +335,7 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
             'provider_attempts' => 1,
         ]);
 
-        self::assertSame(TelegramDeliveryOperationState::Uncertain, $executor->recover($crashCreated->publicId));
+        self::assertSame(TelegramDeliveryOperationState::Uncertain, $executor->recover($crashCreated->publicId, $crashCreated->outboxEventId, 'correlation-crash-179'));
         $this->assertDatabaseHas('telegram_delivery_operations', [
             'public_id' => $crashCreated->publicId,
             'state' => 'uncertain',
@@ -411,6 +419,262 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
         self::assertSame(1, $finalTransport->attempts);
     }
 
+    public function test_known_session_literals_and_visible_capability_hash_cannot_forge_delivery_authority(): void
+    {
+        $storedCapabilityHash = DB::table('telegram_delivery_authority_capability')
+            ->where('id', 1)
+            ->value('capability_hash');
+        self::assertIsString($storedCapabilityHash);
+        self::assertMatchesRegularExpression('/\A[0-9a-f]{64}\z/', $storedCapabilityHash);
+
+        $publicId = '01J00000000000000000000001';
+        $outboxEventId = '0198a4c7-ff31-7bb9-8222-000000017911';
+        $requestHash = hash('sha256', 'forged-request-179');
+        $fingerprint = hash('sha256', 'forged-fingerprint-179');
+        $correlationId = 'correlation-forged-cap-179';
+        $presentation = 'forged presentation';
+        $payload = '{"telegram_delivery_operation_public_id":"'.$publicId.'"}';
+
+        DB::statement(<<<'SQL'
+SET @app_telegram_delivery_capability = ?,
+    @app_telegram_delivery_authority = 'telegram_delivery_queue_v1',
+    @app_telegram_delivery_public_id = ?,
+    @app_telegram_delivery_request_hash = ?,
+    @app_telegram_delivery_fingerprint = ?,
+    @app_telegram_delivery_correlation_id = ?,
+    @app_telegram_delivery_action = 'send',
+    @app_telegram_delivery_bot_id = '123456',
+    @app_telegram_delivery_recipient_chat_id = 900091,
+    @app_telegram_delivery_target_message_id = NULL,
+    @app_telegram_delivery_presentation_hash = ?,
+    @app_telegram_delivery_outbox_event_id = ?
+SQL, [
+            $storedCapabilityHash,
+            $publicId,
+            $requestHash,
+            $fingerprint,
+            $correlationId,
+            hash('sha256', $presentation),
+            $outboxEventId,
+        ]);
+
+        try {
+            DB::table('outbox_messages')->insert([
+                'id' => $outboxEventId,
+                'event_key' => TelegramDeliveryQueueService::OUTBOX_EVENT_KEY_PREFIX.$publicId,
+                'event_type' => TelegramDeliveryQueueService::OUTBOX_EVENT_TYPE,
+                'aggregate_type' => TelegramDeliveryQueueService::OUTBOX_AGGREGATE_TYPE,
+                'aggregate_id' => $publicId,
+                'payload' => $payload,
+                'payload_hash' => hash('sha256', $payload),
+                'correlation_id' => $correlationId,
+                'available_at' => '2026-08-25 12:00:00.000000',
+                'attempts' => 0,
+                'created_at' => '2026-08-25 12:00:00.000000',
+                'updated_at' => '2026-08-25 12:00:00.000000',
+            ]);
+            self::fail('Visible capability hash plus known queue literals must not forge a Telegram Outbox command.');
+        } catch (QueryException $exception) {
+            self::assertStringContainsString('exact canonical safe envelope', $exception->getMessage());
+        }
+
+        try {
+            DB::table('telegram_delivery_operations')->insert([
+                'public_id' => $publicId,
+                'request_key_hash' => $requestHash,
+                'request_fingerprint' => $fingerprint,
+                'correlation_id' => $correlationId,
+                'action' => 'send',
+                'bot_id' => '123456',
+                'recipient_chat_id' => 900091,
+                'target_message_id' => null,
+                'presentation_text' => $presentation,
+                'outbox_event_id' => $outboxEventId,
+                'state' => 'prepared',
+                'state_version' => 1,
+                'provider_attempts' => 0,
+                'created_at' => '2026-08-25 12:00:00.000000',
+                'updated_at' => '2026-08-25 12:00:00.000000',
+            ]);
+            self::fail('Visible capability hash plus known queue literals must not forge a Telegram delivery operation.');
+        } catch (QueryException $exception) {
+            self::assertStringContainsString('creation authority is invalid', $exception->getMessage());
+        } finally {
+            $this->clearDeliverySessionVariables();
+        }
+
+        self::assertSame(0, DB::table('outbox_messages')->where('id', $outboxEventId)->count());
+        self::assertSame(0, DB::table('telegram_delivery_operations')->where('public_id', $publicId)->count());
+
+        $created = $this->queue()->queue(
+            TelegramDeliveryAction::Send,
+            900092,
+            null,
+            NonRestrictedTelegramPresentation::plainText('legitimate before forged effect'),
+            'telegram-forged-effect-request-179',
+            'correlation-forged-effect-179',
+        );
+
+        DB::statement(<<<'SQL'
+SET @app_telegram_delivery_capability = ?,
+    @app_telegram_delivery_effect_authority = 'telegram_delivery_effect_v1',
+    @app_telegram_delivery_effect_public_id = ?,
+    @app_telegram_delivery_effect_expected_version = 1
+SQL, [$storedCapabilityHash, $created->publicId]);
+
+        try {
+            DB::table('telegram_delivery_operations')
+                ->where('public_id', $created->publicId)
+                ->update([
+                    'state' => 'sending',
+                    'state_version' => 2,
+                    'provider_attempts' => 1,
+                    'provider_boundary_started_at' => '2026-08-25 12:00:01.000000',
+                    'updated_at' => '2026-08-25 12:00:01.000000',
+                ]);
+            self::fail('Visible capability hash plus known effect literals must not forge a provider-boundary transition.');
+        } catch (QueryException $exception) {
+            self::assertStringContainsString('transition authority is invalid', $exception->getMessage());
+        } finally {
+            $this->clearDeliverySessionVariables();
+        }
+
+        $this->assertDatabaseHas('telegram_delivery_operations', [
+            'public_id' => $created->publicId,
+            'state' => 'prepared',
+            'state_version' => 1,
+            'provider_attempts' => 0,
+        ]);
+
+        try {
+            DB::table('telegram_delivery_authority_capability')
+                ->where('id', 1)
+                ->update(['capability_hash' => str_repeat('a', 64)]);
+            self::fail('Telegram delivery capability hash must be immutable to raw DML.');
+        } catch (QueryException $exception) {
+            self::assertStringContainsString('capability is immutable', $exception->getMessage());
+        }
+    }
+
+    public function test_capability_cleanup_failure_disconnects_session_and_rolls_back_queue_authority(): void
+    {
+        $connection = DB::connection();
+        $before = $connection->selectOne('SELECT CONNECTION_ID() AS connection_id');
+        self::assertNotNull($before);
+        $beforeConnectionId = (int) $before->connection_id;
+
+        $cleanupInterrupted = false;
+        $connection->beforeExecuting(function (string $query, array $bindings, Connection $db) use (&$cleanupInterrupted): void {
+            unset($bindings, $db);
+            if ($cleanupInterrupted || ! str_contains(strtolower($query), '@app_telegram_delivery_capability = null')) {
+                return;
+            }
+
+            $cleanupInterrupted = true;
+            throw new RuntimeException('Injected Telegram delivery capability clear failure.');
+        });
+
+        try {
+            $this->queue()->queue(
+                TelegramDeliveryAction::Send,
+                900093,
+                null,
+                NonRestrictedTelegramPresentation::plainText('cleanup fault'),
+                'telegram-cleanup-fault-request-179',
+                'correlation-cleanup-fault-179',
+            );
+            self::fail('Telegram delivery capability cleanup failure must invalidate the privileged session.');
+        } catch (RuntimeException $exception) {
+            self::assertSame('Injected Telegram delivery capability clear failure.', $exception->getMessage());
+        }
+        self::assertTrue($cleanupInterrupted);
+
+        $after = $connection->selectOne(<<<'SQL'
+SELECT CONNECTION_ID() AS connection_id,
+       @app_telegram_delivery_capability AS capability,
+       @app_telegram_delivery_authority AS queue_authority,
+       @app_telegram_delivery_effect_authority AS effect_authority
+SQL);
+        self::assertNotNull($after);
+        self::assertNotSame($beforeConnectionId, (int) $after->connection_id);
+        self::assertNull($after->capability);
+        self::assertNull($after->queue_authority);
+        self::assertNull($after->effect_authority);
+        self::assertSame(0, DB::table('telegram_delivery_operations')->count());
+        self::assertSame(0, DB::table('outbox_messages')
+            ->where('event_type', TelegramDeliveryQueueService::OUTBOX_EVENT_TYPE)
+            ->count());
+    }
+
+    public function test_outbox_handler_requires_exact_event_and_correlation_identity_before_transport(): void
+    {
+        $transport = new RecordingTelegramMutationTransport([
+            new TelegramMutationResult(TelegramMutationOutcome::Success, 'telegram_success', messageId: 999),
+        ], DB::getFacadeRoot());
+        $created = $this->queue()->queue(
+            TelegramDeliveryAction::Send,
+            900094,
+            null,
+            NonRestrictedTelegramPresentation::plainText('identity bound'),
+            'telegram-outbox-bind-request-179',
+            'correlation-outbox-bind-179',
+        );
+        $handler = $this->handler($this->executor($transport));
+        $payload = ['telegram_delivery_operation_public_id' => $created->publicId];
+
+        $wrongEvent = new OutboxMessage(
+            '0198a4c7-ff31-7bb9-8222-000000017912',
+            TelegramDeliveryQueueService::OUTBOX_EVENT_KEY_PREFIX.$created->publicId,
+            TelegramDeliveryQueueService::OUTBOX_EVENT_TYPE,
+            TelegramDeliveryQueueService::OUTBOX_AGGREGATE_TYPE,
+            $created->publicId,
+            $payload,
+            'correlation-outbox-bind-179',
+            1,
+        );
+        self::assertSame(OutboxDispatchOutcome::DefinitiveFailure, $handler->handle($wrongEvent));
+        self::assertSame(0, $transport->attempts);
+
+        $wrongCorrelation = new OutboxMessage(
+            $created->outboxEventId,
+            TelegramDeliveryQueueService::OUTBOX_EVENT_KEY_PREFIX.$created->publicId,
+            TelegramDeliveryQueueService::OUTBOX_EVENT_TYPE,
+            TelegramDeliveryQueueService::OUTBOX_AGGREGATE_TYPE,
+            $created->publicId,
+            $payload,
+            'correlation-forged-bind-179',
+            1,
+        );
+        self::assertSame(OutboxDispatchOutcome::DefinitiveFailure, $handler->handle($wrongCorrelation));
+        self::assertSame(0, $transport->attempts);
+        $this->assertDatabaseHas('telegram_delivery_operations', [
+            'public_id' => $created->publicId,
+            'state' => 'prepared',
+            'provider_attempts' => 0,
+        ]);
+    }
+
+    private function clearDeliverySessionVariables(): void
+    {
+        DB::statement(<<<'SQL'
+SET @app_telegram_delivery_effect_expected_version = NULL,
+    @app_telegram_delivery_effect_public_id = NULL,
+    @app_telegram_delivery_effect_authority = NULL,
+    @app_telegram_delivery_outbox_event_id = NULL,
+    @app_telegram_delivery_presentation_hash = NULL,
+    @app_telegram_delivery_target_message_id = NULL,
+    @app_telegram_delivery_recipient_chat_id = NULL,
+    @app_telegram_delivery_bot_id = NULL,
+    @app_telegram_delivery_action = NULL,
+    @app_telegram_delivery_correlation_id = NULL,
+    @app_telegram_delivery_fingerprint = NULL,
+    @app_telegram_delivery_request_hash = NULL,
+    @app_telegram_delivery_public_id = NULL,
+    @app_telegram_delivery_authority = NULL,
+    @app_telegram_delivery_capability = NULL
+SQL);
+    }
+
     private function queue(): TelegramDeliveryQueueService
     {
         $database = app(DatabaseManager::class);
@@ -420,6 +684,7 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
             $this->clock,
             new DatabaseOutboxPublisher($database, $this->clock),
             $this->runtime,
+            new TelegramDeliveryDatabaseCapability,
         );
     }
 
@@ -430,6 +695,7 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
             $this->clock,
             $this->runtime,
             $transport,
+            new TelegramDeliveryDatabaseCapability,
         );
     }
 

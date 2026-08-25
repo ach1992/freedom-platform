@@ -25,6 +25,7 @@ return new class extends Migration
         }
 
         if (DB::connection()->getDriverName() === 'mysql') {
+            $this->ensureCapability();
             $this->createOutboxInsertGuard();
             $this->createOperationInsertGuard();
             $this->createOperationUpdateGuard();
@@ -50,6 +51,66 @@ return new class extends Migration
         DB::unprepared('DROP TRIGGER IF EXISTS telegram_delivery_operations_insert_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS outbox_telegram_delivery_envelope_insert_guard');
         Schema::dropIfExists('telegram_delivery_operations');
+
+        if (Schema::hasTable('telegram_delivery_authority_capability')) {
+            DB::unprepared('DROP TRIGGER IF EXISTS telegram_delivery_capability_delete_guard');
+            DB::unprepared('DROP TRIGGER IF EXISTS telegram_delivery_capability_update_guard');
+            DB::unprepared('DROP TRIGGER IF EXISTS telegram_delivery_capability_insert_guard');
+            Schema::dropIfExists('telegram_delivery_authority_capability');
+        }
+    }
+
+    private function ensureCapability(): void
+    {
+        $expectedHash = $this->capabilityHash();
+        if (! Schema::hasTable('telegram_delivery_authority_capability')) {
+            $this->createCapabilityTable($expectedHash);
+        } else {
+            $rows = DB::table('telegram_delivery_authority_capability')->get(['id', 'capability_hash']);
+            if ($rows->isEmpty()) {
+                if (DB::table('telegram_delivery_operations')->exists()
+                    || DB::table('outbox_messages')->where('event_type', 'telegram.delivery.requested')->exists()) {
+                    throw new RuntimeException('Telegram delivery database capability is missing while durable delivery authority exists.');
+                }
+
+                DB::unprepared('DROP TRIGGER IF EXISTS telegram_delivery_capability_delete_guard');
+                DB::unprepared('DROP TRIGGER IF EXISTS telegram_delivery_capability_update_guard');
+                DB::unprepared('DROP TRIGGER IF EXISTS telegram_delivery_capability_insert_guard');
+                DB::table('telegram_delivery_authority_capability')->insert([
+                    'id' => 1,
+                    'capability_hash' => $expectedHash,
+                    'created_at' => now('UTC'),
+                ]);
+            } elseif ($rows->count() !== 1
+                || (int) $rows->first()->id !== 1
+                || ! is_string($rows->first()->capability_hash)
+                || ! hash_equals($expectedHash, $rows->first()->capability_hash)) {
+                throw new RuntimeException('Telegram delivery database capability does not match the application key.');
+            }
+        }
+
+        DB::unprepared("CREATE OR REPLACE TRIGGER telegram_delivery_capability_insert_guard BEFORE INSERT ON telegram_delivery_authority_capability FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Telegram delivery database capability is immutable.'; END");
+        DB::unprepared("CREATE OR REPLACE TRIGGER telegram_delivery_capability_update_guard BEFORE UPDATE ON telegram_delivery_authority_capability FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Telegram delivery database capability is immutable.'; END");
+        DB::unprepared("CREATE OR REPLACE TRIGGER telegram_delivery_capability_delete_guard BEFORE DELETE ON telegram_delivery_authority_capability FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Telegram delivery database capability is immutable.'; END");
+    }
+
+    private function createCapabilityTable(string $expectedHash): void
+    {
+        DB::statement(<<<'SQL'
+CREATE TABLE telegram_delivery_authority_capability (
+  `id` TINYINT UNSIGNED NOT NULL,
+  `capability_hash` CHAR(64) NOT NULL,
+  `created_at` DATETIME(6) NOT NULL,
+  PRIMARY KEY (`id`),
+  CONSTRAINT `telegram_delivery_capability_singleton_chk` CHECK (`id` = 1),
+  CONSTRAINT `telegram_delivery_capability_hash_chk` CHECK (`capability_hash` REGEXP '^[0-9a-f]{64}$')
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+SQL);
+        DB::table('telegram_delivery_authority_capability')->insert([
+            'id' => 1,
+            'capability_hash' => $expectedHash,
+            'created_at' => now('UTC'),
+        ]);
     }
 
     private function createPortableTable(): void
@@ -186,7 +247,13 @@ BEFORE INSERT ON outbox_messages
 FOR EACH ROW
 BEGIN
     IF LOWER(NEW.event_type) = 'telegram.delivery.requested' THEN
-        IF COALESCE(@app_telegram_delivery_authority, '') <> 'telegram_delivery_queue_v1'
+    IF NOT EXISTS (
+        SELECT 1
+        FROM telegram_delivery_authority_capability capability_row
+        WHERE capability_row.id = 1
+          AND BINARY capability_row.capability_hash = BINARY SHA2(COALESCE(@app_telegram_delivery_capability, ''), 256)
+    )
+           OR COALESCE(@app_telegram_delivery_authority, '') <> 'telegram_delivery_queue_v1'
            OR BINARY NEW.id <> BINARY COALESCE(@app_telegram_delivery_outbox_event_id, '')
            OR BINARY NEW.correlation_id <> BINARY COALESCE(@app_telegram_delivery_correlation_id, '')
            OR HEX(NEW.event_type) <> HEX('telegram.delivery.requested')
@@ -240,7 +307,13 @@ BEGIN
         ELSE LOWER(SHA2(NEW.presentation_text, 256))
     END;
 
-    IF COALESCE(@app_telegram_delivery_authority, '') <> 'telegram_delivery_queue_v1'
+    IF NOT EXISTS (
+        SELECT 1
+        FROM telegram_delivery_authority_capability capability_row
+        WHERE capability_row.id = 1
+          AND BINARY capability_row.capability_hash = BINARY SHA2(COALESCE(@app_telegram_delivery_capability, ''), 256)
+    )
+       OR COALESCE(@app_telegram_delivery_authority, '') <> 'telegram_delivery_queue_v1'
        OR BINARY NEW.public_id <> BINARY COALESCE(@app_telegram_delivery_public_id, '')
        OR BINARY NEW.request_key_hash <> BINARY COALESCE(@app_telegram_delivery_request_hash, '')
        OR BINARY NEW.request_fingerprint <> BINARY COALESCE(@app_telegram_delivery_fingerprint, '')
@@ -298,7 +371,13 @@ CREATE OR REPLACE TRIGGER telegram_delivery_operations_update_guard
 BEFORE UPDATE ON telegram_delivery_operations
 FOR EACH ROW
 BEGIN
-    IF COALESCE(@app_telegram_delivery_effect_authority, '') <> 'telegram_delivery_effect_v1'
+    IF NOT EXISTS (
+        SELECT 1
+        FROM telegram_delivery_authority_capability capability_row
+        WHERE capability_row.id = 1
+          AND BINARY capability_row.capability_hash = BINARY SHA2(COALESCE(@app_telegram_delivery_capability, ''), 256)
+    )
+       OR COALESCE(@app_telegram_delivery_effect_authority, '') <> 'telegram_delivery_effect_v1'
        OR BINARY OLD.public_id <> BINARY COALESCE(@app_telegram_delivery_effect_public_id, '')
        OR OLD.state_version <> COALESCE(@app_telegram_delivery_effect_expected_version, 0)
        OR NEW.state_version <> OLD.state_version + 1 THEN
@@ -416,7 +495,13 @@ BEGIN
         END IF;
 
         IF OLD.dispatch_state = 'authority_pending' AND NEW.dispatch_state <> 'authority_pending' THEN
-            IF COALESCE(@app_telegram_delivery_authority, '') <> 'telegram_delivery_queue_v1'
+            IF NOT EXISTS (
+                SELECT 1
+                FROM telegram_delivery_authority_capability capability_row
+                WHERE capability_row.id = 1
+                  AND BINARY capability_row.capability_hash = BINARY SHA2(COALESCE(@app_telegram_delivery_capability, ''), 256)
+            )
+               OR COALESCE(@app_telegram_delivery_authority, '') <> 'telegram_delivery_queue_v1'
                OR BINARY NEW.id <> BINARY COALESCE(@app_telegram_delivery_outbox_event_id, '')
                OR BINARY NEW.aggregate_id <> BINARY COALESCE(@app_telegram_delivery_public_id, '')
                OR HEX(NEW.dispatch_state) <> HEX('pending')
@@ -470,5 +555,15 @@ BEGIN
     END IF;
 END
 SQL);
+    }
+
+    private function capabilityHash(): string
+    {
+        $key = config('app.key');
+        if (! is_string($key) || $key === '') {
+            throw new RuntimeException('Telegram delivery database capability key is unavailable.');
+        }
+
+        return hash('sha256', hash_hmac('sha256', 'telegram-delivery-database-authority-v1', $key));
     }
 };

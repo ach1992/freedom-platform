@@ -27,13 +27,18 @@ final readonly class TelegramDeliveryOperationExecutor
         private Clock $clock,
         private TelegramDeliveryRuntime $runtime,
         private TelegramMutationTransport $transport,
+        private TelegramDeliveryDatabaseCapability $databaseCapability,
     ) {}
 
     /** @requirement ARCH-004 DAT-003 SEC-002 SEC-008 OPS-003 QUA-001 QUA-004 QUA-007 */
-    public function recover(string $publicId): TelegramDeliveryOperationState
-    {
-        return $this->database->connection()->transaction(function (Connection $connection) use ($publicId): TelegramDeliveryOperationState {
+    public function recover(
+        string $publicId,
+        string $expectedOutboxEventId,
+        string $expectedCorrelationId,
+    ): TelegramDeliveryOperationState {
+        return $this->database->connection()->transaction(function (Connection $connection) use ($publicId, $expectedOutboxEventId, $expectedCorrelationId): TelegramDeliveryOperationState {
             $row = $this->operation($connection, $publicId, true);
+            $this->assertExpectedOutboxIdentity($row, $expectedOutboxEventId, $expectedCorrelationId);
             $this->assertRuntimeBot($row);
             $state = $this->state($row);
 
@@ -55,11 +60,15 @@ final readonly class TelegramDeliveryOperationExecutor
     }
 
     /** @requirement ARCH-004 DAT-003 SEC-002 SEC-008 OPS-003 QUA-001 QUA-004 QUA-007 */
-    public function execute(string $publicId): TelegramDeliveryOperationReceipt
-    {
+    public function execute(
+        string $publicId,
+        string $expectedOutboxEventId,
+        string $expectedCorrelationId,
+    ): TelegramDeliveryOperationReceipt {
         /** @var DeliveryOperationRow $prepared */
-        $prepared = $this->database->connection()->transaction(function (Connection $connection) use ($publicId): object {
+        $prepared = $this->database->connection()->transaction(function (Connection $connection) use ($publicId, $expectedOutboxEventId, $expectedCorrelationId): object {
             $row = $this->operation($connection, $publicId, true);
+            $this->assertExpectedOutboxIdentity($row, $expectedOutboxEventId, $expectedCorrelationId);
             $this->assertRuntimeBot($row);
             $state = $this->state($row);
 
@@ -86,8 +95,9 @@ final readonly class TelegramDeliveryOperationExecutor
 
         $result = $this->normalizeResult($request, $result);
 
-        return $this->database->connection()->transaction(function (Connection $connection) use ($publicId, $result): TelegramDeliveryOperationReceipt {
+        return $this->database->connection()->transaction(function (Connection $connection) use ($publicId, $result, $expectedOutboxEventId, $expectedCorrelationId): TelegramDeliveryOperationReceipt {
             $row = $this->operation($connection, $publicId, true);
+            $this->assertExpectedOutboxIdentity($row, $expectedOutboxEventId, $expectedCorrelationId);
             $this->assertRuntimeBot($row);
 
             if ($this->state($row) !== TelegramDeliveryOperationState::Sending) {
@@ -126,9 +136,12 @@ final readonly class TelegramDeliveryOperationExecutor
         $attempts = $this->nonNegativeInt($row->provider_attempts, 'Telegram provider attempt count');
         $timestamp = $this->timestamp();
 
-        try {
-            $this->setEffectAuthority($connection, (string) $row->public_id, $version);
-            $updated = $connection->table('telegram_delivery_operations')
+        $updated = $this->databaseCapability->runEffect(
+            $connection,
+            self::EFFECT_AUTHORITY,
+            (string) $row->public_id,
+            $version,
+            fn (): int => $connection->table('telegram_delivery_operations')
                 ->where('id', (int) $row->id)
                 ->where('state_version', $version)
                 ->whereIn('state', [
@@ -145,12 +158,10 @@ final readonly class TelegramDeliveryOperationExecutor
                     'result_code' => null,
                     'retry_after_seconds' => null,
                     'updated_at' => $timestamp,
-                ]);
-            if ($updated !== 1) {
-                throw new RuntimeException('Telegram delivery operation lost provider-boundary authority.');
-            }
-        } finally {
-            $this->clearEffectAuthority($connection);
+                ]),
+        );
+        if ($updated !== 1) {
+            throw new RuntimeException('Telegram delivery operation lost provider-boundary authority.');
         }
 
         return $this->operation($connection, (string) $row->public_id, false);
@@ -172,9 +183,12 @@ final readonly class TelegramDeliveryOperationExecutor
         $version = $this->positiveInt($row->state_version, 'Telegram delivery state version');
         $timestamp = $this->timestamp();
 
-        try {
-            $this->setEffectAuthority($connection, (string) $row->public_id, $version);
-            $updated = $connection->table('telegram_delivery_operations')
+        $updated = $this->databaseCapability->runEffect(
+            $connection,
+            self::EFFECT_AUTHORITY,
+            (string) $row->public_id,
+            $version,
+            fn (): int => $connection->table('telegram_delivery_operations')
                 ->where('id', (int) $row->id)
                 ->where('state_version', $version)
                 ->where('state', (string) $row->state)
@@ -186,12 +200,10 @@ final readonly class TelegramDeliveryOperationExecutor
                     'result_code' => $resultCode,
                     'retry_after_seconds' => $retryAfterSeconds,
                     'updated_at' => $timestamp,
-                ]);
-            if ($updated !== 1) {
-                throw new RuntimeException('Telegram delivery operation lost result-transition authority.');
-            }
-        } finally {
-            $this->clearEffectAuthority($connection);
+                ]),
+        );
+        if ($updated !== 1) {
+            throw new RuntimeException('Telegram delivery operation lost result-transition authority.');
         }
 
         return $this->operation($connection, (string) $row->public_id, false);
@@ -276,6 +288,18 @@ final readonly class TelegramDeliveryOperationExecutor
     }
 
     /** @param DeliveryOperationRow $row */
+    private function assertExpectedOutboxIdentity(
+        object $row,
+        string $expectedOutboxEventId,
+        string $expectedCorrelationId,
+    ): void {
+        if (! hash_equals((string) $row->outbox_event_id, $expectedOutboxEventId)
+            || ! hash_equals((string) $row->correlation_id, $expectedCorrelationId)) {
+            throw new DomainException('Telegram delivery Outbox identity does not match the durable operation authority.');
+        }
+    }
+
+    /** @param DeliveryOperationRow $row */
     private function assertRuntimeBot(object $row): void
     {
         $currentBotId = $this->runtime->botId();
@@ -307,24 +331,6 @@ final readonly class TelegramDeliveryOperationExecutor
             $row->result_code === null ? null : (string) $row->result_code,
             $row->retry_after_seconds === null ? null : (int) $row->retry_after_seconds,
         );
-    }
-
-    private function setEffectAuthority(Connection $connection, string $publicId, int $expectedVersion): void
-    {
-        $connection->statement('SET @app_telegram_delivery_effect_authority = ?', [self::EFFECT_AUTHORITY]);
-        $connection->statement('SET @app_telegram_delivery_effect_public_id = ?', [$publicId]);
-        $connection->statement('SET @app_telegram_delivery_effect_expected_version = ?', [$expectedVersion]);
-    }
-
-    private function clearEffectAuthority(Connection $connection): void
-    {
-        try {
-            $connection->statement('SET @app_telegram_delivery_effect_authority = NULL');
-            $connection->statement('SET @app_telegram_delivery_effect_public_id = NULL');
-            $connection->statement('SET @app_telegram_delivery_effect_expected_version = NULL');
-        } catch (Throwable) {
-            // Preserve the original failure.
-        }
     }
 
     private function timestamp(): string

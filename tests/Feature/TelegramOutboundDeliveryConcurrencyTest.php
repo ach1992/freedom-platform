@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace {
     use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
     use App\Modules\Telegram\Application\NonRestrictedTelegramPresentation;
+    use App\Modules\Telegram\Application\TelegramDeliveryDatabaseCapability;
     use App\Modules\Telegram\Application\TelegramDeliveryQueueService;
     use App\Modules\Telegram\Domain\TelegramDeliveryAction;
     use App\Shared\Application\Clock;
@@ -41,6 +42,7 @@ namespace {
             $clock,
             new DatabaseOutboxPublisher($database, $clock),
             $runtime,
+            new TelegramDeliveryDatabaseCapability,
         );
 
         echo "READY\n";
@@ -116,6 +118,9 @@ namespace Tests\Feature {
             if (DB::connection()->getDriverName() !== 'mysql') {
                 $this->markTestSkipped('Telegram outbound queue contention verification requires MariaDB/MySQL.');
             }
+
+            $migration = require database_path('migrations/2026_08_25_000200_enable_telegram_outbound_delivery_authority.php');
+            $migration->up();
         }
 
         protected function tearDown(): void

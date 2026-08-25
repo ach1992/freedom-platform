@@ -37,7 +37,7 @@ final readonly class TelegramDeliveryOutboxHandler implements OutboxEventHandler
 
         try {
             $executor = $this->executor();
-            $state = $executor->recover($publicId);
+            $state = $executor->recover($publicId, $message->id, $message->correlationId);
         } catch (DomainException) {
             return OutboxDispatchOutcome::DefinitiveFailure;
         } catch (Throwable) {
@@ -49,11 +49,11 @@ final readonly class TelegramDeliveryOutboxHandler implements OutboxEventHandler
         }
 
         try {
-            return $this->outcome($executor->execute($publicId)->state);
+            return $this->outcome($executor->execute($publicId, $message->id, $message->correlationId)->state);
         } catch (DomainException) {
-            return $this->outcomeAfterFailure($publicId, true);
+            return $this->outcomeAfterFailure($publicId, $message->id, $message->correlationId, true);
         } catch (Throwable) {
-            return $this->outcomeAfterFailure($publicId, false);
+            return $this->outcomeAfterFailure($publicId, $message->id, $message->correlationId, false);
         }
     }
 
@@ -67,10 +67,14 @@ final readonly class TelegramDeliveryOutboxHandler implements OutboxEventHandler
         return $executor;
     }
 
-    private function outcomeAfterFailure(string $publicId, bool $domainFailure): OutboxDispatchOutcome
-    {
+    private function outcomeAfterFailure(
+        string $publicId,
+        string $outboxEventId,
+        string $correlationId,
+        bool $domainFailure,
+    ): OutboxDispatchOutcome {
         try {
-            $state = $this->executor()->recover($publicId);
+            $state = $this->executor()->recover($publicId, $outboxEventId, $correlationId);
         } catch (Throwable) {
             return $domainFailure
                 ? OutboxDispatchOutcome::DefinitiveFailure

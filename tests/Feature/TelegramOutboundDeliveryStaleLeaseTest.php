@@ -7,6 +7,7 @@ namespace Tests\Feature;
 use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\TelegramMutationTransport;
 use App\Modules\Telegram\Application\NonRestrictedTelegramPresentation;
+use App\Modules\Telegram\Application\TelegramDeliveryDatabaseCapability;
 use App\Modules\Telegram\Application\TelegramDeliveryOperationExecutor;
 use App\Modules\Telegram\Application\TelegramDeliveryOutboxHandler;
 use App\Modules\Telegram\Application\TelegramDeliveryQueueService;
@@ -42,6 +43,9 @@ final class TelegramOutboundDeliveryStaleLeaseTest extends TestCase
             $this->markTestSkipped('Telegram outbound stale-lease verification requires MariaDB/MySQL.');
         }
 
+        $migration = require database_path('migrations/2026_08_25_000200_enable_telegram_outbound_delivery_authority.php');
+        $migration->up();
+
         $this->clock = new TelegramStaleLeaseClock(new DateTimeImmutable('2026-08-25T12:00:00+00:00'));
         $this->runtime = new TelegramStaleLeaseRuntime('123456');
     }
@@ -64,12 +68,14 @@ final class TelegramOutboundDeliveryStaleLeaseTest extends TestCase
             $this->clock,
             new DatabaseOutboxPublisher($database, $this->clock),
             $this->runtime,
+            new TelegramDeliveryDatabaseCapability,
         );
         $executor = new TelegramDeliveryOperationExecutor(
             $database,
             $this->clock,
             $this->runtime,
             $transport,
+            new TelegramDeliveryDatabaseCapability,
         );
         $handler = new TelegramDeliveryOutboxHandler(
             static fn (): TelegramDeliveryOperationExecutor => $executor,

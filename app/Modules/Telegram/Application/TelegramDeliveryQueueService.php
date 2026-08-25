@@ -17,7 +17,6 @@ use Illuminate\Database\QueryException;
 use Illuminate\Support\Str;
 use JsonException;
 use RuntimeException;
-use Throwable;
 
 /**
  * @phpstan-type DeliveryOperationRow object{id:int|string,public_id:string,request_key_hash:string,request_fingerprint:string,correlation_id:string,action:string,bot_id:string,recipient_chat_id:int|string,target_message_id:int|string|null,presentation_text:?string,outbox_event_id:string,state:string,state_version:int|string,provider_attempts:int|string,provider_boundary_started_at:?string,completed_at:?string,telegram_message_id:int|string|null,result_code:?string,retry_after_seconds:int|string|null}
@@ -37,6 +36,7 @@ final readonly class TelegramDeliveryQueueService
         private Clock $clock,
         private OutboxPublisher $outbox,
         private TelegramDeliveryRuntime $runtime,
+        private TelegramDeliveryDatabaseCapability $databaseCapability,
     ) {}
 
     /** @requirement ARCH-003 ARCH-004 DAT-003 SEC-002 SEC-008 OPS-003 QUA-001 QUA-004 QUA-007 */
@@ -106,8 +106,17 @@ final readonly class TelegramDeliveryQueueService
         $outboxEventId = (string) Str::uuid();
         $timestamp = $this->timestamp();
 
-        try {
-            $this->setQueueAuthority(
+        return $this->databaseCapability->runQueue(
+            $connection,
+            self::QUEUE_AUTHORITY,
+            $publicId,
+            $requestKeyHash,
+            $fingerprint,
+            $correlationId,
+            $request,
+            $botId,
+            $outboxEventId,
+            function () use (
                 $connection,
                 $publicId,
                 $requestKeyHash,
@@ -116,59 +125,58 @@ final readonly class TelegramDeliveryQueueService
                 $request,
                 $botId,
                 $outboxEventId,
-            );
+                $timestamp,
+            ): TelegramDeliveryOperationReceipt {
+                $publishedEventId = $this->outbox->publish(
+                    $outboxEventId,
+                    self::OUTBOX_EVENT_KEY_PREFIX.$publicId,
+                    self::OUTBOX_EVENT_TYPE,
+                    self::OUTBOX_AGGREGATE_TYPE,
+                    $publicId,
+                    new SafeOutboxPayload([
+                        'telegram_delivery_operation_public_id' => $publicId,
+                    ]),
+                    $correlationId,
+                );
+                if (! hash_equals($outboxEventId, $publishedEventId)) {
+                    throw new RuntimeException('Telegram delivery Outbox event identity was unexpectedly replayed.');
+                }
 
-            $publishedEventId = $this->outbox->publish(
-                $outboxEventId,
-                self::OUTBOX_EVENT_KEY_PREFIX.$publicId,
-                self::OUTBOX_EVENT_TYPE,
-                self::OUTBOX_AGGREGATE_TYPE,
-                $publicId,
-                new SafeOutboxPayload([
-                    'telegram_delivery_operation_public_id' => $publicId,
-                ]),
-                $correlationId,
-            );
-            if (! hash_equals($outboxEventId, $publishedEventId)) {
-                throw new RuntimeException('Telegram delivery Outbox event identity was unexpectedly replayed.');
-            }
-
-            $connection->table('telegram_delivery_operations')->insert([
-                'public_id' => $publicId,
-                'request_key_hash' => $requestKeyHash,
-                'request_fingerprint' => $fingerprint,
-                'correlation_id' => $correlationId,
-                'action' => $request->action->value,
-                'bot_id' => $botId,
-                'recipient_chat_id' => $request->recipientChatId,
-                'target_message_id' => $request->targetMessageId,
-                'presentation_text' => $request->presentation?->text(),
-                'outbox_event_id' => $outboxEventId,
-                'state' => TelegramDeliveryOperationState::Prepared->value,
-                'state_version' => 1,
-                'provider_attempts' => 0,
-                'created_at' => $timestamp,
-                'updated_at' => $timestamp,
-            ]);
-
-            $released = $connection->table('outbox_messages')
-                ->where('id', $outboxEventId)
-                ->where('dispatch_state', 'authority_pending')
-                ->update([
-                    'dispatch_state' => 'pending',
+                $connection->table('telegram_delivery_operations')->insert([
+                    'public_id' => $publicId,
+                    'request_key_hash' => $requestKeyHash,
+                    'request_fingerprint' => $fingerprint,
+                    'correlation_id' => $correlationId,
+                    'action' => $request->action->value,
+                    'bot_id' => $botId,
+                    'recipient_chat_id' => $request->recipientChatId,
+                    'target_message_id' => $request->targetMessageId,
+                    'presentation_text' => $request->presentation?->text(),
+                    'outbox_event_id' => $outboxEventId,
+                    'state' => TelegramDeliveryOperationState::Prepared->value,
+                    'state_version' => 1,
+                    'provider_attempts' => 0,
+                    'created_at' => $timestamp,
                     'updated_at' => $timestamp,
                 ]);
-            if ($released !== 1) {
-                throw new RuntimeException('Telegram delivery Outbox command did not release from queue authority.');
-            }
 
-            $created = $this->operationByPublicId($connection, $publicId, false)
-                ?? throw new RuntimeException('Telegram delivery operation was not persisted.');
+                $released = $connection->table('outbox_messages')
+                    ->where('id', $outboxEventId)
+                    ->where('dispatch_state', 'authority_pending')
+                    ->update([
+                        'dispatch_state' => 'pending',
+                        'updated_at' => $timestamp,
+                    ]);
+                if ($released !== 1) {
+                    throw new RuntimeException('Telegram delivery Outbox command did not release from queue authority.');
+                }
 
-            return $this->receipt($created, false);
-        } finally {
-            $this->clearQueueAuthority($connection);
-        }
+                $created = $this->operationByPublicId($connection, $publicId, false)
+                    ?? throw new RuntimeException('Telegram delivery operation was not persisted.');
+
+                return $this->receipt($created, false);
+            },
+        );
     }
 
     /** @param DeliveryOperationRow $row */
@@ -262,50 +270,6 @@ final readonly class TelegramDeliveryQueueService
         ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 
         return hash('sha256', $encoded);
-    }
-
-    private function setQueueAuthority(
-        Connection $connection,
-        string $publicId,
-        string $requestKeyHash,
-        string $fingerprint,
-        string $correlationId,
-        TelegramMutationRequest $request,
-        string $botId,
-        string $outboxEventId,
-    ): void {
-        $connection->statement('SET @app_telegram_delivery_authority = ?', [self::QUEUE_AUTHORITY]);
-        $connection->statement('SET @app_telegram_delivery_public_id = ?', [$publicId]);
-        $connection->statement('SET @app_telegram_delivery_request_hash = ?', [$requestKeyHash]);
-        $connection->statement('SET @app_telegram_delivery_fingerprint = ?', [$fingerprint]);
-        $connection->statement('SET @app_telegram_delivery_correlation_id = ?', [$correlationId]);
-        $connection->statement('SET @app_telegram_delivery_action = ?', [$request->action->value]);
-        $connection->statement('SET @app_telegram_delivery_bot_id = ?', [$botId]);
-        $connection->statement('SET @app_telegram_delivery_recipient_chat_id = ?', [$request->recipientChatId]);
-        $connection->statement('SET @app_telegram_delivery_target_message_id = ?', [$request->targetMessageId]);
-        $connection->statement('SET @app_telegram_delivery_presentation_hash = ?', [
-            $request->presentation === null ? null : hash('sha256', $request->presentation->text()),
-        ]);
-        $connection->statement('SET @app_telegram_delivery_outbox_event_id = ?', [$outboxEventId]);
-    }
-
-    private function clearQueueAuthority(Connection $connection): void
-    {
-        try {
-            $connection->statement('SET @app_telegram_delivery_authority = NULL');
-            $connection->statement('SET @app_telegram_delivery_public_id = NULL');
-            $connection->statement('SET @app_telegram_delivery_request_hash = NULL');
-            $connection->statement('SET @app_telegram_delivery_fingerprint = NULL');
-            $connection->statement('SET @app_telegram_delivery_correlation_id = NULL');
-            $connection->statement('SET @app_telegram_delivery_action = NULL');
-            $connection->statement('SET @app_telegram_delivery_bot_id = NULL');
-            $connection->statement('SET @app_telegram_delivery_recipient_chat_id = NULL');
-            $connection->statement('SET @app_telegram_delivery_target_message_id = NULL');
-            $connection->statement('SET @app_telegram_delivery_presentation_hash = NULL');
-            $connection->statement('SET @app_telegram_delivery_outbox_event_id = NULL');
-        } catch (Throwable) {
-            // Preserve the original failure; the connection is discarded by the test/runtime on fatal DB errors.
-        }
     }
 
     private function assertToken(string $value, string $label, int $minimum, int $maximum): void
