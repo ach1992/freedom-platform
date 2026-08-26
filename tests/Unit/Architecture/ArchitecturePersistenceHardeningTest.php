@@ -40,7 +40,18 @@ final class ArchitecturePersistenceHardeningTest extends TestCase
         $this->write('app/Modules/Catalog/Application/Bounded.php', <<<'PHP'
 <?php
 namespace App\Modules\Catalog\Application;
-final class Bounded { public function run($db): void { foreach (['custom_plan_policy_tiers', 'custom_plan_policy_tags'] as $table) { $db->table($table)->delete(); } } }
+final class Bounded
+{
+    public function run($db): void
+    {
+        foreach ([
+            'custom_plan_policy_tiers',
+            'custom_plan_policy_tags',
+        ] as $table) {
+            $db->table($table)->delete();
+        }
+    }
+}
 PHP);
         $this->write('app/Modules/Catalog/Application/Unbounded.php', <<<'PHP'
 <?php
@@ -94,6 +105,50 @@ PHP);
         self::assertSame(1, substr_count($violations, 'non-literal/unsupported statement'));
     }
 
+    public function test_nowdoc_session_statement_is_allowed_but_ddl_requires_an_exact_migration_helper(): void
+    {
+        $path = 'app/Modules/Orders/Infrastructure/OrderMigrationGuard.php';
+        $this->write($path, <<<'PHP'
+<?php
+namespace App\Modules\Orders\Infrastructure;
+use Illuminate\Support\Facades\DB;
+final class OrderMigrationGuard
+{
+    public function session(): void
+    {
+        DB::statement(<<<'SQL'
+SET @freedom_test = 1,
+    @freedom_second = 2
+SQL);
+    }
+
+    public function drop(): void
+    {
+        DB::unprepared('DROP TRIGGER IF EXISTS order_guard');
+    }
+}
+PHP);
+
+        $blocked = implode("\n", $this->checker()->check()['violations']);
+        self::assertSame(1, substr_count($blocked, 'opaque raw SQL mutation'));
+        self::assertStringNotContainsString('non-literal/unsupported statement', $blocked);
+
+        $accepted = $this->checker([], [$path])->check()['violations'];
+        self::assertSame([], $accepted);
+
+        $stale = implode("\n", $this->checker([], [$path, 'app/Modules/Orders/Infrastructure/RemovedGuard.php'])->check()['violations']);
+        self::assertStringContainsString('migration_ddl_helpers contains stale/unused helper', $stale);
+
+        $this->write('app/Modules/Orders/Infrastructure/RuntimeCaller.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Infrastructure;
+final class RuntimeCaller { public function run(): void { OrderMigrationGuard::drop(); } }
+PHP);
+        $runtimeReference = implode("\n", $this->checker([], [$path])->check()['violations']);
+        self::assertStringContainsString('migration-only DDL helper', $runtimeReference);
+        self::assertStringContainsString('may not be referenced from runtime source', $runtimeReference);
+    }
+
     public function test_persistence_exception_must_be_exact_used_and_non_stale(): void
     {
         $path = 'app/Modules/Customers/Application/LegacyWrite.php';
@@ -110,8 +165,11 @@ PHP);
         self::assertStringContainsString('stale/unused entry', $stale);
     }
 
-    /** @param list<string> $exceptions */
-    private function checker(array $exceptions = []): ArchitectureBoundaryChecker
+    /**
+     * @param  list<string>  $exceptions
+     * @param  list<string>  $migrationDdlHelpers
+     */
+    private function checker(array $exceptions = [], array $migrationDdlHelpers = []): ArchitectureBoundaryChecker
     {
         return new ArchitectureBoundaryChecker($this->root, [
             'allowed_module_dependencies' => [],
@@ -123,6 +181,7 @@ PHP);
                 'orders' => 'Orders',
             ],
             'persistence_exceptions' => $exceptions,
+            'migration_ddl_helpers' => $migrationDdlHelpers,
         ]);
     }
 

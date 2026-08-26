@@ -1754,16 +1754,21 @@ final readonly class ServiceNotificationThresholdService
                 $timestamp,
             );
             try {
-                $update = $connection->table('service_notification_scan_cursor')->where('id', 1);
-                if ($lastServiceId === null) {
-                    $update->whereNull('last_service_subscription_id');
-                } else {
-                    $update->where('last_service_subscription_id', $lastServiceId);
-                }
-                $updated = $update->update([
+                $cursorUpdate = [
                     'last_service_subscription_id' => $nextServiceId,
                     'updated_at' => $timestamp,
-                ]);
+                ];
+                if ($lastServiceId === null) {
+                    $updated = $connection->table('service_notification_scan_cursor')
+                        ->where('id', 1)
+                        ->whereNull('last_service_subscription_id')
+                        ->update($cursorUpdate);
+                } else {
+                    $updated = $connection->table('service_notification_scan_cursor')
+                        ->where('id', 1)
+                        ->where('last_service_subscription_id', $lastServiceId)
+                        ->update($cursorUpdate);
+                }
                 if ($updated !== 1) {
                     // MariaDB reports zero changed rows for an exact no-op. Under the held row lock,
                     // accept that only when the authoritative cursor postcondition already matches.

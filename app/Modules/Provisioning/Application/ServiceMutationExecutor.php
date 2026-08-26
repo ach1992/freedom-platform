@@ -683,7 +683,7 @@ final readonly class ServiceMutationExecutor
             $updates['remote_deleted_at'] = $now;
         }
 
-        $query = $connection->table('service_subscriptions')
+        $updated = $connection->table('service_subscriptions')
             ->where('id', (int) $service->id)
             ->where('mutation_generation', $this->nonNegativeDatabaseInt($operation->operation_generation, 'Operation generation'))
             ->where('remote_identity_generation', $this->positiveDatabaseInt($operation->target_remote_identity_generation, 'Target remote identity generation'))
@@ -691,8 +691,8 @@ final readonly class ServiceMutationExecutor
             ->whereIn('lifecycle_state', $expectedStates)
             ->where('service_target_id', $this->positiveDatabaseInt($operation->service_target_id, 'Service target ID'))
             ->where('remote_service_id', $this->requiredString($operation->remote_service_id, 'Remote Service ID'))
-            ->whereNull('remote_deleted_at');
-        $updated = $query->update($updates);
+            ->whereNull('remote_deleted_at')
+            ->update($updates);
         if ($updated !== 1) {
             throw new RuntimeException('Service lifecycle transition lost its authoritative generation.');
         }

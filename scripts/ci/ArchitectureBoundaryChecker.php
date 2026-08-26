@@ -13,6 +13,9 @@ final class ArchitectureBoundaryChecker
     /** @var array<string,true> */
     private array $usedPersistenceExceptions = [];
 
+    /** @var array<string,true> */
+    private array $usedMigrationDdlHelpers = [];
+
     /** @param array<string,mixed> $config */
     public function __construct(
         private readonly string $root,
@@ -25,6 +28,7 @@ final class ArchitectureBoundaryChecker
         $violations = [];
         $edges = [];
         $this->usedPersistenceExceptions = [];
+        $this->usedMigrationDdlHelpers = [];
 
         foreach ($this->phpFiles('app/Modules') as $relativePath => $source) {
             $this->scanModuleFile($relativePath, $source, $violations, $edges);
@@ -47,6 +51,7 @@ final class ArchitectureBoundaryChecker
         sort($edges, SORT_STRING);
         array_push($violations, ...$this->cycleViolations($edges));
         array_push($violations, ...$this->persistenceExceptionViolations());
+        array_push($violations, ...$this->migrationDdlHelperViolations());
 
         $violations = array_values(array_unique($violations));
         sort($violations, SORT_STRING);
@@ -319,7 +324,7 @@ final class ArchitectureBoundaryChecker
 
         $variable = $variableMatch[1];
         $prefix = substr($source, 0, $offset);
-        $pattern = '/foreach\s*\(\s*\[((?:\s*[\'\"][A-Za-z0-9_]+[\'\"]\s*,?)+)\]\s+as\s+\$'.preg_quote($variable, '/').'\s*\)/s';
+        $pattern = '/foreach\s*\(\s*\[((?:\s*[\'\"][A-Za-z0-9_]+[\'\"]\s*,)*\s*[\'\"][A-Za-z0-9_]+[\'\"]\s*,?\s*)\]\s+as\s+\$'.preg_quote($variable, '/').'\s*\)/s';
         preg_match_all($pattern, $prefix, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE);
         if ($matches === []) {
             return null;
@@ -522,9 +527,14 @@ final class ArchitectureBoundaryChecker
                 if ($openParen === false) {
                     continue;
                 }
-                $argument = $this->firstCallArgument($source, $openParen + 1);
-                $classification = $this->classifyRawStatement($argument);
-                if ($classification === 'safe') {
+
+                $sql = $this->literalRawSql($source, $openParen + 1);
+                $classification = $sql === null ? 'unknown' : $this->classifyRawStatement($sql);
+                if ($classification === 'session') {
+                    continue;
+                }
+
+                if ($classification === 'ddl' && $this->consumeMigrationDdlHelper($relativePath)) {
                     continue;
                 }
 
@@ -532,10 +542,35 @@ final class ArchitectureBoundaryChecker
                     '%s:%d opaque raw SQL %s is forbidden because durable-table ownership cannot be attributed.',
                     $relativePath,
                     $line,
-                    $classification === 'mutation' ? 'mutation' : 'with a non-literal/unsupported statement',
+                    in_array($classification, ['mutation', 'ddl'], true)
+                        ? 'mutation'
+                        : 'with a non-literal/unsupported statement',
                 );
             }
         }
+    }
+
+    private function literalRawSql(string $source, int $offset): ?string
+    {
+        $tail = substr($source, $offset);
+        if (preg_match(
+            '/^\s*<<<\'([A-Za-z_][A-Za-z0-9_]*)\'\R(.*?)\R\1(?=\s*[,);])/s',
+            $tail,
+            $heredoc,
+        ) === 1) {
+            $sql = trim($heredoc[2]);
+
+            return $sql === '' ? null : $sql;
+        }
+
+        $argument = $this->firstCallArgument($source, $offset);
+        if (preg_match('/^([\'\"])(.*)\1$/s', $argument, $match) !== 1) {
+            return null;
+        }
+
+        $sql = trim(stripcslashes($match[2]));
+
+        return $sql === '' ? null : $sql;
     }
 
     private function firstCallArgument(string $source, int $offset): string
@@ -597,22 +632,91 @@ final class ArchitectureBoundaryChecker
         return trim($result);
     }
 
-    private function classifyRawStatement(string $argument): string
+    private function classifyRawStatement(string $sql): string
     {
-        if (preg_match('/^([\'\"])(.*)\1$/s', $argument, $match) !== 1) {
+        $sql = trim($sql);
+        if ($sql === '') {
             return 'unknown';
         }
 
-        $sql = trim(stripcslashes($match[2]));
-        if ($sql === '') {
-            return 'unknown';
+        if (preg_match('/^SET\b/i', $sql) === 1) {
+            return 'session';
         }
 
         if (preg_match('/^(INSERT|UPDATE|DELETE|REPLACE|TRUNCATE|WITH|CALL|LOAD)\b/i', $sql) === 1) {
             return 'mutation';
         }
 
-        return 'safe';
+        if (preg_match('/^(CREATE|ALTER|DROP|RENAME)\b/i', $sql) === 1) {
+            return 'ddl';
+        }
+
+        return 'unknown';
+    }
+
+    private function consumeMigrationDdlHelper(string $relativePath): bool
+    {
+        $helpers = $this->config['migration_ddl_helpers'] ?? [];
+        if (! is_array($helpers) || ! in_array($relativePath, $helpers, true)) {
+            return false;
+        }
+
+        $this->usedMigrationDdlHelpers[$relativePath] = true;
+
+        return true;
+    }
+
+    /** @return list<string> */
+    private function migrationDdlHelperViolations(): array
+    {
+        $helpers = $this->config['migration_ddl_helpers'] ?? [];
+        if (! is_array($helpers)) {
+            return ['migration_ddl_helpers must be an exact list of migration-only Infrastructure helper paths.'];
+        }
+
+        $violations = [];
+        $seen = [];
+        foreach ($helpers as $helper) {
+            if (! is_string($helper)
+                || preg_match('#^app/Modules/[A-Za-z0-9_]+/Infrastructure/.+\.php$#', $helper) !== 1
+            ) {
+                $violations[] = 'migration_ddl_helpers contains an invalid non-exact helper path.';
+
+                continue;
+            }
+
+            if (isset($seen[$helper])) {
+                $violations[] = 'migration_ddl_helpers contains duplicate helper '.$helper.'.';
+
+                continue;
+            }
+            $seen[$helper] = true;
+
+            if (! isset($this->usedMigrationDdlHelpers[$helper])) {
+                $violations[] = 'migration_ddl_helpers contains stale/unused helper '.$helper.'.';
+
+                continue;
+            }
+
+            $class = pathinfo($helper, PATHINFO_FILENAME);
+            foreach (['app/Modules', 'app/Shared', 'routes'] as $directory) {
+                foreach ($this->phpFiles($directory) as $runtimePath => $source) {
+                    if ($runtimePath === $helper) {
+                        continue;
+                    }
+
+                    if (preg_match('/\b'.preg_quote($class, '/').'\b/', $source) === 1) {
+                        $violations[] = sprintf(
+                            'migration-only DDL helper %s may not be referenced from runtime source %s.',
+                            $helper,
+                            $runtimePath,
+                        );
+                    }
+                }
+            }
+        }
+
+        return $violations;
     }
 
     private function sourceLayer(string $relativePath): ?string

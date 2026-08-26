@@ -246,6 +246,12 @@ return [
         'zarinpal_payment_verifications' => 'Payments',
     ],
 
+    // Exact migration-only DDL helper retained by the historical migration chain. Runtime
+    // raw DDL remains forbidden; #183 owns the reusable trigger/schema lifecycle contract.
+    'migration_ddl_helpers' => [
+        'app/Modules/Agents/Infrastructure/AgentPricingMigrationGuards.php',
+    ],
+
     // Exact temporary legacy seams only. Each entry is owned by #188 and CI rejects
     // stale/unused entries so the list shrinks as runtime boundaries are repaired.
     'persistence_exceptions' => [
