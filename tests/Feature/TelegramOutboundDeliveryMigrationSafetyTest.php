@@ -536,6 +536,72 @@ SQL);
         );
     }
 
+    public function test_unexpected_authority_table_trigger_is_rejected_before_queue_or_effect_transport(): void
+    {
+        $queued = $this->queue()->queue(
+            TelegramDeliveryAction::Send,
+            900214,
+            null,
+            NonRestrictedTelegramPresentation::plainText('unexpected authority trigger fence'),
+            'semantic-extra-trigger-request-179',
+            'correlation-semantic-extra-trigger-179',
+        );
+
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER telegram_delivery_operations_unexpected_update_guard
+BEFORE UPDATE ON telegram_delivery_operations
+FOR EACH ROW
+BEGIN
+    SET NEW.updated_at = NEW.updated_at;
+END
+SQL);
+
+        try {
+            self::assertFalse((new TelegramDeliveryDatabaseAuthoritySurfaceV1)->semanticsMatchExpected(DB::connection()));
+            $this->assertSemanticDriftRejectsQueueAndEffect(
+                $queued->publicId,
+                $queued->outboxEventId,
+                'correlation-semantic-extra-trigger-179',
+                'semantic-extra-trigger',
+            );
+        } finally {
+            DB::unprepared('DROP TRIGGER IF EXISTS telegram_delivery_operations_unexpected_update_guard');
+        }
+    }
+
+    public function test_outbox_telegram_guards_must_remain_terminal_before_queue_or_effect_transport(): void
+    {
+        $queued = $this->queue()->queue(
+            TelegramDeliveryAction::Send,
+            900215,
+            null,
+            NonRestrictedTelegramPresentation::plainText('terminal outbox trigger fence'),
+            'semantic-outbox-terminal-request-179',
+            'correlation-semantic-outbox-terminal-179',
+        );
+
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER outbox_telegram_delivery_late_insert_probe
+BEFORE INSERT ON outbox_messages
+FOR EACH ROW
+BEGIN
+    SET NEW.updated_at = NEW.updated_at;
+END
+SQL);
+
+        try {
+            self::assertFalse((new TelegramDeliveryDatabaseAuthoritySurfaceV1)->semanticsMatchExpected(DB::connection()));
+            $this->assertSemanticDriftRejectsQueueAndEffect(
+                $queued->publicId,
+                $queued->outboxEventId,
+                'correlation-semantic-outbox-terminal-179',
+                'semantic-outbox-terminal',
+            );
+        } finally {
+            DB::unprepared('DROP TRIGGER IF EXISTS outbox_telegram_delivery_late_insert_probe');
+        }
+    }
+
     public function test_unactivated_surface_cannot_activate_when_same_named_guard_semantics_drift(): void
     {
         $this->dropDeliveryGuards();

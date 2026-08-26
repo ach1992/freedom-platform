@@ -76,6 +76,13 @@ final readonly class TelegramDeliveryDatabaseAuthoritySurfaceV1
         'created_at',
     ];
 
+    /** @var array<string, string> */
+    private const OUTBOX_TERMINAL_GUARDS = [
+        'INSERT' => 'outbox_telegram_delivery_envelope_insert_guard',
+        'UPDATE' => 'outbox_telegram_delivery_envelope_update_guard',
+        'DELETE' => 'outbox_telegram_delivery_envelope_delete_guard',
+    ];
+
     public static function installationLockName(Connection $connection): string
     {
         return 'telegram-delivery-authority-v1:'.substr(hash('sha256', $connection->getDatabaseName()), 0, 32);
@@ -119,7 +126,8 @@ final readonly class TelegramDeliveryDatabaseAuthoritySurfaceV1
     public function semanticsMatchExpected(Connection $connection): bool
     {
         try {
-            return hash_equals(self::EXPECTED_SEMANTIC_FINGERPRINT, $this->semanticFingerprint($connection));
+            return hash_equals(self::EXPECTED_SEMANTIC_FINGERPRINT, $this->semanticFingerprint($connection))
+                && $this->outboxGuardsAreTerminal($connection);
         } catch (Throwable) {
             return false;
         }
@@ -227,7 +235,10 @@ final readonly class TelegramDeliveryDatabaseAuthoritySurfaceV1
 
         $triggers = $connection->table('information_schema.TRIGGERS')
             ->where('TRIGGER_SCHEMA', $databaseName)
-            ->whereIn('TRIGGER_NAME', self::REQUIRED_TRIGGERS)
+            ->where(function ($query): void {
+                $query->whereIn('EVENT_OBJECT_TABLE', self::AUTHORITY_TABLES)
+                    ->orWhereIn('TRIGGER_NAME', self::REQUIRED_TRIGGERS);
+            })
             ->orderBy('TRIGGER_NAME')
             ->get([
                 'TRIGGER_NAME',
@@ -334,6 +345,38 @@ final readonly class TelegramDeliveryDatabaseAuthoritySurfaceV1
             ->all();
 
         return $this->sameNames($columns, $actual);
+    }
+
+    private function outboxGuardsAreTerminal(Connection $connection): bool
+    {
+        $rows = $connection->table('information_schema.TRIGGERS')
+            ->where('TRIGGER_SCHEMA', $connection->getDatabaseName())
+            ->where('EVENT_OBJECT_TABLE', 'outbox_messages')
+            ->where('ACTION_TIMING', 'BEFORE')
+            ->whereIn('EVENT_MANIPULATION', array_keys(self::OUTBOX_TERMINAL_GUARDS))
+            ->get(['TRIGGER_NAME', 'EVENT_MANIPULATION', 'ACTION_ORDER']);
+
+        foreach (self::OUTBOX_TERMINAL_GUARDS as $event => $requiredTrigger) {
+            $eventRows = $rows->filter(
+                static fn (object $row): bool => (string) $row->EVENT_MANIPULATION === $event,
+            );
+            if ($eventRows->isEmpty()) {
+                return false;
+            }
+
+            $required = $eventRows->first(
+                static fn (object $row): bool => (string) $row->TRIGGER_NAME === $requiredTrigger,
+            );
+            if ($required === null) {
+                return false;
+            }
+
+            if ((int) $required->ACTION_ORDER !== (int) $eventRows->max('ACTION_ORDER')) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private function normalizeMetadataSql(mixed $value): string
