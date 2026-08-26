@@ -3,8 +3,10 @@
 declare(strict_types=1);
 
 use FreedomPlatform\CI\ArchitectureBoundaryChecker;
+use FreedomPlatform\CI\DurableTableOwnershipChecker;
 
 require __DIR__.'/ArchitectureBoundaryChecker.php';
+require __DIR__.'/DurableTableOwnershipChecker.php';
 
 $config = require __DIR__.'/architecture-boundaries.php';
 if (! is_array($config)) {
@@ -15,6 +17,9 @@ if (! is_array($config)) {
 $root = dirname(__DIR__, 2);
 $checker = new ArchitectureBoundaryChecker($root, $config);
 $result = $checker->check();
+$ownershipViolations = (new DurableTableOwnershipChecker($root, $config))->violations();
+$result['violations'] = array_values(array_unique(array_merge($result['violations'], $ownershipViolations)));
+sort($result['violations'], SORT_STRING);
 
 $reportDirectory = $root.'/build/evidence/static';
 if (! is_dir($reportDirectory) && ! mkdir($reportDirectory, 0775, true) && ! is_dir($reportDirectory)) {
