@@ -30,6 +30,7 @@ final class ArchitectureBoundaryChecker
 
         foreach ($this->phpFiles('app/Shared') as $relativePath => $source) {
             $this->scanSharedFile($relativePath, $source, $violations);
+            $this->scanPersistence($relativePath, $source, $violations);
         }
 
         foreach ($this->phpFiles('routes') as $relativePath => $source) {
@@ -63,6 +64,14 @@ final class ArchitectureBoundaryChecker
         foreach ($this->qualifiedNames($source) as $reference) {
             $name = $reference['name'];
             $line = $reference['line'];
+
+            if ($this->isEloquentReference($name)) {
+                $violations[] = sprintf(
+                    '%s:%d feature modules may not reference Eloquent persistence primitives because durable-table ownership cannot be attributed; use an attributable persistence boundary.',
+                    $relativePath,
+                    $line,
+                );
+            }
 
             if ($sourceLayer === 'Domain' && $this->isFrameworkReference($name)) {
                 $violations[] = sprintf(
@@ -149,6 +158,14 @@ final class ArchitectureBoundaryChecker
     private function scanSharedFile(string $relativePath, string $source, array &$violations): void
     {
         foreach ($this->qualifiedNames($source) as $reference) {
+            if ($this->isEloquentReference($reference['name'])) {
+                $violations[] = sprintf(
+                    '%s:%d Shared code may not reference Eloquent persistence primitives because durable-table ownership cannot be attributed.',
+                    $relativePath,
+                    $reference['line'],
+                );
+            }
+
             if (str_starts_with($reference['name'], 'App\\Modules\\')) {
                 $violations[] = sprintf(
                     '%s:%d Shared code must not depend on a feature module.',
@@ -170,6 +187,8 @@ final class ArchitectureBoundaryChecker
     /** @param list<string> $violations */
     private function scanPersistence(string $relativePath, string $source, array &$violations): void
     {
+        $this->scanDynamicTableMutations($relativePath, $source, $violations);
+
         preg_match_all(
             '/(?:DB::|->)table\(\s*[\'\"]([^\'\"]+)[\'\"]\s*\)/',
             $source,
@@ -182,16 +201,14 @@ final class ArchitectureBoundaryChecker
             $table = is_array($tableParts) && isset($tableParts[0]) ? $tableParts[0] : trim($match[1][0]);
             $offset = $match[0][1];
             $statement = substr($source, $offset, $this->statementLength($source, $offset));
-            if (preg_match('/->\s*(insert|insertGetId|insertOrIgnore|update|delete|upsert|updateOrInsert|increment|decrement|truncate)\s*\(/', $statement) !== 1) {
+            if (! $this->isMutationStatement($statement)) {
                 continue;
             }
 
             $line = $this->lineNumber($source, $offset);
-            $sourceModule = null;
             $sourceLayer = null;
-            if (preg_match('#^app/Modules/([^/]+)/([^/]+)/#', $relativePath, $pathParts) === 1) {
-                $sourceModule = $pathParts[1];
-                $sourceLayer = $pathParts[2];
+            if (preg_match('#^app/Modules/[^/]+/([^/]+)/#', $relativePath, $pathParts) === 1) {
+                $sourceLayer = $pathParts[1];
             }
 
             $exceptionKey = $relativePath.'|'.$table;
@@ -206,20 +223,48 @@ final class ArchitectureBoundaryChecker
                     $table,
                     str_starts_with($relativePath, 'routes/') ? 'routes' : 'Presentation',
                 );
+
+                continue;
             }
 
-            $owner = $this->protectedTableOwner($table);
-            if ($owner === null || $sourceModule === null || $owner === $sourceModule || $persistenceException) {
+            $owner = $this->durableTableOwner($table);
+            $sourceOwner = $this->sourcePersistenceOwner($relativePath);
+            if ($owner === null || $sourceOwner === null || $owner === $sourceOwner || $persistenceException) {
                 continue;
             }
 
             $violations[] = sprintf(
-                '%s:%d %s mutation of protected table %s owned by %s is forbidden.',
+                '%s:%d %s mutation of durable table %s owned by %s is forbidden.',
                 $relativePath,
                 $line,
-                $sourceModule,
+                $sourceOwner,
                 $table,
                 $owner,
+            );
+        }
+    }
+
+    /** @param list<string> $violations */
+    private function scanDynamicTableMutations(string $relativePath, string $source, array &$violations): void
+    {
+        preg_match_all(
+            '/(?:\bDB::|->)\s*table\(\s*(?![\'\"])([^)]*)\)/',
+            $source,
+            $matches,
+            PREG_SET_ORDER | PREG_OFFSET_CAPTURE,
+        );
+
+        foreach ($matches as $match) {
+            $offset = $match[0][1];
+            $statement = substr($source, $offset, $this->statementLength($source, $offset));
+            if (! $this->isMutationStatement($statement)) {
+                continue;
+            }
+
+            $violations[] = sprintf(
+                '%s:%d dynamic table mutation is forbidden because durable-table ownership cannot be attributed; use a literal reviewed table boundary.',
+                $relativePath,
+                $this->lineNumber($source, $offset),
             );
         }
     }
@@ -276,6 +321,11 @@ final class ArchitectureBoundaryChecker
             || str_starts_with($name, 'Monolog\\');
     }
 
+    private function isEloquentReference(string $name): bool
+    {
+        return str_starts_with($name, 'Illuminate\\Database\\Eloquent\\');
+    }
+
     /** @return array{string,string}|null */
     private function moduleReference(string $name): ?array
     {
@@ -328,23 +378,41 @@ final class ArchitectureBoundaryChecker
         return is_array($allowed) && in_array($targetModule, $allowed, true);
     }
 
-    private function protectedTableOwner(string $table): ?string
+    private function durableTableOwner(string $table): ?string
     {
-        $owners = $this->config['protected_table_owners'] ?? [];
+        $owners = $this->config['durable_table_owners'] ?? [];
         if (! is_array($owners)) {
             return null;
         }
 
-        foreach ($owners as $pattern => $owner) {
-            if (is_string($pattern) && is_string($owner) && preg_match($pattern, $table) === 1) {
-                return $owner;
-            }
+        $owner = $owners[$table] ?? null;
+
+        return is_string($owner) && trim($owner) !== '' ? $owner : null;
+    }
+
+    private function sourcePersistenceOwner(string $relativePath): ?string
+    {
+        if (preg_match('#^app/Modules/([^/]+)/#', $relativePath, $pathParts) === 1) {
+            return $pathParts[1];
+        }
+
+        if (str_starts_with($relativePath, 'app/Shared/')) {
+            return 'Shared';
         }
 
         return null;
     }
 
-    /** @param list<string> $edges
+    private function isMutationStatement(string $statement): bool
+    {
+        return preg_match(
+            '/->\s*(insert|insertGetId|insertOrIgnore|update|delete|upsert|updateOrInsert|increment|decrement|truncate)\s*\(/',
+            $statement,
+        ) === 1;
+    }
+
+    /**
+     * @param  list<string>  $edges
      * @return list<string>
      */
     private function cycleViolations(array $edges): array
