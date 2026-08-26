@@ -4,10 +4,10 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Application;
 
+use App\Modules\Telegram\Application\Contracts\TelegramRuntime;
 use App\Modules\Telegram\Application\Exceptions\InvalidTelegramWebhookPayload;
 use App\Modules\Telegram\Application\Exceptions\TelegramUpdateCollision;
 use App\Modules\Telegram\Application\Jobs\ProcessTelegramUpdateJob;
-use App\Modules\Telegram\Infrastructure\TelegramRuntimeConfiguration;
 use Illuminate\Contracts\Encryption\StringEncrypter;
 use Illuminate\Database\DatabaseManager;
 use JsonException;
@@ -18,7 +18,7 @@ final readonly class TelegramWebhookIngestor
     public function __construct(
         private DatabaseManager $database,
         private StringEncrypter $encrypter,
-        private TelegramRuntimeConfiguration $configuration,
+        private TelegramRuntime $configuration,
     ) {}
 
     public function ingest(string $rawPayload, string $correlationId): TelegramWebhookReceipt
@@ -33,8 +33,10 @@ final readonly class TelegramWebhookIngestor
         $payloadHash = hash('sha256', $rawPayload);
         $now = now('UTC')->format('Y-m-d H:i:s.u');
         $ciphertext = $this->encrypter->encryptString($rawPayload);
+        $botId = $this->configuration->botId();
 
         $duplicate = $this->database->connection()->transaction(function () use (
+            $botId,
             $updateId,
             $payloadHash,
             $ciphertext,
@@ -43,7 +45,7 @@ final readonly class TelegramWebhookIngestor
             $now,
         ): bool {
             $inserted = $this->database->connection()->table('processed_telegram_updates')->insertOrIgnore([
-                'bot_id' => $this->configuration->botId,
+                'bot_id' => $botId,
                 'update_id' => $updateId,
                 'payload_hash' => $payloadHash,
                 'payload_ciphertext' => $ciphertext,
@@ -61,7 +63,7 @@ final readonly class TelegramWebhookIngestor
             }
 
             $existing = $this->database->connection()->table('processed_telegram_updates')
-                ->where('bot_id', $this->configuration->botId)
+                ->where('bot_id', $botId)
                 ->where('update_id', $updateId)
                 ->lockForUpdate()
                 ->first(['payload_hash']);
@@ -73,12 +75,12 @@ final readonly class TelegramWebhookIngestor
             return true;
         });
 
-        ProcessTelegramUpdateJob::dispatch($this->configuration->botId, $updateId)
-            ->onQueue($this->configuration->queue)
+        ProcessTelegramUpdateJob::dispatch($botId, $updateId)
+            ->onQueue($this->configuration->queue())
             ->afterCommit();
 
         $this->database->connection()->table('processed_telegram_updates')
-            ->where('bot_id', $this->configuration->botId)
+            ->where('bot_id', $botId)
             ->where('update_id', $updateId)
             ->whereNull('queued_at')
             ->update([
@@ -87,7 +89,7 @@ final readonly class TelegramWebhookIngestor
                 'updated_at' => $now,
             ]);
 
-        return new TelegramWebhookReceipt($this->configuration->botId, $updateId, $duplicate);
+        return new TelegramWebhookReceipt($botId, $updateId, $duplicate);
     }
 
     /** @return array<string, mixed> */
