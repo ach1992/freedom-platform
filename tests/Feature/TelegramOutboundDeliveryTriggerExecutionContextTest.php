@@ -158,6 +158,70 @@ SQL);
         self::assertTrue($surface->semanticsMatchExpected($connection));
     }
 
+    public function test_incoming_foreign_key_is_rejected_before_effect_authority_can_arm(): void
+    {
+        $connection = DB::connection();
+        $surface = new TelegramDeliveryDatabaseAuthoritySurfaceV1;
+        self::assertTrue($surface->semanticsMatchExpected($connection));
+        $baselineFingerprint = $surface->semanticFingerprint($connection);
+
+        try {
+            DB::statement(<<<'SQL'
+CREATE TABLE telegram_delivery_reverse_foreign_key_probe (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    operation_public_id CHAR(26) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+    PRIMARY KEY (id),
+    KEY telegram_delivery_reverse_fk_operation_idx (operation_public_id),
+    CONSTRAINT telegram_delivery_reverse_fk_operation_fk
+        FOREIGN KEY (operation_public_id)
+        REFERENCES telegram_delivery_operations (public_id)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin
+SQL);
+
+            self::assertTrue($connection->table('information_schema.KEY_COLUMN_USAGE')
+                ->where('CONSTRAINT_SCHEMA', $connection->getDatabaseName())
+                ->where('TABLE_NAME', 'telegram_delivery_reverse_foreign_key_probe')
+                ->where('CONSTRAINT_NAME', 'telegram_delivery_reverse_fk_operation_fk')
+                ->where('REFERENCED_TABLE_SCHEMA', $connection->getDatabaseName())
+                ->where('REFERENCED_TABLE_NAME', 'telegram_delivery_operations')
+                ->where('REFERENCED_COLUMN_NAME', 'public_id')
+                ->exists());
+            self::assertSame($baselineFingerprint, $surface->semanticFingerprint($connection));
+            self::assertFalse($surface->semanticsMatchExpected($connection));
+
+            $effectCallbackRan = false;
+            try {
+                $connection->transaction(function (Connection $transaction) use (&$effectCallbackRan): void {
+                    (new TelegramDeliveryDatabaseCapability)->runEffect(
+                        $transaction,
+                        'telegram_delivery_effect_v1',
+                        'incoming-referential-constraint-review-probe',
+                        1,
+                        function () use (&$effectCallbackRan): int {
+                            $effectCallbackRan = true;
+
+                            return 1;
+                        },
+                    );
+                });
+                self::fail('Incoming referential constraints must reject effect authority before its callback can run.');
+            } catch (RuntimeException $exception) {
+                self::assertStringContainsString(
+                    'Telegram delivery database authority is not fully activated.',
+                    $exception->getMessage(),
+                );
+            }
+            self::assertFalse($effectCallbackRan);
+        } finally {
+            DB::statement('DROP TABLE IF EXISTS telegram_delivery_reverse_foreign_key_probe');
+        }
+
+        self::assertSame($baselineFingerprint, $surface->semanticFingerprint($connection));
+        self::assertTrue($surface->semanticsMatchExpected($connection));
+    }
+
     private function toggleSqlMode(string $sqlMode, string $mode): string
     {
         $modes = array_values(array_filter(
