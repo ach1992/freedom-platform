@@ -14,7 +14,7 @@ final class ArchitectureBoundaryChecker
     private array $usedPersistenceExceptions = [];
 
     /** @var array<string,true> */
-    private array $usedMigrationDdlHelpers = [];
+    private array $usedMigrationTriggerDdlHelpers = [];
 
     /** @param array<string,mixed> $config */
     public function __construct(
@@ -28,7 +28,7 @@ final class ArchitectureBoundaryChecker
         $violations = [];
         $edges = [];
         $this->usedPersistenceExceptions = [];
-        $this->usedMigrationDdlHelpers = [];
+        $this->usedMigrationTriggerDdlHelpers = [];
 
         foreach ($this->phpFiles('app/Modules') as $relativePath => $source) {
             $this->scanModuleFile($relativePath, $source, $violations, $edges);
@@ -51,7 +51,7 @@ final class ArchitectureBoundaryChecker
         sort($edges, SORT_STRING);
         array_push($violations, ...$this->cycleViolations($edges));
         array_push($violations, ...$this->persistenceExceptionViolations());
-        array_push($violations, ...$this->migrationDdlHelperViolations());
+        array_push($violations, ...$this->migrationTriggerDdlHelperViolations());
 
         $violations = array_values(array_unique($violations));
         sort($violations, SORT_STRING);
@@ -534,7 +534,7 @@ final class ArchitectureBoundaryChecker
                     continue;
                 }
 
-                if ($classification === 'ddl' && $this->consumeMigrationDdlHelper($relativePath)) {
+                if ($classification === 'trigger_ddl' && $this->consumeMigrationTriggerDdlHelper($relativePath)) {
                     continue;
                 }
 
@@ -542,7 +542,7 @@ final class ArchitectureBoundaryChecker
                     '%s:%d opaque raw SQL %s is forbidden because durable-table ownership cannot be attributed.',
                     $relativePath,
                     $line,
-                    in_array($classification, ['mutation', 'ddl'], true)
+                    in_array($classification, ['mutation', 'ddl', 'trigger_ddl'], true)
                         ? 'mutation'
                         : 'with a non-literal/unsupported statement',
                 );
@@ -647,6 +647,10 @@ final class ArchitectureBoundaryChecker
             return 'mutation';
         }
 
+        if (preg_match('/^(CREATE|DROP)\s+TRIGGER\b/i', $sql) === 1) {
+            return 'trigger_ddl';
+        }
+
         if (preg_match('/^(CREATE|ALTER|DROP|RENAME)\b/i', $sql) === 1) {
             return 'ddl';
         }
@@ -654,24 +658,24 @@ final class ArchitectureBoundaryChecker
         return 'unknown';
     }
 
-    private function consumeMigrationDdlHelper(string $relativePath): bool
+    private function consumeMigrationTriggerDdlHelper(string $relativePath): bool
     {
-        $helpers = $this->config['migration_ddl_helpers'] ?? [];
+        $helpers = $this->config['migration_trigger_ddl_helpers'] ?? [];
         if (! is_array($helpers) || ! in_array($relativePath, $helpers, true)) {
             return false;
         }
 
-        $this->usedMigrationDdlHelpers[$relativePath] = true;
+        $this->usedMigrationTriggerDdlHelpers[$relativePath] = true;
 
         return true;
     }
 
     /** @return list<string> */
-    private function migrationDdlHelperViolations(): array
+    private function migrationTriggerDdlHelperViolations(): array
     {
-        $helpers = $this->config['migration_ddl_helpers'] ?? [];
+        $helpers = $this->config['migration_trigger_ddl_helpers'] ?? [];
         if (! is_array($helpers)) {
-            return ['migration_ddl_helpers must be an exact list of migration-only Infrastructure helper paths.'];
+            return ['migration_trigger_ddl_helpers must be an exact list of migration-only Infrastructure helper paths.'];
         }
 
         $violations = [];
@@ -680,25 +684,39 @@ final class ArchitectureBoundaryChecker
             if (! is_string($helper)
                 || preg_match('#^app/Modules/[A-Za-z0-9_]+/Infrastructure/.+\.php$#', $helper) !== 1
             ) {
-                $violations[] = 'migration_ddl_helpers contains an invalid non-exact helper path.';
+                $violations[] = 'migration_trigger_ddl_helpers contains an invalid non-exact helper path.';
 
                 continue;
             }
 
             if (isset($seen[$helper])) {
-                $violations[] = 'migration_ddl_helpers contains duplicate helper '.$helper.'.';
+                $violations[] = 'migration_trigger_ddl_helpers contains duplicate helper '.$helper.'.';
 
                 continue;
             }
             $seen[$helper] = true;
 
-            if (! isset($this->usedMigrationDdlHelpers[$helper])) {
-                $violations[] = 'migration_ddl_helpers contains stale/unused helper '.$helper.'.';
+            if (! isset($this->usedMigrationTriggerDdlHelpers[$helper])) {
+                $violations[] = 'migration_trigger_ddl_helpers contains stale/unused helper '.$helper.'.';
 
                 continue;
             }
 
             $class = pathinfo($helper, PATHINFO_FILENAME);
+            $migrationReferenceFound = false;
+            foreach ($this->phpFiles('database/migrations') as $migrationSource) {
+                if (preg_match('/\b'.preg_quote($class, '/').'\b/', $migrationSource) === 1) {
+                    $migrationReferenceFound = true;
+                    break;
+                }
+            }
+            if (! $migrationReferenceFound) {
+                $violations[] = sprintf(
+                    'migration-only trigger DDL helper %s is not referenced by a migration.',
+                    $helper,
+                );
+            }
+
             foreach (['app/Modules', 'app/Shared', 'routes'] as $directory) {
                 foreach ($this->phpFiles($directory) as $runtimePath => $source) {
                     if ($runtimePath === $helper) {
@@ -707,7 +725,7 @@ final class ArchitectureBoundaryChecker
 
                     if (preg_match('/\b'.preg_quote($class, '/').'\b/', $source) === 1) {
                         $violations[] = sprintf(
-                            'migration-only DDL helper %s may not be referenced from runtime source %s.',
+                            'migration-only trigger DDL helper %s may not be referenced from runtime source %s.',
                             $helper,
                             $runtimePath,
                         );

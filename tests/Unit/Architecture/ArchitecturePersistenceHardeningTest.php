@@ -133,11 +133,17 @@ PHP);
         self::assertSame(1, substr_count($blocked, 'opaque raw SQL mutation'));
         self::assertStringNotContainsString('non-literal/unsupported statement', $blocked);
 
+        $this->write('database/migrations/2026_08_27_000000_order_migration_guard.php', <<<'PHP'
+<?php
+use App\Modules\Orders\Infrastructure\OrderMigrationGuard;
+return new class { public function up(): void { OrderMigrationGuard::drop(); } };
+PHP);
+
         $accepted = $this->checker([], [$path])->check()['violations'];
         self::assertSame([], $accepted);
 
         $stale = implode("\n", $this->checker([], [$path, 'app/Modules/Orders/Infrastructure/RemovedGuard.php'])->check()['violations']);
-        self::assertStringContainsString('migration_ddl_helpers contains stale/unused helper', $stale);
+        self::assertStringContainsString('migration_trigger_ddl_helpers contains stale/unused helper', $stale);
 
         $this->write('app/Modules/Orders/Infrastructure/RuntimeCaller.php', <<<'PHP'
 <?php
@@ -145,8 +151,34 @@ namespace App\Modules\Orders\Infrastructure;
 final class RuntimeCaller { public function run(): void { OrderMigrationGuard::drop(); } }
 PHP);
         $runtimeReference = implode("\n", $this->checker([], [$path])->check()['violations']);
-        self::assertStringContainsString('migration-only DDL helper', $runtimeReference);
+        self::assertStringContainsString('migration-only trigger DDL helper', $runtimeReference);
         self::assertStringContainsString('may not be referenced from runtime source', $runtimeReference);
+    }
+
+    public function test_migration_trigger_helper_does_not_grant_general_raw_ddl(): void
+    {
+        $path = 'app/Modules/Orders/Infrastructure/GenericDdlGuard.php';
+        $this->write($path, <<<'PHP'
+<?php
+namespace App\Modules\Orders\Infrastructure;
+use Illuminate\Support\Facades\DB;
+final class GenericDdlGuard
+{
+    public static function run(): void
+    {
+        DB::unprepared('DROP TRIGGER IF EXISTS order_guard');
+        DB::unprepared('CREATE TABLE should_not_pass (id BIGINT)');
+    }
+}
+PHP);
+        $this->write('database/migrations/2026_08_27_000001_generic_ddl_guard.php', <<<'PHP'
+<?php
+use App\Modules\Orders\Infrastructure\GenericDdlGuard;
+return new class { public function up(): void { GenericDdlGuard::run(); } };
+PHP);
+
+        $violations = implode("\n", $this->checker([], [$path])->check()['violations']);
+        self::assertSame(1, substr_count($violations, 'opaque raw SQL mutation'));
     }
 
     public function test_persistence_exception_must_be_exact_used_and_non_stale(): void
@@ -167,9 +199,9 @@ PHP);
 
     /**
      * @param  list<string>  $exceptions
-     * @param  list<string>  $migrationDdlHelpers
+     * @param  list<string>  $migrationTriggerDdlHelpers
      */
-    private function checker(array $exceptions = [], array $migrationDdlHelpers = []): ArchitectureBoundaryChecker
+    private function checker(array $exceptions = [], array $migrationTriggerDdlHelpers = []): ArchitectureBoundaryChecker
     {
         return new ArchitectureBoundaryChecker($this->root, [
             'allowed_module_dependencies' => [],
@@ -181,7 +213,7 @@ PHP);
                 'orders' => 'Orders',
             ],
             'persistence_exceptions' => $exceptions,
-            'migration_ddl_helpers' => $migrationDdlHelpers,
+            'migration_trigger_ddl_helpers' => $migrationTriggerDdlHelpers,
         ]);
     }
 
