@@ -204,6 +204,26 @@ PHP);
         self::assertSame([], $result['violations']);
     }
 
+    public function test_append_only_shared_sink_allows_feature_insert_but_rejects_other_mutations(): void
+    {
+        $this->write('app/Modules/Orders/Application/AuditAppend.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+final class AuditAppend { public function run($db): void { $db->table('audit_logs')->insert(['action' => 'order.created']); } }
+PHP);
+        $this->write('app/Modules/Orders/Application/AuditRewrite.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+final class AuditRewrite { public function run($db): void { $db->table('audit_logs')->update(['action' => 'rewritten']); } }
+PHP);
+
+        $result = $this->checker()->check();
+        $violations = implode("\n", $result['violations']);
+
+        self::assertSame(1, substr_count($violations, 'durable table audit_logs is append-only'));
+        self::assertStringContainsString('mutation update is forbidden', $violations);
+    }
+
     public function test_dynamic_table_mutation_fails_closed_but_dynamic_read_is_not_misclassified(): void
     {
         $this->write('app/Modules/Orders/Application/DynamicWrite.php', <<<'PHP'
@@ -267,6 +287,7 @@ PHP);
             'allowed_module_dependencies' => $allowed,
             'cycle_exceptions' => [],
             'durable_table_owners' => [
+                'audit_logs' => 'SharedAppendOnly',
                 'ledger_entries' => 'Wallet',
                 'orders' => 'Orders',
                 'outbox_messages' => 'Shared',
