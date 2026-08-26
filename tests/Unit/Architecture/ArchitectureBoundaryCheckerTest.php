@@ -178,7 +178,7 @@ PHP);
         self::assertStringContainsString('direct persistence mutation of worker_heartbeats from routes is forbidden', $violations);
     }
 
-    public function test_protected_table_cross_module_mutation_is_rejected(): void
+    public function test_exact_durable_owner_rejects_cross_module_mutation(): void
     {
         $this->write('app/Modules/Payments/Application/UnsafeLedgerWrite.php', <<<'PHP'
 <?php
@@ -188,7 +188,62 @@ PHP);
 
         $result = $this->checker()->check();
 
-        self::assertStringContainsString('Payments mutation of protected table ledger_entries owned by Wallet is forbidden', implode("\n", $result['violations']));
+        self::assertStringContainsString('Payments mutation of durable table ledger_entries owned by Wallet is forbidden', implode("\n", $result['violations']));
+    }
+
+    public function test_shared_persistence_is_checked_against_the_same_owner_map(): void
+    {
+        $this->write('app/Shared/Infrastructure/OutboxStore.php', <<<'PHP'
+<?php
+namespace App\Shared\Infrastructure;
+final class OutboxStore { public function run($db): void { $db->table('outbox_messages')->update(['state' => 'ready']); } }
+PHP);
+
+        $result = $this->checker()->check();
+
+        self::assertSame([], $result['violations']);
+    }
+
+    public function test_dynamic_table_mutation_fails_closed_but_dynamic_read_is_not_misclassified(): void
+    {
+        $this->write('app/Modules/Orders/Application/DynamicWrite.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+final class DynamicWrite { public function run($db, string $table): void { $db->table($table)->update(['state' => 'paid']); } }
+PHP);
+        $this->write('app/Modules/Orders/Application/DynamicRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+final class DynamicRead { public function run($db, string $table): mixed { return $db->table($table)->first(); } }
+PHP);
+
+        $result = $this->checker()->check();
+        $violations = implode("\n", $result['violations']);
+
+        self::assertStringContainsString('dynamic table mutation is forbidden because durable-table ownership cannot be attributed', $violations);
+        self::assertSame(1, substr_count($violations, 'dynamic table mutation is forbidden'));
+    }
+
+    public function test_eloquent_persistence_is_explicitly_prohibited_in_modules_and_shared_code(): void
+    {
+        $this->write('app/Modules/Orders/Infrastructure/OrderRecord.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Infrastructure;
+use Illuminate\Database\Eloquent\Model;
+final class OrderRecord extends Model {}
+PHP);
+        $this->write('app/Shared/Infrastructure/SharedRecord.php', <<<'PHP'
+<?php
+namespace App\Shared\Infrastructure;
+use Illuminate\Database\Eloquent\Model;
+final class SharedRecord extends Model {}
+PHP);
+
+        $result = $this->checker()->check();
+        $violations = implode("\n", $result['violations']);
+
+        self::assertStringContainsString('feature modules may not reference Eloquent persistence primitives', $violations);
+        self::assertStringContainsString('Shared code may not reference Eloquent persistence primitives', $violations);
     }
 
     public function test_opaque_raw_persistence_is_rejected_from_presentation(): void
@@ -211,9 +266,11 @@ PHP);
         return new ArchitectureBoundaryChecker($this->root, [
             'allowed_module_dependencies' => $allowed,
             'cycle_exceptions' => [],
-            'protected_table_owners' => [
-                '#^ledger_#' => 'Wallet',
-                '#^worker_heartbeats$#' => 'Operations',
+            'durable_table_owners' => [
+                'ledger_entries' => 'Wallet',
+                'orders' => 'Orders',
+                'outbox_messages' => 'Shared',
+                'worker_heartbeats' => 'Operations',
             ],
             'persistence_exceptions' => [],
         ]);
