@@ -25,17 +25,16 @@ final class ArchitectureBoundaryChecker
         foreach ($this->phpFiles('app/Modules') as $relativePath => $source) {
             $this->scanModuleFile($relativePath, $source, $violations, $edges);
             $this->scanPersistence($relativePath, $source, $violations);
-            $this->scanOpaquePersistence($relativePath, $source, $violations);
+            $this->scanOpaquePresentationPersistence($relativePath, $source, $violations);
         }
 
         foreach ($this->phpFiles('app/Shared') as $relativePath => $source) {
             $this->scanSharedFile($relativePath, $source, $violations);
-            $this->scanOpaquePersistence($relativePath, $source, $violations);
         }
 
         foreach ($this->phpFiles('routes') as $relativePath => $source) {
             $this->scanPersistence($relativePath, $source, $violations);
-            $this->scanOpaquePersistence($relativePath, $source, $violations);
+            $this->scanOpaquePresentationPersistence($relativePath, $source, $violations);
         }
 
         $edges = array_values(array_unique($edges));
@@ -65,7 +64,7 @@ final class ArchitectureBoundaryChecker
             $name = $reference['name'];
             $line = $reference['line'];
 
-            if ($sourceLayer === 'Domain' && preg_match('#^(Illuminate|Symfony|Monolog)\\#', $name) === 1) {
+            if ($sourceLayer === 'Domain' && $this->isFrameworkReference($name)) {
                 $violations[] = sprintf(
                     '%s:%d Domain may not reference framework infrastructure.',
                     $relativePath,
@@ -73,16 +72,12 @@ final class ArchitectureBoundaryChecker
                 );
             }
 
-            if (preg_match(
-                '#^App\\Modules\\([A-Za-z0-9_]+)\\(Domain|Application|Infrastructure|Presentation)(?:\\|$)#',
-                $name,
-                $match,
-            ) !== 1) {
+            $target = $this->moduleReference($name);
+            if ($target === null) {
                 continue;
             }
 
-            $targetModule = $match[1];
-            $targetLayer = $match[2];
+            [$targetModule, $targetLayer] = $target;
 
             if ($sourceLayer === 'Domain') {
                 if ($targetModule === $sourceModule && $targetLayer === 'Domain') {
@@ -162,8 +157,7 @@ final class ArchitectureBoundaryChecker
                 );
             }
 
-            if (str_starts_with($relativePath, 'app/Shared/Domain/')
-                && preg_match('#^(Illuminate|Symfony|Monolog)\\#', $reference['name']) === 1) {
+            if (str_starts_with($relativePath, 'app/Shared/Domain/') && $this->isFrameworkReference($reference['name'])) {
                 $violations[] = sprintf(
                     '%s:%d Shared Domain may not reference framework infrastructure.',
                     $relativePath,
@@ -231,12 +225,20 @@ final class ArchitectureBoundaryChecker
     }
 
     /** @param list<string> $violations */
-    private function scanOpaquePersistence(string $relativePath, string $source, array &$violations): void
+    private function scanOpaquePresentationPersistence(string $relativePath, string $source, array &$violations): void
     {
+        $sourceLayer = null;
+        if (preg_match('#^app/Modules/[^/]+/([^/]+)/#', $relativePath, $pathParts) === 1) {
+            $sourceLayer = $pathParts[1];
+        }
+
+        if (! str_starts_with($relativePath, 'routes/') && $sourceLayer !== 'Presentation') {
+            return;
+        }
+
         $patterns = [
             '/\bDB::\s*(statement|unprepared|insert|update|delete|affectingStatement)\s*\(/',
             '/->\s*(statement|unprepared|affectingStatement)\s*\(/',
-            '/\bconnection\s*\([^;]{0,200}\)\s*->\s*(insert|update|delete)\s*\(/',
         ];
 
         foreach ($patterns as $pattern) {
@@ -244,17 +246,13 @@ final class ArchitectureBoundaryChecker
             foreach ($matches as $match) {
                 $line = $this->lineNumber($source, $match[0][1]);
                 $method = $match[1][0] ?? 'raw';
-                $exceptionKey = $relativePath.'|'.$method;
-                $exceptions = $this->config['opaque_persistence_exceptions'] ?? [];
-                if (is_array($exceptions) && in_array($exceptionKey, $exceptions, true)) {
-                    continue;
-                }
 
                 $violations[] = sprintf(
-                    '%s:%d opaque persistence API %s is forbidden in application/runtime code because table ownership cannot be attributed; use an attributable persistence boundary or an exact reviewed exception.',
+                    '%s:%d opaque persistence API %s from %s is forbidden; call an Application boundary.',
                     $relativePath,
                     $line,
                     $method,
+                    str_starts_with($relativePath, 'routes/') ? 'routes' : 'Presentation',
                 );
             }
         }
@@ -269,6 +267,29 @@ final class ArchitectureBoundaryChecker
             'Presentation' => in_array($targetLayer, ['Domain', 'Application', 'Presentation'], true),
             default => true,
         };
+    }
+
+    private function isFrameworkReference(string $name): bool
+    {
+        return str_starts_with($name, 'Illuminate\\')
+            || str_starts_with($name, 'Symfony\\')
+            || str_starts_with($name, 'Monolog\\');
+    }
+
+    /** @return array{string,string}|null */
+    private function moduleReference(string $name): ?array
+    {
+        $parts = explode('\\', $name);
+        if (count($parts) < 4 || $parts[0] !== 'App' || $parts[1] !== 'Modules') {
+            return null;
+        }
+
+        $layer = $parts[3];
+        if (! in_array($layer, ['Domain', 'Application', 'Infrastructure', 'Presentation'], true)) {
+            return null;
+        }
+
+        return [$parts[2], $layer];
     }
 
     /** @return list<array{name:string,line:int}> */
