@@ -144,6 +144,7 @@ final readonly class TelegramDeliveryDatabaseAuthoritySurfaceV1
     {
         try {
             return hash_equals(self::EXPECTED_SEMANTIC_FINGERPRINT, $this->semanticFingerprint($connection))
+                && $this->referentialConstraintsMatchExpected($connection)
                 && $this->outboxGuardsAreTerminal($connection)
                 && $this->triggerExecutionContextMatchesCurrentConnection($connection);
         } catch (Throwable) {
@@ -345,6 +346,20 @@ final readonly class TelegramDeliveryDatabaseAuthoritySurfaceV1
             ->all();
 
         return $this->sameNames(self::REQUIRED_UNIQUE_INDEXES, $actual);
+    }
+
+    /**
+     * V1 deliberately defines no referential constraints on its owned authority
+     * tables. Any FOREIGN KEY therefore changes DML/locking/cascade semantics and
+     * must invalidate readiness even when MariaDB can reuse an existing index.
+     */
+    private function referentialConstraintsMatchExpected(Connection $connection): bool
+    {
+        return ! $connection->table('information_schema.TABLE_CONSTRAINTS')
+            ->where('CONSTRAINT_SCHEMA', $connection->getDatabaseName())
+            ->whereIn('TABLE_NAME', self::AUTHORITY_TABLES)
+            ->where('CONSTRAINT_TYPE', 'FOREIGN KEY')
+            ->exists();
     }
 
     /** @param list<string> $columns */
