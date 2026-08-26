@@ -5,15 +5,22 @@ declare(strict_types=1);
 namespace App\Modules\Telegram\Application;
 
 use Illuminate\Database\Connection;
+use JsonException;
 use Throwable;
 
 /**
- * Immutable v1 schema contract shared by the migration and runtime capability
- * fence. Future authority revisions must leave this v1 contract intact and
- * introduce a new versioned surface instead of mutating these identifiers.
+ * Immutable v1 schema contract shared by migration activation and runtime.
+ *
+ * The semantic fingerprint is computed from MariaDB's own metadata for the
+ * security-relevant tables, constraints, indexes, and triggers. The migration
+ * cannot activate unless the installed surface matches this exact v1 digest,
+ * and runtime repeats the same attestation before arming queue/effect authority.
+ * Any semantic DDL change therefore requires an explicit new versioned surface.
  */
 final readonly class TelegramDeliveryDatabaseAuthoritySurfaceV1
 {
+    private const EXPECTED_SEMANTIC_FINGERPRINT = 'ae20e98d7f2b8fc2b88250983b0327bc607c42ab436c17320b997d57387fe13d';
+
     /** @var list<string> */
     public const REQUIRED_TRIGGERS = [
         'telegram_delivery_capability_insert_guard',
@@ -55,37 +62,18 @@ final readonly class TelegramDeliveryDatabaseAuthoritySurfaceV1
     ];
 
     /** @var list<string> */
+    private const AUTHORITY_TABLES = [
+        'telegram_delivery_authority_capability',
+        'telegram_delivery_operations',
+    ];
+
+    /** @var list<string> */
     private const CAPABILITY_COLUMNS = [
         'id',
         'capability_hash',
         'schema_version',
         'activated_at',
         'created_at',
-    ];
-
-    /** @var list<string> */
-    private const OPERATION_COLUMNS = [
-        'id',
-        'public_id',
-        'request_key_hash',
-        'request_fingerprint',
-        'correlation_id',
-        'action',
-        'bot_id',
-        'recipient_chat_id',
-        'target_message_id',
-        'presentation_text',
-        'outbox_event_id',
-        'state',
-        'state_version',
-        'provider_attempts',
-        'provider_boundary_started_at',
-        'completed_at',
-        'telegram_message_id',
-        'result_code',
-        'retry_after_seconds',
-        'created_at',
-        'updated_at',
     ];
 
     public static function installationLockName(Connection $connection): string
@@ -95,13 +83,15 @@ final readonly class TelegramDeliveryDatabaseAuthoritySurfaceV1
 
     public function isReady(Connection $connection, string $expectedCapabilityHash): bool
     {
-        if ($connection->getDriverName() !== 'mysql'
-            || ! $this->tableHasColumns($connection, 'telegram_delivery_authority_capability', self::CAPABILITY_COLUMNS)
-            || ! $this->tableHasColumns($connection, 'telegram_delivery_operations', self::OPERATION_COLUMNS)) {
+        if ($connection->getDriverName() !== 'mysql') {
             return false;
         }
 
         try {
+            if (! $this->semanticsMatchExpected($connection)) {
+                return false;
+            }
+
             $rows = $connection->table('telegram_delivery_authority_capability')->get([
                 'id', 'capability_hash', 'schema_version', 'activated_at',
             ]);
@@ -123,9 +113,153 @@ final readonly class TelegramDeliveryDatabaseAuthoritySurfaceV1
             return false;
         }
 
-        return $this->requiredTriggersPresent($connection)
-            && $this->requiredChecksPresent($connection)
-            && $this->requiredUniqueIndexesPresent($connection);
+        return true;
+    }
+
+    public function semanticsMatchExpected(Connection $connection): bool
+    {
+        try {
+            return hash_equals(self::EXPECTED_SEMANTIC_FINGERPRINT, $this->semanticFingerprint($connection));
+        } catch (Throwable) {
+            return false;
+        }
+    }
+
+    /**
+     * Fingerprint the complete v1 semantic database surface from MariaDB
+     * metadata. This intentionally includes object definitions, not just names.
+     *
+     * @throws JsonException
+     */
+    public function semanticFingerprint(Connection $connection): string
+    {
+        if ($connection->getDriverName() !== 'mysql') {
+            throw new \RuntimeException('Telegram delivery semantic attestation requires MariaDB/MySQL metadata.');
+        }
+
+        $databaseName = $connection->getDatabaseName();
+
+        $tables = $connection->table('information_schema.TABLES')
+            ->where('TABLE_SCHEMA', $databaseName)
+            ->whereIn('TABLE_NAME', self::AUTHORITY_TABLES)
+            ->orderBy('TABLE_NAME')
+            ->get(['TABLE_NAME', 'ENGINE', 'TABLE_COLLATION'])
+            ->map(static fn (object $row): array => [
+                (string) $row->TABLE_NAME,
+                (string) $row->ENGINE,
+                (string) $row->TABLE_COLLATION,
+            ])
+            ->values()
+            ->all();
+
+        $columns = $connection->table('information_schema.COLUMNS')
+            ->where('TABLE_SCHEMA', $databaseName)
+            ->whereIn('TABLE_NAME', self::AUTHORITY_TABLES)
+            ->orderBy('TABLE_NAME')
+            ->orderBy('ORDINAL_POSITION')
+            ->get([
+                'TABLE_NAME',
+                'COLUMN_NAME',
+                'ORDINAL_POSITION',
+                'COLUMN_TYPE',
+                'IS_NULLABLE',
+                'COLUMN_DEFAULT',
+                'CHARACTER_SET_NAME',
+                'COLLATION_NAME',
+                'EXTRA',
+            ])
+            ->map(fn (object $row): array => [
+                (string) $row->TABLE_NAME,
+                (string) $row->COLUMN_NAME,
+                (int) $row->ORDINAL_POSITION,
+                $this->normalizeMetadataSql($row->COLUMN_TYPE),
+                (string) $row->IS_NULLABLE,
+                $row->COLUMN_DEFAULT === null ? null : $this->normalizeMetadataSql($row->COLUMN_DEFAULT),
+                $row->CHARACTER_SET_NAME === null ? null : (string) $row->CHARACTER_SET_NAME,
+                $row->COLLATION_NAME === null ? null : (string) $row->COLLATION_NAME,
+                $this->normalizeMetadataSql($row->EXTRA),
+            ])
+            ->values()
+            ->all();
+
+        $checks = $connection->table('information_schema.CHECK_CONSTRAINTS')
+            ->where('CONSTRAINT_SCHEMA', $databaseName)
+            ->whereIn('TABLE_NAME', self::AUTHORITY_TABLES)
+            ->orderBy('TABLE_NAME')
+            ->orderBy('CONSTRAINT_NAME')
+            ->get(['TABLE_NAME', 'CONSTRAINT_NAME', 'CHECK_CLAUSE'])
+            ->map(fn (object $row): array => [
+                (string) $row->TABLE_NAME,
+                (string) $row->CONSTRAINT_NAME,
+                $this->normalizeMetadataSql($row->CHECK_CLAUSE),
+            ])
+            ->values()
+            ->all();
+
+        $indexes = $connection->table('information_schema.STATISTICS')
+            ->where('TABLE_SCHEMA', $databaseName)
+            ->whereIn('TABLE_NAME', self::AUTHORITY_TABLES)
+            ->orderBy('TABLE_NAME')
+            ->orderBy('INDEX_NAME')
+            ->orderBy('SEQ_IN_INDEX')
+            ->get([
+                'TABLE_NAME',
+                'INDEX_NAME',
+                'NON_UNIQUE',
+                'SEQ_IN_INDEX',
+                'COLUMN_NAME',
+                'SUB_PART',
+                'COLLATION',
+                'INDEX_TYPE',
+            ])
+            ->map(static fn (object $row): array => [
+                (string) $row->TABLE_NAME,
+                (string) $row->INDEX_NAME,
+                (int) $row->NON_UNIQUE,
+                (int) $row->SEQ_IN_INDEX,
+                $row->COLUMN_NAME === null ? null : (string) $row->COLUMN_NAME,
+                $row->SUB_PART === null ? null : (int) $row->SUB_PART,
+                $row->COLLATION === null ? null : (string) $row->COLLATION,
+                (string) $row->INDEX_TYPE,
+            ])
+            ->values()
+            ->all();
+
+        $triggers = $connection->table('information_schema.TRIGGERS')
+            ->where('TRIGGER_SCHEMA', $databaseName)
+            ->whereIn('TRIGGER_NAME', self::REQUIRED_TRIGGERS)
+            ->orderBy('TRIGGER_NAME')
+            ->get([
+                'TRIGGER_NAME',
+                'EVENT_MANIPULATION',
+                'EVENT_OBJECT_TABLE',
+                'ACTION_TIMING',
+                'ACTION_STATEMENT',
+                'ACTION_ORDER',
+            ])
+            ->map(fn (object $row): array => [
+                (string) $row->TRIGGER_NAME,
+                (string) $row->EVENT_MANIPULATION,
+                (string) $row->EVENT_OBJECT_TABLE,
+                (string) $row->ACTION_TIMING,
+                $this->normalizeMetadataSql($row->ACTION_STATEMENT),
+                (int) $row->ACTION_ORDER,
+            ])
+            ->values()
+            ->all();
+
+        $contract = [
+            'tables' => $tables,
+            'columns' => $columns,
+            'checks' => $checks,
+            'indexes' => $indexes,
+            'triggers' => $triggers,
+        ];
+
+        return hash('sha256', json_encode(
+            $contract,
+            JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE,
+        ));
     }
 
     public function capabilityTableHasCurrentShape(Connection $connection): bool
@@ -158,10 +292,7 @@ final readonly class TelegramDeliveryDatabaseAuthoritySurfaceV1
         /** @var list<string> $actual */
         $actual = $connection->table('information_schema.TABLE_CONSTRAINTS')
             ->where('CONSTRAINT_SCHEMA', $connection->getDatabaseName())
-            ->whereIn('TABLE_NAME', [
-                'telegram_delivery_authority_capability',
-                'telegram_delivery_operations',
-            ])
+            ->whereIn('TABLE_NAME', self::AUTHORITY_TABLES)
             ->where('CONSTRAINT_TYPE', 'CHECK')
             ->whereIn('CONSTRAINT_NAME', self::REQUIRED_CHECKS)
             ->pluck('CONSTRAINT_NAME')
@@ -203,6 +334,76 @@ final readonly class TelegramDeliveryDatabaseAuthoritySurfaceV1
             ->all();
 
         return $this->sameNames($columns, $actual);
+    }
+
+    private function normalizeMetadataSql(mixed $value): string
+    {
+        $sql = str_replace(["\r\n", "\r"], "\n", (string) $value);
+        $normalized = '';
+        $inString = false;
+        $pendingSpace = false;
+        $length = strlen($sql);
+
+        for ($index = 0; $index < $length; $index++) {
+            $character = $sql[$index];
+
+            if ($inString) {
+                $normalized .= $character;
+                if ($character !== "'") {
+                    continue;
+                }
+
+                if ($index + 1 < $length && $sql[$index + 1] === "'") {
+                    $normalized .= "'";
+                    $index++;
+
+                    continue;
+                }
+
+                $backslashes = 0;
+                for ($previous = $index - 1; $previous >= 0 && $sql[$previous] === '\\'; $previous--) {
+                    $backslashes++;
+                }
+                if ($backslashes % 2 === 0) {
+                    $inString = false;
+                }
+
+                continue;
+            }
+
+            if ($character === "'") {
+                if ($pendingSpace && $normalized !== '' && ! str_ends_with($normalized, ' ')) {
+                    $normalized .= ' ';
+                }
+                $pendingSpace = false;
+                $normalized .= $character;
+                $inString = true;
+
+                continue;
+            }
+
+            if ($character === '`') {
+                continue;
+            }
+
+            if (ctype_space($character)) {
+                $pendingSpace = true;
+
+                continue;
+            }
+
+            if ($pendingSpace && $normalized !== '' && ! str_ends_with($normalized, ' ')) {
+                $normalized .= ' ';
+            }
+            $pendingSpace = false;
+            $normalized .= $character;
+        }
+
+        if ($inString) {
+            throw new \RuntimeException('Telegram delivery database metadata contains an unterminated SQL string literal.');
+        }
+
+        return trim($normalized);
     }
 
     /**

@@ -152,6 +152,15 @@ final readonly class HttpTelegramMutationTransport implements TelegramMutationTr
         if (! is_int($messageId) || $messageId < 1) {
             return $this->uncertain('telegram_success_identity_missing');
         }
+        $chat = is_array($result) ? ($result['chat'] ?? null) : null;
+        $chatId = is_array($chat) ? ($chat['id'] ?? null) : null;
+        if (! is_int($chatId) || $chatId === 0) {
+            return $this->uncertain('telegram_success_recipient_identity_missing');
+        }
+        if ($chatId !== $request->recipientChatId) {
+            return $this->uncertain('telegram_success_recipient_mismatch');
+        }
+
         if ($request->action === TelegramDeliveryAction::Edit && $messageId !== $request->targetMessageId) {
             return $this->uncertain('telegram_edit_target_mismatch');
         }

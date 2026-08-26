@@ -28,7 +28,10 @@ namespace {
 
 namespace Tests\Feature {
     use App\Modules\Telegram\Application\TelegramDeliveryDatabaseAuthoritySurfaceV1;
+    use App\Modules\Telegram\Application\TelegramDeliveryDatabaseCapability;
+    use Illuminate\Database\Connection;
     use Illuminate\Database\DatabaseManager;
+    use Illuminate\Database\QueryException;
     use Illuminate\Foundation\Testing\DatabaseTruncation;
     use Illuminate\Support\Facades\DB;
     use Illuminate\Support\Facades\Schema;
@@ -165,6 +168,57 @@ namespace Tests\Feature {
             self::assertFalse($probeExisted);
             $this->runMigrationUp();
             self::assertSame(9, $this->deliveryTriggerCount());
+        }
+
+        public function test_runtime_authority_requires_transaction_and_pins_schema_against_concurrent_ddl(): void
+        {
+            $capability = new TelegramDeliveryDatabaseCapability;
+            $connection = DB::connection();
+
+            try {
+                $capability->runEffect(
+                    $connection,
+                    'telegram_delivery_effect_v1',
+                    '01J00000000000000000000001',
+                    1,
+                    static fn (): null => null,
+                );
+                self::fail('Telegram delivery database authority must not be armed outside a transaction.');
+            } catch (RuntimeException $exception) {
+                self::assertStringContainsString('must be armed inside a database transaction', $exception->getMessage());
+            }
+
+            $database = app(DatabaseManager::class);
+            $defaultConnection = config('database.default');
+            self::assertIsString($defaultConnection);
+            $connectionConfig = config('database.connections.'.$defaultConnection);
+            self::assertIsArray($connectionConfig);
+            config(['database.connections.telegram_metadata_ddl_contender' => $connectionConfig]);
+            $contender = $database->connection('telegram_metadata_ddl_contender');
+            $contender->statement('SET SESSION lock_wait_timeout = 1');
+
+            try {
+                $connection->transaction(function (Connection $transaction) use ($capability, $contender): void {
+                    $capability->runEffect(
+                        $transaction,
+                        'telegram_delivery_effect_v1',
+                        '01J00000000000000000000001',
+                        1,
+                        function () use ($contender): void {
+                            try {
+                                $contender->unprepared('DROP TRIGGER telegram_delivery_operations_update_guard');
+                                self::fail('Concurrent DDL must not cross the runtime semantic-attestation metadata lock.');
+                            } catch (QueryException $exception) {
+                                self::assertSame(1205, (int) ($exception->errorInfo[1] ?? 0));
+                            }
+                        },
+                    );
+                });
+
+                self::assertSame(9, $this->deliveryTriggerCount());
+            } finally {
+                $database->purge('telegram_metadata_ddl_contender');
+            }
         }
 
         /** @return array{ok: bool, exception: string, message: string} */

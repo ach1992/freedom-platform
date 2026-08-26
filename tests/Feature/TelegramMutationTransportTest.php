@@ -22,8 +22,8 @@ final class TelegramMutationTransportTest extends TestCase
     public function test_send_edit_and_delete_use_one_operation_specific_http_attempt(): void
     {
         Http::fakeSequence()
-            ->push(['ok' => true, 'result' => ['message_id' => 101]], 200)
-            ->push(['ok' => true, 'result' => ['message_id' => 101]], 200)
+            ->push(['ok' => true, 'result' => ['message_id' => 101, 'chat' => ['id' => -1001234567890]]], 200)
+            ->push(['ok' => true, 'result' => ['message_id' => 101, 'chat' => ['id' => -1001234567890]]], 200)
             ->push(['ok' => true, 'result' => true], 200);
 
         $transport = $this->transport();
@@ -62,6 +62,44 @@ final class TelegramMutationTransportTest extends TestCase
         self::assertSame(101, $requests[1][0]['message_id']);
         self::assertStringEndsWith('/deleteMessage', $requests[2][0]->url());
         self::assertSame(101, $requests[2][0]['message_id']);
+    }
+
+    public function test_send_and_edit_success_require_exact_recipient_chat_identity(): void
+    {
+        Http::fakeSequence()
+            ->push(['ok' => true, 'result' => ['message_id' => 301]], 200)
+            ->push(['ok' => true, 'result' => ['message_id' => 302, 'chat' => ['id' => 900002]]], 200)
+            ->push(['ok' => true, 'result' => ['message_id' => 401, 'chat' => ['id' => 900002]]], 200)
+            ->push(['ok' => true, 'result' => ['message_id' => 401, 'chat' => ['id' => 900001]]], 200);
+
+        $transport = $this->transport();
+        $sendRequest = new TelegramMutationRequest(
+            TelegramDeliveryAction::Send,
+            900001,
+            null,
+            NonRestrictedTelegramPresentation::plainText('send identity'),
+        );
+        $editRequest = new TelegramMutationRequest(
+            TelegramDeliveryAction::Edit,
+            900001,
+            401,
+            NonRestrictedTelegramPresentation::plainText('edit identity'),
+        );
+
+        $missingChat = $transport->mutate($sendRequest);
+        $wrongSendChat = $transport->mutate($sendRequest);
+        $wrongEditChat = $transport->mutate($editRequest);
+        $validEdit = $transport->mutate($editRequest);
+
+        self::assertSame(TelegramMutationOutcome::UncertainResult, $missingChat->outcome);
+        self::assertSame('telegram_success_recipient_identity_missing', $missingChat->resultCode);
+        self::assertSame(TelegramMutationOutcome::UncertainResult, $wrongSendChat->outcome);
+        self::assertSame('telegram_success_recipient_mismatch', $wrongSendChat->resultCode);
+        self::assertSame(TelegramMutationOutcome::UncertainResult, $wrongEditChat->outcome);
+        self::assertSame('telegram_success_recipient_mismatch', $wrongEditChat->resultCode);
+        self::assertSame(TelegramMutationOutcome::Success, $validEdit->outcome);
+        self::assertSame(401, $validEdit->messageId);
+        Http::assertSentCount(4);
     }
 
     public function test_retry_after_is_preserved_but_transport_never_retries_it(): void
@@ -133,7 +171,7 @@ final class TelegramMutationTransportTest extends TestCase
                 throw new RuntimeException('simulated timeout');
             }
 
-            return Http::response(['ok' => true, 'result' => ['message_id' => 202]], 200);
+            return Http::response(['ok' => true, 'result' => ['message_id' => 202, 'chat' => ['id' => 900001]]], 200);
         });
 
         $transport = $this->transport();

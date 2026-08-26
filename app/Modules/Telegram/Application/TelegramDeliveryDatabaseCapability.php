@@ -137,6 +137,11 @@ SQL, [
 
     private function assertReady(Connection $connection): void
     {
+        if ($connection->transactionLevel() < 1) {
+            throw new RuntimeException('Telegram delivery database authority must be armed inside a database transaction.');
+        }
+
+        $this->pinAuthorityMetadata($connection);
         try {
             $ready = (new TelegramDeliveryDatabaseAuthoritySurfaceV1)
                 ->isReady($connection, $this->expectedHash());
@@ -147,6 +152,19 @@ SQL, [
         if (! $ready) {
             throw new RuntimeException('Telegram delivery database authority is not fully activated.');
         }
+    }
+
+    private function pinAuthorityMetadata(Connection $connection): void
+    {
+        // One statement opens all three tables on the write session. MariaDB
+        // keeps the transaction's metadata locks until commit/rollback, closing
+        // the gap between semantic attestation and guarded DML without a cache.
+        $connection->selectOne(<<<'SQL'
+SELECT
+    (SELECT 1 FROM outbox_messages LIMIT 1) AS outbox_pin,
+    (SELECT 1 FROM telegram_delivery_authority_capability LIMIT 1) AS capability_pin,
+    (SELECT 1 FROM telegram_delivery_operations LIMIT 1) AS operation_pin
+SQL, [], false);
     }
 
     private function clearOrDisconnect(Connection $connection, bool $armed): void

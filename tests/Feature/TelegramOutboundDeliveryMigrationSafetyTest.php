@@ -412,6 +412,180 @@ SQL);
         self::assertSame(8, $this->deliveryTriggerCount());
     }
 
+    public function test_same_named_weakened_trigger_is_rejected_before_queue_or_effect_transport(): void
+    {
+        $queued = $this->queue()->queue(
+            TelegramDeliveryAction::Send,
+            900210,
+            null,
+            NonRestrictedTelegramPresentation::plainText('semantic trigger fence'),
+            'semantic-trigger-request-179',
+            'correlation-semantic-trigger-179',
+        );
+
+        DB::unprepared('DROP TRIGGER telegram_delivery_operations_update_guard');
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER telegram_delivery_operations_update_guard
+BEFORE UPDATE ON telegram_delivery_operations
+FOR EACH ROW
+BEGIN
+    SET NEW.updated_at = NEW.updated_at;
+END
+SQL);
+
+        $surface = new TelegramDeliveryDatabaseAuthoritySurfaceV1;
+        self::assertTrue($surface->requiredTriggersPresent(DB::connection()));
+        self::assertFalse($surface->semanticsMatchExpected(DB::connection()));
+
+        DB::table('telegram_delivery_operations')
+            ->where('public_id', $queued->publicId)
+            ->update(['recipient_chat_id' => 900999]);
+        $this->assertDatabaseHas('telegram_delivery_operations', [
+            'public_id' => $queued->publicId,
+            'recipient_chat_id' => 900999,
+        ]);
+
+        $this->assertSemanticDriftRejectsQueueAndEffect(
+            $queued->publicId,
+            $queued->outboxEventId,
+            'correlation-semantic-trigger-179',
+            'semantic-trigger',
+        );
+    }
+
+    public function test_same_named_weakened_check_is_rejected_before_queue_or_effect_transport(): void
+    {
+        $queued = $this->queue()->queue(
+            TelegramDeliveryAction::Send,
+            900211,
+            null,
+            NonRestrictedTelegramPresentation::plainText('semantic check fence'),
+            'semantic-check-request-179',
+            'correlation-semantic-check-179',
+        );
+
+        DB::statement('ALTER TABLE telegram_delivery_operations DROP CONSTRAINT telegram_delivery_operations_recipient_chk');
+        DB::statement('ALTER TABLE telegram_delivery_operations ADD CONSTRAINT telegram_delivery_operations_recipient_chk CHECK (1)');
+
+        $surface = new TelegramDeliveryDatabaseAuthoritySurfaceV1;
+        self::assertTrue($surface->requiredChecksPresent(DB::connection()));
+        self::assertFalse($surface->semanticsMatchExpected(DB::connection()));
+
+        $this->assertSemanticDriftRejectsQueueAndEffect(
+            $queued->publicId,
+            $queued->outboxEventId,
+            'correlation-semantic-check-179',
+            'semantic-check',
+        );
+    }
+
+    public function test_same_named_wrong_column_unique_index_is_rejected_before_queue_or_effect_transport(): void
+    {
+        $queued = $this->queue()->queue(
+            TelegramDeliveryAction::Send,
+            900212,
+            null,
+            NonRestrictedTelegramPresentation::plainText('semantic index fence'),
+            'semantic-index-request-179',
+            'correlation-semantic-index-179',
+        );
+
+        DB::statement('ALTER TABLE telegram_delivery_operations DROP INDEX telegram_delivery_operations_request_unique');
+        DB::statement('ALTER TABLE telegram_delivery_operations ADD UNIQUE INDEX telegram_delivery_operations_request_unique (request_fingerprint)');
+
+        $surface = new TelegramDeliveryDatabaseAuthoritySurfaceV1;
+        self::assertTrue($surface->requiredUniqueIndexesPresent(DB::connection()));
+        self::assertFalse($surface->semanticsMatchExpected(DB::connection()));
+
+        $this->assertSemanticDriftRejectsQueueAndEffect(
+            $queued->publicId,
+            $queued->outboxEventId,
+            'correlation-semantic-index-179',
+            'semantic-index',
+        );
+    }
+
+    public function test_same_named_weakened_column_definition_is_rejected_before_queue_or_effect_transport(): void
+    {
+        $queued = $this->queue()->queue(
+            TelegramDeliveryAction::Send,
+            900213,
+            null,
+            NonRestrictedTelegramPresentation::plainText('semantic column fence'),
+            'semantic-column-request-179',
+            'correlation-semantic-column-179',
+        );
+
+        DB::statement('ALTER TABLE telegram_delivery_operations MODIFY result_code VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL');
+
+        $column = DB::table('information_schema.COLUMNS')
+            ->where('TABLE_SCHEMA', DB::getDatabaseName())
+            ->where('TABLE_NAME', 'telegram_delivery_operations')
+            ->where('COLUMN_NAME', 'result_code')
+            ->first(['COLUMN_NAME', 'COLUMN_TYPE']);
+        self::assertNotNull($column);
+        self::assertSame('result_code', (string) $column->COLUMN_NAME);
+        self::assertSame('varchar(128)', (string) $column->COLUMN_TYPE);
+        self::assertFalse((new TelegramDeliveryDatabaseAuthoritySurfaceV1)->semanticsMatchExpected(DB::connection()));
+
+        $this->assertSemanticDriftRejectsQueueAndEffect(
+            $queued->publicId,
+            $queued->outboxEventId,
+            'correlation-semantic-column-179',
+            'semantic-column',
+        );
+    }
+
+    public function test_unactivated_surface_cannot_activate_when_same_named_guard_semantics_drift(): void
+    {
+        $this->dropDeliveryGuards();
+        Schema::dropIfExists('telegram_delivery_operations');
+        Schema::dropIfExists('telegram_delivery_authority_capability');
+
+        $migration = $this->migration();
+        $reflection = new ReflectionClass($migration);
+        $reflection->getMethod('createCapabilityTable')->invoke(
+            $migration,
+            (new TelegramDeliveryDatabaseCapability)->expectedHash(),
+        );
+        foreach ([
+            'installCapabilityGuards',
+            'createOutboxInsertGuard',
+            'createTable',
+            'createOperationInsertGuard',
+            'createOperationUpdateGuard',
+            'createOperationDeleteGuard',
+            'createOutboxUpdateGuard',
+            'createOutboxDeleteGuard',
+        ] as $method) {
+            $reflection->getMethod($method)->invoke($migration);
+        }
+
+        DB::unprepared('DROP TRIGGER telegram_delivery_operations_update_guard');
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER telegram_delivery_operations_update_guard
+BEFORE UPDATE ON telegram_delivery_operations
+FOR EACH ROW
+BEGIN
+    SET NEW.updated_at = NEW.updated_at;
+END
+SQL);
+        self::assertTrue((new TelegramDeliveryDatabaseAuthoritySurfaceV1)->requiredTriggersPresent(DB::connection()));
+
+        try {
+            $reflection->getMethod('activateAuthority')->invoke($migration, DB::connection());
+            self::fail('Semantic schema drift must prevent final Telegram delivery authority activation.');
+        } catch (RuntimeException $exception) {
+            self::assertStringContainsString('schema semantics do not match the immutable v1 contract', $exception->getMessage());
+        }
+
+        $capability = DB::table('telegram_delivery_authority_capability')->where('id', 1)->first();
+        self::assertNotNull($capability);
+        self::assertSame(0, (int) $capability->schema_version);
+        self::assertNull($capability->activated_at);
+        self::assertFalse((new TelegramDeliveryDatabaseAuthoritySurfaceV1)->semanticsMatchExpected(DB::connection()));
+    }
+
     public function test_activated_surface_with_missing_required_check_is_detected_as_drift_not_repaired(): void
     {
         DB::statement('ALTER TABLE telegram_delivery_operations DROP CONSTRAINT telegram_delivery_operations_attempts_chk');
@@ -630,6 +804,52 @@ SQL);
             $forged->correlation_id,
             1,
         ));
+    }
+
+    private function assertSemanticDriftRejectsQueueAndEffect(
+        string $publicId,
+        string $outboxEventId,
+        string $correlationId,
+        string $suffix,
+    ): void {
+        self::assertFalse($this->surfaceReady());
+
+        try {
+            $this->queue()->queue(
+                TelegramDeliveryAction::Send,
+                900280,
+                null,
+                NonRestrictedTelegramPresentation::plainText('semantic drift queue fence'),
+                'semantic-runtime-'.$suffix.'-179',
+                'correlation-semantic-runtime-179',
+            );
+            self::fail('Queue authority must reject a same-named but semantically invalid database surface.');
+        } catch (RuntimeException $exception) {
+            self::assertStringContainsString('database authority is not fully activated', $exception->getMessage());
+        }
+
+        $transport = new MigrationSafetyTransport;
+        $executor = new TelegramDeliveryOperationExecutor(
+            app(DatabaseManager::class),
+            $this->clock,
+            $this->runtime,
+            $transport,
+            new TelegramDeliveryDatabaseCapability,
+        );
+        try {
+            $executor->execute($publicId, $outboxEventId, $correlationId);
+            self::fail('Effect authority must reject a same-named but semantically invalid database surface before transport.');
+        } catch (RuntimeException $exception) {
+            self::assertStringContainsString('database authority is not fully activated', $exception->getMessage());
+        }
+        self::assertSame(0, $transport->attempts);
+
+        try {
+            $this->runMigrationUp();
+            self::fail('An activated semantically invalid authority surface with durable rows must never be silently repaired.');
+        } catch (RuntimeException $exception) {
+            self::assertStringContainsString('cannot repair an incomplete authority surface after durable rows exist', $exception->getMessage());
+        }
     }
 
     private function queue(): TelegramDeliveryQueueService

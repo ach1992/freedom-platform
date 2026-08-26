@@ -257,7 +257,7 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
     {
         Http::fakeSequence()
             ->push(['ok' => false, 'error_code' => 502], 502)
-            ->push(['ok' => true, 'result' => ['message_id' => 703]], 200);
+            ->push(['ok' => true, 'result' => ['message_id' => 703, 'chat' => ['id' => 900015]]], 200);
 
         $created = $this->queue()->queue(
             TelegramDeliveryAction::Send,
@@ -298,6 +298,100 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
             $executor->execute($created->publicId, $created->outboxEventId, 'correlation-http-5xx-179')->state,
         );
         Http::assertSentCount(1);
+    }
+
+    public function test_direct_execute_reentry_on_existing_sending_state_fails_to_uncertainty_without_transport(): void
+    {
+        $transport = new RecordingTelegramMutationTransport([
+            new TelegramMutationResult(TelegramMutationOutcome::Success, 'telegram_success', messageId: 704),
+        ], DB::getFacadeRoot());
+        $created = $this->queue()->queue(
+            TelegramDeliveryAction::Send,
+            900016,
+            null,
+            NonRestrictedTelegramPresentation::plainText('direct reentry fence'),
+            'telegram-direct-reentry-request-179',
+            'correlation-direct-reentry-179',
+        );
+        $executor = $this->executor($transport);
+
+        $this->enterProviderBoundaryWithoutCallingTransport($executor, $created->publicId);
+        $this->assertDatabaseHas('telegram_delivery_operations', [
+            'public_id' => $created->publicId,
+            'state' => 'sending',
+            'provider_attempts' => 1,
+        ]);
+
+        $receipt = $executor->execute($created->publicId, $created->outboxEventId, 'correlation-direct-reentry-179');
+
+        self::assertSame(TelegramDeliveryOperationState::Uncertain, $receipt->state);
+        self::assertSame('telegram_boundary_reentry_uncertain', $receipt->resultCode);
+        self::assertSame(0, $transport->attempts);
+        $this->assertDatabaseHas('telegram_delivery_operations', [
+            'public_id' => $created->publicId,
+            'state' => 'uncertain',
+            'provider_attempts' => 1,
+            'result_code' => 'telegram_boundary_reentry_uncertain',
+        ]);
+    }
+
+    public function test_interleaved_direct_execute_cannot_share_one_sending_boundary_between_invocations(): void
+    {
+        $secondTransport = new RecordingTelegramMutationTransport([
+            new TelegramMutationResult(TelegramMutationOutcome::Success, 'telegram_success', messageId: 706),
+        ], DB::getFacadeRoot());
+        $created = $this->queue()->queue(
+            TelegramDeliveryAction::Send,
+            900017,
+            null,
+            NonRestrictedTelegramPresentation::plainText('concurrent direct reentry fence'),
+            'telegram-concurrent-direct-reentry-request-179',
+            'correlation-concurrent-direct-reentry-179',
+        );
+        $secondExecutor = $this->executor($secondTransport);
+        $secondReceipt = null;
+        $firstTransport = new class(function () use ($secondExecutor, $created, &$secondReceipt): void {
+            $secondReceipt = $secondExecutor->execute(
+                $created->publicId,
+                $created->outboxEventId,
+                'correlation-concurrent-direct-reentry-179',
+            );
+        }) implements TelegramMutationTransport
+        {
+
+            public int $attempts = 0;
+
+            public function __construct(private readonly \Closure $onMutate) {}
+
+            public function mutate(TelegramMutationRequest $request): TelegramMutationResult
+            {
+                unset($request);
+                $this->attempts++;
+                ($this->onMutate)();
+
+                return new TelegramMutationResult(TelegramMutationOutcome::Success, 'telegram_success', messageId: 705);
+            }
+        };
+        $firstExecutor = $this->executor($firstTransport);
+
+        $firstReceipt = $firstExecutor->execute(
+            $created->publicId,
+            $created->outboxEventId,
+            'correlation-concurrent-direct-reentry-179',
+        );
+
+        self::assertNotNull($secondReceipt);
+        self::assertSame(TelegramDeliveryOperationState::Uncertain, $secondReceipt->state);
+        self::assertSame(TelegramDeliveryOperationState::Uncertain, $firstReceipt->state);
+        self::assertSame('telegram_boundary_reentry_uncertain', $firstReceipt->resultCode);
+        self::assertSame(1, $firstTransport->attempts);
+        self::assertSame(0, $secondTransport->attempts);
+        $this->assertDatabaseHas('telegram_delivery_operations', [
+            'public_id' => $created->publicId,
+            'state' => 'uncertain',
+            'provider_attempts' => 1,
+            'result_code' => 'telegram_boundary_reentry_uncertain',
+        ]);
     }
 
     public function test_provider_retry_after_is_quarantined_and_never_retried_early_or_blindly(): void

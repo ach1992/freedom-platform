@@ -65,21 +65,39 @@ final readonly class TelegramDeliveryOperationExecutor
         string $expectedOutboxEventId,
         string $expectedCorrelationId,
     ): TelegramDeliveryOperationReceipt {
-        /** @var DeliveryOperationRow $prepared */
-        $prepared = $this->database->connection()->transaction(function (Connection $connection) use ($publicId, $expectedOutboxEventId, $expectedCorrelationId): object {
+        /** @var array{row: DeliveryOperationRow, boundary_entered: bool} $boundary */
+        $boundary = $this->database->connection()->transaction(function (Connection $connection) use ($publicId, $expectedOutboxEventId, $expectedCorrelationId): array {
             $row = $this->operation($connection, $publicId, true);
             $this->assertExpectedOutboxIdentity($row, $expectedOutboxEventId, $expectedCorrelationId);
             $this->assertRuntimeBot($row);
             $state = $this->state($row);
 
-            if (! in_array($state, [TelegramDeliveryOperationState::Prepared, TelegramDeliveryOperationState::Retryable], true)) {
-                return $row;
+            if ($state === TelegramDeliveryOperationState::Sending) {
+                return [
+                    'row' => $this->transition(
+                        $connection,
+                        $row,
+                        TelegramDeliveryOperationState::Uncertain,
+                        'telegram_boundary_reentry_uncertain',
+                        null,
+                        null,
+                    ),
+                    'boundary_entered' => false,
+                ];
             }
 
-            return $this->enterProviderBoundary($connection, $row);
+            if (! in_array($state, [TelegramDeliveryOperationState::Prepared, TelegramDeliveryOperationState::Retryable], true)) {
+                return ['row' => $row, 'boundary_entered' => false];
+            }
+
+            return [
+                'row' => $this->enterProviderBoundary($connection, $row),
+                'boundary_entered' => true,
+            ];
         }, 3);
 
-        if ($this->state($prepared) !== TelegramDeliveryOperationState::Sending) {
+        $prepared = $boundary['row'];
+        if (! $boundary['boundary_entered']) {
             return $this->receipt($prepared);
         }
 

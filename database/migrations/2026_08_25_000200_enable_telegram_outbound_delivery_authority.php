@@ -252,6 +252,10 @@ SQL);
         DB::statement('ALTER TABLE telegram_delivery_authority_capability DROP CONSTRAINT telegram_delivery_capability_schema_version_chk');
         DB::statement('ALTER TABLE telegram_delivery_authority_capability ADD CONSTRAINT telegram_delivery_capability_schema_version_chk CHECK (`schema_version` IN (0, 1))');
 
+        if (! (new TelegramDeliveryDatabaseAuthoritySurfaceV1)->semanticsMatchExpected($connection)) {
+            throw new RuntimeException('Telegram delivery authority schema semantics do not match the immutable v1 contract.');
+        }
+
         try {
             $connection->statement('SET @app_telegram_delivery_capability = ?', [$this->capabilityValue()]);
             $armed = true;
