@@ -191,18 +191,18 @@ PHP);
         self::assertStringContainsString('Payments mutation of protected table ledger_entries owned by Wallet is forbidden', implode("\n", $result['violations']));
     }
 
-    public function test_opaque_raw_persistence_is_rejected_when_table_ownership_cannot_be_attributed(): void
+    public function test_opaque_raw_persistence_is_rejected_from_presentation(): void
     {
-        $this->write('app/Modules/Orders/Application/UnsafeSql.php', <<<'PHP'
+        $this->write('app/Modules/Orders/Presentation/Http/UnsafeController.php', <<<'PHP'
 <?php
-namespace App\Modules\Orders\Application;
+namespace App\Modules\Orders\Presentation\Http;
 use Illuminate\Support\Facades\DB;
-final class UnsafeSql { public function run(): void { DB::statement('DELETE FROM orders'); } }
+final class UnsafeController { public function run(): void { DB::statement('DELETE FROM orders'); } }
 PHP);
 
         $result = $this->checker()->check();
 
-        self::assertStringContainsString('opaque persistence API statement is forbidden', implode("\n", $result['violations']));
+        self::assertStringContainsString('opaque persistence API statement from Presentation is forbidden', implode("\n", $result['violations']));
     }
 
     /** @param array<string,list<string>> $allowed */
@@ -216,7 +216,6 @@ PHP);
                 '#^worker_heartbeats$#' => 'Operations',
             ],
             'persistence_exceptions' => [],
-            'opaque_persistence_exceptions' => [],
         ]);
     }
 
