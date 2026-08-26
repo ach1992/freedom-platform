@@ -349,16 +349,26 @@ final readonly class TelegramDeliveryDatabaseAuthoritySurfaceV1
     }
 
     /**
-     * V1 deliberately defines no referential constraints on its owned authority
-     * tables. Any FOREIGN KEY therefore changes DML/locking/cascade semantics and
-     * must invalidate readiness even when MariaDB can reuse an existing index.
+     * V1 deliberately defines no referential constraints on or into its owned
+     * authority tables. Any outgoing or incoming FOREIGN KEY therefore changes
+     * DML/locking/cascade semantics and must invalidate readiness even when the
+     * authority table's own static fingerprint remains unchanged.
      */
     private function referentialConstraintsMatchExpected(Connection $connection): bool
     {
-        return ! $connection->table('information_schema.TABLE_CONSTRAINTS')
-            ->where('CONSTRAINT_SCHEMA', $connection->getDatabaseName())
+        $databaseName = $connection->getDatabaseName();
+
+        if ($connection->table('information_schema.TABLE_CONSTRAINTS')
+            ->where('CONSTRAINT_SCHEMA', $databaseName)
             ->whereIn('TABLE_NAME', self::AUTHORITY_TABLES)
             ->where('CONSTRAINT_TYPE', 'FOREIGN KEY')
+            ->exists()) {
+            return false;
+        }
+
+        return ! $connection->table('information_schema.KEY_COLUMN_USAGE')
+            ->where('REFERENCED_TABLE_SCHEMA', $databaseName)
+            ->whereIn('REFERENCED_TABLE_NAME', self::AUTHORITY_TABLES)
             ->exists();
     }
 
