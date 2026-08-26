@@ -201,7 +201,8 @@ final class ArchitectureBoundaryChecker
             $table = is_array($tableParts) && isset($tableParts[0]) ? $tableParts[0] : trim($match[1][0]);
             $offset = $match[0][1];
             $statement = substr($source, $offset, $this->statementLength($source, $offset));
-            if (! $this->isMutationStatement($statement)) {
+            $mutation = $this->mutationMethod($statement);
+            if ($mutation === null) {
                 continue;
             }
 
@@ -228,6 +229,20 @@ final class ArchitectureBoundaryChecker
             }
 
             $owner = $this->durableTableOwner($table);
+            if ($owner === 'SharedAppendOnly') {
+                if (! in_array($mutation, ['insert', 'insertGetId', 'insertOrIgnore'], true)) {
+                    $violations[] = sprintf(
+                        '%s:%d durable table %s is append-only; mutation %s is forbidden.',
+                        $relativePath,
+                        $line,
+                        $table,
+                        $mutation,
+                    );
+                }
+
+                continue;
+            }
+
             $sourceOwner = $this->sourcePersistenceOwner($relativePath);
             if ($owner === null || $sourceOwner === null || $owner === $sourceOwner || $persistenceException) {
                 continue;
@@ -257,7 +272,7 @@ final class ArchitectureBoundaryChecker
         foreach ($matches as $match) {
             $offset = $match[0][1];
             $statement = substr($source, $offset, $this->statementLength($source, $offset));
-            if (! $this->isMutationStatement($statement)) {
+            if ($this->mutationMethod($statement) === null) {
                 continue;
             }
 
@@ -403,12 +418,17 @@ final class ArchitectureBoundaryChecker
         return null;
     }
 
-    private function isMutationStatement(string $statement): bool
+    private function mutationMethod(string $statement): ?string
     {
-        return preg_match(
+        if (preg_match(
             '/->\s*(insert|insertGetId|insertOrIgnore|update|delete|upsert|updateOrInsert|increment|decrement|truncate)\s*\(/',
             $statement,
-        ) === 1;
+            $match,
+        ) !== 1) {
+            return null;
+        }
+
+        return $match[1];
     }
 
     /**
