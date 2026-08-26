@@ -26,12 +26,12 @@ final class DurableTableOwnershipChecker
         }
 
         $violations = [];
-        foreach ($discovered as $table => $location) {
+        foreach ($discovered as $table => $locations) {
             $owner = $owners[$table] ?? null;
             if (! is_string($owner) || trim($owner) === '') {
                 $violations[] = sprintf(
                     '%s durable table %s has no explicit architecture owner/classification.',
-                    $location,
+                    $locations[0],
                     $table,
                 );
             }
@@ -58,7 +58,7 @@ final class DurableTableOwnershipChecker
         return $violations;
     }
 
-    /** @return array<string,string> table => source:line */
+    /** @return array<string,list<string>> table => creation declaration locations */
     private function discoveredTables(): array
     {
         $directory = $this->root.'/database/migrations';
@@ -106,19 +106,14 @@ final class DurableTableOwnershipChecker
         return $tables;
     }
 
-    /** @param array<string,string> $tables */
+    /** @param array<string,list<string>> $tables */
     private function record(array &$tables, string $table, string $path, string $source, int $offset): void
     {
         $location = $path.':'.(substr_count(substr($source, 0, $offset), "\n") + 1);
-        if (isset($tables[$table]) && $tables[$table] !== $location) {
-            throw new RuntimeException(sprintf(
-                'Durable table %s is created in more than one migration location (%s and %s).',
-                $table,
-                $tables[$table],
-                $location,
-            ));
-        }
+        $tables[$table] ??= [];
 
-        $tables[$table] = $location;
+        if (! in_array($location, $tables[$table], true)) {
+            $tables[$table][] = $location;
+        }
     }
 }
