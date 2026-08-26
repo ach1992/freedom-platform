@@ -11,11 +11,15 @@ use Throwable;
 /**
  * Immutable v1 schema contract shared by migration activation and runtime.
  *
- * The semantic fingerprint is computed from MariaDB's own metadata for the
- * security-relevant tables, constraints, indexes, and triggers. The migration
- * cannot activate unless the installed surface matches this exact v1 digest,
- * and runtime repeats the same attestation before arming queue/effect authority.
- * Any semantic DDL change therefore requires an explicit new versioned surface.
+ * The static semantic fingerprint covers the deployment-portable DDL surface
+ * from MariaDB metadata. Trigger creation/execution context is attested
+ * separately against the current trusted connection because account names and
+ * session character settings are environment-specific but still affect trigger
+ * execution/security semantics.
+ *
+ * The migration cannot activate unless both surfaces match, and runtime repeats
+ * the same attestation before arming queue/effect authority. Any semantic DDL
+ * change or trigger execution-context drift therefore fails closed.
  */
 final readonly class TelegramDeliveryDatabaseAuthoritySurfaceV1
 {
@@ -140,15 +144,17 @@ final readonly class TelegramDeliveryDatabaseAuthoritySurfaceV1
     {
         try {
             return hash_equals(self::EXPECTED_SEMANTIC_FINGERPRINT, $this->semanticFingerprint($connection))
-                && $this->outboxGuardsAreTerminal($connection);
+                && $this->outboxGuardsAreTerminal($connection)
+                && $this->triggerExecutionContextMatchesCurrentConnection($connection);
         } catch (Throwable) {
             return false;
         }
     }
 
     /**
-     * Fingerprint the complete v1 semantic database surface from MariaDB
-     * metadata. This intentionally includes object definitions, not just names.
+     * Fingerprint the complete deployment-portable v1 DDL surface from MariaDB
+     * metadata. Trigger creation/execution context is checked separately because
+     * its exact account and connection values are environment-specific.
      *
      * @throws JsonException
      */
@@ -387,6 +393,75 @@ final readonly class TelegramDeliveryDatabaseAuthoritySurfaceV1
         }
 
         return true;
+    }
+
+    private function triggerExecutionContextMatchesCurrentConnection(Connection $connection): bool
+    {
+        $session = $connection->selectOne(<<<'SQL'
+SELECT
+    @@SESSION.sql_mode AS sql_mode,
+    CURRENT_USER() AS definer,
+    @@SESSION.character_set_client AS character_set_client,
+    @@SESSION.collation_connection AS collation_connection
+SQL, [], false);
+        $schema = $connection->table('information_schema.SCHEMATA')
+            ->where('SCHEMA_NAME', $connection->getDatabaseName())
+            ->first(['DEFAULT_COLLATION_NAME']);
+
+        if ($session === null || $schema === null) {
+            return false;
+        }
+
+        $expectedSqlMode = $this->normalizeSqlMode($session->sql_mode ?? '');
+        $expectedDefiner = (string) ($session->definer ?? '');
+        $expectedCharacterSet = (string) ($session->character_set_client ?? '');
+        $expectedConnectionCollation = (string) ($session->collation_connection ?? '');
+        $expectedDatabaseCollation = (string) ($schema->DEFAULT_COLLATION_NAME ?? '');
+
+        if ($expectedDefiner === ''
+            || $expectedCharacterSet === ''
+            || $expectedConnectionCollation === ''
+            || $expectedDatabaseCollation === '') {
+            return false;
+        }
+
+        $triggers = $connection->table('information_schema.TRIGGERS')
+            ->where('TRIGGER_SCHEMA', $connection->getDatabaseName())
+            ->whereIn('EVENT_OBJECT_TABLE', self::TRIGGER_SURFACE_TABLES)
+            ->get([
+                'SQL_MODE',
+                'DEFINER',
+                'CHARACTER_SET_CLIENT',
+                'COLLATION_CONNECTION',
+                'DATABASE_COLLATION',
+            ]);
+
+        if ($triggers->isEmpty()) {
+            return false;
+        }
+
+        foreach ($triggers as $trigger) {
+            if ($this->normalizeSqlMode($trigger->SQL_MODE ?? '') !== $expectedSqlMode
+                || (string) ($trigger->DEFINER ?? '') !== $expectedDefiner
+                || (string) ($trigger->CHARACTER_SET_CLIENT ?? '') !== $expectedCharacterSet
+                || (string) ($trigger->COLLATION_CONNECTION ?? '') !== $expectedConnectionCollation
+                || (string) ($trigger->DATABASE_COLLATION ?? '') !== $expectedDatabaseCollation) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function normalizeSqlMode(mixed $value): string
+    {
+        $modes = array_values(array_filter(
+            array_map(static fn (string $mode): string => trim($mode), explode(',', (string) $value)),
+            static fn (string $mode): bool => $mode !== '',
+        ));
+        sort($modes, SORT_STRING);
+
+        return implode(',', $modes);
     }
 
     private function normalizeMetadataSql(mixed $value): string
