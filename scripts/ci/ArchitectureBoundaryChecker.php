@@ -640,15 +640,19 @@ final class ArchitectureBoundaryChecker
         }
 
         if (preg_match('/^SET\b/i', $sql) === 1) {
-            return 'session';
+            return preg_match('/;\s*\S/s', $sql) === 1 ? 'unknown' : 'session';
         }
 
         if (preg_match('/^(INSERT|UPDATE|DELETE|REPLACE|TRUNCATE|WITH|CALL|LOAD)\b/i', $sql) === 1) {
             return 'mutation';
         }
 
-        if (preg_match('/^(CREATE|DROP)\s+TRIGGER\b/i', $sql) === 1) {
+        if (preg_match('/^DROP\s+TRIGGER\s+(?:IF\s+EXISTS\s+)?[A-Za-z0-9_]+\s*;?\s*$/i', $sql) === 1) {
             return 'trigger_ddl';
+        }
+
+        if (preg_match('/^CREATE\s+TRIGGER\b/is', $sql) === 1) {
+            return preg_match('/\bEND\s*;?\s*$/is', $sql) === 1 ? 'trigger_ddl' : 'ddl';
         }
 
         if (preg_match('/^(CREATE|ALTER|DROP|RENAME)\b/i', $sql) === 1) {
