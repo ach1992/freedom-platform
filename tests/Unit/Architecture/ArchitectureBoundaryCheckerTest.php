@@ -55,6 +55,25 @@ PHP);
         self::assertStringContainsString('app/Modules/Orders/Application/Checkout.php:3 undeclared module dependency Orders -> Payments', implode("\n", $result['violations']));
     }
 
+    public function test_fully_qualified_cross_module_dependency_cannot_bypass_the_checker(): void
+    {
+        $this->write('app/Modules/Orders/Application/Checkout.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+final class Checkout
+{
+    public function payment(): \App\Modules\Payments\Application\PaymentService
+    {
+        throw new \RuntimeException('not executed');
+    }
+}
+PHP);
+
+        $result = $this->checker()->check();
+
+        self::assertStringContainsString('undeclared module dependency Orders -> Payments', implode("\n", $result['violations']));
+    }
+
     public function test_cross_module_infrastructure_import_is_rejected(): void
     {
         $this->write('app/Modules/Orders/Application/Checkout.php', <<<'PHP'
@@ -66,6 +85,19 @@ PHP);
         $result = $this->checker()->check();
 
         self::assertStringContainsString('cross-module import of Payments\Infrastructure is forbidden', implode("\n", $result['violations']));
+    }
+
+    public function test_application_cannot_depend_on_its_own_infrastructure_layer(): void
+    {
+        $this->write('app/Modules/Orders/Application/Checkout.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+use App\Modules\Orders\Infrastructure\OrderRepository;
+PHP);
+
+        $result = $this->checker()->check();
+
+        self::assertStringContainsString('Application may not depend on its own Infrastructure layer', implode("\n", $result['violations']));
     }
 
     public function test_domain_framework_and_other_layer_imports_are_rejected(): void
@@ -80,21 +112,30 @@ PHP);
         $result = $this->checker()->check();
         $violations = implode("\n", $result['violations']);
 
-        self::assertStringContainsString('Domain may not import framework infrastructure', $violations);
+        self::assertStringContainsString('Domain may not reference framework infrastructure', $violations);
         self::assertStringContainsString('Domain may depend only on its own Domain', $violations);
     }
 
-    public function test_shared_code_cannot_import_feature_modules(): void
+    public function test_shared_code_cannot_reference_feature_modules_with_or_without_imports(): void
     {
         $this->write('app/Shared/Application/SharedService.php', <<<'PHP'
 <?php
 namespace App\Shared\Application;
 use App\Modules\Orders\Application\OrderService;
+final class SharedService
+{
+    public function second(): \App\Modules\Payments\Application\PaymentService
+    {
+        throw new \RuntimeException('not executed');
+    }
+}
 PHP);
 
         $result = $this->checker()->check();
+        $violations = implode("\n", $result['violations']);
 
-        self::assertStringContainsString('Shared code must not depend on a feature module', implode("\n", $result['violations']));
+        self::assertStringContainsString('Shared code must not depend on a feature module', $violations);
+        self::assertGreaterThanOrEqual(2, substr_count($violations, 'Shared code must not depend on a feature module'));
     }
 
     public function test_module_cycles_are_rejected(): void
@@ -150,6 +191,20 @@ PHP);
         self::assertStringContainsString('Payments mutation of protected table ledger_entries owned by Wallet is forbidden', implode("\n", $result['violations']));
     }
 
+    public function test_opaque_raw_persistence_is_rejected_when_table_ownership_cannot_be_attributed(): void
+    {
+        $this->write('app/Modules/Orders/Application/UnsafeSql.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+use Illuminate\Support\Facades\DB;
+final class UnsafeSql { public function run(): void { DB::statement('DELETE FROM orders'); } }
+PHP);
+
+        $result = $this->checker()->check();
+
+        self::assertStringContainsString('opaque persistence API statement is forbidden', implode("\n", $result['violations']));
+    }
+
     /** @param array<string,list<string>> $allowed */
     private function checker(array $allowed = []): ArchitectureBoundaryChecker
     {
@@ -161,6 +216,7 @@ PHP);
                 '#^worker_heartbeats$#' => 'Operations',
             ],
             'persistence_exceptions' => [],
+            'opaque_persistence_exceptions' => [],
         ]);
     }
 
