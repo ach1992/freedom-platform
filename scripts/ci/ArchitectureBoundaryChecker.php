@@ -552,26 +552,31 @@ final class ArchitectureBoundaryChecker
                 $result .= $char;
                 if ($escaped) {
                     $escaped = false;
+
                     continue;
                 }
                 if ($char === '\\') {
                     $escaped = true;
+
                     continue;
                 }
                 if ($char === $quote) {
                     $quote = null;
                 }
+
                 continue;
             }
 
             if ($char === '\'' || $char === '"') {
                 $quote = $char;
                 $result .= $char;
+
                 continue;
             }
             if ($char === '(' || $char === '[' || $char === '{') {
                 $depth++;
                 $result .= $char;
+
                 continue;
             }
             if ($char === ')' || $char === ']' || $char === '}') {
@@ -580,6 +585,7 @@ final class ArchitectureBoundaryChecker
                 }
                 $depth--;
                 $result .= $char;
+
                 continue;
             }
             if ($char === ',' && $depth === 0) {
@@ -746,11 +752,13 @@ final class ArchitectureBoundaryChecker
                 || preg_match('#^(?:app/(?:Modules|Shared)/|routes/).+\.php\|[A-Za-z0-9_]+$#', $exception) !== 1
             ) {
                 $violations[] = 'persistence_exceptions contains an invalid non-exact entry.';
+
                 continue;
             }
 
             if (isset($seen[$exception])) {
                 $violations[] = 'persistence_exceptions contains duplicate entry '.$exception.'.';
+
                 continue;
             }
             $seen[$exception] = true;
