@@ -40,6 +40,7 @@ final class DurableTableOwnershipChecker
         foreach ($owners as $table => $owner) {
             if (! is_string($table) || ! is_string($owner) || trim($owner) === '') {
                 $violations[] = 'durable_table_owners contains an invalid table or owner entry.';
+
                 continue;
             }
 
