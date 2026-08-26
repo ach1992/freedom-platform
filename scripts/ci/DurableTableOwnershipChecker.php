@@ -125,8 +125,8 @@ final class DurableTableOwnershipChecker
     }
 
     /**
-     * @param array<string,list<string>> $tables
-     * @param list<string> $violations
+     * @param  array<string,list<string>>  $tables
+     * @param  list<string>  $violations
      */
     private function resolveHelperCreatedTables(array &$tables, array &$violations, string $path, string $source): void
     {
@@ -148,6 +148,7 @@ final class DurableTableOwnershipChecker
                     $this->lineNumber($source, $offset),
                     '$'.$variable,
                 );
+
                 continue;
             }
 
@@ -160,6 +161,7 @@ final class DurableTableOwnershipChecker
                     $methodName,
                     '$'.$variable,
                 );
+
                 continue;
             }
 
@@ -172,6 +174,7 @@ final class DurableTableOwnershipChecker
                     $this->lineNumber($source, $offset),
                     $methodName,
                 );
+
                 continue;
             }
 
