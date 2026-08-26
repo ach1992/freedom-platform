@@ -47,6 +47,8 @@ MariaDB is the final authority for:
 
 Redis locks may reduce duplicate work but never replace database constraints or transactions.
 
+Every migration-created durable table has one exact feature owner or reviewed infrastructure classification in `scripts/ci/architecture-boundaries.php`; CI verifies that the map is complete and not stale, and uses the same map to reject cross-owner mutations. Dynamic table mutations and Eloquent persistence under `app/Modules` or `app/Shared` are rejected because ownership cannot be attributed statically. Cross-cutting `audit_logs` is classified as a shared append-only sink: Application code may append records, but update/delete-style mutations remain forbidden.
+
 ## Pricing transaction rules
 
 - Quote/agent-pricing commands that X-lock the shared pricing roots acquire the subject `users` row before `plan_offerings`, then `agent_profiles`, then the stable `agent_pricing_profiles` root; immutable agent-pricing profile/rule versions are selected only after that stable root barrier, and nested callers already holding the subject/offering must not acquire the shared pricing-profile root before that same offering.
