@@ -10,6 +10,9 @@ use RuntimeException;
 
 final class ArchitectureBoundaryChecker
 {
+    /** @var array<string,true> */
+    private array $usedPersistenceExceptions = [];
+
     /** @param array<string,mixed> $config */
     public function __construct(
         private readonly string $root,
@@ -21,26 +24,29 @@ final class ArchitectureBoundaryChecker
     {
         $violations = [];
         $edges = [];
+        $this->usedPersistenceExceptions = [];
 
         foreach ($this->phpFiles('app/Modules') as $relativePath => $source) {
             $this->scanModuleFile($relativePath, $source, $violations, $edges);
             $this->scanPersistence($relativePath, $source, $violations);
-            $this->scanOpaquePresentationPersistence($relativePath, $source, $violations);
+            $this->scanOpaquePersistence($relativePath, $source, $violations);
         }
 
         foreach ($this->phpFiles('app/Shared') as $relativePath => $source) {
             $this->scanSharedFile($relativePath, $source, $violations);
             $this->scanPersistence($relativePath, $source, $violations);
+            $this->scanOpaquePersistence($relativePath, $source, $violations);
         }
 
         foreach ($this->phpFiles('routes') as $relativePath => $source) {
             $this->scanPersistence($relativePath, $source, $violations);
-            $this->scanOpaquePresentationPersistence($relativePath, $source, $violations);
+            $this->scanOpaquePersistence($relativePath, $source, $violations);
         }
 
         $edges = array_values(array_unique($edges));
         sort($edges, SORT_STRING);
         array_push($violations, ...$this->cycleViolations($edges));
+        array_push($violations, ...$this->persistenceExceptionViolations());
 
         $violations = array_values(array_unique($violations));
         sort($violations, SORT_STRING);
@@ -187,6 +193,7 @@ final class ArchitectureBoundaryChecker
     /** @param list<string> $violations */
     private function scanPersistence(string $relativePath, string $source, array &$violations): void
     {
+        $this->scanDeferredTableMutations($relativePath, $source, $violations);
         $this->scanDynamicTableMutations($relativePath, $source, $violations);
 
         preg_match_all(
@@ -206,57 +213,70 @@ final class ArchitectureBoundaryChecker
                 continue;
             }
 
-            $line = $this->lineNumber($source, $offset);
-            $sourceLayer = null;
-            if (preg_match('#^app/Modules/[^/]+/([^/]+)/#', $relativePath, $pathParts) === 1) {
-                $sourceLayer = $pathParts[1];
-            }
+            $this->recordTableMutationViolation($relativePath, $source, $offset, $table, $mutation, $violations);
+        }
+    }
 
-            $exceptionKey = $relativePath.'|'.$table;
-            $exceptions = $this->config['persistence_exceptions'] ?? [];
-            $persistenceException = is_array($exceptions) && in_array($exceptionKey, $exceptions, true);
+    /** @param list<string> $violations */
+    private function recordTableMutationViolation(
+        string $relativePath,
+        string $source,
+        int $offset,
+        string $table,
+        string $mutation,
+        array &$violations,
+    ): void {
+        $line = $this->lineNumber($source, $offset);
+        $sourceLayer = $this->sourceLayer($relativePath);
 
-            if ((str_starts_with($relativePath, 'routes/') || $sourceLayer === 'Presentation') && ! $persistenceException) {
-                $violations[] = sprintf(
-                    '%s:%d direct persistence mutation of %s from %s is forbidden; call an Application boundary.',
-                    $relativePath,
-                    $line,
-                    $table,
-                    str_starts_with($relativePath, 'routes/') ? 'routes' : 'Presentation',
-                );
-
-                continue;
-            }
-
-            $owner = $this->durableTableOwner($table);
-            if ($owner === 'SharedAppendOnly') {
-                if (! in_array($mutation, ['insert', 'insertGetId', 'insertOrIgnore'], true)) {
-                    $violations[] = sprintf(
-                        '%s:%d durable table %s is append-only; mutation %s is forbidden.',
-                        $relativePath,
-                        $line,
-                        $table,
-                        $mutation,
-                    );
-                }
-
-                continue;
-            }
-
-            $sourceOwner = $this->sourcePersistenceOwner($relativePath);
-            if ($owner === null || $sourceOwner === null || $owner === $sourceOwner || $persistenceException) {
-                continue;
+        if (str_starts_with($relativePath, 'routes/') || $sourceLayer === 'Presentation') {
+            if ($this->consumePersistenceException($relativePath, $table)) {
+                return;
             }
 
             $violations[] = sprintf(
-                '%s:%d %s mutation of durable table %s owned by %s is forbidden.',
+                '%s:%d direct persistence mutation of %s from %s is forbidden; call an Application boundary.',
                 $relativePath,
                 $line,
-                $sourceOwner,
                 $table,
-                $owner,
+                str_starts_with($relativePath, 'routes/') ? 'routes' : 'Presentation',
             );
+
+            return;
         }
+
+        $owner = $this->durableTableOwner($table);
+        if ($owner === 'SharedAppendOnly') {
+            if (! in_array($mutation, ['insert', 'insertGetId', 'insertOrIgnore'], true)) {
+                $violations[] = sprintf(
+                    '%s:%d durable table %s is append-only; mutation %s is forbidden.',
+                    $relativePath,
+                    $line,
+                    $table,
+                    $mutation,
+                );
+            }
+
+            return;
+        }
+
+        $sourceOwner = $this->sourcePersistenceOwner($relativePath);
+        if ($owner === null || $sourceOwner === null || $owner === $sourceOwner) {
+            return;
+        }
+
+        if ($this->consumePersistenceException($relativePath, $table)) {
+            return;
+        }
+
+        $violations[] = sprintf(
+            '%s:%d %s mutation of durable table %s owned by %s is forbidden.',
+            $relativePath,
+            $line,
+            $sourceOwner,
+            $table,
+            $owner,
+        );
     }
 
     /** @param list<string> $violations */
@@ -272,29 +292,196 @@ final class ArchitectureBoundaryChecker
         foreach ($matches as $match) {
             $offset = $match[0][1];
             $statement = substr($source, $offset, $this->statementLength($source, $offset));
-            if ($this->mutationMethod($statement) === null) {
+            $mutation = $this->mutationMethod($statement);
+            if ($mutation === null) {
+                continue;
+            }
+
+            $tables = $this->boundedDynamicTables($source, $offset, trim($match[1][0]));
+            if ($tables !== null && $this->boundedTablesAreAllowed($relativePath, $tables, $mutation)) {
                 continue;
             }
 
             $violations[] = sprintf(
-                '%s:%d dynamic table mutation is forbidden because durable-table ownership cannot be attributed; use a literal reviewed table boundary.',
+                '%s:%d dynamic table mutation is forbidden because durable-table ownership cannot be attributed; use a literal or statically bounded reviewed table boundary.',
                 $relativePath,
                 $this->lineNumber($source, $offset),
             );
         }
     }
 
-    /** @param list<string> $violations */
-    private function scanOpaquePresentationPersistence(string $relativePath, string $source, array &$violations): void
+    /** @return list<string>|null */
+    private function boundedDynamicTables(string $source, int $offset, string $expression): ?array
     {
-        $sourceLayer = null;
-        if (preg_match('#^app/Modules/[^/]+/([^/]+)/#', $relativePath, $pathParts) === 1) {
-            $sourceLayer = $pathParts[1];
+        if (preg_match('/^\$([A-Za-z_][A-Za-z0-9_]*)$/', $expression, $variableMatch) !== 1) {
+            return null;
         }
 
-        if (! str_starts_with($relativePath, 'routes/') && $sourceLayer !== 'Presentation') {
-            return;
+        $variable = $variableMatch[1];
+        $prefix = substr($source, 0, $offset);
+        $pattern = '/foreach\s*\(\s*\[((?:\s*[\'\"][A-Za-z0-9_]+[\'\"]\s*,?)+)\]\s+as\s+\$'.preg_quote($variable, '/').'\s*\)/s';
+        preg_match_all($pattern, $prefix, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE);
+        if ($matches === []) {
+            return null;
         }
+
+        $match = $matches[array_key_last($matches)];
+        $fullMatch = $match[0][0];
+        $fullOffset = $match[0][1];
+        $lastAs = strrpos($prefix, 'as $'.$variable);
+        if ($lastAs === false || $lastAs < $fullOffset || $lastAs > $fullOffset + strlen($fullMatch)) {
+            return null;
+        }
+
+        $between = substr($prefix, $fullOffset + strlen($fullMatch));
+        if (preg_match('/\$'.preg_quote($variable, '/').'\s*=/', $between) === 1) {
+            return null;
+        }
+
+        preg_match_all('/[\'\"]([A-Za-z0-9_]+)[\'\"]/', $match[1][0], $tableMatches);
+        $tables = array_values(array_unique($tableMatches[1] ?? []));
+
+        return $tables === [] ? null : $tables;
+    }
+
+    /** @param list<string> $tables */
+    private function boundedTablesAreAllowed(string $relativePath, array $tables, string $mutation): bool
+    {
+        $sourceLayer = $this->sourceLayer($relativePath);
+        if (str_starts_with($relativePath, 'routes/') || $sourceLayer === 'Presentation') {
+            return false;
+        }
+
+        $sourceOwner = $this->sourcePersistenceOwner($relativePath);
+        if ($sourceOwner === null) {
+            return false;
+        }
+
+        foreach ($tables as $table) {
+            $owner = $this->durableTableOwner($table);
+            if ($owner === 'SharedAppendOnly') {
+                if (! in_array($mutation, ['insert', 'insertGetId', 'insertOrIgnore'], true)) {
+                    return false;
+                }
+
+                continue;
+            }
+
+            if ($owner === $sourceOwner) {
+                continue;
+            }
+
+            if ($owner !== null && $this->consumePersistenceException($relativePath, $table)) {
+                continue;
+            }
+
+            return false;
+        }
+
+        return true;
+    }
+
+    /** @param list<string> $violations */
+    private function scanDeferredTableMutations(string $relativePath, string $source, array &$violations): void
+    {
+        preg_match_all(
+            '/(\$[A-Za-z_][A-Za-z0-9_]*)\s*=\s*[^;]*?(?:DB::|->)table\(\s*[^)]*\)[^;]*;/',
+            $source,
+            $matches,
+            PREG_SET_ORDER | PREG_OFFSET_CAPTURE,
+        );
+
+        foreach ($matches as $match) {
+            $variable = $match[1][0];
+            $assignmentOffset = $match[0][1];
+            $afterAssignment = $assignmentOffset + strlen($match[0][0]);
+            $functionEnd = $this->enclosingFunctionEnd($source, $assignmentOffset) ?? strlen($source);
+            if ($functionEnd <= $afterAssignment) {
+                continue;
+            }
+
+            $segment = substr($source, $afterAssignment, $functionEnd - $afterAssignment);
+            $reassignmentPattern = '/'.preg_quote($variable, '/').'\s*=/';
+            if (preg_match($reassignmentPattern, $segment, $reassignment, PREG_OFFSET_CAPTURE) === 1) {
+                $segment = substr($segment, 0, $reassignment[0][1]);
+            }
+
+            if (preg_match(
+                '/'.preg_quote($variable, '/').'\s*->\s*(insert|insertGetId|insertOrIgnore|update|delete|upsert|updateOrInsert|increment|decrement|truncate)\s*\(/',
+                $segment,
+                $mutationMatch,
+            ) !== 1) {
+                continue;
+            }
+
+            $violations[] = sprintf(
+                '%s:%d deferred table mutation through %s is forbidden because the table/owner boundary is detached from the mutation; keep the reviewed table chain in one attributable statement.',
+                $relativePath,
+                $this->lineNumber($source, $assignmentOffset),
+                $variable,
+            );
+        }
+    }
+
+    /** @return list<array{start:int,end:int}> */
+    private function functionRanges(string $source): array
+    {
+        $tokens = token_get_all($source);
+        $ranges = [];
+        $offset = 0;
+        $depth = 0;
+        $pendingFunction = false;
+        $functions = [];
+
+        foreach ($tokens as $token) {
+            $text = is_array($token) ? $token[1] : $token;
+
+            if (is_array($token) && $token[0] === T_FUNCTION) {
+                $pendingFunction = true;
+            } elseif ($token === '{') {
+                $depth++;
+                if ($pendingFunction) {
+                    $functions[] = ['depth' => $depth, 'start' => $offset];
+                    $pendingFunction = false;
+                }
+            } elseif ($token === '}') {
+                $last = array_key_last($functions);
+                if ($last !== null && $functions[$last]['depth'] === $depth) {
+                    $function = array_pop($functions);
+                    if (! is_array($function)) {
+                        throw new RuntimeException('Architecture function range stack is inconsistent.');
+                    }
+                    $ranges[] = ['start' => $function['start'], 'end' => $offset];
+                }
+                $depth--;
+            } elseif ($pendingFunction && $token === ';') {
+                $pendingFunction = false;
+            }
+
+            $offset += strlen($text);
+        }
+
+        return $ranges;
+    }
+
+    private function enclosingFunctionEnd(string $source, int $offset): ?int
+    {
+        $bestStart = -1;
+        $bestEnd = null;
+        foreach ($this->functionRanges($source) as $range) {
+            if ($range['start'] <= $offset && $offset <= $range['end'] && $range['start'] > $bestStart) {
+                $bestStart = $range['start'];
+                $bestEnd = $range['end'];
+            }
+        }
+
+        return $bestEnd;
+    }
+
+    /** @param list<string> $violations */
+    private function scanOpaquePersistence(string $relativePath, string $source, array &$violations): void
+    {
+        $presentation = str_starts_with($relativePath, 'routes/') || $this->sourceLayer($relativePath) === 'Presentation';
 
         $patterns = [
             '/\bDB::\s*(statement|unprepared|insert|update|delete|affectingStatement)\s*\(/',
@@ -304,18 +491,131 @@ final class ArchitectureBoundaryChecker
         foreach ($patterns as $pattern) {
             preg_match_all($pattern, $source, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE);
             foreach ($matches as $match) {
-                $line = $this->lineNumber($source, $match[0][1]);
                 $method = $match[1][0] ?? 'raw';
+                $offset = $match[0][1];
+                $line = $this->lineNumber($source, $offset);
+
+                if ($presentation) {
+                    $violations[] = sprintf(
+                        '%s:%d opaque persistence API %s from %s is forbidden; call an Application boundary.',
+                        $relativePath,
+                        $line,
+                        $method,
+                        str_starts_with($relativePath, 'routes/') ? 'routes' : 'Presentation',
+                    );
+
+                    continue;
+                }
+
+                if (in_array($method, ['insert', 'update', 'delete', 'affectingStatement'], true)) {
+                    $violations[] = sprintf(
+                        '%s:%d opaque raw mutation API %s is forbidden because durable-table ownership cannot be attributed.',
+                        $relativePath,
+                        $line,
+                        $method,
+                    );
+
+                    continue;
+                }
+
+                $openParen = strpos($source, '(', $offset);
+                if ($openParen === false) {
+                    continue;
+                }
+                $argument = $this->firstCallArgument($source, $openParen + 1);
+                $classification = $this->classifyRawStatement($argument);
+                if ($classification === 'safe') {
+                    continue;
+                }
 
                 $violations[] = sprintf(
-                    '%s:%d opaque persistence API %s from %s is forbidden; call an Application boundary.',
+                    '%s:%d opaque raw SQL %s is forbidden because durable-table ownership cannot be attributed.',
                     $relativePath,
                     $line,
-                    $method,
-                    str_starts_with($relativePath, 'routes/') ? 'routes' : 'Presentation',
+                    $classification === 'mutation' ? 'mutation' : 'with a non-literal/unsupported statement',
                 );
             }
         }
+    }
+
+    private function firstCallArgument(string $source, int $offset): string
+    {
+        $length = strlen($source);
+        $quote = null;
+        $escaped = false;
+        $depth = 0;
+        $result = '';
+
+        for ($index = $offset; $index < $length; $index++) {
+            $char = $source[$index];
+            if ($quote !== null) {
+                $result .= $char;
+                if ($escaped) {
+                    $escaped = false;
+                    continue;
+                }
+                if ($char === '\\') {
+                    $escaped = true;
+                    continue;
+                }
+                if ($char === $quote) {
+                    $quote = null;
+                }
+                continue;
+            }
+
+            if ($char === '\'' || $char === '"') {
+                $quote = $char;
+                $result .= $char;
+                continue;
+            }
+            if ($char === '(' || $char === '[' || $char === '{') {
+                $depth++;
+                $result .= $char;
+                continue;
+            }
+            if ($char === ')' || $char === ']' || $char === '}') {
+                if ($depth === 0) {
+                    break;
+                }
+                $depth--;
+                $result .= $char;
+                continue;
+            }
+            if ($char === ',' && $depth === 0) {
+                break;
+            }
+            $result .= $char;
+        }
+
+        return trim($result);
+    }
+
+    private function classifyRawStatement(string $argument): string
+    {
+        if (preg_match('/^([\'\"])(.*)\1$/s', $argument, $match) !== 1) {
+            return 'unknown';
+        }
+
+        $sql = trim(stripcslashes($match[2]));
+        if ($sql === '') {
+            return 'unknown';
+        }
+
+        if (preg_match('/^(INSERT|UPDATE|DELETE|REPLACE|TRUNCATE|WITH|CALL|LOAD)\b/i', $sql) === 1) {
+            return 'mutation';
+        }
+
+        return 'safe';
+    }
+
+    private function sourceLayer(string $relativePath): ?string
+    {
+        if (preg_match('#^app/Modules/[^/]+/([^/]+)/#', $relativePath, $pathParts) === 1) {
+            return $pathParts[1];
+        }
+
+        return null;
     }
 
     private function sameModuleLayerAllowed(string $sourceLayer, string $targetLayer): bool
@@ -416,6 +716,51 @@ final class ArchitectureBoundaryChecker
         }
 
         return null;
+    }
+
+    private function consumePersistenceException(string $relativePath, string $table): bool
+    {
+        $key = $relativePath.'|'.$table;
+        $exceptions = $this->config['persistence_exceptions'] ?? [];
+        if (! is_array($exceptions) || ! in_array($key, $exceptions, true)) {
+            return false;
+        }
+
+        $this->usedPersistenceExceptions[$key] = true;
+
+        return true;
+    }
+
+    /** @return list<string> */
+    private function persistenceExceptionViolations(): array
+    {
+        $exceptions = $this->config['persistence_exceptions'] ?? [];
+        if (! is_array($exceptions)) {
+            return ['persistence_exceptions must be an exact list of source-path|table entries.'];
+        }
+
+        $violations = [];
+        $seen = [];
+        foreach ($exceptions as $exception) {
+            if (! is_string($exception)
+                || preg_match('#^(?:app/(?:Modules|Shared)/|routes/).+\.php\|[A-Za-z0-9_]+$#', $exception) !== 1
+            ) {
+                $violations[] = 'persistence_exceptions contains an invalid non-exact entry.';
+                continue;
+            }
+
+            if (isset($seen[$exception])) {
+                $violations[] = 'persistence_exceptions contains duplicate entry '.$exception.'.';
+                continue;
+            }
+            $seen[$exception] = true;
+
+            if (! isset($this->usedPersistenceExceptions[$exception])) {
+                $violations[] = 'persistence_exceptions contains stale/unused entry '.$exception.'.';
+            }
+        }
+
+        return $violations;
     }
 
     private function mutationMethod(string $statement): ?string

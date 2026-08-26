@@ -291,8 +291,7 @@ trait PanelInventoryServiceSupport
         array $after,
         PanelChangeContext $context,
     ): void {
-        $connection->table($table)->insert([
-            $foreignKey => $resourceId,
+        $row = [
             'version' => $version,
             'action' => $action,
             'before_safe_data' => $before === null ? null : json_encode($before, JSON_THROW_ON_ERROR),
@@ -302,7 +301,23 @@ trait PanelInventoryServiceSupport
             'reason' => $context->requireReason(),
             'correlation_id' => $context->correlationId,
             'created_at' => $this->inventoryTimestamp(),
-        ]);
+        ];
+
+        match ($table.'|'.$foreignKey) {
+            'panel_protocol_profile_histories|panel_protocol_profile_id' => $connection->table('panel_protocol_profile_histories')->insert([
+                'panel_protocol_profile_id' => $resourceId,
+                ...$row,
+            ]),
+            'panel_service_target_histories|panel_service_target_id' => $connection->table('panel_service_target_histories')->insert([
+                'panel_service_target_id' => $resourceId,
+                ...$row,
+            ]),
+            'sales_server_histories|sales_server_id' => $connection->table('sales_server_histories')->insert([
+                'sales_server_id' => $resourceId,
+                ...$row,
+            ]),
+            default => throw new RuntimeException('Unsupported panel inventory history target.'),
+        };
     }
 
     private function inventoryTimestamp(): string

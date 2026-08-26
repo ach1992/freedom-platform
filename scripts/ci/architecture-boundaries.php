@@ -110,7 +110,9 @@ return [
         'panel_connection_histories' => 'Panels',
         'panel_connections' => 'Panels',
         'panel_mutation_receipts' => 'Panels',
+        'panel_protocol_profile_histories' => 'Panels',
         'panel_protocol_profiles' => 'Panels',
+        'panel_service_target_histories' => 'Panels',
         'panel_service_targets' => 'Panels',
         'panel_target_capabilities' => 'Panels',
         'panel_target_capacities' => 'Panels',
@@ -176,6 +178,7 @@ return [
         'refunds' => 'Wallet',
         'role_permissions' => 'AccessControl',
         'roles' => 'AccessControl',
+        'sales_server_histories' => 'Panels',
         'sales_servers' => 'Panels',
         'scheduled_task_runs' => 'Operations',
         'sensitive_action_approvals' => 'AccessControl',
@@ -242,5 +245,21 @@ return [
         'zarinpal_payment_requests' => 'Payments',
         'zarinpal_payment_verifications' => 'Payments',
     ],
-    'persistence_exceptions' => [],
+
+    // Exact temporary legacy seams only. Each entry is owned by #188 and CI rejects
+    // stale/unused entries so the list shrinks as runtime boundaries are repaired.
+    'persistence_exceptions' => [
+        'app/Modules/Agents/Application/AgentApplicationService.php|users',
+        'app/Modules/Customers/Application/CustomerAccountStateService.php|users',
+        'app/Modules/Identity/Application/IdentityItemService.php|customer_profiles',
+        'app/Modules/Identity/Application/OtpChallengeIssuer.php|customer_profiles',
+        'app/Modules/Identity/Application/OtpChallengeVerifier.php|customer_profiles',
+        'app/Modules/Identity/Application/TelegramContactVerifier.php|customer_profiles',
+        'app/Modules/Provisioning/Application/InitialProvisioningQueueService.php|orders',
+        'app/Modules/Provisioning/Application/InitialProvisioningQueueService.php|outbox_messages',
+        'app/Modules/Provisioning/Application/ServiceDeliveryAttemptQueueService.php|outbox_messages',
+        'app/Modules/Telegram/Application/TelegramIdentitySynchronizer.php|customer_profiles',
+        'app/Modules/Telegram/Application/TelegramIdentitySynchronizer.php|telegram_accounts',
+        'app/Modules/Telegram/Application/TelegramIdentitySynchronizer.php|users',
+    ],
 ];
