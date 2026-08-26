@@ -25,14 +25,17 @@ final class ArchitectureBoundaryChecker
         foreach ($this->phpFiles('app/Modules') as $relativePath => $source) {
             $this->scanModuleFile($relativePath, $source, $violations, $edges);
             $this->scanPersistence($relativePath, $source, $violations);
+            $this->scanOpaquePersistence($relativePath, $source, $violations);
         }
 
         foreach ($this->phpFiles('app/Shared') as $relativePath => $source) {
             $this->scanSharedFile($relativePath, $source, $violations);
+            $this->scanOpaquePersistence($relativePath, $source, $violations);
         }
 
         foreach ($this->phpFiles('routes') as $relativePath => $source) {
             $this->scanPersistence($relativePath, $source, $violations);
+            $this->scanOpaquePersistence($relativePath, $source, $violations);
         }
 
         $edges = array_values(array_unique($edges));
@@ -58,28 +61,28 @@ final class ArchitectureBoundaryChecker
         $sourceModule = $pathParts[1];
         $sourceLayer = $pathParts[2];
 
-        if ($sourceLayer === 'Domain') {
-            preg_match_all('/^use\s+(Illuminate|Symfony|Monolog)\\\\/m', $source, $frameworkImports, PREG_OFFSET_CAPTURE);
-            foreach ($frameworkImports[0] ?? [] as $frameworkImport) {
+        foreach ($this->qualifiedNames($source) as $reference) {
+            $name = $reference['name'];
+            $line = $reference['line'];
+
+            if ($sourceLayer === 'Domain' && preg_match('#^(Illuminate|Symfony|Monolog)\\#', $name) === 1) {
                 $violations[] = sprintf(
-                    '%s:%d Domain may not import framework infrastructure.',
+                    '%s:%d Domain may not reference framework infrastructure.',
                     $relativePath,
-                    $this->lineNumber($source, $frameworkImport[1]),
+                    $line,
                 );
             }
-        }
 
-        preg_match_all(
-            '/^use\s+App\\\\Modules\\\\([A-Za-z0-9_]+)\\\\(Domain|Application|Infrastructure|Presentation)(?:\\\\[^;]+)?;/m',
-            $source,
-            $matches,
-            PREG_SET_ORDER | PREG_OFFSET_CAPTURE,
-        );
+            if (preg_match(
+                '#^App\\Modules\\([A-Za-z0-9_]+)\\(Domain|Application|Infrastructure|Presentation)(?:\\|$)#',
+                $name,
+                $match,
+            ) !== 1) {
+                continue;
+            }
 
-        foreach ($matches as $match) {
-            $targetModule = $match[1][0];
-            $targetLayer = $match[2][0];
-            $line = $this->lineNumber($source, $match[0][1]);
+            $targetModule = $match[1];
+            $targetLayer = $match[2];
 
             if ($sourceLayer === 'Domain') {
                 if ($targetModule === $sourceModule && $targetLayer === 'Domain') {
@@ -108,6 +111,16 @@ final class ArchitectureBoundaryChecker
             }
 
             if ($targetModule === $sourceModule) {
+                if (! $this->sameModuleLayerAllowed($sourceLayer, $targetLayer)) {
+                    $violations[] = sprintf(
+                        '%s:%d %s may not depend on its own %s layer; preserve dependency direction through Domain/Application boundaries.',
+                        $relativePath,
+                        $line,
+                        $sourceLayer,
+                        $targetLayer,
+                    );
+                }
+
                 continue;
             }
 
@@ -140,26 +153,23 @@ final class ArchitectureBoundaryChecker
     /** @param list<string> $violations */
     private function scanSharedFile(string $relativePath, string $source, array &$violations): void
     {
-        preg_match_all('/^use\s+App\\\\Modules\\\\/m', $source, $featureImports, PREG_OFFSET_CAPTURE);
-        foreach ($featureImports[0] ?? [] as $featureImport) {
-            $violations[] = sprintf(
-                '%s:%d Shared code must not depend on a feature module.',
-                $relativePath,
-                $this->lineNumber($source, $featureImport[1]),
-            );
-        }
+        foreach ($this->qualifiedNames($source) as $reference) {
+            if (str_starts_with($reference['name'], 'App\\Modules\\')) {
+                $violations[] = sprintf(
+                    '%s:%d Shared code must not depend on a feature module.',
+                    $relativePath,
+                    $reference['line'],
+                );
+            }
 
-        if (! str_starts_with($relativePath, 'app/Shared/Domain/')) {
-            return;
-        }
-
-        preg_match_all('/^use\s+(Illuminate|Symfony|Monolog)\\\\/m', $source, $frameworkImports, PREG_OFFSET_CAPTURE);
-        foreach ($frameworkImports[0] ?? [] as $frameworkImport) {
-            $violations[] = sprintf(
-                '%s:%d Shared Domain may not import framework infrastructure.',
-                $relativePath,
-                $this->lineNumber($source, $frameworkImport[1]),
-            );
+            if (str_starts_with($relativePath, 'app/Shared/Domain/')
+                && preg_match('#^(Illuminate|Symfony|Monolog)\\#', $reference['name']) === 1) {
+                $violations[] = sprintf(
+                    '%s:%d Shared Domain may not reference framework infrastructure.',
+                    $relativePath,
+                    $reference['line'],
+                );
+            }
         }
     }
 
@@ -218,6 +228,72 @@ final class ArchitectureBoundaryChecker
                 $owner,
             );
         }
+    }
+
+    /** @param list<string> $violations */
+    private function scanOpaquePersistence(string $relativePath, string $source, array &$violations): void
+    {
+        $patterns = [
+            '/\bDB::\s*(statement|unprepared|insert|update|delete|affectingStatement)\s*\(/',
+            '/->\s*(statement|unprepared|affectingStatement)\s*\(/',
+            '/\bconnection\s*\([^;]{0,200}\)\s*->\s*(insert|update|delete)\s*\(/',
+        ];
+
+        foreach ($patterns as $pattern) {
+            preg_match_all($pattern, $source, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE);
+            foreach ($matches as $match) {
+                $line = $this->lineNumber($source, $match[0][1]);
+                $method = $match[1][0] ?? 'raw';
+                $exceptionKey = $relativePath.'|'.$method;
+                $exceptions = $this->config['opaque_persistence_exceptions'] ?? [];
+                if (is_array($exceptions) && in_array($exceptionKey, $exceptions, true)) {
+                    continue;
+                }
+
+                $violations[] = sprintf(
+                    '%s:%d opaque persistence API %s is forbidden in application/runtime code because table ownership cannot be attributed; use an attributable persistence boundary or an exact reviewed exception.',
+                    $relativePath,
+                    $line,
+                    $method,
+                );
+            }
+        }
+    }
+
+    private function sameModuleLayerAllowed(string $sourceLayer, string $targetLayer): bool
+    {
+        return match ($sourceLayer) {
+            'Domain' => $targetLayer === 'Domain',
+            'Application' => in_array($targetLayer, ['Domain', 'Application'], true),
+            'Infrastructure' => in_array($targetLayer, ['Domain', 'Application', 'Infrastructure'], true),
+            'Presentation' => in_array($targetLayer, ['Domain', 'Application', 'Presentation'], true),
+            default => true,
+        };
+    }
+
+    /** @return list<array{name:string,line:int}> */
+    private function qualifiedNames(string $source): array
+    {
+        $names = [];
+        foreach (token_get_all($source) as $token) {
+            if (! is_array($token)) {
+                continue;
+            }
+
+            [$id, $text, $line] = $token;
+            if (! in_array($id, [T_NAME_QUALIFIED, T_NAME_FULLY_QUALIFIED, T_NAME_RELATIVE], true)) {
+                continue;
+            }
+
+            $name = ltrim($text, '\\');
+            if (str_starts_with($name, 'namespace\\')) {
+                $name = substr($name, strlen('namespace\\'));
+            }
+
+            $names[] = ['name' => $name, 'line' => $line];
+        }
+
+        return $names;
     }
 
     private function allowedDependency(string $sourceModule, string $targetModule): bool
