@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Presentation\Console;
 
+use App\Modules\Telegram\Application\Contracts\TelegramRuntime;
 use App\Modules\Telegram\Application\Jobs\ProcessTelegramUpdateJob;
-use App\Modules\Telegram\Infrastructure\TelegramRuntimeConfiguration;
 use Illuminate\Console\Command;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Support\Collection;
@@ -24,7 +24,7 @@ final class RequeueTelegramUpdatesCommand extends Command
     /** @requirement ONB-001 PAY-003 OPS-003 SEC-009 */
     public function handle(
         DatabaseManager $database,
-        TelegramRuntimeConfiguration $configuration,
+        TelegramRuntime $configuration,
     ): int {
         $olderThan = $this->integerOption('older-than', 0, 86_400);
         $limit = $this->integerOption('limit', 1, 1_000);
@@ -63,7 +63,7 @@ final class RequeueTelegramUpdatesCommand extends Command
                 ProcessTelegramUpdateJob::dispatch(
                     $candidate->bot_id,
                     $candidate->update_id,
-                )->onQueue($configuration->queue)->afterCommit();
+                )->onQueue($configuration->queue())->afterCommit();
 
                 $now = now('UTC')->format('Y-m-d H:i:s.u');
                 $database->connection()->table('processed_telegram_updates')
@@ -87,16 +87,17 @@ final class RequeueTelegramUpdatesCommand extends Command
             }
         }
 
+        $queue = $configuration->queue();
         $result = [
             'requeued' => $requeued,
-            'queue' => $configuration->queue,
+            'queue' => $queue,
             'included_failed' => $includeFailed,
         ];
 
         if ($this->option('json') === true) {
             $this->line(json_encode($result, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR));
         } else {
-            $this->components->info(sprintf('Requeued %d Telegram update(s) on %s.', $requeued, $configuration->queue));
+            $this->components->info(sprintf('Requeued %d Telegram update(s) on %s.', $requeued, $queue));
         }
 
         return self::SUCCESS;
