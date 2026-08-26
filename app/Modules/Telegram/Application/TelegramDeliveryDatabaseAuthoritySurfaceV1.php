@@ -19,7 +19,7 @@ use Throwable;
  */
 final readonly class TelegramDeliveryDatabaseAuthoritySurfaceV1
 {
-    private const EXPECTED_SEMANTIC_FINGERPRINT = 'ae20e98d7f2b8fc2b88250983b0327bc607c42ab436c17320b997d57387fe13d';
+    private const EXPECTED_SEMANTIC_FINGERPRINT = '19e69a2ea8c1a1d4519d04e978acc06b384dd0ab2345eeb443fdc743bb884cb9';
 
     /** @var list<string> */
     public const REQUIRED_TRIGGERS = [
@@ -63,6 +63,19 @@ final readonly class TelegramDeliveryDatabaseAuthoritySurfaceV1
 
     /** @var list<string> */
     private const AUTHORITY_TABLES = [
+        'telegram_delivery_authority_capability',
+        'telegram_delivery_operations',
+    ];
+
+    /**
+     * Every trigger on the shared Outbox must be part of the immutable surface.
+     * Foreign triggers execute in the same privileged session while queue
+     * authority is armed, so attesting only Telegram-named guards is unsafe.
+     *
+     * @var list<string>
+     */
+    private const TRIGGER_SURFACE_TABLES = [
+        'outbox_messages',
         'telegram_delivery_authority_capability',
         'telegram_delivery_operations',
     ];
@@ -235,10 +248,7 @@ final readonly class TelegramDeliveryDatabaseAuthoritySurfaceV1
 
         $triggers = $connection->table('information_schema.TRIGGERS')
             ->where('TRIGGER_SCHEMA', $databaseName)
-            ->where(function ($query): void {
-                $query->whereIn('EVENT_OBJECT_TABLE', self::AUTHORITY_TABLES)
-                    ->orWhereIn('TRIGGER_NAME', self::REQUIRED_TRIGGERS);
-            })
+            ->whereIn('EVENT_OBJECT_TABLE', self::TRIGGER_SURFACE_TABLES)
             ->orderBy('TRIGGER_NAME')
             ->get([
                 'TRIGGER_NAME',

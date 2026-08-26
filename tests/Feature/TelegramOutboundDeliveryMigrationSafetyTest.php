@@ -602,6 +602,128 @@ SQL);
         }
     }
 
+    public function test_unexpected_shared_outbox_after_trigger_is_rejected_before_queue_or_effect_transport(): void
+    {
+        $queued = $this->queue()->queue(
+            TelegramDeliveryAction::Send,
+            900216,
+            null,
+            NonRestrictedTelegramPresentation::plainText('shared outbox after trigger fence'),
+            'semantic-outbox-after-request-179',
+            'correlation-semantic-outbox-after-179',
+        );
+
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER outbox_telegram_delivery_unexpected_after_update_probe
+AFTER UPDATE ON outbox_messages
+FOR EACH ROW
+BEGIN
+    SET @telegram_delivery_review_after_probe = @app_telegram_delivery_capability;
+END
+SQL);
+
+        try {
+            self::assertFalse((new TelegramDeliveryDatabaseAuthoritySurfaceV1)->semanticsMatchExpected(DB::connection()));
+            $this->assertSemanticDriftRejectsQueueAndEffect(
+                $queued->publicId,
+                $queued->outboxEventId,
+                'correlation-semantic-outbox-after-179',
+                'semantic-outbox-after',
+            );
+            self::assertNull(DB::selectOne('SELECT @telegram_delivery_review_after_probe AS value')->value);
+        } finally {
+            DB::unprepared('DROP TRIGGER IF EXISTS outbox_telegram_delivery_unexpected_after_update_probe');
+            DB::statement('SET @telegram_delivery_review_after_probe = NULL');
+        }
+    }
+
+    public function test_replaced_earlier_shared_outbox_guard_cannot_preserve_readiness_or_exfiltrate_capability(): void
+    {
+        $queued = $this->queue()->queue(
+            TelegramDeliveryAction::Send,
+            900217,
+            null,
+            NonRestrictedTelegramPresentation::plainText('shared outbox replacement fence'),
+            'semantic-outbox-replacement-request-179',
+            'correlation-semantic-outbox-replacement-179',
+        );
+        $telegramOrderBefore = (int) DB::table('information_schema.TRIGGERS')
+            ->where('TRIGGER_SCHEMA', DB::getDatabaseName())
+            ->where('TRIGGER_NAME', 'outbox_telegram_delivery_envelope_insert_guard')
+            ->value('ACTION_ORDER');
+
+        Schema::create('telegram_delivery_review_capability_leaks', static function ($table): void {
+            $table->bigIncrements('id');
+            $table->string('capability', 128)->nullable();
+        });
+        DB::unprepared(<<<'SQL'
+CREATE OR REPLACE TRIGGER outbox_service_delivery_envelope_insert_guard
+BEFORE INSERT ON outbox_messages
+FOR EACH ROW PRECEDES outbox_telegram_delivery_envelope_insert_guard
+BEGIN
+    IF LOWER(NEW.event_type) = 'telegram.delivery.requested' THEN
+        INSERT INTO telegram_delivery_review_capability_leaks (capability)
+        VALUES (@app_telegram_delivery_capability);
+    END IF;
+END
+SQL);
+
+        try {
+            $telegramOrderAfter = (int) DB::table('information_schema.TRIGGERS')
+                ->where('TRIGGER_SCHEMA', DB::getDatabaseName())
+                ->where('TRIGGER_NAME', 'outbox_telegram_delivery_envelope_insert_guard')
+                ->value('ACTION_ORDER');
+            self::assertSame($telegramOrderBefore, $telegramOrderAfter);
+            self::assertFalse((new TelegramDeliveryDatabaseAuthoritySurfaceV1)->semanticsMatchExpected(DB::connection()));
+
+            $this->assertSemanticDriftRejectsQueueAndEffect(
+                $queued->publicId,
+                $queued->outboxEventId,
+                'correlation-semantic-outbox-replacement-179',
+                'semantic-outbox-replacement',
+            );
+            self::assertSame(0, DB::table('telegram_delivery_review_capability_leaks')->count());
+        } finally {
+            DB::unprepared('DROP TRIGGER IF EXISTS outbox_service_delivery_envelope_insert_guard');
+            $serviceDeliveryMigration = require database_path('migrations/2026_08_18_000100_create_service_delivery_attempt_authority.php');
+            (new ReflectionClass($serviceDeliveryMigration))->getMethod('createOutboxInsertGuard')->invoke($serviceDeliveryMigration);
+            Schema::dropIfExists('telegram_delivery_review_capability_leaks');
+        }
+    }
+
+    public function test_unactivated_surface_cannot_activate_with_unexpected_shared_outbox_trigger(): void
+    {
+        $this->dropDeliveryGuards();
+        Schema::dropIfExists('telegram_delivery_operations');
+        Schema::dropIfExists('telegram_delivery_authority_capability');
+
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER outbox_telegram_delivery_unexpected_after_insert_probe
+AFTER INSERT ON outbox_messages
+FOR EACH ROW
+BEGIN
+    SET @telegram_delivery_review_activation_probe = 1;
+END
+SQL);
+
+        try {
+            $this->runMigrationUp();
+            self::fail('Unexpected shared Outbox triggers must prevent final Telegram delivery authority activation.');
+        } catch (RuntimeException $exception) {
+            self::assertStringContainsString('schema semantics do not match the immutable v1 contract', $exception->getMessage());
+        } finally {
+            DB::unprepared('DROP TRIGGER IF EXISTS outbox_telegram_delivery_unexpected_after_insert_probe');
+            DB::statement('SET @telegram_delivery_review_activation_probe = NULL');
+        }
+
+        $capability = DB::table('telegram_delivery_authority_capability')->where('id', 1)->first();
+        self::assertNotNull($capability);
+        self::assertSame(0, (int) $capability->schema_version);
+        self::assertNull($capability->activated_at);
+        self::assertTrue((new TelegramDeliveryDatabaseAuthoritySurfaceV1)->semanticsMatchExpected(DB::connection()));
+        self::assertFalse($this->surfaceReady());
+    }
+
     public function test_unactivated_surface_cannot_activate_when_same_named_guard_semantics_drift(): void
     {
         $this->dropDeliveryGuards();

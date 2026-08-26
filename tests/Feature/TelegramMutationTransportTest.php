@@ -102,6 +102,29 @@ final class TelegramMutationTransportTest extends TestCase
         Http::assertSentCount(4);
     }
 
+    public function test_send_success_rejects_string_and_zero_recipient_chat_identity(): void
+    {
+        Http::fakeSequence()
+            ->push(['ok' => true, 'result' => ['message_id' => 303, 'chat' => ['id' => '900001']]], 200)
+            ->push(['ok' => true, 'result' => ['message_id' => 304, 'chat' => ['id' => 0]]], 200);
+
+        $request = new TelegramMutationRequest(
+            TelegramDeliveryAction::Send,
+            900001,
+            null,
+            NonRestrictedTelegramPresentation::plainText('send identity shape'),
+        );
+
+        $stringChat = $this->transport()->mutate($request);
+        $zeroChat = $this->transport()->mutate($request);
+
+        self::assertSame(TelegramMutationOutcome::UncertainResult, $stringChat->outcome);
+        self::assertSame('telegram_success_recipient_identity_missing', $stringChat->resultCode);
+        self::assertSame(TelegramMutationOutcome::UncertainResult, $zeroChat->outcome);
+        self::assertSame('telegram_success_recipient_identity_missing', $zeroChat->resultCode);
+        Http::assertSentCount(2);
+    }
+
     public function test_retry_after_is_preserved_but_transport_never_retries_it(): void
     {
         Http::fake([
