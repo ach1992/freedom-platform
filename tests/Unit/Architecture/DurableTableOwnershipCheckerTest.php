@@ -37,7 +37,7 @@ final class DurableTableOwnershipCheckerTest extends TestCase
 
     public function test_new_schema_table_without_owner_fails_closed(): void
     {
-        $this->migration(<<<'PHP'
+        $this->migration('2026_01_01_000000_test.php', <<<'PHP'
 <?php
 Schema::create('orders', function ($table): void {});
 PHP);
@@ -52,7 +52,7 @@ PHP);
 
     public function test_owned_schema_and_raw_tables_are_accepted(): void
     {
-        $this->migration(<<<'PHP'
+        $this->migration('2026_01_01_000000_test.php', <<<'PHP'
 <?php
 Schema::create('orders', function ($table): void {});
 DB::statement('CREATE TABLE `audit_archive` (`id` BIGINT NOT NULL)');
@@ -68,9 +68,33 @@ PHP);
         self::assertSame([], $violations);
     }
 
+    public function test_restartable_alternative_creation_paths_share_one_owner(): void
+    {
+        $this->migration('2026_01_01_000000_bootstrap.php', <<<'PHP'
+<?php
+if (! Schema::hasTable('service_subscriptions')) {
+    DB::statement('CREATE TABLE service_subscriptions (`id` BIGINT NOT NULL)');
+}
+PHP);
+        $this->migration('2026_01_01_000001_authority.php', <<<'PHP'
+<?php
+if (! Schema::hasTable('service_subscriptions')) {
+    Schema::create('service_subscriptions', function ($table): void {});
+}
+PHP);
+
+        $violations = (new DurableTableOwnershipChecker($this->root, [
+            'durable_table_owners' => [
+                'service_subscriptions' => 'Provisioning',
+            ],
+        ]))->violations();
+
+        self::assertSame([], $violations);
+    }
+
     public function test_stale_owner_entry_is_rejected(): void
     {
-        $this->migration(<<<'PHP'
+        $this->migration('2026_01_01_000000_test.php', <<<'PHP'
 <?php
 Schema::create('orders', function ($table): void {});
 PHP);
@@ -86,8 +110,8 @@ PHP);
         self::assertStringContainsString('stale/undiscovered table removed_table', $violations[0]);
     }
 
-    private function migration(string $content): void
+    private function migration(string $file, string $content): void
     {
-        file_put_contents($this->root.'/database/migrations/2026_01_01_000000_test.php', $content."\n");
+        file_put_contents($this->root.'/database/migrations/'.$file, $content."\n");
     }
 }
