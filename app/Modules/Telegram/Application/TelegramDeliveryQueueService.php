@@ -127,15 +127,16 @@ final readonly class TelegramDeliveryQueueService
                 $outboxEventId,
                 $timestamp,
             ): TelegramDeliveryOperationReceipt {
+                $payload = new SafeOutboxPayload([
+                    'telegram_delivery_operation_public_id' => $publicId,
+                ]);
                 $publishedEventId = $this->outbox->publish(
                     $outboxEventId,
                     self::OUTBOX_EVENT_KEY_PREFIX.$publicId,
                     self::OUTBOX_EVENT_TYPE,
                     self::OUTBOX_AGGREGATE_TYPE,
                     $publicId,
-                    new SafeOutboxPayload([
-                        'telegram_delivery_operation_public_id' => $publicId,
-                    ]),
+                    $payload,
                     $correlationId,
                 );
                 if (! hash_equals($outboxEventId, $publishedEventId)) {
@@ -160,16 +161,15 @@ final readonly class TelegramDeliveryQueueService
                     'updated_at' => $timestamp,
                 ]);
 
-                $released = $connection->table('outbox_messages')
-                    ->where('id', $outboxEventId)
-                    ->where('dispatch_state', 'authority_pending')
-                    ->update([
-                        'dispatch_state' => 'pending',
-                        'updated_at' => $timestamp,
-                    ]);
-                if ($released !== 1) {
-                    throw new RuntimeException('Telegram delivery Outbox command did not release from queue authority.');
-                }
+                $this->outbox->releaseForDispatch(
+                    $outboxEventId,
+                    self::OUTBOX_EVENT_KEY_PREFIX.$publicId,
+                    self::OUTBOX_EVENT_TYPE,
+                    self::OUTBOX_AGGREGATE_TYPE,
+                    $publicId,
+                    $payload,
+                    $correlationId,
+                );
 
                 $created = $this->operationByPublicId($connection, $publicId, false)
                     ?? throw new RuntimeException('Telegram delivery operation was not persisted.');

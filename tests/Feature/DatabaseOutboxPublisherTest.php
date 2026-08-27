@@ -95,6 +95,80 @@ final class DatabaseOutboxPublisherTest extends TestCase
         }
     }
 
+    public function test_release_for_dispatch_requires_exact_pristine_authority_pending_envelope(): void
+    {
+        $database = app(DatabaseManager::class);
+        $publisher = $this->publisher();
+        $payload = new SafeOutboxPayload(['order_id' => '1']);
+        $correlationId = '0198a4c7-ff31-7bb9-8222-000000000002';
+
+        $database->transaction(function () use ($database, $publisher, $payload, $correlationId): void {
+            $publisher->publish(
+                self::EVENT_ID,
+                'order:1:paid:v1',
+                'order.paid',
+                'order',
+                '1',
+                $payload,
+                $correlationId,
+            );
+            $database->connection()->table('outbox_messages')
+                ->where('id', self::EVENT_ID)
+                ->update(['dispatch_state' => 'authority_pending']);
+
+            $publisher->releaseForDispatch(
+                self::EVENT_ID,
+                'order:1:paid:v1',
+                'order.paid',
+                'order',
+                '1',
+                $payload,
+                $correlationId,
+            );
+        });
+
+        self::assertDatabaseHas('outbox_messages', [
+            'id' => self::EVENT_ID,
+            'dispatch_state' => 'pending',
+        ]);
+
+        $secondEventId = '0198a4c7-ff31-7bb9-8222-000000000004';
+        $database->transaction(function () use ($database, $publisher, $payload, $correlationId, $secondEventId): void {
+            $publisher->publish(
+                $secondEventId,
+                'order:2:paid:v1',
+                'order.paid',
+                'order',
+                '2',
+                $payload,
+                $correlationId,
+            );
+            $database->connection()->table('outbox_messages')
+                ->where('id', $secondEventId)
+                ->update(['dispatch_state' => 'authority_pending']);
+
+            try {
+                $publisher->releaseForDispatch(
+                    $secondEventId,
+                    'order:2:paid:v1',
+                    'order.paid',
+                    'wrong-aggregate',
+                    '2',
+                    $payload,
+                    $correlationId,
+                );
+                self::fail('A mismatched Outbox envelope must not be released.');
+            } catch (LogicException $exception) {
+                self::assertSame('Outbox event was not in the expected authority-pending envelope.', $exception->getMessage());
+            }
+
+            self::assertSame(
+                'authority_pending',
+                $database->connection()->table('outbox_messages')->where('id', $secondEventId)->value('dispatch_state'),
+            );
+        });
+    }
+
     private function publisher(): DatabaseOutboxPublisher
     {
         return new DatabaseOutboxPublisher(

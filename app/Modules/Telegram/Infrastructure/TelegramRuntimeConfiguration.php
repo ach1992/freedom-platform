@@ -6,9 +6,10 @@ namespace App\Modules\Telegram\Infrastructure;
 
 use App\Modules\Telegram\Application\Contracts\ProtectedTelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
+use App\Modules\Telegram\Application\Contracts\TelegramRuntime;
 use InvalidArgumentException;
 
-final readonly class TelegramRuntimeConfiguration implements ProtectedTelegramDeliveryRuntime, TelegramDeliveryRuntime
+final readonly class TelegramRuntimeConfiguration implements ProtectedTelegramDeliveryRuntime, TelegramDeliveryRuntime, TelegramRuntime
 {
     /** @requirement ONB-001 SEC-001 SEC-009 OPS-003 */
     public function __construct(
@@ -62,6 +63,31 @@ final readonly class TelegramRuntimeConfiguration implements ProtectedTelegramDe
     public function botId(): string
     {
         return $this->botId;
+    }
+
+    public function webhookUrl(): string
+    {
+        return $this->webhookUrl;
+    }
+
+    public function webhookSecret(): string
+    {
+        return $this->webhookSecret;
+    }
+
+    public function maximumBodyBytes(): int
+    {
+        return $this->maximumBodyBytes;
+    }
+
+    public function queue(): string
+    {
+        return $this->queue;
+    }
+
+    public function processingLeaseSeconds(): int
+    {
+        return $this->processingLeaseSeconds;
     }
 
     /** @param array<string, mixed> $configuration */

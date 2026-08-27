@@ -73,9 +73,13 @@ return new class extends Migration
             return;
         }
 
-        $this->withInstallationLock($connection, function (): void {
+        $this->withInstallationLock($connection, function () use ($connection): void {
             if ($this->durableAuthorityExists()) {
                 throw new RuntimeException('Cannot roll back Telegram outbound delivery authority while durable authority exists.');
+            }
+
+            if (! $this->authorityReady($connection)) {
+                throw new RuntimeException('Cannot roll back Telegram outbound delivery authority unless the complete activated authority surface is attested before guard removal.');
             }
 
             $this->dropGuards();

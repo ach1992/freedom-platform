@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace App\Modules\Telegram\Presentation\Console;
 
 use App\Modules\Telegram\Application\Contracts\TelegramBotApi;
+use App\Modules\Telegram\Application\Contracts\TelegramRuntime;
 use App\Modules\Telegram\Application\TelegramWebhookInfo;
-use App\Modules\Telegram\Infrastructure\TelegramRuntimeConfiguration;
 use Illuminate\Console\Command;
 use RuntimeException;
 
@@ -22,14 +22,14 @@ final class ConfigureTelegramWebhookCommand extends Command
     /** @requirement INS-001 SEC-008 SEC-009 QUA-013 */
     public function handle(
         TelegramBotApi $api,
-        TelegramRuntimeConfiguration $configuration,
+        TelegramRuntime $configuration,
     ): int {
         try {
             $info = $this->option('status-only') === true
                 ? $api->webhookInfo()
                 : $api->configureWebhook(
-                    $configuration->webhookUrl,
-                    $configuration->webhookSecret,
+                    $configuration->webhookUrl(),
+                    $configuration->webhookSecret(),
                     $this->option('drop-pending-updates') === true,
                 );
         } catch (RuntimeException) {
@@ -38,7 +38,7 @@ final class ConfigureTelegramWebhookCommand extends Command
             return self::FAILURE;
         }
 
-        $this->renderResult($configuration->botId, $info);
+        $this->renderResult($configuration->botId(), $info);
 
         return $info->configured && $info->targetsExpectedUrl ? self::SUCCESS : self::FAILURE;
     }

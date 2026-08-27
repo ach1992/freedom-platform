@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Application;
 
-use App\Modules\Telegram\Infrastructure\TelegramRuntimeConfiguration;
+use App\Modules\Telegram\Application\Contracts\TelegramRuntime;
 use Illuminate\Contracts\Encryption\StringEncrypter;
 use Illuminate\Database\DatabaseManager;
 use JsonException;
@@ -19,12 +19,12 @@ final readonly class TelegramUpdateProcessor
         private StringEncrypter $encrypter,
         private TelegramIdentitySynchronizer $identitySynchronizer,
         private TelegramInteractionDispatcher $interactionDispatcher,
-        private TelegramRuntimeConfiguration $configuration,
+        private TelegramRuntime $configuration,
     ) {}
 
     public function process(string $botId, int $updateId): void
     {
-        if (! hash_equals($this->configuration->botId, $botId)) {
+        if (! hash_equals($this->configuration->botId(), $botId)) {
             throw new RuntimeException('Telegram update bot identifier is not configured.');
         }
 
@@ -105,7 +105,7 @@ final readonly class TelegramUpdateProcessor
             $processingStartedAt = is_string($row->processing_started_at) ? strtotime($row->processing_started_at) : false;
             $leaseIsActive = (string) $row->state === 'processing'
                 && $processingStartedAt !== false
-                && $processingStartedAt > time() - $this->configuration->processingLeaseSeconds;
+                && $processingStartedAt > time() - $this->configuration->processingLeaseSeconds();
 
             if ($leaseIsActive) {
                 return null;

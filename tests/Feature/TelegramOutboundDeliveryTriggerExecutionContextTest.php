@@ -222,6 +222,56 @@ SQL);
         self::assertTrue($surface->semanticsMatchExpected($connection));
     }
 
+    public function test_rollback_preflights_incoming_foreign_keys_before_guard_removal(): void
+    {
+        $connection = DB::connection();
+        $migration = $this->migration();
+        $surface = new TelegramDeliveryDatabaseAuthoritySurfaceV1;
+        $guardsBefore = $surface->presentRequiredTriggers($connection);
+        sort($guardsBefore, SORT_STRING);
+
+        DB::statement(<<<'SQL'
+CREATE TABLE telegram_delivery_rollback_fk_probe (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    operation_public_id CHAR(26) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+    PRIMARY KEY (id),
+    KEY telegram_delivery_rollback_fk_operation_idx (operation_public_id),
+    CONSTRAINT telegram_delivery_rollback_fk_operation_fk
+        FOREIGN KEY (operation_public_id)
+        REFERENCES telegram_delivery_operations (public_id)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin
+SQL);
+
+        try {
+            try {
+                $migration->down();
+                self::fail('Rollback must fail before guard removal when an incoming FK changes the activated authority surface.');
+            } catch (RuntimeException $exception) {
+                self::assertStringContainsString(
+                    'complete activated authority surface is attested before guard removal',
+                    $exception->getMessage(),
+                );
+            }
+
+            self::assertTrue($connection->getSchemaBuilder()->hasTable('telegram_delivery_operations'));
+            self::assertTrue($connection->getSchemaBuilder()->hasTable('telegram_delivery_authority_capability'));
+            $guardsAfterFailure = $surface->presentRequiredTriggers($connection);
+            sort($guardsAfterFailure, SORT_STRING);
+            self::assertSame($guardsBefore, $guardsAfterFailure);
+        } finally {
+            DB::statement('DROP TABLE IF EXISTS telegram_delivery_rollback_fk_probe');
+        }
+
+        $migration->down();
+        self::assertFalse($connection->getSchemaBuilder()->hasTable('telegram_delivery_operations'));
+        self::assertFalse($connection->getSchemaBuilder()->hasTable('telegram_delivery_authority_capability'));
+
+        $migration->up();
+        self::assertTrue($surface->semanticsMatchExpected($connection));
+    }
+
     private function toggleSqlMode(string $sqlMode, string $mode): string
     {
         $modes = array_values(array_filter(

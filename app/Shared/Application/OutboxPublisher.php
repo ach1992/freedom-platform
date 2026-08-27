@@ -19,4 +19,18 @@ interface OutboxPublisher
         SafeOutboxPayload $payload,
         string $correlationId,
     ): string;
+
+    /**
+     * Release one exact authority-pending event for normal dispatch.
+     * The caller must still hold whatever database authority its envelope trigger requires.
+     */
+    public function releaseForDispatch(
+        string $eventId,
+        string $eventKey,
+        string $eventType,
+        string $aggregateType,
+        string $aggregateId,
+        SafeOutboxPayload $payload,
+        string $correlationId,
+    ): void;
 }
