@@ -84,6 +84,10 @@ Before installation or release activation verify:
 
 - compatible PHP 8.4 runtimes and required extensions;
 - MariaDB and authenticated Redis reachability with least privilege;
+- when the generic outbound Telegram delivery authority is present or will be installed, MariaDB is `>=10.11.9` and exposes a non-empty `@@server_uid`; older or identity-ambiguous servers are incompatible with that authority surface;
+- the Telegram metadata-attestation account is provisioned through the protected database-administration path as a principal distinct from `DB_USERNAME`, with only global `PROCESS`/`USAGE` and no grant option, role/PUBLIC grant, routine `EXECUTE`, schema/table/column privilege, or application DML/DDL authority;
+- `TELEGRAM_METADATA_DB_USERNAME` / `TELEGRAM_METADATA_DB_PASSWORD` and, when needed, `TELEGRAM_METADATA_DB_URL` are supplied through protected deployment secrets and resolve to the exact same MariaDB server as the runtime connection; never reuse the ordinary runtime database credentials for this path;
+- the Telegram authority migration preflight succeeds before any Telegram authority DDL; missing/under-privileged/over-privileged/wrong-server metadata authority is a deployment failure, not a reason to weaken grants or fall back to the runtime principal;
 - filesystem ownership/permissions without `0777`;
 - valid HTTPS;
 - exactly one Scheduler Cron entry;
