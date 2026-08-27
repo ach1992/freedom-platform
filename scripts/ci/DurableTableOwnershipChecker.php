@@ -71,7 +71,7 @@ final class DurableTableOwnershipChecker
         $violations = [];
         $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($directory));
         foreach ($iterator as $file) {
-            if (! $file->isFile() || $file->getExtension() !== 'php') {
+            if (! $file->isFile() || ! in_array($file->getExtension(), ['php', 'sql'], true)) {
                 continue;
             }
 
@@ -81,6 +81,15 @@ final class DurableTableOwnershipChecker
             }
 
             $relativePath = str_replace('\\', '/', ltrim(str_replace($this->root, '', $file->getPathname()), DIRECTORY_SEPARATOR));
+
+            if ($file->getExtension() === 'sql') {
+                $this->recordRawCreateTables($tables, $relativePath, $source);
+                $this->recordUnsupportedTableRenames($violations, $relativePath, $source);
+
+                continue;
+            }
+
+            $this->recordAliasedMigrationPrimitiveViolations($violations, $relativePath, $source);
 
             preg_match_all(
                 '/Schema::create\(\s*[\'\"]([A-Za-z0-9_]+)[\'\"]/',
@@ -93,6 +102,7 @@ final class DurableTableOwnershipChecker
             }
 
             $this->resolveHelperCreatedTables($tables, $violations, $relativePath, $source);
+            $this->resolveBlueprintCreatedTables($tables, $violations, $relativePath, $source);
 
             preg_match_all(
                 '/Schema::create\(\s*(?![\'\"]|\$)/',
@@ -108,15 +118,9 @@ final class DurableTableOwnershipChecker
                 );
             }
 
-            preg_match_all(
-                '/\bCREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:`?[A-Za-z0-9_]+`?\.)?`?([A-Za-z0-9_]+)`?/i',
-                $source,
-                $rawMatches,
-                PREG_SET_ORDER | PREG_OFFSET_CAPTURE,
-            );
-            foreach ($rawMatches as $match) {
-                $this->record($tables, $match[1][0], $relativePath, $source, $match[0][1]);
-            }
+            $this->recordRawCreateTables($tables, $relativePath, $source);
+            $this->recordUnsupportedTableRenames($violations, $relativePath, $source);
+
         }
 
         ksort($tables, SORT_STRING);
@@ -191,6 +195,181 @@ final class DurableTableOwnershipChecker
 
             foreach ($literalCalls as $call) {
                 $this->record($tables, $call[2][0], $path, $source, $call[0][1]);
+            }
+        }
+    }
+
+    /**
+     * @param  array<string,list<string>>  $tables
+     * @param  list<string>  $violations
+     */
+    private function resolveBlueprintCreatedTables(array &$tables, array &$violations, string $path, string $source): void
+    {
+        $blueprintClass = '(?:Blueprint|'.preg_quote('\\Illuminate\\Database\\Schema\\Blueprint', '/').'|'.preg_quote('Illuminate\\Database\\Schema\\Blueprint', '/').')';
+        $recognizedCreates = [];
+
+        preg_match_all(
+            '/(\$[A-Za-z_][A-Za-z0-9_]*)\s*=\s*new\s+'.$blueprintClass.'\s*\(\s*[^,]+,\s*([\'\"])([A-Za-z0-9_]+)\2\s*\)\s*;/',
+            $source,
+            $literalBlueprints,
+            PREG_SET_ORDER | PREG_OFFSET_CAPTURE,
+        );
+        foreach ($literalBlueprints as $blueprint) {
+            $variable = $blueprint[1][0];
+            $offset = $blueprint[0][1];
+            if (! $this->blueprintCreatesTable($source, $offset, $variable)) {
+                continue;
+            }
+            $recognizedCreates[$offset] = true;
+            $this->record($tables, $blueprint[3][0], $path, $source, $offset);
+        }
+
+        preg_match_all(
+            '/(\$[A-Za-z_][A-Za-z0-9_]*)\s*=\s*new\s+'.$blueprintClass.'\s*\(\s*[^,]+,\s*\$([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*;/',
+            $source,
+            $dynamicBlueprints,
+            PREG_SET_ORDER | PREG_OFFSET_CAPTURE,
+        );
+        foreach ($dynamicBlueprints as $blueprint) {
+            $blueprintVariable = $blueprint[1][0];
+            $tableVariable = $blueprint[2][0];
+            $offset = $blueprint[0][1];
+            if (! $this->blueprintCreatesTable($source, $offset, $blueprintVariable)) {
+                continue;
+            }
+            $recognizedCreates[$offset] = true;
+
+            $method = $this->containingMethodParameter($source, $offset, $tableVariable);
+            if ($method === null) {
+                $violations[] = sprintf(
+                    '%s:%d Blueprint table creation variable $%s is not tied to a resolvable helper parameter.',
+                    $path,
+                    $this->lineNumber($source, $offset),
+                    $tableVariable,
+                );
+
+                continue;
+            }
+
+            [$methodName, $parameterIndex] = $method;
+            if ($parameterIndex !== 0) {
+                $violations[] = sprintf(
+                    '%s:%d Blueprint helper %s uses its table parameter outside the first argument position; ownership discovery fails closed.',
+                    $path,
+                    $this->lineNumber($source, $offset),
+                    $methodName,
+                );
+
+                continue;
+            }
+
+            $callPattern = '/\$this->'.preg_quote($methodName, '/').'\s*\(/';
+            preg_match_all($callPattern, $source, $allCalls, PREG_SET_ORDER | PREG_OFFSET_CAPTURE);
+            $literalPattern = '/\$this->'.preg_quote($methodName, '/').'\s*\(\s*([\'\"])([A-Za-z0-9_]+)\1\s*[,)]/';
+            preg_match_all($literalPattern, $source, $literalCalls, PREG_SET_ORDER | PREG_OFFSET_CAPTURE);
+            if ($allCalls === []) {
+                $violations[] = sprintf(
+                    '%s:%d Blueprint helper %s has no statically visible callsites.',
+                    $path,
+                    $this->lineNumber($source, $offset),
+                    $methodName,
+                );
+
+                continue;
+            }
+            if (count($literalCalls) !== count($allCalls)) {
+                $violations[] = sprintf(
+                    '%s:%d Blueprint helper %s has a non-literal table callsite; durable ownership discovery fails closed.',
+                    $path,
+                    $this->lineNumber($source, $offset),
+                    $methodName,
+                );
+            }
+            foreach ($literalCalls as $call) {
+                $this->record($tables, $call[2][0], $path, $source, $call[0][1]);
+            }
+        }
+
+        preg_match_all(
+            '/(\$[A-Za-z_][A-Za-z0-9_]*)\s*=\s*new\s+'.$blueprintClass.'\s*\(/',
+            $source,
+            $allBlueprints,
+            PREG_SET_ORDER | PREG_OFFSET_CAPTURE,
+        );
+        foreach ($allBlueprints as $blueprint) {
+            $variable = $blueprint[1][0];
+            $offset = $blueprint[0][1];
+            if (isset($recognizedCreates[$offset]) || ! $this->blueprintCreatesTable($source, $offset, $variable)) {
+                continue;
+            }
+            $violations[] = sprintf(
+                '%s:%d Blueprint table creation could not be statically resolved to a literal table set.',
+                $path,
+                $this->lineNumber($source, $offset),
+            );
+        }
+    }
+
+    private function blueprintCreatesTable(string $source, int $offset, string $variable): bool
+    {
+        $tail = substr($source, $offset);
+
+        return preg_match('/'.preg_quote($variable, '/').'\s*->\s*create\s*\(/', $tail) === 1;
+    }
+
+    /** @param list<string> $violations */
+    private function recordUnsupportedTableRenames(array &$violations, string $path, string $source): void
+    {
+        $patterns = [
+            '/\bSchema::rename\s*\(/' => 'Schema::rename',
+            '/\bRENAME\s+TABLE\b/i' => 'raw RENAME TABLE',
+            '/\bALTER\s+TABLE\b[^;\r\n]*\bRENAME\b/i' => 'raw ALTER TABLE ... RENAME',
+        ];
+        foreach ($patterns as $pattern => $mechanism) {
+            preg_match_all($pattern, $source, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE);
+            foreach ($matches as $match) {
+                $violations[] = sprintf(
+                    '%s:%d durable table rename via %s is not ownership-attributable; model the post-rename durable ownership lifecycle explicitly before using table rename.',
+                    $path,
+                    $this->lineNumber($source, $match[0][1]),
+                    $mechanism,
+                );
+            }
+        }
+    }
+
+    /** @param array<string,list<string>> $tables */
+    private function recordRawCreateTables(array &$tables, string $path, string $source): void
+    {
+        preg_match_all(
+            '/\bCREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:`?[A-Za-z0-9_]+`?\.)?`?([A-Za-z0-9_]+)`?/i',
+            $source,
+            $rawMatches,
+            PREG_SET_ORDER | PREG_OFFSET_CAPTURE,
+        );
+        foreach ($rawMatches as $match) {
+            $this->record($tables, $match[1][0], $path, $source, $match[0][1]);
+        }
+    }
+
+    /** @param list<string> $violations */
+    private function recordAliasedMigrationPrimitiveViolations(array &$violations, string $path, string $source): void
+    {
+        $schemaFacade = preg_quote('Illuminate\\Support\\Facades\\Schema', '/');
+        $blueprint = preg_quote('Illuminate\\Database\\Schema\\Blueprint', '/');
+        $patterns = [
+            '/\buse\s+'.$schemaFacade.'\s+as\s+[A-Za-z_][A-Za-z0-9_]*\s*;/' => 'Schema facade',
+            '/\buse\s+'.$blueprint.'\s+as\s+[A-Za-z_][A-Za-z0-9_]*\s*;/' => 'Blueprint',
+        ];
+        foreach ($patterns as $pattern => $primitive) {
+            preg_match_all($pattern, $source, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE);
+            foreach ($matches as $match) {
+                $violations[] = sprintf(
+                    '%s:%d aliasing %s is forbidden because durable-table discovery must remain syntax-stable.',
+                    $path,
+                    $this->lineNumber($source, $match[0][1]),
+                    $primitive,
+                );
             }
         }
     }

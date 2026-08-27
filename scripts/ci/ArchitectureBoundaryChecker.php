@@ -34,17 +34,20 @@ final class ArchitectureBoundaryChecker
             $this->scanModuleFile($relativePath, $source, $violations, $edges);
             $this->scanPersistence($relativePath, $source, $violations);
             $this->scanOpaquePersistence($relativePath, $source, $violations);
+            $this->scanUnattributablePersistenceMechanisms($relativePath, $source, $violations);
         }
 
         foreach ($this->phpFiles('app/Shared') as $relativePath => $source) {
             $this->scanSharedFile($relativePath, $source, $violations);
             $this->scanPersistence($relativePath, $source, $violations);
             $this->scanOpaquePersistence($relativePath, $source, $violations);
+            $this->scanUnattributablePersistenceMechanisms($relativePath, $source, $violations);
         }
 
         foreach ($this->phpFiles('routes') as $relativePath => $source) {
             $this->scanPersistence($relativePath, $source, $violations);
             $this->scanOpaquePersistence($relativePath, $source, $violations);
+            $this->scanUnattributablePersistenceMechanisms($relativePath, $source, $violations);
         }
 
         $edges = array_values(array_unique($edges));
@@ -200,9 +203,10 @@ final class ArchitectureBoundaryChecker
     {
         $this->scanDeferredTableMutations($relativePath, $source, $violations);
         $this->scanDynamicTableMutations($relativePath, $source, $violations);
+        $this->scanUnsupportedQuerySources($relativePath, $source, $violations);
 
         preg_match_all(
-            '/(?:DB::|->)table\(\s*[\'\"]([^\'\"]+)[\'\"]\s*\)/',
+            '/(?:DB::|->)(?:table|from)\(\s*[\'\"]([^\'\"]+)[\'\"]\s*\)/',
             $source,
             $matches,
             PREG_SET_ORDER | PREG_OFFSET_CAPTURE,
@@ -266,7 +270,17 @@ final class ArchitectureBoundaryChecker
         }
 
         $sourceOwner = $this->sourcePersistenceOwner($relativePath);
-        if ($owner === null || $sourceOwner === null || $owner === $sourceOwner) {
+        if ($owner === null) {
+            $violations[] = sprintf(
+                '%s:%d mutation of unmapped durable table candidate %s is forbidden because ownership cannot be attributed.',
+                $relativePath,
+                $line,
+                $table,
+            );
+
+            return;
+        }
+        if ($sourceOwner === null || $owner === $sourceOwner) {
             return;
         }
 
@@ -288,7 +302,7 @@ final class ArchitectureBoundaryChecker
     private function scanDynamicTableMutations(string $relativePath, string $source, array &$violations): void
     {
         preg_match_all(
-            '/(?:\bDB::|->)\s*table\(\s*(?![\'\"])([^)]*)\)/',
+            '/(?:\bDB::|->)\s*(?:table|from)\(\s*(?![\'\"])([^)]*)\)/',
             $source,
             $matches,
             PREG_SET_ORDER | PREG_OFFSET_CAPTURE,
@@ -390,7 +404,7 @@ final class ArchitectureBoundaryChecker
     private function scanDeferredTableMutations(string $relativePath, string $source, array &$violations): void
     {
         preg_match_all(
-            '/(\$[A-Za-z_][A-Za-z0-9_]*)\s*=\s*[^;]*?(?:DB::|->)table\(\s*[^)]*\)[^;]*;/',
+            '/(\$[A-Za-z_][A-Za-z0-9_]*)\s*=\s*[^;]*?(?:DB::|->)(?:table|from|fromRaw|fromSub)\(\s*[^)]*\)[^;]*;/',
             $source,
             $matches,
             PREG_SET_ORDER | PREG_OFFSET_CAPTURE,
@@ -412,7 +426,7 @@ final class ArchitectureBoundaryChecker
             }
 
             if (preg_match(
-                '/'.preg_quote($variable, '/').'\s*->\s*(insert|insertGetId|insertOrIgnore|update|delete|upsert|updateOrInsert|increment|decrement|truncate)\s*\(/',
+                '/'.preg_quote($variable, '/').'\s*->\s*(insert|insertGetId|insertOrIgnore|insertOrIgnoreReturning|insertUsing|insertOrIgnoreUsing|update|updateFrom|delete|upsert|updateOrInsert|increment|incrementEach|decrement|decrementEach|truncate)\s*\(/',
                 $segment,
                 $mutationMatch,
             ) !== 1) {
@@ -424,6 +438,30 @@ final class ArchitectureBoundaryChecker
                 $relativePath,
                 $this->lineNumber($source, $assignmentOffset),
                 $variable,
+            );
+        }
+    }
+
+    /** @param list<string> $violations */
+    private function scanUnsupportedQuerySources(string $relativePath, string $source, array &$violations): void
+    {
+        preg_match_all(
+            '/->\s*(fromRaw|fromSub)\s*\(/',
+            $source,
+            $matches,
+            PREG_SET_ORDER | PREG_OFFSET_CAPTURE,
+        );
+        foreach ($matches as $match) {
+            $offset = $match[0][1];
+            $statement = substr($source, $offset, $this->statementLength($source, $offset));
+            if ($this->mutationMethod($statement) === null) {
+                continue;
+            }
+            $violations[] = sprintf(
+                '%s:%d query mutation through %s is forbidden because durable-table ownership cannot be statically attributed.',
+                $relativePath,
+                $this->lineNumber($source, $offset),
+                $match[1][0],
             );
         }
     }
@@ -550,6 +588,257 @@ final class ArchitectureBoundaryChecker
         }
     }
 
+    /** @param list<string> $violations */
+    private function scanUnattributablePersistenceMechanisms(string $relativePath, string $source, array &$violations): void
+    {
+        $dbFacade = preg_quote('Illuminate\\Support\\Facades\\DB', '/');
+        preg_match_all(
+            '/\buse\s+'.$dbFacade.'\s+as\s+([A-Za-z_][A-Za-z0-9_]*)\s*;/',
+            $source,
+            $aliases,
+            PREG_SET_ORDER | PREG_OFFSET_CAPTURE,
+        );
+        foreach ($aliases as $alias) {
+            $violations[] = sprintf(
+                '%s:%d aliasing the DB facade as %s is forbidden because static persistence attribution must remain syntax-stable.',
+                $relativePath,
+                $this->lineNumber($source, $alias[0][1]),
+                $alias[1][0],
+            );
+        }
+
+        $this->scanConnectionRawSql($relativePath, $source, $violations);
+        $this->scanRuntimeSchemaMutations($relativePath, $source, $violations);
+
+        $pdoPatterns = [
+            '/(?:->\s*(?:getPdo|getRawPdo)\s*\(|\bDB::\s*(?:getPdo|getRawPdo)\s*\()/',
+            '/\bnew\s+(?:'.preg_quote('\\PDO', '/').'|PDO)\b/',
+        ];
+        foreach ($pdoPatterns as $pattern) {
+            preg_match_all($pattern, $source, $pdoCalls, PREG_SET_ORDER | PREG_OFFSET_CAPTURE);
+            foreach ($pdoCalls as $call) {
+                $violations[] = sprintf(
+                    '%s:%d direct PDO access is forbidden in runtime source because durable persistence ownership cannot be statically attributed.',
+                    $relativePath,
+                    $this->lineNumber($source, $call[0][1]),
+                );
+            }
+        }
+    }
+
+    /** @param list<string> $violations */
+    private function scanConnectionRawSql(string $relativePath, string $source, array &$violations): void
+    {
+        $readMethods = '(?:select|selectOne|selectFromWriteConnection|selectResultSets|scalar|cursor)';
+        $writeMethods = '(?:insert|update|delete)';
+        $methods = '(?:'.$readMethods.'|'.$writeMethods.')';
+        $memberOperator = '(?:\\?->|->)';
+
+        $receiverPatterns = [
+            '/\\bDB\\s*::/',
+            '/\\bDB\\s*::\\s*connection\\s*\\([^)]*\\)\\s*'.$memberOperator.'/',
+        ];
+
+        foreach ([
+            'Illuminate\\Database\\Connection',
+            'Illuminate\\Database\\ConnectionInterface',
+        ] as $connectionType) {
+            foreach ($this->typedPersistenceReceivers($source, $connectionType) as $receiver) {
+                $receiverPatterns[] = '/'.preg_quote($receiver, '/').'\\s*'.$memberOperator.'/';
+            }
+        }
+
+        $databaseManagers = $this->typedPersistenceReceivers($source, 'Illuminate\\Database\\DatabaseManager');
+        foreach ($databaseManagers as $receiver) {
+            $receiverPatterns[] = '/'.preg_quote($receiver, '/').'\\s*'.$memberOperator.'/';
+            $receiverPatterns[] = '/'.preg_quote($receiver, '/').'\\s*'.$memberOperator.'\\s*connection\\s*\\([^)]*\\)\\s*'.$memberOperator.'/';
+        }
+
+        foreach ($databaseManagers as $manager) {
+            preg_match_all(
+                '/(\\$[A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*'.preg_quote($manager, '/').'\\s*'.$memberOperator.'\\s*connection\\s*\\([^)]*\\)\\s*;/',
+                $source,
+                $assignedConnections,
+                PREG_SET_ORDER,
+            );
+            foreach ($assignedConnections as $assigned) {
+                $receiverPatterns[] = '/'.preg_quote($assigned[1], '/').'\\s*'.$memberOperator.'/';
+            }
+        }
+        preg_match_all(
+            '/(\\$[A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*DB\\s*::\\s*connection\\s*\\([^)]*\\)\\s*;/',
+            $source,
+            $assignedFacadeConnections,
+            PREG_SET_ORDER,
+        );
+        foreach ($assignedFacadeConnections as $assigned) {
+            $receiverPatterns[] = '/'.preg_quote($assigned[1], '/').'\\s*'.$memberOperator.'/';
+        }
+
+        $receiverPatterns = array_values(array_unique($receiverPatterns));
+        foreach ($receiverPatterns as $receiverPattern) {
+            $pattern = substr($receiverPattern, 0, -1).'\\s*('.$methods.')\\s*\\(/';
+            preg_match_all($pattern, $source, $calls, PREG_SET_ORDER | PREG_OFFSET_CAPTURE);
+            foreach ($calls as $call) {
+                $method = $call[1][0];
+                $offset = $call[0][1];
+                if (preg_match('/^'.$writeMethods.'$/', $method) === 1) {
+                    $violations[] = sprintf(
+                        '%s:%d raw Connection mutation API %s is forbidden because durable-table ownership cannot be attributed.',
+                        $relativePath,
+                        $this->lineNumber($source, $offset),
+                        $method,
+                    );
+
+                    continue;
+                }
+
+                $openParen = $offset + strlen($call[0][0]) - 1;
+                $sql = $this->literalRawSql($source, $openParen + 1);
+                if ($sql !== null && $this->isLiteralReadOnlySql($sql)) {
+                    continue;
+                }
+
+                $violations[] = sprintf(
+                    '%s:%d raw Connection read API %s must receive one literal read-only SELECT statement; mutation/DDL/dynamic SQL is forbidden.',
+                    $relativePath,
+                    $this->lineNumber($source, $offset),
+                    $method,
+                );
+            }
+        }
+    }
+
+    /** @return list<string> */
+    private function typedPersistenceReceivers(string $source, string $fqcn): array
+    {
+        $short = substr($fqcn, strrpos($fqcn, '\\') + 1);
+        $typeNames = [$short, '\\'.$fqcn];
+        $importPattern = preg_quote($fqcn, '/');
+        if (preg_match('/\\buse\\s+'.$importPattern.'\\s+as\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*;/', $source, $alias) === 1) {
+            $typeNames[] = $alias[1];
+        }
+
+        $receivers = [];
+        foreach (array_values(array_unique($typeNames)) as $typeName) {
+            $typePattern = preg_quote($typeName, '/');
+            $typeUsePattern = '(?:\\?'.$typePattern.'|'.$typePattern.'(?:\\s*\\|\\s*null)?|null\\s*\\|\\s*'.$typePattern.')';
+            preg_match_all(
+                '/(?<![A-Za-z0-9_\\\\])'.$typeUsePattern.'\\s+\\$([A-Za-z_][A-Za-z0-9_]*)/',
+                $source,
+                $variables,
+                PREG_SET_ORDER,
+            );
+            foreach ($variables as $variable) {
+                $receivers[] = '$'.$variable[1];
+            }
+
+            preg_match_all(
+                '/\\b(?:public|protected|private)(?:\\s+readonly)?\\s+'.$typeUsePattern.'\\s+\\$([A-Za-z_][A-Za-z0-9_]*)/',
+                $source,
+                $properties,
+                PREG_SET_ORDER,
+            );
+            foreach ($properties as $property) {
+                $receivers[] = '$this->'.$property[1];
+            }
+        }
+
+        return array_values(array_unique($receivers));
+    }
+
+    private function isLiteralReadOnlySql(string $sql): bool
+    {
+        $sql = trim($sql);
+        if ($sql === '' || preg_match('/;\\s*\\S/s', $sql) === 1) {
+            return false;
+        }
+        if (preg_match('/^SELECT\\b/is', $sql) !== 1) {
+            return false;
+        }
+
+        return preg_match('/\\bINTO\\s+(?:OUTFILE|DUMPFILE)\\b/i', $sql) !== 1;
+    }
+
+    private function scanRuntimeSchemaMutations(string $relativePath, string $source, array &$violations): void
+    {
+        $mutations = '(?:createDatabase|dropDatabaseIfExists|table|create|drop|dropIfExists|dropColumns|dropAllTables|dropAllViews|dropAllTypes|rename|enableForeignKeyConstraints|disableForeignKeyConstraints|withoutForeignKeyConstraints|ensureVectorExtensionExists|ensureExtensionExists|whenTableHasColumn|whenTableDoesntHaveColumn|whenTableHasIndex|whenTableDoesntHaveIndex|getConnection|blueprintResolver)';
+        $schemaFacade = preg_quote('Illuminate\\Support\\Facades\\Schema', '/');
+        preg_match_all(
+            '/\buse\s+'.$schemaFacade.'\s+as\s+([A-Za-z_][A-Za-z0-9_]*)\s*;/',
+            $source,
+            $aliases,
+            PREG_SET_ORDER | PREG_OFFSET_CAPTURE,
+        );
+        foreach ($aliases as $alias) {
+            $violations[] = sprintf(
+                '%s:%d aliasing the Schema facade as %s is forbidden because runtime DDL attribution must remain syntax-stable.',
+                $relativePath,
+                $this->lineNumber($source, $alias[0][1]),
+                $alias[1][0],
+            );
+        }
+
+        $facadePatterns = [
+            '/\bSchema\s*::\s*'.$mutations.'\s*\(/',
+            '/'.preg_quote('\\Illuminate\\Support\\Facades\\Schema', '/').'\s*::\s*'.$mutations.'\s*\(/',
+        ];
+        foreach ($facadePatterns as $pattern) {
+            preg_match_all($pattern, $source, $schemaCalls, PREG_SET_ORDER | PREG_OFFSET_CAPTURE);
+            foreach ($schemaCalls as $call) {
+                $violations[] = sprintf(
+                    '%s:%d runtime schema mutation or escape surface is forbidden because durable DDL ownership belongs to reviewed migrations.',
+                    $relativePath,
+                    $this->lineNumber($source, $call[0][1]),
+                );
+            }
+        }
+
+        preg_match_all(
+            '/->\s*getSchemaBuilder\s*\(\s*\)\s*->\s*'.$mutations.'\s*\(/',
+            $source,
+            $directBuilders,
+            PREG_SET_ORDER | PREG_OFFSET_CAPTURE,
+        );
+        foreach ($directBuilders as $call) {
+            $violations[] = sprintf(
+                '%s:%d runtime schema mutation or escape surface is forbidden because durable DDL ownership belongs to reviewed migrations.',
+                $relativePath,
+                $this->lineNumber($source, $call[0][1]),
+            );
+        }
+
+        preg_match_all(
+            '/(\$[A-Za-z_][A-Za-z0-9_]*)\s*=\s*[^;]*->\s*getSchemaBuilder\s*\(\s*\)\s*;/',
+            $source,
+            $builders,
+            PREG_SET_ORDER | PREG_OFFSET_CAPTURE,
+        );
+        foreach ($builders as $builder) {
+            $variable = $builder[1][0];
+            $assignmentOffset = $builder[0][1];
+            $afterAssignment = $assignmentOffset + strlen($builder[0][0]);
+            $functionEnd = $this->enclosingFunctionEnd($source, $assignmentOffset) ?? strlen($source);
+            if ($functionEnd <= $afterAssignment) {
+                continue;
+            }
+            $segment = substr($source, $afterAssignment, $functionEnd - $afterAssignment);
+            $reassignmentPattern = '/'.preg_quote($variable, '/').'\s*=/';
+            if (preg_match($reassignmentPattern, $segment, $reassignment, PREG_OFFSET_CAPTURE) === 1) {
+                $segment = substr($segment, 0, $reassignment[0][1]);
+            }
+            if (preg_match('/'.preg_quote($variable, '/').'\s*->\s*'.$mutations.'\s*\(/', $segment) !== 1) {
+                continue;
+            }
+            $violations[] = sprintf(
+                '%s:%d deferred runtime schema mutation or escape through %s is forbidden because durable DDL ownership belongs to reviewed migrations.',
+                $relativePath,
+                $this->lineNumber($source, $assignmentOffset),
+                $variable,
+            );
+        }
+    }
+
     private function literalRawSql(string $source, int $offset): ?string
     {
         $tail = substr($source, $offset);
@@ -640,7 +929,16 @@ final class ArchitectureBoundaryChecker
         }
 
         if (preg_match('/^SET\b/i', $sql) === 1) {
-            return preg_match('/;\s*\S/s', $sql) === 1 ? 'unknown' : 'session';
+            if (preg_match('/;\s*\S/s', $sql) === 1) {
+                return 'unknown';
+            }
+            if (preg_match('/^SET\s+@(?!@)/i', $sql) !== 1
+                || preg_match('/(?:@@\s*GLOBAL\.|\bGLOBAL\b|\bPERSIST\b)/i', $sql) === 1
+            ) {
+                return 'unknown';
+            }
+
+            return 'session';
         }
 
         if (preg_match('/^(INSERT|UPDATE|DELETE|REPLACE|TRUNCATE|WITH|CALL|LOAD)\b/i', $sql) === 1) {
@@ -900,7 +1198,7 @@ final class ArchitectureBoundaryChecker
     private function mutationMethod(string $statement): ?string
     {
         if (preg_match(
-            '/->\s*(insert|insertGetId|insertOrIgnore|update|delete|upsert|updateOrInsert|increment|decrement|truncate)\s*\(/',
+            '/->\s*(insert|insertGetId|insertOrIgnore|insertOrIgnoreReturning|insertUsing|insertOrIgnoreUsing|update|updateFrom|delete|upsert|updateOrInsert|increment|incrementEach|decrement|decrementEach|truncate)\s*\(/',
             $statement,
             $match,
         ) !== 1) {

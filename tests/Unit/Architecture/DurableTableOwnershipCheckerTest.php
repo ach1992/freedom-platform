@@ -92,6 +92,66 @@ PHP);
         self::assertSame([], $violations);
     }
 
+    public function test_sql_support_file_create_table_is_inventoried(): void
+    {
+        $this->migration('support/service-delivery-effects.sql', <<<'SQL'
+CREATE TABLE service_delivery_effects (
+    id BIGINT UNSIGNED NOT NULL PRIMARY KEY
+);
+SQL);
+
+        $missing = implode("\n", (new DurableTableOwnershipChecker($this->root, [
+            'durable_table_owners' => [],
+        ]))->violations());
+        self::assertStringContainsString('durable table service_delivery_effects has no explicit architecture owner', $missing);
+
+        $accepted = (new DurableTableOwnershipChecker($this->root, [
+            'durable_table_owners' => [
+                'service_delivery_effects' => 'Provisioning',
+            ],
+        ]))->violations();
+        self::assertSame([], $accepted);
+    }
+
+    public function test_aliased_schema_or_blueprint_import_fails_closed(): void
+    {
+        $this->migration('2026_01_01_000000_alias.php', <<<'PHP'
+<?php
+use Illuminate\Support\Facades\Schema as SchemaFacade;
+use Illuminate\Database\Schema\Blueprint as TableBlueprint;
+PHP);
+
+        $violations = implode("\n", (new DurableTableOwnershipChecker($this->root, [
+            'durable_table_owners' => [],
+        ]))->violations());
+
+        self::assertStringContainsString('aliasing Schema facade is forbidden', $violations);
+        self::assertStringContainsString('aliasing Blueprint is forbidden', $violations);
+    }
+
+    public function test_table_rename_requires_explicit_ownership_lifecycle_support(): void
+    {
+        $this->migration('2026_01_01_000000_schema_rename.php', <<<'PHP'
+<?php
+Schema::create('orders', function ($table): void {});
+Schema::rename('orders', 'orders_archive');
+PHP);
+        $this->migration('support/raw-rename.sql', <<<'SQL'
+RENAME TABLE orders TO orders_archive;
+ALTER TABLE orders_archive RENAME TO orders_final;
+SQL);
+
+        $violations = implode("\n", (new DurableTableOwnershipChecker($this->root, [
+            'durable_table_owners' => [
+                'orders' => 'Orders',
+            ],
+        ]))->violations());
+
+        self::assertStringContainsString('durable table rename via Schema::rename is not ownership-attributable', $violations);
+        self::assertStringContainsString('durable table rename via raw RENAME TABLE is not ownership-attributable', $violations);
+        self::assertStringContainsString('durable table rename via raw ALTER TABLE ... RENAME is not ownership-attributable', $violations);
+    }
+
     public function test_stale_owner_entry_is_rejected(): void
     {
         $this->migration('2026_01_01_000000_test.php', <<<'PHP'
@@ -112,6 +172,10 @@ PHP);
 
     private function migration(string $file, string $content): void
     {
-        file_put_contents($this->root.'/database/migrations/'.$file, $content."\n");
+        $path = $this->root.'/database/migrations/'.$file;
+        if (! is_dir(dirname($path))) {
+            mkdir(dirname($path), 0775, true);
+        }
+        file_put_contents($path, $content."\n");
     }
 }

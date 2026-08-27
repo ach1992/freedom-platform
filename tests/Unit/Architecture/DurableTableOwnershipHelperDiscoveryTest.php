@@ -89,6 +89,99 @@ PHP);
         self::assertStringContainsString('non-literal table callsite', $dynamic);
     }
 
+    public function test_blueprint_literal_and_literal_helper_calls_are_inventoried(): void
+    {
+        $this->migration(<<<'PHP'
+<?php
+use Illuminate\Database\Schema\Blueprint;
+final class ProbeMigration
+{
+    public function up(): void
+    {
+        $literal = new Blueprint('mysql', 'order_source_authorizations');
+        $literal->create();
+        $this->createTable('agent_bulk_orders');
+        $this->createTable('agent_bulk_order_items');
+    }
+
+    private function createTable(string $table): void
+    {
+        $blueprint = new Blueprint('mysql', $table);
+        $blueprint->create();
+    }
+}
+PHP);
+
+        $missing = implode("\n", (new DurableTableOwnershipChecker($this->root, [
+            'durable_table_owners' => [],
+        ]))->violations());
+        self::assertStringContainsString('durable table order_source_authorizations has no explicit architecture owner', $missing);
+        self::assertStringContainsString('durable table agent_bulk_orders has no explicit architecture owner', $missing);
+        self::assertStringContainsString('durable table agent_bulk_order_items has no explicit architecture owner', $missing);
+
+        $accepted = (new DurableTableOwnershipChecker($this->root, [
+            'durable_table_owners' => [
+                'order_source_authorizations' => 'Orders',
+                'agent_bulk_orders' => 'Orders',
+                'agent_bulk_order_items' => 'Orders',
+            ],
+        ]))->violations();
+        self::assertSame([], $accepted);
+    }
+
+    public function test_fully_qualified_blueprint_is_discovered_and_unresolved_construction_fails_closed(): void
+    {
+        $this->migration(<<<'PHP'
+<?php
+final class ProbeMigration
+{
+    public function up(string $prefix): void
+    {
+        $literal = new \Illuminate\Database\Schema\Blueprint('mysql', 'order_source_authorizations');
+        $literal->create();
+        $dynamic = new \Illuminate\Database\Schema\Blueprint('mysql', $prefix.'_events');
+        $dynamic->create();
+    }
+}
+PHP);
+
+        $violations = implode("\n", (new DurableTableOwnershipChecker($this->root, [
+            'durable_table_owners' => [
+                'order_source_authorizations' => 'Orders',
+            ],
+        ]))->violations());
+
+        self::assertStringContainsString('Blueprint table creation could not be statically resolved to a literal table set', $violations);
+        self::assertStringNotContainsString('stale/undiscovered table order_source_authorizations', $violations);
+    }
+
+    public function test_blueprint_helper_non_literal_table_call_fails_closed(): void
+    {
+        $this->migration(<<<'PHP'
+<?php
+use Illuminate\Database\Schema\Blueprint;
+final class ProbeMigration
+{
+    public function up(string $runtimeTable): void
+    {
+        $this->createTable($runtimeTable);
+    }
+
+    private function createTable(string $table): void
+    {
+        $blueprint = new Blueprint('mysql', $table);
+        $blueprint->create();
+    }
+}
+PHP);
+
+        $violations = implode("\n", (new DurableTableOwnershipChecker($this->root, [
+            'durable_table_owners' => [],
+        ]))->violations());
+
+        self::assertStringContainsString('Blueprint helper createTable has a non-literal table callsite', $violations);
+    }
+
     private function migration(string $content): void
     {
         file_put_contents($this->root.'/database/migrations/2026_01_01_000000_probe.php', $content."\n");
