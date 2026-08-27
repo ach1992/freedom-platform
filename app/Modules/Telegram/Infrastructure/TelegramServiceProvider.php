@@ -8,6 +8,7 @@ use App\Modules\Telegram\Application\Contracts\ProtectedTelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\ProtectedTelegramMessageSender;
 use App\Modules\Telegram\Application\Contracts\TelegramBotApi;
 use App\Modules\Telegram\Application\Contracts\TelegramInteractionHandler;
+use App\Modules\Telegram\Application\Contracts\TelegramRuntime;
 use App\Modules\Telegram\Application\TelegramInteractionHandlerRegistry;
 use App\Modules\Telegram\Application\TelegramInteractionPolicy;
 use Illuminate\Contracts\Config\Repository;
@@ -33,6 +34,10 @@ final class TelegramServiceProvider extends ServiceProvider
             },
         );
         $this->app->singleton(
+            TelegramRuntime::class,
+            fn (Application $application): TelegramRuntime => $application->make(TelegramRuntimeConfiguration::class),
+        );
+        $this->app->singleton(
             TelegramInteractionPolicy::class,
             function (Application $application): TelegramInteractionPolicy {
                 $repository = $application->make(Repository::class);
@@ -51,7 +56,7 @@ final class TelegramServiceProvider extends ServiceProvider
         );
         $this->app->singleton(
             ProtectedTelegramDeliveryRuntime::class,
-            fn (Application $application): ProtectedTelegramDeliveryRuntime => $application->make(TelegramRuntimeConfiguration::class),
+            fn (Application $application): ProtectedTelegramDeliveryRuntime => $application->make(TelegramRuntime::class),
         );
         $this->app->singleton(
             TelegramBotApi::class,
