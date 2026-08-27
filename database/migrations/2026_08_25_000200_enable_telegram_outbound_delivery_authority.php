@@ -128,20 +128,16 @@ return new class extends Migration
             // independent incoming FK appeared after attestation, this DROP fails
             // before any guard is removed from a surviving authority table.
             Schema::dropIfExists('telegram_delivery_operations');
-            $hasOperationTable = false;
         }
 
-        if ($hasCapabilityTable) {
-            if (! $this->rollbackCanResumeAfterOperationDrop($connection)) {
-                throw new RuntimeException('Cannot resume Telegram outbound delivery rollback from an unattested partial rollback surface.');
-            }
-
-            // A racing dependency on the capability table can still make this
-            // DROP fail, but the capability guards and shared Outbox guards remain
-            // attached and the next down() can safely resume after the dependency
-            // is removed.
-            Schema::dropIfExists('telegram_delivery_authority_capability');
+        if (! $this->rollbackCanResumeAfterOperationDrop($connection)) {
+            throw new RuntimeException('Cannot resume Telegram outbound delivery rollback from an unattested partial rollback surface.');
         }
+
+        // A racing dependency on the capability table can still make this DROP
+        // fail, but the capability guards and shared Outbox guards remain attached
+        // and the next down() can safely resume after the dependency is removed.
+        Schema::dropIfExists('telegram_delivery_authority_capability');
 
         // Only shared-table guards remain now. No dependency-sensitive authority
         // table DROP follows these statements, so partial trigger cleanup is both
