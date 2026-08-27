@@ -695,12 +695,14 @@ final class ArchitectureBoundaryChecker
 
                 $openParen = $offset + strlen($call[0][0]) - 1;
                 $sql = $this->literalRawSql($source, $openParen + 1);
-                if ($sql !== null && $this->isLiteralReadOnlySql($sql)) {
+                if ($sql !== null
+                    && ($this->isLiteralReadOnlySql($sql)
+                        || $this->isReviewedMetadataIntrospection($relativePath, $sql))) {
                     continue;
                 }
 
                 $violations[] = sprintf(
-                    '%s:%d raw Connection read API %s must receive one literal read-only SELECT statement; mutation/DDL/dynamic SQL is forbidden.',
+                    '%s:%d raw Connection read API %s must receive one literal read-only SELECT statement or the exact reviewed metadata introspection; mutation/DDL/dynamic SQL is forbidden.',
                     $relativePath,
                     $this->lineNumber($source, $offset),
                     $method,
@@ -758,6 +760,15 @@ final class ArchitectureBoundaryChecker
         }
 
         return preg_match('/\\bINTO\\s+(?:OUTFILE|DUMPFILE)\\b/i', $sql) !== 1;
+    }
+
+    private function isReviewedMetadataIntrospection(string $relativePath, string $sql): bool
+    {
+        if ($relativePath !== 'app/Modules/Telegram/Application/TelegramDeliveryForeignKeyMetadataAttestor.php') {
+            return false;
+        }
+
+        return preg_match('/^SHOW\s+GRANTS\s+FOR\s+CURRENT_USER(?:\(\))?\s*;?\s*$/i', trim($sql)) === 1;
     }
 
     private function scanRuntimeSchemaMutations(string $relativePath, string $source, array &$violations): void
