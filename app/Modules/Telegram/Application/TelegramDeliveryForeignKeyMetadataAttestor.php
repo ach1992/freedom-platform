@@ -99,41 +99,47 @@ final readonly class TelegramDeliveryForeignKeyMetadataAttestor
 
     private function metadataPrincipalIsProcessOnly(Connection $connection): bool
     {
-        $rows = $connection->select('SHOW GRANTS FOR CURRENT_USER', [], false);
-        if ($rows === []) {
+        $globalPrivileges = $connection->table('information_schema.USER_PRIVILEGES')
+            ->get(['PRIVILEGE_TYPE', 'IS_GRANTABLE']);
+        if ($globalPrivileges->isEmpty()) {
             return false;
         }
 
         $sawProcess = false;
-        foreach ($rows as $row) {
-            $values = array_values((array) $row);
-            if (count($values) !== 1 || ! is_string($values[0])) {
+        foreach ($globalPrivileges as $row) {
+            $privilege = strtoupper(trim((string) ($row->PRIVILEGE_TYPE ?? '')));
+            $grantable = strtoupper(trim((string) ($row->IS_GRANTABLE ?? '')));
+            if ($grantable !== 'NO') {
                 return false;
             }
 
-            $grant = strtoupper(trim($values[0]));
-            if (str_contains($grant, 'WITH GRANT OPTION')) {
-                return false;
+            if ($privilege === 'PROCESS') {
+                $sawProcess = true;
+
+                continue;
             }
 
-            if (preg_match('/\AGRANT\s+(.+?)\s+ON\s+\*\.\*\s+TO\s+/', $grant, $matches) !== 1) {
+            if ($privilege !== 'USAGE') {
                 return false;
-            }
-
-            foreach (array_map('trim', explode(',', $matches[1])) as $privilege) {
-                if ($privilege === 'PROCESS') {
-                    $sawProcess = true;
-
-                    continue;
-                }
-
-                if ($privilege !== 'USAGE') {
-                    return false;
-                }
             }
         }
 
-        return $sawProcess;
+        if (! $sawProcess) {
+            return false;
+        }
+
+        foreach ([
+            'information_schema.SCHEMA_PRIVILEGES',
+            'information_schema.TABLE_PRIVILEGES',
+            'information_schema.COLUMN_PRIVILEGES',
+            'information_schema.APPLICABLE_ROLES',
+        ] as $privilegeSurface) {
+            if ($connection->table($privilegeSurface)->exists()) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private function sameMariaDbServer(Connection $runtimeConnection, Connection $metadataConnection): bool
@@ -158,8 +164,10 @@ SQL, [], false);
             return null;
         }
 
-        $uidRow = $connection->selectOne("SHOW VARIABLES LIKE 'server_uid'", [], false);
-        $uid = $uidRow === null ? null : trim((string) ($uidRow->Value ?? ''));
+        $uidValue = $connection->table('information_schema.GLOBAL_VARIABLES')
+            ->where('VARIABLE_NAME', 'SERVER_UID')
+            ->value('VARIABLE_VALUE');
+        $uid = $uidValue === null ? null : trim((string) $uidValue);
         if ($uid === '') {
             $uid = null;
         }
