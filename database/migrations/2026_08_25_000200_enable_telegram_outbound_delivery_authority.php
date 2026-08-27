@@ -29,6 +29,10 @@ return new class extends Migration
             return;
         }
 
+        if (! (new TelegramDeliveryForeignKeyMetadataAttestor)->connectionBoundaryMatchesExpected($connection)) {
+            throw new RuntimeException('Telegram delivery authority requires MariaDB >=10.11.9 and the exact dedicated metadata-attestation boundary before schema mutation.');
+        }
+
         $this->withInstallationLock($connection, function () use ($connection): void {
             if ($this->authorityReady($connection)) {
                 return;
