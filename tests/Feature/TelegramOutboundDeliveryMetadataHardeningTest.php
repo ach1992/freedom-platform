@@ -10,6 +10,7 @@ use Illuminate\Database\DatabaseManager;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use RuntimeException;
 use Tests\TestCase;
 
 /** @requirement ARCH-003 ARCH-004 DAT-003 SEC-002 SEC-008 OPS-003 QUA-004 QUA-007 QUA-010 */
@@ -35,8 +36,7 @@ final class TelegramOutboundDeliveryMetadataHardeningTest extends TestCase
         self::assertIsArray($metadata);
         $this->originalMetadataConfig = $metadata;
 
-        $migration = require database_path('migrations/2026_08_25_000200_enable_telegram_outbound_delivery_authority.php');
-        $migration->up();
+        $this->migration()->up();
     }
 
     protected function tearDown(): void
@@ -100,6 +100,41 @@ final class TelegramOutboundDeliveryMetadataHardeningTest extends TestCase
         self::assertFalse(Schema::hasTable('telegram_metadata_definer_probe_effect'));
     }
 
+    public function test_invalid_metadata_boundary_blocks_install_before_any_telegram_ddl(): void
+    {
+        $runtime = DB::connection();
+        $surface = new TelegramDeliveryDatabaseAuthoritySurfaceV1;
+        $migration = $this->migration();
+
+        $migration->down();
+        self::assertFalse(Schema::hasTable('telegram_delivery_operations'));
+        self::assertFalse(Schema::hasTable('telegram_delivery_authority_capability'));
+        self::assertSame([], $surface->presentRequiredTriggers($runtime));
+
+        $underPrivileged = $this->originalMetadataConfig;
+        $underPrivileged['username'] = 'freedom_ci_metadata_unprivileged';
+        $underPrivileged['password'] = 'ci-only-metadata-unprivileged-password';
+        $underPrivileged['url'] = null;
+        config(['database.connections.telegram_metadata' => $underPrivileged]);
+        $this->database->purge('telegram_metadata');
+
+        try {
+            $migration->up();
+            self::fail('Invalid metadata authority must be rejected before Telegram schema mutation.');
+        } catch (RuntimeException $exception) {
+            self::assertStringContainsString('exact dedicated metadata-attestation boundary', $exception->getMessage());
+            self::assertFalse(Schema::hasTable('telegram_delivery_operations'));
+            self::assertFalse(Schema::hasTable('telegram_delivery_authority_capability'));
+            self::assertSame([], $surface->presentRequiredTriggers($runtime));
+        } finally {
+            config(['database.connections.telegram_metadata' => $this->originalMetadataConfig]);
+            $this->database->purge('telegram_metadata');
+        }
+
+        $migration->up();
+        self::assertTrue($surface->semanticsMatchExpected($runtime));
+    }
+
     private function configureShadowMetadataConnection(): Connection
     {
         $port = getenv('MARIADB_SHADOW_PORT');
@@ -140,5 +175,10 @@ SQL, [], false);
             'version' => (string) ($row->version ?? ''),
             'server_uid' => trim((string) ($row->server_uid ?? '')),
         ];
+    }
+
+    private function migration(): object
+    {
+        return require database_path('migrations/2026_08_25_000200_enable_telegram_outbound_delivery_authority.php');
     }
 }
