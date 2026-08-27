@@ -21,6 +21,8 @@ final readonly class TelegramDeliveryForeignKeyMetadataAttestor
 
     private const PROCESS_PRIVILEGE_REQUIRED_ERROR = 1227;
 
+    private const MINIMUM_SERVER_UID_VERSION = '10.11.9';
+
     public function __construct(private ?DatabaseManager $database = null) {}
 
     /** @param list<string> $authorityTables */
@@ -99,47 +101,56 @@ final readonly class TelegramDeliveryForeignKeyMetadataAttestor
 
     private function metadataPrincipalIsProcessOnly(Connection $connection): bool
     {
-        $globalPrivileges = $connection->table('information_schema.USER_PRIVILEGES')
-            ->get(['PRIVILEGE_TYPE', 'IS_GRANTABLE']);
-        if ($globalPrivileges->isEmpty()) {
+        $rows = $connection->select('SHOW GRANTS FOR CURRENT_USER', [], false);
+        if ($rows === []) {
+            return false;
+        }
+
+        $grants = [];
+        foreach ($rows as $row) {
+            $values = array_values((array) $row);
+            if (count($values) !== 1 || ! is_string($values[0])) {
+                return false;
+            }
+
+            $grants[] = $values[0];
+        }
+
+        return $this->grantSetIsProcessOnly($grants);
+    }
+
+    /** @param list<string> $grants */
+    private function grantSetIsProcessOnly(array $grants): bool
+    {
+        if ($grants === []) {
             return false;
         }
 
         $sawProcess = false;
-        foreach ($globalPrivileges as $row) {
-            $privilege = strtoupper(trim((string) ($row->PRIVILEGE_TYPE ?? '')));
-            $grantable = strtoupper(trim((string) ($row->IS_GRANTABLE ?? '')));
-            if ($grantable !== 'NO') {
+        foreach ($grants as $grant) {
+            $grant = trim($grant);
+            if ($grant === ''
+                || stripos($grant, 'WITH GRANT OPTION') !== false
+                || stripos($grant, 'WITH ADMIN OPTION') !== false
+                || preg_match('/\AGRANT\s+(.+?)\s+ON\s+\*\.\*\s+TO\s+/i', $grant, $matches) !== 1) {
                 return false;
             }
 
-            if ($privilege === 'PROCESS') {
-                $sawProcess = true;
+            foreach (array_map('trim', explode(',', $matches[1])) as $privilege) {
+                $privilege = strtoupper(preg_replace('/\s+/', ' ', $privilege) ?? '');
+                if ($privilege === 'PROCESS') {
+                    $sawProcess = true;
 
-                continue;
-            }
+                    continue;
+                }
 
-            if ($privilege !== 'USAGE') {
-                return false;
-            }
-        }
-
-        if (! $sawProcess) {
-            return false;
-        }
-
-        foreach ([
-            'information_schema.SCHEMA_PRIVILEGES',
-            'information_schema.TABLE_PRIVILEGES',
-            'information_schema.COLUMN_PRIVILEGES',
-            'information_schema.APPLICABLE_ROLES',
-        ] as $privilegeSurface) {
-            if ($connection->table($privilegeSurface)->exists()) {
-                return false;
+                if ($privilege !== 'USAGE') {
+                    return false;
+                }
             }
         }
 
-        return true;
+        return $sawProcess;
     }
 
     private function sameMariaDbServer(Connection $runtimeConnection, Connection $metadataConnection): bool
@@ -147,38 +158,39 @@ final readonly class TelegramDeliveryForeignKeyMetadataAttestor
         $runtime = $this->serverIdentity($runtimeConnection);
         $metadata = $this->serverIdentity($metadataConnection);
 
-        return $runtime !== null && $runtime === $metadata;
+        return $runtime !== null
+            && $metadata !== null
+            && hash_equals($runtime, $metadata);
     }
 
-    /** @return array{uid:?string,hostname:string,port:int,server_id:int,version:string}|null */
-    private function serverIdentity(Connection $connection): ?array
+    private function serverIdentity(Connection $connection): ?string
     {
-        $identity = $connection->selectOne(<<<'SQL'
-SELECT
-    @@hostname AS hostname,
-    @@port AS port,
-    @@server_id AS server_id,
-    VERSION() AS version
-SQL, [], false);
+        $identity = $connection->selectOne(
+            'SELECT VERSION() AS version, @@server_uid AS server_uid',
+            [],
+            false,
+        );
         if ($identity === null) {
             return null;
         }
 
-        $uidValue = $connection->table('information_schema.GLOBAL_VARIABLES')
-            ->where('VARIABLE_NAME', 'SERVER_UID')
-            ->value('VARIABLE_VALUE');
-        $uid = $uidValue === null ? null : trim((string) $uidValue);
-        if ($uid === '') {
-            $uid = null;
+        $version = trim((string) ($identity->version ?? ''));
+        $uid = trim((string) ($identity->server_uid ?? ''));
+        if (! $this->mariaDbVersionSupportsServerUid($version) || $uid === '' || strlen($uid) > 128) {
+            return null;
         }
 
-        return [
-            'uid' => $uid,
-            'hostname' => (string) ($identity->hostname ?? ''),
-            'port' => (int) ($identity->port ?? 0),
-            'server_id' => (int) ($identity->server_id ?? 0),
-            'version' => (string) ($identity->version ?? ''),
-        ];
+        return $uid;
+    }
+
+    private function mariaDbVersionSupportsServerUid(string $version): bool
+    {
+        if (stripos($version, 'mariadb') === false
+            || preg_match('/\b(\d+\.\d+\.\d+)\b/', $version, $matches) !== 1) {
+            return false;
+        }
+
+        return version_compare($matches[1], self::MINIMUM_SERVER_UID_VERSION, '>=');
     }
 
     private function database(): DatabaseManager
