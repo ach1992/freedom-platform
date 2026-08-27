@@ -146,8 +146,8 @@ return [
     |--------------------------------------------------------------------------
     |
     | This table keeps track of all the migrations that have already run for
-    | the application. Using this information, we can determine which of the
-    | migrations on disk haven't actually been run for the database.
+    | your application. Using this information, we can determine which of
+    | the migrations on disk haven't actually been run on the database.
     |
     */
 
