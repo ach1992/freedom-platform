@@ -23,6 +23,18 @@ final class TelegramDeliveryForeignKeyMetadataAttestorTest extends TestCase
             "GRANT USAGE ON *.* TO 'metadata'@'%'",
             "GRANT PROCESS ON *.* TO 'metadata'@'%'",
         ]));
+        self::assertTrue($method->invoke($attestor, [
+            "GRANT USAGE ON *.* TO `metadata`@`%` IDENTIFIED BY PASSWORD '*0123456789ABCDEF'",
+            'GRANT PROCESS ON *.* TO `metadata`@`%` REQUIRE SSL WITH MAX_USER_CONNECTIONS 2',
+        ]));
+        self::assertTrue($method->invoke($attestor, [
+            "GRANT USAGE ON *.* TO 'metadata'@'%' IDENTIFIED VIA mysql_native_password USING '*0123456789ABCDEF'",
+            "GRANT PROCESS ON *.* TO 'metadata'@'%'",
+        ]));
+        self::assertTrue($method->invoke($attestor, [
+            "GRANT USAGE ON *.* TO 'metadata'@'%' IDENTIFIED WITH ed25519 AS 'hash-value'",
+            "GRANT PROCESS ON *.* TO 'metadata'@'%'",
+        ]));
 
         foreach ([
             ["GRANT PROCESS ON *.* TO 'metadata'@'%' WITH GRANT OPTION"],
@@ -30,6 +42,10 @@ final class TelegramDeliveryForeignKeyMetadataAttestorTest extends TestCase
             ["GRANT PROCESS ON *.* TO 'metadata'@'%'", "GRANT `metadata_role` TO 'metadata'@'%'"],
             ["GRANT PROCESS ON *.* TO 'metadata'@'%'", 'GRANT SELECT ON `freedom_platform`.* TO `PUBLIC`'],
             ["GRANT PROCESS, SELECT ON *.* TO 'metadata'@'%'"],
+            ["GRANT PROCESS ON *.* TO 'metadata'@'%' FUTURE AUTHORITY"],
+            ["GRANT PROCESS ON *.* TO 'metadata'@'%' IDENTIFIED BY PASSWORD '*0123456789ABCDEF' FUTURE AUTHORITY"],
+            ["GRANT PROCESS ON *.* TO 'metadata'@'%' WITH MAX_USER_CONNECTIONS 2 FUTURE AUTHORITY"],
+            ["GRANT PROCESS ON *.* TO 'metadata'@'%' WITH ADMIN OPTION"],
         ] as $grants) {
             self::assertFalse($method->invoke($attestor, $grants));
         }

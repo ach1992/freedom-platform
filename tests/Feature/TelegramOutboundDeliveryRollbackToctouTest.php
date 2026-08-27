@@ -70,7 +70,9 @@ final class TelegramOutboundDeliveryRollbackToctouTest extends TestCase
         $databaseName = $this->safeDatabaseName($runtime);
         $migration = $this->migration();
 
-        $this->assertRollbackDropFails(function () use ($builder, $databaseName): void {
+        $this->assertDistinctDatabaseSessions($runtime, $builder);
+
+        $this->assertRollbackDropFails(afterFinalPreflight: function () use ($builder, $databaseName): void {
             $builder->statement(sprintf(<<<'SQL'
 CREATE TABLE telegram_delivery_rollback_operation_fk_probe (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -108,7 +110,9 @@ SQL, $databaseName));
         $databaseName = $this->safeDatabaseName($runtime);
         $migration = $this->migration();
 
-        $this->assertRollbackDropFails(function () use ($builder, $databaseName): void {
+        $this->assertDistinctDatabaseSessions($runtime, $builder);
+
+        $this->assertRollbackDropFails(afterCapabilityPreflight: function () use ($builder, $databaseName): void {
             $builder->statement(sprintf(<<<'SQL'
 CREATE TABLE telegram_delivery_rollback_capability_fk_probe (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -150,15 +154,18 @@ SQL, $databaseName));
         self::assertTrue((new TelegramDeliveryDatabaseAuthoritySurfaceV1)->semanticsMatchExpected($runtime));
     }
 
-    /** @param \Closure():void $afterFinalPreflight */
-    private function assertRollbackDropFails(\Closure $afterFinalPreflight): void
+    /**
+     * @param  null|\Closure():void  $afterFinalPreflight
+     * @param  null|\Closure():void  $afterCapabilityPreflight
+     */
+    private function assertRollbackDropFails(?\Closure $afterFinalPreflight = null, ?\Closure $afterCapabilityPreflight = null): void
     {
         $migration = $this->migration();
         $method = new ReflectionMethod($migration, 'rollbackMysql');
         $method->setAccessible(true);
 
         try {
-            $method->invoke($migration, DB::connection(), $afterFinalPreflight);
+            $method->invoke($migration, DB::connection(), $afterFinalPreflight, $afterCapabilityPreflight);
             self::fail('A racing incoming foreign key must prevent dependency-sensitive rollback progress.');
         } catch (QueryException $exception) {
             self::assertContains((int) ($exception->errorInfo[1] ?? 0), [1217, 1451]);
@@ -168,6 +175,22 @@ SQL, $databaseName));
                 $exception->getMessage(),
             );
         }
+    }
+
+    private function assertDistinctDatabaseSessions(Connection $runtime, Connection $builder): void
+    {
+        $runtimeSession = $runtime->selectOne('SELECT CONNECTION_ID() AS connection_id', [], false);
+        $builderSession = $builder->selectOne('SELECT CONNECTION_ID() AS connection_id', [], false);
+
+        self::assertNotNull($runtimeSession);
+        self::assertNotNull($builderSession);
+        self::assertGreaterThan(0, (int) ($runtimeSession->connection_id ?? 0));
+        self::assertGreaterThan(0, (int) ($builderSession->connection_id ?? 0));
+        self::assertNotSame(
+            (int) $runtimeSession->connection_id,
+            (int) $builderSession->connection_id,
+            'The rollback race actor must use an independent MariaDB session.',
+        );
     }
 
     private function assertExactRequiredTriggers(): void

@@ -89,13 +89,14 @@ return new class extends Migration
      * first operation that can fail after final attestation; an independent DDL
      * race therefore cannot leave a surviving authority table unguarded.
      *
-     * The optional callback is an internal deterministic concurrency-test seam
-     * invoked after final attestation and before the first dependency-sensitive
-     * DROP. Production down() never supplies it.
+     * The optional callbacks are internal deterministic concurrency-test seams
+     * invoked after each final dependency attestation and before the corresponding
+     * dependency-sensitive DROP. Production down() never supplies them.
      *
      * @param  null|Closure():void  $afterFinalPreflight
+     * @param  null|Closure():void  $afterCapabilityPreflight
      */
-    private function rollbackMysql(Connection $connection, ?Closure $afterFinalPreflight = null): void
+    private function rollbackMysql(Connection $connection, ?Closure $afterFinalPreflight = null, ?Closure $afterCapabilityPreflight = null): void
     {
         if ($this->durableAuthorityExists()) {
             throw new RuntimeException('Cannot roll back Telegram outbound delivery authority while durable authority exists.');
@@ -132,6 +133,10 @@ return new class extends Migration
 
         if (! $this->rollbackCanResumeAfterOperationDrop($connection)) {
             throw new RuntimeException('Cannot resume Telegram outbound delivery rollback from an unattested partial rollback surface.');
+        }
+
+        if ($afterCapabilityPreflight !== null) {
+            $afterCapabilityPreflight();
         }
 
         // A racing dependency on the capability table can still make this DROP

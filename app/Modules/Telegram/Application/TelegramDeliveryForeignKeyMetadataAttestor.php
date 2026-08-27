@@ -151,15 +151,17 @@ final readonly class TelegramDeliveryForeignKeyMetadataAttestor
 
         $sawProcess = false;
         foreach ($grants as $grant) {
-            $grant = trim($grant);
-            if ($grant === ''
-                || stripos($grant, 'WITH GRANT OPTION') !== false
-                || stripos($grant, 'WITH ADMIN OPTION') !== false
-                || preg_match('/\AGRANT\s+(.+?)\s+ON\s+\*\.\*\s+TO\s+/i', $grant, $matches) !== 1) {
+            $grant = preg_replace('/\s+/', ' ', trim($grant));
+            if (! is_string($grant) || $grant === '') {
                 return false;
             }
 
-            foreach (array_map('trim', explode(',', $matches[1])) as $privilege) {
+            $privileges = $this->allowedGlobalGrantPrivileges($grant);
+            if ($privileges === null) {
+                return false;
+            }
+
+            foreach (array_map('trim', explode(',', $privileges)) as $privilege) {
                 $privilege = strtoupper(preg_replace('/\s+/', ' ', $privilege) ?? '');
                 if ($privilege === 'PROCESS') {
                     $sawProcess = true;
@@ -174,6 +176,40 @@ final readonly class TelegramDeliveryForeignKeyMetadataAttestor
         }
 
         return $sawProcess;
+    }
+
+    private function allowedGlobalGrantPrivileges(string $grant): ?string
+    {
+        $quotedIdentifier = '`(?:``|[^`])*`';
+        $quotedString = "'(?:''|\\\\.|[^'])*'";
+        $unquotedAccountAtom = '[A-Za-z0-9_.%:$-]+';
+        $accountAtom = '(?:'.$quotedIdentifier.'|'.$quotedString.'|'.$unquotedAccountAtom.')';
+        $account = $accountAtom.'@'.$accountAtom;
+
+        $plugin = '(?:'.$quotedIdentifier.'|[A-Za-z0-9_.$-]+)';
+        $pluginAuth = $plugin.'(?:\s+(?:USING|AS)\s+'.$quotedString.')?';
+        $identifiedVia = $pluginAuth.'(?:\s+OR\s+'.$pluginAuth.')*';
+        $authentication = '(?:\s+IDENTIFIED\s+(?:BY\s+PASSWORD\s+'.$quotedString.'|(?:VIA|WITH)\s+'.$identifiedVia.'))?';
+
+        $tlsItem = '(?:SSL|X509|CIPHER\s+'.$quotedString.'|ISSUER\s+'.$quotedString.'|SUBJECT\s+'.$quotedString.')';
+        $tls = '(?:\s+REQUIRE\s+(?:NONE|'.$tlsItem.'(?:\s+AND\s+'.$tlsItem.')*))?';
+
+        $resourceName = '(?:MAX_QUERIES_PER_HOUR|MAX_UPDATES_PER_HOUR|MAX_CONNECTIONS_PER_HOUR|MAX_USER_CONNECTIONS|MAX_STATEMENT_TIME)';
+        $resourceValue = '(?:[0-9]+(?:\.[0-9]+)?)';
+        $resources = '(?:\s+WITH\s+'.$resourceName.'\s+'.$resourceValue.'(?:\s+'.$resourceName.'\s+'.$resourceValue.')*)?';
+
+        $pattern = '~\AGRANT\s+(.+?)\s+ON\s+\*\.\*\s+TO\s+'
+            .$account
+            .$authentication
+            .$tls
+            .$resources
+            .'\z~iD';
+
+        if (preg_match($pattern, $grant, $matches) !== 1) {
+            return null;
+        }
+
+        return $matches[1];
     }
 
     private function sameMariaDbServer(Connection $runtimeConnection, Connection $metadataConnection): bool

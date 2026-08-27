@@ -212,6 +212,31 @@ grep -A3 -F 'concurrency:' "$ci" | grep -F 'cancel-in-progress: true' >/dev/null
     || fail 'generic CI must cancel superseded runs'
 grep -F 'EXPECTED_HEAD_SHA' "$ci" >/dev/null \
     || fail 'generic CI lacks exact PR head/base freshness validation'
+grep -F 'PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}' "$ci" >/dev/null \
+    || fail 'generic CI secret scan must bind to the exact PR base SHA from the event'
+grep -F 'PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}' "$ci" >/dev/null \
+    || fail 'generic CI secret scan must bind to the exact PR head SHA from the event'
+grep -F 'current_base=$(git ls-remote origin "refs/heads/$PR_BASE_REF"' "$ci" >/dev/null \
+    || fail 'generic CI secret scan must independently verify the current PR base ref'
+grep -F 'current_head=$(git ls-remote origin "refs/heads/$PR_HEAD_REF"' "$ci" >/dev/null \
+    || fail 'generic CI secret scan must independently verify the current PR head ref'
+grep -F 'scan_range="$PR_BASE_SHA..$PR_HEAD_SHA"' "$ci" >/dev/null \
+    || fail 'generic CI secret scan must scan the exact base-to-head range without PR-commit pagination'
+grep -F 'commit_count=$(git rev-list --count "$scan_range")' "$ci" >/dev/null \
+    || fail 'generic CI secret scan must count the exact resolved candidate history'
+grep -F 'log_opts=--full-history --diff-merges=separate $scan_range' "$ci" >/dev/null \
+    || fail 'generic CI secret scan must pass the exact PR range and merge-resolution diffs to Gitleaks'
+grep -F 'log_opts=--full-history --diff-merges=separate $PUSH_BEFORE_SHA..$GITHUB_SHA' "$ci" >/dev/null \
+    || fail 'generic CI push secret scan must preserve the exact before-to-head range'
+grep -Eq "GITLEAKS_SHA256: '[0-9a-f]{64}'" "$ci" >/dev/null \
+    || fail 'generic CI secret scan must checksum-pin the standalone Gitleaks binary'
+grep -F 'sha256sum -c -' "$ci" >/dev/null \
+    || fail 'generic CI secret scan must verify the pinned Gitleaks archive checksum'
+grep -F 'gitleaks "${args[@]}"' "$ci" >/dev/null \
+    || fail 'generic CI secret scan must execute the explicitly resolved Gitleaks range'
+if grep -F 'gitleaks/gitleaks-action@' "$ci" >/dev/null; then
+    fail 'generic CI must not rely on the PR-commit-list pagination behavior of gitleaks-action'
+fi
 grep -F 'needs.preflight.outputs.integration == ' "$ci" >/dev/null \
     || fail 'MariaDB/Redis integration must be gated by the computed validation plan'
 grep -F 'needs.preflight.outputs.dependencies == ' "$ci" >/dev/null \
