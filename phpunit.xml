@@ -3,6 +3,8 @@
          xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
          bootstrap="vendor/autoload.php"
          colors="true"
+         failOnPhpunitNotice="true"
+         displayDetailsOnPhpunitNotices="true"
 >
     <testsuites>
         <testsuite name="Unit">
@@ -36,5 +38,6 @@
         <env name="BENEFIT_CODE_LOOKUP_KEY_CURRENT" value="benefit-code-test-only-key-material-benefit-code-test-only"/>
         <env name="TELEGRAM_METADATA_DB_USERNAME" value="freedom_ci_metadata"/>
         <env name="TELEGRAM_METADATA_DB_PASSWORD" value="ci-only-metadata-password"/>
+        <env name="MARIADB_SHADOW_PORT" value="33068"/>
     </php>
 </phpunit>
