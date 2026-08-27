@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use App\Modules\Telegram\Application\TelegramDeliveryDatabaseAuthoritySurfaceV1;
+use App\Modules\Telegram\Application\TelegramDeliveryForeignKeyMetadataAttestor;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\Migrations\Migration;
@@ -74,18 +75,122 @@ return new class extends Migration
         }
 
         $this->withInstallationLock($connection, function () use ($connection): void {
-            if ($this->durableAuthorityExists()) {
-                throw new RuntimeException('Cannot roll back Telegram outbound delivery authority while durable authority exists.');
-            }
-
-            if (! $this->authorityReady($connection)) {
-                throw new RuntimeException('Cannot roll back Telegram outbound delivery authority unless the complete activated authority surface is attested before guard removal.');
-            }
-
-            $this->dropGuards();
-            Schema::dropIfExists('telegram_delivery_operations');
-            Schema::dropIfExists('telegram_delivery_authority_capability');
+            $this->rollbackMysql($connection);
         });
+    }
+
+    /**
+     * Keep every guard attached to a still-existing authority table until that
+     * table itself has been removed. This makes a dependency-sensitive DROP the
+     * first operation that can fail after final attestation; an independent DDL
+     * race therefore cannot leave a surviving authority table unguarded.
+     *
+     * The optional callback is an internal deterministic concurrency-test seam
+     * invoked after final attestation and before the first dependency-sensitive
+     * DROP. Production down() never supplies it.
+     *
+     * @param  null|Closure():void  $afterFinalPreflight
+     */
+    private function rollbackMysql(Connection $connection, ?Closure $afterFinalPreflight = null): void
+    {
+        if ($this->durableAuthorityExists()) {
+            throw new RuntimeException('Cannot roll back Telegram outbound delivery authority while durable authority exists.');
+        }
+
+        $hasOperationTable = Schema::hasTable('telegram_delivery_operations');
+        $hasCapabilityTable = Schema::hasTable('telegram_delivery_authority_capability');
+
+        if (! $hasOperationTable && ! $hasCapabilityTable) {
+            $this->dropOutboxGuards();
+
+            return;
+        }
+
+        if ($hasOperationTable && ! $hasCapabilityTable) {
+            throw new RuntimeException('Cannot roll back Telegram outbound delivery authority from an unrecognized incomplete authority surface.');
+        }
+
+        if ($hasOperationTable) {
+            if (! $this->authorityReady($connection)) {
+                throw new RuntimeException('Cannot roll back Telegram outbound delivery authority unless the complete activated authority surface is attested before destructive rollback.');
+            }
+
+            if ($afterFinalPreflight !== null) {
+                $afterFinalPreflight();
+            }
+
+            // Dropping the table atomically removes only triggers attached to this
+            // table. Shared Outbox and capability guards remain in place. If an
+            // independent incoming FK appeared after attestation, this DROP fails
+            // before any guard is removed from a surviving authority table.
+            Schema::dropIfExists('telegram_delivery_operations');
+            $hasOperationTable = false;
+        }
+
+        if ($hasCapabilityTable) {
+            if (! $this->rollbackCanResumeAfterOperationDrop($connection)) {
+                throw new RuntimeException('Cannot resume Telegram outbound delivery rollback from an unattested partial rollback surface.');
+            }
+
+            // A racing dependency on the capability table can still make this
+            // DROP fail, but the capability guards and shared Outbox guards remain
+            // attached and the next down() can safely resume after the dependency
+            // is removed.
+            Schema::dropIfExists('telegram_delivery_authority_capability');
+        }
+
+        // Only shared-table guards remain now. No dependency-sensitive authority
+        // table DROP follows these statements, so partial trigger cleanup is both
+        // fail-closed and idempotently resumable.
+        $this->dropOutboxGuards();
+    }
+
+    private function rollbackCanResumeAfterOperationDrop(Connection $connection): bool
+    {
+        if (Schema::hasTable('telegram_delivery_operations')
+            || ! Schema::hasTable('telegram_delivery_authority_capability')) {
+            return false;
+        }
+
+        $surface = new TelegramDeliveryDatabaseAuthoritySurfaceV1;
+        if (! $surface->capabilityTableHasCurrentShape($connection)) {
+            return false;
+        }
+
+        $rows = DB::table('telegram_delivery_authority_capability')->get([
+            'id', 'capability_hash', 'schema_version', 'activated_at',
+        ]);
+        if ($rows->count() !== 1) {
+            return false;
+        }
+
+        $capability = $rows->first();
+        if ($capability === null
+            || (int) $capability->id !== 1
+            || ! is_string($capability->capability_hash)
+            || ! hash_equals($this->capabilityHash(), $capability->capability_hash)
+            || (int) $capability->schema_version !== 1
+            || $capability->activated_at === null) {
+            return false;
+        }
+
+        $presentTriggers = $surface->presentRequiredTriggers($connection);
+        sort($presentTriggers, SORT_STRING);
+        $expectedTriggers = [
+            'outbox_telegram_delivery_envelope_insert_guard',
+            'outbox_telegram_delivery_envelope_update_guard',
+            'outbox_telegram_delivery_envelope_delete_guard',
+            'telegram_delivery_capability_insert_guard',
+            'telegram_delivery_capability_update_guard',
+            'telegram_delivery_capability_delete_guard',
+        ];
+        sort($expectedTriggers, SORT_STRING);
+        if ($presentTriggers !== $expectedTriggers) {
+            return false;
+        }
+
+        return (new TelegramDeliveryForeignKeyMetadataAttestor)
+            ->matchesExpected($connection, ['telegram_delivery_authority_capability']);
     }
 
     private function authorityReady(Connection $connection): bool
@@ -297,6 +402,13 @@ SQL);
         DB::unprepared('DROP TRIGGER IF EXISTS telegram_delivery_capability_delete_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS telegram_delivery_capability_update_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS telegram_delivery_capability_insert_guard');
+    }
+
+    private function dropOutboxGuards(): void
+    {
+        DB::unprepared('DROP TRIGGER IF EXISTS outbox_telegram_delivery_envelope_delete_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS outbox_telegram_delivery_envelope_update_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS outbox_telegram_delivery_envelope_insert_guard');
     }
 
     private function disconnect(Connection $connection): void
