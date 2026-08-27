@@ -13,6 +13,6 @@ GRANT SELECT ON `freedom_platform_ci`.* TO 'freedom_ci_metadata_broad'@'%';
 -- application principal cannot inspect. It exists only inside disposable CI.
 CREATE USER IF NOT EXISTS 'freedom_ci_fk_builder'@'%' IDENTIFIED BY 'ci-only-fk-builder-password';
 GRANT CREATE, ALTER, DROP, INDEX ON `freedom_platform_hidden_fk`.* TO 'freedom_ci_fk_builder'@'%';
-GRANT SELECT ON `freedom_platform_ci`.`telegram_delivery_operations` TO 'freedom_ci_fk_builder'@'%';
+GRANT SELECT ON `freedom_platform_ci`.* TO 'freedom_ci_fk_builder'@'%';
 
 FLUSH PRIVILEGES;
