@@ -84,6 +84,7 @@ final class DurableTableOwnershipChecker
 
             if ($file->getExtension() === 'sql') {
                 $this->recordRawCreateTables($tables, $relativePath, $source);
+                $this->recordUnsupportedTableRenames($violations, $relativePath, $source);
 
                 continue;
             }
@@ -118,6 +119,7 @@ final class DurableTableOwnershipChecker
             }
 
             $this->recordRawCreateTables($tables, $relativePath, $source);
+            $this->recordUnsupportedTableRenames($violations, $relativePath, $source);
 
         }
 
@@ -313,6 +315,27 @@ final class DurableTableOwnershipChecker
         $tail = substr($source, $offset);
 
         return preg_match('/'.preg_quote($variable, '/').'\s*->\s*create\s*\(/', $tail) === 1;
+    }
+
+    /** @param list<string> $violations */
+    private function recordUnsupportedTableRenames(array &$violations, string $path, string $source): void
+    {
+        $patterns = [
+            '/\bSchema::rename\s*\(/' => 'Schema::rename',
+            '/\bRENAME\s+TABLE\b/i' => 'raw RENAME TABLE',
+            '/\bALTER\s+TABLE\b[^;\r\n]*\bRENAME\b/i' => 'raw ALTER TABLE ... RENAME',
+        ];
+        foreach ($patterns as $pattern => $mechanism) {
+            preg_match_all($pattern, $source, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE);
+            foreach ($matches as $match) {
+                $violations[] = sprintf(
+                    '%s:%d durable table rename via %s is not ownership-attributable; model the post-rename durable ownership lifecycle explicitly before using table rename.',
+                    $path,
+                    $this->lineNumber($source, $match[0][1]),
+                    $mechanism,
+                );
+            }
+        }
     }
 
     /** @param array<string,list<string>> $tables */

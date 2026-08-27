@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Unit\Architecture;
 
 use FreedomPlatform\CI\ArchitectureBoundaryChecker;
+use Illuminate\Database\Connection;
 use Illuminate\Database\Query\Builder;
 use PHPUnit\Framework\TestCase;
 use RecursiveDirectoryIterator;
@@ -287,6 +288,177 @@ PHP;
         $violations = implode("\n", $this->checker()->check()['violations']);
 
         self::assertSame(count($writeLikeMethods), substr_count($violations, 'mutation of durable table orders owned by Orders is forbidden'));
+    }
+
+    public function test_query_builder_from_variants_cannot_bypass_table_attribution(): void
+    {
+        $this->write('app/Modules/Customers/Application/FromBypasses.php', <<<'PHP'
+<?php
+namespace App\Modules\Customers\Application;
+final class FromBypasses
+{
+    public function run($db, string $table): void
+    {
+        $db->query()->from('orders')->update([]);
+        $db->query()->from($table)->delete();
+        $db->query()->fromRaw('orders')->update([]);
+        $deferred = $db->query()->from('orders');
+        $deferred->delete();
+    }
+}
+PHP);
+
+        $violations = implode("\n", $this->checker()->check()['violations']);
+
+        self::assertStringContainsString('Customers mutation of durable table orders owned by Orders is forbidden', $violations);
+        self::assertStringContainsString('dynamic table mutation is forbidden', $violations);
+        self::assertStringContainsString('query mutation through fromRaw is forbidden', $violations);
+        self::assertStringContainsString('deferred table mutation through $deferred is forbidden', $violations);
+    }
+
+    public function test_runtime_schema_introspection_is_allowed_but_mutation_surfaces_fail_closed(): void
+    {
+        $this->write('app/Modules/Orders/Application/RuntimeSchema.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+use Illuminate\Support\Facades\Schema;
+final class RuntimeSchema
+{
+    public function run($connection): void
+    {
+        Schema::hasTable('orders');
+        $connection->getSchemaBuilder()->hasTable('orders');
+        Schema::dropIfExists('orders');
+        $connection->getSchemaBuilder()->dropIfExists('orders');
+        Schema::whenTableHasColumn('orders', 'id', static function (): void {});
+        $connection->getSchemaBuilder()->getConnection();
+        $schema = $connection->getSchemaBuilder();
+        $schema->rename('orders', 'orders_archive');
+    }
+}
+PHP);
+        $this->write('app/Modules/Orders/Application/AliasedRuntimeSchema.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+use Illuminate\Support\Facades\Schema as DatabaseSchema;
+final class AliasedRuntimeSchema { public function run(): void { DatabaseSchema::dropIfExists('orders'); } }
+PHP);
+
+        $violations = implode("\n", $this->checker()->check()['violations']);
+
+        self::assertSame(4, substr_count($violations, 'runtime schema mutation or escape surface is forbidden'));
+        self::assertSame(1, substr_count($violations, 'deferred runtime schema mutation or escape through $schema is forbidden'));
+        self::assertStringContainsString('aliasing the Schema facade as DatabaseSchema is forbidden', $violations);
+    }
+
+    public function test_raw_connection_sql_surface_is_read_only_or_fails_closed(): void
+    {
+        $expectedRawMethods = [
+            'affectingStatement',
+            'cursor',
+            'delete',
+            'insert',
+            'scalar',
+            'select',
+            'selectFromWriteConnection',
+            'selectOne',
+            'selectResultSets',
+            'statement',
+            'unprepared',
+            'update',
+        ];
+        $rawMethods = array_values(array_filter(
+            get_class_methods(Connection::class),
+            static fn (string $method): bool => preg_match('/^(?:select|insert|update|delete|statement|affectingStatement|unprepared|scalar|cursor)/', $method) === 1,
+        ));
+        sort($rawMethods, SORT_STRING);
+        self::assertSame($expectedRawMethods, $rawMethods, 'Laravel Connection raw SQL surface changed; update architecture attribution deliberately.');
+
+        $this->write('app/Modules/Orders/Application/RawConnectionReads.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+use Illuminate\Database\Connection;
+use Illuminate\Database\DatabaseManager;
+use Illuminate\Support\Facades\DB;
+final class RawConnectionReads
+{
+    public function __construct(
+        private Connection $connection,
+        private DatabaseManager $database,
+    ) {}
+
+    public function safe(Connection $parameter): void
+    {
+        $this->connection->selectOne('SELECT 1 AS ready');
+        $this->database->select('SELECT COUNT(*) AS total FROM orders');
+        $this->database->connection()->selectOne('SELECT 1');
+        $parameter->scalar('SELECT COUNT(*) FROM orders');
+        DB::selectOne('SELECT 1');
+    }
+
+    public function unsafe(Connection $parameter, string $sql): void
+    {
+        $this->connection->selectOne('UPDATE orders SET state = "paid"');
+        $this->database->select('SELECT 1; DELETE FROM orders');
+        $this->database->connection()->selectOne('ALTER TABLE orders ADD COLUMN bad INT');
+        $parameter->cursor($sql);
+        $parameter->selectOne("SELECT 1 INTO OUTFILE '/tmp/architecture-bypass'");
+        $this->connection->update('UPDATE orders SET state = "paid"');
+        $this->database->delete('DELETE FROM orders');
+        DB::selectOne('DROP TABLE orders');
+        $local = $this->database->connection();
+        $local->selectOne('DELETE FROM orders');
+        $facadeConnection = DB::connection();
+        $facadeConnection->selectOne('UPDATE orders SET state = "paid"');
+    }
+}
+PHP);
+        $this->write('app/Modules/Orders/Application/AliasedConnection.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+use Illuminate\Database\Connection as SqlConnection;
+final class AliasedConnection
+{
+    public function unsafe(SqlConnection $db): void
+    {
+        $db->selectOne('DELETE FROM orders');
+    }
+}
+PHP);
+        $this->write('app/Modules/Orders/Application/InterfaceConnection.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+use Illuminate\Database\ConnectionInterface;
+final class InterfaceConnection
+{
+    public function unsafe(ConnectionInterface $db): void
+    {
+        $db->selectOne('TRUNCATE TABLE orders');
+    }
+}
+PHP);
+        $this->write('app/Modules/Orders/Application/NullableConnection.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+use Illuminate\Database\Connection;
+final class NullableConnection
+{
+    public function __construct(private ?Connection $connection) {}
+
+    public function unsafe(Connection|null $parameter): void
+    {
+        $this->connection?->selectOne('DELETE FROM orders');
+        $parameter?->update('UPDATE orders SET state = "paid"');
+    }
+}
+PHP);
+
+        $violations = implode("\n", $this->checker()->check()['violations']);
+
+        self::assertSame(11, substr_count($violations, 'raw Connection read API'));
+        self::assertSame(3, substr_count($violations, 'raw Connection mutation API'));
+        self::assertStringContainsString('read API cursor must receive one literal read-only SELECT statement', $violations);
+        self::assertStringContainsString('read API selectOne must receive one literal read-only SELECT statement', $violations);
     }
 
     public function test_mutation_of_unmapped_literal_table_fails_closed(): void

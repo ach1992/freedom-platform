@@ -129,6 +129,29 @@ PHP);
         self::assertStringContainsString('aliasing Blueprint is forbidden', $violations);
     }
 
+    public function test_table_rename_requires_explicit_ownership_lifecycle_support(): void
+    {
+        $this->migration('2026_01_01_000000_schema_rename.php', <<<'PHP'
+<?php
+Schema::create('orders', function ($table): void {});
+Schema::rename('orders', 'orders_archive');
+PHP);
+        $this->migration('support/raw-rename.sql', <<<'SQL'
+RENAME TABLE orders TO orders_archive;
+ALTER TABLE orders_archive RENAME TO orders_final;
+SQL);
+
+        $violations = implode("\n", (new DurableTableOwnershipChecker($this->root, [
+            'durable_table_owners' => [
+                'orders' => 'Orders',
+            ],
+        ]))->violations());
+
+        self::assertStringContainsString('durable table rename via Schema::rename is not ownership-attributable', $violations);
+        self::assertStringContainsString('durable table rename via raw RENAME TABLE is not ownership-attributable', $violations);
+        self::assertStringContainsString('durable table rename via raw ALTER TABLE ... RENAME is not ownership-attributable', $violations);
+    }
+
     public function test_stale_owner_entry_is_rejected(): void
     {
         $this->migration('2026_01_01_000000_test.php', <<<'PHP'
