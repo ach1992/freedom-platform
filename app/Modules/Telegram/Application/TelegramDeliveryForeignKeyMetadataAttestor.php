@@ -25,26 +25,24 @@ final readonly class TelegramDeliveryForeignKeyMetadataAttestor
 
     public function __construct(private ?DatabaseManager $database = null) {}
 
+    public function connectionBoundaryMatchesExpected(Connection $runtimeConnection): bool
+    {
+        return $this->validatedMetadataConnection($runtimeConnection) instanceof Connection;
+    }
+
     /** @param list<string> $authorityTables */
     public function matchesExpected(Connection $runtimeConnection, array $authorityTables): bool
     {
-        if ($runtimeConnection->getDriverName() !== 'mysql' || $authorityTables === []) {
+        if ($authorityTables === []) {
+            return false;
+        }
+
+        $metadataConnection = $this->validatedMetadataConnection($runtimeConnection);
+        if (! $metadataConnection instanceof Connection) {
             return false;
         }
 
         try {
-            if (! $this->runtimePrincipalIsProcessFree($runtimeConnection)) {
-                return false;
-            }
-
-            $metadataConnection = $this->database()->connection(self::METADATA_CONNECTION);
-            if ($metadataConnection->getDriverName() !== 'mysql'
-                || ! $this->sameMariaDbServer($runtimeConnection, $metadataConnection)
-                || ! $this->usesDistinctPrincipal($runtimeConnection, $metadataConnection)
-                || ! $this->metadataPrincipalIsProcessOnly($metadataConnection)) {
-                return false;
-            }
-
             $databaseName = $runtimeConnection->getDatabaseName();
             if ($databaseName === '' || str_contains($databaseName, '/')) {
                 return false;
@@ -63,6 +61,31 @@ final readonly class TelegramDeliveryForeignKeyMetadataAttestor
                 ->exists();
         } catch (Throwable) {
             return false;
+        }
+    }
+
+    private function validatedMetadataConnection(Connection $runtimeConnection): ?Connection
+    {
+        if ($runtimeConnection->getDriverName() !== 'mysql') {
+            return null;
+        }
+
+        try {
+            if (! $this->runtimePrincipalIsProcessFree($runtimeConnection)) {
+                return null;
+            }
+
+            $metadataConnection = $this->database()->connection(self::METADATA_CONNECTION);
+            if ($metadataConnection->getDriverName() !== 'mysql'
+                || ! $this->sameMariaDbServer($runtimeConnection, $metadataConnection)
+                || ! $this->usesDistinctPrincipal($runtimeConnection, $metadataConnection)
+                || ! $this->metadataPrincipalIsProcessOnly($metadataConnection)) {
+                return null;
+            }
+
+            return $metadataConnection;
+        } catch (Throwable) {
+            return null;
         }
     }
 
