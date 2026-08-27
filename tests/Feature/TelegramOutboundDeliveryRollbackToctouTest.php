@@ -159,9 +159,14 @@ SQL, $databaseName));
 
         try {
             $method->invoke($migration, DB::connection(), $afterFinalPreflight);
-            self::fail('A racing incoming foreign key must prevent the dependency-sensitive rollback DROP.');
+            self::fail('A racing incoming foreign key must prevent dependency-sensitive rollback progress.');
         } catch (QueryException $exception) {
             self::assertContains((int) ($exception->errorInfo[1] ?? 0), [1217, 1451]);
+        } catch (RuntimeException $exception) {
+            self::assertStringContainsString(
+                'Cannot resume Telegram outbound delivery rollback from an unattested partial rollback surface.',
+                $exception->getMessage(),
+            );
         }
     }
 
