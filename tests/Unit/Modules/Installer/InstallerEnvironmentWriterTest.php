@@ -48,6 +48,59 @@ final class InstallerEnvironmentWriterTest extends TestCase
     }
 
     /** @requirement INS-001 SEC-003 SEC-007 SEC-008 QUA-011 */
+    public function test_it_accepts_dedicated_metadata_credentials_without_disclosing_the_secret_in_result(): void
+    {
+        [$directory, $environmentPath, $snapshotPath] = $this->paths('telegram-metadata');
+        $allowedKeys = config('installer.environment.allowed_keys');
+        $this->assertIsArray($allowedKeys);
+        $this->assertContains('TELEGRAM_METADATA_DB_URL', $allowedKeys);
+        $this->assertContains('TELEGRAM_METADATA_DB_USERNAME', $allowedKeys);
+        $this->assertContains('TELEGRAM_METADATA_DB_PASSWORD', $allowedKeys);
+
+        $writer = new InstallerEnvironmentWriter(
+            new class implements RandomGenerator
+            {
+                public function bytes(int $length): string
+                {
+                    return str_repeat("\x03", $length);
+                }
+
+                public function integer(int $minimum, int $maximum): int
+                {
+                    return $minimum;
+                }
+            },
+            $environmentPath,
+            $snapshotPath,
+            $allowedKeys,
+        );
+        $secret = 'metadata-test-only-$secret-with-"quotes"';
+
+        try {
+            $result = $writer->write([
+                'TELEGRAM_METADATA_DB_URL' => 'mysql://metadata.internal:3306/information_schema',
+                'TELEGRAM_METADATA_DB_USERNAME' => 'telegram_metadata',
+                'TELEGRAM_METADATA_DB_PASSWORD' => $secret,
+            ]);
+            $contents = (string) file_get_contents($environmentPath);
+
+            $this->assertStringContainsString(
+                'TELEGRAM_METADATA_DB_URL="mysql://metadata.internal:3306/information_schema"',
+                $contents,
+            );
+            $this->assertStringContainsString('TELEGRAM_METADATA_DB_USERNAME="telegram_metadata"', $contents);
+            $this->assertStringContainsString(
+                'TELEGRAM_METADATA_DB_PASSWORD="metadata-test-only-\\$secret-with-\\"quotes\\""',
+                $contents,
+            );
+            $this->assertStringNotContainsString($secret, json_encode($result, JSON_THROW_ON_ERROR));
+            $this->assertSame(0600, fileperms($environmentPath) & 0777);
+        } finally {
+            $this->cleanup($directory);
+        }
+    }
+
+    /** @requirement INS-001 SEC-003 SEC-007 SEC-008 QUA-011 */
     public function test_it_preserves_unrelated_lines_deduplicates_managed_keys_and_restores_exact_contents(): void
     {
         [$directory, $environmentPath, $snapshotPath] = $this->paths('rollback');
