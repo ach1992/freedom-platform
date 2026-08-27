@@ -3,6 +3,7 @@ name: freedom-platform-ci
 services:
   mariadb:
     image: mariadb:${MARIADB_VERSION:-10.11}
+    hostname: freedom-ci-mariadb
     environment:
       MARIADB_DATABASE: freedom_platform_ci
       MARIADB_USER: freedom_ci
@@ -15,6 +16,38 @@ services:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
       - --transaction-isolation=READ-COMMITTED
+      - --server-id=1
+    healthcheck:
+      test: ["CMD-SHELL", "mariadb-admin ping -h 127.0.0.1 -u freedom_ci -pci-only-database-password --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ./docker/mariadb/ci-init.sql:/docker-entrypoint-initdb.d/10-freedom-ci.sql:ro
+    tmpfs:
+      - /var/lib/mysql
+      - /tmp
+    restart: "no"
+
+  mariadb-shadow:
+    image: mariadb:${MARIADB_VERSION:-10.11}
+    hostname: freedom-ci-mariadb
+    environment:
+      MARIADB_DATABASE: freedom_platform_ci
+      MARIADB_USER: freedom_ci
+      MARIADB_PASSWORD: ci-only-database-password
+      MARIADB_ROOT_PASSWORD: ci-only-root-password
+      TZ: UTC
+    ports:
+      - "127.0.0.1:${MARIADB_SHADOW_HOST_PORT:-33068}:3306"
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --transaction-isolation=READ-COMMITTED
+      - --server-id=1
     healthcheck:
       test: ["CMD-SHELL", "mariadb-admin ping -h 127.0.0.1 -u freedom_ci -pci-only-database-password --silent"]
       interval: 5s
