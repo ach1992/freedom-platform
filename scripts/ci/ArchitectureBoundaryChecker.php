@@ -34,17 +34,20 @@ final class ArchitectureBoundaryChecker
             $this->scanModuleFile($relativePath, $source, $violations, $edges);
             $this->scanPersistence($relativePath, $source, $violations);
             $this->scanOpaquePersistence($relativePath, $source, $violations);
+            $this->scanUnattributablePersistenceMechanisms($relativePath, $source, $violations);
         }
 
         foreach ($this->phpFiles('app/Shared') as $relativePath => $source) {
             $this->scanSharedFile($relativePath, $source, $violations);
             $this->scanPersistence($relativePath, $source, $violations);
             $this->scanOpaquePersistence($relativePath, $source, $violations);
+            $this->scanUnattributablePersistenceMechanisms($relativePath, $source, $violations);
         }
 
         foreach ($this->phpFiles('routes') as $relativePath => $source) {
             $this->scanPersistence($relativePath, $source, $violations);
             $this->scanOpaquePersistence($relativePath, $source, $violations);
+            $this->scanUnattributablePersistenceMechanisms($relativePath, $source, $violations);
         }
 
         $edges = array_values(array_unique($edges));
@@ -266,7 +269,17 @@ final class ArchitectureBoundaryChecker
         }
 
         $sourceOwner = $this->sourcePersistenceOwner($relativePath);
-        if ($owner === null || $sourceOwner === null || $owner === $sourceOwner) {
+        if ($owner === null) {
+            $violations[] = sprintf(
+                '%s:%d mutation of unmapped durable table candidate %s is forbidden because ownership cannot be attributed.',
+                $relativePath,
+                $line,
+                $table,
+            );
+
+            return;
+        }
+        if ($sourceOwner === null || $owner === $sourceOwner) {
             return;
         }
 
@@ -412,7 +425,7 @@ final class ArchitectureBoundaryChecker
             }
 
             if (preg_match(
-                '/'.preg_quote($variable, '/').'\s*->\s*(insert|insertGetId|insertOrIgnore|update|delete|upsert|updateOrInsert|increment|decrement|truncate)\s*\(/',
+                '/'.preg_quote($variable, '/').'\s*->\s*(insert|insertGetId|insertOrIgnore|insertOrIgnoreReturning|insertUsing|insertOrIgnoreUsing|update|updateFrom|delete|upsert|updateOrInsert|increment|incrementEach|decrement|decrementEach|truncate)\s*\(/',
                 $segment,
                 $mutationMatch,
             ) !== 1) {
@@ -550,6 +563,41 @@ final class ArchitectureBoundaryChecker
         }
     }
 
+    /** @param list<string> $violations */
+    private function scanUnattributablePersistenceMechanisms(string $relativePath, string $source, array &$violations): void
+    {
+        $dbFacade = preg_quote('Illuminate\\Support\\Facades\\DB', '/');
+        preg_match_all(
+            '/\buse\s+'.$dbFacade.'\s+as\s+([A-Za-z_][A-Za-z0-9_]*)\s*;/',
+            $source,
+            $aliases,
+            PREG_SET_ORDER | PREG_OFFSET_CAPTURE,
+        );
+        foreach ($aliases as $alias) {
+            $violations[] = sprintf(
+                '%s:%d aliasing the DB facade as %s is forbidden because static persistence attribution must remain syntax-stable.',
+                $relativePath,
+                $this->lineNumber($source, $alias[0][1]),
+                $alias[1][0],
+            );
+        }
+
+        $pdoPatterns = [
+            '/(?:->\s*(?:getPdo|getRawPdo)\s*\(|\bDB::\s*(?:getPdo|getRawPdo)\s*\()/',
+            '/\bnew\s+(?:'.preg_quote('\\PDO', '/').'|PDO)\b/',
+        ];
+        foreach ($pdoPatterns as $pattern) {
+            preg_match_all($pattern, $source, $pdoCalls, PREG_SET_ORDER | PREG_OFFSET_CAPTURE);
+            foreach ($pdoCalls as $call) {
+                $violations[] = sprintf(
+                    '%s:%d direct PDO access is forbidden in runtime source because durable persistence ownership cannot be statically attributed.',
+                    $relativePath,
+                    $this->lineNumber($source, $call[0][1]),
+                );
+            }
+        }
+    }
+
     private function literalRawSql(string $source, int $offset): ?string
     {
         $tail = substr($source, $offset);
@@ -640,7 +688,16 @@ final class ArchitectureBoundaryChecker
         }
 
         if (preg_match('/^SET\b/i', $sql) === 1) {
-            return preg_match('/;\s*\S/s', $sql) === 1 ? 'unknown' : 'session';
+            if (preg_match('/;\s*\S/s', $sql) === 1) {
+                return 'unknown';
+            }
+            if (preg_match('/^SET\s+@(?!@)/i', $sql) !== 1
+                || preg_match('/(?:@@\s*GLOBAL\.|\bGLOBAL\b|\bPERSIST\b)/i', $sql) === 1
+            ) {
+                return 'unknown';
+            }
+
+            return 'session';
         }
 
         if (preg_match('/^(INSERT|UPDATE|DELETE|REPLACE|TRUNCATE|WITH|CALL|LOAD)\b/i', $sql) === 1) {
@@ -900,7 +957,7 @@ final class ArchitectureBoundaryChecker
     private function mutationMethod(string $statement): ?string
     {
         if (preg_match(
-            '/->\s*(insert|insertGetId|insertOrIgnore|update|delete|upsert|updateOrInsert|increment|decrement|truncate)\s*\(/',
+            '/->\s*(insert|insertGetId|insertOrIgnore|insertOrIgnoreReturning|insertUsing|insertOrIgnoreUsing|update|updateFrom|delete|upsert|updateOrInsert|increment|incrementEach|decrement|decrementEach|truncate)\s*\(/',
             $statement,
             $match,
         ) !== 1) {

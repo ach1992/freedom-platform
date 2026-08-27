@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Unit\Architecture;
 
 use FreedomPlatform\CI\ArchitectureBoundaryChecker;
+use Illuminate\Database\Query\Builder;
 use PHPUnit\Framework\TestCase;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
@@ -212,6 +213,116 @@ PHP);
 
         $violations = implode("\n", $this->checker([], [$path])->check()['violations']);
         self::assertSame(1, substr_count($violations, 'opaque raw SQL mutation'));
+    }
+
+    public function test_only_connection_scoped_user_variable_set_statements_are_allowed(): void
+    {
+        $this->write('app/Modules/Orders/Application/SetScope.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+use Illuminate\Support\Facades\DB;
+final class SetScope
+{
+    public function run(): void
+    {
+        DB::statement('SET @freedom_local = 1');
+        DB::statement('SET GLOBAL sql_mode = \'STRICT_ALL_TABLES\'');
+        DB::statement('SET @@GLOBAL.sql_mode = \'STRICT_ALL_TABLES\'');
+        DB::statement('SET sql_mode = \'STRICT_ALL_TABLES\'');
+    }
+}
+PHP);
+
+        $violations = implode("\n", $this->checker()->check()['violations']);
+
+        self::assertSame(3, substr_count($violations, 'non-literal/unsupported statement'));
+    }
+
+    public function test_all_supported_query_builder_write_apis_are_attributed(): void
+    {
+        $expectedMethods = [
+            'decrement',
+            'decrementEach',
+            'delete',
+            'increment',
+            'incrementEach',
+            'insert',
+            'insertGetId',
+            'insertOrIgnore',
+            'insertOrIgnoreReturning',
+            'insertOrIgnoreUsing',
+            'insertUsing',
+            'truncate',
+            'update',
+            'updateFrom',
+            'updateOrInsert',
+            'upsert',
+        ];
+        $writeLikeMethods = array_values(array_filter(
+            get_class_methods(Builder::class),
+            static fn (string $method): bool => preg_match('/^(?:insert|update|delete|upsert|increment|decrement|truncate)/', $method) === 1,
+        ));
+        sort($writeLikeMethods, SORT_STRING);
+        self::assertSame($expectedMethods, $writeLikeMethods, 'Laravel Query Builder write surface changed; update architecture attribution deliberately.');
+
+        $template = <<<'PHP'
+<?php
+namespace App\Modules\Customers\Application;
+final class __CLASS__
+{
+    public function run($db): void
+    {
+        $db->table('orders')->__METHOD__();
+    }
+}
+PHP;
+        foreach ($writeLikeMethods as $index => $method) {
+            $class = 'WriteApiBypass'.$index;
+            $this->write(
+                'app/Modules/Customers/Application/'.$class.'.php',
+                str_replace(['__CLASS__', '__METHOD__'], [$class, $method], $template),
+            );
+        }
+
+        $violations = implode("\n", $this->checker()->check()['violations']);
+
+        self::assertSame(count($writeLikeMethods), substr_count($violations, 'mutation of durable table orders owned by Orders is forbidden'));
+    }
+
+    public function test_mutation_of_unmapped_literal_table_fails_closed(): void
+    {
+        $this->write('app/Modules/Orders/Application/UnknownOwner.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+final class UnknownOwner { public function run($db): void { $db->table('orphan_table')->delete(); } }
+PHP);
+
+        $violations = implode("\n", $this->checker()->check()['violations']);
+
+        self::assertStringContainsString('mutation of unmapped durable table candidate orphan_table', $violations);
+    }
+
+    public function test_db_facade_alias_and_direct_runtime_pdo_access_fail_closed(): void
+    {
+        $this->write('app/Modules/Orders/Application/OpaqueAccess.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+use Illuminate\Support\Facades\DB as Database;
+final class OpaqueAccess
+{
+    public function run($db): void
+    {
+        Database::table('orders')->delete();
+        $db->getPdo();
+        new \PDO('sqlite::memory:');
+    }
+}
+PHP);
+
+        $violations = implode("\n", $this->checker()->check()['violations']);
+
+        self::assertStringContainsString('aliasing the DB facade as Database is forbidden', $violations);
+        self::assertSame(2, substr_count($violations, 'direct PDO access is forbidden'));
     }
 
     public function test_persistence_exception_must_be_exact_used_and_non_stale(): void
