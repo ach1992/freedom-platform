@@ -28,7 +28,7 @@ final class TelegramDeliveryForeignKeyMetadataAttestorTest extends TestCase
             ["GRANT PROCESS ON *.* TO 'metadata'@'%' WITH GRANT OPTION"],
             ["GRANT PROCESS ON *.* TO 'metadata'@'%'", "GRANT EXECUTE ON PROCEDURE `freedom_platform`.`dangerous` TO 'metadata'@'%'"],
             ["GRANT PROCESS ON *.* TO 'metadata'@'%'", "GRANT `metadata_role` TO 'metadata'@'%'"],
-            ["GRANT PROCESS ON *.* TO 'metadata'@'%'", "GRANT SELECT ON `freedom_platform`.* TO `PUBLIC`"],
+            ["GRANT PROCESS ON *.* TO 'metadata'@'%'", 'GRANT SELECT ON `freedom_platform`.* TO `PUBLIC`'],
             ["GRANT PROCESS, SELECT ON *.* TO 'metadata'@'%'"],
         ] as $grants) {
             self::assertFalse($method->invoke($attestor, $grants));
