@@ -366,10 +366,15 @@ final readonly class TelegramDeliveryDatabaseAuthoritySurfaceV1
             return false;
         }
 
-        return ! $connection->table('information_schema.KEY_COLUMN_USAGE')
+        if ($connection->table('information_schema.KEY_COLUMN_USAGE')
             ->where('REFERENCED_TABLE_SCHEMA', $databaseName)
             ->whereIn('REFERENCED_TABLE_NAME', self::AUTHORITY_TABLES)
-            ->exists();
+            ->exists()) {
+            return false;
+        }
+
+        return (new TelegramDeliveryForeignKeyMetadataAttestor)
+            ->matchesExpected($connection, self::AUTHORITY_TABLES);
     }
 
     /** @param list<string> $columns */

@@ -34,5 +34,7 @@
         <env name="NIGHTWATCH_ENABLED" value="false"/>
         <env name="BENEFIT_CODE_LOOKUP_KEY_CURRENT_VERSION" value="1"/>
         <env name="BENEFIT_CODE_LOOKUP_KEY_CURRENT" value="benefit-code-test-only-key-material-benefit-code-test-only"/>
+        <env name="TELEGRAM_METADATA_DB_USERNAME" value="freedom_ci_metadata"/>
+        <env name="TELEGRAM_METADATA_DB_PASSWORD" value="ci-only-metadata-password"/>
     </php>
 </phpunit>
