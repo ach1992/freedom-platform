@@ -35,13 +35,28 @@ final class ArchitectureMetadataGrantIntrospectionTest extends TestCase
         parent::tearDown();
     }
 
-    public function test_exact_literal_show_grants_is_allowed_only_in_reviewed_attestor_path(): void
+    public function test_exact_literal_show_grants_is_allowed_only_in_reviewed_telegram_authority_paths(): void
     {
         $this->write('app/Modules/Telegram/Application/TelegramDeliveryForeignKeyMetadataAttestor.php', <<<'PHP'
 <?php
 namespace App\Modules\Telegram\Application;
 use Illuminate\Database\Connection;
 final class TelegramDeliveryForeignKeyMetadataAttestor
+{
+    public function grants(Connection $connection): array
+    {
+        return $connection->select('SHOW GRANTS FOR CURRENT_USER', [], false);
+    }
+}
+PHP);
+
+        self::assertSame([], $this->checker()->check()['violations']);
+
+        $this->write('app/Modules/Telegram/Application/TelegramDeliveryLifecycleDatabaseAuthority.php', <<<'PHP'
+<?php
+namespace App\Modules\Telegram\Application;
+use Illuminate\Database\Connection;
+final class TelegramDeliveryLifecycleDatabaseAuthority
 {
     public function grants(Connection $connection): array
     {

@@ -66,6 +66,27 @@ return [
             ]) : [],
         ],
 
+        // Deployment-only lifecycle authority. This principal must be distinct from
+        // DB_USERNAME and is accepted only with USAGE + SELECT/UPDATE on this exact schema.
+        'telegram_lifecycle' => [
+            'driver' => 'mysql',
+            'host' => env('DB_HOST', '127.0.0.1'),
+            'port' => env('DB_PORT', '3306'),
+            'database' => env('DB_DATABASE', 'laravel'),
+            'username' => 'telegram_lifecycle',
+            'password' => env('TELEGRAM_LIFECYCLE_DB_PASSWORD'),
+            'unix_socket' => env('DB_SOCKET', ''),
+            'charset' => env('DB_CHARSET', 'utf8mb4'),
+            'collation' => env('DB_COLLATION', 'utf8mb4_unicode_ci'),
+            'prefix' => '',
+            'prefix_indexes' => true,
+            'strict' => true,
+            'engine' => null,
+            'options' => extension_loaded('pdo_mysql') ? array_filter([
+                Mysql::ATTR_SSL_CA => env('MYSQL_ATTR_SSL_CA'),
+            ]) : [],
+        ],
+
         // Dedicated read-only metadata authority for complete InnoDB FK attestation.
         // This principal must be distinct from DB_USERNAME and hold PROCESS only.
         'telegram_metadata' => [

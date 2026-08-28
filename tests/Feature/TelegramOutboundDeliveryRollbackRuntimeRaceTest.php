@@ -12,6 +12,7 @@ namespace {
     use App\Shared\Application\SafeOutboxPayload;
     use App\Shared\Infrastructure\DatabaseOutboxPublisher;
     use Illuminate\Contracts\Console\Kernel;
+    use Illuminate\Database\Connection;
     use Illuminate\Database\DatabaseManager;
     use Illuminate\Support\Str;
 
@@ -29,8 +30,12 @@ namespace {
         /** @var DatabaseManager $database */
         $database = $app->make(DatabaseManager::class);
         $connection = $database->connection();
-        $connection->statement('SET SESSION innodb_lock_wait_timeout = 10');
-        $connectionId = $connection->selectOne('SELECT CONNECTION_ID() AS connection_id', [], false);
+        $lifecycleConnection = $rollbackRuntimeMode === '--telegram-rollback-runtime-down'
+            ? $database->connection('telegram_lifecycle')
+            : null;
+        $identityConnection = $lifecycleConnection ?? $connection;
+        $identityConnection->statement('SET SESSION innodb_lock_wait_timeout = 10');
+        $connectionId = $identityConnection->selectOne('SELECT CONNECTION_ID() AS connection_id', [], false);
         echo 'READY:'.(int) ($connectionId->connection_id ?? 0)."\n";
         flush();
 
@@ -51,13 +56,22 @@ namespace {
                     echo "ROLLBACK_FENCE_READY\n";
                     flush();
                 };
-                $withInstallationLock->invoke($migration, $connection, static function () use (
+                if (! $lifecycleConnection instanceof Connection) {
+                    throw new RuntimeException('Lifecycle connection was not initialized for rollback worker.');
+                }
+                $withInstallationLock->invoke($migration, $lifecycleConnection, static function () use (
                     $rollback,
                     $migration,
                     $connection,
                     $beforeRuntimeFence,
                 ): void {
-                    $rollback->invoke($migration, $connection, null, null, $beforeRuntimeFence);
+                    $rollback->invoke(
+                        $migration,
+                        $connection,
+                        null,
+                        null,
+                        $beforeRuntimeFence,
+                    );
                 });
                 echo json_encode(['ok' => true], JSON_THROW_ON_ERROR)."\n";
             } catch (Throwable $exception) {
@@ -216,6 +230,7 @@ SQL);
 namespace Tests\Feature {
     use App\Modules\Telegram\Application\TelegramDeliveryDatabaseAuthoritySurfaceV1;
     use App\Modules\Telegram\Application\TelegramDeliveryDatabaseCapability;
+    use Illuminate\Database\DatabaseManager;
     use Illuminate\Foundation\Testing\DatabaseTruncation;
     use Illuminate\Support\Facades\DB;
     use Illuminate\Support\Facades\Schema;
@@ -364,6 +379,8 @@ namespace Tests\Feature {
                 $withInstallationLock = new ReflectionMethod($migration, 'withInstallationLock');
                 $withInstallationLock->setAccessible(true);
                 $connection = DB::connection();
+                $database = app(DatabaseManager::class);
+                $lifecycleConnection = $database->connection('telegram_lifecycle');
                 $lateQueueResult = null;
 
                 $afterFinalPreflight = function () use ($queueWorker, &$lateQueueResult): void {
@@ -378,13 +395,19 @@ namespace Tests\Feature {
                     );
                 };
 
-                $withInstallationLock->invoke($migration, $connection, function () use (
+                $withInstallationLock->invoke($migration, $lifecycleConnection, function () use (
                     $rollback,
                     $migration,
                     $connection,
                     $afterFinalPreflight,
                 ): void {
-                    $rollback->invoke($migration, $connection, $afterFinalPreflight, null, null);
+                    $rollback->invoke(
+                        $migration,
+                        $connection,
+                        $afterFinalPreflight,
+                        null,
+                        null,
+                    );
                 });
 
                 self::assertIsArray($lateQueueResult);

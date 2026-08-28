@@ -764,7 +764,10 @@ final class ArchitectureBoundaryChecker
 
     private function isReviewedMetadataIntrospection(string $relativePath, string $sql): bool
     {
-        if ($relativePath !== 'app/Modules/Telegram/Application/TelegramDeliveryForeignKeyMetadataAttestor.php') {
+        if (! in_array($relativePath, [
+            'app/Modules/Telegram/Application/TelegramDeliveryForeignKeyMetadataAttestor.php',
+            'app/Modules/Telegram/Application/TelegramDeliveryLifecycleDatabaseAuthority.php',
+        ], true)) {
             return false;
         }
 

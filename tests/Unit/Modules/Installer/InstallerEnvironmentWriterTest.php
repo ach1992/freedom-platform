@@ -56,6 +56,8 @@ final class InstallerEnvironmentWriterTest extends TestCase
         $this->assertContains('TELEGRAM_METADATA_DB_URL', $allowedKeys);
         $this->assertContains('TELEGRAM_METADATA_DB_USERNAME', $allowedKeys);
         $this->assertContains('TELEGRAM_METADATA_DB_PASSWORD', $allowedKeys);
+        $this->assertNotContains('TELEGRAM_LIFECYCLE_DB_USERNAME', $allowedKeys);
+        $this->assertNotContains('TELEGRAM_LIFECYCLE_DB_PASSWORD', $allowedKeys);
 
         $writer = new InstallerEnvironmentWriter(
             new class implements RandomGenerator

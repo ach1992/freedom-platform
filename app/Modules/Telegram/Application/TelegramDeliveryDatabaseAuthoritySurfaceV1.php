@@ -23,7 +23,7 @@ use Throwable;
  */
 final readonly class TelegramDeliveryDatabaseAuthoritySurfaceV1
 {
-    private const EXPECTED_SEMANTIC_FINGERPRINT = 'e8c852ef485f209e82d4c34400192367cb1dd314b84867926ff6af83168bb292';
+    private const EXPECTED_SEMANTIC_FINGERPRINT = '1f15546a0e868d566f162697d86d2fe0d7fb313bc5e2b8c03301f0c7a47a2906';
 
     /** @var list<string> */
     public const REQUIRED_TRIGGERS = [
@@ -119,19 +119,25 @@ final readonly class TelegramDeliveryDatabaseAuthoritySurfaceV1
             $rows = $connection->table('telegram_delivery_authority_capability')->get([
                 'id', 'capability_hash', 'schema_version', 'activated_at',
             ]);
+            $runtimeIdentity = $connection->selectOne(<<<'SQL'
+SELECT SUBSTRING_INDEX(USER(), '@', 1) AS session_username
+SQL, [], false);
         } catch (Throwable) {
             return false;
         }
 
-        if ($rows->count() !== 1) {
+        if ($rows->count() !== 1 || $runtimeIdentity === null) {
             return false;
         }
 
         $capability = $rows->first();
+        $sessionUsername = (string) ($runtimeIdentity->session_username ?? '');
         if ($capability === null
             || (int) $capability->id !== 1
             || ! is_string($capability->capability_hash)
             || ! hash_equals($expectedCapabilityHash, $capability->capability_hash)
+            || $sessionUsername === ''
+            || hash_equals('telegram_lifecycle', $sessionUsername)
             || (int) $capability->schema_version !== 1
             || $capability->activated_at === null) {
             return false;

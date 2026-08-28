@@ -201,16 +201,22 @@ SQL, $databaseName));
         $withInstallationLock = new ReflectionMethod($migration, 'withInstallationLock');
         $withInstallationLock->setAccessible(true);
         $connection = DB::connection();
+        $lifecycleConnection = $this->database->connection('telegram_lifecycle');
 
         try {
-            $withInstallationLock->invoke($migration, $connection, function () use (
+            $withInstallationLock->invoke($migration, $lifecycleConnection, function () use (
                 $rollback,
                 $migration,
                 $connection,
                 $afterFinalPreflight,
                 $afterCapabilityPreflight,
             ): void {
-                $rollback->invoke($migration, $connection, $afterFinalPreflight, $afterCapabilityPreflight);
+                $rollback->invoke(
+                    $migration,
+                    $connection,
+                    $afterFinalPreflight,
+                    $afterCapabilityPreflight,
+                );
             });
             self::fail('A racing incoming foreign key must prevent dependency-sensitive rollback progress.');
         } catch (QueryException $exception) {
