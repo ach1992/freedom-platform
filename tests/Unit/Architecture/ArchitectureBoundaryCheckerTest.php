@@ -335,6 +335,103 @@ PHP);
         self::assertSame([], $reviewed['violations']);
     }
 
+    public function test_generic_telegram_boundary_rejects_split_string_dynamic_resolution(): void
+    {
+        $this->write('app/Modules/Provisioning/Application/DynamicTelegramEscape.php', <<<'PHP'
+<?php
+namespace App\Modules\Provisioning\Application;
+final class DynamicTelegramEscape
+{
+    public function run(string $restrictedSecret): void
+    {
+        $presentationClass = 'App\\Modules\\Telegram\\Application\\NonRestricted'.'TelegramPresentation';
+        $queueClass = 'App\\Modules\\Telegram\\Application\\TelegramDeliveryQueue'.'Service';
+        $presentation = $presentationClass::restorePersisted($restrictedSecret);
+        $queue = app($queueClass);
+    }
+}
+PHP);
+
+        $result = $this->checker(['Provisioning' => ['Telegram']])->check();
+        $violations = implode("\n", $result['violations']);
+
+        self::assertStringContainsString('dynamic class/container resolution via variable static call is forbidden', $violations);
+        self::assertStringContainsString('dynamic class/container resolution via app($variable) is forbidden', $violations);
+        self::assertStringContainsString('internal Telegram presentation method restorePersisted', $violations);
+    }
+
+    public function test_generic_telegram_boundary_rejects_internal_presentation_methods_from_allowlisted_source(): void
+    {
+        $path = 'app/Modules/Telegram/Application/ReviewedButUnsafePresentation.php';
+        $this->write($path, <<<'PHP'
+<?php
+namespace App\Modules\Telegram\Application;
+final class ReviewedButUnsafePresentation implements NonRestrictedTelegramPresentationSource
+{
+    public function nonRestrictedTelegramText(): string { return 'ordinary'; }
+    public function unsafe(string $restricted): NonRestrictedTelegramPresentation
+    {
+        NonRestrictedTelegramPresentation::fromReviewedSource($this);
+        return NonRestrictedTelegramPresentation::restorePersisted($restricted);
+    }
+}
+PHP);
+
+        $result = $this->checker([], [$path])->check();
+        $violations = implode("\n", $result['violations']);
+
+        self::assertStringContainsString('internal Telegram presentation method fromReviewedSource', $violations);
+        self::assertStringContainsString('internal Telegram presentation method restorePersisted', $violations);
+    }
+
+    public function test_generic_telegram_boundary_rejects_reflection_alias_and_dynamic_container_resolution(): void
+    {
+        $this->write('app/Modules/Orders/Application/ReflectionTelegramEscape.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+final class ReflectionTelegramEscape
+{
+    public function run(string $class): void
+    {
+        new \ReflectionClass($class);
+        class_alias($class, 'TemporaryTelegramAlias');
+        resolve($class);
+        app()->make($class);
+    }
+}
+PHP);
+
+        $result = $this->checker()->check();
+        $violations = implode("\n", $result['violations']);
+
+        self::assertStringContainsString('dynamic class/container resolution via reflectionclass is forbidden', $violations);
+        self::assertStringContainsString('dynamic class/container resolution via class_alias is forbidden', $violations);
+        self::assertStringContainsString('dynamic class/container resolution via resolve($variable) is forbidden', $violations);
+        self::assertStringContainsString('dynamic class/container resolution via app()->make($variable) is forbidden', $violations);
+    }
+
+    public function test_generic_telegram_boundary_rejects_dynamic_new_and_callback_indirection(): void
+    {
+        $this->write('app/Modules/Orders/Application/CallableTelegramEscape.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+final class CallableTelegramEscape
+{
+    public function run(string $class, string $method): void
+    {
+        $instance = new $class();
+        call_user_func([$class, $method], $instance);
+    }
+}
+PHP);
+
+        $result = $this->checker()->check();
+        $violations = implode("\n", $result['violations']);
+
+        self::assertStringContainsString('dynamic class/container resolution via dynamic new is forbidden', $violations);
+        self::assertStringContainsString('dynamic class/container resolution via call_user_func is forbidden', $violations);
+    }
+
     public function test_generic_non_restricted_telegram_source_allowlist_rejects_non_telegram_and_stale_entries(): void
     {
         $result = $this->checker([], [

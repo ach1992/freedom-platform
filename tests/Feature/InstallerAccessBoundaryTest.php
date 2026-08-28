@@ -129,6 +129,50 @@ final class InstallerAccessBoundaryTest extends TestCase
     }
 
     /** @requirement INS-001 SEC-003 SEC-007 SEC-008 QUA-011 */
+    public function test_lifecycle_password_is_not_flashed_to_session_on_browser_validation_failure(): void
+    {
+        $paths = $this->finalizationPaths('lifecycle-validation-flash');
+        $runner = new HttpRecordingFinalizationRunner;
+        $this->configureFinalization($paths, $runner);
+        $this->accessStore($paths['access'])->issue(5);
+        $marker = 'test-only-lifecycle-browser-secret-'.bin2hex(random_bytes(8));
+
+        try {
+            $response = $this->withServerVariables([
+                'REMOTE_ADDR' => '198.51.100.13',
+            ])->withSession([
+                'installer.unlocked_until' => now()->addMinute()->getTimestamp(),
+            ])->post('/installer/finalize', [
+                'environment' => [],
+                'lifecycle_database_password' => $marker,
+            ]);
+
+            $response->assertRedirect();
+            $response->assertSessionHasErrors('environment');
+            $response->assertDontSee($marker);
+            $this->assertSame([], $runner->actions);
+            $this->assertFileDoesNotExist($paths['environment']);
+            $this->assertFileDoesNotExist($paths['lock']);
+
+            $oldInput = session()->get('_old_input', []);
+            $this->assertIsArray($oldInput);
+            $this->assertArrayNotHasKey('lifecycle_database_password', $oldInput);
+            $this->assertStringNotContainsString(
+                $marker,
+                json_encode(session()->all(), JSON_THROW_ON_ERROR),
+            );
+
+            foreach (glob(storage_path('logs/*')) ?: [] as $logPath) {
+                if (is_file($logPath)) {
+                    $this->assertStringNotContainsString($marker, (string) file_get_contents($logPath));
+                }
+            }
+        } finally {
+            $this->cleanupFinalization($paths);
+        }
+    }
+
+    /** @requirement INS-001 SEC-003 SEC-007 SEC-008 QUA-011 */
     public function test_lifecycle_password_cannot_be_smuggled_into_the_persisted_environment_map(): void
     {
         $paths = $this->finalizationPaths('lifecycle-environment-rejected');

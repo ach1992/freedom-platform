@@ -53,6 +53,7 @@ return Application::configure(basePath: dirname(__DIR__))
         WalletMaintenanceCommand::class,
     ])
     ->withExceptions(function (Exceptions $exceptions): void {
+        $exceptions->dontFlash('lifecycle_database_password');
         $exceptions->shouldRenderJsonWhen(
             fn (Request $request) => $request->is('api/*') || $request->expectsJson(),
         );
