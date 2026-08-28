@@ -250,7 +250,7 @@ SQL);
                 self::fail('Rollback must fail before guard removal when an incoming FK changes the activated authority surface.');
             } catch (RuntimeException $exception) {
                 self::assertStringContainsString(
-                    'complete activated authority surface is attested before destructive rollback',
+                    'complete rollback-fenced authority surface is attested before destructive rollback',
                     $exception->getMessage(),
                 );
             }

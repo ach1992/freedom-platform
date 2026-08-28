@@ -37,6 +37,7 @@ final readonly class TelegramDeliveryOperationExecutor
         string $expectedCorrelationId,
     ): TelegramDeliveryOperationState {
         return $this->database->connection()->transaction(function (Connection $connection) use ($publicId, $expectedOutboxEventId, $expectedCorrelationId): TelegramDeliveryOperationState {
+            $this->databaseCapability->acquireRuntimeLifecycleFence($connection);
             $row = $this->operation($connection, $publicId, true);
             $this->assertExpectedOutboxIdentity($row, $expectedOutboxEventId, $expectedCorrelationId);
             $this->assertRuntimeBot($row);
@@ -67,6 +68,7 @@ final readonly class TelegramDeliveryOperationExecutor
     ): TelegramDeliveryOperationReceipt {
         /** @var array{row: DeliveryOperationRow, boundary_entered: bool} $boundary */
         $boundary = $this->database->connection()->transaction(function (Connection $connection) use ($publicId, $expectedOutboxEventId, $expectedCorrelationId): array {
+            $this->databaseCapability->acquireRuntimeLifecycleFence($connection);
             $row = $this->operation($connection, $publicId, true);
             $this->assertExpectedOutboxIdentity($row, $expectedOutboxEventId, $expectedCorrelationId);
             $this->assertRuntimeBot($row);
@@ -114,6 +116,7 @@ final readonly class TelegramDeliveryOperationExecutor
         $result = $this->normalizeResult($request, $result);
 
         return $this->database->connection()->transaction(function (Connection $connection) use ($publicId, $result, $expectedOutboxEventId, $expectedCorrelationId): TelegramDeliveryOperationReceipt {
+            $this->databaseCapability->acquireRuntimeLifecycleFence($connection);
             $row = $this->operation($connection, $publicId, true);
             $this->assertExpectedOutboxIdentity($row, $expectedOutboxEventId, $expectedCorrelationId);
             $this->assertRuntimeBot($row);

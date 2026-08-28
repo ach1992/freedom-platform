@@ -63,6 +63,10 @@ final readonly class TelegramDeliveryQueueService
                 $botId,
                 $fingerprint,
             ): TelegramDeliveryOperationReceipt {
+                // Take the shared lifecycle fence before any operation-table row/gap
+                // lock so rollback and runtime always acquire locks in one order.
+                $this->databaseCapability->acquireRuntimeLifecycleFence($connection);
+
                 $existing = $this->operationByRequestHash($connection, $requestKeyHash, true);
                 if ($existing !== null) {
                     return $this->replayReceipt($existing, $fingerprint);

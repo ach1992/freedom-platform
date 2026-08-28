@@ -23,7 +23,7 @@ use Throwable;
  */
 final readonly class TelegramDeliveryDatabaseAuthoritySurfaceV1
 {
-    private const EXPECTED_SEMANTIC_FINGERPRINT = '19e69a2ea8c1a1d4519d04e978acc06b384dd0ab2345eeb443fdc743bb884cb9';
+    private const EXPECTED_SEMANTIC_FINGERPRINT = 'e8c852ef485f209e82d4c34400192367cb1dd314b84867926ff6af83168bb292';
 
     /** @var list<string> */
     public const REQUIRED_TRIGGERS = [

@@ -38,6 +38,21 @@ return new class extends Migration
                 return;
             }
 
+            if (Schema::hasTable('telegram_delivery_operations')
+                && Schema::hasTable('telegram_delivery_authority_capability')
+                && $this->rollbackFenceReady($connection)) {
+                if ($this->durableAuthorityExists($connection)) {
+                    throw new RuntimeException('Telegram delivery rollback-fenced authority cannot reactivate after durable rows appeared.');
+                }
+
+                $this->activateAuthority($connection);
+                if (! $this->authorityReady($connection)) {
+                    throw new RuntimeException('Telegram delivery rollback-fenced authority did not reactivate to the exact v1 surface.');
+                }
+
+                return;
+            }
+
             $this->resetInterruptedInstallIfSafe($connection);
 
             // Keep the authority disabled until every table/guard/constraint is installed.
@@ -95,17 +110,22 @@ return new class extends Migration
      *
      * @param  null|Closure():void  $afterFinalPreflight
      * @param  null|Closure():void  $afterCapabilityPreflight
+     * @param  null|Closure():void  $beforeRuntimeFence
      */
-    private function rollbackMysql(Connection $connection, ?Closure $afterFinalPreflight = null, ?Closure $afterCapabilityPreflight = null): void
-    {
-        if ($this->durableAuthorityExists()) {
-            throw new RuntimeException('Cannot roll back Telegram outbound delivery authority while durable authority exists.');
-        }
-
+    private function rollbackMysql(
+        Connection $connection,
+        ?Closure $afterFinalPreflight = null,
+        ?Closure $afterCapabilityPreflight = null,
+        ?Closure $beforeRuntimeFence = null,
+    ): void {
         $hasOperationTable = Schema::hasTable('telegram_delivery_operations');
         $hasCapabilityTable = Schema::hasTable('telegram_delivery_authority_capability');
 
         if (! $hasOperationTable && ! $hasCapabilityTable) {
+            if ($this->durableAuthorityExists($connection)) {
+                throw new RuntimeException('Cannot finish Telegram outbound delivery rollback while orphaned durable authority exists.');
+            }
+
             $this->dropOutboxGuards();
 
             return;
@@ -116,8 +136,20 @@ return new class extends Migration
         }
 
         if ($hasOperationTable) {
-            if (! $this->authorityReady($connection)) {
-                throw new RuntimeException('Cannot roll back Telegram outbound delivery authority unless the complete activated authority surface is attested before destructive rollback.');
+            if ($this->authorityReady($connection)) {
+                if ($beforeRuntimeFence !== null) {
+                    $beforeRuntimeFence();
+                }
+
+                $this->deactivateAuthorityForRollback($connection);
+            }
+
+            if (! $this->rollbackFenceReady($connection)) {
+                throw new RuntimeException('Cannot roll back Telegram outbound delivery authority unless the complete rollback-fenced authority surface is attested before destructive rollback.');
+            }
+
+            if ($this->durableAuthorityExists($connection)) {
+                throw new RuntimeException('Cannot roll back Telegram outbound delivery authority while durable authority exists.');
             }
 
             if ($afterFinalPreflight !== null) {
@@ -174,8 +206,12 @@ return new class extends Migration
             || (int) $capability->id !== 1
             || ! is_string($capability->capability_hash)
             || ! hash_equals($this->capabilityHash(), $capability->capability_hash)
-            || (int) $capability->schema_version !== 1
-            || $capability->activated_at === null) {
+            || (int) $capability->schema_version !== 0
+            || $capability->activated_at !== null) {
+            return false;
+        }
+
+        if ($this->durableAuthorityExists($connection)) {
             return false;
         }
 
@@ -204,6 +240,102 @@ return new class extends Migration
             ->isReady($connection, $this->capabilityHash());
     }
 
+    private function rollbackFenceReady(Connection $connection): bool
+    {
+        $surface = new TelegramDeliveryDatabaseAuthoritySurfaceV1;
+        if (! $surface->semanticsMatchExpected($connection)) {
+            return false;
+        }
+
+        $rows = $connection->table('telegram_delivery_authority_capability')->get([
+            'id', 'capability_hash', 'schema_version', 'activated_at',
+        ]);
+        if ($rows->count() !== 1) {
+            return false;
+        }
+
+        $capability = $rows->first();
+
+        return $capability !== null
+            && (int) $capability->id === 1
+            && is_string($capability->capability_hash)
+            && hash_equals($this->capabilityHash(), $capability->capability_hash)
+            && (int) $capability->schema_version === 0
+            && $capability->activated_at === null;
+    }
+
+    private function deactivateAuthorityForRollback(Connection $connection): void
+    {
+        if (! $this->authorityReady($connection)) {
+            throw new RuntimeException('Cannot establish Telegram delivery rollback fence from an unattested active authority surface.');
+        }
+
+        $connection->transaction(function () use ($connection): void {
+            $capability = $connection->selectOne(<<<'SQL'
+SELECT id, capability_hash, schema_version, activated_at
+FROM telegram_delivery_authority_capability
+WHERE id = 1
+FOR UPDATE
+SQL, [], false);
+
+            if ($capability === null
+                || (int) ($capability->id ?? 0) !== 1
+                || ! is_string($capability->capability_hash ?? null)
+                || ! hash_equals($this->capabilityHash(), $capability->capability_hash)
+                || (int) ($capability->schema_version ?? -1) !== 1
+                || ($capability->activated_at ?? null) === null) {
+                throw new RuntimeException('Cannot establish Telegram delivery rollback fence because the active capability row changed.');
+            }
+
+            // Every legitimate runtime queue/effect transaction takes a shared row
+            // lock before arming authority. This exclusive lock therefore waits for
+            // all already-entered runtime transactions to commit/rollback, while
+            // preventing any new runtime transaction from passing the same fence.
+            // Locking durable reads below are current reads after that drain point.
+            if ($this->durableAuthorityExists($connection, true)) {
+                throw new RuntimeException('Cannot roll back Telegram outbound delivery authority while durable authority exists.');
+            }
+
+            $armed = false;
+            try {
+                $connection->statement(<<<'SQL'
+SET @app_telegram_delivery_capability = ?,
+    @app_telegram_delivery_lifecycle_authority = 'rollback'
+SQL, [$this->capabilityValue()]);
+                $armed = true;
+
+                $updated = $connection->table('telegram_delivery_authority_capability')
+                    ->where('id', 1)
+                    ->where('schema_version', 1)
+                    ->whereNotNull('activated_at')
+                    ->update([
+                        'schema_version' => 0,
+                        'activated_at' => null,
+                    ]);
+
+                if ($updated !== 1) {
+                    throw new RuntimeException('Telegram delivery rollback fence activation was rejected.');
+                }
+            } finally {
+                if ($armed) {
+                    try {
+                        $connection->statement(<<<'SQL'
+SET @app_telegram_delivery_lifecycle_authority = NULL,
+    @app_telegram_delivery_capability = NULL
+SQL);
+                    } catch (Throwable $exception) {
+                        $this->disconnect($connection);
+                        throw $exception;
+                    }
+                }
+            }
+        }, 1);
+
+        if (! $this->rollbackFenceReady($connection)) {
+            throw new RuntimeException('Telegram delivery rollback fence did not reach the exact deactivated authority state.');
+        }
+    }
+
     private function resetInterruptedInstallIfSafe(Connection $connection): void
     {
         $surface = new TelegramDeliveryDatabaseAuthoritySurfaceV1;
@@ -222,9 +354,7 @@ return new class extends Migration
 
         if ($hasCapabilityTable) {
             if (! $surface->capabilityTableHasCurrentShape($connection)) {
-                $this->dropGuards();
-                Schema::dropIfExists('telegram_delivery_operations');
-                Schema::dropIfExists('telegram_delivery_authority_capability');
+                $this->resetInactiveTablesPreservingGuards();
 
                 return;
             }
@@ -253,21 +383,50 @@ return new class extends Migration
             }
         }
 
-        $this->dropGuards();
-        Schema::dropIfExists('telegram_delivery_operations');
-        Schema::dropIfExists('telegram_delivery_authority_capability');
+        $this->resetInactiveTablesPreservingGuards();
     }
 
-    private function durableAuthorityExists(): bool
+    private function resetInactiveTablesPreservingGuards(): void
     {
-        if (Schema::hasTable('telegram_delivery_operations')
-            && DB::table('telegram_delivery_operations')->exists()) {
-            return true;
+        // An interrupted install or an interrupted rollback is inactive here. Keep
+        // every trigger attached to a surviving authority table until that table
+        // itself is gone, so an unexpected incoming dependency cannot turn reset
+        // into the same guard-loss-before-DROP failure that rollback forbids.
+        Schema::dropIfExists('telegram_delivery_operations');
+        Schema::dropIfExists('telegram_delivery_authority_capability');
+        $this->dropOutboxGuards();
+    }
+
+    private function durableAuthorityExists(?Connection $connection = null, bool $locking = false): bool
+    {
+        $connection ??= DB::connection();
+        $schema = $connection->getSchemaBuilder();
+
+        if ($locking && $connection->transactionLevel() < 1) {
+            throw new RuntimeException('Telegram delivery durable-authority locking read requires a transaction.');
         }
 
-        return DB::table('outbox_messages')
+        if ($schema->hasTable('telegram_delivery_operations')) {
+            $operationQuery = $connection->table('telegram_delivery_operations')
+                ->select('id')
+                ->limit(1);
+            if ($locking) {
+                $operationQuery->lockForUpdate();
+            }
+            if ($operationQuery->first() !== null) {
+                return true;
+            }
+        }
+
+        $outboxQuery = $connection->table('outbox_messages')
+            ->select('id')
             ->whereRaw('LOWER(event_type) = ?', ['telegram.delivery.requested'])
-            ->exists();
+            ->limit(1);
+        if ($locking) {
+            $outboxQuery->lockForUpdate();
+        }
+
+        return $outboxQuery->first() !== null;
     }
 
     /**
@@ -347,12 +506,32 @@ BEGIN
        OR NEW.id <> OLD.id
        OR BINARY NEW.capability_hash <> BINARY OLD.capability_hash
        OR NOT (NEW.created_at <=> OLD.created_at)
-       OR OLD.schema_version <> 0
-       OR NEW.schema_version <> 1
-       OR OLD.activated_at IS NOT NULL
-       OR NEW.activated_at IS NULL
        OR BINARY OLD.capability_hash <> BINARY SHA2(COALESCE(@app_telegram_delivery_capability, ''), 256) THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Telegram delivery database capability is immutable outside final schema activation.';
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Telegram delivery database capability identity is immutable.';
+    END IF;
+
+    IF OLD.schema_version = 0 AND OLD.activated_at IS NULL THEN
+        IF NEW.schema_version <> 1
+           OR NEW.activated_at IS NULL
+           OR COALESCE(@app_telegram_delivery_lifecycle_authority, '') <> 'activate'
+           OR COALESCE(IS_USED_LOCK(CONCAT(
+                'telegram-delivery-authority-v1:',
+                LEFT(SHA2(DATABASE(), 256), 32)
+           )), 0) <> CONNECTION_ID() THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Telegram delivery database capability activation is invalid.';
+        END IF;
+    ELSEIF OLD.schema_version = 1 AND OLD.activated_at IS NOT NULL THEN
+        IF NEW.schema_version <> 0
+           OR NEW.activated_at IS NOT NULL
+           OR COALESCE(@app_telegram_delivery_lifecycle_authority, '') <> 'rollback'
+           OR COALESCE(IS_USED_LOCK(CONCAT(
+                'telegram-delivery-authority-v1:',
+                LEFT(SHA2(DATABASE(), 256), 32)
+           )), 0) <> CONNECTION_ID() THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Telegram delivery database capability rollback fence transition is invalid.';
+        END IF;
+    ELSE
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Telegram delivery database capability activation state is malformed.';
     END IF;
 END
 SQL);
@@ -371,7 +550,10 @@ SQL);
         }
 
         try {
-            $connection->statement('SET @app_telegram_delivery_capability = ?', [$this->capabilityValue()]);
+            $connection->statement(<<<'SQL'
+SET @app_telegram_delivery_capability = ?,
+    @app_telegram_delivery_lifecycle_authority = 'activate'
+SQL, [$this->capabilityValue()]);
             $armed = true;
             $updated = $connection->table('telegram_delivery_authority_capability')
                 ->where('id', 1)
@@ -387,26 +569,16 @@ SQL);
         } finally {
             if ($armed) {
                 try {
-                    $connection->statement('SET @app_telegram_delivery_capability = NULL');
+                    $connection->statement(<<<'SQL'
+SET @app_telegram_delivery_lifecycle_authority = NULL,
+    @app_telegram_delivery_capability = NULL
+SQL);
                 } catch (Throwable $exception) {
                     $this->disconnect($connection);
                     throw $exception;
                 }
             }
         }
-    }
-
-    private function dropGuards(): void
-    {
-        DB::unprepared('DROP TRIGGER IF EXISTS outbox_telegram_delivery_envelope_delete_guard');
-        DB::unprepared('DROP TRIGGER IF EXISTS outbox_telegram_delivery_envelope_update_guard');
-        DB::unprepared('DROP TRIGGER IF EXISTS telegram_delivery_operations_delete_guard');
-        DB::unprepared('DROP TRIGGER IF EXISTS telegram_delivery_operations_update_guard');
-        DB::unprepared('DROP TRIGGER IF EXISTS telegram_delivery_operations_insert_guard');
-        DB::unprepared('DROP TRIGGER IF EXISTS outbox_telegram_delivery_envelope_insert_guard');
-        DB::unprepared('DROP TRIGGER IF EXISTS telegram_delivery_capability_delete_guard');
-        DB::unprepared('DROP TRIGGER IF EXISTS telegram_delivery_capability_update_guard');
-        DB::unprepared('DROP TRIGGER IF EXISTS telegram_delivery_capability_insert_guard');
     }
 
     private function dropOutboxGuards(): void
@@ -585,8 +757,16 @@ CREATE OR REPLACE TRIGGER outbox_telegram_delivery_envelope_insert_guard
 BEFORE INSERT ON outbox_messages
 FOR EACH ROW
 BEGIN
+    DECLARE capability_fence_rows INT DEFAULT 0;
+
     IF LOWER(NEW.event_type) = 'telegram.delivery.requested' THEN
-    IF NOT EXISTS (
+        SELECT COUNT(*) INTO capability_fence_rows
+        FROM telegram_delivery_authority_capability
+        WHERE id = 1
+        LOCK IN SHARE MODE;
+
+        IF capability_fence_rows <> 1
+           OR NOT EXISTS (
         SELECT 1
         FROM telegram_delivery_authority_capability capability_row
         WHERE capability_row.id = 1
@@ -714,7 +894,15 @@ CREATE OR REPLACE TRIGGER telegram_delivery_operations_update_guard
 BEFORE UPDATE ON telegram_delivery_operations
 FOR EACH ROW
 BEGIN
-    IF NOT EXISTS (
+    DECLARE capability_fence_rows INT DEFAULT 0;
+
+    SELECT COUNT(*) INTO capability_fence_rows
+    FROM telegram_delivery_authority_capability
+    WHERE id = 1
+    LOCK IN SHARE MODE;
+
+    IF capability_fence_rows <> 1
+       OR NOT EXISTS (
         SELECT 1
         FROM telegram_delivery_authority_capability capability_row
         WHERE capability_row.id = 1

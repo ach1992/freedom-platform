@@ -28,6 +28,15 @@ final readonly class TelegramDeliveryDatabaseCapability
         return hash('sha256', $this->value());
     }
 
+    public function acquireRuntimeLifecycleFence(Connection $connection): void
+    {
+        if ($connection->transactionLevel() < 1) {
+            throw new RuntimeException('Telegram delivery runtime lifecycle fence requires a database transaction.');
+        }
+
+        $this->lockActiveCapability($connection);
+    }
+
     /**
      * @template T
      *
@@ -141,6 +150,7 @@ SQL, [
             throw new RuntimeException('Telegram delivery database authority must be armed inside a database transaction.');
         }
 
+        $this->acquireRuntimeLifecycleFence($connection);
         $this->pinAuthorityMetadata($connection);
         try {
             $ready = (new TelegramDeliveryDatabaseAuthoritySurfaceV1)
@@ -151,6 +161,29 @@ SQL, [
 
         if (! $ready) {
             throw new RuntimeException('Telegram delivery database authority is not fully activated.');
+        }
+    }
+
+    private function lockActiveCapability(Connection $connection): void
+    {
+        try {
+            $capability = $connection->selectOne(<<<'SQL'
+SELECT id, capability_hash, schema_version, activated_at
+FROM telegram_delivery_authority_capability
+WHERE id = 1
+LOCK IN SHARE MODE
+SQL, [], false);
+        } catch (Throwable $exception) {
+            throw new RuntimeException('Telegram delivery database authority is not accepting runtime work.', 0, $exception);
+        }
+
+        if ($capability === null
+            || (int) ($capability->id ?? 0) !== 1
+            || ! is_string($capability->capability_hash ?? null)
+            || ! hash_equals($this->expectedHash(), $capability->capability_hash)
+            || (int) ($capability->schema_version ?? -1) !== 1
+            || ($capability->activated_at ?? null) === null) {
+            throw new RuntimeException('Telegram delivery database authority is not accepting runtime work.');
         }
     }
 
@@ -180,6 +213,7 @@ SQL, [], false);
 SET @app_telegram_delivery_effect_expected_version = NULL,
     @app_telegram_delivery_effect_public_id = NULL,
     @app_telegram_delivery_effect_authority = NULL,
+    @app_telegram_delivery_lifecycle_authority = NULL,
     @app_telegram_delivery_outbox_event_id = NULL,
     @app_telegram_delivery_presentation_hash = NULL,
     @app_telegram_delivery_target_message_id = NULL,

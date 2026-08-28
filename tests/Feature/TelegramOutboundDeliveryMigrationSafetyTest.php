@@ -196,6 +196,37 @@ SQL);
         self::assertNull($capability->activated_at);
     }
 
+    public function test_runtime_session_cannot_spoof_rollback_lifecycle_authority_without_installation_lock(): void
+    {
+        $connection = DB::connection();
+        $connection->statement(<<<'SQL'
+SET @app_telegram_delivery_capability = ?,
+    @app_telegram_delivery_lifecycle_authority = 'rollback'
+SQL, [(new TelegramDeliveryDatabaseCapability)->value()]);
+
+        try {
+            $connection->table('telegram_delivery_authority_capability')
+                ->where('id', 1)
+                ->update([
+                    'schema_version' => 0,
+                    'activated_at' => null,
+                ]);
+            self::fail('Runtime session variables must not authorize the migration-owned rollback fence.');
+        } catch (QueryException $exception) {
+            self::assertStringContainsString('rollback fence transition is invalid', $exception->getMessage());
+        } finally {
+            $connection->statement(<<<'SQL'
+SET @app_telegram_delivery_lifecycle_authority = NULL,
+    @app_telegram_delivery_capability = NULL
+SQL);
+        }
+
+        $capability = $connection->table('telegram_delivery_authority_capability')->where('id', 1)->first();
+        self::assertNotNull($capability);
+        self::assertSame(1, (int) $capability->schema_version);
+        self::assertNotNull($capability->activated_at);
+    }
+
     public function test_database_installation_lock_serializes_concurrent_runners_before_any_reset_decision(): void
     {
         $this->dropDeliveryGuards();

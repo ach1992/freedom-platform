@@ -91,8 +91,29 @@ SQL, $databaseName));
         self::assertTrue(Schema::hasTable('telegram_delivery_operations'));
         self::assertTrue(Schema::hasTable('telegram_delivery_authority_capability'));
         $this->assertExactRequiredTriggers();
+        $capability = DB::table('telegram_delivery_authority_capability')->where('id', 1)->first();
+        self::assertNotNull($capability);
+        self::assertSame(0, (int) $capability->schema_version);
+        self::assertNull($capability->activated_at);
+
+        try {
+            $migration->up();
+            self::fail('Re-entry must not remove guards while the rollback-blocking operation FK still exists.');
+        } catch (QueryException $exception) {
+            self::assertContains((int) ($exception->errorInfo[1] ?? 0), [1217, 1451]);
+        }
+        self::assertTrue(Schema::hasTable('telegram_delivery_operations'));
+        self::assertTrue(Schema::hasTable('telegram_delivery_authority_capability'));
+        $this->assertExactRequiredTriggers();
 
         $builder->statement('DROP TABLE telegram_delivery_rollback_operation_fk_probe');
+        $migration->up();
+        self::assertTrue((new TelegramDeliveryDatabaseAuthoritySurfaceV1)->semanticsMatchExpected($runtime));
+        $reactivated = DB::table('telegram_delivery_authority_capability')->where('id', 1)->first();
+        self::assertNotNull($reactivated);
+        self::assertSame(1, (int) $reactivated->schema_version);
+        self::assertNotNull($reactivated->activated_at);
+
         $migration->down();
 
         self::assertFalse(Schema::hasTable('telegram_delivery_operations'));
@@ -143,14 +164,28 @@ SQL, $databaseName));
         ];
         sort($expected, SORT_STRING);
         self::assertSame($expected, $present);
+        $capability = DB::table('telegram_delivery_authority_capability')->where('id', 1)->first();
+        self::assertNotNull($capability);
+        self::assertSame(0, (int) $capability->schema_version);
+        self::assertNull($capability->activated_at);
+
+        try {
+            $migration->up();
+            self::fail('Capability-only re-entry must not remove guards while its rollback-blocking FK still exists.');
+        } catch (QueryException $exception) {
+            self::assertContains((int) ($exception->errorInfo[1] ?? 0), [1217, 1451]);
+        }
+        self::assertFalse(Schema::hasTable('telegram_delivery_operations'));
+        self::assertTrue(Schema::hasTable('telegram_delivery_authority_capability'));
+        $presentAfterFailedUp = (new TelegramDeliveryDatabaseAuthoritySurfaceV1)->presentRequiredTriggers($runtime);
+        sort($presentAfterFailedUp, SORT_STRING);
+        self::assertSame($expected, $presentAfterFailedUp);
 
         $builder->statement('DROP TABLE telegram_delivery_rollback_capability_fk_probe');
-        $migration->down();
-
-        self::assertFalse(Schema::hasTable('telegram_delivery_authority_capability'));
-        self::assertSame([], (new TelegramDeliveryDatabaseAuthoritySurfaceV1)->presentRequiredTriggers($runtime));
-
         $migration->up();
+
+        self::assertTrue(Schema::hasTable('telegram_delivery_authority_capability'));
+        self::assertTrue(Schema::hasTable('telegram_delivery_operations'));
         self::assertTrue((new TelegramDeliveryDatabaseAuthoritySurfaceV1)->semanticsMatchExpected($runtime));
     }
 
@@ -161,11 +196,22 @@ SQL, $databaseName));
     private function assertRollbackDropFails(?\Closure $afterFinalPreflight = null, ?\Closure $afterCapabilityPreflight = null): void
     {
         $migration = $this->migration();
-        $method = new ReflectionMethod($migration, 'rollbackMysql');
-        $method->setAccessible(true);
+        $rollback = new ReflectionMethod($migration, 'rollbackMysql');
+        $rollback->setAccessible(true);
+        $withInstallationLock = new ReflectionMethod($migration, 'withInstallationLock');
+        $withInstallationLock->setAccessible(true);
+        $connection = DB::connection();
 
         try {
-            $method->invoke($migration, DB::connection(), $afterFinalPreflight, $afterCapabilityPreflight);
+            $withInstallationLock->invoke($migration, $connection, function () use (
+                $rollback,
+                $migration,
+                $connection,
+                $afterFinalPreflight,
+                $afterCapabilityPreflight,
+            ): void {
+                $rollback->invoke($migration, $connection, $afterFinalPreflight, $afterCapabilityPreflight);
+            });
             self::fail('A racing incoming foreign key must prevent dependency-sensitive rollback progress.');
         } catch (QueryException $exception) {
             self::assertContains((int) ($exception->errorInfo[1] ?? 0), [1217, 1451]);
