@@ -1233,6 +1233,10 @@ final class ArchitectureBoundaryChecker
         $reported = [];
         $dynamicCallableVariables = [];
         $containerVariables = [];
+        $hasLaravelContainerType = $this->containsCodeTokenText($source, 'Illuminate\\Foundation\\Application')
+            || $this->containsCodeTokenText($source, 'Illuminate\\Contracts\\Container\\Container')
+            || $this->containsCodeTokenText($source, 'Illuminate\\Container\\Container')
+            || $this->containsCodeTokenText($source, 'Illuminate\\Support\\Facades\\App');
         $report = function (int $line, string $mechanism) use ($relativePath, &$violations, &$reported): void {
             $key = $line.'|'.$mechanism;
             if (isset($reported[$key])) {
@@ -1276,6 +1280,34 @@ final class ArchitectureBoundaryChecker
                 && ($tokens[$index + 3]['text'] ?? null) === '('
             ) {
                 $containerVariables[$text] = true;
+            }
+
+            if ($hasLaravelContainerType
+                && $id === T_VARIABLE
+                && ($tokens[$index + 1]['id'] ?? null) === T_OBJECT_OPERATOR
+                && ($tokens[$index + 2]['id'] ?? null) === T_STRING
+                && in_array(strtolower((string) ($tokens[$index + 2]['text'] ?? '')), ['make', 'get'], true)
+                && ($tokens[$index + 3]['text'] ?? null) === '('
+                && ($tokens[$index + 4]['id'] ?? null) === T_VARIABLE
+            ) {
+                $report($line, 'typed Laravel container ->'.strtolower((string) $tokens[$index + 2]['text']).'($variable)');
+            }
+
+            if ($hasLaravelContainerType
+                && $id === T_VARIABLE
+                && $text === '$this'
+                && ($tokens[$index + 1]['id'] ?? null) === T_OBJECT_OPERATOR
+                && ($tokens[$index + 2]['id'] ?? null) === T_STRING
+                && ($tokens[$index + 3]['id'] ?? null) === T_OBJECT_OPERATOR
+                && ($tokens[$index + 4]['id'] ?? null) === T_STRING
+                && in_array(strtolower((string) ($tokens[$index + 4]['text'] ?? '')), ['make', 'get'], true)
+                && ($tokens[$index + 5]['text'] ?? null) === '('
+                && ($tokens[$index + 6]['id'] ?? null) === T_VARIABLE
+            ) {
+                $report(
+                    $line,
+                    'typed Laravel container property ->'.strtolower((string) $tokens[$index + 4]['text']).'($variable)',
+                );
             }
 
             if ($id === T_VARIABLE

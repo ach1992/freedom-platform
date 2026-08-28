@@ -412,6 +412,28 @@ PHP);
         self::assertStringContainsString('dynamic class/container resolution via app()->make($variable) is forbidden', $violations);
     }
 
+    public function test_generic_telegram_boundary_rejects_injected_laravel_container_dynamic_resolution(): void
+    {
+        $this->write('app/Modules/Orders/Application/InjectedContainerTelegramEscape.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+use Illuminate\Contracts\Container\Container;
+final class InjectedContainerTelegramEscape
+{
+    public function __construct(private Container $container) {}
+    public function run(string $queueClass): void
+    {
+        $this->container->make($queueClass);
+    }
+}
+PHP);
+
+        $result = $this->checker()->check();
+        $violations = implode("\n", $result['violations']);
+
+        self::assertStringContainsString('dynamic class/container resolution via typed Laravel container property ->make($variable) is forbidden', $violations);
+    }
+
     public function test_generic_telegram_boundary_rejects_dynamic_new_and_callback_indirection(): void
     {
         $this->write('app/Modules/Orders/Application/CallableTelegramEscape.php', <<<'PHP'
