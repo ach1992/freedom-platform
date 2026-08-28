@@ -99,6 +99,7 @@ final class InstallerAccessBoundaryTest extends TestCase
         $this->configureFinalization($paths, $runner);
         $this->accessStore($paths['access'])->issue(5);
         $testSecret = 'test-only-database-secret';
+        $lifecycleSecret = 'test-only-lifecycle-database-secret';
 
         try {
             $response = $this->withServerVariables([
@@ -110,14 +111,46 @@ final class InstallerAccessBoundaryTest extends TestCase
                     'DB_HOST' => 'database.internal',
                     'DB_PASSWORD' => $testSecret,
                 ],
+                'lifecycle_database_password' => $lifecycleSecret,
             ]);
 
             $response->assertOk()->assertExactJson(['status' => 'completed']);
             $response->assertDontSee($testSecret);
+            $response->assertDontSee($lifecycleSecret);
+            $this->assertSame($lifecycleSecret, $runner->migrationPassword);
             $this->assertSame(['config_clear', 'migrations', 'config_cache'], $runner->actions);
             $this->assertStringContainsString('DB_PASSWORD="'.$testSecret.'"', (string) file_get_contents($paths['environment']));
+            $this->assertStringNotContainsString($lifecycleSecret, (string) file_get_contents($paths['environment']));
             $this->assertFileExists($paths['lock']);
             $this->assertFileDoesNotExist($paths['snapshot']);
+        } finally {
+            $this->cleanupFinalization($paths);
+        }
+    }
+
+    /** @requirement INS-001 SEC-003 SEC-007 SEC-008 QUA-011 */
+    public function test_lifecycle_password_cannot_be_smuggled_into_the_persisted_environment_map(): void
+    {
+        $paths = $this->finalizationPaths('lifecycle-environment-rejected');
+        $runner = new HttpRecordingFinalizationRunner;
+        $this->configureFinalization($paths, $runner);
+        $this->accessStore($paths['access'])->issue(5);
+        $testSecret = 'test-only-lifecycle-environment-secret';
+
+        try {
+            $response = $this->withServerVariables([
+                'REMOTE_ADDR' => '198.51.100.12',
+            ])->withSession([
+                'installer.unlocked_until' => now()->addMinute()->getTimestamp(),
+            ])->postJson('/installer/finalize', [
+                'environment' => ['TELEGRAM_LIFECYCLE_DB_PASSWORD' => $testSecret],
+            ]);
+
+            $response->assertUnprocessable();
+            $response->assertDontSee($testSecret);
+            $this->assertSame([], $runner->actions);
+            $this->assertFileDoesNotExist($paths['environment']);
+            $this->assertFileDoesNotExist($paths['lock']);
         } finally {
             $this->cleanupFinalization($paths);
         }
@@ -229,13 +262,16 @@ final class HttpRecordingFinalizationRunner implements InstallerFinalizationRunn
     /** @var list<string> */
     public array $actions = [];
 
+    public ?string $migrationPassword = null;
+
     public function clearConfiguration(): void
     {
         $this->actions[] = 'config_clear';
     }
 
-    public function migrate(): void
+    public function migrate(?string $lifecycleDatabasePassword = null): void
     {
+        $this->migrationPassword = $lifecycleDatabasePassword;
         $this->actions[] = 'migrations';
     }
 

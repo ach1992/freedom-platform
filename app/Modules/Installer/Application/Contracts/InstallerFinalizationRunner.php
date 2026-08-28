@@ -8,7 +8,7 @@ interface InstallerFinalizationRunner
 {
     public function clearConfiguration(): void;
 
-    public function migrate(): void;
+    public function migrate(?string $lifecycleDatabasePassword = null): void;
 
     public function cacheConfiguration(): void;
 }

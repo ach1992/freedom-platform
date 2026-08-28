@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace {
     use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
-    use App\Modules\Telegram\Application\NonRestrictedTelegramPresentation;
     use App\Modules\Telegram\Application\TelegramDeliveryDatabaseCapability;
     use App\Modules\Telegram\Application\TelegramDeliveryQueueService;
     use App\Modules\Telegram\Domain\TelegramDeliveryAction;
@@ -15,6 +14,7 @@ namespace {
     use Illuminate\Database\Connection;
     use Illuminate\Database\DatabaseManager;
     use Illuminate\Support\Str;
+    use Tests\Support\NonRestrictedTelegramPresentationTestFactory;
 
     $rollbackRuntimeMode = PHP_SAPI === 'cli' ? ($argv[1] ?? null) : null;
     if (in_array($rollbackRuntimeMode, [
@@ -196,7 +196,7 @@ SQL);
                 TelegramDeliveryAction::Send,
                 900031,
                 null,
-                NonRestrictedTelegramPresentation::plainText('rollback runtime race'),
+                NonRestrictedTelegramPresentationTestFactory::plainText('rollback runtime race'),
                 $requestKey,
                 $correlationId,
             );

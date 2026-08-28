@@ -6,7 +6,6 @@ namespace Tests\Feature;
 
 use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\TelegramMutationTransport;
-use App\Modules\Telegram\Application\NonRestrictedTelegramPresentation;
 use App\Modules\Telegram\Application\TelegramDeliveryDatabaseAuthoritySurfaceV1;
 use App\Modules\Telegram\Application\TelegramDeliveryDatabaseCapability;
 use App\Modules\Telegram\Application\TelegramDeliveryOperationExecutor;
@@ -28,6 +27,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use ReflectionClass;
 use RuntimeException;
+use Tests\Support\NonRestrictedTelegramPresentationTestFactory;
 use Tests\TestCase;
 
 /** @requirement ARCH-003 ARCH-004 DAT-003 SEC-002 SEC-008 OPS-003 QUA-004 QUA-007 QUA-010 */
@@ -99,7 +99,7 @@ final class TelegramOutboundDeliveryMigrationSafetyTest extends TestCase
             TelegramDeliveryAction::Send,
             900103,
             null,
-            NonRestrictedTelegramPresentation::plainText('release must require activated schema'),
+            NonRestrictedTelegramPresentationTestFactory::plainText('release must require activated schema'),
             'migration-unactivated-release-179',
             'correlation-unactivated-release-179',
         );
@@ -352,7 +352,7 @@ SQL);
             TelegramDeliveryAction::Send,
             900101,
             null,
-            NonRestrictedTelegramPresentation::plainText('activated after safe repair'),
+            NonRestrictedTelegramPresentationTestFactory::plainText('activated after safe repair'),
             'migration-safe-repair-request-179',
             'correlation-migration-repair-179',
         );
@@ -483,7 +483,7 @@ SQL);
             TelegramDeliveryAction::Send,
             900102,
             null,
-            NonRestrictedTelegramPresentation::plainText('durable before guard loss'),
+            NonRestrictedTelegramPresentationTestFactory::plainText('durable before guard loss'),
             'migration-durable-guard-loss-179',
             'correlation-guard-loss-179',
         );
@@ -503,7 +503,7 @@ SQL);
             TelegramDeliveryAction::Send,
             900210,
             null,
-            NonRestrictedTelegramPresentation::plainText('semantic trigger fence'),
+            NonRestrictedTelegramPresentationTestFactory::plainText('semantic trigger fence'),
             'semantic-trigger-request-179',
             'correlation-semantic-trigger-179',
         );
@@ -544,7 +544,7 @@ SQL);
             TelegramDeliveryAction::Send,
             900211,
             null,
-            NonRestrictedTelegramPresentation::plainText('semantic check fence'),
+            NonRestrictedTelegramPresentationTestFactory::plainText('semantic check fence'),
             'semantic-check-request-179',
             'correlation-semantic-check-179',
         );
@@ -570,7 +570,7 @@ SQL);
             TelegramDeliveryAction::Send,
             900212,
             null,
-            NonRestrictedTelegramPresentation::plainText('semantic index fence'),
+            NonRestrictedTelegramPresentationTestFactory::plainText('semantic index fence'),
             'semantic-index-request-179',
             'correlation-semantic-index-179',
         );
@@ -596,7 +596,7 @@ SQL);
             TelegramDeliveryAction::Send,
             900213,
             null,
-            NonRestrictedTelegramPresentation::plainText('semantic column fence'),
+            NonRestrictedTelegramPresentationTestFactory::plainText('semantic column fence'),
             'semantic-column-request-179',
             'correlation-semantic-column-179',
         );
@@ -627,7 +627,7 @@ SQL);
             TelegramDeliveryAction::Send,
             900214,
             null,
-            NonRestrictedTelegramPresentation::plainText('unexpected authority trigger fence'),
+            NonRestrictedTelegramPresentationTestFactory::plainText('unexpected authority trigger fence'),
             'semantic-extra-trigger-request-179',
             'correlation-semantic-extra-trigger-179',
         );
@@ -660,7 +660,7 @@ SQL);
             TelegramDeliveryAction::Send,
             900215,
             null,
-            NonRestrictedTelegramPresentation::plainText('terminal outbox trigger fence'),
+            NonRestrictedTelegramPresentationTestFactory::plainText('terminal outbox trigger fence'),
             'semantic-outbox-terminal-request-179',
             'correlation-semantic-outbox-terminal-179',
         );
@@ -693,7 +693,7 @@ SQL);
             TelegramDeliveryAction::Send,
             900216,
             null,
-            NonRestrictedTelegramPresentation::plainText('shared outbox after trigger fence'),
+            NonRestrictedTelegramPresentationTestFactory::plainText('shared outbox after trigger fence'),
             'semantic-outbox-after-request-179',
             'correlation-semantic-outbox-after-179',
         );
@@ -728,7 +728,7 @@ SQL);
             TelegramDeliveryAction::Send,
             900217,
             null,
-            NonRestrictedTelegramPresentation::plainText('shared outbox replacement fence'),
+            NonRestrictedTelegramPresentationTestFactory::plainText('shared outbox replacement fence'),
             'semantic-outbox-replacement-request-179',
             'correlation-semantic-outbox-replacement-179',
         );
@@ -1031,7 +1031,7 @@ SQL);
                 TelegramDeliveryAction::Send,
                 900180,
                 null,
-                NonRestrictedTelegramPresentation::plainText('partial surface runtime fence'),
+                NonRestrictedTelegramPresentationTestFactory::plainText('partial surface runtime fence'),
                 'migration-runtime-fence-'.$suffix,
                 'correlation-runtime-fence-179',
             );
@@ -1092,7 +1092,7 @@ SQL);
                 TelegramDeliveryAction::Send,
                 900280,
                 null,
-                NonRestrictedTelegramPresentation::plainText('semantic drift queue fence'),
+                NonRestrictedTelegramPresentationTestFactory::plainText('semantic drift queue fence'),
                 'semantic-runtime-'.$suffix.'-179',
                 'correlation-semantic-runtime-179',
             );

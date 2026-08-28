@@ -6,7 +6,6 @@ namespace Tests\Feature;
 
 use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\TelegramMutationTransport;
-use App\Modules\Telegram\Application\NonRestrictedTelegramPresentation;
 use App\Modules\Telegram\Application\TelegramDeliveryDatabaseCapability;
 use App\Modules\Telegram\Application\TelegramDeliveryOperationExecutor;
 use App\Modules\Telegram\Application\TelegramDeliveryOutboxHandler;
@@ -24,6 +23,7 @@ use Illuminate\Database\DatabaseManager;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\DB;
 use ReflectionClass;
+use Tests\Support\NonRestrictedTelegramPresentationTestFactory;
 use Tests\TestCase;
 
 /** @requirement ARCH-004 DAT-003 OPS-003 QUA-004 QUA-007 */
@@ -86,7 +86,7 @@ final class TelegramOutboundDeliveryStaleLeaseTest extends TestCase
             TelegramDeliveryAction::Send,
             900040,
             null,
-            NonRestrictedTelegramPresentation::plainText('stale lease recovery'),
+            NonRestrictedTelegramPresentationTestFactory::plainText('stale lease recovery'),
             'telegram-stale-lease-request-179',
             'correlation-stale-lease-179',
         );

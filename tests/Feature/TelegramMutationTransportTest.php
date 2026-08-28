@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
-use App\Modules\Telegram\Application\NonRestrictedTelegramPresentation;
 use App\Modules\Telegram\Application\TelegramMutationOutcome;
 use App\Modules\Telegram\Application\TelegramMutationRequest;
 use App\Modules\Telegram\Domain\TelegramDeliveryAction;
@@ -14,6 +13,7 @@ use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use RuntimeException;
+use Tests\Support\NonRestrictedTelegramPresentationTestFactory;
 use Tests\TestCase;
 
 /** @requirement ARCH-004 SEC-002 SEC-008 INT-001 INT-002 OPS-003 QUA-001 QUA-004 */
@@ -31,13 +31,13 @@ final class TelegramMutationTransportTest extends TestCase
             TelegramDeliveryAction::Send,
             -1001234567890,
             null,
-            NonRestrictedTelegramPresentation::plainText('hello'),
+            NonRestrictedTelegramPresentationTestFactory::plainText('hello'),
         ));
         $edit = $transport->mutate(new TelegramMutationRequest(
             TelegramDeliveryAction::Edit,
             -1001234567890,
             101,
-            NonRestrictedTelegramPresentation::plainText('updated'),
+            NonRestrictedTelegramPresentationTestFactory::plainText('updated'),
         ));
         $delete = $transport->mutate(new TelegramMutationRequest(
             TelegramDeliveryAction::Delete,
@@ -77,13 +77,13 @@ final class TelegramMutationTransportTest extends TestCase
             TelegramDeliveryAction::Send,
             900001,
             null,
-            NonRestrictedTelegramPresentation::plainText('send identity'),
+            NonRestrictedTelegramPresentationTestFactory::plainText('send identity'),
         );
         $editRequest = new TelegramMutationRequest(
             TelegramDeliveryAction::Edit,
             900001,
             401,
-            NonRestrictedTelegramPresentation::plainText('edit identity'),
+            NonRestrictedTelegramPresentationTestFactory::plainText('edit identity'),
         );
 
         $missingChat = $transport->mutate($sendRequest);
@@ -112,7 +112,7 @@ final class TelegramMutationTransportTest extends TestCase
             TelegramDeliveryAction::Send,
             900001,
             null,
-            NonRestrictedTelegramPresentation::plainText('send identity shape'),
+            NonRestrictedTelegramPresentationTestFactory::plainText('send identity shape'),
         );
 
         $stringChat = $this->transport()->mutate($request);
@@ -139,7 +139,7 @@ final class TelegramMutationTransportTest extends TestCase
             TelegramDeliveryAction::Send,
             900001,
             null,
-            NonRestrictedTelegramPresentation::plainText('rate-limited'),
+            NonRestrictedTelegramPresentationTestFactory::plainText('rate-limited'),
         ));
 
         self::assertSame(TelegramMutationOutcome::RetryAfter, $result->outcome);
@@ -157,7 +157,7 @@ final class TelegramMutationTransportTest extends TestCase
             TelegramDeliveryAction::Send,
             900001,
             null,
-            NonRestrictedTelegramPresentation::plainText('message'),
+            NonRestrictedTelegramPresentationTestFactory::plainText('message'),
         );
 
         $serverFailure = $this->transport()->mutate($request);
@@ -177,7 +177,7 @@ final class TelegramMutationTransportTest extends TestCase
             TelegramDeliveryAction::Send,
             900001,
             null,
-            NonRestrictedTelegramPresentation::plainText('message'),
+            NonRestrictedTelegramPresentationTestFactory::plainText('message'),
         ));
 
         self::assertSame(TelegramMutationOutcome::UncertainResult, $result->outcome);
@@ -202,13 +202,13 @@ final class TelegramMutationTransportTest extends TestCase
             TelegramDeliveryAction::Send,
             900001,
             null,
-            NonRestrictedTelegramPresentation::plainText('message'),
+            NonRestrictedTelegramPresentationTestFactory::plainText('message'),
         ));
         $mismatch = $transport->mutate(new TelegramMutationRequest(
             TelegramDeliveryAction::Edit,
             900001,
             201,
-            NonRestrictedTelegramPresentation::plainText('message'),
+            NonRestrictedTelegramPresentationTestFactory::plainText('message'),
         ));
 
         self::assertSame(TelegramMutationOutcome::UncertainResult, $timeout->outcome);
@@ -220,7 +220,7 @@ final class TelegramMutationTransportTest extends TestCase
 
     public function test_non_restricted_presentation_debug_output_is_redacted(): void
     {
-        $presentation = NonRestrictedTelegramPresentation::plainText('confidential-but-not-restricted-display');
+        $presentation = NonRestrictedTelegramPresentationTestFactory::plainText('confidential-but-not-restricted-display');
 
         self::assertSame('[NON_RESTRICTED_TELEGRAM_PRESENTATION]', (string) $presentation);
         self::assertSame(['redacted' => true, 'type' => 'plain_text'], $presentation->__debugInfo());

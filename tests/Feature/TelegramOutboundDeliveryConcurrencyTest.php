@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace {
     use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
-    use App\Modules\Telegram\Application\NonRestrictedTelegramPresentation;
     use App\Modules\Telegram\Application\TelegramDeliveryDatabaseCapability;
     use App\Modules\Telegram\Application\TelegramDeliveryQueueService;
     use App\Modules\Telegram\Domain\TelegramDeliveryAction;
@@ -13,6 +12,7 @@ namespace {
     use Illuminate\Contracts\Console\Kernel;
     use Illuminate\Database\Connection;
     use Illuminate\Database\DatabaseManager;
+    use Tests\Support\NonRestrictedTelegramPresentationTestFactory;
 
     if (PHP_SAPI === 'cli' && ($argv[1] ?? null) === '--telegram-outbound-queue-contention-worker') {
         require dirname(__DIR__, 2).'/vendor/autoload.php';
@@ -76,7 +76,7 @@ namespace {
                 TelegramDeliveryAction::Send,
                 900030,
                 null,
-                NonRestrictedTelegramPresentation::plainText('concurrent delivery'),
+                NonRestrictedTelegramPresentationTestFactory::plainText('concurrent delivery'),
                 'telegram-concurrent-request-179',
                 'correlation-concurrent-179',
             );

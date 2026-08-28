@@ -102,9 +102,14 @@ final class InstallerAccessController extends Controller
         $validated = $request->validate([
             'environment' => ['required', 'array', 'min:1', 'max:40'],
             'environment.*' => ['nullable', 'string', 'max:4096'],
+            'lifecycle_database_password' => ['nullable', 'string', 'min:1', 'max:4096'],
         ]);
         $environment = $this->environmentMap($validated['environment'] ?? null);
-        $result = $finalizer->finalize($environment);
+        $lifecycleDatabasePassword = $validated['lifecycle_database_password'] ?? null;
+        $result = $finalizer->finalize(
+            $environment,
+            is_string($lifecycleDatabasePassword) ? $lifecycleDatabasePassword : null,
+        );
 
         $request->session()->invalidate();
         $request->session()->regenerateToken();

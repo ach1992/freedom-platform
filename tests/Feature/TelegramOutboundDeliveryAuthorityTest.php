@@ -6,7 +6,6 @@ namespace Tests\Feature;
 
 use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\TelegramMutationTransport;
-use App\Modules\Telegram\Application\NonRestrictedTelegramPresentation;
 use App\Modules\Telegram\Application\TelegramDeliveryDatabaseCapability;
 use App\Modules\Telegram\Application\TelegramDeliveryOperationExecutor;
 use App\Modules\Telegram\Application\TelegramDeliveryOutboxHandler;
@@ -34,6 +33,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use ReflectionClass;
 use RuntimeException;
+use Tests\Support\NonRestrictedTelegramPresentationTestFactory;
 use Tests\TestCase;
 
 /** @requirement ARCH-003 ARCH-004 DAT-003 SEC-002 SEC-008 OPS-003 QUA-001 QUA-004 QUA-007 QUA-010 */
@@ -72,7 +72,7 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
     public function test_queue_is_atomic_exact_replay_safe_conflict_safe_and_direct_dml_guarded(): void
     {
         $queue = $this->queue();
-        $presentation = NonRestrictedTelegramPresentation::plainText('مرحله بعدی خرید');
+        $presentation = NonRestrictedTelegramPresentationTestFactory::plainText('مرحله بعدی خرید');
 
         $created = $queue->queue(
             TelegramDeliveryAction::Send,
@@ -100,7 +100,7 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
             TelegramDeliveryAction::Send,
             900001,
             null,
-            NonRestrictedTelegramPresentation::plainText('مرحله بعدی خرید'),
+            NonRestrictedTelegramPresentationTestFactory::plainText('مرحله بعدی خرید'),
             'telegram-send-request-001',
             'correlation-telegram-001',
         );
@@ -115,7 +115,7 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
                 TelegramDeliveryAction::Send,
                 900001,
                 null,
-                NonRestrictedTelegramPresentation::plainText('conflicting text'),
+                NonRestrictedTelegramPresentationTestFactory::plainText('conflicting text'),
                 'telegram-send-request-001',
                 'correlation-telegram-001',
             );
@@ -172,7 +172,7 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
             TelegramDeliveryAction::Send,
             900010,
             null,
-            NonRestrictedTelegramPresentation::plainText('delivery success'),
+            NonRestrictedTelegramPresentationTestFactory::plainText('delivery success'),
             'telegram-success-request',
             'correlation-success-179',
         );
@@ -214,7 +214,7 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
             TelegramDeliveryAction::Send,
             900011,
             null,
-            NonRestrictedTelegramPresentation::plainText('retryable'),
+            NonRestrictedTelegramPresentationTestFactory::plainText('retryable'),
             'telegram-retryable-request',
             'correlation-retry-179',
         );
@@ -263,7 +263,7 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
             TelegramDeliveryAction::Send,
             900015,
             null,
-            NonRestrictedTelegramPresentation::plainText('server failure is ambiguous'),
+            NonRestrictedTelegramPresentationTestFactory::plainText('server failure is ambiguous'),
             'telegram-http-5xx-request',
             'correlation-http-5xx-179',
         );
@@ -309,7 +309,7 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
             TelegramDeliveryAction::Send,
             900016,
             null,
-            NonRestrictedTelegramPresentation::plainText('direct reentry fence'),
+            NonRestrictedTelegramPresentationTestFactory::plainText('direct reentry fence'),
             'telegram-direct-reentry-request-179',
             'correlation-direct-reentry-179',
         );
@@ -344,7 +344,7 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
             TelegramDeliveryAction::Send,
             900017,
             null,
-            NonRestrictedTelegramPresentation::plainText('concurrent direct reentry fence'),
+            NonRestrictedTelegramPresentationTestFactory::plainText('concurrent direct reentry fence'),
             'telegram-concurrent-direct-reentry-request-179',
             'correlation-concurrent-direct-reentry-179',
         );
@@ -407,7 +407,7 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
             TelegramDeliveryAction::Send,
             900012,
             null,
-            NonRestrictedTelegramPresentation::plainText('retry after'),
+            NonRestrictedTelegramPresentationTestFactory::plainText('retry after'),
             'telegram-retry-after-request',
             'correlation-retry-after-179',
         );
@@ -443,7 +443,7 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
             TelegramDeliveryAction::Send,
             900013,
             null,
-            NonRestrictedTelegramPresentation::plainText('uncertain'),
+            NonRestrictedTelegramPresentationTestFactory::plainText('uncertain'),
             'telegram-uncertain-request',
             'correlation-uncertain-179',
         );
@@ -469,7 +469,7 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
             TelegramDeliveryAction::Send,
             900014,
             null,
-            NonRestrictedTelegramPresentation::plainText('crash fence'),
+            NonRestrictedTelegramPresentationTestFactory::plainText('crash fence'),
             'telegram-crash-request',
             'correlation-crash-179',
         );
@@ -498,7 +498,7 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
             TelegramDeliveryAction::Edit,
             900020,
             801,
-            NonRestrictedTelegramPresentation::plainText('edited'),
+            NonRestrictedTelegramPresentationTestFactory::plainText('edited'),
             'telegram-edit-request',
             'correlation-edit-179',
         );
@@ -546,7 +546,7 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
             TelegramDeliveryAction::Send,
             900022,
             null,
-            NonRestrictedTelegramPresentation::plainText('blocked'),
+            NonRestrictedTelegramPresentationTestFactory::plainText('blocked'),
             'telegram-blocked-request',
             'correlation-blocked-179',
         );
@@ -655,7 +655,7 @@ SQL, [
             TelegramDeliveryAction::Send,
             900092,
             null,
-            NonRestrictedTelegramPresentation::plainText('legitimate before forged effect'),
+            NonRestrictedTelegramPresentationTestFactory::plainText('legitimate before forged effect'),
             'telegram-forged-effect-request-179',
             'correlation-forged-effect-179',
         );
@@ -724,7 +724,7 @@ SQL, [$storedCapabilityHash, $created->publicId]);
                 TelegramDeliveryAction::Send,
                 900093,
                 null,
-                NonRestrictedTelegramPresentation::plainText('cleanup fault'),
+                NonRestrictedTelegramPresentationTestFactory::plainText('cleanup fault'),
                 'telegram-cleanup-fault-request-179',
                 'correlation-cleanup-fault-179',
             );
@@ -760,7 +760,7 @@ SQL);
             TelegramDeliveryAction::Send,
             900094,
             null,
-            NonRestrictedTelegramPresentation::plainText('identity bound'),
+            NonRestrictedTelegramPresentationTestFactory::plainText('identity bound'),
             'telegram-outbox-bind-request-179',
             'correlation-outbox-bind-179',
         );

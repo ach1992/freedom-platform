@@ -237,7 +237,7 @@ final readonly class TelegramDeliveryOperationExecutor
             ?? throw new RuntimeException('Stored Telegram delivery action is invalid.');
         $presentation = $row->presentation_text === null
             ? null
-            : NonRestrictedTelegramPresentation::plainText((string) $row->presentation_text);
+            : NonRestrictedTelegramPresentation::restorePersisted((string) $row->presentation_text);
 
         return new TelegramMutationRequest(
             $action,

@@ -280,12 +280,89 @@ PHP);
         self::assertStringContainsString('opaque persistence API statement from Presentation is forbidden', implode("\n", $result['violations']));
     }
 
-    /** @param array<string,list<string>> $allowed */
-    private function checker(array $allowed = []): ArchitectureBoundaryChecker
+    public function test_restricted_owners_cannot_consume_generic_non_restricted_telegram_delivery(): void
+    {
+        $cases = [
+            'Provisioning' => 'subscription-config-url',
+            'Identity' => 'otp-value',
+            'Panels' => 'provider-credential',
+            'Payments' => 'raw-provider-payload',
+        ];
+
+        foreach ($cases as $module => $restrictedMarker) {
+            $this->write('app/Modules/'.$module.'/Application/UnsafeGenericDelivery.php', <<<PHP
+<?php
+namespace App\\Modules\\{$module}\\Application;
+use App\\Modules\\Telegram\\Application\\NonRestrictedTelegramPresentationFactory;
+use App\\Modules\\Telegram\\Application\\NonRestrictedTelegramPresentationSource;
+use App\\Modules\\Telegram\\Application\\TelegramDeliveryQueueService;
+final class UnsafeGenericDelivery implements NonRestrictedTelegramPresentationSource
+{
+    public function __construct(private TelegramDeliveryQueueService \$queue, private NonRestrictedTelegramPresentationFactory \$factory) {}
+    public function nonRestrictedTelegramText(): string { return '{$restrictedMarker}'; }
+}
+PHP);
+        }
+
+        $result = $this->checker(['Provisioning' => ['Telegram']])->check();
+        $violations = implode("\n", $result['violations']);
+
+        self::assertSame(
+            4,
+            substr_count($violations, 'generic non-restricted Telegram delivery is Telegram-owned and cannot be consumed by another module'),
+        );
+    }
+
+    public function test_generic_non_restricted_telegram_source_requires_exact_reviewed_path(): void
+    {
+        $path = 'app/Modules/Telegram/Application/CustomerJourneyPresentation.php';
+        $this->write($path, <<<'PHP'
+<?php
+namespace App\Modules\Telegram\Application;
+final class CustomerJourneyPresentation
+{
+    public function __construct(private NonRestrictedTelegramPresentationFactory $factory) {}
+}
+PHP);
+
+        $unreviewed = $this->checker()->check();
+        self::assertStringContainsString(
+            'generic non-restricted Telegram delivery source is not explicitly reviewed',
+            implode("\n", $unreviewed['violations']),
+        );
+
+        $reviewed = $this->checker([], [$path])->check();
+        self::assertSame([], $reviewed['violations']);
+    }
+
+    public function test_generic_non_restricted_telegram_source_allowlist_rejects_non_telegram_and_stale_entries(): void
+    {
+        $result = $this->checker([], [
+            'app/Modules/Provisioning/Application/Unsafe.php',
+            'app/Modules/Telegram/Application/Stale.php',
+        ])->check();
+        $violations = implode("\n", $result['violations']);
+
+        self::assertStringContainsString(
+            'telegram_non_restricted_presentation_sources contains an invalid or non-Telegram source path',
+            $violations,
+        );
+        self::assertStringContainsString(
+            'telegram_non_restricted_presentation_sources contains stale/unused entry app/Modules/Telegram/Application/Stale.php',
+            $violations,
+        );
+    }
+
+    /**
+     * @param  array<string,list<string>>  $allowed
+     * @param  list<string>  $telegramPresentationSources
+     */
+    private function checker(array $allowed = [], array $telegramPresentationSources = []): ArchitectureBoundaryChecker
     {
         return new ArchitectureBoundaryChecker($this->root, [
             'allowed_module_dependencies' => $allowed,
             'cycle_exceptions' => [],
+            'telegram_non_restricted_presentation_sources' => $telegramPresentationSources,
             'durable_table_owners' => [
                 'audit_logs' => 'SharedAppendOnly',
                 'ledger_entries' => 'Wallet',
