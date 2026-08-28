@@ -192,6 +192,7 @@ final class InstallerEnvironmentBootstrapperTest extends TestCase
             $paths['environment'],
             $paths['snapshot'],
             ['APP_KEY', 'DB_HOST'],
+            ['TELEGRAM_LIFECYCLE_DB_PASSWORD'],
         );
     }
 

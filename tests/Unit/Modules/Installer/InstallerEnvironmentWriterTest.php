@@ -52,12 +52,15 @@ final class InstallerEnvironmentWriterTest extends TestCase
     {
         [$directory, $environmentPath, $snapshotPath] = $this->paths('telegram-metadata');
         $allowedKeys = config('installer.environment.allowed_keys');
+        $nonPersistableKeys = config('installer.environment.non_persistable_keys');
         $this->assertIsArray($allowedKeys);
+        $this->assertIsArray($nonPersistableKeys);
         $this->assertContains('TELEGRAM_METADATA_DB_URL', $allowedKeys);
         $this->assertContains('TELEGRAM_METADATA_DB_USERNAME', $allowedKeys);
         $this->assertContains('TELEGRAM_METADATA_DB_PASSWORD', $allowedKeys);
         $this->assertNotContains('TELEGRAM_LIFECYCLE_DB_USERNAME', $allowedKeys);
         $this->assertNotContains('TELEGRAM_LIFECYCLE_DB_PASSWORD', $allowedKeys);
+        $this->assertContains('TELEGRAM_LIFECYCLE_DB_PASSWORD', $nonPersistableKeys);
 
         $writer = new InstallerEnvironmentWriter(
             new class implements RandomGenerator
@@ -75,6 +78,7 @@ final class InstallerEnvironmentWriterTest extends TestCase
             $environmentPath,
             $snapshotPath,
             $allowedKeys,
+            $nonPersistableKeys,
         );
         $secret = 'metadata-test-only-$secret-with-"quotes"';
 
@@ -144,6 +148,53 @@ ENV;
     }
 
     /** @requirement INS-001 SEC-003 SEC-007 SEC-008 QUA-011 */
+    public function test_it_rejects_a_preexisting_configured_deployment_only_secret_before_snapshot_or_write(): void
+    {
+        [$directory, $environmentPath, $snapshotPath] = $this->paths('preexisting-lifecycle-secret');
+        $secret = 'test-only-preexisting-lifecycle-secret';
+        $original = "APP_KEY=base64:existing-test-key\nTELEGRAM_LIFECYCLE_DB_PASSWORD=\"\"\nTELEGRAM_LIFECYCLE_DB_PASSWORD=\"{$secret}\"\nDB_HOST=old-primary\n";
+        $this->writeFixture($environmentPath, $original);
+        $writer = $this->writer($environmentPath, $snapshotPath);
+
+        try {
+            try {
+                $writer->write(['DB_HOST' => 'database.internal']);
+                $this->fail('A configured deployment-only lifecycle secret must block installer environment persistence.');
+            } catch (RuntimeException $exception) {
+                $this->assertStringNotContainsString($secret, $exception->getMessage());
+                $this->assertStringContainsString('deployment-only key', $exception->getMessage());
+            }
+
+            $this->assertSame($original, file_get_contents($environmentPath));
+            $this->assertFileDoesNotExist($snapshotPath);
+            $this->assertFileDoesNotExist($snapshotPath.'.json');
+        } finally {
+            $this->cleanup($directory);
+        }
+    }
+
+    /** @requirement INS-001 SEC-003 SEC-007 SEC-008 QUA-011 */
+    public function test_blank_deployment_only_placeholder_does_not_block_safe_environment_updates(): void
+    {
+        [$directory, $environmentPath, $snapshotPath] = $this->paths('blank-lifecycle-placeholder');
+        $this->writeFixture(
+            $environmentPath,
+            "APP_KEY=base64:existing-test-key\nTELEGRAM_LIFECYCLE_DB_PASSWORD=\"\"\nDB_HOST=old-primary\n",
+        );
+        $writer = $this->writer($environmentPath, $snapshotPath);
+
+        try {
+            $writer->write(['DB_HOST' => 'database.internal']);
+            $contents = (string) file_get_contents($environmentPath);
+
+            $this->assertStringContainsString('TELEGRAM_LIFECYCLE_DB_PASSWORD=""', $contents);
+            $this->assertStringContainsString('DB_HOST="database.internal"', $contents);
+        } finally {
+            $this->cleanup($directory);
+        }
+    }
+
+    /** @requirement INS-001 SEC-003 SEC-007 SEC-008 QUA-011 */
     public function test_it_rejects_unknown_keys_and_control_characters_without_disclosing_values(): void
     {
         [$directory, $environmentPath, $snapshotPath] = $this->paths('validation');
@@ -197,6 +248,7 @@ ENV;
             $environmentPath,
             $snapshotPath,
             ['APP_KEY', 'APP_NAME', 'DB_HOST', 'DB_PASSWORD'],
+            ['TELEGRAM_LIFECYCLE_DB_PASSWORD'],
         );
     }
 

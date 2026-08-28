@@ -92,6 +92,7 @@ final class InstallerFinalizerTest extends TestCase
             $paths['environment'],
             $paths['snapshot'],
             ['APP_KEY', 'DB_HOST'],
+            ['TELEGRAM_LIFECYCLE_DB_PASSWORD'],
         );
         $bootstrapper = new InstallerEnvironmentBootstrapper(
             $writer,
