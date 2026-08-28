@@ -29,18 +29,27 @@ final readonly class NonRestrictedTelegramPresentationFactory
         $caller = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 2)[1] ?? null;
         $callerFile = is_array($caller) ? ($caller['file'] ?? null) : null;
         $resolvedCaller = is_string($callerFile) ? realpath($callerFile) : false;
-        if ($resolvedCaller === false) {
+        $root = realpath(dirname(__DIR__, 4));
+        if ($resolvedCaller === false || $root === false) {
             throw new LogicException('Telegram presentation source provenance is unavailable.');
         }
 
-        $root = dirname(__DIR__, 4);
-        foreach (self::REVIEWED_SOURCE_FILES as $relativePath) {
-            $reviewed = realpath($root.'/'.$relativePath);
-            if ($reviewed !== false && $reviewed === $resolvedCaller) {
-                return;
-            }
+        $prefix = rtrim($root, DIRECTORY_SEPARATOR).DIRECTORY_SEPARATOR;
+        if (! str_starts_with($resolvedCaller, $prefix)) {
+            throw new LogicException('Telegram presentation source is outside the reviewed repository boundary.');
         }
 
-        throw new LogicException('Telegram presentation source is not an exact reviewed production gateway.');
+        $relativePath = str_replace('\\', '/', substr($resolvedCaller, strlen($prefix)));
+        if (! $this->isReviewedSourceFile($relativePath)) {
+            throw new LogicException('Telegram presentation source is not an exact reviewed production gateway.');
+        }
+    }
+
+    private function isReviewedSourceFile(string $relativePath): bool
+    {
+        return match ($relativePath) {
+            // Intentionally no production source until the first Phase 0.7 journey is reviewed.
+            default => false,
+        };
     }
 }
