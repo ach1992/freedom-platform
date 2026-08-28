@@ -268,7 +268,7 @@ final class TelegramPresentationProvenanceChecker
     }
 
     /**
-     * @param list<array{id:int|null,text:string,line:int|null}> $tokens
+     * @param  list<array{id:int|null,text:string,line:int|null}>  $tokens
      * @return list<string>
      */
     private function foldedStringRuns(array $tokens): array
