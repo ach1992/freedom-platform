@@ -1231,6 +1231,8 @@ final class ArchitectureBoundaryChecker
         }
 
         $reported = [];
+        $dynamicCallableVariables = [];
+        $containerVariables = [];
         $report = function (int $line, string $mechanism) use ($relativePath, &$violations, &$reported): void {
             $key = $line.'|'.$mechanism;
             if (isset($reported[$key])) {
@@ -1251,6 +1253,41 @@ final class ArchitectureBoundaryChecker
             $id = $token['id'];
             $text = $token['text'];
             $line = (int) ($token['line'] ?? 1);
+
+            if ($id === T_VARIABLE
+                && ($tokens[$index + 1]['text'] ?? null) === '='
+                && ($tokens[$index + 2]['text'] ?? null) === '['
+                && ($tokens[$index + 3]['id'] ?? null) === T_VARIABLE
+            ) {
+                $dynamicCallableVariables[$text] = true;
+            }
+
+            if ($id === T_VARIABLE
+                && isset($dynamicCallableVariables[$text])
+                && ($tokens[$index + 1]['text'] ?? null) === '('
+            ) {
+                $report($line, 'dynamic callable invocation');
+            }
+
+            if ($id === T_VARIABLE
+                && ($tokens[$index + 1]['text'] ?? null) === '='
+                && ($tokens[$index + 2]['id'] ?? null) === T_STRING
+                && in_array(strtolower((string) ($tokens[$index + 2]['text'] ?? '')), ['app', 'resolve'], true)
+                && ($tokens[$index + 3]['text'] ?? null) === '('
+            ) {
+                $containerVariables[$text] = true;
+            }
+
+            if ($id === T_VARIABLE
+                && isset($containerVariables[$text])
+                && ($tokens[$index + 1]['id'] ?? null) === T_OBJECT_OPERATOR
+                && ($tokens[$index + 2]['id'] ?? null) === T_STRING
+                && in_array(strtolower((string) ($tokens[$index + 2]['text'] ?? '')), ['make', 'get'], true)
+                && ($tokens[$index + 3]['text'] ?? null) === '('
+                && ($tokens[$index + 4]['id'] ?? null) === T_VARIABLE
+            ) {
+                $report($line, 'stored container ->'.strtolower((string) $tokens[$index + 2]['text']).'($variable)');
+            }
 
             if ($id === T_NEW && isset($tokens[$index + 1]) && $tokens[$index + 1]['id'] === T_VARIABLE) {
                 $report($line, 'dynamic new');
@@ -1303,21 +1340,30 @@ final class ArchitectureBoundaryChecker
             }
 
             $firstArgument = $tokens[$index + 2] ?? null;
-            if ($firstArgument !== null && $firstArgument['id'] === T_VARIABLE) {
-                $report($line, $baseName.'($variable)');
+            if (($firstArgument['text'] ?? null) !== ')') {
+                $staticClassArgument = $firstArgument !== null
+                    && in_array($firstArgument['id'], [T_STRING, T_NAME_QUALIFIED, T_NAME_FULLY_QUALIFIED], true)
+                    && ($tokens[$index + 3]['id'] ?? null) === T_DOUBLE_COLON
+                    && ($tokens[$index + 4]['id'] ?? null) === T_CLASS;
+                if (! $staticClassArgument) {
+                    $report($line, $baseName.'(dynamic expression)');
 
-                continue;
+                    continue;
+                }
             }
 
-            if ($baseName === 'app'
-                && ($firstArgument['text'] ?? null) === ')'
-                && ($tokens[$index + 3]['id'] ?? null) === T_OBJECT_OPERATOR
-                && ($tokens[$index + 4]['id'] ?? null) === T_STRING
-                && in_array(strtolower((string) ($tokens[$index + 4]['text'] ?? '')), ['make', 'get'], true)
-                && ($tokens[$index + 5]['text'] ?? null) === '('
-                && ($tokens[$index + 6]['id'] ?? null) === T_VARIABLE
+            $closingOffset = ($firstArgument['text'] ?? null) === ')' ? 2 : 5;
+            if (($tokens[$index + $closingOffset]['text'] ?? null) === ')'
+                && ($tokens[$index + $closingOffset + 1]['id'] ?? null) === T_OBJECT_OPERATOR
+                && ($tokens[$index + $closingOffset + 2]['id'] ?? null) === T_STRING
+                && in_array(strtolower((string) ($tokens[$index + $closingOffset + 2]['text'] ?? '')), ['make', 'get'], true)
+                && ($tokens[$index + $closingOffset + 3]['text'] ?? null) === '('
+                && ($tokens[$index + $closingOffset + 4]['id'] ?? null) === T_VARIABLE
             ) {
-                $report($line, 'app()->'.strtolower((string) $tokens[$index + 4]['text']).'($variable)');
+                $report(
+                    $line,
+                    $baseName.'()->'.strtolower((string) $tokens[$index + $closingOffset + 2]['text']).'($variable)',
+                );
             }
         }
     }

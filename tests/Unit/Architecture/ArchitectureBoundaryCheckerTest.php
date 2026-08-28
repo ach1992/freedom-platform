@@ -346,8 +346,11 @@ final class DynamicTelegramEscape
     {
         $presentationClass = 'App\\Modules\\Telegram\\Application\\NonRestricted'.'TelegramPresentation';
         $queueClass = 'App\\Modules\\Telegram\\Application\\TelegramDeliveryQueue'.'Service';
-        $presentation = $presentationClass::restorePersisted($restrictedSecret);
-        $queue = app($queueClass);
+        $method = 'restore'.'Persisted';
+        $callable = [$presentationClass, $method];
+        $presentation = $callable($restrictedSecret);
+        $container = app();
+        $queue = $container->make($queueClass);
     }
 }
 PHP);
@@ -355,9 +358,8 @@ PHP);
         $result = $this->checker(['Provisioning' => ['Telegram']])->check();
         $violations = implode("\n", $result['violations']);
 
-        self::assertStringContainsString('dynamic class/container resolution via variable static call is forbidden', $violations);
-        self::assertStringContainsString('dynamic class/container resolution via app($variable) is forbidden', $violations);
-        self::assertStringContainsString('internal Telegram presentation method restorePersisted', $violations);
+        self::assertStringContainsString('dynamic class/container resolution via dynamic callable invocation is forbidden', $violations);
+        self::assertStringContainsString('dynamic class/container resolution via stored container ->make($variable) is forbidden', $violations);
     }
 
     public function test_generic_telegram_boundary_rejects_internal_presentation_methods_from_allowlisted_source(): void
@@ -406,7 +408,7 @@ PHP);
 
         self::assertStringContainsString('dynamic class/container resolution via reflectionclass is forbidden', $violations);
         self::assertStringContainsString('dynamic class/container resolution via class_alias is forbidden', $violations);
-        self::assertStringContainsString('dynamic class/container resolution via resolve($variable) is forbidden', $violations);
+        self::assertStringContainsString('dynamic class/container resolution via resolve(dynamic expression) is forbidden', $violations);
         self::assertStringContainsString('dynamic class/container resolution via app()->make($variable) is forbidden', $violations);
     }
 
