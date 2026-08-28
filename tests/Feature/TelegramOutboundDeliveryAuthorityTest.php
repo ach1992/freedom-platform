@@ -697,7 +697,7 @@ SQL, [$storedCapabilityHash, $created->publicId]);
                 ->update(['capability_hash' => str_repeat('a', 64)]);
             self::fail('Telegram delivery capability hash must be immutable to raw DML.');
         } catch (QueryException $exception) {
-            self::assertStringContainsString('capability is immutable', $exception->getMessage());
+            self::assertStringContainsString('capability identity is immutable', $exception->getMessage());
         }
     }
 
