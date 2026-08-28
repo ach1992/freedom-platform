@@ -67,6 +67,7 @@ assert_plan deployment_mutation_workflow FULL true true true true true true true
 assert_plan provider_mutation_workflow FULL true true true true true true true true true .github/workflows/provider-live-acceptance.yml
 assert_plan security_sensitive APPLICATION false false false true true false true false false app/Modules/AccessControl/Application/AuthorizationService.php
 assert_plan ci_policy CONTROL_PLANE true false true false false false false false false .github/workflows/ci.yml scripts/ci/classify-validation-plan.sh
+assert_plan secret_scan_control CONTROL_PLANE true false true false false false false false false scripts/ci/scan-git-secrets.sh scripts/ci/test-secret-scan.sh
 assert_plan operations_only OPERATIONS false false false false false false false false true deploy/staging/prepare-runtime-paths.sh
 assert_plan unknown_path FULL true true true true true true true true true mystery/unclassified.file
 assert_plan mixed_application APPLICATION true true false true true false true false false docs/06-test-strategy.md app/Modules/Orders/Application/OrderService.php

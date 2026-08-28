@@ -136,7 +136,7 @@ jobs:
           done < "$plan"
 
           # Independent self-modifying-CI guard: these surfaces may not suppress their own control validation.
-          if grep -Eq '^(\.github/workflows/ci\.yml|\.github/workflows/staging-readiness\.yml|scripts/ci/(classify-validation-plan|test-validation-plan|verify-project-control|verify-readonly-staging-workflow)\.sh)$' "$changed"; then
+          if grep -Eq '^(\.github/workflows/ci\.yml|\.github/workflows/staging-readiness\.yml|scripts/ci/(classify-validation-plan|test-validation-plan|scan-git-secrets|test-secret-scan|verify-project-control|verify-readonly-staging-workflow)\.sh)$' "$changed"; then
             project_control=true
             control_plane=true
           fi
@@ -171,6 +171,8 @@ jobs:
             docker-compose.ci.yml
             scripts/ci/classify-validation-plan.sh
             scripts/ci/test-validation-plan.sh
+            scripts/ci/scan-git-secrets.sh
+            scripts/ci/test-secret-scan.sh
             scripts/ci/verify-readonly-staging-workflow.sh
             scripts/ci/verify-planning.sh
             scripts/ci/verify-project-control.sh
@@ -179,7 +181,7 @@ jobs:
             test -s "$path" || { echo "Required repository control file is missing or empty: $path" >&2; exit 1; }
           done
 
-          for script in scripts/ci/classify-validation-plan.sh scripts/ci/test-validation-plan.sh scripts/ci/verify-readonly-staging-workflow.sh scripts/ci/verify-planning.sh scripts/ci/verify-project-control.sh; do
+          for script in scripts/ci/classify-validation-plan.sh scripts/ci/test-validation-plan.sh scripts/ci/scan-git-secrets.sh scripts/ci/test-secret-scan.sh scripts/ci/verify-readonly-staging-workflow.sh scripts/ci/verify-planning.sh scripts/ci/verify-project-control.sh; do
             bash -n "$script"
           done
 
@@ -231,8 +233,9 @@ jobs:
         run: |
           set -euo pipefail
           changed=build/evidence/preflight/changed-files.txt
-          if [[ ! -s "$changed" ]] || grep -Eq '^(\.github/workflows/(ci|staging-readiness)\.yml|scripts/ci/(classify-validation-plan|test-validation-plan|verify-project-control|verify-readonly-staging-workflow)\.sh)$' "$changed"; then
+          if [[ ! -s "$changed" ]] || grep -Eq '^(\.github/workflows/(ci|staging-readiness)\.yml|scripts/ci/(classify-validation-plan|test-validation-plan|scan-git-secrets|test-secret-scan|verify-project-control|verify-readonly-staging-workflow)\.sh)$' "$changed"; then
             bash scripts/ci/test-validation-plan.sh
+            bash scripts/ci/test-secret-scan.sh
             bash scripts/ci/verify-readonly-staging-workflow.sh
           fi
 
@@ -521,8 +524,7 @@ jobs:
           "$install_dir/gitleaks" version
           printf '%s\n' "$install_dir" >> "$GITHUB_PATH"
 
-      - name: Resolve exact secret-scan range
-        id: secret_range
+      - name: Scan exact Git history
         shell: bash
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -530,85 +532,4 @@ jobs:
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
           PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
           PUSH_BEFORE_SHA: ${{ github.event.before }}
-        run: |
-          set -euo pipefail
-
-          if [[ "$GITHUB_EVENT_NAME" == 'pull_request' ]]; then
-            for value in PR_BASE_SHA PR_HEAD_SHA PR_BASE_REF PR_HEAD_REF; do
-              [[ -n "${!value}" ]] || { echo "Missing pull-request secret-scan input: $value" >&2; exit 1; }
-            done
-
-            current_base=$(git ls-remote origin "refs/heads/$PR_BASE_REF" | awk 'NR == 1 {print $1}')
-            current_head=$(git ls-remote origin "refs/heads/$PR_HEAD_REF" | awk 'NR == 1 {print $1}')
-            [[ "$current_base" == "$PR_BASE_SHA" ]] || {
-              echo "Secret-scan base drifted: expected $PR_BASE_SHA, got ${current_base:-missing}" >&2
-              exit 1
-            }
-            [[ "$current_head" == "$PR_HEAD_SHA" ]] || {
-              echo "Secret-scan head drifted: expected $PR_HEAD_SHA, got ${current_head:-missing}" >&2
-              exit 1
-            }
-
-            git cat-file -e "${PR_BASE_SHA}^{commit}"
-            git cat-file -e "${PR_HEAD_SHA}^{commit}"
-            git merge-base --is-ancestor "$PR_BASE_SHA" "$PR_HEAD_SHA" || {
-              echo 'Secret-scan head is not a descendant of the event base.' >&2
-              exit 1
-            }
-
-            scan_range="$PR_BASE_SHA..$PR_HEAD_SHA"
-            commit_count=$(git rev-list --count "$scan_range")
-            ((commit_count > 0)) || { echo 'Secret-scan range contains no candidate commits.' >&2; exit 1; }
-
-            echo "Secret-scan base SHA: $PR_BASE_SHA"
-            echo "Secret-scan head SHA: $PR_HEAD_SHA"
-            echo "Secret-scan candidate commits: $commit_count"
-            echo "mode=range" >> "$GITHUB_OUTPUT"
-            echo "log_opts=--full-history --diff-merges=separate $scan_range" >> "$GITHUB_OUTPUT"
-          elif [[ "$GITHUB_EVENT_NAME" == 'push' ]]; then
-            git cat-file -e "${GITHUB_SHA}^{commit}"
-            if [[ -n "$PUSH_BEFORE_SHA" && ! "$PUSH_BEFORE_SHA" =~ ^0+$ && "$PUSH_BEFORE_SHA" != "$GITHUB_SHA" ]]; then
-              git cat-file -e "${PUSH_BEFORE_SHA}^{commit}"
-              echo "mode=range" >> "$GITHUB_OUTPUT"
-              echo "log_opts=--full-history --diff-merges=separate $PUSH_BEFORE_SHA..$GITHUB_SHA" >> "$GITHUB_OUTPUT"
-            else
-              echo "mode=single" >> "$GITHUB_OUTPUT"
-            fi
-          else
-            echo "mode=all" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Scan exact Git history
-        shell: bash
-        env:
-          SCAN_MODE: ${{ steps.secret_range.outputs.mode }}
-          SCAN_LOG_OPTS: ${{ steps.secret_range.outputs.log_opts }}
-        run: |
-          set -euo pipefail
-          args=(
-            detect
-            --redact
-            -v
-            --exit-code=2
-            --report-format=sarif
-            --report-path=results.sarif
-            --log-level=debug
-          )
-
-          case "$SCAN_MODE" in
-            range)
-              [[ -n "$SCAN_LOG_OPTS" ]] || { echo 'Secret-scan range mode is missing log opts.' >&2; exit 1; }
-              args+=(--log-opts="$SCAN_LOG_OPTS")
-              ;;
-            single)
-              args+=(--log-opts=-1)
-              ;;
-            all)
-              ;;
-            *)
-              echo "Unknown secret-scan mode: $SCAN_MODE" >&2
-              exit 1
-              ;;
-          esac
-
-          gitleaks "${args[@]}"
+        run: bash scripts/ci/scan-git-secrets.sh
