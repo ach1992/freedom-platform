@@ -110,9 +110,11 @@ final class NonRestrictedTelegramPresentation implements Stringable
 
     private static function assertExactCaller(string $expectedClass, string $expectedFile): void
     {
-        $caller = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 2)[1] ?? null;
-        $callerClass = is_array($caller) ? ($caller['class'] ?? null) : null;
-        $callerFile = is_array($caller) ? ($caller['file'] ?? null) : null;
+        $trace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 3);
+        $directInvocation = $trace[1] ?? null;
+        $gatewayFrame = $trace[2] ?? null;
+        $callerClass = is_array($gatewayFrame) ? ($gatewayFrame['class'] ?? null) : null;
+        $callerFile = is_array($directInvocation) ? ($directInvocation['file'] ?? null) : null;
         $resolvedExpected = realpath($expectedFile);
         $resolvedCaller = is_string($callerFile) ? realpath($callerFile) : false;
 

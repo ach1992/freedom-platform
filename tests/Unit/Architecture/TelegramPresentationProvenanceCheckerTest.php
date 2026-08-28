@@ -169,6 +169,28 @@ PHP);
         self::assertStringContainsString('Closure::bind scope mutation', $violations[0]);
     }
 
+    public function test_unrelated_dynamic_callable_and_container_mechanisms_remain_allowed(): void
+    {
+        $this->write('app/Modules/Payments/Infrastructure/IndependentDynamicResolver.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Infrastructure;
+use Closure;
+use Psr\Container\ContainerInterface;
+final class IndependentDynamicResolver
+{
+    public function __construct(private ContainerInterface $container) {}
+    public function run(object $service, string $method, string $class): object
+    {
+        Closure::fromCallable([$service, $method])();
+
+        return $this->container->get($class);
+    }
+}
+PHP);
+
+        self::assertSame([], $this->checker()->violations());
+    }
+
     public function test_static_reviewed_class_resolution_remains_allowed(): void
     {
         $this->write('app/Modules/Telegram/Application/TelegramDeliveryQueueService.php', <<<'PHP'

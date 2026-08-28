@@ -82,9 +82,15 @@ final class TelegramPresentationProvenanceChecker
     {
         $tokens = $this->tokens($source);
         $folded = $this->foldedStringRuns($tokens);
+        $foldedRestrictedMethod = false;
 
         foreach (self::RESTRICTED_METHOD_PATHS as $method => $allowedPaths) {
-            if ($this->containsFolded($folded, $method) && ! in_array($relativePath, $allowedPaths, true)) {
+            if (! $this->containsFolded($folded, $method)) {
+                continue;
+            }
+
+            $foldedRestrictedMethod = true;
+            if (! in_array($relativePath, $allowedPaths, true)) {
                 $violations[] = sprintf(
                     '%s constant-folded internal Telegram presentation method %s is forbidden; use the reviewed source/factory boundary instead.',
                     $relativePath,
@@ -108,14 +114,24 @@ final class TelegramPresentationProvenanceChecker
                     $relativePath,
                 );
             } else {
-                $sources = $this->config['telegram_non_restricted_presentation_sources'] ?? [];
-                if (! is_array($sources) || ! in_array($relativePath, $sources, true)) {
+                $sources = $this->reviewedSources();
+                if (! in_array($relativePath, $sources, true)) {
                     $violations[] = sprintf(
                         '%s constant-folded generic Telegram presentation symbol is not from an exact reviewed Telegram source path.',
                         $relativePath,
                     );
                 }
             }
+        }
+
+        $provenanceSensitive = in_array($relativePath, self::INTERNAL_PATHS, true)
+            || in_array($relativePath, $this->reviewedSources(), true)
+            || $foldedProtected
+            || $foldedRestrictedMethod
+            || $this->referencesProtectedSymbol($source);
+
+        if (! $provenanceSensitive) {
+            return;
         }
 
         $this->scanClosureMechanisms($relativePath, $tokens, $violations);
@@ -235,6 +251,28 @@ final class TelegramPresentationProvenanceChecker
         return in_array($argument['id'], [T_STRING, T_NAME_QUALIFIED, T_NAME_FULLY_QUALIFIED], true)
             && ($tokens[$index + 1]['id'] ?? null) === T_DOUBLE_COLON
             && ($tokens[$index + 2]['id'] ?? null) === T_CLASS;
+    }
+
+    /** @return list<string> */
+    private function reviewedSources(): array
+    {
+        $sources = $this->config['telegram_non_restricted_presentation_sources'] ?? [];
+        if (! is_array($sources)) {
+            return [];
+        }
+
+        return array_values(array_filter($sources, 'is_string'));
+    }
+
+    private function referencesProtectedSymbol(string $source): bool
+    {
+        foreach (self::PROTECTED_SYMBOLS as $symbol) {
+            if (str_contains($source, $symbol)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function referencesContainer(string $source): bool
