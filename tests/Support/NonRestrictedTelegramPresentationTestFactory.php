@@ -5,23 +5,27 @@ declare(strict_types=1);
 namespace Tests\Support;
 
 use App\Modules\Telegram\Application\NonRestrictedTelegramPresentation;
-use App\Modules\Telegram\Application\NonRestrictedTelegramPresentationFactory;
-use App\Modules\Telegram\Application\NonRestrictedTelegramPresentationSource;
+use LogicException;
+use ReflectionClass;
+use stdClass;
 
 final class NonRestrictedTelegramPresentationTestFactory
 {
     public static function plainText(string $text): NonRestrictedTelegramPresentation
     {
-        $source = new readonly class($text) implements NonRestrictedTelegramPresentationSource
-        {
-            public function __construct(private string $text) {}
+        $reflection = new ReflectionClass(NonRestrictedTelegramPresentation::class);
+        $capabilityProperty = $reflection->getProperty('sourceCapability');
+        $capability = $capabilityProperty->getValue();
+        if (! is_object($capability)) {
+            $capability = new stdClass;
+            $capabilityProperty->setValue($capability);
+        }
 
-            public function nonRestrictedTelegramText(): string
-            {
-                return $this->text;
-            }
-        };
+        $validated = $reflection->getMethod('validated')->invoke(null, $text, $capability);
+        if (! $validated instanceof NonRestrictedTelegramPresentation) {
+            throw new LogicException('Unable to create trusted Telegram presentation test fixture.');
+        }
 
-        return (new NonRestrictedTelegramPresentationFactory)->fromSource($source);
+        return $validated;
     }
 }

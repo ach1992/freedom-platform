@@ -15,6 +15,8 @@ final readonly class TelegramMutationRequest
         public ?int $targetMessageId,
         public ?NonRestrictedTelegramPresentation $presentation,
     ) {
+        $presentation?->assertTrustedProvenance();
+
         if ($recipientChatId === 0) {
             throw new InvalidArgumentException('Telegram recipient chat identity must be non-zero.');
         }

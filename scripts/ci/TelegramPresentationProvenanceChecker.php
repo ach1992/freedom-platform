@@ -9,11 +9,8 @@ use RecursiveIteratorIterator;
 
 /**
  * Semantic defense-in-depth for the generic non-restricted Telegram presentation boundary.
- *
- * The primary ArchitectureBoundaryChecker owns the repository-wide boundary graph and exact
- * reviewed-source allowlist. This guard closes equivalent dynamic callable/container paths and
- * constant-folded protected symbol construction so the provenance rule is not dependent on one
- * spelling of a PHP/Laravel resolution mechanism.
+ * Runtime construction/restoration capability checks are authoritative; this checker blocks
+ * equivalent dynamic resolver/callable forms before they can become production dependencies.
  */
 final class TelegramPresentationProvenanceChecker
 {
@@ -70,7 +67,7 @@ final class TelegramPresentationProvenanceChecker
 
         foreach (['app/Modules', 'app/Shared', 'routes'] as $directory) {
             foreach ($this->phpFiles($directory) as $relativePath => $source) {
-                $this->scanFile($relativePath, $source, $violations);
+                $this->scan($relativePath, $source, $violations);
             }
         }
 
@@ -81,15 +78,13 @@ final class TelegramPresentationProvenanceChecker
     }
 
     /** @param list<string> $violations */
-    private function scanFile(string $relativePath, string $source, array &$violations): void
+    private function scan(string $relativePath, string $source, array &$violations): void
     {
         $tokens = $this->tokens($source);
-        $foldedStrings = $this->foldedStringRuns($tokens);
+        $folded = $this->foldedStringRuns($tokens);
 
         foreach (self::RESTRICTED_METHOD_PATHS as $method => $allowedPaths) {
-            if ($this->foldedStringsContain($foldedStrings, $method)
-                && ! in_array($relativePath, $allowedPaths, true)
-            ) {
+            if ($this->containsFolded($folded, $method) && ! in_array($relativePath, $allowedPaths, true)) {
                 $violations[] = sprintf(
                     '%s constant-folded internal Telegram presentation method %s is forbidden; use the reviewed source/factory boundary instead.',
                     $relativePath,
@@ -98,15 +93,15 @@ final class TelegramPresentationProvenanceChecker
             }
         }
 
-        $usesFoldedProtectedBoundary = false;
+        $foldedProtected = false;
         foreach (self::PROTECTED_SYMBOLS as $symbol) {
-            if ($this->foldedStringsContain($foldedStrings, $symbol)) {
-                $usesFoldedProtectedBoundary = true;
+            if ($this->containsFolded($folded, $symbol)) {
+                $foldedProtected = true;
                 break;
             }
         }
 
-        if ($usesFoldedProtectedBoundary && ! in_array($relativePath, self::INTERNAL_PATHS, true)) {
+        if ($foldedProtected && ! in_array($relativePath, self::INTERNAL_PATHS, true)) {
             if (! str_starts_with($relativePath, 'app/Modules/Telegram/')) {
                 $violations[] = sprintf(
                     '%s constant-folded generic Telegram presentation symbol bypasses module provenance; generic non-restricted delivery is Telegram-owned.',
@@ -123,66 +118,62 @@ final class TelegramPresentationProvenanceChecker
             }
         }
 
-        $this->scanDynamicCallableResolution($relativePath, $tokens, $source, $violations);
-        $this->scanDynamicContainerResolution($relativePath, $tokens, $source, $violations);
+        $this->scanClosureMechanisms($relativePath, $tokens, $violations);
+        if ($this->referencesContainer($source)) {
+            $this->scanContainerMechanisms($relativePath, $tokens, $violations);
+        }
     }
 
     /**
-     * @param list<array{id:int|null,text:string,line:int|null}> $tokens
-     * @param list<string> $violations
+     * @param  list<array{id:int|null,text:string,line:int|null}>  $tokens
+     * @param  list<string>  $violations
      */
-    private function scanDynamicCallableResolution(
-        string $relativePath,
-        array $tokens,
-        string $source,
-        array &$violations,
-    ): void {
-        $aliases = $this->importAliases($source);
-        $count = count($tokens);
-
-        for ($index = 0; $index < $count; $index++) {
-            $token = $tokens[$index];
+    private function scanClosureMechanisms(string $relativePath, array $tokens, array &$violations): void
+    {
+        foreach ($tokens as $index => $token) {
             $id = $token['id'];
-            $text = strtolower($token['text']);
             $line = (int) ($token['line'] ?? 1);
+            $text = strtolower($token['text']);
 
             if ($id === T_STRING
-                && $text === 'fromcallable'
+                && in_array($text, ['fromcallable', 'bind'], true)
                 && ($tokens[$index - 1]['id'] ?? null) === T_DOUBLE_COLON
+                && strtolower((string) ($tokens[$index - 2]['text'] ?? '')) === 'closure'
                 && ($tokens[$index + 1]['text'] ?? null) === '('
             ) {
-                $class = $this->resolvedStaticClass($tokens, $index - 2, $aliases);
-                if ($class !== null && strtolower(ltrim($class, '\\')) === 'closure') {
-                    $violations[] = sprintf(
-                        '%s:%d Telegram presentation provenance forbids Closure::fromCallable dynamic callable construction in production source.',
-                        $relativePath,
-                        $line,
-                    );
-                }
+                $mechanism = $text === 'fromcallable'
+                    ? 'Closure::fromCallable dynamic callable construction'
+                    : 'Closure::bind scope mutation';
+                $violations[] = sprintf(
+                    '%s:%d Telegram presentation provenance forbids %s in production source.',
+                    $relativePath,
+                    $line,
+                    $mechanism,
+                );
+            }
+
+            if (in_array($id, [T_OBJECT_OPERATOR, T_NULLSAFE_OBJECT_OPERATOR], true)
+                && ($tokens[$index + 1]['id'] ?? null) === T_STRING
+                && in_array(strtolower((string) ($tokens[$index + 1]['text'] ?? '')), ['bindto', 'call'], true)
+                && ($tokens[$index + 2]['text'] ?? null) === '('
+            ) {
+                $violations[] = sprintf(
+                    '%s:%d Telegram presentation provenance forbids Closure ->%s(...) scope mutation in production source.',
+                    $relativePath,
+                    $line,
+                    (string) $tokens[$index + 1]['text'],
+                );
             }
         }
     }
 
     /**
-     * @param list<array{id:int|null,text:string,line:int|null}> $tokens
-     * @param list<string> $violations
+     * @param  list<array{id:int|null,text:string,line:int|null}>  $tokens
+     * @param  list<string>  $violations
      */
-    private function scanDynamicContainerResolution(
-        string $relativePath,
-        array $tokens,
-        string $source,
-        array &$violations,
-    ): void {
-        if (! $this->referencesContainerType($source)) {
-            return;
-        }
-
-        $aliases = $this->importAliases($source);
-        [$receiverVariables, $receiverProperties] = $this->containerReceivers($source, $aliases);
-        $count = count($tokens);
-
-        for ($index = 0; $index < $count; $index++) {
-            $token = $tokens[$index];
+    private function scanContainerMechanisms(string $relativePath, array $tokens, array &$violations): void
+    {
+        foreach ($tokens as $index => $token) {
             $id = $token['id'];
             $line = (int) ($token['line'] ?? 1);
 
@@ -190,18 +181,15 @@ final class TelegramPresentationProvenanceChecker
                 && ($tokens[$index + 1]['id'] ?? null) === T_STRING
                 && in_array(strtolower((string) ($tokens[$index + 1]['text'] ?? '')), ['make', 'makewith', 'get', 'offsetget'], true)
                 && ($tokens[$index + 2]['text'] ?? null) === '('
+                && ! $this->staticResolutionArgument($tokens, $index + 3)
             ) {
-                $argumentIndex = $index + 3;
-                if (! $this->isStaticContainerResolutionArgument($tokens, $argumentIndex)) {
-                    $method = (string) $tokens[$index + 1]['text'];
-                    $violations[] = sprintf(
-                        '%s:%d Telegram presentation provenance forbids dynamic container %s%s(...); use a static Class::class/literal reviewed resolution.',
-                        $relativePath,
-                        $line,
-                        $id === T_DOUBLE_COLON ? '::' : '->',
-                        $method,
-                    );
-                }
+                $violations[] = sprintf(
+                    '%s:%d Telegram presentation provenance forbids dynamic container %s%s(...); use a static Class::class/literal reviewed resolution.',
+                    $relativePath,
+                    $line,
+                    $id === T_DOUBLE_COLON ? '::' : '->',
+                    (string) $tokens[$index + 1]['text'],
+                );
             }
 
             if ($id === T_STRING
@@ -212,58 +200,34 @@ final class TelegramPresentationProvenanceChecker
                 && ($tokens[$index + 3]['text'] ?? null) === '['
                 && ($tokens[$index + 4]['id'] ?? null) === T_VARIABLE
             ) {
-                $class = $this->resolvedStaticClass($tokens, $index - 2, $aliases);
-                if ($class !== null && $this->isContainerClass($class)) {
-                    $violations[] = sprintf(
-                        '%s:%d Telegram presentation provenance forbids dynamic container ArrayAccess through %s::getInstance()[$variable].',
-                        $relativePath,
-                        $line,
-                        ltrim($class, '\\'),
-                    );
-                }
+                $violations[] = sprintf(
+                    '%s:%d Telegram presentation provenance forbids dynamic container ArrayAccess through getInstance()[$variable].',
+                    $relativePath,
+                    $line,
+                );
             }
 
             if ($id === T_VARIABLE
-                && isset($receiverVariables[$token['text']])
                 && ($tokens[$index + 1]['text'] ?? null) === '['
                 && ($tokens[$index + 2]['id'] ?? null) === T_VARIABLE
             ) {
                 $violations[] = sprintf(
-                    '%s:%d Telegram presentation provenance forbids dynamic container ArrayAccess through %s[$variable].',
+                    '%s:%d Telegram presentation provenance forbids dynamic typed-container ArrayAccess through %s[$variable].',
                     $relativePath,
                     $line,
                     $token['text'],
                 );
             }
-
-            if ($id === T_VARIABLE
-                && $token['text'] === '$this'
-                && ($tokens[$index + 1]['id'] ?? null) === T_OBJECT_OPERATOR
-                && ($tokens[$index + 2]['id'] ?? null) === T_STRING
-                && isset($receiverProperties[$tokens[$index + 2]['text']])
-                && ($tokens[$index + 3]['text'] ?? null) === '['
-                && ($tokens[$index + 4]['id'] ?? null) === T_VARIABLE
-            ) {
-                $violations[] = sprintf(
-                    '%s:%d Telegram presentation provenance forbids dynamic container ArrayAccess through $this->%s[$variable].',
-                    $relativePath,
-                    $line,
-                    $tokens[$index + 2]['text'],
-                );
-            }
         }
     }
 
-    /**
-     * @param list<array{id:int|null,text:string,line:int|null}> $tokens
-     */
-    private function isStaticContainerResolutionArgument(array $tokens, int $index): bool
+    /** @param list<array{id:int|null,text:string,line:int|null}> $tokens */
+    private function staticResolutionArgument(array $tokens, int $index): bool
     {
         $argument = $tokens[$index] ?? null;
         if ($argument === null) {
             return false;
         }
-
         if ($argument['id'] === T_CONSTANT_ENCAPSED_STRING) {
             return true;
         }
@@ -273,104 +237,10 @@ final class TelegramPresentationProvenanceChecker
             && ($tokens[$index + 2]['id'] ?? null) === T_CLASS;
     }
 
-    private function referencesContainerType(string $source): bool
+    private function referencesContainer(string $source): bool
     {
         foreach (self::CONTAINER_TYPES as $type) {
-            if ($this->containsCodeTokenText($source, $type)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * @param array<string,string> $aliases
-     * @return array{array<string,true>,array<string,true>}
-     */
-    private function containerReceivers(string $source, array $aliases): array
-    {
-        $variables = [];
-        $properties = [];
-        $typeNames = [];
-
-        foreach (self::CONTAINER_TYPES as $fqcn) {
-            $separator = strrpos($fqcn, '\\');
-            $typeNames[] = $separator === false ? $fqcn : substr($fqcn, $separator + 1);
-            $typeNames[] = '\\'.$fqcn;
-            foreach ($aliases as $alias => $target) {
-                if (strcasecmp(ltrim($target, '\\'), $fqcn) === 0) {
-                    $typeNames[] = $alias;
-                }
-            }
-        }
-
-        foreach (array_values(array_unique($typeNames)) as $typeName) {
-            $pattern = '/(?<![A-Za-z0-9_\\\\])'.preg_quote($typeName, '/').'\\s+\\$([A-Za-z_][A-Za-z0-9_]*)/';
-            preg_match_all($pattern, $source, $matches);
-            foreach ($matches[1] ?? [] as $name) {
-                if (! is_string($name)) {
-                    continue;
-                }
-                $variables['$'.$name] = true;
-                $properties[$name] = true;
-            }
-        }
-
-        return [$variables, $properties];
-    }
-
-    /** @return array<string,string> */
-    private function importAliases(string $source): array
-    {
-        $aliases = [];
-        preg_match_all(
-            '/\\buse\\s+([A-Za-z_\\\\][A-Za-z0-9_\\\\]*)(?:\\s+as\\s+([A-Za-z_][A-Za-z0-9_]*))?\\s*;/',
-            $source,
-            $matches,
-            PREG_SET_ORDER,
-        );
-
-        foreach ($matches as $match) {
-            $fqcn = ltrim((string) ($match[1] ?? ''), '\\');
-            if ($fqcn === '') {
-                continue;
-            }
-            $alias = (string) ($match[2] ?? '');
-            if ($alias === '') {
-                $separator = strrpos($fqcn, '\\');
-                $alias = $separator === false ? $fqcn : substr($fqcn, $separator + 1);
-            }
-            $aliases[$alias] = $fqcn;
-        }
-
-        return $aliases;
-    }
-
-    /**
-     * @param list<array{id:int|null,text:string,line:int|null}> $tokens
-     * @param array<string,string> $aliases
-     */
-    private function resolvedStaticClass(array $tokens, int $index, array $aliases): ?string
-    {
-        $token = $tokens[$index] ?? null;
-        if ($token === null || ! in_array($token['id'], [T_STRING, T_NAME_QUALIFIED, T_NAME_FULLY_QUALIFIED], true)) {
-            return null;
-        }
-
-        $name = ltrim($token['text'], '\\');
-        if (str_contains($name, '\\')) {
-            return $name;
-        }
-
-        return $aliases[$name] ?? $name;
-    }
-
-    private function isContainerClass(string $class): bool
-    {
-        $class = ltrim($class, '\\');
-        foreach (self::CONTAINER_TYPES as $type) {
-            if (strcasecmp($class, $type) === 0) {
+            if (str_contains($source, $type)) {
                 return true;
             }
         }
@@ -410,8 +280,7 @@ final class TelegramPresentationProvenanceChecker
             if (($tokens[$index]['id'] ?? null) !== T_CONSTANT_ENCAPSED_STRING) {
                 continue;
             }
-
-            $value = $this->decodeStringLiteral($tokens[$index]['text']);
+            $value = $this->decodeLiteral($tokens[$index]['text']);
             if ($value === null) {
                 continue;
             }
@@ -421,7 +290,7 @@ final class TelegramPresentationProvenanceChecker
             while (($tokens[$cursor + 1]['text'] ?? null) === '.'
                 && ($tokens[$cursor + 2]['id'] ?? null) === T_CONSTANT_ENCAPSED_STRING
             ) {
-                $next = $this->decodeStringLiteral($tokens[$cursor + 2]['text']);
+                $next = $this->decodeLiteral($tokens[$cursor + 2]['text']);
                 if ($next === null) {
                     break;
                 }
@@ -439,49 +308,28 @@ final class TelegramPresentationProvenanceChecker
         return array_values(array_unique($folded));
     }
 
-    private function decodeStringLiteral(string $literal): ?string
+    private function decodeLiteral(string $literal): ?string
     {
         $length = strlen($literal);
         if ($length < 2) {
             return null;
         }
-
         $quote = $literal[0];
         if (($quote !== "'" && $quote !== '"') || $literal[$length - 1] !== $quote) {
             return null;
         }
-
         $body = substr($literal, 1, -1);
-        if ($quote === "'") {
-            return str_replace(["\\\\", "\\'"], ["\\", "'"], $body);
-        }
 
-        return stripcslashes($body);
+        return $quote === "'"
+            ? str_replace(['\\\\', "\\'"], ['\\', "'"], $body)
+            : stripcslashes($body);
     }
 
-    /** @param list<string> $foldedStrings */
-    private function foldedStringsContain(array $foldedStrings, string $needle): bool
+    /** @param list<string> $folded */
+    private function containsFolded(array $folded, string $needle): bool
     {
-        foreach ($foldedStrings as $value) {
+        foreach ($folded as $value) {
             if (str_contains($value, $needle)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private function containsCodeTokenText(string $source, string $needle): bool
-    {
-        foreach (token_get_all($source) as $token) {
-            if (! is_array($token)) {
-                continue;
-            }
-            [$id, $text] = $token;
-            if (in_array($id, [T_COMMENT, T_DOC_COMMENT], true)) {
-                continue;
-            }
-            if (str_contains($text, $needle)) {
                 return true;
             }
         }
@@ -497,26 +345,21 @@ final class TelegramPresentationProvenanceChecker
             return [];
         }
 
+        $files = [];
         $iterator = new RecursiveIteratorIterator(
             new RecursiveDirectoryIterator($directory, RecursiveDirectoryIterator::SKIP_DOTS),
         );
-
-        $files = [];
         foreach ($iterator as $file) {
             if (! $file->isFile() || $file->isLink() || strtolower($file->getExtension()) !== 'php') {
                 continue;
             }
-
-            $path = $file->getPathname();
-            $source = file_get_contents($path);
+            $source = file_get_contents($file->getPathname());
             if (! is_string($source)) {
                 continue;
             }
-
-            $relativePath = str_replace('\\', '/', substr($path, strlen($this->root) + 1));
+            $relativePath = str_replace('\\', '/', substr($file->getPathname(), strlen($this->root) + 1));
             $files[$relativePath] = $source;
         }
-
         ksort($files, SORT_STRING);
 
         return $files;

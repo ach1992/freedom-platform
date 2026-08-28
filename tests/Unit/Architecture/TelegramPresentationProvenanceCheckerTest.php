@@ -148,6 +148,27 @@ PHP);
         self::assertStringContainsString('dynamic container ArrayAccess', $joined);
     }
 
+    public function test_closure_scope_rebinding_is_rejected(): void
+    {
+        $this->write('app/Modules/Telegram/Application/TelegramDeliveryOperationExecutor.php', <<<'PHP'
+<?php
+namespace App\Modules\Telegram\Application;
+use Closure;
+final class TelegramDeliveryOperationExecutor
+{
+    public function run(): void
+    {
+        Closure::bind(static function (): void {}, null, NonRestrictedTelegramPresentation::class);
+    }
+}
+PHP);
+
+        $violations = $this->checker()->violations();
+
+        self::assertCount(1, $violations);
+        self::assertStringContainsString('Closure::bind scope mutation', $violations[0]);
+    }
+
     public function test_static_reviewed_class_resolution_remains_allowed(): void
     {
         $this->write('app/Modules/Telegram/Application/TelegramDeliveryQueueService.php', <<<'PHP'
