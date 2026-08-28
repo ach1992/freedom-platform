@@ -1283,30 +1283,16 @@ final class ArchitectureBoundaryChecker
             }
 
             if ($hasLaravelContainerType
-                && $id === T_VARIABLE
-                && ($tokens[$index + 1]['id'] ?? null) === T_OBJECT_OPERATOR
-                && ($tokens[$index + 2]['id'] ?? null) === T_STRING
-                && in_array(strtolower((string) ($tokens[$index + 2]['text'] ?? '')), ['make', 'get'], true)
-                && ($tokens[$index + 3]['text'] ?? null) === '('
-                && ($tokens[$index + 4]['id'] ?? null) === T_VARIABLE
-            ) {
-                $report($line, 'typed Laravel container ->'.strtolower((string) $tokens[$index + 2]['text']).'($variable)');
-            }
-
-            if ($hasLaravelContainerType
-                && $id === T_VARIABLE
-                && $text === '$this'
-                && ($tokens[$index + 1]['id'] ?? null) === T_OBJECT_OPERATOR
-                && ($tokens[$index + 2]['id'] ?? null) === T_STRING
-                && ($tokens[$index + 3]['id'] ?? null) === T_OBJECT_OPERATOR
-                && ($tokens[$index + 4]['id'] ?? null) === T_STRING
-                && in_array(strtolower((string) ($tokens[$index + 4]['text'] ?? '')), ['make', 'get'], true)
-                && ($tokens[$index + 5]['text'] ?? null) === '('
-                && ($tokens[$index + 6]['id'] ?? null) === T_VARIABLE
+                && in_array($id, [T_OBJECT_OPERATOR, T_NULLSAFE_OBJECT_OPERATOR, T_DOUBLE_COLON], true)
+                && ($tokens[$index + 1]['id'] ?? null) === T_STRING
+                && in_array(strtolower((string) ($tokens[$index + 1]['text'] ?? '')), ['make', 'get'], true)
+                && ($tokens[$index + 2]['text'] ?? null) === '('
+                && ($tokens[$index + 3]['id'] ?? null) === T_VARIABLE
             ) {
                 $report(
                     $line,
-                    'typed Laravel container property ->'.strtolower((string) $tokens[$index + 4]['text']).'($variable)',
+                    'typed Laravel container '.($id === T_DOUBLE_COLON ? '::' : '->')
+                        .strtolower((string) $tokens[$index + 1]['text']).'($variable)',
                 );
             }
 

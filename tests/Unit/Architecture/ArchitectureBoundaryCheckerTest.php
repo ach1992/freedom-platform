@@ -418,12 +418,16 @@ PHP);
 <?php
 namespace App\Modules\Orders\Application;
 use Illuminate\Contracts\Container\Container;
+use Illuminate\Container\Container as ConcreteContainer;
+use Illuminate\Support\Facades\App;
 final class InjectedContainerTelegramEscape
 {
     public function __construct(private Container $container) {}
     public function run(string $queueClass): void
     {
         $this->container->make($queueClass);
+        ConcreteContainer::getInstance()->make($queueClass);
+        App::make($queueClass);
     }
 }
 PHP);
@@ -431,7 +435,8 @@ PHP);
         $result = $this->checker()->check();
         $violations = implode("\n", $result['violations']);
 
-        self::assertStringContainsString('dynamic class/container resolution via typed Laravel container property ->make($variable) is forbidden', $violations);
+        self::assertSame(2, substr_count($violations, 'typed Laravel container ->make($variable)'));
+        self::assertStringContainsString('typed Laravel container ::make($variable)', $violations);
     }
 
     public function test_generic_telegram_boundary_rejects_dynamic_new_and_callback_indirection(): void
