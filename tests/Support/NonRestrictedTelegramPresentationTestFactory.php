@@ -18,7 +18,7 @@ final class NonRestrictedTelegramPresentationTestFactory
         $capability = $capabilityProperty->getValue();
         if (! is_object($capability)) {
             $capability = new stdClass;
-            $capabilityProperty->setValue($capability);
+            $capabilityProperty->setValue(null, $capability);
         }
 
         $validated = $reflection->getMethod('validated')->invoke(null, $text, $capability);
