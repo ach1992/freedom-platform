@@ -40,16 +40,14 @@ final readonly class NonRestrictedTelegramPresentationFactory
         }
 
         $relativePath = str_replace('\\', '/', substr($resolvedCaller, strlen($prefix)));
-        if (! $this->isReviewedSourceFile($relativePath)) {
+        if (! in_array($relativePath, $this->reviewedSourceFiles(), true)) {
             throw new LogicException('Telegram presentation source is not an exact reviewed production gateway.');
         }
     }
 
-    private function isReviewedSourceFile(string $relativePath): bool
+    /** @return list<string> */
+    private function reviewedSourceFiles(): array
     {
-        return match ($relativePath) {
-            // Intentionally no production source until the first Phase 0.7 journey is reviewed.
-            default => false,
-        };
+        return self::REVIEWED_SOURCE_FILES;
     }
 }

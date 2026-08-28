@@ -67,10 +67,10 @@ final class NonRestrictedTelegramPresentationProvenanceTest extends TestCase
         self::assertSame('ordinary', $request->presentation?->text());
     }
 
-    public function test_runtime_and_architecture_source_policies_remain_identical(): void
+    public function test_runtime_and_architecture_source_lists_remain_identical(): void
     {
-        $factoryReflection = new ReflectionClass(NonRestrictedTelegramPresentationFactory::class);
-        $constant = $factoryReflection->getReflectionConstant('REVIEWED_SOURCE_FILES');
+        $factory = new ReflectionClass(NonRestrictedTelegramPresentationFactory::class);
+        $constant = $factory->getReflectionConstant('REVIEWED_SOURCE_FILES');
         self::assertNotFalse($constant);
         $runtimeSources = $constant->getValue();
         self::assertIsArray($runtimeSources);
@@ -79,14 +79,6 @@ final class NonRestrictedTelegramPresentationProvenanceTest extends TestCase
         $architecture = require $root.'/scripts/ci/architecture-boundaries.php';
         self::assertIsArray($architecture);
         self::assertSame($runtimeSources, $architecture['telegram_non_restricted_presentation_sources'] ?? null);
-
-        $policy = $factoryReflection->getMethod('isReviewedSourceFile');
-        $factory = new NonRestrictedTelegramPresentationFactory;
-        foreach ($runtimeSources as $runtimeSource) {
-            self::assertIsString($runtimeSource);
-            self::assertTrue($policy->invoke($factory, $runtimeSource));
-        }
-        self::assertFalse($policy->invoke($factory, 'app/Modules/Telegram/Application/UnreviewedSource.php'));
     }
 
     public function test_presentation_object_cannot_be_serialized_for_reconstruction(): void
