@@ -86,11 +86,7 @@ final class InstallerArtisanProcessRunnerTest extends TestCase
 
             $cached = require $cachePath;
             $this->assertIsArray($cached);
-            $cachedLifecyclePassword = $cached['database']['connections']['telegram_lifecycle']['password'] ?? null;
-            $this->assertTrue(
-                $cachedLifecyclePassword === null || $cachedLifecyclePassword === '',
-                'The cached lifecycle password must be absent or an empty placeholder.',
-            );
+            $this->assertNull($cached['database']['connections']['telegram_lifecycle']['password'] ?? null);
         } finally {
             @unlink($cachePath);
         }
