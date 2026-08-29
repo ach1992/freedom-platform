@@ -561,7 +561,7 @@ SQL, [$this->capabilityValue()]);
             );
         }
 
-        $wsrepRows = $connection->select("SHOW GLOBAL VARIABLES LIKE 'wsrep_on'", [], false);
+        $wsrepRows = $connection->select("SHOW SESSION VARIABLES LIKE 'wsrep_on'", [], false);
         if (count($wsrepRows) > 1) {
             throw new RuntimeException('Telegram delivery rollback reference fence found ambiguous Galera/wsrep state.');
         }
@@ -574,6 +574,19 @@ SQL, [$this->capabilityValue()]);
 
                 throw new RuntimeException(
                     'Telegram delivery rollback reference fence is not supported while Galera/wsrep is enabled.',
+                );
+            }
+        }
+
+        $providerRows = $connection->select("SHOW GLOBAL VARIABLES LIKE 'wsrep_provider'", [], false);
+        if (count($providerRows) > 1) {
+            throw new RuntimeException('Telegram delivery rollback reference fence found ambiguous Galera provider state.');
+        }
+        if ($providerRows !== []) {
+            $provider = strtolower(trim((string) ($providerRows[0]->Value ?? '')));
+            if (! in_array($provider, ['', 'none'], true)) {
+                throw new RuntimeException(
+                    'Telegram delivery rollback reference fence is not supported with a loaded Galera provider.',
                 );
             }
         }
