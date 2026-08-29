@@ -9,8 +9,8 @@ use RecursiveIteratorIterator;
 
 /**
  * Semantic defense-in-depth for the generic non-restricted Telegram presentation boundary.
- * Runtime construction/restoration capability checks are authoritative; this checker blocks
- * equivalent dynamic resolver/callable forms before they can become production dependencies.
+ * Runtime queue/transport call-site authorization is authoritative; this checker blocks
+ * recognizable dynamic resolver/callable forms as defense in depth before they become production dependencies.
  */
 final class TelegramPresentationProvenanceChecker
 {
@@ -20,6 +20,7 @@ final class TelegramPresentationProvenanceChecker
         'NonRestrictedTelegramPresentationFactory',
         'NonRestrictedTelegramPresentationSource',
         'TelegramDeliveryQueueService',
+        'TelegramPresentationProvenanceGuard',
     ];
 
     /** @var array<string,list<string>> */
@@ -39,10 +40,12 @@ final class TelegramPresentationProvenanceChecker
         'app/Modules/Telegram/Application/NonRestrictedTelegramPresentation.php',
         'app/Modules/Telegram/Application/NonRestrictedTelegramPresentationFactory.php',
         'app/Modules/Telegram/Application/NonRestrictedTelegramPresentationSource.php',
+        'app/Modules/Telegram/Application/TelegramDeliveryDatabaseCapability.php',
         'app/Modules/Telegram/Application/TelegramDeliveryOperationExecutor.php',
         'app/Modules/Telegram/Application/TelegramDeliveryOutboxHandler.php',
         'app/Modules/Telegram/Application/TelegramDeliveryQueueService.php',
         'app/Modules/Telegram/Application/TelegramMutationRequest.php',
+        'app/Modules/Telegram/Application/TelegramPresentationProvenanceGuard.php',
     ];
 
     /** @var list<string> */

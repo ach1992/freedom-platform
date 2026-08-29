@@ -82,7 +82,7 @@ final class TelegramOutboundDeliveryStaleLeaseTest extends TestCase
         );
         $dispatcher = new DatabaseOutboxDispatcher($database, $this->clock, 60);
 
-        $created = $queue->queue(
+        $created = NonRestrictedTelegramPresentationTestFactory::queue($queue,
             TelegramDeliveryAction::Send,
             900040,
             null,

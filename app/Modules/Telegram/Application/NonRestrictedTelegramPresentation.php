@@ -6,7 +6,6 @@ namespace App\Modules\Telegram\Application;
 
 use InvalidArgumentException;
 use LogicException;
-use stdClass;
 use Stringable;
 
 /**
@@ -14,57 +13,34 @@ use Stringable;
  * credentials, subscription/config URLs, OTPs, tokens, and raw provider
  * payloads must use their existing protected authority instead.
  *
- * New application construction is accepted only from the reviewed source
- * contract through NonRestrictedTelegramPresentationFactory. Persisted text is
- * restored only by the delivery executor after DB authority has already fenced
- * creation/replay. Each instance carries a process-local identity capability so
- * forged/reflected/unserialized objects fail again at the request boundary.
+ * This value object does not carry security authority. The actual generic queue
+ * and provider transport boundaries independently authorize their engine-visible
+ * source call paths through TelegramPresentationProvenanceGuard.
  */
 final class NonRestrictedTelegramPresentation implements Stringable
 {
-    private static ?object $sourceCapability = null;
-
-    private static ?object $restoreCapability = null;
-
-    private function __construct(
-        private readonly string $text,
-        private readonly object $provenanceCapability,
-    ) {}
+    private function __construct(private readonly string $text) {}
 
     /** @internal Use NonRestrictedTelegramPresentationFactory for new application data. */
     public static function fromReviewedSource(NonRestrictedTelegramPresentationSource $source): self
     {
-        self::assertExactCaller(
+        TelegramPresentationProvenanceGuard::assertExactInternalCaller(
             NonRestrictedTelegramPresentationFactory::class,
             __DIR__.'/NonRestrictedTelegramPresentationFactory.php',
         );
-        $capability = self::$sourceCapability ??= new stdClass;
 
-        return self::validated($source->nonRestrictedTelegramText(), $capability);
+        return self::validated($source->nonRestrictedTelegramText());
     }
 
     /** @internal Existing trusted durable operation data only. */
     public static function restorePersisted(string $text): self
     {
-        self::assertExactCaller(
+        TelegramPresentationProvenanceGuard::assertExactInternalCaller(
             TelegramDeliveryOperationExecutor::class,
             __DIR__.'/TelegramDeliveryOperationExecutor.php',
         );
-        $capability = self::$restoreCapability ??= new stdClass;
 
-        return self::validated($text, $capability);
-    }
-
-    public function assertTrustedProvenance(): void
-    {
-        $sourceTrusted = self::$sourceCapability !== null
-            && $this->provenanceCapability === self::$sourceCapability;
-        $restoreTrusted = self::$restoreCapability !== null
-            && $this->provenanceCapability === self::$restoreCapability;
-
-        if (! $sourceTrusted && ! $restoreTrusted) {
-            throw new LogicException('Telegram presentation provenance is not trusted.');
-        }
+        return self::validated($text);
     }
 
     public function text(): string
@@ -95,7 +71,7 @@ final class NonRestrictedTelegramPresentation implements Stringable
         throw new LogicException('Telegram presentation objects cannot be unserialized.');
     }
 
-    private static function validated(string $text, object $provenanceCapability): self
+    private static function validated(string $text): self
     {
         if ($text === '' || mb_strlen($text) > 4096 || str_contains($text, "\0")) {
             throw new InvalidArgumentException('Telegram presentation text must contain 1-4096 safe characters.');
@@ -105,25 +81,6 @@ final class NonRestrictedTelegramPresentation implements Stringable
             throw new InvalidArgumentException('Telegram presentation text must be valid UTF-8.');
         }
 
-        return new self($text, $provenanceCapability);
-    }
-
-    private static function assertExactCaller(string $expectedClass, string $expectedFile): void
-    {
-        $trace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 3);
-        $directInvocation = $trace[1] ?? null;
-        $gatewayFrame = $trace[2] ?? null;
-        $callerClass = is_array($gatewayFrame) ? ($gatewayFrame['class'] ?? null) : null;
-        $callerFile = is_array($directInvocation) ? ($directInvocation['file'] ?? null) : null;
-        $resolvedExpected = realpath($expectedFile);
-        $resolvedCaller = is_string($callerFile) ? realpath($callerFile) : false;
-
-        if ($callerClass !== $expectedClass
-            || $resolvedExpected === false
-            || $resolvedCaller === false
-            || $resolvedCaller !== $resolvedExpected
-        ) {
-            throw new LogicException('Telegram presentation construction is restricted to its reviewed provenance gateway.');
-        }
+        return new self($text);
     }
 }

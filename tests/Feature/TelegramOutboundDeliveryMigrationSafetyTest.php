@@ -95,7 +95,7 @@ final class TelegramOutboundDeliveryMigrationSafetyTest extends TestCase
 
     public function test_unactivated_schema_cannot_release_quarantined_outbox_even_with_real_capability(): void
     {
-        $queued = $this->queue()->queue(
+        $queued = NonRestrictedTelegramPresentationTestFactory::queue($this->queue(),
             TelegramDeliveryAction::Send,
             900103,
             null,
@@ -348,7 +348,7 @@ SQL);
         self::assertNotNull($capability->activated_at);
         self::assertSame(9, $this->deliveryTriggerCount());
 
-        $queued = $this->queue()->queue(
+        $queued = NonRestrictedTelegramPresentationTestFactory::queue($this->queue(),
             TelegramDeliveryAction::Send,
             900101,
             null,
@@ -479,7 +479,7 @@ SQL);
 
     public function test_missing_required_guard_with_durable_authority_fails_closed_instead_of_repairing(): void
     {
-        $queued = $this->queue()->queue(
+        $queued = NonRestrictedTelegramPresentationTestFactory::queue($this->queue(),
             TelegramDeliveryAction::Send,
             900102,
             null,
@@ -499,7 +499,7 @@ SQL);
 
     public function test_same_named_weakened_trigger_is_rejected_before_queue_or_effect_transport(): void
     {
-        $queued = $this->queue()->queue(
+        $queued = NonRestrictedTelegramPresentationTestFactory::queue($this->queue(),
             TelegramDeliveryAction::Send,
             900210,
             null,
@@ -540,7 +540,7 @@ SQL);
 
     public function test_same_named_weakened_check_is_rejected_before_queue_or_effect_transport(): void
     {
-        $queued = $this->queue()->queue(
+        $queued = NonRestrictedTelegramPresentationTestFactory::queue($this->queue(),
             TelegramDeliveryAction::Send,
             900211,
             null,
@@ -566,7 +566,7 @@ SQL);
 
     public function test_same_named_wrong_column_unique_index_is_rejected_before_queue_or_effect_transport(): void
     {
-        $queued = $this->queue()->queue(
+        $queued = NonRestrictedTelegramPresentationTestFactory::queue($this->queue(),
             TelegramDeliveryAction::Send,
             900212,
             null,
@@ -592,7 +592,7 @@ SQL);
 
     public function test_same_named_weakened_column_definition_is_rejected_before_queue_or_effect_transport(): void
     {
-        $queued = $this->queue()->queue(
+        $queued = NonRestrictedTelegramPresentationTestFactory::queue($this->queue(),
             TelegramDeliveryAction::Send,
             900213,
             null,
@@ -623,7 +623,7 @@ SQL);
 
     public function test_unexpected_authority_table_trigger_is_rejected_before_queue_or_effect_transport(): void
     {
-        $queued = $this->queue()->queue(
+        $queued = NonRestrictedTelegramPresentationTestFactory::queue($this->queue(),
             TelegramDeliveryAction::Send,
             900214,
             null,
@@ -656,7 +656,7 @@ SQL);
 
     public function test_outbox_telegram_guards_must_remain_terminal_before_queue_or_effect_transport(): void
     {
-        $queued = $this->queue()->queue(
+        $queued = NonRestrictedTelegramPresentationTestFactory::queue($this->queue(),
             TelegramDeliveryAction::Send,
             900215,
             null,
@@ -689,7 +689,7 @@ SQL);
 
     public function test_unexpected_shared_outbox_after_trigger_is_rejected_before_queue_or_effect_transport(): void
     {
-        $queued = $this->queue()->queue(
+        $queued = NonRestrictedTelegramPresentationTestFactory::queue($this->queue(),
             TelegramDeliveryAction::Send,
             900216,
             null,
@@ -724,7 +724,7 @@ SQL);
 
     public function test_replaced_earlier_shared_outbox_guard_cannot_preserve_readiness_or_exfiltrate_capability(): void
     {
-        $queued = $this->queue()->queue(
+        $queued = NonRestrictedTelegramPresentationTestFactory::queue($this->queue(),
             TelegramDeliveryAction::Send,
             900217,
             null,
@@ -1027,7 +1027,7 @@ SQL);
         self::assertFalse($this->surfaceReady());
 
         try {
-            $this->queue()->queue(
+            NonRestrictedTelegramPresentationTestFactory::queue($this->queue(),
                 TelegramDeliveryAction::Send,
                 900180,
                 null,
@@ -1088,7 +1088,7 @@ SQL);
         self::assertFalse($this->surfaceReady());
 
         try {
-            $this->queue()->queue(
+            NonRestrictedTelegramPresentationTestFactory::queue($this->queue(),
                 TelegramDeliveryAction::Send,
                 900280,
                 null,

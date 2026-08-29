@@ -192,7 +192,7 @@ SQL);
                 ? 'correlation-rollback-entered-179'
                 : 'correlation-rollback-late-179';
 
-            $receipt = $queue->queue(
+            $receipt = NonRestrictedTelegramPresentationTestFactory::queue($queue,
                 TelegramDeliveryAction::Send,
                 900031,
                 null,

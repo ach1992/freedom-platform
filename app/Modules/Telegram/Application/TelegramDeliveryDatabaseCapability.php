@@ -55,6 +55,7 @@ final readonly class TelegramDeliveryDatabaseCapability
         string $outboxEventId,
         Closure $operation,
     ): mixed {
+        TelegramPresentationProvenanceGuard::assertQueueSource($connection);
         $this->assertReady($connection);
         $armed = false;
 

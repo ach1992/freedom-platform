@@ -74,7 +74,7 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
         $queue = $this->queue();
         $presentation = NonRestrictedTelegramPresentationTestFactory::plainText('مرحله بعدی خرید');
 
-        $created = $queue->queue(
+        $created = NonRestrictedTelegramPresentationTestFactory::queue($queue,
             TelegramDeliveryAction::Send,
             900001,
             null,
@@ -96,7 +96,7 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
         );
         self::assertStringNotContainsString('مرحله بعدی خرید', (string) $outbox->payload);
 
-        $replay = $queue->queue(
+        $replay = NonRestrictedTelegramPresentationTestFactory::queue($queue,
             TelegramDeliveryAction::Send,
             900001,
             null,
@@ -111,7 +111,7 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
         self::assertSame(1, DB::table('outbox_messages')->where('event_type', TelegramDeliveryQueueService::OUTBOX_EVENT_TYPE)->count());
 
         try {
-            $queue->queue(
+            NonRestrictedTelegramPresentationTestFactory::queue($queue,
                 TelegramDeliveryAction::Send,
                 900001,
                 null,
@@ -168,7 +168,7 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
         $transport = new RecordingTelegramMutationTransport([
             new TelegramMutationResult(TelegramMutationOutcome::Success, 'telegram_success', messageId: 701),
         ], DB::getFacadeRoot());
-        $created = $this->queue()->queue(
+        $created = NonRestrictedTelegramPresentationTestFactory::queue($this->queue(),
             TelegramDeliveryAction::Send,
             900010,
             null,
@@ -210,7 +210,7 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
             new TelegramMutationResult(TelegramMutationOutcome::DefinitiveNoEffectRetryable, 'telegram_definite_no_effect_retryable'),
             new TelegramMutationResult(TelegramMutationOutcome::Success, 'telegram_success', messageId: 702),
         ], DB::getFacadeRoot());
-        $created = $this->queue()->queue(
+        $created = NonRestrictedTelegramPresentationTestFactory::queue($this->queue(),
             TelegramDeliveryAction::Send,
             900011,
             null,
@@ -259,7 +259,7 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
             ->push(['ok' => false, 'error_code' => 502], 502)
             ->push(['ok' => true, 'result' => ['message_id' => 703, 'chat' => ['id' => 900015]]], 200);
 
-        $created = $this->queue()->queue(
+        $created = NonRestrictedTelegramPresentationTestFactory::queue($this->queue(),
             TelegramDeliveryAction::Send,
             900015,
             null,
@@ -305,7 +305,7 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
         $transport = new RecordingTelegramMutationTransport([
             new TelegramMutationResult(TelegramMutationOutcome::Success, 'telegram_success', messageId: 704),
         ], DB::getFacadeRoot());
-        $created = $this->queue()->queue(
+        $created = NonRestrictedTelegramPresentationTestFactory::queue($this->queue(),
             TelegramDeliveryAction::Send,
             900016,
             null,
@@ -340,7 +340,7 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
         $secondTransport = new RecordingTelegramMutationTransport([
             new TelegramMutationResult(TelegramMutationOutcome::Success, 'telegram_success', messageId: 706),
         ], DB::getFacadeRoot());
-        $created = $this->queue()->queue(
+        $created = NonRestrictedTelegramPresentationTestFactory::queue($this->queue(),
             TelegramDeliveryAction::Send,
             900017,
             null,
@@ -403,7 +403,7 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
                 retryAfterSeconds: 73,
             ),
         ], DB::getFacadeRoot());
-        $created = $this->queue()->queue(
+        $created = NonRestrictedTelegramPresentationTestFactory::queue($this->queue(),
             TelegramDeliveryAction::Send,
             900012,
             null,
@@ -439,7 +439,7 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
         $transport = new RecordingTelegramMutationTransport([
             new TelegramMutationResult(TelegramMutationOutcome::UncertainResult, 'telegram_transport_uncertain'),
         ], DB::getFacadeRoot());
-        $created = $this->queue()->queue(
+        $created = NonRestrictedTelegramPresentationTestFactory::queue($this->queue(),
             TelegramDeliveryAction::Send,
             900013,
             null,
@@ -465,7 +465,7 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
         self::assertSame(TelegramDeliveryOperationState::Uncertain, $executor->recover($created->publicId, $created->outboxEventId, 'correlation-uncertain-179'));
         self::assertSame(1, $transport->attempts);
 
-        $crashCreated = $this->queue()->queue(
+        $crashCreated = NonRestrictedTelegramPresentationTestFactory::queue($this->queue(),
             TelegramDeliveryAction::Send,
             900014,
             null,
@@ -494,7 +494,7 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
         $editTransport = new RecordingTelegramMutationTransport([
             new TelegramMutationResult(TelegramMutationOutcome::Success, 'telegram_success', messageId: 802),
         ], DB::getFacadeRoot());
-        $edit = $this->queue()->queue(
+        $edit = NonRestrictedTelegramPresentationTestFactory::queue($this->queue(),
             TelegramDeliveryAction::Edit,
             900020,
             801,
@@ -523,7 +523,7 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
         $deleteTransport = new RecordingTelegramMutationTransport([
             new TelegramMutationResult(TelegramMutationOutcome::Success, 'telegram_success'),
         ], DB::getFacadeRoot());
-        $delete = $this->queue()->queue(
+        $delete = NonRestrictedTelegramPresentationTestFactory::queue($this->queue(),
             TelegramDeliveryAction::Delete,
             900021,
             901,
@@ -542,7 +542,7 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
         $finalTransport = new RecordingTelegramMutationTransport([
             new TelegramMutationResult(TelegramMutationOutcome::DefinitiveFailure, 'telegram_api_error_403'),
         ], DB::getFacadeRoot());
-        $failed = $this->queue()->queue(
+        $failed = NonRestrictedTelegramPresentationTestFactory::queue($this->queue(),
             TelegramDeliveryAction::Send,
             900022,
             null,
@@ -651,7 +651,7 @@ SQL, [
         self::assertSame(0, DB::table('outbox_messages')->where('id', $outboxEventId)->count());
         self::assertSame(0, DB::table('telegram_delivery_operations')->where('public_id', $publicId)->count());
 
-        $created = $this->queue()->queue(
+        $created = NonRestrictedTelegramPresentationTestFactory::queue($this->queue(),
             TelegramDeliveryAction::Send,
             900092,
             null,
@@ -720,7 +720,7 @@ SQL, [$storedCapabilityHash, $created->publicId]);
         });
 
         try {
-            $this->queue()->queue(
+            NonRestrictedTelegramPresentationTestFactory::queue($this->queue(),
                 TelegramDeliveryAction::Send,
                 900093,
                 null,
@@ -756,7 +756,7 @@ SQL);
         $transport = new RecordingTelegramMutationTransport([
             new TelegramMutationResult(TelegramMutationOutcome::Success, 'telegram_success', messageId: 999),
         ], DB::getFacadeRoot());
-        $created = $this->queue()->queue(
+        $created = NonRestrictedTelegramPresentationTestFactory::queue($this->queue(),
             TelegramDeliveryAction::Send,
             900094,
             null,

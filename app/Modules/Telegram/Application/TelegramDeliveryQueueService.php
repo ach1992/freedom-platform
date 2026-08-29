@@ -48,6 +48,8 @@ final readonly class TelegramDeliveryQueueService
         string $requestKey,
         string $correlationId,
     ): TelegramDeliveryOperationReceipt {
+        TelegramPresentationProvenanceGuard::assertQueueSource($this->database->connection());
+
         $request = new TelegramMutationRequest($action, $recipientChatId, $targetMessageId, $presentation);
         $requestKeyHash = $this->requestKeyHash($requestKey);
         $this->assertToken($correlationId, 'Telegram delivery correlation ID', 8, 64);

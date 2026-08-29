@@ -14,6 +14,8 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
+    private const ROLLBACK_REFERENCE_FENCE_COMMENT = 'telegram-delivery-rollback-reference-fence-v1';
+
     /** @requirement ARCH-003 ARCH-004 DAT-003 SEC-002 SEC-008 OPS-003 QUA-004 QUA-007 QUA-010 */
     public function up(): void
     {
@@ -157,7 +159,8 @@ return new class extends Migration
                 $this->deactivateAuthorityForRollback($connection, $lifecycleConnection);
             }
 
-            if (! $this->rollbackFenceReady($connection)) {
+            if (! $this->rollbackFenceReady($connection)
+                && ! $this->operationReferenceFenceCanResume($connection)) {
                 throw new RuntimeException('Cannot roll back Telegram outbound delivery authority unless the complete rollback-fenced authority surface is attested before destructive rollback.');
             }
 
@@ -165,29 +168,22 @@ return new class extends Migration
                 throw new RuntimeException('Cannot roll back Telegram outbound delivery authority while durable authority exists.');
             }
 
-            if ($afterFinalPreflight !== null) {
-                $afterFinalPreflight();
-            }
-
-            // Dropping the table atomically removes only triggers attached to this
-            // table. Shared Outbox and capability guards remain in place. If an
-            // independent incoming FK appeared after attestation, this DROP fails
-            // before any guard is removed from a surviving authority table.
-            Schema::dropIfExists('telegram_delivery_operations');
+            $this->dropAuthorityTableWithReferenceFence(
+                $connection,
+                'telegram_delivery_operations',
+                $afterFinalPreflight,
+            );
         }
 
         if (! $this->rollbackCanResumeAfterOperationDrop($connection)) {
             throw new RuntimeException('Cannot resume Telegram outbound delivery rollback from an unattested partial rollback surface.');
         }
 
-        if ($afterCapabilityPreflight !== null) {
-            $afterCapabilityPreflight();
-        }
-
-        // A racing dependency on the capability table can still make this DROP
-        // fail, but the capability guards and shared Outbox guards remain attached
-        // and the next down() can safely resume after the dependency is removed.
-        Schema::dropIfExists('telegram_delivery_authority_capability');
+        $this->dropAuthorityTableWithReferenceFence(
+            $connection,
+            'telegram_delivery_authority_capability',
+            $afterCapabilityPreflight,
+        );
 
         // Only shared-table guards remain now. No dependency-sensitive authority
         // table DROP follows these statements, so partial trigger cleanup is both
@@ -394,13 +390,228 @@ SQL, [$this->capabilityValue()]);
 
     private function resetInactiveTablesPreservingGuards(): void
     {
-        // An interrupted install or an interrupted rollback is inactive here. Keep
-        // every trigger attached to a surviving authority table until that table
-        // itself is gone, so an unexpected incoming dependency cannot turn reset
-        // into the same guard-loss-before-DROP failure that rollback forbids.
-        Schema::dropIfExists('telegram_delivery_operations');
-        Schema::dropIfExists('telegram_delivery_authority_capability');
+        $connection = DB::connection();
+
+        // Interrupted install/rollback cleanup uses the same reference-exclusion
+        // barrier as normal down(). A raced incoming FK must fail the atomic index
+        // strip before a surviving authority table loses any guard.
+        if ($connection->getSchemaBuilder()->hasTable('telegram_delivery_operations')) {
+            $this->dropAuthorityTableWithReferenceFence($connection, 'telegram_delivery_operations');
+        }
+        if ($connection->getSchemaBuilder()->hasTable('telegram_delivery_authority_capability')) {
+            $this->dropAuthorityTableWithReferenceFence($connection, 'telegram_delivery_authority_capability');
+        }
         $this->dropOutboxGuards();
+    }
+
+    private function operationReferenceFenceCanResume(Connection $connection): bool
+    {
+        if (! $connection->getSchemaBuilder()->hasTable('telegram_delivery_operations')
+            || ! $connection->getSchemaBuilder()->hasTable('telegram_delivery_authority_capability')
+            || ! $this->authorityTableReferenceFenceReady($connection, 'telegram_delivery_operations')
+            || $this->durableAuthorityExists($connection)) {
+            return false;
+        }
+
+        $surface = new TelegramDeliveryDatabaseAuthoritySurfaceV1;
+        if (! $surface->capabilityTableHasCurrentShape($connection)
+            || ! $surface->requiredChecksPresent($connection)) {
+            return false;
+        }
+
+        $rows = $connection->table('telegram_delivery_authority_capability')->get([
+            'id', 'capability_hash', 'schema_version', 'activated_at',
+        ]);
+        if ($rows->count() !== 1) {
+            return false;
+        }
+
+        $capability = $rows->first();
+        if ($capability === null
+            || (int) $capability->id !== 1
+            || ! is_string($capability->capability_hash)
+            || ! hash_equals($this->capabilityHash(), $capability->capability_hash)
+            || (int) $capability->schema_version !== 0
+            || $capability->activated_at !== null) {
+            return false;
+        }
+
+        $presentTriggers = $surface->presentRequiredTriggers($connection);
+        sort($presentTriggers, SORT_STRING);
+        $expectedTriggers = TelegramDeliveryDatabaseAuthoritySurfaceV1::REQUIRED_TRIGGERS;
+        sort($expectedTriggers, SORT_STRING);
+        if ($presentTriggers !== $expectedTriggers) {
+            return false;
+        }
+
+        return (new TelegramDeliveryForeignKeyMetadataAttestor)
+            ->matchesExpected($connection, [
+                'telegram_delivery_operations',
+                'telegram_delivery_authority_capability',
+            ]);
+    }
+
+    /** @param null|Closure():void $afterFence */
+    private function dropAuthorityTableWithReferenceFence(
+        Connection $connection,
+        string $table,
+        ?Closure $afterFence = null,
+    ): void {
+        if (! in_array($table, [
+            'telegram_delivery_operations',
+            'telegram_delivery_authority_capability',
+        ], true)) {
+            throw new RuntimeException('Unsupported Telegram delivery rollback reference-fence table.');
+        }
+        if ($connection->transactionLevel() !== 0) {
+            throw new RuntimeException('Telegram delivery rollback reference fence requires no active runtime transaction.');
+        }
+        if (! $connection->getSchemaBuilder()->hasTable($table)) {
+            return;
+        }
+
+        $autocommit = $connection->selectOne('SELECT @@SESSION.autocommit AS autocommit', [], false);
+        if ($autocommit === null) {
+            throw new RuntimeException('Telegram delivery rollback reference fence could not read autocommit state.');
+        }
+        $restoreAutocommit = (int) ($autocommit->autocommit ?? -1) === 1;
+        if (! $restoreAutocommit && (int) ($autocommit->autocommit ?? -1) !== 0) {
+            throw new RuntimeException('Telegram delivery rollback reference fence found an invalid autocommit state.');
+        }
+
+        $quotedTable = '`'.str_replace('`', '``', $table).'`';
+        $locked = false;
+        try {
+            if ($restoreAutocommit) {
+                $connection->statement('SET autocommit = 0');
+            }
+            $connection->statement('LOCK TABLES '.$quotedTable.' WRITE');
+            $locked = true;
+
+            $this->establishAuthorityTableReferenceFence($connection, $table);
+            if (! $this->authorityTableReferenceFenceReady($connection, $table)
+                || ! (new TelegramDeliveryForeignKeyMetadataAttestor)
+                    ->matchesExpected($connection, [$table])) {
+                throw new RuntimeException('Telegram delivery rollback reference fence did not exclude the complete foreign-key dependency surface.');
+            }
+
+            if ($afterFence !== null) {
+                $afterFence();
+            }
+
+            // Re-attest after the adversarial window. The WRITE lock excludes
+            // parent ALTER/CREATE INDEX while the no-index state makes a new
+            // incoming FK structurally impossible, including with
+            // FOREIGN_KEY_CHECKS=0 in the competing session.
+            if (! $this->authorityTableReferenceFenceReady($connection, $table)
+                || ! (new TelegramDeliveryForeignKeyMetadataAttestor)
+                    ->matchesExpected($connection, [$table])) {
+                throw new RuntimeException('Telegram delivery rollback reference fence changed before destructive DDL.');
+            }
+
+            $connection->statement('DROP TABLE '.$quotedTable);
+        } finally {
+            if ($locked) {
+                try {
+                    $connection->statement('UNLOCK TABLES');
+                } catch (Throwable $exception) {
+                    $this->disconnect($connection);
+                    throw new RuntimeException('Telegram delivery rollback reference-fence lock cleanup failed.', 0, $exception);
+                }
+            }
+
+            if ($restoreAutocommit) {
+                try {
+                    $connection->statement('SET autocommit = 1');
+                } catch (Throwable $exception) {
+                    $this->disconnect($connection);
+                    throw new RuntimeException('Telegram delivery rollback reference-fence autocommit restoration failed.', 0, $exception);
+                }
+            }
+        }
+    }
+
+    private function establishAuthorityTableReferenceFence(Connection $connection, string $table): void
+    {
+        if ($this->authorityTableReferenceFenceReady($connection, $table)) {
+            return;
+        }
+
+        $quotedTable = '`'.str_replace('`', '``', $table).'`';
+        $columnRows = $connection->select('SHOW COLUMNS FROM '.$quotedTable, [], false);
+        $autoIncrementColumns = [];
+        foreach ($columnRows as $row) {
+            $field = (string) ($row->Field ?? '');
+            $extra = strtolower((string) ($row->Extra ?? ''));
+            if (str_contains($extra, 'auto_increment')) {
+                $autoIncrementColumns[] = $field;
+            }
+        }
+
+        $clauses = [];
+        if ($autoIncrementColumns !== []) {
+            if ($table !== 'telegram_delivery_operations' || $autoIncrementColumns !== ['id']) {
+                throw new RuntimeException('Telegram delivery rollback reference fence found an unexpected AUTO_INCREMENT surface.');
+            }
+            $clauses[] = 'MODIFY `id` BIGINT UNSIGNED NOT NULL';
+        }
+
+        $indexRows = $connection->select('SHOW INDEX FROM '.$quotedTable, [], false);
+        $indexNames = [];
+        foreach ($indexRows as $row) {
+            $name = (string) ($row->Key_name ?? '');
+            if ($name === '') {
+                throw new RuntimeException('Telegram delivery rollback reference fence found an unnamed index.');
+            }
+            $indexNames[$name] = true;
+        }
+
+        if (isset($indexNames['PRIMARY'])) {
+            $clauses[] = 'DROP PRIMARY KEY';
+            unset($indexNames['PRIMARY']);
+        }
+        foreach (array_keys($indexNames) as $indexName) {
+            $clauses[] = 'DROP INDEX `'.str_replace('`', '``', $indexName).'`';
+        }
+
+        if ($clauses === []) {
+            throw new RuntimeException('Telegram delivery rollback reference fence found a non-fenced table without removable reference indexes.');
+        }
+
+        $clauses[] = "COMMENT='".self::ROLLBACK_REFERENCE_FENCE_COMMENT."'";
+        $connection->statement('ALTER TABLE '.$quotedTable.' '.implode(', ', $clauses));
+    }
+
+    private function authorityTableReferenceFenceReady(Connection $connection, string $table): bool
+    {
+        $quotedTable = '`'.str_replace('`', '``', $table).'`';
+        try {
+            $indexes = $connection->select('SHOW INDEX FROM '.$quotedTable, [], false);
+            if ($indexes !== []) {
+                return false;
+            }
+
+            $columns = $connection->select('SHOW COLUMNS FROM '.$quotedTable, [], false);
+            foreach ($columns as $column) {
+                if (str_contains(strtolower((string) ($column->Extra ?? '')), 'auto_increment')) {
+                    return false;
+                }
+            }
+
+            $status = $connection->selectOne(<<<'SQL'
+SELECT TABLE_COMMENT AS table_comment
+FROM information_schema.TABLES
+WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+SQL, [$connection->getDatabaseName(), $table], false);
+            if ($status === null
+                || (string) ($status->table_comment ?? '') !== self::ROLLBACK_REFERENCE_FENCE_COMMENT) {
+                return false;
+            }
+        } catch (Throwable) {
+            return false;
+        }
+
+        return true;
     }
 
     private function durableAuthorityExists(?Connection $connection = null, bool $locking = false): bool

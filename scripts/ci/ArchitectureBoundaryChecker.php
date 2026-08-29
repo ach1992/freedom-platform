@@ -1137,8 +1137,6 @@ final class ArchitectureBoundaryChecker
     /** @param list<string> $violations */
     private function scanTelegramGenericDeliveryBoundary(string $relativePath, string $source, array &$violations): void
     {
-        $this->scanTelegramDynamicResolution($relativePath, $source, $violations);
-
         $restrictedMethods = [
             'fromReviewedSource' => [
                 'app/Modules/Telegram/Application/NonRestrictedTelegramPresentation.php',
@@ -1164,6 +1162,7 @@ final class ArchitectureBoundaryChecker
             'NonRestrictedTelegramPresentationFactory',
             'NonRestrictedTelegramPresentationSource',
             'TelegramDeliveryQueueService',
+            'TelegramPresentationProvenanceGuard',
         ];
         $usesGenericBoundary = false;
         foreach ($symbols as $symbol) {
@@ -1181,10 +1180,12 @@ final class ArchitectureBoundaryChecker
             'app/Modules/Telegram/Application/NonRestrictedTelegramPresentation.php',
             'app/Modules/Telegram/Application/NonRestrictedTelegramPresentationFactory.php',
             'app/Modules/Telegram/Application/NonRestrictedTelegramPresentationSource.php',
+            'app/Modules/Telegram/Application/TelegramDeliveryDatabaseCapability.php',
             'app/Modules/Telegram/Application/TelegramDeliveryOperationExecutor.php',
             'app/Modules/Telegram/Application/TelegramDeliveryOutboxHandler.php',
             'app/Modules/Telegram/Application/TelegramDeliveryQueueService.php',
             'app/Modules/Telegram/Application/TelegramMutationRequest.php',
+            'app/Modules/Telegram/Application/TelegramPresentationProvenanceGuard.php',
         ];
         if (in_array($relativePath, $internalPaths, true)) {
             return;
@@ -1210,180 +1211,6 @@ final class ArchitectureBoundaryChecker
         }
 
         $this->usedTelegramPresentationSources[$relativePath] = true;
-    }
-
-    /** @param list<string> $violations */
-    private function scanTelegramDynamicResolution(string $relativePath, string $source, array &$violations): void
-    {
-        $tokens = [];
-        foreach (token_get_all($source) as $token) {
-            if (is_array($token)) {
-                [$id, $text, $line] = $token;
-                if (in_array($id, [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT, T_OPEN_TAG, T_CLOSE_TAG], true)) {
-                    continue;
-                }
-                $tokens[] = ['id' => $id, 'text' => $text, 'line' => $line];
-
-                continue;
-            }
-
-            $tokens[] = ['id' => null, 'text' => $token, 'line' => null];
-        }
-
-        $reported = [];
-        $dynamicCallableVariables = [];
-        $containerVariables = [];
-        $hasLaravelContainerType = $this->containsCodeTokenText($source, 'Illuminate\\Foundation\\Application')
-            || $this->containsCodeTokenText($source, 'Illuminate\\Contracts\\Container\\Container')
-            || $this->containsCodeTokenText($source, 'Illuminate\\Container\\Container')
-            || $this->containsCodeTokenText($source, 'Illuminate\\Support\\Facades\\App');
-        $report = function (int $line, string $mechanism) use ($relativePath, &$violations, &$reported): void {
-            $key = $line.'|'.$mechanism;
-            if (isset($reported[$key])) {
-                return;
-            }
-            $reported[$key] = true;
-            $violations[] = sprintf(
-                '%s:%d dynamic class/container resolution via %s is forbidden because it can bypass reviewed Telegram presentation provenance; use statically named reviewed boundaries.',
-                $relativePath,
-                $line,
-                $mechanism,
-            );
-        };
-
-        $count = count($tokens);
-        for ($index = 0; $index < $count; $index++) {
-            $token = $tokens[$index];
-            $id = $token['id'];
-            $text = $token['text'];
-            $line = (int) ($token['line'] ?? 1);
-
-            if ($id === T_VARIABLE
-                && ($tokens[$index + 1]['text'] ?? null) === '='
-                && ($tokens[$index + 2]['text'] ?? null) === '['
-                && ($tokens[$index + 3]['id'] ?? null) === T_VARIABLE
-            ) {
-                $dynamicCallableVariables[$text] = true;
-            }
-
-            if ($id === T_VARIABLE
-                && isset($dynamicCallableVariables[$text])
-                && ($tokens[$index + 1]['text'] ?? null) === '('
-            ) {
-                $report($line, 'dynamic callable invocation');
-            }
-
-            if ($id === T_VARIABLE
-                && ($tokens[$index + 1]['text'] ?? null) === '='
-                && ($tokens[$index + 2]['id'] ?? null) === T_STRING
-                && in_array(strtolower((string) ($tokens[$index + 2]['text'] ?? '')), ['app', 'resolve'], true)
-                && ($tokens[$index + 3]['text'] ?? null) === '('
-            ) {
-                $containerVariables[$text] = true;
-            }
-
-            if ($hasLaravelContainerType
-                && in_array($id, [T_OBJECT_OPERATOR, T_NULLSAFE_OBJECT_OPERATOR, T_DOUBLE_COLON], true)
-                && ($tokens[$index + 1]['id'] ?? null) === T_STRING
-                && in_array(strtolower((string) ($tokens[$index + 1]['text'] ?? '')), ['make', 'get'], true)
-                && ($tokens[$index + 2]['text'] ?? null) === '('
-                && ($tokens[$index + 3]['id'] ?? null) === T_VARIABLE
-            ) {
-                $report(
-                    $line,
-                    'typed Laravel container '.($id === T_DOUBLE_COLON ? '::' : '->')
-                        .strtolower((string) $tokens[$index + 1]['text']).'($variable)',
-                );
-            }
-
-            if ($id === T_VARIABLE
-                && isset($containerVariables[$text])
-                && ($tokens[$index + 1]['id'] ?? null) === T_OBJECT_OPERATOR
-                && ($tokens[$index + 2]['id'] ?? null) === T_STRING
-                && in_array(strtolower((string) ($tokens[$index + 2]['text'] ?? '')), ['make', 'get'], true)
-                && ($tokens[$index + 3]['text'] ?? null) === '('
-                && ($tokens[$index + 4]['id'] ?? null) === T_VARIABLE
-            ) {
-                $report($line, 'stored container ->'.strtolower((string) $tokens[$index + 2]['text']).'($variable)');
-            }
-
-            if ($id === T_NEW && isset($tokens[$index + 1]) && $tokens[$index + 1]['id'] === T_VARIABLE) {
-                $report($line, 'dynamic new');
-
-                continue;
-            }
-
-            if ($id === T_VARIABLE
-                && isset($tokens[$index + 2])
-                && $tokens[$index + 1]['id'] === T_DOUBLE_COLON
-                && $tokens[$index + 2]['id'] !== T_CLASS
-            ) {
-                $report($line, 'variable static call');
-
-                continue;
-            }
-
-            if (! is_int($id) || ! in_array($id, [T_STRING, T_NAME_QUALIFIED, T_NAME_FULLY_QUALIFIED], true)) {
-                continue;
-            }
-
-            $name = strtolower(ltrim($text, '\\'));
-            $baseName = str_contains($name, '\\') ? substr($name, strrpos($name, '\\') + 1) : $name;
-            $previousId = $tokens[$index - 1]['id'] ?? null;
-            $nextText = $tokens[$index + 1]['text'] ?? null;
-
-            if (in_array($baseName, ['reflectionclass', 'reflectionmethod'], true)) {
-                $report($line, $baseName);
-
-                continue;
-            }
-
-            if (in_array($baseName, [
-                'class_alias',
-                'call_user_func',
-                'call_user_func_array',
-                'forward_static_call',
-                'forward_static_call_array',
-            ], true) && $nextText === '(' && ! in_array($previousId, [T_OBJECT_OPERATOR, T_NULLSAFE_OBJECT_OPERATOR, T_DOUBLE_COLON, T_FUNCTION], true)) {
-                $report($line, $baseName);
-
-                continue;
-            }
-
-            if (! in_array($baseName, ['app', 'resolve'], true)
-                || $nextText !== '('
-                || in_array($previousId, [T_OBJECT_OPERATOR, T_NULLSAFE_OBJECT_OPERATOR, T_DOUBLE_COLON, T_FUNCTION], true)
-            ) {
-                continue;
-            }
-
-            $firstArgument = $tokens[$index + 2] ?? null;
-            if (($firstArgument['text'] ?? null) !== ')') {
-                $staticClassArgument = $firstArgument !== null
-                    && in_array($firstArgument['id'], [T_STRING, T_NAME_QUALIFIED, T_NAME_FULLY_QUALIFIED], true)
-                    && ($tokens[$index + 3]['id'] ?? null) === T_DOUBLE_COLON
-                    && ($tokens[$index + 4]['id'] ?? null) === T_CLASS;
-                if (! $staticClassArgument) {
-                    $report($line, $baseName.'(dynamic expression)');
-
-                    continue;
-                }
-            }
-
-            $closingOffset = ($firstArgument['text'] ?? null) === ')' ? 2 : 5;
-            if (($tokens[$index + $closingOffset]['text'] ?? null) === ')'
-                && ($tokens[$index + $closingOffset + 1]['id'] ?? null) === T_OBJECT_OPERATOR
-                && ($tokens[$index + $closingOffset + 2]['id'] ?? null) === T_STRING
-                && in_array(strtolower((string) ($tokens[$index + $closingOffset + 2]['text'] ?? '')), ['make', 'get'], true)
-                && ($tokens[$index + $closingOffset + 3]['text'] ?? null) === '('
-                && ($tokens[$index + $closingOffset + 4]['id'] ?? null) === T_VARIABLE
-            ) {
-                $report(
-                    $line,
-                    $baseName.'()->'.strtolower((string) $tokens[$index + $closingOffset + 2]['text']).'($variable)',
-                );
-            }
-        }
     }
 
     private function containsCodeTokenText(string $source, string $needle): bool

@@ -7,12 +7,15 @@ namespace Tests\Unit\Modules\Telegram;
 use App\Modules\Telegram\Application\NonRestrictedTelegramPresentation;
 use App\Modules\Telegram\Application\NonRestrictedTelegramPresentationFactory;
 use App\Modules\Telegram\Application\NonRestrictedTelegramPresentationSource;
-use App\Modules\Telegram\Application\TelegramMutationRequest;
-use App\Modules\Telegram\Domain\TelegramDeliveryAction;
+use App\Modules\Telegram\Application\TelegramDeliveryQueueService;
+use App\Modules\Telegram\Application\TelegramPresentationProvenanceGuard;
+use Illuminate\Database\Connection;
+use Illuminate\Database\DatabaseManager;
 use LogicException;
 use PHPUnit\Framework\TestCase;
+use Psr\Container\ContainerInterface;
 use ReflectionClass;
-use stdClass;
+use Tests\Fixtures\Telegram\UnreviewedDynamicTelegramSource;
 use Tests\Support\NonRestrictedTelegramPresentationTestFactory;
 
 final class NonRestrictedTelegramPresentationProvenanceTest extends TestCase
@@ -37,43 +40,59 @@ final class NonRestrictedTelegramPresentationProvenanceTest extends TestCase
         (new NonRestrictedTelegramPresentationFactory)->fromSource($source);
     }
 
-    public function test_forged_presentation_identity_is_rejected_by_request_boundary(): void
+    public function test_multistage_scope_rebinding_and_dynamic_container_resolution_cannot_enter_queue_authority(): void
     {
-        $reflection = new ReflectionClass(NonRestrictedTelegramPresentation::class);
-        $forged = $reflection->newInstanceWithoutConstructor();
-        $constructor = $reflection->getConstructor();
-        self::assertNotNull($constructor);
-        $constructor->invoke($forged, 'restricted', new stdClass);
+        $connection = new Connection(null, 'production_like_database');
+        $database = new class($connection) extends DatabaseManager
+        {
+            public function __construct(private readonly Connection $testConnection) {}
+
+            public function connection($name = null): Connection
+            {
+                return $this->testConnection;
+            }
+        };
+
+        $queueReflection = new ReflectionClass(TelegramDeliveryQueueService::class);
+        /** @var TelegramDeliveryQueueService $queue */
+        $queue = $queueReflection->newInstanceWithoutConstructor();
+        $queueReflection->getProperty('database')->setValue($queue, $database);
+
+        $container = new readonly class($queue) implements ContainerInterface
+        {
+            public function __construct(private object $queue) {}
+
+            public function get(string $id): mixed
+            {
+                return $this->queue;
+            }
+
+            public function has(string $id): bool
+            {
+                return true;
+            }
+        };
+
+        $source = new UnreviewedDynamicTelegramSource($container);
 
         $this->expectException(LogicException::class);
-        new TelegramMutationRequest(
-            TelegramDeliveryAction::Send,
-            900001,
-            null,
-            $forged,
-        );
+        $this->expectExceptionMessage('requires an exact reviewed production source gateway');
+        $source->queueRestricted('restricted-secret-value');
     }
 
-    public function test_trusted_test_fixture_is_accepted_by_request_boundary(): void
+    public function test_test_fixture_is_a_value_fixture_not_a_security_capability(): void
     {
         $presentation = NonRestrictedTelegramPresentationTestFactory::plainText('ordinary');
-        $request = new TelegramMutationRequest(
-            TelegramDeliveryAction::Send,
-            900001,
-            null,
-            $presentation,
-        );
+        $reflection = new ReflectionClass(NonRestrictedTelegramPresentation::class);
 
-        self::assertSame('ordinary', $request->presentation?->text());
+        self::assertSame('ordinary', $presentation->text());
+        self::assertFalse($reflection->hasProperty('sourceCapability'));
+        self::assertFalse($reflection->hasProperty('restoreCapability'));
     }
 
     public function test_runtime_and_architecture_source_lists_remain_identical(): void
     {
-        $factory = new ReflectionClass(NonRestrictedTelegramPresentationFactory::class);
-        $constant = $factory->getReflectionConstant('REVIEWED_SOURCE_FILES');
-        self::assertNotFalse($constant);
-        $runtimeSources = $constant->getValue();
-        self::assertIsArray($runtimeSources);
+        $runtimeSources = TelegramPresentationProvenanceGuard::REVIEWED_SOURCE_FILES;
 
         $root = dirname(__DIR__, 4);
         $architecture = require $root.'/scripts/ci/architecture-boundaries.php';

@@ -14,6 +14,7 @@ use Illuminate\Support\Facades\Schema;
 use ReflectionMethod;
 use RuntimeException;
 use Tests\TestCase;
+use Throwable;
 
 /** @requirement ARCH-003 ARCH-004 DAT-003 SEC-002 SEC-008 OPS-003 QUA-004 QUA-007 QUA-010 */
 final class TelegramOutboundDeliveryRollbackToctouTest extends TestCase
@@ -32,9 +33,9 @@ final class TelegramOutboundDeliveryRollbackToctouTest extends TestCase
 
         $this->database = app(DatabaseManager::class);
         $this->configureForeignKeyBuilderConnection();
+        $this->configureDdlAttackerConnection();
 
-        $migration = $this->migration();
-        $migration->up();
+        $this->migration()->up();
     }
 
     protected function tearDown(): void
@@ -48,12 +49,13 @@ final class TelegramOutboundDeliveryRollbackToctouTest extends TestCase
                     try {
                         $this->database->connection('telegram_fk_builder')
                             ->statement('DROP TABLE IF EXISTS '.$table);
-                    } catch (\Throwable) {
+                    } catch (Throwable) {
                         // Best-effort isolation cleanup must not hide the original result.
                     }
                 }
 
                 $this->database->purge('telegram_fk_builder');
+                $this->database->purge('telegram_ddl_attacker');
                 $this->database->purge('telegram_metadata');
             }
 
@@ -63,137 +65,147 @@ final class TelegramOutboundDeliveryRollbackToctouTest extends TestCase
         }
     }
 
-    public function test_incoming_fk_created_after_final_preflight_blocks_before_any_guard_loss(): void
+    public function test_operation_reference_fence_excludes_incoming_fk_and_parent_index_ddl_until_drop(): void
     {
         $runtime = DB::connection();
         $builder = $this->database->connection('telegram_fk_builder');
+        $attacker = $this->database->connection('telegram_ddl_attacker');
         $databaseName = $this->safeDatabaseName($runtime);
-        $migration = $this->migration();
 
-        $this->assertDistinctDatabaseSessions($runtime, $builder);
+        $this->assertDistinctDatabaseSessions($runtime, $builder, $attacker);
 
-        $this->assertRollbackDropFails(afterFinalPreflight: function () use ($builder, $databaseName): void {
-            $builder->statement(sprintf(<<<'SQL'
-CREATE TABLE telegram_delivery_rollback_operation_fk_probe (
-    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-    operation_public_id CHAR(26) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
-    PRIMARY KEY (id),
-    KEY rollback_operation_fk_idx (operation_public_id),
-    CONSTRAINT rollback_operation_fk
-        FOREIGN KEY (operation_public_id)
-        REFERENCES `%s`.`telegram_delivery_operations` (`public_id`)
-        ON UPDATE CASCADE
-        ON DELETE RESTRICT
-) ENGINE=InnoDB DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin
-SQL, $databaseName));
+        $this->invokeRollback(afterFinalPreflight: function () use ($runtime, $builder, $attacker, $databaseName): void {
+            $this->assertNoReferenceIndexes($runtime, 'telegram_delivery_operations');
+            $this->assertIncomingForeignKeyRejected(
+                $builder,
+                $databaseName,
+                'telegram_delivery_operations',
+                'public_id',
+                'CHAR(26) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin',
+                'telegram_delivery_rollback_operation_fk_probe',
+                'operation_public_id',
+            );
+            $this->assertParentIndexDdlExcluded(
+                $attacker,
+                $databaseName,
+                'telegram_delivery_operations',
+                'public_id',
+                'rollback_operation_attacker_idx',
+            );
         });
-
-        self::assertTrue(Schema::hasTable('telegram_delivery_operations'));
-        self::assertTrue(Schema::hasTable('telegram_delivery_authority_capability'));
-        $this->assertExactRequiredTriggers();
-        $capability = DB::table('telegram_delivery_authority_capability')->where('id', 1)->first();
-        self::assertNotNull($capability);
-        self::assertSame(0, (int) $capability->schema_version);
-        self::assertNull($capability->activated_at);
-
-        try {
-            $migration->up();
-            self::fail('Re-entry must not remove guards while the rollback-blocking operation FK still exists.');
-        } catch (QueryException $exception) {
-            self::assertContains((int) ($exception->errorInfo[1] ?? 0), [1217, 1451]);
-        }
-        self::assertTrue(Schema::hasTable('telegram_delivery_operations'));
-        self::assertTrue(Schema::hasTable('telegram_delivery_authority_capability'));
-        $this->assertExactRequiredTriggers();
-
-        $builder->statement('DROP TABLE telegram_delivery_rollback_operation_fk_probe');
-        $migration->up();
-        self::assertTrue((new TelegramDeliveryDatabaseAuthoritySurfaceV1)->semanticsMatchExpected($runtime));
-        $reactivated = DB::table('telegram_delivery_authority_capability')->where('id', 1)->first();
-        self::assertNotNull($reactivated);
-        self::assertSame(1, (int) $reactivated->schema_version);
-        self::assertNotNull($reactivated->activated_at);
-
-        $migration->down();
 
         self::assertFalse(Schema::hasTable('telegram_delivery_operations'));
         self::assertFalse(Schema::hasTable('telegram_delivery_authority_capability'));
         self::assertSame([], (new TelegramDeliveryDatabaseAuthoritySurfaceV1)->presentRequiredTriggers($runtime));
 
-        $migration->up();
+        $this->migration()->up();
         self::assertTrue((new TelegramDeliveryDatabaseAuthoritySurfaceV1)->semanticsMatchExpected($runtime));
     }
 
-    public function test_capability_fk_race_leaves_a_guarded_resumable_partial_rollback(): void
+    public function test_capability_reference_fence_excludes_incoming_fk_and_parent_index_ddl_until_drop(): void
     {
         $runtime = DB::connection();
         $builder = $this->database->connection('telegram_fk_builder');
+        $attacker = $this->database->connection('telegram_ddl_attacker');
         $databaseName = $this->safeDatabaseName($runtime);
-        $migration = $this->migration();
 
-        $this->assertDistinctDatabaseSessions($runtime, $builder);
+        $this->assertDistinctDatabaseSessions($runtime, $builder, $attacker);
 
-        $this->assertRollbackDropFails(afterCapabilityPreflight: function () use ($builder, $databaseName): void {
-            $builder->statement(sprintf(<<<'SQL'
-CREATE TABLE telegram_delivery_rollback_capability_fk_probe (
-    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-    capability_id TINYINT UNSIGNED NOT NULL,
-    PRIMARY KEY (id),
-    KEY rollback_capability_fk_idx (capability_id),
-    CONSTRAINT rollback_capability_fk
-        FOREIGN KEY (capability_id)
-        REFERENCES `%s`.`telegram_delivery_authority_capability` (`id`)
-        ON UPDATE CASCADE
-        ON DELETE RESTRICT
-) ENGINE=InnoDB DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
-SQL, $databaseName));
+        $this->invokeRollback(afterCapabilityPreflight: function () use ($runtime, $builder, $attacker, $databaseName): void {
+            self::assertFalse(Schema::hasTable('telegram_delivery_operations'));
+            $this->assertNoReferenceIndexes($runtime, 'telegram_delivery_authority_capability');
+            $this->assertIncomingForeignKeyRejected(
+                $builder,
+                $databaseName,
+                'telegram_delivery_authority_capability',
+                'id',
+                'TINYINT UNSIGNED',
+                'telegram_delivery_rollback_capability_fk_probe',
+                'capability_id',
+            );
+            $this->assertParentIndexDdlExcluded(
+                $attacker,
+                $databaseName,
+                'telegram_delivery_authority_capability',
+                'id',
+                'rollback_capability_attacker_idx',
+            );
         });
 
         self::assertFalse(Schema::hasTable('telegram_delivery_operations'));
-        self::assertTrue(Schema::hasTable('telegram_delivery_authority_capability'));
+        self::assertFalse(Schema::hasTable('telegram_delivery_authority_capability'));
+        self::assertSame([], (new TelegramDeliveryDatabaseAuthoritySurfaceV1)->presentRequiredTriggers($runtime));
 
-        $present = (new TelegramDeliveryDatabaseAuthoritySurfaceV1)->presentRequiredTriggers($runtime);
-        sort($present, SORT_STRING);
-        $expected = [
-            'outbox_telegram_delivery_envelope_delete_guard',
-            'outbox_telegram_delivery_envelope_insert_guard',
-            'outbox_telegram_delivery_envelope_update_guard',
-            'telegram_delivery_capability_delete_guard',
-            'telegram_delivery_capability_insert_guard',
-            'telegram_delivery_capability_update_guard',
-        ];
-        sort($expected, SORT_STRING);
-        self::assertSame($expected, $present);
-        $capability = DB::table('telegram_delivery_authority_capability')->where('id', 1)->first();
-        self::assertNotNull($capability);
-        self::assertSame(0, (int) $capability->schema_version);
-        self::assertNull($capability->activated_at);
+        $this->migration()->up();
+        self::assertTrue((new TelegramDeliveryDatabaseAuthoritySurfaceV1)->semanticsMatchExpected($runtime));
+    }
+
+    public function test_operation_reference_fence_interruption_is_guarded_and_down_resumes_safely(): void
+    {
+        $runtime = DB::connection();
 
         try {
-            $migration->up();
-            self::fail('Capability-only re-entry must not remove guards while its rollback-blocking FK still exists.');
-        } catch (QueryException $exception) {
-            self::assertContains((int) ($exception->errorInfo[1] ?? 0), [1217, 1451]);
+            $this->invokeRollback(afterFinalPreflight: function () use ($runtime): void {
+                $this->assertNoReferenceIndexes($runtime, 'telegram_delivery_operations');
+                throw new RuntimeException('operation-reference-fence-interruption');
+            });
+            self::fail('The deterministic interruption seam must abort after the operation reference fence.');
+        } catch (RuntimeException $exception) {
+            self::assertSame('operation-reference-fence-interruption', $exception->getMessage());
         }
+
+        self::assertTrue(Schema::hasTable('telegram_delivery_operations'));
+        self::assertTrue(Schema::hasTable('telegram_delivery_authority_capability'));
+        $this->assertNoReferenceIndexes($runtime, 'telegram_delivery_operations');
+        $this->assertExactRequiredTriggers();
+        $this->assertInactiveCapability();
+
+        $this->migration()->down();
+
+        self::assertFalse(Schema::hasTable('telegram_delivery_operations'));
+        self::assertFalse(Schema::hasTable('telegram_delivery_authority_capability'));
+        self::assertSame([], (new TelegramDeliveryDatabaseAuthoritySurfaceV1)->presentRequiredTriggers($runtime));
+
+        $this->migration()->up();
+        self::assertTrue((new TelegramDeliveryDatabaseAuthoritySurfaceV1)->semanticsMatchExpected($runtime));
+    }
+
+    public function test_capability_reference_fence_interruption_is_guarded_and_up_reenters_safely(): void
+    {
+        $runtime = DB::connection();
+
+        try {
+            $this->invokeRollback(afterCapabilityPreflight: function () use ($runtime): void {
+                self::assertFalse(Schema::hasTable('telegram_delivery_operations'));
+                $this->assertNoReferenceIndexes($runtime, 'telegram_delivery_authority_capability');
+                throw new RuntimeException('capability-reference-fence-interruption');
+            });
+            self::fail('The deterministic interruption seam must abort after the capability reference fence.');
+        } catch (RuntimeException $exception) {
+            self::assertSame('capability-reference-fence-interruption', $exception->getMessage());
+        }
+
         self::assertFalse(Schema::hasTable('telegram_delivery_operations'));
         self::assertTrue(Schema::hasTable('telegram_delivery_authority_capability'));
-        $presentAfterFailedUp = (new TelegramDeliveryDatabaseAuthoritySurfaceV1)->presentRequiredTriggers($runtime);
-        sort($presentAfterFailedUp, SORT_STRING);
-        self::assertSame($expected, $presentAfterFailedUp);
+        $this->assertNoReferenceIndexes($runtime, 'telegram_delivery_authority_capability');
+        $this->assertInactiveCapability();
 
-        $builder->statement('DROP TABLE telegram_delivery_rollback_capability_fk_probe');
-        $migration->up();
+        $this->migration()->up();
 
-        self::assertTrue(Schema::hasTable('telegram_delivery_authority_capability'));
         self::assertTrue(Schema::hasTable('telegram_delivery_operations'));
+        self::assertTrue(Schema::hasTable('telegram_delivery_authority_capability'));
         self::assertTrue((new TelegramDeliveryDatabaseAuthoritySurfaceV1)->semanticsMatchExpected($runtime));
+        $reactivated = DB::table('telegram_delivery_authority_capability')->where('id', 1)->first();
+        self::assertNotNull($reactivated);
+        self::assertSame(1, (int) $reactivated->schema_version);
+        self::assertNotNull($reactivated->activated_at);
     }
 
     /**
      * @param  null|\Closure():void  $afterFinalPreflight
      * @param  null|\Closure():void  $afterCapabilityPreflight
      */
-    private function assertRollbackDropFails(?\Closure $afterFinalPreflight = null, ?\Closure $afterCapabilityPreflight = null): void
+    private function invokeRollback(?\Closure $afterFinalPreflight = null, ?\Closure $afterCapabilityPreflight = null): void
     {
         $migration = $this->migration();
         $rollback = new ReflectionMethod($migration, 'rollbackMysql');
@@ -203,46 +215,115 @@ SQL, $databaseName));
         $connection = DB::connection();
         $lifecycleConnection = $this->database->connection('telegram_lifecycle');
 
-        try {
-            $withInstallationLock->invoke($migration, $lifecycleConnection, function () use (
-                $rollback,
+        $withInstallationLock->invoke($migration, $lifecycleConnection, function () use (
+            $rollback,
+            $migration,
+            $connection,
+            $afterFinalPreflight,
+            $afterCapabilityPreflight,
+        ): void {
+            $rollback->invoke(
                 $migration,
                 $connection,
                 $afterFinalPreflight,
                 $afterCapabilityPreflight,
-            ): void {
-                $rollback->invoke(
-                    $migration,
-                    $connection,
-                    $afterFinalPreflight,
-                    $afterCapabilityPreflight,
-                );
-            });
-            self::fail('A racing incoming foreign key must prevent dependency-sensitive rollback progress.');
-        } catch (QueryException $exception) {
-            self::assertContains((int) ($exception->errorInfo[1] ?? 0), [1217, 1451]);
-        } catch (RuntimeException $exception) {
-            self::assertStringContainsString(
-                'Cannot resume Telegram outbound delivery rollback from an unattested partial rollback surface.',
-                $exception->getMessage(),
             );
+        });
+    }
+
+    private function assertIncomingForeignKeyRejected(
+        Connection $builder,
+        string $databaseName,
+        string $parentTable,
+        string $parentColumn,
+        string $childColumnType,
+        string $childTable,
+        string $childColumn,
+    ): void {
+        $builder->statement('SET FOREIGN_KEY_CHECKS = 0');
+        try {
+            $sql = sprintf(<<<'SQL'
+CREATE TABLE `%s` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `%s` %s NOT NULL,
+    PRIMARY KEY (`id`),
+    KEY `rollback_fk_idx` (`%s`),
+    CONSTRAINT `rollback_fk_probe`
+        FOREIGN KEY (`%s`)
+        REFERENCES `%s`.`%s` (`%s`)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+SQL,
+                $childTable,
+                $childColumn,
+                $childColumnType,
+                $childColumn,
+                $childColumn,
+                $databaseName,
+                $parentTable,
+                $parentColumn,
+            );
+
+            try {
+                $builder->statement($sql);
+                self::fail('The reference-fenced parent must reject a new incoming foreign key.');
+            } catch (QueryException $exception) {
+                self::assertContains((int) ($exception->errorInfo[1] ?? 0), [1005, 1215, 1822]);
+            }
+        } finally {
+            $builder->statement('SET FOREIGN_KEY_CHECKS = 1');
         }
     }
 
-    private function assertDistinctDatabaseSessions(Connection $runtime, Connection $builder): void
-    {
-        $runtimeSession = $runtime->selectOne('SELECT CONNECTION_ID() AS connection_id', [], false);
-        $builderSession = $builder->selectOne('SELECT CONNECTION_ID() AS connection_id', [], false);
+    private function assertParentIndexDdlExcluded(
+        Connection $attacker,
+        string $databaseName,
+        string $table,
+        string $column,
+        string $index,
+    ): void {
+        $attacker->statement('SET SESSION lock_wait_timeout = 1');
+        try {
+            $attacker->statement(sprintf(
+                'ALTER TABLE `%s`.`%s` ADD INDEX `%s` (`%s`)',
+                $databaseName,
+                $table,
+                $index,
+                $column,
+            ));
+            self::fail('The parent WRITE lock must exclude competing parent index DDL until destructive DROP.');
+        } catch (QueryException $exception) {
+            self::assertSame(1205, (int) ($exception->errorInfo[1] ?? 0));
+        }
+    }
 
-        self::assertNotNull($runtimeSession);
-        self::assertNotNull($builderSession);
-        self::assertGreaterThan(0, (int) ($runtimeSession->connection_id ?? 0));
-        self::assertGreaterThan(0, (int) ($builderSession->connection_id ?? 0));
-        self::assertNotSame(
-            (int) $runtimeSession->connection_id,
-            (int) $builderSession->connection_id,
-            'The rollback race actor must use an independent MariaDB session.',
-        );
+    private function assertNoReferenceIndexes(Connection $connection, string $table): void
+    {
+        $rows = $connection->select('SHOW INDEX FROM `'.$table.'`', [], false);
+        self::assertSame([], $rows, 'The rollback reference fence must remove every parent reference index.');
+    }
+
+    private function assertInactiveCapability(): void
+    {
+        $capability = DB::table('telegram_delivery_authority_capability')->where('id', 1)->first();
+        self::assertNotNull($capability);
+        self::assertSame(0, (int) $capability->schema_version);
+        self::assertNull($capability->activated_at);
+    }
+
+    private function assertDistinctDatabaseSessions(Connection ...$connections): void
+    {
+        $ids = [];
+        foreach ($connections as $connection) {
+            $row = $connection->selectOne('SELECT CONNECTION_ID() AS connection_id', [], false);
+            self::assertNotNull($row);
+            $id = (int) ($row->connection_id ?? 0);
+            self::assertGreaterThan(0, $id);
+            $ids[] = $id;
+        }
+
+        self::assertCount(count($ids), array_unique($ids), 'Rollback race actors must use independent MariaDB sessions.');
     }
 
     private function assertExactRequiredTriggers(): void
@@ -280,6 +361,18 @@ SQL, $databaseName));
 
         config(['database.connections.telegram_fk_builder' => $config]);
         $this->database->purge('telegram_fk_builder');
+    }
+
+    private function configureDdlAttackerConnection(): void
+    {
+        $default = config('database.default');
+        self::assertIsString($default);
+        $config = config('database.connections.'.$default);
+        self::assertIsArray($config);
+        $config['url'] = null;
+
+        config(['database.connections.telegram_ddl_attacker' => $config]);
+        $this->database->purge('telegram_ddl_attacker');
     }
 
     private function migration(): object

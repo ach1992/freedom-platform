@@ -335,7 +335,7 @@ PHP);
         self::assertSame([], $reviewed['violations']);
     }
 
-    public function test_generic_telegram_boundary_rejects_split_string_dynamic_resolution(): void
+    public function test_generic_boundary_defers_split_string_semantics_to_dedicated_provenance_checker(): void
     {
         $this->write('app/Modules/Provisioning/Application/DynamicTelegramEscape.php', <<<'PHP'
 <?php
@@ -356,10 +356,7 @@ final class DynamicTelegramEscape
 PHP);
 
         $result = $this->checker(['Provisioning' => ['Telegram']])->check();
-        $violations = implode("\n", $result['violations']);
-
-        self::assertStringContainsString('dynamic class/container resolution via dynamic callable invocation is forbidden', $violations);
-        self::assertStringContainsString('dynamic class/container resolution via stored container ->make($variable) is forbidden', $violations);
+        self::assertSame([], $result['violations']);
     }
 
     public function test_generic_telegram_boundary_rejects_internal_presentation_methods_from_allowlisted_source(): void
@@ -386,7 +383,7 @@ PHP);
         self::assertStringContainsString('internal Telegram presentation method restorePersisted', $violations);
     }
 
-    public function test_generic_telegram_boundary_rejects_reflection_alias_and_dynamic_container_resolution(): void
+    public function test_unrelated_reflection_alias_and_dynamic_container_resolution_are_not_telegram_provenance_violations(): void
     {
         $this->write('app/Modules/Orders/Application/ReflectionTelegramEscape.php', <<<'PHP'
 <?php
@@ -404,15 +401,10 @@ final class ReflectionTelegramEscape
 PHP);
 
         $result = $this->checker()->check();
-        $violations = implode("\n", $result['violations']);
-
-        self::assertStringContainsString('dynamic class/container resolution via reflectionclass is forbidden', $violations);
-        self::assertStringContainsString('dynamic class/container resolution via class_alias is forbidden', $violations);
-        self::assertStringContainsString('dynamic class/container resolution via resolve(dynamic expression) is forbidden', $violations);
-        self::assertStringContainsString('dynamic class/container resolution via app()->make($variable) is forbidden', $violations);
+        self::assertSame([], $result['violations']);
     }
 
-    public function test_generic_telegram_boundary_rejects_injected_laravel_container_dynamic_resolution(): void
+    public function test_unrelated_injected_laravel_container_resolution_is_not_a_telegram_provenance_violation(): void
     {
         $this->write('app/Modules/Orders/Application/InjectedContainerTelegramEscape.php', <<<'PHP'
 <?php
@@ -433,13 +425,10 @@ final class InjectedContainerTelegramEscape
 PHP);
 
         $result = $this->checker()->check();
-        $violations = implode("\n", $result['violations']);
-
-        self::assertSame(2, substr_count($violations, 'typed Laravel container ->make($variable)'));
-        self::assertStringContainsString('typed Laravel container ::make($variable)', $violations);
+        self::assertSame([], $result['violations']);
     }
 
-    public function test_generic_telegram_boundary_rejects_dynamic_new_and_callback_indirection(): void
+    public function test_unrelated_dynamic_new_and_callback_indirection_are_not_telegram_provenance_violations(): void
     {
         $this->write('app/Modules/Orders/Application/CallableTelegramEscape.php', <<<'PHP'
 <?php
@@ -455,10 +444,7 @@ final class CallableTelegramEscape
 PHP);
 
         $result = $this->checker()->check();
-        $violations = implode("\n", $result['violations']);
-
-        self::assertStringContainsString('dynamic class/container resolution via dynamic new is forbidden', $violations);
-        self::assertStringContainsString('dynamic class/container resolution via call_user_func is forbidden', $violations);
+        self::assertSame([], $result['violations']);
     }
 
     public function test_generic_non_restricted_telegram_source_allowlist_rejects_non_telegram_and_stale_entries(): void

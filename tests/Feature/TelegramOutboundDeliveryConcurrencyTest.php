@@ -72,7 +72,7 @@ namespace {
         });
 
         try {
-            $receipt = $queue->queue(
+            $receipt = NonRestrictedTelegramPresentationTestFactory::queue($queue,
                 TelegramDeliveryAction::Send,
                 900030,
                 null,

@@ -30,7 +30,11 @@ final readonly class TelegramDeliveryForeignKeyMetadataAttestor
         return $this->validatedMetadataConnection($runtimeConnection) instanceof Connection;
     }
 
-    /** @param list<string> $authorityTables */
+    /**
+     * @param  list<string>  $authorityTables
+     *
+     * @phpstan-impure
+     */
     public function matchesExpected(Connection $runtimeConnection, array $authorityTables): bool
     {
         if ($authorityTables === []) {
