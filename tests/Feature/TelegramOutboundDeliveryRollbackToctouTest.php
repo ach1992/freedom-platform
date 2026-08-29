@@ -140,6 +140,47 @@ final class TelegramOutboundDeliveryRollbackToctouTest extends TestCase
         self::assertTrue((new TelegramDeliveryDatabaseAuthoritySurfaceV1)->semanticsMatchExpected($runtime));
     }
 
+    public function test_reference_fence_refuses_before_mutation_when_innodb_table_locks_is_disabled(): void
+    {
+        $runtime = DB::connection();
+        $locking = $runtime->selectOne('SELECT @@SESSION.innodb_table_locks AS innodb_table_locks', [], false);
+        self::assertNotNull($locking);
+        self::assertSame(1, (int) ($locking->innodb_table_locks ?? -1));
+
+        $runtime->statement('SET SESSION innodb_table_locks = 0');
+        try {
+            try {
+                $this->invokeRollback();
+                self::fail('Rollback must reject a session whose InnoDB table-lock prerequisite is disabled.');
+            } catch (RuntimeException $exception) {
+                self::assertSame(
+                    'Telegram delivery rollback reference fence requires @@SESSION.innodb_table_locks = 1.',
+                    $exception->getMessage(),
+                );
+            }
+
+            self::assertTrue(Schema::hasTable('telegram_delivery_operations'));
+            self::assertTrue(Schema::hasTable('telegram_delivery_authority_capability'));
+            $this->assertReferenceIndexesPresent($runtime, 'telegram_delivery_operations');
+            $this->assertReferenceIndexesPresent($runtime, 'telegram_delivery_authority_capability');
+            $this->assertExactRequiredTriggers();
+
+            $capability = DB::table('telegram_delivery_authority_capability')->where('id', 1)->first();
+            self::assertNotNull($capability);
+            self::assertSame(1, (int) $capability->schema_version);
+            self::assertNotNull($capability->activated_at);
+        } finally {
+            $runtime->statement('SET SESSION innodb_table_locks = 1');
+        }
+
+        $this->migration()->down();
+        self::assertFalse(Schema::hasTable('telegram_delivery_operations'));
+        self::assertFalse(Schema::hasTable('telegram_delivery_authority_capability'));
+
+        $this->migration()->up();
+        self::assertTrue((new TelegramDeliveryDatabaseAuthoritySurfaceV1)->semanticsMatchExpected($runtime));
+    }
+
     public function test_operation_reference_fence_interruption_is_guarded_and_down_resumes_safely(): void
     {
         $runtime = DB::connection();
@@ -302,6 +343,33 @@ SQL,
     {
         $rows = $connection->select('SHOW INDEX FROM `'.$table.'`', [], false);
         self::assertSame([], $rows, 'The rollback reference fence must remove every parent reference index.');
+    }
+
+    private function assertReferenceIndexesPresent(Connection $connection, string $table): void
+    {
+        $rows = $connection->select('SHOW INDEX FROM `'.$table.'`', [], false);
+        $actual = [];
+        foreach ($rows as $row) {
+            $name = (string) ($row->Key_name ?? '');
+            if ($name !== '') {
+                $actual[$name] = true;
+            }
+        }
+
+        $actual = array_keys($actual);
+        sort($actual, SORT_STRING);
+        $expected = $table === 'telegram_delivery_operations'
+            ? [
+                'PRIMARY',
+                'telegram_delivery_operations_outbox_unique',
+                'telegram_delivery_operations_public_unique',
+                'telegram_delivery_operations_request_unique',
+                'telegram_delivery_operations_state_idx',
+            ]
+            : ['PRIMARY'];
+        sort($expected, SORT_STRING);
+
+        self::assertSame($expected, $actual, 'Unsupported rollback must not strip parent reference indexes.');
     }
 
     private function assertInactiveCapability(): void

@@ -150,6 +150,11 @@ return new class extends Migration
             throw new RuntimeException('Cannot roll back Telegram outbound delivery authority from an unrecognized incomplete authority surface.');
         }
 
+        // The reference-fence DROP path depends on explicit InnoDB table locks.
+        // Attest that prerequisite before lifecycle deactivation so an unsupported
+        // session/topology leaves the active authority surface untouched.
+        $this->assertReferenceFenceLockingPrerequisites($connection);
+
         if ($hasOperationTable) {
             if ($this->authorityReady($connection)) {
                 if ($beforeRuntimeFence !== null) {
@@ -470,6 +475,11 @@ SQL, [$this->capabilityValue()]);
             return;
         }
 
+        // Re-attest immediately before the exact session relies on LOCK TABLES.
+        // innodb_table_locks is session-dynamic, so the earlier rollback preflight
+        // is not sufficient as the sole proof for this destructive boundary.
+        $this->assertReferenceFenceLockingPrerequisites($connection);
+
         $autocommit = $connection->selectOne('SELECT @@SESSION.autocommit AS autocommit', [], false);
         if ($autocommit === null) {
             throw new RuntimeException('Telegram delivery rollback reference fence could not read autocommit state.');
@@ -534,6 +544,37 @@ SQL, [$this->capabilityValue()]);
                     $this->disconnect($connection);
                     throw new RuntimeException('Telegram delivery rollback reference-fence autocommit restoration failed.', 0, $exception);
                 }
+            }
+        }
+    }
+
+    private function assertReferenceFenceLockingPrerequisites(Connection $connection): void
+    {
+        $locking = $connection->selectOne(
+            'SELECT @@SESSION.innodb_table_locks AS innodb_table_locks',
+            [],
+            false,
+        );
+        if ($locking === null || (int) ($locking->innodb_table_locks ?? -1) !== 1) {
+            throw new RuntimeException(
+                'Telegram delivery rollback reference fence requires @@SESSION.innodb_table_locks = 1.',
+            );
+        }
+
+        $wsrepRows = $connection->select("SHOW GLOBAL VARIABLES LIKE 'wsrep_on'", [], false);
+        if (count($wsrepRows) > 1) {
+            throw new RuntimeException('Telegram delivery rollback reference fence found ambiguous Galera/wsrep state.');
+        }
+        if ($wsrepRows !== []) {
+            $wsrepOn = strtoupper(trim((string) ($wsrepRows[0]->Value ?? '')));
+            if (! in_array($wsrepOn, ['OFF', '0'], true)) {
+                if (! in_array($wsrepOn, ['ON', '1'], true)) {
+                    throw new RuntimeException('Telegram delivery rollback reference fence found an invalid Galera/wsrep state.');
+                }
+
+                throw new RuntimeException(
+                    'Telegram delivery rollback reference fence is not supported while Galera/wsrep is enabled.',
+                );
             }
         }
     }
