@@ -55,6 +55,16 @@ When independent review is required, the permitted project dispatch mechanism is
 4. The Owner relays the complete review result back to the authoring Master. The Master reconciles every finding and refreshes candidate/target/CI/review freshness before relying on the review or integrating.
 5. Candidate, target, contract, or material effective-diff drift invalidates the affected independent review; generate a new exact review packet rather than reusing a stale verdict.
 
+### Defensive review-packet formulation
+
+Independent-review packets are defensive software-assurance artifacts. Preserve the exact envelope, complete material review scope, adversarial depth, and applicable HIGH_ASSURANCE requirements, while expressing review challenges primarily as properties and invariants to verify rather than as procedural misuse instructions.
+
+- Prefer exact file/symbol/test locators, expected invariants, failure conditions, and required regression evidence over copied step-by-step exploitation sequences when the reviewer can inspect the authoritative repository directly.
+- It is valid to name language/runtime/container/database mechanism families that are material to the invariant, but do not turn the relay packet into operational instructions for exploitation, credential abuse, or live-system mutation when an equivalent property-based review question is sufficient.
+- This is a presentation constraint only. Never omit a material security boundary, concurrency case, restricted-data concern, failure mode, acceptance criterion, or required validation merely to make the packet easier for a platform to accept.
+- A platform refusal, hidden response, or safety limitation is not review evidence and never satisfies an independent-review gate. Reformulate the same exact review envelope using bounded defensive/property-based language and the same Owner-relayed fresh ChatGPT mechanism; keep the material scope unchanged.
+- Do not evade or defeat platform safety controls. If an equivalent compliant review packet still cannot be reviewed, surface the missing review capability/gate instead of substituting self-review, weakening the contract, or manufacturing approval.
+
 Do not request GitHub/Copilot reviewers or dispatch independent review through another agent/service merely to satisfy this repository rule. If repository/platform protection independently requires a native approval object, treat that as a separate integration gate and surface it without fabricating or bypassing it.
 
 ## Merge method
