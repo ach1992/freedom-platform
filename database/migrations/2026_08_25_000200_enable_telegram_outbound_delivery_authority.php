@@ -479,13 +479,20 @@ SQL, [$this->capabilityValue()]);
             throw new RuntimeException('Telegram delivery rollback reference fence found an invalid autocommit state.');
         }
 
-        $quotedTable = '`'.str_replace('`', '``', $table).'`';
+        $lockSql = match ($table) {
+            'telegram_delivery_operations' => 'LOCK TABLES `telegram_delivery_operations` WRITE',
+            'telegram_delivery_authority_capability' => 'LOCK TABLES `telegram_delivery_authority_capability` WRITE',
+        };
+        $dropSql = match ($table) {
+            'telegram_delivery_operations' => 'DROP TABLE `telegram_delivery_operations`',
+            'telegram_delivery_authority_capability' => 'DROP TABLE `telegram_delivery_authority_capability`',
+        };
         $locked = false;
         try {
             if ($restoreAutocommit) {
                 $connection->statement('SET autocommit = 0');
             }
-            $connection->statement('LOCK TABLES '.$quotedTable.' WRITE');
+            $connection->statement($lockSql);
             $locked = true;
 
             $this->establishAuthorityTableReferenceFence($connection, $table);
@@ -509,7 +516,7 @@ SQL, [$this->capabilityValue()]);
                 throw new RuntimeException('Telegram delivery rollback reference fence changed before destructive DDL.');
             }
 
-            $connection->statement('DROP TABLE '.$quotedTable);
+            $connection->statement($dropSql);
         } finally {
             if ($locked) {
                 try {
@@ -548,15 +555,41 @@ SQL, [$this->capabilityValue()]);
             }
         }
 
-        $clauses = [];
-        if ($autoIncrementColumns !== []) {
-            if ($table !== 'telegram_delivery_operations' || $autoIncrementColumns !== ['id']) {
+        if ($table === 'telegram_delivery_operations') {
+            if ($autoIncrementColumns !== ['id']) {
                 throw new RuntimeException('Telegram delivery rollback reference fence found an unexpected AUTO_INCREMENT surface.');
             }
-            $clauses[] = 'MODIFY `id` BIGINT UNSIGNED NOT NULL';
+            $indexRows = $connection->select('SHOW INDEX FROM `telegram_delivery_operations`', [], false);
+            $expectedIndexes = [
+                'PRIMARY',
+                'telegram_delivery_operations_outbox_unique',
+                'telegram_delivery_operations_public_unique',
+                'telegram_delivery_operations_request_unique',
+                'telegram_delivery_operations_state_idx',
+            ];
+            $alterSql = <<<'SQL'
+ALTER TABLE `telegram_delivery_operations`
+    MODIFY `id` BIGINT UNSIGNED NOT NULL,
+    DROP PRIMARY KEY,
+    DROP INDEX `telegram_delivery_operations_outbox_unique`,
+    DROP INDEX `telegram_delivery_operations_public_unique`,
+    DROP INDEX `telegram_delivery_operations_request_unique`,
+    DROP INDEX `telegram_delivery_operations_state_idx`,
+    COMMENT='telegram-delivery-rollback-reference-fence-v1'
+SQL;
+        } else {
+            if ($autoIncrementColumns !== []) {
+                throw new RuntimeException('Telegram delivery rollback reference fence found an unexpected AUTO_INCREMENT surface.');
+            }
+            $indexRows = $connection->select('SHOW INDEX FROM `telegram_delivery_authority_capability`', [], false);
+            $expectedIndexes = ['PRIMARY'];
+            $alterSql = <<<'SQL'
+ALTER TABLE `telegram_delivery_authority_capability`
+    DROP PRIMARY KEY,
+    COMMENT='telegram-delivery-rollback-reference-fence-v1'
+SQL;
         }
 
-        $indexRows = $connection->select('SHOW INDEX FROM '.$quotedTable, [], false);
         $indexNames = [];
         foreach ($indexRows as $row) {
             $name = (string) ($row->Key_name ?? '');
@@ -565,21 +598,14 @@ SQL, [$this->capabilityValue()]);
             }
             $indexNames[$name] = true;
         }
-
-        if (isset($indexNames['PRIMARY'])) {
-            $clauses[] = 'DROP PRIMARY KEY';
-            unset($indexNames['PRIMARY']);
-        }
-        foreach (array_keys($indexNames) as $indexName) {
-            $clauses[] = 'DROP INDEX `'.str_replace('`', '``', $indexName).'`';
+        $actualIndexes = array_keys($indexNames);
+        sort($actualIndexes, SORT_STRING);
+        sort($expectedIndexes, SORT_STRING);
+        if ($actualIndexes !== $expectedIndexes) {
+            throw new RuntimeException('Telegram delivery rollback reference fence found an unexpected index surface.');
         }
 
-        if ($clauses === []) {
-            throw new RuntimeException('Telegram delivery rollback reference fence found a non-fenced table without removable reference indexes.');
-        }
-
-        $clauses[] = "COMMENT='".self::ROLLBACK_REFERENCE_FENCE_COMMENT."'";
-        $connection->statement('ALTER TABLE '.$quotedTable.' '.implode(', ', $clauses));
+        $connection->statement($alterSql);
     }
 
     private function authorityTableReferenceFenceReady(Connection $connection, string $table): bool
