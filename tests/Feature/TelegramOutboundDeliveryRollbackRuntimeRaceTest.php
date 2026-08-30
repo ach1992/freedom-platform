@@ -15,6 +15,7 @@ namespace {
     use Illuminate\Database\DatabaseManager;
     use Illuminate\Support\Str;
     use Tests\Support\NonRestrictedTelegramPresentationTestFactory;
+    use Tests\Support\TelegramInteractivePresentationTestFactory;
 
     $rollbackRuntimeMode = PHP_SAPI === 'cli' ? ($argv[1] ?? null) : null;
     if (in_array($rollbackRuntimeMode, [
@@ -109,6 +110,7 @@ namespace {
             $outbox,
             $runtime,
             $capability,
+            TelegramInteractivePresentationTestFactory::service($clock, $runtime),
         );
 
         if ($rollbackRuntimeMode === '--telegram-rollback-runtime-trigger-hold-fence') {
