@@ -120,11 +120,17 @@ return [
                     ]],
                 ],
                 'rollback_preflight' => [
-                    'strategy' => 'durable_snapshot_preflight_before_destructive_ddl',
-                    'evidence' => [[
-                        'file' => 'tests/Feature/TelegramInteractiveDeliveryAuthorityTest.php',
-                        'symbol' => 'test_interactive_migration_down_refuses_durable_snapshots_before_destructive_ddl',
-                    ]],
+                    'strategy' => 'durable_authority_and_runtime_fence_preflight',
+                    'evidence' => [
+                        [
+                            'file' => 'tests/Feature/TelegramInteractiveDeliveryAuthorityTest.php',
+                            'symbol' => 'test_interactive_migration_down_refuses_durable_snapshots_before_destructive_ddl',
+                        ],
+                        [
+                            'file' => 'tests/Feature/TelegramInteractiveDeliveryRollbackRuntimeRaceTest.php',
+                            'symbol' => 'test_interactive_rollback_excludes_late_runtime_work_between_empty_preflight_and_drop',
+                        ],
+                    ],
                 ],
                 'ddl_toctou' => [
                     'strategy' => 'mariadb_dependency_ddl_fail_closed_reentry',

@@ -172,9 +172,16 @@ SQL,
     {
         return <<<'SQL'
 BEGIN
+    DECLARE capability_fence_rows INT DEFAULT 0;
     DECLARE valid_operation_count INT DEFAULT 0;
 
-    IF NOT EXISTS (
+    SELECT COUNT(*) INTO capability_fence_rows
+    FROM telegram_delivery_authority_capability
+    WHERE id = 1
+    LOCK IN SHARE MODE;
+
+    IF capability_fence_rows <> 1
+       OR NOT EXISTS (
         SELECT 1
         FROM telegram_delivery_authority_capability capability_row
         WHERE capability_row.id = 1
