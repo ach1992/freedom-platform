@@ -7,9 +7,9 @@ namespace App\Modules\Telegram\Application;
 /**
  * Application construction boundary for new persistable generic Telegram text.
  * The factory and queue authority independently require an exact reviewed source
- * file. Phase #179 intentionally has no production source yet; later Phase 0.7
- * journeys must add their exact file to the runtime/architecture allowlist after
- * classification review.
+ * file. Each production journey must add only its exact reviewed Telegram-owned
+ * source path to the runtime/architecture allowlist after data-classification
+ * review.
  */
 final readonly class NonRestrictedTelegramPresentationFactory
 {

@@ -30,7 +30,9 @@ return [
     // persistable Telegram presentation path. Each addition is a deliberate
     // data-classification review boundary; RESTRICTED owners must keep using
     // their protected/reference delivery authority instead.
-    'telegram_non_restricted_presentation_sources' => [],
+    'telegram_non_restricted_presentation_sources' => [
+        'app/Modules/Telegram/Application/TelegramNavigationHandler.php',
+    ],
 
     // Critical MariaDB authority-surface lifecycle contracts. Every registered surface
     // must disposition every lifecycle rule with a concrete strategy and a PHP method/function

@@ -12,7 +12,7 @@ use App\Modules\Telegram\Application\TelegramInteractionSessionService;
 use App\Modules\Telegram\Application\TelegramUpdateProcessor;
 use Illuminate\Contracts\Encryption\StringEncrypter;
 use Illuminate\Database\QueryException;
-use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
 use RuntimeException;
@@ -20,7 +20,7 @@ use Tests\TestCase;
 
 final class TelegramUpdateProcessorTest extends TestCase
 {
-    use RefreshDatabase;
+    use DatabaseTruncation;
 
     private const SECRET = 'telegram_webhook_secret_1234567890_safe';
 
@@ -31,6 +31,7 @@ final class TelegramUpdateProcessorTest extends TestCase
         if (DB::connection()->getDriverName() === 'mysql') {
             $migration = require database_path('migrations/2026_08_25_000100_enable_telegram_interaction_authority.php');
             $migration->up();
+            (require database_path('migrations/2026_08_25_000200_enable_telegram_outbound_delivery_authority.php'))->up();
         }
         Queue::fake();
         config([
@@ -44,6 +45,17 @@ final class TelegramUpdateProcessorTest extends TestCase
             'telegram.api_base_url' => 'https://api.telegram.org',
             'telegram.api_timeout_seconds' => 15,
         ]);
+    }
+
+    protected function tearDown(): void
+    {
+        try {
+            if (DB::connection()->getDriverName() === 'mysql') {
+                $this->truncateTablesForAllConnections();
+            }
+        } finally {
+            parent::tearDown();
+        }
     }
 
     public function test_processing_upserts_identity_profile_and_first_start_attribution_idempotently(): void
@@ -86,7 +98,7 @@ final class TelegramUpdateProcessorTest extends TestCase
 
     public function test_processed_update_routes_one_restart_safe_interaction_transition_without_duplicate_replay(): void
     {
-        $this->accept($this->payload(3050, 9150, 'interaction_user', '/start'));
+        $this->accept($this->payload(3050, 9150, 'interaction_user', 'hello'));
         $processor = $this->app->make(TelegramUpdateProcessor::class);
         $processor->process('123456789', 3050);
 
@@ -150,7 +162,7 @@ final class TelegramUpdateProcessorTest extends TestCase
 
     public function test_failed_message_and_back_retries_remain_bound_to_the_original_session(): void
     {
-        $this->accept($this->payload(3060, 9160, 'retry_user', '/start'));
+        $this->accept($this->payload(3060, 9160, 'retry_user', 'hello'));
         $processor = $this->app->make(TelegramUpdateProcessor::class);
         $processor->process('123456789', 3060);
 
@@ -294,7 +306,7 @@ final class TelegramUpdateProcessorTest extends TestCase
 
     public function test_cancel_without_a_session_is_durably_bound_as_a_noop_before_a_later_session_exists(): void
     {
-        $this->accept($this->payload(3070, 9170, 'cancel_retry_user', '/start'));
+        $this->accept($this->payload(3070, 9170, 'cancel_retry_user', 'hello'));
         $processor = $this->app->make(TelegramUpdateProcessor::class);
         $processor->process('123456789', 3070);
         $account = DB::table('telegram_accounts')->where('telegram_user_id', 9170)->first(['id']);

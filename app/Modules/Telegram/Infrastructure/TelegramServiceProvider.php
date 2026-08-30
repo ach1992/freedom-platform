@@ -15,6 +15,8 @@ use App\Modules\Telegram\Application\TelegramDeliveryOperationExecutor;
 use App\Modules\Telegram\Application\TelegramDeliveryOutboxHandler;
 use App\Modules\Telegram\Application\TelegramInteractionHandlerRegistry;
 use App\Modules\Telegram\Application\TelegramInteractionPolicy;
+use App\Modules\Telegram\Application\TelegramNavigationEntryGateway;
+use App\Modules\Telegram\Application\TelegramNavigationHandler;
 use App\Shared\Application\OutboxEventHandler;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Contracts\Foundation\Application;
@@ -53,6 +55,9 @@ final class TelegramServiceProvider extends ServiceProvider
                 );
             },
         );
+        $this->app->singleton(TelegramNavigationEntryGateway::class);
+        $this->app->singleton(TelegramNavigationHandler::class);
+        $this->app->tag([TelegramNavigationHandler::class], TelegramInteractionHandler::class);
         $this->app->singleton(
             TelegramInteractionHandlerRegistry::class,
             fn (Application $application): TelegramInteractionHandlerRegistry => new TelegramInteractionHandlerRegistry(
