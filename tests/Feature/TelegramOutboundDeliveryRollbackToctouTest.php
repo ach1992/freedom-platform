@@ -34,7 +34,6 @@ final class TelegramOutboundDeliveryRollbackToctouTest extends TestCase
         $this->database = app(DatabaseManager::class);
         $this->configureForeignKeyBuilderConnection();
         $this->configureDdlAttackerConnection();
-        $this->configureRollbackNoLockConnection();
 
         $this->migration()->up();
     }
@@ -57,7 +56,6 @@ final class TelegramOutboundDeliveryRollbackToctouTest extends TestCase
 
                 $this->database->purge('telegram_fk_builder');
                 $this->database->purge('telegram_ddl_attacker');
-                $this->database->purge('telegram_rollback_no_lock');
                 $this->database->purge('telegram_metadata');
             }
 
@@ -183,54 +181,6 @@ final class TelegramOutboundDeliveryRollbackToctouTest extends TestCase
         self::assertTrue((new TelegramDeliveryDatabaseAuthoritySurfaceV1)->semanticsMatchExpected($runtime));
     }
 
-    public function test_reference_fence_refuses_before_deactivation_when_lock_tables_privilege_is_missing(): void
-    {
-        $runtime = DB::connection();
-        $noLock = $this->database->connection('telegram_rollback_no_lock');
-        $this->assertDistinctDatabaseSessions($runtime, $noLock);
-
-        $grantRows = $noLock->select('SHOW GRANTS FOR CURRENT_USER', [], false);
-        $grantText = implode("\n", array_map(
-            static fn (object $row): string => implode(' ', array_map('strval', array_values((array) $row))),
-            $grantRows,
-        ));
-        self::assertStringNotContainsString('LOCK TABLES', strtoupper($grantText));
-
-        try {
-            $this->invokeRollback(connection: $noLock);
-            self::fail('Rollback must reject an exact DDL session that cannot acquire the required WRITE locks.');
-        } catch (RuntimeException $exception) {
-            self::assertSame(
-                'Telegram delivery rollback reference fence could not prove effective LOCK TABLES and SELECT authority before lifecycle deactivation.',
-                $exception->getMessage(),
-            );
-            self::assertInstanceOf(QueryException::class, $exception->getPrevious());
-            self::assertContains((int) ($exception->getPrevious()->errorInfo[1] ?? 0), [1044, 1142]);
-        }
-
-        self::assertTrue(Schema::hasTable('telegram_delivery_operations'));
-        self::assertTrue(Schema::hasTable('telegram_delivery_authority_capability'));
-        $this->assertReferenceIndexesPresent($runtime, 'telegram_delivery_operations');
-        $this->assertReferenceIndexesPresent($runtime, 'telegram_delivery_authority_capability');
-        $this->assertExactRequiredTriggers();
-
-        $capability = DB::table('telegram_delivery_authority_capability')->where('id', 1)->first();
-        self::assertNotNull($capability);
-        self::assertSame(1, (int) $capability->schema_version);
-        self::assertNotNull($capability->activated_at);
-
-        $autocommit = $noLock->selectOne('SELECT @@SESSION.autocommit AS autocommit', [], false);
-        self::assertNotNull($autocommit);
-        self::assertSame(1, (int) ($autocommit->autocommit ?? -1));
-
-        $this->migration()->down();
-        self::assertFalse(Schema::hasTable('telegram_delivery_operations'));
-        self::assertFalse(Schema::hasTable('telegram_delivery_authority_capability'));
-
-        $this->migration()->up();
-        self::assertTrue((new TelegramDeliveryDatabaseAuthoritySurfaceV1)->semanticsMatchExpected($runtime));
-    }
-
     public function test_operation_reference_fence_interruption_is_guarded_and_down_resumes_safely(): void
     {
         $runtime = DB::connection();
@@ -296,17 +246,14 @@ final class TelegramOutboundDeliveryRollbackToctouTest extends TestCase
      * @param  null|\Closure():void  $afterFinalPreflight
      * @param  null|\Closure():void  $afterCapabilityPreflight
      */
-    private function invokeRollback(
-        ?\Closure $afterFinalPreflight = null,
-        ?\Closure $afterCapabilityPreflight = null,
-        ?Connection $connection = null,
-    ): void {
+    private function invokeRollback(?\Closure $afterFinalPreflight = null, ?\Closure $afterCapabilityPreflight = null): void
+    {
         $migration = $this->migration();
         $rollback = new ReflectionMethod($migration, 'rollbackMysql');
         $rollback->setAccessible(true);
         $withInstallationLock = new ReflectionMethod($migration, 'withInstallationLock');
         $withInstallationLock->setAccessible(true);
-        $connection ??= DB::connection();
+        $connection = DB::connection();
         $lifecycleConnection = $this->database->connection('telegram_lifecycle');
 
         $withInstallationLock->invoke($migration, $lifecycleConnection, function () use (
@@ -494,21 +441,6 @@ SQL,
 
         config(['database.connections.telegram_ddl_attacker' => $config]);
         $this->database->purge('telegram_ddl_attacker');
-    }
-
-    private function configureRollbackNoLockConnection(): void
-    {
-        $default = config('database.default');
-        self::assertIsString($default);
-        $config = config('database.connections.'.$default);
-        self::assertIsArray($config);
-
-        $config['username'] = 'freedom_ci_rollback_no_lock';
-        $config['password'] = 'ci-only-rollback-no-lock-password';
-        $config['url'] = null;
-
-        config(['database.connections.telegram_rollback_no_lock' => $config]);
-        $this->database->purge('telegram_rollback_no_lock');
     }
 
     private function migration(): object

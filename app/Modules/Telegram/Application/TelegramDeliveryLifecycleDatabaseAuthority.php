@@ -22,6 +22,12 @@ final readonly class TelegramDeliveryLifecycleDatabaseAuthority
 
     private const REQUIRED_USERNAME = 'telegram_lifecycle';
 
+    /** @var list<string> */
+    private const REFERENCE_FENCE_TABLES = [
+        'telegram_delivery_operations',
+        'telegram_delivery_authority_capability',
+    ];
+
     public function __construct(private ?DatabaseManager $database = null) {}
 
     public function requireConnection(Connection $runtimeConnection): Connection
@@ -31,11 +37,7 @@ final readonly class TelegramDeliveryLifecycleDatabaseAuthority
             throw new RuntimeException('Telegram delivery lifecycle authority requires the exact dedicated SELECT/UPDATE-only MariaDB principal.');
         }
 
-        // An active surface can be deactivated immediately after this authority
-        // is returned. Prove first that the exact DDL session can acquire the
-        // reference-fence locks needed later in the same rollback state machine.
-        (new TelegramDeliveryReferenceFenceLockPreflight)
-            ->assertActiveSurfaceLockCapability($runtimeConnection);
+        $this->assertRuntimeReferenceFencePrivilegesIfActive($runtimeConnection);
 
         return $connection;
     }
@@ -98,6 +100,148 @@ final readonly class TelegramDeliveryLifecycleDatabaseAuthority
         } catch (Throwable) {
             return null;
         }
+    }
+
+    private function assertRuntimeReferenceFencePrivilegesIfActive(Connection $connection): void
+    {
+        $schema = $connection->getSchemaBuilder();
+        if (! $schema->hasTable('telegram_delivery_authority_capability')) {
+            return;
+        }
+
+        $capability = $connection->table('telegram_delivery_authority_capability')
+            ->select(['schema_version', 'activated_at'])
+            ->where('id', 1)
+            ->first();
+        if ($capability === null
+            || (int) ($capability->schema_version ?? -1) !== 1
+            || ($capability->activated_at ?? null) === null) {
+            return;
+        }
+
+        foreach (self::REFERENCE_FENCE_TABLES as $table) {
+            if (! $schema->hasTable($table)) {
+                throw new RuntimeException(
+                    'Telegram delivery rollback reference-fence privilege preflight found an incomplete active authority surface.',
+                );
+            }
+        }
+
+        try {
+            $rows = $connection->select('SHOW GRANTS FOR CURRENT_USER', [], false);
+        } catch (Throwable $exception) {
+            throw new RuntimeException(
+                'Telegram delivery rollback reference fence could not attest the exact DDL principal privileges before lifecycle deactivation.',
+                0,
+                $exception,
+            );
+        }
+
+        $grants = [];
+        foreach ($rows as $row) {
+            $values = array_values((array) $row);
+            if (count($values) !== 1 || ! is_string($values[0])) {
+                throw new RuntimeException(
+                    'Telegram delivery rollback reference fence received an invalid exact DDL principal grant set.',
+                );
+            }
+            $grants[] = $values[0];
+        }
+
+        if (! $this->grantSetCanUseReferenceFenceLocks($grants, $connection->getDatabaseName())) {
+            throw new RuntimeException(
+                'Telegram delivery rollback reference fence requires effective SELECT and LOCK TABLES authority on both authority tables before lifecycle deactivation.',
+            );
+        }
+    }
+
+    /** @param list<string> $grants */
+    public function grantSetCanUseReferenceFenceLocks(array $grants, string $databaseName): bool
+    {
+        if ($grants === [] || $databaseName === '') {
+            return false;
+        }
+
+        $coverage = [];
+        foreach (self::REFERENCE_FENCE_TABLES as $table) {
+            $coverage[$table] = ['select' => false, 'lock_tables' => false];
+        }
+
+        foreach ($grants as $grantValue) {
+            if (! is_string($grantValue)) {
+                return false;
+            }
+
+            $grant = preg_replace('/\s+/', ' ', trim($grantValue));
+            if (! is_string($grant) || $grant === '') {
+                return false;
+            }
+
+            if (preg_match('/\AGRANT\s+(.+?)\s+ON\s+(.+?)\s+TO\s+.+\z/iD', $grant, $matches) !== 1) {
+                // Role/default-role lines are not expanded privilege evidence.
+                continue;
+            }
+
+            $privilegeList = trim($matches[1]);
+            $object = trim($matches[2]);
+            if ($privilegeList === '' || $object === '' || str_contains($privilegeList, '(')) {
+                continue;
+            }
+
+            $privileges = [];
+            foreach (array_map('trim', explode(',', strtoupper($privilegeList))) as $privilege) {
+                $privilege = preg_replace('/\s+/', ' ', $privilege);
+                if (is_string($privilege) && $privilege !== '') {
+                    $privileges[$privilege] = true;
+                }
+            }
+
+            $all = isset($privileges['ALL PRIVILEGES']) || isset($privileges['ALL']);
+            foreach (self::REFERENCE_FENCE_TABLES as $table) {
+                if (! $this->grantObjectCoversReferenceFenceTable($object, $databaseName, $table)) {
+                    continue;
+                }
+
+                if ($all || isset($privileges['SELECT'])) {
+                    $coverage[$table]['select'] = true;
+                }
+                if ($all || isset($privileges['LOCK TABLES'])) {
+                    $coverage[$table]['lock_tables'] = true;
+                }
+            }
+        }
+
+        foreach ($coverage as $privileges) {
+            if (! $privileges['select'] || ! $privileges['lock_tables']) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function grantObjectCoversReferenceFenceTable(
+        string $object,
+        string $databaseName,
+        string $table,
+    ): bool {
+        if ($object === '*.*') {
+            return true;
+        }
+
+        $quotedDatabase = '`'.str_replace('`', '``', $databaseName).'`';
+        $quotedTable = '`'.str_replace('`', '``', $table).'`';
+        $objects = [
+            $quotedDatabase.'.*',
+            $quotedDatabase.'.'.$quotedTable,
+        ];
+
+        if (preg_match('/\A[A-Za-z0-9_.$-]+\z/D', $databaseName) === 1) {
+            $objects[] = $databaseName.'.*';
+            $objects[] = $databaseName.'.'.$table;
+        }
+
+        return in_array($object, $objects, true);
     }
 
     private function lifecyclePrincipalIsSelectUpdateOnly(Connection $connection, string $databaseName): bool
