@@ -230,14 +230,20 @@ final readonly class TelegramDeliveryLifecycleDatabaseAuthority
 
             $all = isset($privileges['ALL PRIVILEGES']) || isset($privileges['ALL']);
             foreach (self::REFERENCE_FENCE_TABLES as $table) {
-                if (! $this->grantObjectCoversReferenceFenceTable($object, $databaseName, $table)) {
+                $level = $this->referenceFenceGrantObjectLevel($object, $databaseName, $table);
+                if ($level === null) {
                     continue;
                 }
 
+                // MariaDB expands ALL PRIVILEGES only within the privilege level
+                // named by the ON object. SELECT exists at global/database/table
+                // level, but LOCK TABLES exists only at global/database level.
+                // Therefore table-level ALL may prove SELECT for that table but
+                // must never fabricate the database-level locking prerequisite.
                 if ($all || isset($privileges['SELECT'])) {
                     $coverage[$table]['select'] = true;
                 }
-                if ($all || isset($privileges['LOCK TABLES'])) {
+                if ($level !== 'table' && ($all || isset($privileges['LOCK TABLES']))) {
                     $coverage[$table]['lock_tables'] = true;
                 }
             }
@@ -252,13 +258,13 @@ final readonly class TelegramDeliveryLifecycleDatabaseAuthority
         return true;
     }
 
-    private function grantObjectCoversReferenceFenceTable(
+    private function referenceFenceGrantObjectLevel(
         string $object,
         string $databaseName,
         string $table,
-    ): bool {
+    ): ?string {
         if ($object === '*.*') {
-            return true;
+            return 'global';
         }
 
         $quotedDatabase = '`'.str_replace('`', '``', $databaseName).'`';
@@ -268,19 +274,29 @@ final readonly class TelegramDeliveryLifecycleDatabaseAuthority
             $databaseName,
         ).'`';
         $quotedTable = '`'.str_replace('`', '``', $table).'`';
-        $objects = [
+        $databaseObjects = [
             $quotedDatabase.'.*',
             $grantPatternDatabase.'.*',
+        ];
+        $tableObjects = [
             $quotedDatabase.'.'.$quotedTable,
             $grantPatternDatabase.'.'.$quotedTable,
         ];
 
         if (preg_match('/\A[A-Za-z0-9_.$-]+\z/D', $databaseName) === 1) {
-            $objects[] = $databaseName.'.*';
-            $objects[] = $databaseName.'.'.$table;
+            $databaseObjects[] = $databaseName.'.*';
+            $tableObjects[] = $databaseName.'.'.$table;
         }
 
-        return in_array($object, array_values(array_unique($objects)), true);
+        if (in_array($object, array_values(array_unique($databaseObjects)), true)) {
+            return 'database';
+        }
+
+        if (in_array($object, array_values(array_unique($tableObjects)), true)) {
+            return 'table';
+        }
+
+        return null;
     }
 
     private function exactDatabaseGrantObject(string $databaseName): string

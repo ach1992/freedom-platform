@@ -54,11 +54,12 @@ final class TelegramDeliveryLifecycleDatabaseAuthorityTest extends TestCase
         ], 'freedom_platform_ci'));
     }
 
-    public function test_reference_fence_grants_accept_complete_per_table_privileges(): void
+    public function test_reference_fence_grants_accept_table_select_with_database_lock_tables(): void
     {
         self::assertTrue((new TelegramDeliveryLifecycleDatabaseAuthority)->grantSetCanUseReferenceFenceLocks([
-            'GRANT SELECT, LOCK TABLES ON `freedom_platform_ci`.`telegram_delivery_operations` TO `freedom_ci`@`%`',
-            'GRANT SELECT, LOCK TABLES ON `freedom_platform_ci`.`telegram_delivery_authority_capability` TO `freedom_ci`@`%`',
+            'GRANT SELECT ON `freedom_platform_ci`.`telegram_delivery_operations` TO `freedom_ci`@`%`',
+            'GRANT SELECT ON `freedom_platform_ci`.`telegram_delivery_authority_capability` TO `freedom_ci`@`%`',
+            'GRANT LOCK TABLES ON `freedom_platform_ci`.* TO `freedom_ci`@`%`',
         ], 'freedom_platform_ci'));
     }
 
@@ -102,11 +103,22 @@ final class TelegramDeliveryLifecycleDatabaseAuthorityTest extends TestCase
             'GRANT SELECT, LOCK TABLES ON `other_database`.* TO `freedom_ci`@`%`',
         ]];
         yield 'only one authority table covered' => [[
+            'GRANT SELECT ON `freedom_platform_ci`.`telegram_delivery_operations` TO `freedom_ci`@`%`',
+            'GRANT LOCK TABLES ON `freedom_platform_ci`.* TO `freedom_ci`@`%`',
+        ]];
+        yield 'table all does not imply database lock tables' => [[
+            'GRANT SELECT, ALTER, DROP, INDEX ON `freedom_platform_ci`.* TO `freedom_ci`@`%`',
+            'GRANT ALL PRIVILEGES ON `freedom_platform_ci`.`telegram_delivery_operations` TO `freedom_ci`@`%`',
+            'GRANT ALL PRIVILEGES ON `freedom_platform_ci`.`telegram_delivery_authority_capability` TO `freedom_ci`@`%`',
+        ]];
+        yield 'table scoped lock tables is not valid database privilege proof' => [[
             'GRANT SELECT, LOCK TABLES ON `freedom_platform_ci`.`telegram_delivery_operations` TO `freedom_ci`@`%`',
+            'GRANT SELECT, LOCK TABLES ON `freedom_platform_ci`.`telegram_delivery_authority_capability` TO `freedom_ci`@`%`',
         ]];
         yield 'column select is not complete table select' => [[
-            'GRANT SELECT (`id`), LOCK TABLES ON `freedom_platform_ci`.`telegram_delivery_operations` TO `freedom_ci`@`%`',
-            'GRANT SELECT, LOCK TABLES ON `freedom_platform_ci`.`telegram_delivery_authority_capability` TO `freedom_ci`@`%`',
+            'GRANT SELECT (`id`) ON `freedom_platform_ci`.`telegram_delivery_operations` TO `freedom_ci`@`%`',
+            'GRANT SELECT ON `freedom_platform_ci`.`telegram_delivery_authority_capability` TO `freedom_ci`@`%`',
+            'GRANT LOCK TABLES ON `freedom_platform_ci`.* TO `freedom_ci`@`%`',
         ]];
         yield 'role-only authority is not accepted as direct evidence' => [[
             'GRANT `rollback_role` TO `freedom_ci`@`%`',

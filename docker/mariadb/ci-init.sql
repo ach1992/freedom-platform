@@ -35,6 +35,17 @@ GRANT EXECUTE ON PROCEDURE `freedom_platform_ci`.`telegram_metadata_definer_prob
 CREATE USER IF NOT EXISTS 'freedom_ci_rollback_no_lock'@'%' IDENTIFIED BY 'ci-only-rollback-no-lock-password';
 GRANT SELECT, ALTER, DROP, INDEX ON `freedom_platform_ci`.* TO 'freedom_ci_rollback_no_lock'@'%';
 
+-- Test-only DDL authority for the privilege-level regression. The test grants
+-- ALL PRIVILEGES only at exact table level after the authority tables exist;
+-- this database-level grant intentionally still omits LOCK TABLES.
+CREATE USER IF NOT EXISTS 'freedom_ci_rollback_table_all'@'%' IDENTIFIED BY 'ci-only-rollback-table-all-password';
+GRANT SELECT, ALTER, DROP, INDEX ON `freedom_platform_ci`.* TO 'freedom_ci_rollback_table_all'@'%';
+
+-- Disposable CI-only grant administrator used solely to create the exact
+-- table-level ALL PRIVILEGES shape returned by MariaDB SHOW GRANTS.
+CREATE USER IF NOT EXISTS 'freedom_ci_test_grant_admin'@'%' IDENTIFIED BY 'ci-only-test-grant-admin-password';
+GRANT ALL PRIVILEGES ON `freedom_platform_ci`.* TO 'freedom_ci_test_grant_admin'@'%' WITH GRANT OPTION;
+
 -- Test-only authority used to construct a child table in a schema the ordinary
 -- application principal cannot inspect. It exists only inside disposable CI.
 CREATE USER IF NOT EXISTS 'freedom_ci_fk_builder'@'%' IDENTIFIED BY 'ci-only-fk-builder-password';
