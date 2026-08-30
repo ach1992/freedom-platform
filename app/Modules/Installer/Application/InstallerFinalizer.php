@@ -18,14 +18,14 @@ final readonly class InstallerFinalizer
      * @param  array<string, string>  $environment
      * @return array{status: 'already_locked'|'completed', completed_steps: list<string>, resumed: bool}
      */
-    public function finalize(array $environment): array
+    public function finalize(array $environment, ?string $lifecycleDatabasePassword = null): array
     {
         return $this->bootstrapper->run($environment, [
             'config_clear' => function (): void {
                 $this->runner->clearConfiguration();
             },
-            'migrations' => function (): void {
-                $this->runner->migrate();
+            'migrations' => function () use ($lifecycleDatabasePassword): void {
+                $this->runner->migrate($lifecycleDatabasePassword);
             },
             'config_cache' => function (): void {
                 $this->runner->cacheConfiguration();

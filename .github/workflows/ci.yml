@@ -136,7 +136,7 @@ jobs:
           done < "$plan"
 
           # Independent self-modifying-CI guard: these surfaces may not suppress their own control validation.
-          if grep -Eq '^(\.github/workflows/ci\.yml|\.github/workflows/staging-readiness\.yml|scripts/ci/(classify-validation-plan|test-validation-plan|verify-project-control|verify-readonly-staging-workflow)\.sh)$' "$changed"; then
+          if grep -Eq '^(\.github/workflows/ci\.yml|\.github/workflows/staging-readiness\.yml|scripts/ci/(classify-validation-plan|test-validation-plan|scan-git-secrets|test-secret-scan|verify-project-control|verify-readonly-staging-workflow)\.sh)$' "$changed"; then
             project_control=true
             control_plane=true
           fi
@@ -171,6 +171,8 @@ jobs:
             docker-compose.ci.yml
             scripts/ci/classify-validation-plan.sh
             scripts/ci/test-validation-plan.sh
+            scripts/ci/scan-git-secrets.sh
+            scripts/ci/test-secret-scan.sh
             scripts/ci/verify-readonly-staging-workflow.sh
             scripts/ci/verify-planning.sh
             scripts/ci/verify-project-control.sh
@@ -179,7 +181,7 @@ jobs:
             test -s "$path" || { echo "Required repository control file is missing or empty: $path" >&2; exit 1; }
           done
 
-          for script in scripts/ci/classify-validation-plan.sh scripts/ci/test-validation-plan.sh scripts/ci/verify-readonly-staging-workflow.sh scripts/ci/verify-planning.sh scripts/ci/verify-project-control.sh; do
+          for script in scripts/ci/classify-validation-plan.sh scripts/ci/test-validation-plan.sh scripts/ci/scan-git-secrets.sh scripts/ci/test-secret-scan.sh scripts/ci/verify-readonly-staging-workflow.sh scripts/ci/verify-planning.sh scripts/ci/verify-project-control.sh; do
             bash -n "$script"
           done
 
@@ -231,8 +233,9 @@ jobs:
         run: |
           set -euo pipefail
           changed=build/evidence/preflight/changed-files.txt
-          if [[ ! -s "$changed" ]] || grep -Eq '^(\.github/workflows/(ci|staging-readiness)\.yml|scripts/ci/(classify-validation-plan|test-validation-plan|verify-project-control|verify-readonly-staging-workflow)\.sh)$' "$changed"; then
+          if [[ ! -s "$changed" ]] || grep -Eq '^(\.github/workflows/(ci|staging-readiness)\.yml|scripts/ci/(classify-validation-plan|test-validation-plan|scan-git-secrets|test-secret-scan|verify-project-control|verify-readonly-staging-workflow)\.sh)$' "$changed"; then
             bash scripts/ci/test-validation-plan.sh
+            bash scripts/ci/test-secret-scan.sh
             bash scripts/ci/verify-readonly-staging-workflow.sh
           fi
 
@@ -487,7 +490,7 @@ jobs:
 
   secrets:
     name: Secret scan
-    # A filtered workflow_dispatch is diagnostic-only; every pull-request run still scans its changed history.
+    # A filtered workflow_dispatch is diagnostic-only; every pull-request run scans the exact event base-to-head history.
     if: ${{ (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.draft == false)) && !(github.event_name == 'workflow_dispatch' && inputs.phpunit_filter != '') }}
     runs-on: [self-hosted, Linux, X64, freedom-ci-core]
     steps:
@@ -495,13 +498,38 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Prepare Gitleaks temporary path
+      - name: Install checksum-pinned Gitleaks
         shell: bash
-        run: rm -f /tmp/gitleaks.tmp
-
-      - name: Scan Git history
-        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:
-          GITHUB_TOKEN: ${{ github.token }}
-          # Scan failures still fail the job; disable only the action's incompatible SARIF upload on self-hosted runners.
-          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: 'false'
+          GITLEAKS_VERSION: '8.24.3'
+          GITLEAKS_SHA256: '9991e0b2903da4c8f6122b5c3186448b927a5da4deef1fe45271c3793f4ee29c'
+        run: |
+          set -euo pipefail
+          [[ "$RUNNER_OS" == 'Linux' && "$RUNNER_ARCH" == 'X64' ]] || {
+            echo "Unsupported runner for pinned Gitleaks binary: $RUNNER_OS/$RUNNER_ARCH" >&2
+            exit 1
+          }
+
+          archive="$RUNNER_TEMP/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          install_dir="$RUNNER_TEMP/gitleaks-${GITLEAKS_VERSION}"
+          rm -rf "$install_dir"
+          mkdir -p "$install_dir"
+
+          curl -fsSL \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            -o "$archive"
+          printf '%s  %s\n' "$GITLEAKS_SHA256" "$archive" | sha256sum -c -
+          tar -xzf "$archive" -C "$install_dir" gitleaks
+          test -x "$install_dir/gitleaks"
+          "$install_dir/gitleaks" version
+          printf '%s\n' "$install_dir" >> "$GITHUB_PATH"
+
+      - name: Scan exact Git history
+        shell: bash
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+        run: bash scripts/ci/scan-git-secrets.sh

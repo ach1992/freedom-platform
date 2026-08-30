@@ -25,13 +25,15 @@ final class InstallerFinalizerTest extends TestCase
         [$finalizer, $lock] = $this->finalizer($paths, $runner);
 
         try {
-            $result = $finalizer->finalize(['DB_HOST' => 'database.internal']);
+            $lifecyclePassword = 'test-only-lifecycle-finalizer-password';
+            $result = $finalizer->finalize(['DB_HOST' => 'database.internal'], $lifecyclePassword);
 
             $this->assertSame('completed', $result['status']);
             $this->assertSame(
                 ['config_clear', 'migrations', 'config_cache'],
                 $runner->actions,
             );
+            $this->assertSame($lifecyclePassword, $runner->migrationPassword);
             $this->assertTrue($lock->exists());
             $this->assertFileExists($paths['environment']);
             $this->assertFileDoesNotExist($paths['snapshot']);
@@ -90,6 +92,7 @@ final class InstallerFinalizerTest extends TestCase
             $paths['environment'],
             $paths['snapshot'],
             ['APP_KEY', 'DB_HOST'],
+            ['TELEGRAM_LIFECYCLE_DB_PASSWORD'],
         );
         $bootstrapper = new InstallerEnvironmentBootstrapper(
             $writer,
@@ -147,6 +150,8 @@ final class RecordingFinalizationRunner implements InstallerFinalizationRunner
     /** @var list<string> */
     public array $actions = [];
 
+    public ?string $migrationPassword = null;
+
     public function __construct(private readonly ?string $failAt = null) {}
 
     public function clearConfiguration(): void
@@ -154,8 +159,9 @@ final class RecordingFinalizationRunner implements InstallerFinalizationRunner
         $this->record('config_clear');
     }
 
-    public function migrate(): void
+    public function migrate(?string $lifecycleDatabasePassword = null): void
     {
+        $this->migrationPassword = $lifecycleDatabasePassword;
         $this->record('migrations');
     }
 

@@ -280,12 +280,201 @@ PHP);
         self::assertStringContainsString('opaque persistence API statement from Presentation is forbidden', implode("\n", $result['violations']));
     }
 
-    /** @param array<string,list<string>> $allowed */
-    private function checker(array $allowed = []): ArchitectureBoundaryChecker
+    public function test_restricted_owners_cannot_consume_generic_non_restricted_telegram_delivery(): void
+    {
+        $cases = [
+            'Provisioning' => 'subscription-config-url',
+            'Identity' => 'otp-value',
+            'Panels' => 'provider-credential',
+            'Payments' => 'raw-provider-payload',
+        ];
+
+        foreach ($cases as $module => $restrictedMarker) {
+            $this->write('app/Modules/'.$module.'/Application/UnsafeGenericDelivery.php', <<<PHP
+<?php
+namespace App\\Modules\\{$module}\\Application;
+use App\\Modules\\Telegram\\Application\\NonRestrictedTelegramPresentationFactory;
+use App\\Modules\\Telegram\\Application\\NonRestrictedTelegramPresentationSource;
+use App\\Modules\\Telegram\\Application\\TelegramDeliveryQueueService;
+final class UnsafeGenericDelivery implements NonRestrictedTelegramPresentationSource
+{
+    public function __construct(private TelegramDeliveryQueueService \$queue, private NonRestrictedTelegramPresentationFactory \$factory) {}
+    public function nonRestrictedTelegramText(): string { return '{$restrictedMarker}'; }
+}
+PHP);
+        }
+
+        $result = $this->checker(['Provisioning' => ['Telegram']])->check();
+        $violations = implode("\n", $result['violations']);
+
+        self::assertSame(
+            4,
+            substr_count($violations, 'generic non-restricted Telegram delivery is Telegram-owned and cannot be consumed by another module'),
+        );
+    }
+
+    public function test_generic_non_restricted_telegram_source_requires_exact_reviewed_path(): void
+    {
+        $path = 'app/Modules/Telegram/Application/CustomerJourneyPresentation.php';
+        $this->write($path, <<<'PHP'
+<?php
+namespace App\Modules\Telegram\Application;
+final class CustomerJourneyPresentation
+{
+    public function __construct(private NonRestrictedTelegramPresentationFactory $factory) {}
+}
+PHP);
+
+        $unreviewed = $this->checker()->check();
+        self::assertStringContainsString(
+            'generic non-restricted Telegram delivery source is not explicitly reviewed',
+            implode("\n", $unreviewed['violations']),
+        );
+
+        $reviewed = $this->checker([], [$path])->check();
+        self::assertSame([], $reviewed['violations']);
+    }
+
+    public function test_generic_boundary_defers_split_string_semantics_to_dedicated_provenance_checker(): void
+    {
+        $this->write('app/Modules/Provisioning/Application/DynamicTelegramEscape.php', <<<'PHP'
+<?php
+namespace App\Modules\Provisioning\Application;
+final class DynamicTelegramEscape
+{
+    public function run(string $restrictedSecret): void
+    {
+        $presentationClass = 'App\\Modules\\Telegram\\Application\\NonRestricted'.'TelegramPresentation';
+        $queueClass = 'App\\Modules\\Telegram\\Application\\TelegramDeliveryQueue'.'Service';
+        $method = 'restore'.'Persisted';
+        $callable = [$presentationClass, $method];
+        $presentation = $callable($restrictedSecret);
+        $container = app();
+        $queue = $container->make($queueClass);
+    }
+}
+PHP);
+
+        $result = $this->checker(['Provisioning' => ['Telegram']])->check();
+        self::assertSame([], $result['violations']);
+    }
+
+    public function test_generic_telegram_boundary_rejects_internal_presentation_methods_from_allowlisted_source(): void
+    {
+        $path = 'app/Modules/Telegram/Application/ReviewedButUnsafePresentation.php';
+        $this->write($path, <<<'PHP'
+<?php
+namespace App\Modules\Telegram\Application;
+final class ReviewedButUnsafePresentation implements NonRestrictedTelegramPresentationSource
+{
+    public function nonRestrictedTelegramText(): string { return 'ordinary'; }
+    public function unsafe(string $restricted): NonRestrictedTelegramPresentation
+    {
+        NonRestrictedTelegramPresentation::fromReviewedSource($this);
+        return NonRestrictedTelegramPresentation::restorePersisted($restricted);
+    }
+}
+PHP);
+
+        $result = $this->checker([], [$path])->check();
+        $violations = implode("\n", $result['violations']);
+
+        self::assertStringContainsString('internal Telegram presentation method fromReviewedSource', $violations);
+        self::assertStringContainsString('internal Telegram presentation method restorePersisted', $violations);
+    }
+
+    public function test_unrelated_reflection_alias_and_dynamic_container_resolution_are_not_telegram_provenance_violations(): void
+    {
+        $this->write('app/Modules/Orders/Application/ReflectionTelegramEscape.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+final class ReflectionTelegramEscape
+{
+    public function run(string $class): void
+    {
+        new \ReflectionClass($class);
+        class_alias($class, 'TemporaryTelegramAlias');
+        resolve($class);
+        app()->make($class);
+    }
+}
+PHP);
+
+        $result = $this->checker()->check();
+        self::assertSame([], $result['violations']);
+    }
+
+    public function test_unrelated_injected_laravel_container_resolution_is_not_a_telegram_provenance_violation(): void
+    {
+        $this->write('app/Modules/Orders/Application/InjectedContainerTelegramEscape.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+use Illuminate\Contracts\Container\Container;
+use Illuminate\Container\Container as ConcreteContainer;
+use Illuminate\Support\Facades\App;
+final class InjectedContainerTelegramEscape
+{
+    public function __construct(private Container $container) {}
+    public function run(string $queueClass): void
+    {
+        $this->container->make($queueClass);
+        ConcreteContainer::getInstance()->make($queueClass);
+        App::make($queueClass);
+    }
+}
+PHP);
+
+        $result = $this->checker()->check();
+        self::assertSame([], $result['violations']);
+    }
+
+    public function test_unrelated_dynamic_new_and_callback_indirection_are_not_telegram_provenance_violations(): void
+    {
+        $this->write('app/Modules/Orders/Application/CallableTelegramEscape.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+final class CallableTelegramEscape
+{
+    public function run(string $class, string $method): void
+    {
+        $instance = new $class();
+        call_user_func([$class, $method], $instance);
+    }
+}
+PHP);
+
+        $result = $this->checker()->check();
+        self::assertSame([], $result['violations']);
+    }
+
+    public function test_generic_non_restricted_telegram_source_allowlist_rejects_non_telegram_and_stale_entries(): void
+    {
+        $result = $this->checker([], [
+            'app/Modules/Provisioning/Application/Unsafe.php',
+            'app/Modules/Telegram/Application/Stale.php',
+        ])->check();
+        $violations = implode("\n", $result['violations']);
+
+        self::assertStringContainsString(
+            'telegram_non_restricted_presentation_sources contains an invalid or non-Telegram source path',
+            $violations,
+        );
+        self::assertStringContainsString(
+            'telegram_non_restricted_presentation_sources contains stale/unused entry app/Modules/Telegram/Application/Stale.php',
+            $violations,
+        );
+    }
+
+    /**
+     * @param  array<string,list<string>>  $allowed
+     * @param  list<string>  $telegramPresentationSources
+     */
+    private function checker(array $allowed = [], array $telegramPresentationSources = []): ArchitectureBoundaryChecker
     {
         return new ArchitectureBoundaryChecker($this->root, [
             'allowed_module_dependencies' => $allowed,
             'cycle_exceptions' => [],
+            'telegram_non_restricted_presentation_sources' => $telegramPresentationSources,
             'durable_table_owners' => [
                 'audit_logs' => 'SharedAppendOnly',
                 'ledger_entries' => 'Wallet',

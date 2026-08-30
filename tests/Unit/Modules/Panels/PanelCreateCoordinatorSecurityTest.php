@@ -19,7 +19,7 @@ final class PanelCreateCoordinatorSecurityTest extends TestCase
     public function test_unexpected_adapter_exception_never_exposes_provider_text(): void
     {
         $secret = 'provider-secret-token-should-never-persist';
-        $adapter = $this->createMock(PanelAdapter::class);
+        $adapter = $this->createStub(PanelAdapter::class);
         $adapter->method('capabilities')->willReturn(new PanelCapabilities(
             'fake',
             '1.0.0',

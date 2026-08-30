@@ -51,6 +51,7 @@ final class InstallerServiceProvider extends ServiceProvider
                 (string) config('installer.environment.file_path'),
                 (string) config('installer.environment.snapshot_path'),
                 $this->stringList(config('installer.environment.allowed_keys', [])),
+                $this->stringList(config('installer.environment.non_persistable_keys', [])),
             ),
         );
 

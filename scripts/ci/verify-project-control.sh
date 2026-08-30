@@ -51,6 +51,8 @@ required_files=(
     scripts/ci/classify-validation-plan.sh
     scripts/ci/test-validation-plan.sh
     scripts/ci/verify-readonly-staging-workflow.sh
+    scripts/ci/scan-git-secrets.sh
+    scripts/ci/test-secret-scan.sh
 
 )
 
@@ -212,6 +214,30 @@ grep -A3 -F 'concurrency:' "$ci" | grep -F 'cancel-in-progress: true' >/dev/null
     || fail 'generic CI must cancel superseded runs'
 grep -F 'EXPECTED_HEAD_SHA' "$ci" >/dev/null \
     || fail 'generic CI lacks exact PR head/base freshness validation'
+grep -F 'fetch-depth: 0' "$ci" >/dev/null \
+    || fail 'generic CI secret scan must fetch complete Git history'
+grep -F 'bash scripts/ci/scan-git-secrets.sh' "$ci" >/dev/null \
+    || fail 'generic CI secret scan must delegate range resolution and scanning to the shared executable helper'
+grep -F 'PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}' "$ci" >/dev/null \
+    || fail 'generic CI secret scan must bind the helper to the exact PR base SHA from the event'
+grep -F 'PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}' "$ci" >/dev/null \
+    || fail 'generic CI secret scan must bind the helper to the exact PR head SHA from the event'
+grep -F 'PR_BASE_REF: ${{ github.event.pull_request.base.ref }}' "$ci" >/dev/null \
+    || fail 'generic CI secret scan must bind the helper to the exact PR base ref from the event'
+grep -F 'PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}' "$ci" >/dev/null \
+    || fail 'generic CI secret scan must bind the helper to the exact PR head ref from the event'
+grep -Eq "GITLEAKS_SHA256: '[0-9a-f]{64}'" "$ci" >/dev/null \
+    || fail 'generic CI secret scan must checksum-pin the standalone Gitleaks binary'
+grep -F 'sha256sum -c -' "$ci" >/dev/null \
+    || fail 'generic CI secret scan must verify the pinned Gitleaks archive checksum'
+if grep -F 'gitleaks/gitleaks-action@' "$ci" >/dev/null; then
+    fail 'generic CI must not rely on the PR-commit-list pagination behavior of gitleaks-action'
+fi
+if grep -F 'SCAN_LOG_OPTS' "$ci" >/dev/null; then
+    fail 'generic CI must not reintroduce a separately mutable Secret-scan log-options handoff'
+fi
+bash scripts/ci/test-secret-scan.sh >/dev/null \
+    || fail 'generic CI Secret-scan helper failed semantic history regression tests'
 grep -F 'needs.preflight.outputs.integration == ' "$ci" >/dev/null \
     || fail 'MariaDB/Redis integration must be gated by the computed validation plan'
 grep -F 'needs.preflight.outputs.dependencies == ' "$ci" >/dev/null \

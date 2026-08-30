@@ -4,10 +4,12 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Infrastructure;
 
+use App\Modules\Telegram\Application\Contracts\ProtectedTelegramDeliveryRuntime;
+use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\TelegramRuntime;
 use InvalidArgumentException;
 
-final readonly class TelegramRuntimeConfiguration implements TelegramRuntime
+final readonly class TelegramRuntimeConfiguration implements ProtectedTelegramDeliveryRuntime, TelegramDeliveryRuntime, TelegramRuntime
 {
     /** @requirement ONB-001 SEC-001 SEC-009 OPS-003 */
     public function __construct(

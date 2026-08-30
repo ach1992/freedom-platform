@@ -21,28 +21,47 @@ final readonly class InstallerArtisanProcessRunner implements InstallerFinalizat
 
     public function clearConfiguration(): void
     {
-        $this->run('config_clear', ['config:clear', '--no-ansi', '--no-interaction']);
+        $this->run(
+            'config_clear',
+            ['config:clear', '--no-ansi', '--no-interaction'],
+            ['TELEGRAM_LIFECYCLE_DB_PASSWORD' => false],
+        );
     }
 
-    public function migrate(): void
+    public function migrate(?string $lifecycleDatabasePassword = null): void
     {
-        $this->run('migrations', ['migrate', '--force', '--no-ansi', '--no-interaction']);
+        $this->run(
+            'migrations',
+            ['migrate', '--force', '--isolated=1', '--no-ansi', '--no-interaction'],
+            [
+                'TELEGRAM_LIFECYCLE_DB_PASSWORD' => $lifecycleDatabasePassword === null
+                    ? false
+                    : $lifecycleDatabasePassword,
+            ],
+        );
     }
 
     public function cacheConfiguration(): void
     {
-        $this->run('config_cache', ['config:cache', '--no-ansi', '--no-interaction']);
+        $this->run(
+            'config_cache',
+            ['config:cache', '--no-ansi', '--no-interaction'],
+            ['TELEGRAM_LIFECYCLE_DB_PASSWORD' => false],
+        );
     }
 
-    /** @param  list<string>  $arguments */
-    private function run(string $step, array $arguments): void
+    /**
+     * @param  list<string>  $arguments
+     * @param  array<string, string|false>  $environment
+     */
+    private function run(string $step, array $arguments, array $environment): void
     {
         $this->validateRuntime();
 
         $process = new Process(
             [$this->phpBinary, $this->artisanPath, ...$arguments],
             $this->workingDirectory,
-            null,
+            $environment,
             null,
             max(1, $this->timeoutSeconds),
         );

@@ -59,7 +59,7 @@ else
                 break
                 ;;
 
-            scripts/ci/classify-validation-plan.sh|scripts/ci/test-validation-plan.sh|scripts/ci/verify-project-control.sh|scripts/ci/verify-planning.sh|scripts/ci/verify-readonly-staging-workflow.sh)
+            scripts/ci/classify-validation-plan.sh|scripts/ci/test-validation-plan.sh|scripts/ci/scan-git-secrets.sh|scripts/ci/test-secret-scan.sh|scripts/ci/verify-project-control.sh|scripts/ci/verify-planning.sh|scripts/ci/verify-readonly-staging-workflow.sh)
                 project_control=true
                 control_plane=true
                 ;;

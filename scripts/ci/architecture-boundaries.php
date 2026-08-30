@@ -26,6 +26,12 @@ return [
     ],
     'cycle_exceptions' => [],
 
+    // Exact production call sites allowed to construct/consume the generic
+    // persistable Telegram presentation path. Each addition is a deliberate
+    // data-classification review boundary; RESTRICTED owners must keep using
+    // their protected/reference delivery authority instead.
+    'telegram_non_restricted_presentation_sources' => [],
+
     // Exact source of truth for every migration-created durable table. Values are either
     // an owning feature module or a reviewed infrastructure classification. Framework
     // tables are Laravel runtime state; Shared is owned by app/Shared; SharedAppendOnly
@@ -215,6 +221,8 @@ return [
         'sessions' => 'Framework',
         'sms_delivery_attempts' => 'Identity',
         'telegram_accounts' => 'Identity',
+        'telegram_delivery_authority_capability' => 'Telegram',
+        'telegram_delivery_operations' => 'Telegram',
         'telegram_interaction_authority_capability' => 'Telegram',
         'telegram_interaction_callbacks' => 'Telegram',
         'telegram_interaction_sessions' => 'Telegram',

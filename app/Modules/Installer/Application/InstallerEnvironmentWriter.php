@@ -12,6 +12,7 @@ final class InstallerEnvironmentWriter
 {
     /**
      * @param  list<string>  $allowedKeys
+     * @param  list<string>  $nonPersistableKeys
      *
      * @requirement INS-001 SEC-003 SEC-007 SEC-008 QUA-011
      */
@@ -20,6 +21,7 @@ final class InstallerEnvironmentWriter
         private readonly string $environmentPath,
         private readonly string $snapshotPath,
         private readonly array $allowedKeys,
+        private readonly array $nonPersistableKeys = [],
     ) {}
 
     /**
@@ -31,6 +33,7 @@ final class InstallerEnvironmentWriter
         return $this->synchronized(function () use ($values): array {
             $validated = $this->validateValues($values);
             $original = $this->readEnvironment();
+            $this->assertNoConfiguredNonPersistableKeys($original ?? '');
             $created = $original === null;
             $generatedAppKey = false;
 
@@ -100,7 +103,10 @@ final class InstallerEnvironmentWriter
         $validated = [];
 
         foreach ($values as $key => $value) {
-            if (! is_string($key) || ! in_array($key, $this->allowedKeys, true)) {
+            if (! is_string($key)
+                || ! in_array($key, $this->allowedKeys, true)
+                || in_array($key, $this->nonPersistableKeys, true)
+            ) {
                 throw new RuntimeException('The installer environment contains a key that is not allowed.');
             }
 
@@ -133,11 +139,31 @@ final class InstallerEnvironmentWriter
 
     private function hasConfiguredAppKey(string $contents): bool
     {
-        foreach (preg_split('/\R/', $contents) ?: [] as $line) {
-            if (preg_match('/^\s*(?:export\s+)?APP_KEY\s*=\s*(.+?)\s*$/', $line, $matches) === 1) {
-                $value = trim($matches[1], " \t\n\r\0\x0B\"'");
+        return $this->hasConfiguredValue($contents, 'APP_KEY');
+    }
 
-                return $value !== '';
+    private function assertNoConfiguredNonPersistableKeys(string $contents): void
+    {
+        foreach ($this->nonPersistableKeys as $key) {
+            if ($this->hasConfiguredValue($contents, $key)) {
+                throw new RuntimeException(
+                    'The installer environment contains a configured deployment-only key that must be removed before finalization.',
+                );
+            }
+        }
+    }
+
+    private function hasConfiguredValue(string $contents, string $key): bool
+    {
+        $pattern = '/^\s*(?:export\s+)?'.preg_quote($key, '/').'\s*=\s*(.*?)\s*$/';
+
+        foreach (preg_split('/\R/', $contents) ?: [] as $line) {
+            if (preg_match($pattern, $line, $matches) !== 1) {
+                continue;
+            }
+
+            if (trim($matches[1], " \t\n\r\0\x0B\"'") !== '') {
+                return true;
             }
         }
 

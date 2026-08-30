@@ -5,6 +5,12 @@ declare(strict_types=1);
 use Illuminate\Support\Str;
 use Pdo\Mysql;
 
+$telegramLifecycleDatabasePassword = env('TELEGRAM_LIFECYCLE_DB_PASSWORD');
+
+if ($telegramLifecycleDatabasePassword === '') {
+    $telegramLifecycleDatabasePassword = null;
+}
+
 return [
 
     /*
@@ -54,6 +60,49 @@ return [
             'database' => env('DB_DATABASE', 'laravel'),
             'username' => env('DB_USERNAME', 'root'),
             'password' => env('DB_PASSWORD', ''),
+            'unix_socket' => env('DB_SOCKET', ''),
+            'charset' => env('DB_CHARSET', 'utf8mb4'),
+            'collation' => env('DB_COLLATION', 'utf8mb4_unicode_ci'),
+            'prefix' => '',
+            'prefix_indexes' => true,
+            'strict' => true,
+            'engine' => null,
+            'options' => extension_loaded('pdo_mysql') ? array_filter([
+                Mysql::ATTR_SSL_CA => env('MYSQL_ATTR_SSL_CA'),
+            ]) : [],
+        ],
+
+        // Deployment-only lifecycle authority. This principal must be distinct from
+        // DB_USERNAME and is accepted only with USAGE + SELECT/UPDATE on this exact schema.
+        'telegram_lifecycle' => [
+            'driver' => 'mysql',
+            'host' => env('DB_HOST', '127.0.0.1'),
+            'port' => env('DB_PORT', '3306'),
+            'database' => env('DB_DATABASE', 'laravel'),
+            'username' => 'telegram_lifecycle',
+            'password' => $telegramLifecycleDatabasePassword,
+            'unix_socket' => env('DB_SOCKET', ''),
+            'charset' => env('DB_CHARSET', 'utf8mb4'),
+            'collation' => env('DB_COLLATION', 'utf8mb4_unicode_ci'),
+            'prefix' => '',
+            'prefix_indexes' => true,
+            'strict' => true,
+            'engine' => null,
+            'options' => extension_loaded('pdo_mysql') ? array_filter([
+                Mysql::ATTR_SSL_CA => env('MYSQL_ATTR_SSL_CA'),
+            ]) : [],
+        ],
+
+        // Dedicated read-only metadata authority for complete InnoDB FK attestation.
+        // This principal must be distinct from DB_USERNAME and hold PROCESS only.
+        'telegram_metadata' => [
+            'driver' => 'mysql',
+            'url' => env('TELEGRAM_METADATA_DB_URL'),
+            'host' => env('DB_HOST', '127.0.0.1'),
+            'port' => env('DB_PORT', '3306'),
+            'database' => 'information_schema',
+            'username' => env('TELEGRAM_METADATA_DB_USERNAME'),
+            'password' => env('TELEGRAM_METADATA_DB_PASSWORD'),
             'unix_socket' => env('DB_SOCKET', ''),
             'charset' => env('DB_CHARSET', 'utf8mb4'),
             'collation' => env('DB_COLLATION', 'utf8mb4_unicode_ci'),
@@ -125,7 +174,7 @@ return [
     |
     | This table keeps track of all the migrations that have already run for
     | your application. Using this information, we can determine which of
-    | the migrations on disk haven't actually been run on the database.
+    | the migrations on disk haven't actually been run in the database.
     |
     */
 
@@ -140,7 +189,7 @@ return [
     |--------------------------------------------------------------------------
     |
     | Redis is an open source, fast, and advanced key-value store that also
-    | provides a richer body of commands than a typical key-value system
+    | provides a richer body of commands than a typical key-value store
     | such as Memcached. You may define your connection settings here.
     |
     */

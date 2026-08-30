@@ -48,6 +48,65 @@ final class InstallerEnvironmentWriterTest extends TestCase
     }
 
     /** @requirement INS-001 SEC-003 SEC-007 SEC-008 QUA-011 */
+    public function test_it_accepts_dedicated_metadata_credentials_without_disclosing_the_secret_in_result(): void
+    {
+        [$directory, $environmentPath, $snapshotPath] = $this->paths('telegram-metadata');
+        $allowedKeys = config('installer.environment.allowed_keys');
+        $nonPersistableKeys = config('installer.environment.non_persistable_keys');
+        $this->assertIsArray($allowedKeys);
+        $this->assertIsArray($nonPersistableKeys);
+        $this->assertContains('TELEGRAM_METADATA_DB_URL', $allowedKeys);
+        $this->assertContains('TELEGRAM_METADATA_DB_USERNAME', $allowedKeys);
+        $this->assertContains('TELEGRAM_METADATA_DB_PASSWORD', $allowedKeys);
+        $this->assertNotContains('TELEGRAM_LIFECYCLE_DB_USERNAME', $allowedKeys);
+        $this->assertNotContains('TELEGRAM_LIFECYCLE_DB_PASSWORD', $allowedKeys);
+        $this->assertContains('TELEGRAM_LIFECYCLE_DB_PASSWORD', $nonPersistableKeys);
+
+        $writer = new InstallerEnvironmentWriter(
+            new class implements RandomGenerator
+            {
+                public function bytes(int $length): string
+                {
+                    return str_repeat("\x03", $length);
+                }
+
+                public function integer(int $minimum, int $maximum): int
+                {
+                    return $minimum;
+                }
+            },
+            $environmentPath,
+            $snapshotPath,
+            $allowedKeys,
+            $nonPersistableKeys,
+        );
+        $secret = 'metadata-test-only-$secret-with-"quotes"';
+
+        try {
+            $result = $writer->write([
+                'TELEGRAM_METADATA_DB_URL' => 'mysql://metadata.internal:3306/information_schema',
+                'TELEGRAM_METADATA_DB_USERNAME' => 'telegram_metadata',
+                'TELEGRAM_METADATA_DB_PASSWORD' => $secret,
+            ]);
+            $contents = (string) file_get_contents($environmentPath);
+
+            $this->assertStringContainsString(
+                'TELEGRAM_METADATA_DB_URL="mysql://metadata.internal:3306/information_schema"',
+                $contents,
+            );
+            $this->assertStringContainsString('TELEGRAM_METADATA_DB_USERNAME="telegram_metadata"', $contents);
+            $this->assertStringContainsString(
+                'TELEGRAM_METADATA_DB_PASSWORD="metadata-test-only-\\$secret-with-\\"quotes\\""',
+                $contents,
+            );
+            $this->assertStringNotContainsString($secret, json_encode($result, JSON_THROW_ON_ERROR));
+            $this->assertSame(0600, fileperms($environmentPath) & 0777);
+        } finally {
+            $this->cleanup($directory);
+        }
+    }
+
+    /** @requirement INS-001 SEC-003 SEC-007 SEC-008 QUA-011 */
     public function test_it_preserves_unrelated_lines_deduplicates_managed_keys_and_restores_exact_contents(): void
     {
         [$directory, $environmentPath, $snapshotPath] = $this->paths('rollback');
@@ -83,6 +142,53 @@ ENV;
             $this->assertSame($original, file_get_contents($environmentPath));
             $this->assertFileDoesNotExist($snapshotPath);
             $this->assertFileDoesNotExist($snapshotPath.'.json');
+        } finally {
+            $this->cleanup($directory);
+        }
+    }
+
+    /** @requirement INS-001 SEC-003 SEC-007 SEC-008 QUA-011 */
+    public function test_it_rejects_a_preexisting_configured_deployment_only_secret_before_snapshot_or_write(): void
+    {
+        [$directory, $environmentPath, $snapshotPath] = $this->paths('preexisting-lifecycle-secret');
+        $secret = 'test-only-preexisting-lifecycle-secret';
+        $original = "APP_KEY=base64:existing-test-key\nTELEGRAM_LIFECYCLE_DB_PASSWORD=\"\"\nTELEGRAM_LIFECYCLE_DB_PASSWORD=\"{$secret}\"\nDB_HOST=old-primary\n";
+        $this->writeFixture($environmentPath, $original);
+        $writer = $this->writer($environmentPath, $snapshotPath);
+
+        try {
+            try {
+                $writer->write(['DB_HOST' => 'database.internal']);
+                $this->fail('A configured deployment-only lifecycle secret must block installer environment persistence.');
+            } catch (RuntimeException $exception) {
+                $this->assertStringNotContainsString($secret, $exception->getMessage());
+                $this->assertStringContainsString('deployment-only key', $exception->getMessage());
+            }
+
+            $this->assertSame($original, file_get_contents($environmentPath));
+            $this->assertFileDoesNotExist($snapshotPath);
+            $this->assertFileDoesNotExist($snapshotPath.'.json');
+        } finally {
+            $this->cleanup($directory);
+        }
+    }
+
+    /** @requirement INS-001 SEC-003 SEC-007 SEC-008 QUA-011 */
+    public function test_blank_deployment_only_placeholder_does_not_block_safe_environment_updates(): void
+    {
+        [$directory, $environmentPath, $snapshotPath] = $this->paths('blank-lifecycle-placeholder');
+        $this->writeFixture(
+            $environmentPath,
+            "APP_KEY=base64:existing-test-key\nTELEGRAM_LIFECYCLE_DB_PASSWORD=\"\"\nDB_HOST=old-primary\n",
+        );
+        $writer = $this->writer($environmentPath, $snapshotPath);
+
+        try {
+            $writer->write(['DB_HOST' => 'database.internal']);
+            $contents = (string) file_get_contents($environmentPath);
+
+            $this->assertStringContainsString('TELEGRAM_LIFECYCLE_DB_PASSWORD=""', $contents);
+            $this->assertStringContainsString('DB_HOST="database.internal"', $contents);
         } finally {
             $this->cleanup($directory);
         }
@@ -142,6 +248,7 @@ ENV;
             $environmentPath,
             $snapshotPath,
             ['APP_KEY', 'APP_NAME', 'DB_HOST', 'DB_PASSWORD'],
+            ['TELEGRAM_LIFECYCLE_DB_PASSWORD'],
         );
     }
 

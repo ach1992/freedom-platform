@@ -51,6 +51,11 @@ return [
             'INSTALLER_ENVIRONMENT_SNAPSHOT_PATH',
             storage_path('app/installer/environment.snapshot'),
         ),
+        // Deployment-only secrets that may be transient process inputs but must
+        // never contain a configured value in the persisted application .env.
+        'non_persistable_keys' => [
+            'TELEGRAM_LIFECYCLE_DB_PASSWORD',
+        ],
         'allowed_keys' => [
             'APP_NAME',
             'APP_ENV',
@@ -68,6 +73,9 @@ return [
             'DB_DATABASE',
             'DB_USERNAME',
             'DB_PASSWORD',
+            'TELEGRAM_METADATA_DB_URL',
+            'TELEGRAM_METADATA_DB_USERNAME',
+            'TELEGRAM_METADATA_DB_PASSWORD',
             'REDIS_CLIENT',
             'REDIS_HOST',
             'REDIS_PASSWORD',

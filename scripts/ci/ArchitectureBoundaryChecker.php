@@ -16,6 +16,9 @@ final class ArchitectureBoundaryChecker
     /** @var array<string,true> */
     private array $usedMigrationTriggerDdlHelpers = [];
 
+    /** @var array<string,true> */
+    private array $usedTelegramPresentationSources = [];
+
     /** @param array<string,mixed> $config */
     public function __construct(
         private readonly string $root,
@@ -29,12 +32,14 @@ final class ArchitectureBoundaryChecker
         $edges = [];
         $this->usedPersistenceExceptions = [];
         $this->usedMigrationTriggerDdlHelpers = [];
+        $this->usedTelegramPresentationSources = [];
 
         foreach ($this->phpFiles('app/Modules') as $relativePath => $source) {
             $this->scanModuleFile($relativePath, $source, $violations, $edges);
             $this->scanPersistence($relativePath, $source, $violations);
             $this->scanOpaquePersistence($relativePath, $source, $violations);
             $this->scanUnattributablePersistenceMechanisms($relativePath, $source, $violations);
+            $this->scanTelegramGenericDeliveryBoundary($relativePath, $source, $violations);
         }
 
         foreach ($this->phpFiles('app/Shared') as $relativePath => $source) {
@@ -42,12 +47,14 @@ final class ArchitectureBoundaryChecker
             $this->scanPersistence($relativePath, $source, $violations);
             $this->scanOpaquePersistence($relativePath, $source, $violations);
             $this->scanUnattributablePersistenceMechanisms($relativePath, $source, $violations);
+            $this->scanTelegramGenericDeliveryBoundary($relativePath, $source, $violations);
         }
 
         foreach ($this->phpFiles('routes') as $relativePath => $source) {
             $this->scanPersistence($relativePath, $source, $violations);
             $this->scanOpaquePersistence($relativePath, $source, $violations);
             $this->scanUnattributablePersistenceMechanisms($relativePath, $source, $violations);
+            $this->scanTelegramGenericDeliveryBoundary($relativePath, $source, $violations);
         }
 
         $edges = array_values(array_unique($edges));
@@ -55,6 +62,7 @@ final class ArchitectureBoundaryChecker
         array_push($violations, ...$this->cycleViolations($edges));
         array_push($violations, ...$this->persistenceExceptionViolations());
         array_push($violations, ...$this->migrationTriggerDdlHelperViolations());
+        array_push($violations, ...$this->telegramPresentationSourceViolations());
 
         $violations = array_values(array_unique($violations));
         sort($violations, SORT_STRING);
@@ -695,12 +703,14 @@ final class ArchitectureBoundaryChecker
 
                 $openParen = $offset + strlen($call[0][0]) - 1;
                 $sql = $this->literalRawSql($source, $openParen + 1);
-                if ($sql !== null && $this->isLiteralReadOnlySql($sql)) {
+                if ($sql !== null
+                    && ($this->isLiteralReadOnlySql($sql)
+                        || $this->isReviewedMetadataIntrospection($relativePath, $sql))) {
                     continue;
                 }
 
                 $violations[] = sprintf(
-                    '%s:%d raw Connection read API %s must receive one literal read-only SELECT statement; mutation/DDL/dynamic SQL is forbidden.',
+                    '%s:%d raw Connection read API %s must receive one literal read-only SELECT statement or the exact reviewed metadata introspection; mutation/DDL/dynamic SQL is forbidden.',
                     $relativePath,
                     $this->lineNumber($source, $offset),
                     $method,
@@ -758,6 +768,18 @@ final class ArchitectureBoundaryChecker
         }
 
         return preg_match('/\\bINTO\\s+(?:OUTFILE|DUMPFILE)\\b/i', $sql) !== 1;
+    }
+
+    private function isReviewedMetadataIntrospection(string $relativePath, string $sql): bool
+    {
+        if (! in_array($relativePath, [
+            'app/Modules/Telegram/Application/TelegramDeliveryForeignKeyMetadataAttestor.php',
+            'app/Modules/Telegram/Application/TelegramDeliveryLifecycleDatabaseAuthority.php',
+        ], true)) {
+            return false;
+        }
+
+        return preg_match('/^SHOW\s+GRANTS\s+FOR\s+CURRENT_USER(?:\(\))?\s*;?\s*$/i', trim($sql)) === 1;
     }
 
     private function scanRuntimeSchemaMutations(string $relativePath, string $source, array &$violations): void
@@ -1110,6 +1132,139 @@ final class ArchitectureBoundaryChecker
         }
 
         return $names;
+    }
+
+    /** @param list<string> $violations */
+    private function scanTelegramGenericDeliveryBoundary(string $relativePath, string $source, array &$violations): void
+    {
+        $restrictedMethods = [
+            'fromReviewedSource' => [
+                'app/Modules/Telegram/Application/NonRestrictedTelegramPresentation.php',
+                'app/Modules/Telegram/Application/NonRestrictedTelegramPresentationFactory.php',
+            ],
+            'restorePersisted' => [
+                'app/Modules/Telegram/Application/NonRestrictedTelegramPresentation.php',
+                'app/Modules/Telegram/Application/TelegramDeliveryOperationExecutor.php',
+            ],
+        ];
+        foreach ($restrictedMethods as $method => $allowedPaths) {
+            if ($this->containsCodeTokenText($source, $method) && ! in_array($relativePath, $allowedPaths, true)) {
+                $violations[] = sprintf(
+                    '%s may not call or dynamically reference internal Telegram presentation method %s; use the reviewed source/factory boundary instead.',
+                    $relativePath,
+                    $method,
+                );
+            }
+        }
+
+        $symbols = [
+            'NonRestrictedTelegramPresentation',
+            'NonRestrictedTelegramPresentationFactory',
+            'NonRestrictedTelegramPresentationSource',
+            'TelegramDeliveryQueueService',
+            'TelegramPresentationProvenanceGuard',
+        ];
+        $usesGenericBoundary = false;
+        foreach ($symbols as $symbol) {
+            if ($this->containsCodeTokenText($source, $symbol)) {
+                $usesGenericBoundary = true;
+
+                break;
+            }
+        }
+        if (! $usesGenericBoundary) {
+            return;
+        }
+
+        $internalPaths = [
+            'app/Modules/Telegram/Application/NonRestrictedTelegramPresentation.php',
+            'app/Modules/Telegram/Application/NonRestrictedTelegramPresentationFactory.php',
+            'app/Modules/Telegram/Application/NonRestrictedTelegramPresentationSource.php',
+            'app/Modules/Telegram/Application/TelegramDeliveryDatabaseCapability.php',
+            'app/Modules/Telegram/Application/TelegramDeliveryOperationExecutor.php',
+            'app/Modules/Telegram/Application/TelegramDeliveryOutboxHandler.php',
+            'app/Modules/Telegram/Application/TelegramDeliveryQueueService.php',
+            'app/Modules/Telegram/Application/TelegramMutationRequest.php',
+            'app/Modules/Telegram/Application/TelegramPresentationProvenanceGuard.php',
+        ];
+        if (in_array($relativePath, $internalPaths, true)) {
+            return;
+        }
+
+        if (! str_starts_with($relativePath, 'app/Modules/Telegram/')) {
+            $violations[] = sprintf(
+                '%s generic non-restricted Telegram delivery is Telegram-owned and cannot be consumed by another module, Shared code, or routes; use the owning protected/reference delivery authority for RESTRICTED data.',
+                $relativePath,
+            );
+
+            return;
+        }
+
+        $sources = $this->config['telegram_non_restricted_presentation_sources'] ?? [];
+        if (! is_array($sources) || ! in_array($relativePath, $sources, true)) {
+            $violations[] = sprintf(
+                '%s generic non-restricted Telegram delivery source is not explicitly reviewed; add the exact Telegram Application/Presentation source path only after data-classification review.',
+                $relativePath,
+            );
+
+            return;
+        }
+
+        $this->usedTelegramPresentationSources[$relativePath] = true;
+    }
+
+    private function containsCodeTokenText(string $source, string $needle): bool
+    {
+        foreach (token_get_all($source) as $token) {
+            if (is_string($token)) {
+                continue;
+            }
+
+            [$id, $text] = $token;
+            if (in_array($id, [T_COMMENT, T_DOC_COMMENT], true)) {
+                continue;
+            }
+
+            if (str_contains($text, $needle)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** @return list<string> */
+    private function telegramPresentationSourceViolations(): array
+    {
+        $sources = $this->config['telegram_non_restricted_presentation_sources'] ?? [];
+        if (! is_array($sources)) {
+            return ['telegram_non_restricted_presentation_sources must be an exact list of reviewed Telegram source paths.'];
+        }
+
+        $violations = [];
+        $seen = [];
+        foreach ($sources as $source) {
+            if (! is_string($source)
+                || preg_match('#^app/Modules/Telegram/(?:Application|Presentation)/.+\.php$#', $source) !== 1
+            ) {
+                $violations[] = 'telegram_non_restricted_presentation_sources contains an invalid or non-Telegram source path.';
+
+                continue;
+            }
+
+            if (isset($seen[$source])) {
+                $violations[] = 'telegram_non_restricted_presentation_sources contains duplicate entry '.$source.'.';
+
+                continue;
+            }
+            $seen[$source] = true;
+
+            if (! isset($this->usedTelegramPresentationSources[$source])) {
+                $violations[] = 'telegram_non_restricted_presentation_sources contains stale/unused entry '.$source.'.';
+            }
+        }
+
+        return $violations;
     }
 
     private function allowedDependency(string $sourceModule, string $targetModule): bool
