@@ -7,6 +7,7 @@ namespace Tests\Support;
 use App\Modules\Telegram\Application\NonRestrictedTelegramPresentation;
 use App\Modules\Telegram\Application\TelegramDeliveryOperationReceipt;
 use App\Modules\Telegram\Application\TelegramDeliveryQueueService;
+use App\Modules\Telegram\Application\TelegramInlineKeyboardSnapshot;
 use App\Modules\Telegram\Domain\TelegramDeliveryAction;
 use LogicException;
 use ReflectionClass;
@@ -40,6 +41,27 @@ final class NonRestrictedTelegramPresentationTestFactory
             $presentation,
             $requestKey,
             $correlationId,
+        );
+    }
+
+    public static function queueInteractive(
+        TelegramDeliveryQueueService $queue,
+        TelegramDeliveryAction $action,
+        int $recipientChatId,
+        ?int $targetMessageId,
+        ?NonRestrictedTelegramPresentation $presentation,
+        string $requestKey,
+        string $correlationId,
+        TelegramInlineKeyboardSnapshot $inlineKeyboard,
+    ): TelegramDeliveryOperationReceipt {
+        return $queue->queue(
+            $action,
+            $recipientChatId,
+            $targetMessageId,
+            $presentation,
+            $requestKey,
+            $correlationId,
+            $inlineKeyboard,
         );
     }
 }

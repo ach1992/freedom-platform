@@ -55,7 +55,7 @@ final readonly class HttpTelegramMutationTransport implements TelegramMutationTr
     /** @return array<string, mixed> */
     private function payload(TelegramMutationRequest $request): array
     {
-        return match ($request->action) {
+        $payload = match ($request->action) {
             TelegramDeliveryAction::Send => [
                 'chat_id' => $request->recipientChatId,
                 'text' => $request->presentation?->text(),
@@ -72,6 +72,12 @@ final readonly class HttpTelegramMutationTransport implements TelegramMutationTr
                 'message_id' => $request->targetMessageId,
             ],
         };
+
+        if ($request->inlineKeyboard !== null) {
+            $payload['reply_markup'] = $request->inlineKeyboard->providerPayload();
+        }
+
+        return $payload;
     }
 
     private function result(TelegramMutationRequest $request, Response $response): TelegramMutationResult

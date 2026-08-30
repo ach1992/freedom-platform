@@ -14,6 +14,7 @@ final readonly class TelegramMutationRequest
         public int $recipientChatId,
         public ?int $targetMessageId,
         public ?NonRestrictedTelegramPresentation $presentation,
+        public ?TelegramResolvedInlineKeyboardMarkup $inlineKeyboard = null,
     ) {
         if ($recipientChatId === 0) {
             throw new InvalidArgumentException('Telegram recipient chat identity must be non-zero.');
@@ -35,8 +36,8 @@ final readonly class TelegramMutationRequest
             throw new InvalidArgumentException('Telegram edit requires presentation text.');
         }
 
-        if ($action === TelegramDeliveryAction::Delete && $presentation !== null) {
-            throw new InvalidArgumentException('Telegram delete must not carry presentation text.');
+        if ($action === TelegramDeliveryAction::Delete && ($presentation !== null || $inlineKeyboard !== null)) {
+            throw new InvalidArgumentException('Telegram delete must not carry presentation text or interactive markup.');
         }
     }
 }

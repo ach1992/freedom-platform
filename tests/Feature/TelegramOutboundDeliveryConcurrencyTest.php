@@ -13,6 +13,7 @@ namespace {
     use Illuminate\Database\Connection;
     use Illuminate\Database\DatabaseManager;
     use Tests\Support\NonRestrictedTelegramPresentationTestFactory;
+    use Tests\Support\TelegramInteractivePresentationTestFactory;
 
     if (PHP_SAPI === 'cli' && ($argv[1] ?? null) === '--telegram-outbound-queue-contention-worker') {
         require dirname(__DIR__, 2).'/vendor/autoload.php';
@@ -43,6 +44,7 @@ namespace {
             new DatabaseOutboxPublisher($database, $clock),
             $runtime,
             new TelegramDeliveryDatabaseCapability,
+            TelegramInteractivePresentationTestFactory::service($clock, $runtime),
         );
 
         echo "READY\n";

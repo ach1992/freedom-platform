@@ -37,6 +37,11 @@ final readonly class TelegramDeliveryDatabaseCapability
         $this->lockActiveCapability($connection);
     }
 
+    public function assertRuntimeAuthorityReady(Connection $connection): void
+    {
+        $this->assertReady($connection);
+    }
+
     /**
      * @template T
      *
