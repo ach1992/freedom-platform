@@ -34,6 +34,12 @@ Rules:
 - A module must not import another module's Infrastructure implementation.
 - Shared primitives live under `App\Shared` and must not depend on feature modules.
 
+## Critical MariaDB authority-surface lifecycle contract
+
+Correctness-critical MariaDB authority surfaces must explicitly disposition seven lifecycle concerns before they are treated as reusable architecture: complete-enough metadata evidence, install/upgrade fencing, interrupted apply/re-entry, rollback preflight before destructive DDL, external-DDL/TOCTOU handling, incoming/outgoing dependency checks, and postflight readiness. The strategies do not need identical schema shapes: a surface may use explicit advisory/reference fencing or MariaDB metadata-lock fail-closed behavior, but it must name the strategy and bind it to executable/runtime evidence.
+
+`scripts/ci/architecture-boundaries.php` is the machine-readable registry and `CriticalMariaDbLifecycleContractChecker` validates it from PHP tokens. Every registered surface must map all seven rules to real declared PHP methods/functions; comments or string mentions cannot satisfy evidence. CI currently proves the contract against both the Telegram outbound-delivery authority and the Service operational authority. Adding another critical authority surface therefore requires extending the same rule map instead of copying one migration's implementation shape.
+
 ## Durable correctness boundaries
 
 MariaDB is the final authority for:
