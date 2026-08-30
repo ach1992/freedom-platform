@@ -20,6 +20,23 @@ return new class extends Migration
                 'outbox_contract_route_index',
             );
         });
+
+        DB::unprepared(<<<'SQL'
+ALTER TABLE outbox_messages
+    ADD CONSTRAINT outbox_contract_version_chk
+    CHECK (contract_version BETWEEN 1 AND 65535)
+SQL);
+
+        DB::unprepared(<<<'SQL'
+CREATE OR REPLACE TRIGGER outbox_contract_version_update_guard
+BEFORE UPDATE ON outbox_messages
+FOR EACH ROW
+BEGIN
+    IF OLD.contract_version <> NEW.contract_version THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Outbox durable contract version is immutable.';
+    END IF;
+END
+SQL);
     }
 
     public function down(): void
@@ -33,6 +50,9 @@ return new class extends Migration
                 'Outbox contract versioning cannot be removed while non-v1 durable history exists.',
             );
         }
+
+        DB::unprepared('DROP TRIGGER IF EXISTS outbox_contract_version_update_guard');
+        DB::unprepared('ALTER TABLE outbox_messages DROP CONSTRAINT outbox_contract_version_chk');
 
         Schema::table('outbox_messages', function (Blueprint $table): void {
             $table->dropIndex('outbox_contract_route_index');

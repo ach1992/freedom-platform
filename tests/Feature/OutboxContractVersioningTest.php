@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Shared\Infrastructure\DatabaseOutboxContractRetirementGuard;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
@@ -21,6 +22,19 @@ final class OutboxContractVersioningTest extends TestCase
         $this->insertMessage($id, 'legacy.example', null);
 
         self::assertSame(1, (int) DB::table('outbox_messages')->where('id', $id)->value('contract_version'));
+    }
+
+    public function test_durable_contract_version_cannot_be_mutated_after_persistence(): void
+    {
+        $id = '0198a4c7-ff31-7bb9-8222-000000018405';
+        $this->insertMessage($id, 'immutable.example', 1);
+
+        try {
+            DB::table('outbox_messages')->where('id', $id)->update(['contract_version' => 2]);
+            self::fail('A persisted Outbox contract version must be immutable.');
+        } catch (QueryException) {
+            self::assertSame(1, (int) DB::table('outbox_messages')->where('id', $id)->value('contract_version'));
+        }
     }
 
     public function test_retirement_guard_blocks_until_matching_durable_messages_are_processed(): void
