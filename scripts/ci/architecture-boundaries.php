@@ -269,8 +269,5 @@ return [
 
     // Exact temporary legacy seams only. Each entry is owned by #188 and CI rejects
     // stale/unused entries so the list shrinks as runtime boundaries are repaired.
-    'persistence_exceptions' => [
-        'app/Modules/Provisioning/Application/InitialProvisioningQueueService.php|outbox_messages',
-        'app/Modules/Provisioning/Application/ServiceDeliveryAttemptQueueService.php|outbox_messages',
-    ],
+    'persistence_exceptions' => [],
 ];

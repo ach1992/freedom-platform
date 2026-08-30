@@ -292,15 +292,16 @@ final readonly class ServiceDeliveryAttemptQueueService
                 $outboxEventId,
             );
 
+            $payload = new SafeOutboxPayload([
+                'service_delivery_attempt_public_id' => $attemptPublicId,
+            ]);
             $publishedEventId = $this->outbox->publish(
                 $outboxEventId,
                 self::OUTBOX_EVENT_KEY_PREFIX.$attemptPublicId,
                 self::OUTBOX_EVENT_TYPE,
                 self::OUTBOX_AGGREGATE_TYPE,
                 $attemptPublicId,
-                new SafeOutboxPayload([
-                    'service_delivery_attempt_public_id' => $attemptPublicId,
-                ]),
+                $payload,
                 $correlationId,
             );
             if (! hash_equals($outboxEventId, $publishedEventId)) {
@@ -323,15 +324,21 @@ final readonly class ServiceDeliveryAttemptQueueService
                 $beforeRelease($attemptId, $timestamp);
             }
 
-            $released = $connection->table('outbox_messages')
-                ->where('id', $outboxEventId)
-                ->where('dispatch_state', 'authority_pending')
-                ->update([
-                    'dispatch_state' => 'pending',
-                    'updated_at' => $timestamp,
-                ]);
-            if ($released !== 1) {
-                throw new RuntimeException('Service delivery Outbox command did not release from queue authority.');
+            try {
+                $this->outbox->releaseForDispatch(
+                    $outboxEventId,
+                    self::OUTBOX_EVENT_KEY_PREFIX.$attemptPublicId,
+                    self::OUTBOX_EVENT_TYPE,
+                    self::OUTBOX_AGGREGATE_TYPE,
+                    $attemptPublicId,
+                    $payload,
+                    $correlationId,
+                );
+            } catch (\LogicException $exception) {
+                throw new RuntimeException(
+                    'Service delivery Outbox command did not release from queue authority.',
+                    previous: $exception,
+                );
             }
 
             return $this->attemptById($connection, $attemptId);
