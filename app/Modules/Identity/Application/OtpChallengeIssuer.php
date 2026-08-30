@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Identity\Application;
 
+use App\Modules\Identity\Application\Contracts\CustomerIdentityProfileWriter;
 use App\Modules\Identity\Application\Contracts\OtpAbuseLimiter;
 use App\Modules\Identity\Application\Contracts\OtpCodeHasher;
 use App\Modules\Identity\Application\Contracts\PhoneLookupHasher;
@@ -14,6 +15,7 @@ use App\Modules\Identity\Application\Exceptions\TelegramIdentityNotFound;
 use App\Modules\Identity\Domain\IranianMobileNumber;
 use App\Modules\Identity\Domain\PhoneVerificationMethod;
 use App\Modules\Identity\Domain\SmsDeliveryStatus;
+use App\Modules\Identity\Domain\VerificationStatus;
 use App\Shared\Application\Clock;
 use App\Shared\Application\RandomGenerator;
 use DateTimeImmutable;
@@ -33,6 +35,7 @@ final readonly class OtpChallengeIssuer
         private OtpCodeHasher $codeHasher,
         private OtpAbuseLimiter $limiter,
         private FallbackSmsDispatcher $dispatcher,
+        private CustomerIdentityProfileWriter $customerProfiles,
         private RandomGenerator $random,
         private Clock $clock,
         private int $ttlSeconds = 120,
@@ -349,7 +352,14 @@ final readonly class OtpChallengeIssuer
             ]);
         }
 
-        $this->updateCustomerProfile($request->userId, $status, $now);
+        $connection = $this->database->connection();
+        $this->customerProfiles->ensure($connection, $request->userId, $now);
+        $this->customerProfiles->updatePhoneVerificationStatus(
+            $connection,
+            $request->userId,
+            VerificationStatus::from($status),
+            $now,
+        );
 
         return $phoneNumberId;
     }
@@ -361,24 +371,6 @@ final readonly class OtpChallengeIssuer
             ->where('method', PhoneVerificationMethod::TelegramContact->value)
             ->whereNull('invalidated_at')
             ->exists();
-    }
-
-    private function updateCustomerProfile(int $userId, string $status, string $now): void
-    {
-        $tierId = $this->database->connection()->table('customer_tiers')->where('code', 'new')->value('id');
-        $this->database->connection()->table('customer_profiles')->insertOrIgnore([
-            'user_id' => $userId,
-            'current_tier_id' => is_numeric($tierId) ? (int) $tierId : null,
-            'tier_locked' => false,
-            'phone_verification_status' => 'unverified',
-            'identity_verification_status' => 'unverified',
-            'created_at' => $now,
-            'updated_at' => $now,
-        ]);
-        $this->database->connection()->table('customer_profiles')->where('user_id', $userId)->update([
-            'phone_verification_status' => $status,
-            'updated_at' => $now,
-        ]);
     }
 
     private function existingChallenge(

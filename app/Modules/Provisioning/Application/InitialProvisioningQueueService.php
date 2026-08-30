@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Provisioning\Application;
 
+use App\Modules\Orders\Application\OrderProvisioningTransitionService;
 use App\Modules\Orders\Domain\OrderSourceType;
 use App\Modules\Orders\Domain\OrderState;
 use App\Modules\Payments\Domain\PaymentIntentState;
@@ -47,6 +48,7 @@ final readonly class InitialProvisioningQueueService
         private DatabaseManager $database,
         private Clock $clock,
         private OutboxPublisher $outbox,
+        private OrderProvisioningTransitionService $orderTransitions,
     ) {}
 
     /** @requirement BUY-001 CAT-006 ADM-002 PAY-002 PAY-003 PRV-002 PRV-003 ARCH-003 ARCH-004 DAT-002 DAT-003 DAT-004 SEC-002 SEC-008 QUA-001 QUA-004 */
@@ -208,29 +210,34 @@ final readonly class InitialProvisioningQueueService
             self::OUTBOX_CONTRACT_VERSION,
         );
 
-        $updated = $connection->table('orders')
-            ->where('id', $orderId)
-            ->where('state', $fromState->value)
-            ->where('state_version', $fromVersion)
-            ->update([
-                'state' => OrderState::ProvisioningQueued->value,
-                'state_version' => $toVersion,
-                'updated_at' => $timestamp,
-            ]);
+        $updated = $this->orderTransitions->transition(
+            $connection,
+            $orderId,
+            $fromState,
+            $fromVersion,
+            $toVersion,
+            $timestamp,
+        );
         if ($updated !== 1) {
             throw new RuntimeException('Order provisioning transition lost its authoritative state.');
         }
 
-        $released = $connection->table('outbox_messages')
-            ->where('id', $eventId)
-            ->where('event_type', self::OUTBOX_EVENT_TYPE)
-            ->where('dispatch_state', 'authority_pending')
-            ->update([
-                'dispatch_state' => 'pending',
-                'updated_at' => $timestamp,
-            ]);
-        if ($released !== 1) {
-            throw new RuntimeException('Initial provisioning Outbox command did not release from final Order authority.');
+        try {
+            $this->outbox->releaseForDispatch(
+                $eventId,
+                $this->eventKey($operationPublicId),
+                self::OUTBOX_EVENT_TYPE,
+                self::OUTBOX_AGGREGATE_TYPE,
+                $operationPublicId,
+                $payload,
+                $correlationId,
+                self::OUTBOX_CONTRACT_VERSION,
+            );
+        } catch (\LogicException $exception) {
+            throw new RuntimeException(
+                'Initial provisioning Outbox command did not release from final Order authority.',
+                previous: $exception,
+            );
         }
 
         $this->recordAudit(

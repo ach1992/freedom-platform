@@ -9,6 +9,7 @@ use App\Modules\Agents\Application\AgentApplicationService;
 use App\Modules\Agents\Application\AgentMutationAudit;
 use App\Modules\Agents\Application\AgentPricingService;
 use App\Modules\Agents\Application\AgentProfileService;
+use App\Modules\Identity\Application\UserAccountMutationService;
 use App\Shared\Application\Clock;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Contracts\Foundation\Application;
@@ -37,6 +38,7 @@ final class AgentsServiceProvider extends ServiceProvider
                     $application->make(DatabaseManager::class),
                     $application->make(AdministratorPermissionAuthorizer::class),
                     $application->make(AgentMutationAudit::class),
+                    $application->make(UserAccountMutationService::class),
                     $application->make(Clock::class),
                     self::nonNegativeInteger($configuration['reapplication_cooldown_days'] ?? 30, 30),
                     self::pricingProfileCode($configuration['default_pricing_profile_code'] ?? 'default'),

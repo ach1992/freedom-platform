@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Identity\Application;
 
+use App\Modules\Identity\Application\Contracts\CustomerIdentityProfileWriter;
 use App\Modules\Identity\Application\Contracts\PhoneLookupHasher;
 use App\Modules\Identity\Application\Exceptions\PhoneAlreadyAssigned;
 use App\Modules\Identity\Application\Exceptions\PhoneVerificationMethodNotAllowed;
@@ -12,6 +13,7 @@ use App\Modules\Identity\Application\Exceptions\TelegramIdentityNotFound;
 use App\Modules\Identity\Domain\IranianMobileNumber;
 use App\Modules\Identity\Domain\PhoneVerificationMethod;
 use App\Modules\Identity\Domain\PhoneVerificationPolicy;
+use App\Modules\Identity\Domain\VerificationStatus;
 use App\Shared\Application\Clock;
 use Illuminate\Contracts\Encryption\StringEncrypter;
 use Illuminate\Database\DatabaseManager;
@@ -24,6 +26,7 @@ final readonly class TelegramContactVerifier
         private DatabaseManager $database,
         private StringEncrypter $encrypter,
         private PhoneLookupHasher $hasher,
+        private CustomerIdentityProfileWriter $customerProfiles,
         private Clock $clock,
     ) {}
 
@@ -166,7 +169,14 @@ final readonly class TelegramContactVerifier
             $status,
             $now,
         );
-        $this->updateCustomerProfile($userId, $status, $now);
+        $connection = $this->database->connection();
+        $this->customerProfiles->ensure($connection, $userId, $now);
+        $this->customerProfiles->updatePhoneVerificationStatus(
+            $connection,
+            $userId,
+            VerificationStatus::from($status),
+            $now,
+        );
         $this->recordEvent(
             $userId,
             $phoneNumberId,
@@ -379,24 +389,6 @@ final readonly class TelegramContactVerifier
             'verified_via_telegram_account_id' => $telegramAccountId,
             'verified_at' => $policySatisfied ? $now : null,
             'released_at' => null,
-            'updated_at' => $now,
-        ]);
-    }
-
-    private function updateCustomerProfile(int $userId, string $status, string $now): void
-    {
-        $tierId = $this->database->connection()->table('customer_tiers')->where('code', 'new')->value('id');
-        $this->database->connection()->table('customer_profiles')->insertOrIgnore([
-            'user_id' => $userId,
-            'current_tier_id' => is_numeric($tierId) ? (int) $tierId : null,
-            'tier_locked' => false,
-            'phone_verification_status' => 'unverified',
-            'identity_verification_status' => 'unverified',
-            'created_at' => $now,
-            'updated_at' => $now,
-        ]);
-        $this->database->connection()->table('customer_profiles')->where('user_id', $userId)->update([
-            'phone_verification_status' => $status,
             'updated_at' => $now,
         ]);
     }

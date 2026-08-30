@@ -4,10 +4,11 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Application;
 
+use App\Modules\Identity\Application\Contracts\CustomerIdentityProfileWriter;
+use App\Modules\Identity\Application\TelegramIdentityAccountService;
 use Illuminate\Contracts\Encryption\StringEncrypter;
+use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
-use Illuminate\Support\Str;
-use RuntimeException;
 
 final readonly class TelegramIdentitySynchronizer
 {
@@ -15,6 +16,8 @@ final readonly class TelegramIdentitySynchronizer
     public function __construct(
         private DatabaseManager $database,
         private StringEncrypter $encrypter,
+        private TelegramIdentityAccountService $identityAccounts,
+        private CustomerIdentityProfileWriter $customerProfiles,
     ) {}
 
     /** @param array<string, mixed> $update */
@@ -38,7 +41,7 @@ final readonly class TelegramIdentitySynchronizer
         $isBot = ($telegramUser['is_bot'] ?? false) === true;
         $now = now('UTC')->format('Y-m-d H:i:s.u');
 
-        return $this->database->connection()->transaction(function () use (
+        return $this->database->connection()->transaction(function (Connection $connection) use (
             $botId,
             $updateId,
             $telegramUserId,
@@ -49,118 +52,32 @@ final readonly class TelegramIdentitySynchronizer
             $update,
             $now,
         ): int {
-            $account = $this->database->connection()->table('telegram_accounts')
-                ->where('bot_id', $botId)
-                ->where('telegram_user_id', $telegramUserId)
-                ->lockForUpdate()
-                ->first(['id', 'user_id']);
+            $identity = $this->identityAccounts->synchronize(
+                $connection,
+                $botId,
+                $telegramUserId,
+                $username,
+                $languageCode,
+                $locale,
+                $isBot,
+                $now,
+            );
 
-            if ($account !== null) {
-                $userId = (int) $account->user_id;
-                $this->touchExistingIdentity(
-                    (int) $account->id,
-                    $userId,
-                    $username,
-                    $languageCode,
-                    $locale,
-                    $isBot,
-                    $now,
-                );
-                $this->recordStartAttribution($botId, $userId, $updateId, $update, $now);
-
-                return $userId;
+            if ($identity->profileBootstrapRequired) {
+                $this->customerProfiles->ensure($connection, $identity->userId, $now);
             }
 
-            $userId = (int) $this->database->connection()->table('users')->insertGetId([
-                'public_id' => (string) Str::ulid(),
-                'account_type' => 'customer',
-                'account_status' => 'active',
-                'locale' => $locale,
-                'first_seen_at' => $now,
-                'last_seen_at' => $now,
-                'created_at' => $now,
-                'updated_at' => $now,
-            ]);
+            $this->recordStartAttribution(
+                $connection,
+                $botId,
+                $identity->userId,
+                $updateId,
+                $update,
+                $now,
+            );
 
-            $inserted = $this->database->connection()->table('telegram_accounts')->insertOrIgnore([
-                'user_id' => $userId,
-                'bot_id' => $botId,
-                'telegram_user_id' => $telegramUserId,
-                'username' => $username,
-                'language_code' => $languageCode,
-                'is_bot' => $isBot,
-                'first_seen_at' => $now,
-                'last_seen_at' => $now,
-                'created_at' => $now,
-                'updated_at' => $now,
-            ]);
-
-            if ($inserted !== 1) {
-                $this->database->connection()->table('users')->where('id', $userId)->delete();
-                $winner = $this->database->connection()->table('telegram_accounts')
-                    ->where('bot_id', $botId)
-                    ->where('telegram_user_id', $telegramUserId)
-                    ->lockForUpdate()
-                    ->first(['id', 'user_id']);
-
-                if ($winner === null) {
-                    throw new RuntimeException('Telegram identity race could not be resolved.');
-                }
-
-                $userId = (int) $winner->user_id;
-                $this->touchExistingIdentity(
-                    (int) $winner->id,
-                    $userId,
-                    $username,
-                    $languageCode,
-                    $locale,
-                    $isBot,
-                    $now,
-                );
-            }
-
-            $tierId = $this->database->connection()->table('customer_tiers')
-                ->where('code', 'new')
-                ->value('id');
-
-            $this->database->connection()->table('customer_profiles')->insertOrIgnore([
-                'user_id' => $userId,
-                'current_tier_id' => is_numeric($tierId) ? (int) $tierId : null,
-                'tier_locked' => false,
-                'phone_verification_status' => 'unverified',
-                'identity_verification_status' => 'unverified',
-                'created_at' => $now,
-                'updated_at' => $now,
-            ]);
-
-            $this->recordStartAttribution($botId, $userId, $updateId, $update, $now);
-
-            return $userId;
+            return $identity->userId;
         });
-    }
-
-    private function touchExistingIdentity(
-        int $accountId,
-        int $userId,
-        ?string $username,
-        ?string $languageCode,
-        string $locale,
-        bool $isBot,
-        string $now,
-    ): void {
-        $this->database->connection()->table('telegram_accounts')->where('id', $accountId)->update([
-            'username' => $username,
-            'language_code' => $languageCode,
-            'is_bot' => $isBot,
-            'last_seen_at' => $now,
-            'updated_at' => $now,
-        ]);
-
-        $this->database->connection()->table('users')->where('id', $userId)->update([
-            'locale' => $locale,
-            'last_seen_at' => $now,
-            'updated_at' => $now,
-        ]);
     }
 
     /**
@@ -194,6 +111,7 @@ final readonly class TelegramIdentitySynchronizer
 
     /** @param array<string, mixed> $update */
     private function recordStartAttribution(
+        Connection $connection,
         string $botId,
         int $userId,
         int $updateId,
@@ -213,7 +131,7 @@ final readonly class TelegramIdentitySynchronizer
             return;
         }
 
-        $this->database->connection()->table('telegram_start_attributions')->insertOrIgnore([
+        $connection->table('telegram_start_attributions')->insertOrIgnore([
             'user_id' => $userId,
             'bot_id' => $botId,
             'payload_hash' => hash('sha256', $parameter),

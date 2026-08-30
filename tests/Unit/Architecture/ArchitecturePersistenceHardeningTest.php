@@ -497,6 +497,13 @@ PHP);
         self::assertSame(2, substr_count($violations, 'direct PDO access is forbidden'));
     }
 
+    public function test_repository_has_no_grandfathered_persistence_exceptions(): void
+    {
+        $config = require dirname(__DIR__, 3).'/scripts/ci/architecture-boundaries.php';
+
+        self::assertSame([], $config['persistence_exceptions'] ?? null);
+    }
+
     public function test_persistence_exception_must_be_exact_used_and_non_stale(): void
     {
         $path = 'app/Modules/Customers/Application/LegacyWrite.php';
