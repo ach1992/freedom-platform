@@ -19,12 +19,12 @@ use App\Shared\Infrastructure\DatabaseOutboxDispatcher;
 use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
-use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use RuntimeException;
+use Tests\Support\RestoresDatabaseTrigger;
 use Tests\TestCase;
 
 /** @requirement PAY-003 PRV-002 PRV-003 DAT-002 DAT-003 DAT-004 SEC-002 SEC-008 QUA-004 */
@@ -33,6 +33,7 @@ final class InitialProvisioningDispatchAndReplayAuthorityTest extends TestCase
     use AgentPricingQuoteIntegrationTestSupport;
     use DatabaseTruncation;
     use PurchaseOrderTestSupport;
+    use RestoresDatabaseTrigger;
 
     protected function setUp(): void
     {
@@ -259,19 +260,14 @@ final class InitialProvisioningDispatchAndReplayAuthorityTest extends TestCase
             'updated_at' => $timestamp,
         ]);
 
-        /** @var Migration $outboxEnvelopeMigration */
-        $outboxEnvelopeMigration = require database_path('migrations/2026_08_14_001161_z_harden_initial_provisioning_outbox_envelope.php');
-        DB::unprepared('DROP TRIGGER IF EXISTS outbox_initial_provision_envelope_update_guard');
-        try {
+        $this->withDatabaseTriggerDisabled('outbox_initial_provision_envelope_update_guard', function () use ($eventId, $timestamp): void {
             $updated = DB::table('outbox_messages')->where('id', $eventId)->update([
                 'dispatch_state' => 'processed',
                 'processed_at' => $timestamp,
                 'updated_at' => $timestamp,
             ]);
             self::assertSame(1, $updated);
-        } finally {
-            $outboxEnvelopeMigration->up();
-        }
+        });
         self::assertSame('processed', DB::table('outbox_messages')->where('id', $eventId)->value('dispatch_state'));
 
         try {
@@ -307,17 +303,12 @@ final class InitialProvisioningDispatchAndReplayAuthorityTest extends TestCase
         self::assertSame($first->provisioningOperationPublicId, $exactReplay->provisioningOperationPublicId);
         self::assertSame($first->outboxEventId, $exactReplay->outboxEventId);
 
-        /** @var Migration $outboxEnvelopeMigration */
-        $outboxEnvelopeMigration = require database_path('migrations/2026_08_14_001161_z_harden_initial_provisioning_outbox_envelope.php');
-        DB::unprepared('DROP TRIGGER IF EXISTS outbox_initial_provision_envelope_update_guard');
-        try {
+        $this->withDatabaseTriggerDisabled('outbox_initial_provision_envelope_update_guard', function () use ($first): void {
             $updated = DB::table('outbox_messages')->where('id', $first->outboxEventId)->update([
                 'correlation_id' => $this->purchaseOrderCorrelation('replay-correlation-corrupt'),
             ]);
             self::assertSame(1, $updated);
-        } finally {
-            $outboxEnvelopeMigration->up();
-        }
+        });
 
         try {
             $service->queueInitial(
