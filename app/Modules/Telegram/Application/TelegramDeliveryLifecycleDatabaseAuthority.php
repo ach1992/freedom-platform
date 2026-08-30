@@ -265,6 +265,15 @@ final readonly class TelegramDeliveryLifecycleDatabaseAuthority
         return in_array($object, array_values(array_unique($objects)), true);
     }
 
+    private function exactDatabaseGrantObject(string $databaseName): string
+    {
+        return '`'.str_replace(
+            ['\\', '%', '_', '`'],
+            ['\\\\', '\\%', '\\_', '``'],
+            $databaseName,
+        ).'`.*';
+    }
+
     private function capabilityHash(): ?string
     {
         $key = config('app.key');
@@ -299,8 +308,10 @@ final readonly class TelegramDeliveryLifecycleDatabaseAuthority
             return false;
         }
 
-        $expectedQuotedObject = '`'.str_replace('`', '``', $databaseName).'`.*';
-        $expectedPlainObject = $databaseName.'.*';
+        $expectedQuotedObject = $this->exactDatabaseGrantObject($databaseName);
+        $expectedPlainObject = strpbrk($databaseName, "\\%_") === false
+            ? $databaseName.'.*'
+            : null;
         $expectedTargetPattern = '/\bTO\s+`telegram_lifecycle`@`[^`]+`(?:\s|\z)/iD';
         $sawUsage = false;
         $sawSelect = false;
@@ -331,7 +342,7 @@ final readonly class TelegramDeliveryLifecycleDatabaseAuthority
 
             $object = trim($matches[2]);
             if (! hash_equals($expectedQuotedObject, $object)
-                && ! hash_equals($expectedPlainObject, $object)) {
+                && ($expectedPlainObject === null || ! hash_equals($expectedPlainObject, $object))) {
                 return false;
             }
 

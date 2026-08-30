@@ -1,12 +1,16 @@
 CREATE DATABASE IF NOT EXISTS `freedom_platform_hidden_fk`;
+CREATE DATABASE IF NOT EXISTS `freedomXplatformYci`;
+CREATE TABLE IF NOT EXISTS `freedomXplatformYci`.`telegram_lifecycle_scope_probe` (
+    `id` INT NOT NULL PRIMARY KEY
+);
 
 CREATE USER IF NOT EXISTS 'telegram_lifecycle'@'%' IDENTIFIED BY 'ci-only-lifecycle-password';
-GRANT SELECT, UPDATE ON `freedom_platform_ci`.* TO 'telegram_lifecycle'@'%';
+GRANT SELECT, UPDATE ON `freedom\_platform\_ci`.* TO 'telegram_lifecycle'@'%';
 
 CREATE USER IF NOT EXISTS 'freedom_ci_lifecycle_unprivileged'@'%' IDENTIFIED BY 'ci-only-lifecycle-unprivileged-password';
 
 CREATE USER IF NOT EXISTS 'freedom_ci_lifecycle_broad'@'%' IDENTIFIED BY 'ci-only-lifecycle-broad-password';
-GRANT SELECT, UPDATE, DELETE ON `freedom_platform_ci`.* TO 'freedom_ci_lifecycle_broad'@'%';
+GRANT SELECT, UPDATE, DELETE ON `freedom\_platform\_ci`.* TO 'freedom_ci_lifecycle_broad'@'%';
 
 CREATE USER IF NOT EXISTS 'freedom_ci_metadata'@'%' IDENTIFIED BY 'ci-only-metadata-password';
 GRANT PROCESS ON *.* TO 'freedom_ci_metadata'@'%';

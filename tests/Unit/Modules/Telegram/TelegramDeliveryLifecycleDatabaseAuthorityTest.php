@@ -16,6 +16,16 @@ final class TelegramDeliveryLifecycleDatabaseAuthorityTest extends TestCase
 
         self::assertTrue($authority->grantSetIsSelectUpdateOnly([
             "GRANT USAGE ON *.* TO `telegram_lifecycle`@`%` IDENTIFIED BY PASSWORD '*HASH'",
+            'GRANT SELECT, UPDATE ON `freedom\\_platform\\_ci`.* TO `telegram_lifecycle`@`%`',
+        ], 'freedom_platform_ci'));
+    }
+
+    public function test_database_wildcard_grant_is_not_exact_schema_authority(): void
+    {
+        $authority = new TelegramDeliveryLifecycleDatabaseAuthority;
+
+        self::assertFalse($authority->grantSetIsSelectUpdateOnly([
+            "GRANT USAGE ON *.* TO `telegram_lifecycle`@`%` IDENTIFIED BY PASSWORD '*HASH'",
             'GRANT SELECT, UPDATE ON `freedom_platform_ci`.* TO `telegram_lifecycle`@`%`',
         ], 'freedom_platform_ci'));
     }
@@ -66,15 +76,15 @@ final class TelegramDeliveryLifecycleDatabaseAuthorityTest extends TestCase
     {
         $usage = "GRANT USAGE ON *.* TO `telegram_lifecycle`@`%` IDENTIFIED BY PASSWORD '*HASH'";
 
-        yield 'missing select' => [[$usage, 'GRANT UPDATE ON `freedom_platform_ci`.* TO `telegram_lifecycle`@`%`']];
-        yield 'missing update' => [[$usage, 'GRANT SELECT ON `freedom_platform_ci`.* TO `telegram_lifecycle`@`%`']];
-        yield 'extra delete' => [[$usage, 'GRANT SELECT, UPDATE, DELETE ON `freedom_platform_ci`.* TO `telegram_lifecycle`@`%`']];
-        yield 'wrong schema' => [[$usage, 'GRANT SELECT, UPDATE ON `other_database`.* TO `telegram_lifecycle`@`%`']];
+        yield 'missing select' => [[$usage, 'GRANT UPDATE ON `freedom\\_platform\\_ci`.* TO `telegram_lifecycle`@`%`']];
+        yield 'missing update' => [[$usage, 'GRANT SELECT ON `freedom\\_platform\\_ci`.* TO `telegram_lifecycle`@`%`']];
+        yield 'extra delete' => [[$usage, 'GRANT SELECT, UPDATE, DELETE ON `freedom\\_platform\\_ci`.* TO `telegram_lifecycle`@`%`']];
+        yield 'wrong schema' => [[$usage, 'GRANT SELECT, UPDATE ON `other\\_database`.* TO `telegram_lifecycle`@`%`']];
         yield 'table scoped' => [[$usage, 'GRANT SELECT, UPDATE ON `freedom_platform_ci`.`telegram_delivery_authority_capability` TO `telegram_lifecycle`@`%`']];
-        yield 'grant option' => [[$usage, 'GRANT SELECT, UPDATE ON `freedom_platform_ci`.* TO `telegram_lifecycle`@`%` WITH GRANT OPTION']];
+        yield 'grant option' => [[$usage, 'GRANT SELECT, UPDATE ON `freedom\\_platform\\_ci`.* TO `telegram_lifecycle`@`%` WITH GRANT OPTION']];
         yield 'role assignment' => [[$usage, 'GRANT `telegram_lifecycle_role` TO `telegram_lifecycle`@`%`']];
-        yield 'public authority' => [[$usage, 'GRANT SELECT, UPDATE ON `freedom_platform_ci`.* TO PUBLIC']];
-        yield 'wrong user' => [['GRANT USAGE ON *.* TO `other_user`@`%`', 'GRANT SELECT, UPDATE ON `freedom_platform_ci`.* TO `other_user`@`%`']];
+        yield 'public authority' => [[$usage, 'GRANT SELECT, UPDATE ON `freedom\\_platform\\_ci`.* TO PUBLIC']];
+        yield 'wrong user' => [['GRANT USAGE ON *.* TO `other_user`@`%`', 'GRANT SELECT, UPDATE ON `freedom\\_platform\\_ci`.* TO `other_user`@`%`']];
         yield 'proxy' => [[$usage, 'GRANT PROXY ON `root`@`localhost` TO `telegram_lifecycle`@`%`']];
         yield 'empty' => [[]];
     }
