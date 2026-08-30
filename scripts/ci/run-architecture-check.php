@@ -3,10 +3,12 @@
 declare(strict_types=1);
 
 use FreedomPlatform\CI\ArchitectureBoundaryChecker;
+use FreedomPlatform\CI\CriticalMariaDbLifecycleContractChecker;
 use FreedomPlatform\CI\DurableTableOwnershipChecker;
 use FreedomPlatform\CI\TelegramPresentationProvenanceChecker;
 
 require __DIR__.'/ArchitectureBoundaryChecker.php';
+require __DIR__.'/CriticalMariaDbLifecycleContractChecker.php';
 require __DIR__.'/DurableTableOwnershipChecker.php';
 require __DIR__.'/TelegramPresentationProvenanceChecker.php';
 
@@ -20,10 +22,12 @@ $root = dirname(__DIR__, 2);
 $checker = new ArchitectureBoundaryChecker($root, $config);
 $result = $checker->check();
 $ownershipViolations = (new DurableTableOwnershipChecker($root, $config))->violations();
+$lifecycleViolations = (new CriticalMariaDbLifecycleContractChecker($root, $config))->violations();
 $telegramProvenanceViolations = (new TelegramPresentationProvenanceChecker($root, $config))->violations();
 $result['violations'] = array_values(array_unique(array_merge(
     $result['violations'],
     $ownershipViolations,
+    $lifecycleViolations,
     $telegramProvenanceViolations,
 )));
 sort($result['violations'], SORT_STRING);
