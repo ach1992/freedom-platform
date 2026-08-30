@@ -34,6 +34,121 @@ return [
         'app/Modules/Telegram/Application/TelegramNavigationHandler.php',
     ],
 
+    // Critical MariaDB authority-surface lifecycle contracts. Every registered surface
+    // must disposition every lifecycle rule with a concrete strategy and a PHP method/function
+    // that CI executes or production readiness code exposes. Evidence is resolved by PHP tokens,
+    // so comments/string mentions cannot satisfy the contract.
+    'critical_mariadb_authority_surfaces' => [
+        'telegram_outbound_delivery_v1' => [
+            'migration' => 'database/migrations/2026_08_25_000200_enable_telegram_outbound_delivery_authority.php',
+            'rules' => [
+                'metadata_evidence' => [
+                    'strategy' => 'semantic_metadata_attestation',
+                    'evidence' => [[
+                        'file' => 'app/Modules/Telegram/Application/TelegramDeliveryDatabaseAuthoritySurfaceV1.php',
+                        'symbol' => 'semanticFingerprint',
+                    ]],
+                ],
+                'install_upgrade_fencing' => [
+                    'strategy' => 'serialized_installation_lock',
+                    'evidence' => [[
+                        'file' => 'tests/Feature/TelegramOutboundDeliveryMigrationSafetyTest.php',
+                        'symbol' => 'test_database_installation_lock_serializes_concurrent_runners_before_any_reset_decision',
+                    ]],
+                ],
+                'interrupted_reentry' => [
+                    'strategy' => 'fail_closed_rebuild_and_reentry',
+                    'evidence' => [[
+                        'file' => 'tests/Feature/TelegramOutboundDeliveryMigrationSafetyTest.php',
+                        'symbol' => 'test_zero_data_interrupted_install_rebuilds_and_activates_complete_surface',
+                    ]],
+                ],
+                'rollback_preflight' => [
+                    'strategy' => 'durable_authority_and_runtime_fence_preflight',
+                    'evidence' => [[
+                        'file' => 'tests/Feature/TelegramOutboundDeliveryRollbackRuntimeRaceTest.php',
+                        'symbol' => 'test_entered_runtime_queue_drains_before_rollback_and_forces_durable_refusal_without_data_loss',
+                    ]],
+                ],
+                'ddl_toctou' => [
+                    'strategy' => 'explicit_reference_fence_serialization',
+                    'evidence' => [[
+                        'file' => 'tests/Feature/TelegramOutboundDeliveryRollbackToctouTest.php',
+                        'symbol' => 'test_operation_reference_fence_excludes_incoming_fk_and_parent_index_ddl_until_drop',
+                    ]],
+                ],
+                'dependency_checks' => [
+                    'strategy' => 'privileged_fk_metadata_inventory',
+                    'evidence' => [[
+                        'file' => 'app/Modules/Telegram/Application/TelegramDeliveryForeignKeyMetadataAttestor.php',
+                        'symbol' => 'matchesExpected',
+                    ]],
+                ],
+                'postflight_readiness' => [
+                    'strategy' => 'semantic_surface_readiness',
+                    'evidence' => [[
+                        'file' => 'app/Modules/Telegram/Application/TelegramDeliveryDatabaseAuthoritySurfaceV1.php',
+                        'symbol' => 'isReady',
+                    ]],
+                ],
+            ],
+        ],
+        'service_operational_authority_v1' => [
+            'migration' => 'database/migrations/2026_08_19_000140_enable_service_operational_authority.php',
+            'rules' => [
+                'metadata_evidence' => [
+                    'strategy' => 'information_schema_finalization_attestation',
+                    'evidence' => [[
+                        'file' => 'app/Modules/Provisioning/Application/ServiceOperationalAuthorityGuard.php',
+                        'symbol' => 'assertFinalized',
+                    ]],
+                ],
+                'install_upgrade_fencing' => [
+                    'strategy' => 'bootstrap_check_barriers',
+                    'evidence' => [[
+                        'file' => 'tests/Feature/ServiceOperationalAuthorityTest.php',
+                        'symbol' => 'test_operational_migration_reenters_partial_release_and_survives_historical_authority_reentry',
+                    ]],
+                ],
+                'interrupted_reentry' => [
+                    'strategy' => 'consumer_fail_closed_partial_rollback_reentry',
+                    'evidence' => [[
+                        'file' => 'tests/Feature/ServiceOperationalMigrationSafetyTest.php',
+                        'symbol' => 'test_interrupted_down_is_consumer_fail_closed_restores_predecessor_guard_and_retries_cleanly',
+                    ]],
+                ],
+                'rollback_preflight' => [
+                    'strategy' => 'durable_row_preflight_before_destructive_ddl',
+                    'evidence' => [[
+                        'file' => 'tests/Feature/ServiceOperationalMigrationSafetyTest.php',
+                        'symbol' => 'test_down_refuses_durable_batch_evidence_before_closing_or_dismantling_authority',
+                    ]],
+                ],
+                'ddl_toctou' => [
+                    'strategy' => 'mariadb_metadata_lock_fail_closed_reentry',
+                    'evidence' => [[
+                        'file' => 'tests/Feature/ServiceOperationalMigrationSafetyTest.php',
+                        'symbol' => 'test_external_incoming_fk_dependency_fails_closed_and_down_retries_after_dependency_removal',
+                    ]],
+                ],
+                'dependency_checks' => [
+                    'strategy' => 'mariadb_fk_restrict_dependency_probe',
+                    'evidence' => [[
+                        'file' => 'tests/Feature/ServiceOperationalMigrationSafetyTest.php',
+                        'symbol' => 'test_external_incoming_fk_dependency_fails_closed_and_down_retries_after_dependency_removal',
+                    ]],
+                ],
+                'postflight_readiness' => [
+                    'strategy' => 'finalized_guard_attestation',
+                    'evidence' => [[
+                        'file' => 'app/Modules/Provisioning/Application/ServiceOperationalAuthorityGuard.php',
+                        'symbol' => 'assertFinalized',
+                    ]],
+                ],
+            ],
+        ],
+    ],
+
     // Exact source of truth for every migration-created durable table. Values are either
     // an owning feature module or a reviewed infrastructure classification. Framework
     // tables are Laravel runtime state; Shared is owned by app/Shared; SharedAppendOnly

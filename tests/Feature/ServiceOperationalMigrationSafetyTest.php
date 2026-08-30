@@ -159,6 +159,44 @@ final class ServiceOperationalMigrationSafetyTest extends TestCase
         self::assertSame(1, DB::table('service_batch_grant_items')->count());
     }
 
+    public function test_external_incoming_fk_dependency_fails_closed_and_down_retries_after_dependency_removal(): void
+    {
+        DB::unprepared(<<<'SQL'
+CREATE TABLE service_operational_external_dependency_probe (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    service_batch_grant_id BIGINT UNSIGNED NULL,
+    PRIMARY KEY (id),
+    CONSTRAINT service_operational_external_batch_fk
+        FOREIGN KEY (service_batch_grant_id) REFERENCES service_batch_grants(id) ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+SQL);
+
+        try {
+            try {
+                $this->migration()->down();
+                self::fail('An incoming external foreign key must prevent destructive Service operational rollback.');
+            } catch (QueryException) {
+                self::assertTrue(DB::getSchemaBuilder()->hasTable('service_operational_external_dependency_probe'));
+                self::assertTrue(DB::getSchemaBuilder()->hasTable('service_batch_grants'));
+            }
+
+            try {
+                $this->app->make(ServiceOperationalAuthorityGuard::class)->assertFinalized();
+                self::fail('A dependency-interrupted rollback must leave Service operational consumers fail closed.');
+            } catch (RuntimeException $exception) {
+                self::assertSame('Service operational authority is not finalized.', $exception->getMessage());
+            }
+        } finally {
+            DB::unprepared('DROP TABLE IF EXISTS service_operational_external_dependency_probe');
+        }
+
+        $this->migration()->down();
+        self::assertFalse(DB::getSchemaBuilder()->hasTable('service_operational_authority_capability'));
+
+        $this->migration()->up();
+        $this->app->make(ServiceOperationalAuthorityGuard::class)->assertFinalized();
+    }
+
     private function migration(): Migration
     {
         /** @var Migration $migration */
