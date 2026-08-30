@@ -5,7 +5,15 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Modules\Telegram\Application\TelegramDeliveryDatabaseAuthoritySurfaceV1;
+use App\Shared\Application\Clock;
+use App\Shared\Application\OutboxDispatchOutcome;
+use App\Shared\Application\OutboxEventHandler;
+use App\Shared\Application\OutboxMessage;
+use App\Shared\Application\OutboxMessageRouter;
 use App\Shared\Infrastructure\DatabaseOutboxContractRetirementGuard;
+use App\Shared\Infrastructure\DatabaseOutboxDispatcher;
+use DateTimeImmutable;
+use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
@@ -137,6 +145,53 @@ final class OutboxContractVersioningTest extends TestCase
         );
     }
 
+    public function test_persisted_v1_message_survives_release_evolution_and_unsupported_version_fails_closed(): void
+    {
+        $eventType = 'release.evolved.example';
+        $v1Id = '0198a4c7-ff31-7bb9-8222-000000018406';
+        $unsupportedId = '0198a4c7-ff31-7bb9-8222-000000018407';
+        $this->insertMessage($v1Id, $eventType, null);
+
+        $v1 = new PersistedReleaseOutboxHandler($eventType, 1);
+        $v2 = new PersistedReleaseOutboxHandler($eventType, 2);
+        $router = new OutboxMessageRouter([$v1, $v2]);
+        $dispatcher = new DatabaseOutboxDispatcher(
+            $this->app->make(DatabaseManager::class),
+            new FixedOutboxVersioningClock,
+        );
+
+        $v1Result = $dispatcher->dispatchOne($router);
+
+        self::assertNotNull($v1Result);
+        self::assertSame($v1Id, $v1Result->messageId);
+        self::assertSame(OutboxDispatchOutcome::Success, $v1Result->outcome);
+        self::assertSame([1], $v1->handledVersions);
+        self::assertSame([], $v2->handledVersions);
+        $this->assertDatabaseHas('outbox_messages', [
+            'id' => $v1Id,
+            'contract_version' => 1,
+            'dispatch_state' => 'processed',
+            'attempts' => 1,
+        ]);
+
+        $this->insertMessage($unsupportedId, $eventType, 3);
+
+        $unsupportedResult = $dispatcher->dispatchOne($router);
+
+        self::assertNotNull($unsupportedResult);
+        self::assertSame($unsupportedId, $unsupportedResult->messageId);
+        self::assertSame(OutboxDispatchOutcome::DefinitiveFailure, $unsupportedResult->outcome);
+        self::assertSame([1], $v1->handledVersions);
+        self::assertSame([], $v2->handledVersions);
+        $this->assertDatabaseHas('outbox_messages', [
+            'id' => $unsupportedId,
+            'contract_version' => 3,
+            'dispatch_state' => 'review_required',
+            'attempts' => 1,
+            'review_reason' => OutboxDispatchOutcome::DefinitiveFailure->value,
+        ]);
+    }
+
     private function insertMessage(string $id, string $eventType, ?int $contractVersion): void
     {
         $payload = '{"public_id":"legacy-aggregate-1"}';
@@ -160,5 +215,41 @@ final class OutboxContractVersioningTest extends TestCase
         }
 
         DB::table('outbox_messages')->insert($row);
+    }
+}
+
+final class PersistedReleaseOutboxHandler implements OutboxEventHandler
+{
+    /** @var list<int> */
+    public array $handledVersions = [];
+
+    public function __construct(
+        private readonly string $type,
+        private readonly int $version,
+    ) {}
+
+    public function eventType(): string
+    {
+        return $this->type;
+    }
+
+    public function contractVersion(): int
+    {
+        return $this->version;
+    }
+
+    public function handle(OutboxMessage $message): OutboxDispatchOutcome
+    {
+        $this->handledVersions[] = $message->contractVersion;
+
+        return OutboxDispatchOutcome::Success;
+    }
+}
+
+final class FixedOutboxVersioningClock implements Clock
+{
+    public function now(): DateTimeImmutable
+    {
+        return new DateTimeImmutable('2026-08-30T10:00:00+00:00');
     }
 }
