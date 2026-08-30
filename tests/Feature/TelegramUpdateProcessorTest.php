@@ -47,6 +47,17 @@ final class TelegramUpdateProcessorTest extends TestCase
         ]);
     }
 
+    protected function tearDown(): void
+    {
+        try {
+            if (DB::connection()->getDriverName() === 'mysql') {
+                $this->truncateTablesForAllConnections();
+            }
+        } finally {
+            parent::tearDown();
+        }
+    }
+
     public function test_processing_upserts_identity_profile_and_first_start_attribution_idempotently(): void
     {
         $this->accept($this->payload(3001, 9100, 'initial_name', '/start ref_123'));
