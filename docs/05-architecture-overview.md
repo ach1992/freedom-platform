@@ -110,6 +110,8 @@ Target layout:
 
 Only `current/public` is web-exposed. CLI and LSPHP PHP 8.4 runtimes are independently verified. One Scheduler Cron drives scheduled work; supervised workers process isolated queues.
 
+Runtime readiness is a fail-closed deployment contract, not only a reachability probe. The shared `RuntimeHealthProbe` verifies the supported MariaDB family/version/server identity and connection charset/collation/strict-mode assumptions, authenticated Redis for active queue/cache dependencies, Redis queue `after_commit`, and `retry_after` above every reviewed Supervisor worker timeout. The guarded release-switch invokes the same `health:check --critical` path after activation so deployment postflight cannot drift into a separate shell-only rule set.
+
 ## Source of implementation truth
 
 Current implementation boundaries come from source, migrations, tests, and live GitHub PR/CI state. Do not add module status tables or implementation progress to this document.
