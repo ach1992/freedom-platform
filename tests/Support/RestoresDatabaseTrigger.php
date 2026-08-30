@@ -41,9 +41,7 @@ trait RestoresDatabaseTrigger
      */
     private function snapshotDatabaseTrigger(string $triggerName): array
     {
-        if (preg_match('/\A[A-Za-z0-9_]+\z/', $triggerName) !== 1) {
-            throw new RuntimeException('Database trigger snapshot requires a simple trusted identifier.');
-        }
+        $this->assertSimpleDatabaseIdentifier($triggerName);
 
         $databaseName = DB::connection()->getDatabaseName();
         $trigger = DB::table('information_schema.TRIGGERS')
@@ -59,12 +57,7 @@ trait RestoresDatabaseTrigger
             throw new RuntimeException('Database trigger snapshot target is unavailable: '.$triggerName);
         }
 
-        $create = DB::selectOne('SHOW CREATE TRIGGER `'.$triggerName.'`');
-        $createStatement = $create->{'SQL Original Statement'} ?? null;
-        if (! is_string($createStatement) || trim($createStatement) === '') {
-            throw new RuntimeException('Database trigger create statement is unavailable: '.$triggerName);
-        }
-
+        $createStatement = $this->databaseTriggerCreateStatement($triggerName);
         $siblings = DB::table('information_schema.TRIGGERS')
             ->where('TRIGGER_SCHEMA', $databaseName)
             ->where('EVENT_OBJECT_TABLE', (string) $trigger->event_object_table)
@@ -86,6 +79,43 @@ trait RestoresDatabaseTrigger
             'previous_trigger' => is_string($previousTrigger) ? $previousTrigger : null,
             'next_trigger' => is_string($nextTrigger) ? $nextTrigger : null,
         ];
+    }
+
+    /**
+     * @return list<array{
+     *     name: string,
+     *     create_statement: string,
+     *     event_manipulation: string,
+     *     action_timing: string,
+     *     action_order: int
+     * }>
+     */
+    private function snapshotDatabaseTriggersForTable(string $tableName): array
+    {
+        $this->assertSimpleDatabaseIdentifier($tableName);
+
+        $rows = DB::table('information_schema.TRIGGERS')
+            ->where('TRIGGER_SCHEMA', DB::connection()->getDatabaseName())
+            ->where('EVENT_OBJECT_TABLE', $tableName)
+            ->orderBy('EVENT_MANIPULATION')
+            ->orderBy('ACTION_TIMING')
+            ->orderBy('ACTION_ORDER')
+            ->get(['TRIGGER_NAME', 'EVENT_MANIPULATION', 'ACTION_TIMING', 'ACTION_ORDER']);
+
+        $snapshots = [];
+        foreach ($rows as $row) {
+            $triggerName = (string) $row->TRIGGER_NAME;
+            $this->assertSimpleDatabaseIdentifier($triggerName);
+            $snapshots[] = [
+                'name' => $triggerName,
+                'create_statement' => $this->databaseTriggerCreateStatement($triggerName),
+                'event_manipulation' => (string) $row->EVENT_MANIPULATION,
+                'action_timing' => (string) $row->ACTION_TIMING,
+                'action_order' => (int) $row->ACTION_ORDER,
+            ];
+        }
+
+        return $snapshots;
     }
 
     /**
@@ -123,11 +153,68 @@ trait RestoresDatabaseTrigger
         DB::connection()->getPdo()->exec($statement);
     }
 
+    /**
+     * @param  list<array{
+     *     name: string,
+     *     create_statement: string,
+     *     event_manipulation: string,
+     *     action_timing: string,
+     *     action_order: int
+     * }>  $snapshots
+     */
+    private function restoreDatabaseTriggersForTable(string $tableName, array $snapshots): void
+    {
+        $this->assertSimpleDatabaseIdentifier($tableName);
+
+        $currentTriggerNames = DB::table('information_schema.TRIGGERS')
+            ->where('TRIGGER_SCHEMA', DB::connection()->getDatabaseName())
+            ->where('EVENT_OBJECT_TABLE', $tableName)
+            ->pluck('TRIGGER_NAME');
+        foreach ($currentTriggerNames as $triggerName) {
+            if (! is_string($triggerName)) {
+                throw new RuntimeException('Database trigger inventory contains an invalid trigger name.');
+            }
+            $this->assertSimpleDatabaseIdentifier($triggerName);
+            DB::connection()->getPdo()->exec('DROP TRIGGER IF EXISTS `'.$triggerName.'`');
+        }
+
+        usort($snapshots, static function (array $left, array $right): int {
+            return [$left['event_manipulation'], $left['action_timing'], $left['action_order'], $left['name']]
+                <=> [$right['event_manipulation'], $right['action_timing'], $right['action_order'], $right['name']];
+        });
+
+        foreach ($snapshots as $snapshot) {
+            $this->assertSimpleDatabaseIdentifier($snapshot['name']);
+            if (trim($snapshot['create_statement']) === '') {
+                throw new RuntimeException('Database trigger create statement cannot be empty.');
+            }
+            DB::connection()->getPdo()->exec($snapshot['create_statement']);
+        }
+    }
+
+    private function databaseTriggerCreateStatement(string $triggerName): string
+    {
+        $create = DB::selectOne('SHOW CREATE TRIGGER `'.$triggerName.'`');
+        $createStatement = $create->{'SQL Original Statement'} ?? null;
+        if (! is_string($createStatement) || trim($createStatement) === '') {
+            throw new RuntimeException('Database trigger create statement is unavailable: '.$triggerName);
+        }
+
+        return $createStatement;
+    }
+
     private function databaseTriggerExists(string $triggerName): bool
     {
         return DB::table('information_schema.TRIGGERS')
             ->where('TRIGGER_SCHEMA', DB::connection()->getDatabaseName())
             ->where('TRIGGER_NAME', $triggerName)
             ->exists();
+    }
+
+    private function assertSimpleDatabaseIdentifier(string $identifier): void
+    {
+        if (preg_match('/\A[A-Za-z0-9_]+\z/', $identifier) !== 1) {
+            throw new RuntimeException('Database trigger snapshot requires a simple trusted identifier.');
+        }
     }
 }

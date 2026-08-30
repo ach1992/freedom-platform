@@ -17,6 +17,7 @@ use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use RuntimeException;
+use Tests\Support\PreservesOutboxTriggerSurface;
 use Tests\TestCase;
 
 /** @requirement PRV-002 PRV-003 DAT-002 DAT-003 DAT-004 SEC-008 QUA-004 */
@@ -24,6 +25,7 @@ final class InitialProvisioningExactAuthorityUpgradePaddingTest extends TestCase
 {
     use AgentPricingQuoteIntegrationTestSupport;
     use DatabaseTruncation;
+    use PreservesOutboxTriggerSurface;
     use PurchaseOrderTestSupport;
 
     protected function setUp(): void
