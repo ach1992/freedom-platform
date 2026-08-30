@@ -30,7 +30,9 @@ return [
     // persistable Telegram presentation path. Each addition is a deliberate
     // data-classification review boundary; RESTRICTED owners must keep using
     // their protected/reference delivery authority instead.
-    'telegram_non_restricted_presentation_sources' => [],
+    'telegram_non_restricted_presentation_sources' => [
+        'app/Modules/Telegram/Application/TelegramNavigationHandler.php',
+    ],
 
     // Exact source of truth for every migration-created durable table. Values are either
     // an owning feature module or a reviewed infrastructure classification. Framework
