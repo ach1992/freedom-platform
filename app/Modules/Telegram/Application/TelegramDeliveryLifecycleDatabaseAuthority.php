@@ -309,7 +309,7 @@ final readonly class TelegramDeliveryLifecycleDatabaseAuthority
         }
 
         $expectedQuotedObject = $this->exactDatabaseGrantObject($databaseName);
-        $expectedPlainObject = strpbrk($databaseName, "\\%_") === false
+        $expectedPlainObject = strpbrk($databaseName, '\\%_') === false
             ? $databaseName.'.*'
             : null;
         $expectedTargetPattern = '/\bTO\s+`telegram_lifecycle`@`[^`]+`(?:\s|\z)/iD';
