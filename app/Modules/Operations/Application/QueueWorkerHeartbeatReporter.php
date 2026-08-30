@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Operations\Application;
 
 use App\Shared\Application\Clock;
+use App\Shared\Application\SafeLogContext;
 use DateTimeImmutable;
 use Psr\Log\LoggerInterface;
 use Throwable;
@@ -54,10 +55,13 @@ final class QueueWorkerHeartbeatReporter
         try {
             $this->report($queue);
         } catch (Throwable $exception) {
-            $this->logger->warning('Queue worker heartbeat could not be recorded.', [
-                'event' => 'operations.worker_heartbeat_record_failed',
-                'exception_class' => $exception::class,
-            ]);
+            $this->logger->warning(
+                'Queue worker heartbeat could not be recorded.',
+                SafeLogContext::from([
+                    'event' => 'operations.worker_heartbeat_record_failed',
+                    'exception_class' => $exception::class,
+                ])->values(),
+            );
         }
     }
 }

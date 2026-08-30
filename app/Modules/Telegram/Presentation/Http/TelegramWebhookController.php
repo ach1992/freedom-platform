@@ -7,6 +7,7 @@ namespace App\Modules\Telegram\Presentation\Http;
 use App\Modules\Telegram\Application\Exceptions\InvalidTelegramWebhookPayload;
 use App\Modules\Telegram\Application\Exceptions\TelegramUpdateCollision;
 use App\Modules\Telegram\Application\TelegramWebhookIngestor;
+use App\Shared\Application\SafeLogContext;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -35,10 +36,13 @@ final readonly class TelegramWebhookController
         } catch (TelegramUpdateCollision) {
             return new JsonResponse(['ok' => false], Response::HTTP_CONFLICT);
         } catch (Throwable $exception) {
-            Log::error('Telegram webhook ingestion failed.', [
-                'correlation_id' => $correlationId,
-                'error_class' => $exception::class,
-            ]);
+            Log::error(
+                'Telegram webhook ingestion failed.',
+                SafeLogContext::from([
+                    'correlation_id' => $correlationId,
+                    'error_class' => $exception::class,
+                ])->values(),
+            );
 
             return new JsonResponse(['ok' => false], Response::HTTP_SERVICE_UNAVAILABLE);
         }
