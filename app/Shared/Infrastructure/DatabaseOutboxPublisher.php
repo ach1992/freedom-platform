@@ -28,6 +28,7 @@ final readonly class DatabaseOutboxPublisher implements OutboxPublisher
         string $aggregateId,
         SafeOutboxPayload $payload,
         string $correlationId,
+        int $contractVersion,
     ): string {
         if (! Str::isUuid($eventId)) {
             throw new InvalidArgumentException('Outbox event ID must be a UUID.');
@@ -35,6 +36,10 @@ final readonly class DatabaseOutboxPublisher implements OutboxPublisher
 
         if ($eventKey === '' || strlen($eventKey) > 191) {
             throw new InvalidArgumentException('Outbox event key must contain 1-191 characters.');
+        }
+
+        if ($contractVersion < 1 || $contractVersion > 65_535) {
+            throw new InvalidArgumentException('Outbox contract version must be between 1 and 65535.');
         }
 
         $connection = $this->database->connection();
@@ -50,6 +55,7 @@ final readonly class DatabaseOutboxPublisher implements OutboxPublisher
             'id' => $eventId,
             'event_key' => $eventKey,
             'event_type' => $eventType,
+            'contract_version' => $contractVersion,
             'aggregate_type' => $aggregateType,
             'aggregate_id' => $aggregateId,
             'payload' => $payload->json(),
@@ -67,10 +73,11 @@ final readonly class DatabaseOutboxPublisher implements OutboxPublisher
 
         $existing = $connection->table('outbox_messages')
             ->where('event_key', $eventKey)
-            ->first(['id', 'event_type', 'aggregate_type', 'aggregate_id', 'payload_hash']);
+            ->first(['id', 'event_type', 'contract_version', 'aggregate_type', 'aggregate_id', 'payload_hash']);
 
         if ($existing === null
             || (string) $existing->event_type !== $eventType
+            || (int) $existing->contract_version !== $contractVersion
             || (string) $existing->aggregate_type !== $aggregateType
             || (string) $existing->aggregate_id !== $aggregateId
             || ! hash_equals((string) $existing->payload_hash, $payloadHash)
@@ -89,9 +96,14 @@ final readonly class DatabaseOutboxPublisher implements OutboxPublisher
         string $aggregateId,
         SafeOutboxPayload $payload,
         string $correlationId,
+        int $contractVersion,
     ): void {
         if (! Str::isUuid($eventId)) {
             throw new InvalidArgumentException('Outbox event ID must be a UUID.');
+        }
+
+        if ($contractVersion < 1 || $contractVersion > 65_535) {
+            throw new InvalidArgumentException('Outbox contract version must be between 1 and 65535.');
         }
 
         $connection = $this->database->connection();
@@ -103,6 +115,7 @@ final readonly class DatabaseOutboxPublisher implements OutboxPublisher
             ->where('id', $eventId)
             ->where('event_key', $eventKey)
             ->where('event_type', $eventType)
+            ->where('contract_version', $contractVersion)
             ->where('aggregate_type', $aggregateType)
             ->where('aggregate_id', $aggregateId)
             ->where('payload_hash', $payload->hash())

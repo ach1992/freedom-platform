@@ -23,11 +23,17 @@ final readonly class ServiceMutationOutboxHandler implements OutboxEventHandler
         return ServiceMutationQueueService::OUTBOX_EVENT_TYPE;
     }
 
+    public function contractVersion(): int
+    {
+        return ServiceMutationQueueService::OUTBOX_CONTRACT_VERSION;
+    }
+
     /** @requirement SVC-004 PRV-002 PRV-003 ARCH-004 SEC-002 QUA-001 QUA-004 */
     public function handle(OutboxMessage $message): OutboxDispatchOutcome
     {
         $operationPublicId = $message->payload['provisioning_operation_public_id'] ?? null;
         if ($message->eventType !== ServiceMutationQueueService::OUTBOX_EVENT_TYPE
+            || $message->contractVersion !== ServiceMutationQueueService::OUTBOX_CONTRACT_VERSION
             || $message->aggregateType !== ServiceMutationQueueService::OUTBOX_AGGREGATE_TYPE
             || ! is_string($operationPublicId)
             || ! hash_equals($message->aggregateId, $operationPublicId)

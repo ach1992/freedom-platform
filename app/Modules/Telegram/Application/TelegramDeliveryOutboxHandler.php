@@ -23,11 +23,17 @@ final readonly class TelegramDeliveryOutboxHandler implements OutboxEventHandler
         return TelegramDeliveryQueueService::OUTBOX_EVENT_TYPE;
     }
 
+    public function contractVersion(): int
+    {
+        return TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION;
+    }
+
     /** @requirement ARCH-004 SEC-002 SEC-008 OPS-003 QUA-001 QUA-004 */
     public function handle(OutboxMessage $message): OutboxDispatchOutcome
     {
         $publicId = $message->payload['telegram_delivery_operation_public_id'] ?? null;
         if ($message->eventType !== TelegramDeliveryQueueService::OUTBOX_EVENT_TYPE
+            || $message->contractVersion !== TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION
             || $message->aggregateType !== TelegramDeliveryQueueService::OUTBOX_AGGREGATE_TYPE
             || ! is_string($publicId)
             || ! hash_equals($message->aggregateId, $publicId)

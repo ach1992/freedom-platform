@@ -138,6 +138,7 @@ SQL, [$capability->value(), $publicId, $correlationId, $outboxEventId]);
                     $publicId,
                     $payload,
                     $correlationId,
+                    TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION,
                 );
                 echo "TRIGGER_FENCE_HELD\n";
                 flush();

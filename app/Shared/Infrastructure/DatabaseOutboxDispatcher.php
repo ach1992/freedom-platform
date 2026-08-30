@@ -87,6 +87,7 @@ final readonly class DatabaseOutboxDispatcher
                     'id',
                     'event_key',
                     'event_type',
+                    'contract_version',
                     'aggregate_type',
                     'aggregate_id',
                     'payload',
@@ -126,6 +127,7 @@ final readonly class DatabaseOutboxDispatcher
                     $this->decodePayload((string) $row->payload),
                     (string) $row->correlation_id,
                     $attempt,
+                    (int) $row->contract_version,
                 ),
                 $leaseToken,
             );

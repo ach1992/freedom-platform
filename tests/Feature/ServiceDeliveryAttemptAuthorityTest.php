@@ -409,6 +409,7 @@ SQL);
                     $forgedAttemptPublicId,
                     new SafeOutboxPayload(['service_delivery_attempt_public_id' => $forgedAttemptPublicId]),
                     'correlation-delivery-forged-outbox-0001',
+                    ServiceDeliveryAttemptQueueService::OUTBOX_CONTRACT_VERSION,
                 );
             });
             self::fail('Direct canonical Delivery Outbox insert without queue authority must fail closed.');

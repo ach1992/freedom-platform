@@ -35,9 +35,11 @@ final readonly class InitialProvisioningQueueService
 
     private const OPERATION_TYPE = 'initial_provision';
 
-    private const EVENT_TYPE = 'provisioning.initial.requested';
+    public const OUTBOX_EVENT_TYPE = 'provisioning.initial.requested';
 
-    private const AGGREGATE_TYPE = 'provisioning_operation';
+    public const OUTBOX_CONTRACT_VERSION = 1;
+
+    public const OUTBOX_AGGREGATE_TYPE = 'provisioning_operation';
 
     private const DEADLOCK_RETRY_ATTEMPTS = 3;
 
@@ -198,11 +200,12 @@ final readonly class InitialProvisioningQueueService
         $eventId = $this->outbox->publish(
             (string) Str::uuid(),
             $this->eventKey($operationPublicId),
-            self::EVENT_TYPE,
-            self::AGGREGATE_TYPE,
+            self::OUTBOX_EVENT_TYPE,
+            self::OUTBOX_AGGREGATE_TYPE,
             $operationPublicId,
             $payload,
             $correlationId,
+            self::OUTBOX_CONTRACT_VERSION,
         );
 
         $updated = $connection->table('orders')
@@ -220,7 +223,7 @@ final readonly class InitialProvisioningQueueService
 
         $released = $connection->table('outbox_messages')
             ->where('id', $eventId)
-            ->where('event_type', self::EVENT_TYPE)
+            ->where('event_type', self::OUTBOX_EVENT_TYPE)
             ->where('dispatch_state', 'authority_pending')
             ->update([
                 'dispatch_state' => 'pending',
@@ -610,8 +613,8 @@ final readonly class InitialProvisioningQueueService
             || (int) $operation->user_id !== (int) $order->user_id
             || $operation->state !== ProvisioningState::Queued->value
             || (int) $operation->state_version !== 1
-            || $outbox->event_type !== self::EVENT_TYPE
-            || $outbox->aggregate_type !== self::AGGREGATE_TYPE
+            || $outbox->event_type !== self::OUTBOX_EVENT_TYPE
+            || $outbox->aggregate_type !== self::OUTBOX_AGGREGATE_TYPE
             || ! hash_equals($outbox->aggregate_id, $operation->public_id)
             || ! hash_equals($outbox->event_key, $this->eventKey($operation->public_id))
             || ! hash_equals($outbox->correlation_id, $operation->correlation_id)

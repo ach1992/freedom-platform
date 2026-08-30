@@ -186,6 +186,7 @@ final class DatabaseOutboxDispatcherTest extends TestCase
                 '1',
                 new SafeOutboxPayload(['order_id' => '1']),
                 '0198a4c7-ff31-7bb9-8222-000000000099',
+                1,
             );
         });
 
