@@ -98,6 +98,7 @@ Before installation or release activation verify:
 - valid HTTPS;
 - exactly one Scheduler Cron entry;
 - reviewed Supervisor worker configuration;
+- `php artisan health:check --critical --json --redact` passes on the candidate runtime before protected work is reopened. This shared readiness path fails closed on incompatible MariaDB family/version/`@@server_uid`, connection charset/collation/strict-mode drift, missing authentication on required Redis connections, Redis queue `after_commit` drift, or `retry_after` that does not exceed every reviewed Supervisor worker timeout; the atomic release-switch consumes this same check after activation;
 - no secret is exposed in command arguments, Chat, Git, or screenshots.
 
 ## Release gate
