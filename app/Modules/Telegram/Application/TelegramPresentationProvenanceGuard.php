@@ -20,7 +20,9 @@ use LogicException;
 final class TelegramPresentationProvenanceGuard
 {
     /** @var list<string> */
-    public const REVIEWED_SOURCE_FILES = [];
+    public const REVIEWED_SOURCE_FILES = [
+        'app/Modules/Telegram/Application/TelegramNavigationHandler.php',
+    ];
 
     /** @var list<string> */
     private const INTERNAL_AUTHORITY_FILES = [

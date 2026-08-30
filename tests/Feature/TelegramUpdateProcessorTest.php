@@ -86,7 +86,7 @@ final class TelegramUpdateProcessorTest extends TestCase
 
     public function test_processed_update_routes_one_restart_safe_interaction_transition_without_duplicate_replay(): void
     {
-        $this->accept($this->payload(3050, 9150, 'interaction_user', '/start'));
+        $this->accept($this->payload(3050, 9150, 'interaction_user', 'hello'));
         $processor = $this->app->make(TelegramUpdateProcessor::class);
         $processor->process('123456789', 3050);
 
@@ -150,7 +150,7 @@ final class TelegramUpdateProcessorTest extends TestCase
 
     public function test_failed_message_and_back_retries_remain_bound_to_the_original_session(): void
     {
-        $this->accept($this->payload(3060, 9160, 'retry_user', '/start'));
+        $this->accept($this->payload(3060, 9160, 'retry_user', 'hello'));
         $processor = $this->app->make(TelegramUpdateProcessor::class);
         $processor->process('123456789', 3060);
 
@@ -294,7 +294,7 @@ final class TelegramUpdateProcessorTest extends TestCase
 
     public function test_cancel_without_a_session_is_durably_bound_as_a_noop_before_a_later_session_exists(): void
     {
-        $this->accept($this->payload(3070, 9170, 'cancel_retry_user', '/start'));
+        $this->accept($this->payload(3070, 9170, 'cancel_retry_user', 'hello'));
         $processor = $this->app->make(TelegramUpdateProcessor::class);
         $processor->process('123456789', 3070);
         $account = DB::table('telegram_accounts')->where('telegram_user_id', 9170)->first(['id']);
