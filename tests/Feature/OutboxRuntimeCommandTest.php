@@ -256,6 +256,11 @@ final class RuntimeSuccessOutboxHandler implements OutboxEventHandler
         return 'test.success';
     }
 
+    public function contractVersion(): int
+    {
+        return 1;
+    }
+
     public function handle(OutboxMessage $message): OutboxDispatchOutcome
     {
         $this->messages[] = $message;

@@ -337,7 +337,6 @@ final class OtpChallengeLifecycleTest extends TestCase
             $database,
             $this->app->make(StringEncrypter::class),
             $phoneHasher,
-            $this->app->make(CustomerIdentityProfileWriter::class),
             $clock,
         );
         $dispatcher = new FallbackSmsDispatcher(

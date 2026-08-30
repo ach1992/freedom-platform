@@ -17,6 +17,7 @@ use Illuminate\Support\Str;
 use PDO;
 use RuntimeException;
 use Tests\Support\CreatesBenefitCodeFixtures;
+use Tests\Support\PreservesOutboxTriggerSurface;
 use Tests\TestCase;
 
 /** @requirement BUY-001 BUY-002 AGT-003 AGT-004 DAT-002 DAT-003 DAT-004 SEC-002 QUA-004 */
@@ -24,6 +25,7 @@ final class NonPaidOrderMigrationRollbackSafetyTest extends TestCase
 {
     use CreatesBenefitCodeFixtures;
     use DatabaseTruncation;
+    use PreservesOutboxTriggerSurface;
 
     protected function setUp(): void
     {

@@ -19,28 +19,39 @@ final class OutboxMessageRouter implements OutboxMessageHandler
     {
         foreach ($handlers as $handler) {
             $eventType = $handler->eventType();
+            $contractVersion = $handler->contractVersion();
 
             if ($eventType === '' || strlen($eventType) > 191) {
                 throw new InvalidArgumentException('Outbox handler event type must contain 1-191 characters.');
             }
 
-            if (isset($this->handlers[$eventType])) {
-                throw new LogicException('Outbox event type has more than one registered handler.');
+            if ($contractVersion < 1 || $contractVersion > 65_535) {
+                throw new InvalidArgumentException('Outbox handler contract version must be between 1 and 65535.');
             }
 
-            $this->handlers[$eventType] = $handler;
+            $route = $this->route($eventType, $contractVersion);
+            if (isset($this->handlers[$route])) {
+                throw new LogicException('Outbox event contract has more than one registered handler.');
+            }
+
+            $this->handlers[$route] = $handler;
         }
     }
 
     /** @requirement ARCH-004 OPS-003 */
     public function handle(OutboxMessage $message): OutboxDispatchOutcome
     {
-        $handler = $this->handlers[$message->eventType] ?? null;
+        $handler = $this->handlers[$this->route($message->eventType, $message->contractVersion)] ?? null;
 
         if ($handler === null) {
             return OutboxDispatchOutcome::DefinitiveFailure;
         }
 
         return $handler->handle($message);
+    }
+
+    private function route(string $eventType, int $contractVersion): string
+    {
+        return $eventType.'@v'.$contractVersion;
     }
 }

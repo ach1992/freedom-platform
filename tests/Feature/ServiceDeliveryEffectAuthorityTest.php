@@ -933,6 +933,7 @@ final class ServiceDeliveryEffectAuthorityTest extends TestCase
             $payload,
             (string) $row->correlation_id,
             1,
+            ServiceDeliveryAttemptQueueService::OUTBOX_CONTRACT_VERSION,
         );
     }
 

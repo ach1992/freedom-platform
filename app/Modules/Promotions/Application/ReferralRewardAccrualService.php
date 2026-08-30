@@ -23,6 +23,8 @@ use stdClass;
 
 final readonly class ReferralRewardAccrualService
 {
+    private const OUTBOX_CONTRACT_VERSION = 1;
+
     public function __construct(
         private DatabaseManager $database,
         private OutboxPublisher $outbox,
@@ -200,6 +202,7 @@ final readonly class ReferralRewardAccrualService
                             'reward_public_id' => $rewardPublicId,
                         ]),
                         $correlationId,
+                        self::OUTBOX_CONTRACT_VERSION,
                     );
                 }
 

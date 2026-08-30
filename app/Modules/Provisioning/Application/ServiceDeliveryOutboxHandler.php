@@ -25,11 +25,17 @@ final readonly class ServiceDeliveryOutboxHandler implements OutboxEventHandler
         return ServiceDeliveryAttemptQueueService::OUTBOX_EVENT_TYPE;
     }
 
+    public function contractVersion(): int
+    {
+        return ServiceDeliveryAttemptQueueService::OUTBOX_CONTRACT_VERSION;
+    }
+
     /** @requirement SVC-002 SVC-014 ARCH-004 SEC-002 SEC-008 OPS-003 QUA-001 QUA-004 */
     public function handle(OutboxMessage $message): OutboxDispatchOutcome
     {
         $attemptPublicId = $message->payload['service_delivery_attempt_public_id'] ?? null;
         if ($message->eventType !== ServiceDeliveryAttemptQueueService::OUTBOX_EVENT_TYPE
+            || $message->contractVersion !== ServiceDeliveryAttemptQueueService::OUTBOX_CONTRACT_VERSION
             || $message->aggregateType !== ServiceDeliveryAttemptQueueService::OUTBOX_AGGREGATE_TYPE
             || ! is_string($attemptPublicId)
             || ! hash_equals($message->aggregateId, $attemptPublicId)

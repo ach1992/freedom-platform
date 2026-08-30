@@ -21,6 +21,8 @@ use stdClass;
 
 final readonly class ReferralRewardLifecycleService
 {
+    private const OUTBOX_CONTRACT_VERSION = 1;
+
     public function __construct(
         private DatabaseManager $database,
         private ReferralRewardWalletService $wallet,
@@ -162,6 +164,7 @@ final readonly class ReferralRewardLifecycleService
                 'state' => ReferralRewardState::Released->value,
             ]),
             $correlationId,
+            self::OUTBOX_CONTRACT_VERSION,
         );
 
         $current = $this->rewardById($connection, $rewardId);
@@ -285,6 +288,7 @@ final readonly class ReferralRewardLifecycleService
                 'state' => ReferralRewardState::Reversed->value,
             ]),
             $correlationId,
+            self::OUTBOX_CONTRACT_VERSION,
         );
 
         $current = $this->rewardById($connection, $rewardId);

@@ -268,6 +268,7 @@ final readonly class ServicePurchaseMutationQueueService
                     $operation->public_id,
                     new SafeOutboxPayload(['provisioning_operation_public_id' => $operation->public_id]),
                     $correlationId,
+                    ServiceMutationQueueService::OUTBOX_CONTRACT_VERSION,
                 );
 
                 return $this->receipt($service, $operation, false);

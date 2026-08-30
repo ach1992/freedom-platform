@@ -7,4 +7,6 @@ namespace App\Shared\Application;
 interface OutboxEventHandler extends OutboxMessageHandler
 {
     public function eventType(): string;
+
+    public function contractVersion(): int;
 }

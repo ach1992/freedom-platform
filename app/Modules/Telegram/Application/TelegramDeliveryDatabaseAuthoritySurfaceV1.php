@@ -25,6 +25,12 @@ final readonly class TelegramDeliveryDatabaseAuthoritySurfaceV1
 {
     private const EXPECTED_SEMANTIC_FINGERPRINT = '1f15546a0e868d566f162697d86d2fe0d7fb313bc5e2b8c03301f0c7a47a2906';
 
+    private const OUTBOX_CONTRACT_VERSION_TRIGGER = 'outbox_contract_version_update_guard';
+
+    private const OUTBOX_CONTRACT_VERSION_CHECK = 'outbox_contract_version_chk';
+
+    private const OUTBOX_CONTRACT_VERSION_INDEX = 'outbox_contract_route_index';
+
     /** @var list<string> */
     public const REQUIRED_TRIGGERS = [
         'telegram_delivery_capability_insert_guard',
@@ -148,13 +154,38 @@ SQL, [], false);
 
     public function semanticsMatchExpected(Connection $connection): bool
     {
+        return $this->semanticAttestationFailures($connection) === [];
+    }
+
+    /**
+     * Return stable, non-sensitive failure codes for operational/test diagnostics.
+     * Metadata values, account names and SQL bodies are deliberately not exposed.
+     *
+     * @return list<string>
+     */
+    public function semanticAttestationFailures(Connection $connection): array
+    {
         try {
-            return hash_equals(self::EXPECTED_SEMANTIC_FINGERPRINT, $this->semanticFingerprint($connection))
-                && $this->referentialConstraintsMatchExpected($connection)
-                && $this->outboxGuardsAreTerminal($connection)
-                && $this->triggerExecutionContextMatchesCurrentConnection($connection);
+            $failures = [];
+            if (! hash_equals(self::EXPECTED_SEMANTIC_FINGERPRINT, $this->semanticFingerprint($connection))) {
+                $failures[] = 'telegram_delivery_semantic_fingerprint_mismatch';
+            }
+            if (! $this->referentialConstraintsMatchExpected($connection)) {
+                $failures[] = 'telegram_delivery_referential_metadata_mismatch';
+            }
+            foreach ($this->outboxContractVersionSurfaceFailures($connection) as $failure) {
+                $failures[] = $failure;
+            }
+            if (! $this->outboxGuardsAreTerminal($connection)) {
+                $failures[] = 'telegram_delivery_outbox_terminal_guard_mismatch';
+            }
+            if (! $this->triggerExecutionContextMatchesCurrentConnection($connection)) {
+                $failures[] = 'telegram_delivery_trigger_execution_context_mismatch';
+            }
+
+            return $failures;
         } catch (Throwable) {
-            return false;
+            return ['telegram_delivery_semantic_attestation_error'];
         }
     }
 
@@ -259,7 +290,7 @@ SQL, [], false);
             ->values()
             ->all();
 
-        $triggers = $connection->table('information_schema.TRIGGERS')
+        $triggerRows = $connection->table('information_schema.TRIGGERS')
             ->where('TRIGGER_SCHEMA', $databaseName)
             ->whereIn('EVENT_OBJECT_TABLE', self::TRIGGER_SURFACE_TABLES)
             ->orderBy('TRIGGER_NAME')
@@ -270,14 +301,34 @@ SQL, [], false);
                 'ACTION_TIMING',
                 'ACTION_STATEMENT',
                 'ACTION_ORDER',
-            ])
+            ]);
+        $contractVersionTrigger = $triggerRows->first(
+            static fn (object $row): bool => (string) $row->TRIGGER_NAME === self::OUTBOX_CONTRACT_VERSION_TRIGGER,
+        );
+        $contractVersionActionOrder = $contractVersionTrigger === null
+            ? null
+            : (int) $contractVersionTrigger->ACTION_ORDER;
+
+        // The shared Outbox contract-version guard is a separately attested extension.
+        // Remove it from the historical Telegram v1 fingerprint and renumber only the
+        // affected BEFORE UPDATE action orders back to their pre-extension positions.
+        // This preserves the immutable v1 fingerprint while still failing closed on
+        // any unrecognized shared-Outbox trigger or ordering change.
+        $triggers = $triggerRows
+            ->reject(static fn (object $row): bool => (string) $row->TRIGGER_NAME === self::OUTBOX_CONTRACT_VERSION_TRIGGER)
             ->map(fn (object $row): array => [
                 (string) $row->TRIGGER_NAME,
                 (string) $row->EVENT_MANIPULATION,
                 (string) $row->EVENT_OBJECT_TABLE,
                 (string) $row->ACTION_TIMING,
                 $this->normalizeMetadataSql($row->ACTION_STATEMENT),
-                (int) $row->ACTION_ORDER,
+                $this->baselineTriggerActionOrder(
+                    (int) $row->ACTION_ORDER,
+                    (string) $row->EVENT_OBJECT_TABLE,
+                    (string) $row->EVENT_MANIPULATION,
+                    (string) $row->ACTION_TIMING,
+                    $contractVersionActionOrder,
+                ),
             ])
             ->values()
             ->all();
@@ -397,6 +448,131 @@ SQL, [], false);
             ->all();
 
         return $this->sameNames($columns, $actual);
+    }
+
+    /** @return list<string> */
+    private function outboxContractVersionSurfaceFailures(Connection $connection): array
+    {
+        $databaseName = $connection->getDatabaseName();
+        $column = $connection->table('information_schema.COLUMNS')
+            ->where('TABLE_SCHEMA', $databaseName)
+            ->where('TABLE_NAME', 'outbox_messages')
+            ->where('COLUMN_NAME', 'contract_version')
+            ->first(['DATA_TYPE', 'COLUMN_TYPE', 'IS_NULLABLE', 'COLUMN_DEFAULT']);
+        $check = $connection->table('information_schema.CHECK_CONSTRAINTS')
+            ->where('CONSTRAINT_SCHEMA', $databaseName)
+            ->where('TABLE_NAME', 'outbox_messages')
+            ->where('CONSTRAINT_NAME', self::OUTBOX_CONTRACT_VERSION_CHECK)
+            ->first(['CHECK_CLAUSE']);
+        $indexRows = $connection->table('information_schema.STATISTICS')
+            ->where('TABLE_SCHEMA', $databaseName)
+            ->where('TABLE_NAME', 'outbox_messages')
+            ->where('INDEX_NAME', self::OUTBOX_CONTRACT_VERSION_INDEX)
+            ->orderBy('SEQ_IN_INDEX')
+            ->get(['NON_UNIQUE', 'SEQ_IN_INDEX', 'COLUMN_NAME']);
+        $trigger = $connection->table('information_schema.TRIGGERS')
+            ->where('TRIGGER_SCHEMA', $databaseName)
+            ->where('TRIGGER_NAME', self::OUTBOX_CONTRACT_VERSION_TRIGGER)
+            ->first([
+                'EVENT_MANIPULATION',
+                'EVENT_OBJECT_TABLE',
+                'ACTION_TIMING',
+                'ACTION_STATEMENT',
+                'ACTION_ORDER',
+            ]);
+
+        $surfacePresent = [
+            $column !== null,
+            $check !== null,
+            $indexRows->isNotEmpty(),
+            $trigger !== null,
+        ];
+        if (! in_array(true, $surfacePresent, true)) {
+            return [];
+        }
+
+        $failures = [];
+        if (in_array(false, $surfacePresent, true)) {
+            $failures[] = 'outbox_contract_version_surface_partial';
+
+            return $failures;
+        }
+
+        if ($column === null
+            || strtolower((string) $column->DATA_TYPE) !== 'smallint'
+            || ! str_contains(strtolower((string) $column->COLUMN_TYPE), 'unsigned')
+            || (string) $column->IS_NULLABLE !== 'NO'
+            || (string) $column->COLUMN_DEFAULT !== '1') {
+            $failures[] = 'outbox_contract_version_column_mismatch';
+        }
+
+        $checkClause = strtolower(str_replace(
+            ['`', '(', ')', ' '],
+            '',
+            $this->normalizeMetadataSql($check->CHECK_CLAUSE),
+        ));
+        if ($checkClause !== 'contract_versionbetween1and65535') {
+            $failures[] = 'outbox_contract_version_check_mismatch';
+        }
+
+        if ($indexRows->count() !== 2) {
+            $failures[] = 'outbox_contract_version_index_mismatch';
+        } else {
+            $index = $indexRows->values();
+            if ((int) $index[0]->NON_UNIQUE !== 1
+                || (int) $index[0]->SEQ_IN_INDEX !== 1
+                || (string) $index[0]->COLUMN_NAME !== 'event_type'
+                || (int) $index[1]->NON_UNIQUE !== 1
+                || (int) $index[1]->SEQ_IN_INDEX !== 2
+                || (string) $index[1]->COLUMN_NAME !== 'contract_version') {
+                $failures[] = 'outbox_contract_version_index_mismatch';
+            }
+        }
+
+        $expectedTriggerBody = $this->normalizeMetadataSql(<<<'SQL'
+BEGIN
+    IF OLD.contract_version <> NEW.contract_version THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Outbox durable contract version is immutable.';
+    END IF;
+END
+SQL);
+        if ($trigger === null
+            || (string) $trigger->EVENT_MANIPULATION !== 'UPDATE'
+            || (string) $trigger->EVENT_OBJECT_TABLE !== 'outbox_messages'
+            || (string) $trigger->ACTION_TIMING !== 'BEFORE'
+            || $this->normalizeMetadataSql($trigger->ACTION_STATEMENT) !== $expectedTriggerBody) {
+            $failures[] = 'outbox_contract_version_trigger_mismatch';
+        }
+
+        $terminalGuard = $connection->table('information_schema.TRIGGERS')
+            ->where('TRIGGER_SCHEMA', $databaseName)
+            ->where('TRIGGER_NAME', self::OUTBOX_TERMINAL_GUARDS['UPDATE'])
+            ->first(['ACTION_ORDER']);
+        if ($terminalGuard === null
+            || $trigger === null
+            || (int) $trigger->ACTION_ORDER >= (int) $terminalGuard->ACTION_ORDER) {
+            $failures[] = 'outbox_contract_version_trigger_order_mismatch';
+        }
+
+        return $failures;
+    }
+
+    private function baselineTriggerActionOrder(
+        int $actionOrder,
+        string $table,
+        string $event,
+        string $timing,
+        ?int $contractVersionActionOrder,
+    ): int {
+        if ($contractVersionActionOrder === null
+            || $table !== 'outbox_messages'
+            || $event !== 'UPDATE'
+            || $timing !== 'BEFORE'
+            || $actionOrder <= $contractVersionActionOrder) {
+            return $actionOrder;
+        }
+
+        return $actionOrder - 1;
     }
 
     private function outboxGuardsAreTerminal(Connection $connection): bool

@@ -28,7 +28,7 @@ use RuntimeException;
  * @phpstan-type OrderItemRow object{id:int|string,public_id:string,order_id:int|string,line_number:int|string,source_quote_id:int|string|null,source_quote_public_id:string|null,order_source_authorization_id:int|string|null,order_source_authorization_public_id:string|null,configuration_snapshot_hash:string}
  * @phpstan-type ServiceRow object{id:int|string,public_id:string,order_id:int|string,order_item_id:int|string,user_id:int|string,creation_correlation_id:string}
  * @phpstan-type OperationRow object{id:int|string,public_id:string,operation_key:string,operation_type:string,order_id:int|string,order_item_id:int|string,service_subscription_id:int|string,user_id:int|string,state:string,state_version:int|string,correlation_id:string}
- * @phpstan-type OutboxRow object{id:string,event_key:string,event_type:string,aggregate_type:string,aggregate_id:string,payload:string,payload_hash:string,correlation_id:string}
+ * @phpstan-type OutboxRow object{id:string,event_key:string,event_type:string,contract_version:int|string,aggregate_type:string,aggregate_id:string,payload:string,payload_hash:string,correlation_id:string}
  */
 final readonly class InitialProvisioningQueueService
 {
@@ -36,9 +36,11 @@ final readonly class InitialProvisioningQueueService
 
     private const OPERATION_TYPE = 'initial_provision';
 
-    private const EVENT_TYPE = 'provisioning.initial.requested';
+    public const OUTBOX_EVENT_TYPE = 'provisioning.initial.requested';
 
-    private const AGGREGATE_TYPE = 'provisioning_operation';
+    public const OUTBOX_CONTRACT_VERSION = 1;
+
+    public const OUTBOX_AGGREGATE_TYPE = 'provisioning_operation';
 
     private const DEADLOCK_RETRY_ATTEMPTS = 3;
 
@@ -200,11 +202,12 @@ final readonly class InitialProvisioningQueueService
         $eventId = $this->outbox->publish(
             (string) Str::uuid(),
             $this->eventKey($operationPublicId),
-            self::EVENT_TYPE,
-            self::AGGREGATE_TYPE,
+            self::OUTBOX_EVENT_TYPE,
+            self::OUTBOX_AGGREGATE_TYPE,
             $operationPublicId,
             $payload,
             $correlationId,
+            self::OUTBOX_CONTRACT_VERSION,
         );
 
         $updated = $this->orderTransitions->transition(
@@ -223,11 +226,12 @@ final readonly class InitialProvisioningQueueService
             $this->outbox->releaseForDispatch(
                 $eventId,
                 $this->eventKey($operationPublicId),
-                self::EVENT_TYPE,
-                self::AGGREGATE_TYPE,
+                self::OUTBOX_EVENT_TYPE,
+                self::OUTBOX_AGGREGATE_TYPE,
                 $operationPublicId,
                 $payload,
                 $correlationId,
+                self::OUTBOX_CONTRACT_VERSION,
             );
         } catch (\LogicException $exception) {
             throw new RuntimeException(
@@ -414,7 +418,7 @@ final readonly class InitialProvisioningQueueService
         $row = $connection->table('outbox_messages')
             ->where('event_key', $this->eventKey($operationPublicId))
             ->lockForUpdate()
-            ->first(['id', 'event_key', 'event_type', 'aggregate_type', 'aggregate_id', 'payload', 'payload_hash', 'correlation_id']);
+            ->first(['id', 'event_key', 'event_type', 'contract_version', 'aggregate_type', 'aggregate_id', 'payload', 'payload_hash', 'correlation_id']);
         if ($row === null) {
             throw new RuntimeException('Provisioning Operation durable Outbox command is unavailable.');
         }
@@ -616,8 +620,9 @@ final readonly class InitialProvisioningQueueService
             || (int) $operation->user_id !== (int) $order->user_id
             || $operation->state !== ProvisioningState::Queued->value
             || (int) $operation->state_version !== 1
-            || $outbox->event_type !== self::EVENT_TYPE
-            || $outbox->aggregate_type !== self::AGGREGATE_TYPE
+            || $outbox->event_type !== self::OUTBOX_EVENT_TYPE
+            || (int) $outbox->contract_version !== self::OUTBOX_CONTRACT_VERSION
+            || $outbox->aggregate_type !== self::OUTBOX_AGGREGATE_TYPE
             || ! hash_equals($outbox->aggregate_id, $operation->public_id)
             || ! hash_equals($outbox->event_key, $this->eventKey($operation->public_id))
             || ! hash_equals($outbox->correlation_id, $operation->correlation_id)

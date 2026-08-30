@@ -581,6 +581,7 @@ final class InitialProvisioningRemoteEffectTest extends TestCase
             $payload,
             (string) $event->correlation_id,
             2,
+            InitialProvisioningQueueService::OUTBOX_CONTRACT_VERSION,
         ));
 
         self::assertSame(OutboxDispatchOutcome::RetryableFailure, $outcome);

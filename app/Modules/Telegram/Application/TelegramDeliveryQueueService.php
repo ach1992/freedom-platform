@@ -27,6 +27,8 @@ final readonly class TelegramDeliveryQueueService
 
     public const OUTBOX_EVENT_TYPE = 'telegram.delivery.requested';
 
+    public const OUTBOX_CONTRACT_VERSION = 1;
+
     public const OUTBOX_AGGREGATE_TYPE = 'telegram_delivery_operation';
 
     public const OUTBOX_EVENT_KEY_PREFIX = 'telegram-delivery-requested:';
@@ -144,6 +146,7 @@ final readonly class TelegramDeliveryQueueService
                     $publicId,
                     $payload,
                     $correlationId,
+                    self::OUTBOX_CONTRACT_VERSION,
                 );
                 if (! hash_equals($outboxEventId, $publishedEventId)) {
                     throw new RuntimeException('Telegram delivery Outbox event identity was unexpectedly replayed.');
@@ -175,6 +178,7 @@ final readonly class TelegramDeliveryQueueService
                     $publicId,
                     $payload,
                     $correlationId,
+                    self::OUTBOX_CONTRACT_VERSION,
                 );
 
                 $created = $this->operationByPublicId($connection, $publicId, false)

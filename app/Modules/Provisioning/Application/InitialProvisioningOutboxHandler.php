@@ -13,8 +13,6 @@ use Throwable;
 
 final readonly class InitialProvisioningOutboxHandler implements OutboxEventHandler
 {
-    private const EVENT_TYPE = 'provisioning.initial.requested';
-
     public function __construct(
         private InitialProvisioningExecutor $executor,
         private InitialProvisioningRecoveryService $recovery,
@@ -23,14 +21,20 @@ final readonly class InitialProvisioningOutboxHandler implements OutboxEventHand
 
     public function eventType(): string
     {
-        return self::EVENT_TYPE;
+        return InitialProvisioningQueueService::OUTBOX_EVENT_TYPE;
+    }
+
+    public function contractVersion(): int
+    {
+        return InitialProvisioningQueueService::OUTBOX_CONTRACT_VERSION;
     }
 
     /** @requirement PAY-003 PRV-002 PRV-003 SVC-002 ARCH-004 SEC-002 QUA-001 */
     public function handle(OutboxMessage $message): OutboxDispatchOutcome
     {
         $operationPublicId = $message->payload['provisioning_operation_public_id'] ?? null;
-        if ($message->eventType !== self::EVENT_TYPE
+        if ($message->eventType !== InitialProvisioningQueueService::OUTBOX_EVENT_TYPE
+            || $message->contractVersion !== InitialProvisioningQueueService::OUTBOX_CONTRACT_VERSION
             || $message->aggregateType !== 'provisioning_operation'
             || ! is_string($operationPublicId)
             || ! hash_equals($message->aggregateId, $operationPublicId)

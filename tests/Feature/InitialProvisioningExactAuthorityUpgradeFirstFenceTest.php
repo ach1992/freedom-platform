@@ -25,6 +25,7 @@ use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use RuntimeException;
+use Tests\Support\PreservesOutboxTriggerSurface;
 use Tests\TestCase;
 
 /** @requirement BUY-001 PAY-002 PAY-003 PRV-002 PRV-003 DAT-002 DAT-003 DAT-004 SEC-002 SEC-008 QUA-004 */
@@ -32,6 +33,7 @@ final class InitialProvisioningExactAuthorityUpgradeFirstFenceTest extends TestC
 {
     use AgentPricingQuoteIntegrationTestSupport;
     use DatabaseTruncation;
+    use PreservesOutboxTriggerSurface;
     use PurchaseOrderTestSupport;
 
     protected function setUp(): void

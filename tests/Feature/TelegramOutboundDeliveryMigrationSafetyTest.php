@@ -1076,6 +1076,7 @@ SQL);
             ['telegram_delivery_operation_public_id' => $forged->public_id],
             $forged->correlation_id,
             1,
+            TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION,
         ));
     }
 
