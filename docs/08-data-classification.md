@@ -21,6 +21,7 @@ A record inherits the highest class of any included field. Hashing is not anonym
 - Full restricted values are masked by default and revealed only through a narrowly authorized/audited path when genuinely required.
 - Private files, backups, and subscription material remain outside the public web root.
 - Queue, cache, outbox, alerts, exceptions, audit, and logs carry identifiers/references rather than restricted values whenever possible.
+- When application code must temporarily carry plaintext RESTRICTED data, use the shared `RestrictedData` marker/value boundary. Routine structured log context is normalized through `SafeLogContext` to flat scalar metadata; the logging processor redacts any `RestrictedData` regardless of its key, and `SafeOutboxPayload` rejects the marker recursively before durable serialization. Legacy key/message redaction remains defense-in-depth rather than the primary type boundary.
 - Provider payloads are normalized immediately; raw payload retention is exceptional, encrypted, and time-bounded.
 - Financial and audit history is append-only; deletion/anonymization must not corrupt accounting or security evidence.
 
