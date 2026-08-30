@@ -27,10 +27,18 @@ ALTER TABLE outbox_messages
     CHECK (contract_version BETWEEN 1 AND 65535)
 SQL);
 
-        DB::unprepared(<<<'SQL'
+        $telegramTerminalGuardExists = DB::table('information_schema.TRIGGERS')
+            ->where('TRIGGER_SCHEMA', DB::connection()->getDatabaseName())
+            ->where('TRIGGER_NAME', 'outbox_telegram_delivery_envelope_update_guard')
+            ->exists();
+        $ordering = $telegramTerminalGuardExists
+            ? "\nPRECEDES outbox_telegram_delivery_envelope_update_guard"
+            : '';
+
+        DB::unprepared(<<<SQL
 CREATE OR REPLACE TRIGGER outbox_contract_version_update_guard
 BEFORE UPDATE ON outbox_messages
-FOR EACH ROW
+FOR EACH ROW{$ordering}
 BEGIN
     IF OLD.contract_version <> NEW.contract_version THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Outbox durable contract version is immutable.';

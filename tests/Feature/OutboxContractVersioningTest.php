@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Modules\Telegram\Application\TelegramDeliveryDatabaseAuthoritySurfaceV1;
 use App\Shared\Infrastructure\DatabaseOutboxContractRetirementGuard;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -35,6 +36,33 @@ final class OutboxContractVersioningTest extends TestCase
         } catch (QueryException) {
             self::assertSame(1, (int) DB::table('outbox_messages')->where('id', $id)->value('contract_version'));
         }
+    }
+
+    public function test_version_guard_preserves_telegram_outbox_terminal_authority(): void
+    {
+        $connection = DB::connection();
+        if ($connection->getDriverName() !== 'mysql') {
+            self::markTestSkipped('Telegram delivery semantic attestation requires MariaDB/MySQL.');
+        }
+
+        self::assertTrue(
+            (new TelegramDeliveryDatabaseAuthoritySurfaceV1)->semanticsMatchExpected($connection),
+            'Outbox contract versioning must remain an explicitly attested extension of Telegram delivery authority.',
+        );
+
+        $orders = DB::table('information_schema.TRIGGERS')
+            ->where('TRIGGER_SCHEMA', $connection->getDatabaseName())
+            ->whereIn('TRIGGER_NAME', [
+                'outbox_contract_version_update_guard',
+                'outbox_telegram_delivery_envelope_update_guard',
+            ])
+            ->pluck('ACTION_ORDER', 'TRIGGER_NAME');
+
+        self::assertTrue(
+            (int) $orders->get('outbox_contract_version_update_guard')
+                < (int) $orders->get('outbox_telegram_delivery_envelope_update_guard'),
+            'The shared version guard must execute before the Telegram terminal mutation guard.',
+        );
     }
 
     public function test_retirement_guard_blocks_until_matching_durable_messages_are_processed(): void
