@@ -24,6 +24,13 @@ SQL SECURITY DEFINER
 CREATE TABLE IF NOT EXISTS `freedom_platform_ci`.`telegram_metadata_definer_probe_effect` (`id` INT NOT NULL);
 GRANT EXECUTE ON PROCEDURE `freedom_platform_ci`.`telegram_metadata_definer_probe` TO 'freedom_ci_metadata_routine'@'%';
 
+-- Test-only DDL authority that deliberately lacks LOCK TABLES. It proves
+-- rollback rejects the unsupported reference-fence primitive before lifecycle
+-- deactivation while still granting the ordinary table inspection/DDL surface
+-- needed by the regression setup.
+CREATE USER IF NOT EXISTS 'freedom_ci_rollback_no_lock'@'%' IDENTIFIED BY 'ci-only-rollback-no-lock-password';
+GRANT SELECT, ALTER, DROP, INDEX ON `freedom_platform_ci`.* TO 'freedom_ci_rollback_no_lock'@'%';
+
 -- Test-only authority used to construct a child table in a schema the ordinary
 -- application principal cannot inspect. It exists only inside disposable CI.
 CREATE USER IF NOT EXISTS 'freedom_ci_fk_builder'@'%' IDENTIFIED BY 'ci-only-fk-builder-password';

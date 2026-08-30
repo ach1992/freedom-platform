@@ -31,6 +31,12 @@ final readonly class TelegramDeliveryLifecycleDatabaseAuthority
             throw new RuntimeException('Telegram delivery lifecycle authority requires the exact dedicated SELECT/UPDATE-only MariaDB principal.');
         }
 
+        // An active surface can be deactivated immediately after this authority
+        // is returned. Prove first that the exact DDL session can acquire the
+        // reference-fence locks needed later in the same rollback state machine.
+        (new TelegramDeliveryReferenceFenceLockPreflight)
+            ->assertActiveSurfaceLockCapability($runtimeConnection);
+
         return $connection;
     }
 
