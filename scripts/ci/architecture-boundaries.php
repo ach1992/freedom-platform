@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 return [
     'allowed_module_dependencies' => [
-        'Agents' => ['AccessControl'],
+        'Agents' => ['AccessControl', 'Identity'],
         'Catalog' => ['AccessControl', 'Customers', 'Identity', 'Panels'],
         'Customers' => ['AccessControl', 'Identity'],
         'Identity' => ['AccessControl'],
@@ -14,6 +14,7 @@ return [
         'Payments' => ['AccessControl', 'Orders', 'Wallet'],
         'Promotions' => ['AccessControl', 'Wallet'],
         'Provisioning' => ['AccessControl', 'Catalog', 'Orders', 'Panels', 'Payments', 'Telegram', 'Wallet'],
+        'Telegram' => ['Identity'],
         'Wallet' => ['AccessControl'],
     ],
     'domain_dependency_exceptions' => [
@@ -269,17 +270,7 @@ return [
     // Exact temporary legacy seams only. Each entry is owned by #188 and CI rejects
     // stale/unused entries so the list shrinks as runtime boundaries are repaired.
     'persistence_exceptions' => [
-        'app/Modules/Agents/Application/AgentApplicationService.php|users',
-        'app/Modules/Customers/Application/CustomerAccountStateService.php|users',
-        'app/Modules/Identity/Application/IdentityItemService.php|customer_profiles',
-        'app/Modules/Identity/Application/OtpChallengeIssuer.php|customer_profiles',
-        'app/Modules/Identity/Application/OtpChallengeVerifier.php|customer_profiles',
-        'app/Modules/Identity/Application/TelegramContactVerifier.php|customer_profiles',
-        'app/Modules/Provisioning/Application/InitialProvisioningQueueService.php|orders',
         'app/Modules/Provisioning/Application/InitialProvisioningQueueService.php|outbox_messages',
         'app/Modules/Provisioning/Application/ServiceDeliveryAttemptQueueService.php|outbox_messages',
-        'app/Modules/Telegram/Application/TelegramIdentitySynchronizer.php|customer_profiles',
-        'app/Modules/Telegram/Application/TelegramIdentitySynchronizer.php|telegram_accounts',
-        'app/Modules/Telegram/Application/TelegramIdentitySynchronizer.php|users',
     ],
 ];

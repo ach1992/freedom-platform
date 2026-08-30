@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Identity\Application;
 
 use App\Modules\AccessControl\Application\AdministratorPermissionAuthorizer;
+use App\Modules\Identity\Application\Contracts\CustomerIdentityProfileWriter;
 use App\Modules\Identity\Application\Contracts\PhoneLookupHasher;
 use App\Modules\Identity\Domain\IdentityItemType;
 use App\Modules\Identity\Domain\IdentityItemValue;
@@ -33,6 +34,7 @@ final readonly class IdentityItemService
         private PhoneLookupHasher $hasher,
         private AdministratorPermissionAuthorizer $authorizer,
         private IdentityMutationAudit $audit,
+        private CustomerIdentityProfileWriter $customerProfiles,
         private Clock $clock,
         private int $hashKeyVersion = 1,
         array $requiredTypes = [IdentityItemType::NationalId, IdentityItemType::FullName],
@@ -508,23 +510,9 @@ final readonly class IdentityItemService
         return $row === null ? null : IdentityItemRecord::fromRow($row);
     }
 
-    private function ensureProfile(Connection $connection, int $userId, string $now): void
-    {
-        $tierId = $connection->table('customer_tiers')->where('code', 'new')->value('id');
-        $connection->table('customer_profiles')->insertOrIgnore([
-            'user_id' => $userId,
-            'current_tier_id' => is_numeric($tierId) ? (int) $tierId : null,
-            'tier_locked' => false,
-            'phone_verification_status' => VerificationStatus::Unverified->value,
-            'identity_verification_status' => VerificationStatus::Unverified->value,
-            'created_at' => $now,
-            'updated_at' => $now,
-        ]);
-    }
-
     private function updateAggregate(Connection $connection, int $userId, string $now): void
     {
-        $this->ensureProfile($connection, $userId, $now);
+        $this->customerProfiles->ensure($connection, $userId, $now);
         /** @var array<string, string> $states */
         $states = $connection->table('identity_items')
             ->where('user_id', $userId)
@@ -546,10 +534,7 @@ final readonly class IdentityItemService
             in_array(VerificationStatus::Unverified->value, $requiredStates, true) => VerificationStatus::Unverified,
             default => VerificationStatus::Verified,
         };
-        $connection->table('customer_profiles')->where('user_id', $userId)->update([
-            'identity_verification_status' => $aggregate->value,
-            'updated_at' => $now,
-        ]);
+        $this->customerProfiles->updateIdentityVerificationStatus($connection, $userId, $aggregate, $now);
     }
 
     private function history(

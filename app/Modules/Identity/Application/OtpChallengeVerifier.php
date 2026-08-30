@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Identity\Application;
 
+use App\Modules\Identity\Application\Contracts\CustomerIdentityProfileWriter;
 use App\Modules\Identity\Application\Contracts\OtpCodeHasher;
 use App\Modules\Identity\Application\Exceptions\InvalidOtpCode;
 use App\Modules\Identity\Application\Exceptions\OtpChallengeExpired;
@@ -11,6 +12,7 @@ use App\Modules\Identity\Application\Exceptions\OtpChallengeInactive;
 use App\Modules\Identity\Application\Exceptions\OtpChallengeNotFound;
 use App\Modules\Identity\Domain\PhoneVerificationMethod;
 use App\Modules\Identity\Domain\PhoneVerificationPolicy;
+use App\Modules\Identity\Domain\VerificationStatus;
 use App\Shared\Application\Clock;
 use DateTimeImmutable;
 use DateTimeZone;
@@ -22,6 +24,7 @@ final readonly class OtpChallengeVerifier
     public function __construct(
         private DatabaseManager $database,
         private OtpCodeHasher $hasher,
+        private CustomerIdentityProfileWriter $customerProfiles,
         private Clock $clock,
     ) {}
 
@@ -237,10 +240,12 @@ final readonly class OtpChallengeVerifier
             'verified_at' => $policySatisfied ? $nowString : null,
             'updated_at' => $nowString,
         ]);
-        $connection->table('customer_profiles')->where('user_id', $userId)->update([
-            'phone_verification_status' => $status,
-            'updated_at' => $nowString,
-        ]);
+        $this->customerProfiles->updatePhoneVerificationStatus(
+            $connection,
+            $userId,
+            VerificationStatus::from($status),
+            $nowString,
+        );
         $this->recordEvent(
             $userId,
             $phoneNumberId,

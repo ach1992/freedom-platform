@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Modules\Identity\Application\Contracts\CustomerIdentityProfileWriter;
 use App\Modules\Identity\Application\Exceptions\PhoneAlreadyAssigned;
 use App\Modules\Identity\Application\Exceptions\PhoneVerificationMethodNotAllowed;
 use App\Modules\Identity\Application\Exceptions\TelegramContactOwnershipMismatch;
@@ -228,6 +229,7 @@ final class TelegramContactVerificationTest extends TestCase
             $this->app->make(DatabaseManager::class),
             $this->app->make(StringEncrypter::class),
             new HmacPhoneLookupHasher(str_repeat('k', 32), 1),
+            $this->app->make(CustomerIdentityProfileWriter::class),
             $this->app->make(Clock::class),
         );
     }

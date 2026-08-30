@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Provisioning\Application;
 
+use App\Modules\Orders\Application\OrderProvisioningTransitionService;
 use App\Modules\Orders\Domain\OrderSourceType;
 use App\Modules\Orders\Domain\OrderState;
 use App\Modules\Payments\Domain\PaymentIntentState;
@@ -45,6 +46,7 @@ final readonly class InitialProvisioningQueueService
         private DatabaseManager $database,
         private Clock $clock,
         private OutboxPublisher $outbox,
+        private OrderProvisioningTransitionService $orderTransitions,
     ) {}
 
     /** @requirement BUY-001 CAT-006 ADM-002 PAY-002 PAY-003 PRV-002 PRV-003 ARCH-003 ARCH-004 DAT-002 DAT-003 DAT-004 SEC-002 SEC-008 QUA-001 QUA-004 */
@@ -205,15 +207,14 @@ final readonly class InitialProvisioningQueueService
             $correlationId,
         );
 
-        $updated = $connection->table('orders')
-            ->where('id', $orderId)
-            ->where('state', $fromState->value)
-            ->where('state_version', $fromVersion)
-            ->update([
-                'state' => OrderState::ProvisioningQueued->value,
-                'state_version' => $toVersion,
-                'updated_at' => $timestamp,
-            ]);
+        $updated = $this->orderTransitions->transition(
+            $connection,
+            $orderId,
+            $fromState,
+            $fromVersion,
+            $toVersion,
+            $timestamp,
+        );
         if ($updated !== 1) {
             throw new RuntimeException('Order provisioning transition lost its authoritative state.');
         }

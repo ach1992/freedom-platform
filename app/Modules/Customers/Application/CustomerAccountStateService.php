@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Customers\Application;
 
 use App\Modules\AccessControl\Application\AdministratorPermissionAuthorizer;
+use App\Modules\Identity\Application\UserAccountMutationService;
 use App\Modules\Identity\Domain\AccountStatus;
 use App\Shared\Application\Clock;
 use Illuminate\Database\Connection;
@@ -22,6 +23,7 @@ final readonly class CustomerAccountStateService
         private DatabaseManager $database,
         private AdministratorPermissionAuthorizer $authorizer,
         private CustomerMutationAudit $audit,
+        private UserAccountMutationService $userAccounts,
         private Clock $clock,
     ) {}
 
@@ -93,10 +95,7 @@ final readonly class CustomerAccountStateService
         $now = $this->clock->now()->format('Y-m-d H:i:s.u');
 
         if ($currentStatus !== $targetStatus) {
-            $connection->table('users')->where('id', $userId)->update([
-                'account_status' => $targetStatus->value,
-                'updated_at' => $now,
-            ]);
+            $this->userAccounts->updateAccountStatus($connection, $userId, $targetStatus, $now);
 
             $connection->table('customer_status_histories')->insert([
                 'user_id' => $userId,

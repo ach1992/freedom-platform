@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Identity\Infrastructure;
 
 use App\Modules\AccessControl\Application\AdministratorPermissionAuthorizer;
+use App\Modules\Identity\Application\Contracts\CustomerIdentityProfileWriter;
 use App\Modules\Identity\Application\Contracts\OtpAbuseLimiter;
 use App\Modules\Identity\Application\Contracts\OtpCodeHasher;
 use App\Modules\Identity\Application\Contracts\PhoneLookupHasher;
@@ -56,6 +57,7 @@ final class IdentityServiceProvider extends ServiceProvider
                     $application->make(PhoneLookupHasher::class),
                     $application->make(AdministratorPermissionAuthorizer::class),
                     $application->make(IdentityMutationAudit::class),
+                    $application->make(CustomerIdentityProfileWriter::class),
                     $application->make(Clock::class),
                     self::positiveInteger($items['hash_key_version'] ?? 1, 1),
                     self::stringList($items['required_types'] ?? null, ['national_id', 'full_name']),
@@ -133,6 +135,7 @@ final class IdentityServiceProvider extends ServiceProvider
                     $application->make(OtpCodeHasher::class),
                     $application->make(OtpAbuseLimiter::class),
                     $application->make(FallbackSmsDispatcher::class),
+                    $application->make(CustomerIdentityProfileWriter::class),
                     $application->make(RandomGenerator::class),
                     $application->make(Clock::class),
                     self::positiveInteger($otp['ttl_seconds'] ?? 120, 120),
@@ -150,6 +153,7 @@ final class IdentityServiceProvider extends ServiceProvider
             fn (Application $application): OtpChallengeVerifier => new OtpChallengeVerifier(
                 $application->make(DatabaseManager::class),
                 $application->make(OtpCodeHasher::class),
+                $application->make(CustomerIdentityProfileWriter::class),
                 $application->make(Clock::class),
             ),
         );

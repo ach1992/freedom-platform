@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Modules\Identity\Application\Contracts\CustomerIdentityProfileWriter;
 use App\Modules\Identity\Application\Contracts\OtpAbuseLimiter;
 use App\Modules\Identity\Application\Exceptions\InvalidOtpCode;
 use App\Modules\Identity\Application\Exceptions\OtpChallengeExpired;
@@ -165,6 +166,7 @@ final class OtpChallengeLifecycleTest extends TestCase
             $this->app->make(DatabaseManager::class),
             $this->app->make(StringEncrypter::class),
             $phoneHasher,
+            $this->app->make(CustomerIdentityProfileWriter::class),
             $clock,
         );
         [$issuer, $verifier] = $this->services($clock, new FakeSmsProvider('primary'));
@@ -265,6 +267,7 @@ final class OtpChallengeLifecycleTest extends TestCase
             $this->app->make(DatabaseManager::class),
             $this->app->make(StringEncrypter::class),
             $phoneHasher,
+            $this->app->make(CustomerIdentityProfileWriter::class),
             $clock,
         );
         [$issuer, $verifier] = $this->services($clock, new FakeSmsProvider('primary'));
@@ -334,6 +337,7 @@ final class OtpChallengeLifecycleTest extends TestCase
             $database,
             $this->app->make(StringEncrypter::class),
             $phoneHasher,
+            $this->app->make(CustomerIdentityProfileWriter::class),
             $clock,
         );
         $dispatcher = new FallbackSmsDispatcher(
@@ -348,11 +352,17 @@ final class OtpChallengeLifecycleTest extends TestCase
             $otpHasher,
             new AllowAllOtpLimiter,
             $dispatcher,
+            $this->app->make(CustomerIdentityProfileWriter::class),
             new FixedOtpRandomGenerator,
             $clock,
         );
 
-        return [$issuer, new OtpChallengeVerifier($database, $otpHasher, $clock)];
+        return [$issuer, new OtpChallengeVerifier(
+            $database,
+            $otpHasher,
+            $this->app->make(CustomerIdentityProfileWriter::class),
+            $clock,
+        )];
     }
 
     private function request(

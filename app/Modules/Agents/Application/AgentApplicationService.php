@@ -6,6 +6,8 @@ namespace App\Modules\Agents\Application;
 
 use App\Modules\AccessControl\Application\AdministratorPermissionAuthorizer;
 use App\Modules\Agents\Domain\AgentApplicationState;
+use App\Modules\Identity\Application\UserAccountMutationService;
+use App\Modules\Identity\Domain\AccountType;
 use App\Shared\Application\Clock;
 use DateInterval;
 use Illuminate\Auth\Access\AuthorizationException;
@@ -22,6 +24,7 @@ final readonly class AgentApplicationService
         private DatabaseManager $database,
         private AdministratorPermissionAuthorizer $authorizer,
         private AgentMutationAudit $audit,
+        private UserAccountMutationService $userAccounts,
         private Clock $clock,
         private int $reapplicationCooldownDays = 30,
         private string $defaultPricingProfileCode = 'default',
@@ -188,10 +191,12 @@ final readonly class AgentApplicationService
                     'created_at' => $now,
                     'updated_at' => $now,
                 ]);
-                $connection->table('users')->where('id', $application->customerId)->update([
-                    'account_type' => 'agent',
-                    'updated_at' => $now,
-                ]);
+                $this->userAccounts->updateAccountType(
+                    $connection,
+                    $application->customerId,
+                    AccountType::Agent,
+                    $now,
+                );
                 $connection->table('agent_applications')->where('id', $applicationId)->update([
                     'active_customer_id' => null,
                     'state' => AgentApplicationState::Approved->value,
