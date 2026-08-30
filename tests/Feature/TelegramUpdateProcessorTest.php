@@ -12,7 +12,7 @@ use App\Modules\Telegram\Application\TelegramInteractionSessionService;
 use App\Modules\Telegram\Application\TelegramUpdateProcessor;
 use Illuminate\Contracts\Encryption\StringEncrypter;
 use Illuminate\Database\QueryException;
-use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
 use RuntimeException;
@@ -20,7 +20,7 @@ use Tests\TestCase;
 
 final class TelegramUpdateProcessorTest extends TestCase
 {
-    use RefreshDatabase;
+    use DatabaseTruncation;
 
     private const SECRET = 'telegram_webhook_secret_1234567890_safe';
 
@@ -31,6 +31,7 @@ final class TelegramUpdateProcessorTest extends TestCase
         if (DB::connection()->getDriverName() === 'mysql') {
             $migration = require database_path('migrations/2026_08_25_000100_enable_telegram_interaction_authority.php');
             $migration->up();
+            (require database_path('migrations/2026_08_25_000200_enable_telegram_outbound_delivery_authority.php'))->up();
         }
         Queue::fake();
         config([

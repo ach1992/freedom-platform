@@ -25,6 +25,11 @@ final class TelegramPresentationProvenanceGuard
     ];
 
     /** @var list<string> */
+    private const TRUSTED_TRAMPOLINE_FILES = [
+        'vendor/laravel/framework/src/Illuminate/Database/Concerns/ManagesTransactions.php',
+    ];
+
+    /** @var list<string> */
     private const INTERNAL_AUTHORITY_FILES = [
         'app/Modules/Telegram/Application/NonRestrictedTelegramPresentation.php',
         'app/Modules/Telegram/Application/NonRestrictedTelegramPresentationFactory.php',
@@ -87,7 +92,10 @@ final class TelegramPresentationProvenanceGuard
             }
 
             $relativePath = self::repositoryRelativePath($file);
-            if ($relativePath === null || in_array($relativePath, self::INTERNAL_AUTHORITY_FILES, true)) {
+            if ($relativePath === null
+                || in_array($relativePath, self::INTERNAL_AUTHORITY_FILES, true)
+                || in_array($relativePath, self::TRUSTED_TRAMPOLINE_FILES, true)
+            ) {
                 continue;
             }
 
