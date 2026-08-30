@@ -154,14 +154,38 @@ SQL, [], false);
 
     public function semanticsMatchExpected(Connection $connection): bool
     {
+        return $this->semanticAttestationFailures($connection) === [];
+    }
+
+    /**
+     * Return stable, non-sensitive failure codes for operational/test diagnostics.
+     * Metadata values, account names and SQL bodies are deliberately not exposed.
+     *
+     * @return list<string>
+     */
+    public function semanticAttestationFailures(Connection $connection): array
+    {
         try {
-            return hash_equals(self::EXPECTED_SEMANTIC_FINGERPRINT, $this->semanticFingerprint($connection))
-                && $this->referentialConstraintsMatchExpected($connection)
-                && $this->outboxContractVersionSurfaceMatchesExpected($connection)
-                && $this->outboxGuardsAreTerminal($connection)
-                && $this->triggerExecutionContextMatchesCurrentConnection($connection);
+            $failures = [];
+            if (! hash_equals(self::EXPECTED_SEMANTIC_FINGERPRINT, $this->semanticFingerprint($connection))) {
+                $failures[] = 'telegram_delivery_semantic_fingerprint_mismatch';
+            }
+            if (! $this->referentialConstraintsMatchExpected($connection)) {
+                $failures[] = 'telegram_delivery_referential_metadata_mismatch';
+            }
+            foreach ($this->outboxContractVersionSurfaceFailures($connection) as $failure) {
+                $failures[] = $failure;
+            }
+            if (! $this->outboxGuardsAreTerminal($connection)) {
+                $failures[] = 'telegram_delivery_outbox_terminal_guard_mismatch';
+            }
+            if (! $this->triggerExecutionContextMatchesCurrentConnection($connection)) {
+                $failures[] = 'telegram_delivery_trigger_execution_context_mismatch';
+            }
+
+            return $failures;
         } catch (Throwable) {
-            return false;
+            return ['telegram_delivery_semantic_attestation_error'];
         }
     }
 
@@ -426,7 +450,8 @@ SQL, [], false);
         return $this->sameNames($columns, $actual);
     }
 
-    private function outboxContractVersionSurfaceMatchesExpected(Connection $connection): bool
+    /** @return list<string> */
+    private function outboxContractVersionSurfaceFailures(Connection $connection): array
     {
         $databaseName = $connection->getDatabaseName();
         $column = $connection->table('information_schema.COLUMNS')
@@ -463,10 +488,14 @@ SQL, [], false);
             $trigger !== null,
         ];
         if (! in_array(true, $surfacePresent, true)) {
-            return true;
+            return [];
         }
+
+        $failures = [];
         if (in_array(false, $surfacePresent, true)) {
-            return false;
+            $failures[] = 'outbox_contract_version_surface_partial';
+
+            return $failures;
         }
 
         if ($column === null
@@ -474,7 +503,7 @@ SQL, [], false);
             || ! str_contains(strtolower((string) $column->COLUMN_TYPE), 'unsigned')
             || (string) $column->IS_NULLABLE !== 'NO'
             || (string) $column->COLUMN_DEFAULT !== '1') {
-            return false;
+            $failures[] = 'outbox_contract_version_column_mismatch';
         }
 
         $checkClause = strtolower(str_replace(
@@ -483,20 +512,21 @@ SQL, [], false);
             $this->normalizeMetadataSql($check->CHECK_CLAUSE),
         ));
         if ($checkClause !== 'contract_versionbetween1and65535') {
-            return false;
+            $failures[] = 'outbox_contract_version_check_mismatch';
         }
 
         if ($indexRows->count() !== 2) {
-            return false;
-        }
-        $index = $indexRows->values();
-        if ((int) $index[0]->NON_UNIQUE !== 1
-            || (int) $index[0]->SEQ_IN_INDEX !== 1
-            || (string) $index[0]->COLUMN_NAME !== 'event_type'
-            || (int) $index[1]->NON_UNIQUE !== 1
-            || (int) $index[1]->SEQ_IN_INDEX !== 2
-            || (string) $index[1]->COLUMN_NAME !== 'contract_version') {
-            return false;
+            $failures[] = 'outbox_contract_version_index_mismatch';
+        } else {
+            $index = $indexRows->values();
+            if ((int) $index[0]->NON_UNIQUE !== 1
+                || (int) $index[0]->SEQ_IN_INDEX !== 1
+                || (string) $index[0]->COLUMN_NAME !== 'event_type'
+                || (int) $index[1]->NON_UNIQUE !== 1
+                || (int) $index[1]->SEQ_IN_INDEX !== 2
+                || (string) $index[1]->COLUMN_NAME !== 'contract_version') {
+                $failures[] = 'outbox_contract_version_index_mismatch';
+            }
         }
 
         $expectedTriggerBody = $this->normalizeMetadataSql(<<<'SQL'
@@ -511,16 +541,20 @@ SQL);
             || (string) $trigger->EVENT_OBJECT_TABLE !== 'outbox_messages'
             || (string) $trigger->ACTION_TIMING !== 'BEFORE'
             || $this->normalizeMetadataSql($trigger->ACTION_STATEMENT) !== $expectedTriggerBody) {
-            return false;
+            $failures[] = 'outbox_contract_version_trigger_mismatch';
         }
 
         $terminalGuard = $connection->table('information_schema.TRIGGERS')
             ->where('TRIGGER_SCHEMA', $databaseName)
             ->where('TRIGGER_NAME', self::OUTBOX_TERMINAL_GUARDS['UPDATE'])
             ->first(['ACTION_ORDER']);
+        if ($terminalGuard === null
+            || $trigger === null
+            || (int) $trigger->ACTION_ORDER >= (int) $terminalGuard->ACTION_ORDER) {
+            $failures[] = 'outbox_contract_version_trigger_order_mismatch';
+        }
 
-        return $terminalGuard !== null
-            && (int) $trigger->ACTION_ORDER < (int) $terminalGuard->ACTION_ORDER;
+        return $failures;
     }
 
     private function baselineTriggerActionOrder(

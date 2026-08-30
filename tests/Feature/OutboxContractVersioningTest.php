@@ -45,10 +45,13 @@ final class OutboxContractVersioningTest extends TestCase
             self::markTestSkipped('Telegram delivery semantic attestation requires MariaDB/MySQL.');
         }
 
-        self::assertTrue(
-            (new TelegramDeliveryDatabaseAuthoritySurfaceV1)->semanticsMatchExpected($connection),
+        $surface = new TelegramDeliveryDatabaseAuthoritySurfaceV1;
+        self::assertSame(
+            [],
+            $surface->semanticAttestationFailures($connection),
             'Outbox contract versioning must remain an explicitly attested extension of Telegram delivery authority.',
         );
+        self::assertTrue($surface->semanticsMatchExpected($connection));
 
         $orders = DB::table('information_schema.TRIGGERS')
             ->where('TRIGGER_SCHEMA', $connection->getDatabaseName())
