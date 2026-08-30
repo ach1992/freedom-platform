@@ -106,6 +106,7 @@ SQL,
                     $attemptPublicId,
                     new SafeOutboxPayload(['service_delivery_attempt_public_id' => $attemptPublicId]),
                     $correlationId,
+                    ServiceDeliveryAttemptQueueService::OUTBOX_CONTRACT_VERSION,
                 );
                 self::assertSame($outboxEventId, $published);
 

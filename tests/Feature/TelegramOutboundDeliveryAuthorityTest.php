@@ -776,6 +776,7 @@ SQL);
             $payload,
             'correlation-outbox-bind-179',
             1,
+            TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION,
         );
         self::assertSame(OutboxDispatchOutcome::DefinitiveFailure, $handler->handle($wrongEvent));
         self::assertSame(0, $transport->attempts);
@@ -789,6 +790,7 @@ SQL);
             $payload,
             'correlation-forged-bind-179',
             1,
+            TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION,
         );
         self::assertSame(OutboxDispatchOutcome::DefinitiveFailure, $handler->handle($wrongCorrelation));
         self::assertSame(0, $transport->attempts);

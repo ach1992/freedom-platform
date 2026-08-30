@@ -18,6 +18,7 @@ interface OutboxPublisher
         string $aggregateId,
         SafeOutboxPayload $payload,
         string $correlationId,
+        int $contractVersion,
     ): string;
 
     /**
@@ -32,5 +33,6 @@ interface OutboxPublisher
         string $aggregateId,
         SafeOutboxPayload $payload,
         string $correlationId,
+        int $contractVersion,
     ): void;
 }

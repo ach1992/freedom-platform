@@ -6,6 +6,7 @@ use App\Modules\Installer\Presentation\Console\IssueInstallerTokenCommand;
 use App\Modules\Installer\Presentation\Http\Middleware\EnsureInstallerAvailable;
 use App\Modules\Installer\Presentation\Http\Middleware\EnsureInstallerHttps;
 use App\Modules\Installer\Presentation\Http\Middleware\EnsureInstallerUnlocked;
+use App\Modules\Operations\Presentation\Console\CheckOutboxContractRetirementCommand;
 use App\Modules\Operations\Presentation\Console\CheckWorkerHeartbeatsCommand;
 use App\Modules\Operations\Presentation\Console\DispatchOutboxCommand;
 use App\Modules\Operations\Presentation\Console\HealthCheckCommand;
@@ -40,6 +41,7 @@ return Application::configure(basePath: dirname(__DIR__))
         ]);
     })
     ->withCommands([
+        CheckOutboxContractRetirementCommand::class,
         CheckWorkerHeartbeatsCommand::class,
         ConfigureTelegramWebhookCommand::class,
         DispatchOutboxCommand::class,

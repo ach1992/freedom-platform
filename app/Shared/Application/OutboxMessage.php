@@ -20,6 +20,7 @@ final readonly class OutboxMessage
         public array $payload,
         public string $correlationId,
         public int $attempt,
+        public int $contractVersion,
     ) {
         if ($id === '' || $eventKey === '' || $eventType === '' || $aggregateType === '' || $aggregateId === '') {
             throw new InvalidArgumentException('Outbox message identity fields must not be empty.');
@@ -27,6 +28,10 @@ final readonly class OutboxMessage
 
         if ($attempt < 1) {
             throw new InvalidArgumentException('Outbox dispatch attempt must be positive.');
+        }
+
+        if ($contractVersion < 1 || $contractVersion > 65_535) {
+            throw new InvalidArgumentException('Outbox contract version must be between 1 and 65535.');
         }
     }
 }

@@ -25,6 +25,8 @@ final readonly class ServiceMutationQueueService
 
     public const OUTBOX_EVENT_TYPE = 'provisioning.service_mutation.requested';
 
+    public const OUTBOX_CONTRACT_VERSION = 1;
+
     public const OUTBOX_AGGREGATE_TYPE = 'provisioning_operation';
 
     public const OUTBOX_EVENT_KEY_PREFIX = 'provisioning-service-mutation-requested:';
@@ -151,6 +153,7 @@ final readonly class ServiceMutationQueueService
                         'provisioning_operation_public_id' => $operation->public_id,
                     ]),
                     $correlationId,
+                    self::OUTBOX_CONTRACT_VERSION,
                 );
 
                 return $this->receipt($service, $operation, false);

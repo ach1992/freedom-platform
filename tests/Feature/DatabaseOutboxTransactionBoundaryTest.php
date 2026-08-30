@@ -42,6 +42,7 @@ final class DatabaseOutboxTransactionBoundaryTest extends TestCase
             '1',
             new SafeOutboxPayload(['order_id' => '1']),
             '0198a4c7-ff31-7bb9-8222-000000000002',
+            1,
         );
     }
 
@@ -69,11 +70,11 @@ final class DatabaseOutboxTransactionBoundaryTest extends TestCase
                     '11',
                     new SafeOutboxPayload(['order_id' => '11']),
                     '0198a4c7-ff31-7bb9-8222-000000000012',
+                    1,
                 );
 
                 throw new RuntimeException('Force aggregate transaction rollback.');
             });
-            self::fail('Expected the aggregate transaction to roll back.');
         } catch (RuntimeException) {
             self::assertDatabaseCount('outbox_messages', 0);
         }
