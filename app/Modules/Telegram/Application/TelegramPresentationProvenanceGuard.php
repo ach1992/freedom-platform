@@ -20,7 +20,14 @@ use LogicException;
 final class TelegramPresentationProvenanceGuard
 {
     /** @var list<string> */
-    public const REVIEWED_SOURCE_FILES = [];
+    public const REVIEWED_SOURCE_FILES = [
+        'app/Modules/Telegram/Application/TelegramNavigationHandler.php',
+    ];
+
+    /** @var list<string> */
+    private const TRUSTED_TRAMPOLINE_FILES = [
+        'vendor/laravel/framework/src/Illuminate/Database/Concerns/ManagesTransactions.php',
+    ];
 
     /** @var list<string> */
     private const INTERNAL_AUTHORITY_FILES = [
@@ -85,7 +92,10 @@ final class TelegramPresentationProvenanceGuard
             }
 
             $relativePath = self::repositoryRelativePath($file);
-            if ($relativePath === null || in_array($relativePath, self::INTERNAL_AUTHORITY_FILES, true)) {
+            if ($relativePath === null
+                || in_array($relativePath, self::INTERNAL_AUTHORITY_FILES, true)
+                || in_array($relativePath, self::TRUSTED_TRAMPOLINE_FILES, true)
+            ) {
                 continue;
             }
 
