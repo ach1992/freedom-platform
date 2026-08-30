@@ -17,8 +17,8 @@ return new class extends Migration
     {
         $connection = DB::connection();
         if ($connection->getDriverName() !== 'mysql') {
-            if (! Schema::hasTable(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)) {
-                Schema::create(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE, function (Blueprint $table): void {
+            if (! Schema::hasTable('telegram_delivery_interactive_presentations')) {
+                Schema::create('telegram_delivery_interactive_presentations', function (Blueprint $table): void {
                     $table->char('delivery_operation_public_id', 26)->primary();
                     $table->longText('keyboard_snapshot');
                     $table->char('keyboard_snapshot_hash', 64);
@@ -41,12 +41,12 @@ return new class extends Migration
                 return;
             }
 
-            if (Schema::hasTable(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)) {
+            if (Schema::hasTable('telegram_delivery_interactive_presentations')) {
                 if ($connection->table(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)->exists()) {
                     throw new RuntimeException('Telegram interactive presentation authority cannot repair a non-empty unrecognized surface.');
                 }
                 $this->dropTriggers();
-                Schema::drop(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE);
+                Schema::drop('telegram_delivery_interactive_presentations');
             }
 
             DB::unprepared(<<<'SQL'
@@ -80,7 +80,7 @@ SQL);
 
     public function down(): void
     {
-        if (! Schema::hasTable(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)) {
+        if (! Schema::hasTable('telegram_delivery_interactive_presentations')) {
             return;
         }
         if (DB::table(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)->exists()) {
@@ -89,14 +89,14 @@ SQL);
 
         $connection = DB::connection();
         if ($connection->getDriverName() !== 'mysql') {
-            Schema::drop(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE);
+            Schema::drop('telegram_delivery_interactive_presentations');
 
             return;
         }
 
         $this->withInstallationLock($connection, function (): void {
             $this->dropTriggers();
-            Schema::dropIfExists(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE);
+            Schema::dropIfExists('telegram_delivery_interactive_presentations');
         });
     }
 

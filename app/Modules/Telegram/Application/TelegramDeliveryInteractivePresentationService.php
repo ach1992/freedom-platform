@@ -50,7 +50,7 @@ final readonly class TelegramDeliveryInteractivePresentationService
             $connection,
             $operationPublicId,
             $keyboard->hash(),
-            fn (): bool => $connection->table(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)->insert([
+            fn (): bool => $connection->table('telegram_delivery_interactive_presentations')->insert([
                 'delivery_operation_public_id' => $operationPublicId,
                 'keyboard_snapshot' => $keyboard->json(),
                 'keyboard_snapshot_hash' => $keyboard->hash(),

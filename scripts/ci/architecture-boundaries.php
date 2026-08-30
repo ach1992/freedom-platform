@@ -32,6 +32,7 @@ return [
     // data-classification review boundary; RESTRICTED owners must keep using
     // their protected/reference delivery authority instead.
     'telegram_non_restricted_presentation_sources' => [
+        'app/Modules/Telegram/Application/TelegramInteractiveDeliveryOutboxHandler.php',
         'app/Modules/Telegram/Application/TelegramNavigationHandler.php',
     ],
 
@@ -89,6 +90,60 @@ return [
                     'strategy' => 'semantic_surface_readiness',
                     'evidence' => [[
                         'file' => 'app/Modules/Telegram/Application/TelegramDeliveryDatabaseAuthoritySurfaceV1.php',
+                        'symbol' => 'isReady',
+                    ]],
+                ],
+            ],
+        ],
+        'telegram_interactive_delivery_v1' => [
+            'migration' => 'database/migrations/2026_08_31_000100_enable_telegram_interactive_delivery_presentations.php',
+            'rules' => [
+                'metadata_evidence' => [
+                    'strategy' => 'semantic_metadata_attestation',
+                    'evidence' => [[
+                        'file' => 'app/Modules/Telegram/Application/TelegramDeliveryInteractivePresentationDatabaseSurfaceV1.php',
+                        'symbol' => 'isReady',
+                    ]],
+                ],
+                'install_upgrade_fencing' => [
+                    'strategy' => 'shared_serialized_installation_lock',
+                    'evidence' => [[
+                        'file' => 'database/migrations/2026_08_31_000100_enable_telegram_interactive_delivery_presentations.php',
+                        'symbol' => 'withInstallationLock',
+                    ]],
+                ],
+                'interrupted_reentry' => [
+                    'strategy' => 'zero_data_fail_closed_rebuild',
+                    'evidence' => [[
+                        'file' => 'tests/Feature/TelegramInteractiveDeliveryAuthorityTest.php',
+                        'symbol' => 'test_interactive_migration_rebuilds_empty_incomplete_surface_and_restores_exact_readiness',
+                    ]],
+                ],
+                'rollback_preflight' => [
+                    'strategy' => 'durable_snapshot_preflight_before_destructive_ddl',
+                    'evidence' => [[
+                        'file' => 'tests/Feature/TelegramInteractiveDeliveryAuthorityTest.php',
+                        'symbol' => 'test_interactive_migration_down_refuses_durable_snapshots_before_destructive_ddl',
+                    ]],
+                ],
+                'ddl_toctou' => [
+                    'strategy' => 'mariadb_dependency_ddl_fail_closed_reentry',
+                    'evidence' => [[
+                        'file' => 'tests/Feature/TelegramInteractiveDeliveryAuthorityTest.php',
+                        'symbol' => 'test_interactive_migration_down_fails_closed_on_external_fk_and_retries_cleanly',
+                    ]],
+                ],
+                'dependency_checks' => [
+                    'strategy' => 'semantic_no_fk_contract_plus_ddl_restrict',
+                    'evidence' => [[
+                        'file' => 'tests/Feature/TelegramInteractiveDeliveryAuthorityTest.php',
+                        'symbol' => 'test_interactive_migration_down_fails_closed_on_external_fk_and_retries_cleanly',
+                    ]],
+                ],
+                'postflight_readiness' => [
+                    'strategy' => 'semantic_surface_readiness',
+                    'evidence' => [[
+                        'file' => 'app/Modules/Telegram/Application/TelegramDeliveryInteractivePresentationDatabaseSurfaceV1.php',
                         'symbol' => 'isReady',
                     ]],
                 ],
@@ -340,6 +395,7 @@ return [
         'sms_delivery_attempts' => 'Identity',
         'telegram_accounts' => 'Identity',
         'telegram_delivery_authority_capability' => 'Telegram',
+        'telegram_delivery_interactive_presentations' => 'Telegram',
         'telegram_delivery_operations' => 'Telegram',
         'telegram_interaction_authority_capability' => 'Telegram',
         'telegram_interaction_callbacks' => 'Telegram',
