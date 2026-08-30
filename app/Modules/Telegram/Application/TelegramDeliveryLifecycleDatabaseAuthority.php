@@ -43,7 +43,7 @@ final readonly class TelegramDeliveryLifecycleDatabaseAuthority
         // install/repair/no-op migration semantics unchanged while mechanically
         // attesting the DDL principal before an active capability can deactivate.
         if ($this->ownsInstallationLock($connection)) {
-            $this->assertRuntimeReferenceFencePrivilegesIfActive($runtimeConnection);
+            $this->assertRuntimeReferenceFencePrivilegesIfActive($runtimeConnection, $connection);
         }
 
         return $connection;
@@ -127,11 +127,29 @@ final readonly class TelegramDeliveryLifecycleDatabaseAuthority
         return $connectionId > 0 && $lockOwner === $connectionId;
     }
 
-    private function assertRuntimeReferenceFencePrivilegesIfActive(Connection $runtimeConnection): void
-    {
-        $capabilityHash = $this->capabilityHash();
-        if ($capabilityHash === null
-            || ! (new TelegramDeliveryDatabaseAuthoritySurfaceV1)->isReady($runtimeConnection, $capabilityHash)) {
+    private function assertRuntimeReferenceFencePrivilegesIfActive(
+        Connection $runtimeConnection,
+        Connection $lifecycleConnection,
+    ): void {
+        if (! $lifecycleConnection->getSchemaBuilder()->hasTable('telegram_delivery_authority_capability')) {
+            return;
+        }
+
+        try {
+            $capability = $lifecycleConnection->table('telegram_delivery_authority_capability')
+                ->where('id', 1)
+                ->first(['schema_version', 'activated_at']);
+        } catch (Throwable $exception) {
+            throw new RuntimeException(
+                'Telegram delivery rollback reference fence could not attest active lifecycle state before validating the exact DDL principal privileges.',
+                0,
+                $exception,
+            );
+        }
+
+        if ($capability === null
+            || (int) ($capability->schema_version ?? -1) !== 1
+            || ($capability->activated_at ?? null) === null) {
             return;
         }
 
@@ -272,18 +290,6 @@ final readonly class TelegramDeliveryLifecycleDatabaseAuthority
             ['\\\\', '\\%', '\\_', '``'],
             $databaseName,
         ).'`.*';
-    }
-
-    private function capabilityHash(): ?string
-    {
-        $key = config('app.key');
-        if (! is_string($key) || $key === '') {
-            return null;
-        }
-
-        $capability = hash_hmac('sha256', 'telegram-delivery-database-authority-v1', $key);
-
-        return hash('sha256', $capability);
     }
 
     private function lifecyclePrincipalIsSelectUpdateOnly(Connection $connection, string $databaseName): bool
