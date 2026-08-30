@@ -37,7 +37,14 @@ final readonly class TelegramDeliveryLifecycleDatabaseAuthority
             throw new RuntimeException('Telegram delivery lifecycle authority requires the exact dedicated SELECT/UPDATE-only MariaDB principal.');
         }
 
-        $this->assertRuntimeReferenceFencePrivilegesIfActive($runtimeConnection);
+        // The migration calls requireConnection() once before acquiring GET_LOCK
+        // and again from rollbackMysql() while this exact lifecycle session owns
+        // it. Only the latter is the irreversible rollback path, so keep normal
+        // install/repair/no-op migration semantics unchanged while mechanically
+        // attesting the DDL principal before an active capability can deactivate.
+        if ($this->ownsInstallationLock($connection)) {
+            $this->assertRuntimeReferenceFencePrivilegesIfActive($runtimeConnection);
+        }
 
         return $connection;
     }
@@ -102,33 +109,34 @@ final readonly class TelegramDeliveryLifecycleDatabaseAuthority
         }
     }
 
-    private function assertRuntimeReferenceFencePrivilegesIfActive(Connection $connection): void
+    private function ownsInstallationLock(Connection $lifecycleConnection): bool
     {
-        $schema = $connection->getSchemaBuilder();
-        if (! $schema->hasTable('telegram_delivery_authority_capability')) {
-            return;
+        $lockName = TelegramDeliveryDatabaseAuthoritySurfaceV1::installationLockName($lifecycleConnection);
+        $ownership = $lifecycleConnection->selectOne(
+            'SELECT CONNECTION_ID() AS connection_id, IS_USED_LOCK(?) AS lock_owner',
+            [$lockName],
+            false,
+        );
+        if ($ownership === null) {
+            throw new RuntimeException('Telegram delivery lifecycle authority could not attest installation-lock ownership.');
         }
 
-        $capability = $connection->table('telegram_delivery_authority_capability')
-            ->select(['schema_version', 'activated_at'])
-            ->where('id', 1)
-            ->first();
-        if ($capability === null
-            || (int) ($capability->schema_version ?? -1) !== 1
-            || ($capability->activated_at ?? null) === null) {
-            return;
-        }
+        $connectionId = (int) ($ownership->connection_id ?? 0);
+        $lockOwner = (int) ($ownership->lock_owner ?? 0);
 
-        foreach (self::REFERENCE_FENCE_TABLES as $table) {
-            if (! $schema->hasTable($table)) {
-                throw new RuntimeException(
-                    'Telegram delivery rollback reference-fence privilege preflight found an incomplete active authority surface.',
-                );
-            }
+        return $connectionId > 0 && $lockOwner === $connectionId;
+    }
+
+    private function assertRuntimeReferenceFencePrivilegesIfActive(Connection $runtimeConnection): void
+    {
+        $capabilityHash = $this->capabilityHash();
+        if ($capabilityHash === null
+            || ! (new TelegramDeliveryDatabaseAuthoritySurfaceV1)->isReady($runtimeConnection, $capabilityHash)) {
+            return;
         }
 
         try {
-            $rows = $connection->select('SHOW GRANTS FOR CURRENT_USER', [], false);
+            $rows = $runtimeConnection->select('SHOW GRANTS FOR CURRENT_USER', [], false);
         } catch (Throwable $exception) {
             throw new RuntimeException(
                 'Telegram delivery rollback reference fence could not attest the exact DDL principal privileges before lifecycle deactivation.',
@@ -148,7 +156,7 @@ final readonly class TelegramDeliveryLifecycleDatabaseAuthority
             $grants[] = $values[0];
         }
 
-        if (! $this->grantSetCanUseReferenceFenceLocks($grants, $connection->getDatabaseName())) {
+        if (! $this->grantSetCanUseReferenceFenceLocks($grants, $runtimeConnection->getDatabaseName())) {
             throw new RuntimeException(
                 'Telegram delivery rollback reference fence requires effective SELECT and LOCK TABLES authority on both authority tables before lifecycle deactivation.',
             );
@@ -177,8 +185,14 @@ final readonly class TelegramDeliveryLifecycleDatabaseAuthority
                 return false;
             }
 
+            // PUBLIC and role/default-role authority is deliberately not accepted
+            // as proof for this destructive DDL boundary. If the exact migration
+            // principal lacks a directly visible grant, rollback fails closed.
+            if (preg_match('/\bTO\s+`?PUBLIC`?(?:\s|\z)/iD', $grant) === 1) {
+                continue;
+            }
+
             if (preg_match('/\AGRANT\s+(.+?)\s+ON\s+(.+?)\s+TO\s+.+\z/iD', $grant, $matches) !== 1) {
-                // Role/default-role lines are not expanded privilege evidence.
                 continue;
             }
 
@@ -230,10 +244,17 @@ final readonly class TelegramDeliveryLifecycleDatabaseAuthority
         }
 
         $quotedDatabase = '`'.str_replace('`', '``', $databaseName).'`';
+        $grantPatternDatabase = '`'.str_replace(
+            ['\\', '%', '_', '`'],
+            ['\\\\', '\\%', '\\_', '``'],
+            $databaseName,
+        ).'`';
         $quotedTable = '`'.str_replace('`', '``', $table).'`';
         $objects = [
             $quotedDatabase.'.*',
+            $grantPatternDatabase.'.*',
             $quotedDatabase.'.'.$quotedTable,
+            $grantPatternDatabase.'.'.$quotedTable,
         ];
 
         if (preg_match('/\A[A-Za-z0-9_.$-]+\z/D', $databaseName) === 1) {
@@ -241,7 +262,19 @@ final readonly class TelegramDeliveryLifecycleDatabaseAuthority
             $objects[] = $databaseName.'.'.$table;
         }
 
-        return in_array($object, $objects, true);
+        return in_array($object, array_values(array_unique($objects)), true);
+    }
+
+    private function capabilityHash(): ?string
+    {
+        $key = config('app.key');
+        if (! is_string($key) || $key === '') {
+            return null;
+        }
+
+        $capability = hash_hmac('sha256', 'telegram-delivery-database-authority-v1', $key);
+
+        return hash('sha256', $capability);
     }
 
     private function lifecyclePrincipalIsSelectUpdateOnly(Connection $connection, string $databaseName): bool

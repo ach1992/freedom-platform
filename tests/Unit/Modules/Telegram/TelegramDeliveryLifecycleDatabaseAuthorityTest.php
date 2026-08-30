@@ -29,14 +29,14 @@ final class TelegramDeliveryLifecycleDatabaseAuthorityTest extends TestCase
         ));
     }
 
-    public function test_reference_fence_grant_set_accepts_schema_all_privileges(): void
+    public function test_reference_fence_grants_accept_exact_database_wildcard_escaping(): void
     {
         self::assertTrue((new TelegramDeliveryLifecycleDatabaseAuthority)->grantSetCanUseReferenceFenceLocks([
-            'GRANT ALL PRIVILEGES ON `freedom_platform_ci`.* TO `freedom_ci`@`%`',
+            'GRANT ALL PRIVILEGES ON `freedom\\_platform\\_ci`.* TO `freedom_ci`@`%`',
         ], 'freedom_platform_ci'));
     }
 
-    public function test_reference_fence_grant_set_accepts_split_schema_privileges(): void
+    public function test_reference_fence_grants_accept_split_direct_privileges(): void
     {
         self::assertTrue((new TelegramDeliveryLifecycleDatabaseAuthority)->grantSetCanUseReferenceFenceLocks([
             'GRANT SELECT ON `freedom_platform_ci`.* TO `freedom_ci`@`%`',
@@ -44,7 +44,7 @@ final class TelegramDeliveryLifecycleDatabaseAuthorityTest extends TestCase
         ], 'freedom_platform_ci'));
     }
 
-    public function test_reference_fence_grant_set_accepts_complete_per_table_privileges(): void
+    public function test_reference_fence_grants_accept_complete_per_table_privileges(): void
     {
         self::assertTrue((new TelegramDeliveryLifecycleDatabaseAuthority)->grantSetCanUseReferenceFenceLocks([
             'GRANT SELECT, LOCK TABLES ON `freedom_platform_ci`.`telegram_delivery_operations` TO `freedom_ci`@`%`',
@@ -52,15 +52,8 @@ final class TelegramDeliveryLifecycleDatabaseAuthorityTest extends TestCase
         ], 'freedom_platform_ci'));
     }
 
-    public function test_reference_fence_grant_set_counts_public_privilege_evidence_when_show_grants_exposes_it(): void
-    {
-        self::assertTrue((new TelegramDeliveryLifecycleDatabaseAuthority)->grantSetCanUseReferenceFenceLocks([
-            'GRANT SELECT, LOCK TABLES ON `freedom_platform_ci`.* TO PUBLIC',
-        ], 'freedom_platform_ci'));
-    }
-
     #[DataProvider('rejectedReferenceFenceGrantSets')]
-    public function test_reference_fence_grant_set_fails_closed(array $grants): void
+    public function test_reference_fence_grants_fail_closed(array $grants): void
     {
         self::assertFalse((new TelegramDeliveryLifecycleDatabaseAuthority)->grantSetCanUseReferenceFenceLocks(
             $grants,
@@ -93,7 +86,7 @@ final class TelegramDeliveryLifecycleDatabaseAuthorityTest extends TestCase
             'GRANT SELECT, ALTER, DROP, INDEX ON `freedom_platform_ci`.* TO `freedom_ci`@`%`',
         ]];
         yield 'missing select' => [[
-            'GRANT LOCK TABLES, ALTER, DROP, INDEX ON `freedom_platform_ci`.* TO `freedom_ci`@`%`',
+            'GRANT LOCK TABLES ON `freedom_platform_ci`.* TO `freedom_ci`@`%`',
         ]];
         yield 'wrong schema' => [[
             'GRANT SELECT, LOCK TABLES ON `other_database`.* TO `freedom_ci`@`%`',
@@ -105,8 +98,11 @@ final class TelegramDeliveryLifecycleDatabaseAuthorityTest extends TestCase
             'GRANT SELECT (`id`), LOCK TABLES ON `freedom_platform_ci`.`telegram_delivery_operations` TO `freedom_ci`@`%`',
             'GRANT SELECT, LOCK TABLES ON `freedom_platform_ci`.`telegram_delivery_authority_capability` TO `freedom_ci`@`%`',
         ]];
-        yield 'role assignment is not expanded evidence' => [[
+        yield 'role-only authority is not accepted as direct evidence' => [[
             'GRANT `rollback_role` TO `freedom_ci`@`%`',
+        ]];
+        yield 'public authority is not accepted for destructive ddl' => [[
+            'GRANT SELECT, LOCK TABLES ON `freedom_platform_ci`.* TO PUBLIC',
         ]];
         yield 'empty' => [[]];
     }
