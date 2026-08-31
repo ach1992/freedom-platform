@@ -41,6 +41,7 @@ use ReflectionMethod;
 use RuntimeException;
 use Tests\Support\NonRestrictedTelegramPresentationTestFactory;
 use Tests\TestCase;
+use Throwable;
 
 /** @requirement ARCH-003 ARCH-004 DAT-003 SEC-002 SEC-003 SEC-008 OPS-003 QUA-001 QUA-004 QUA-007 */
 final class TelegramInteractiveDeliveryAuthorityTest extends TestCase
@@ -429,7 +430,7 @@ final class TelegramInteractiveDeliveryAuthorityTest extends TestCase
         // Simulate process death after the durable state-0 fence commits and the
         // canonical table has been atomically moved to its rollback staging name,
         // but before v1 reactivation and destructive DROP begin.
-        $withInstallationLock->invoke($migration, $lifecycleConnection, function () use (
+        $withInstallationLock->invoke($migration, $connection, $lifecycleConnection, function () use (
             $establishFence,
             $stageTable,
             $migration,
@@ -477,7 +478,7 @@ final class TelegramInteractiveDeliveryAuthorityTest extends TestCase
 
         // Simulate process death after state0, staging rename, and successful DROP,
         // but before the lifecycle finally block can reactivate shared v1 authority.
-        $withInstallationLock->invoke($migration, $lifecycleConnection, function () use (
+        $withInstallationLock->invoke($migration, $connection, $lifecycleConnection, function () use (
             $establishFence,
             $stageTable,
             $migration,
@@ -509,58 +510,209 @@ final class TelegramInteractiveDeliveryAuthorityTest extends TestCase
         self::assertTrue((new TelegramDeliveryInteractivePresentationDatabaseSurfaceV1)->isReady($connection));
     }
 
-    public function test_interactive_installation_lock_owner_session_loss_aborts_without_unlocked_reconnect(): void
+    public function test_interactive_ddl_lock_owner_session_loss_blocks_protected_ddl_after_contender_acquires_ddl_lock(): void
     {
         $database = app(DatabaseManager::class);
-        $lifecycleConfig = config('database.connections.telegram_lifecycle');
-        self::assertIsArray($lifecycleConfig);
-        config(['database.connections.telegram_interactive_lifecycle_killer' => $lifecycleConfig]);
+        $defaultConnection = config('database.default');
+        self::assertIsString($defaultConnection);
+        $runtimeConfig = config('database.connections.'.$defaultConnection);
+        self::assertIsArray($runtimeConfig);
+        config(['database.connections.telegram_interactive_runtime_killer' => $runtimeConfig]);
 
         $runtimeConnection = DB::connection();
         $lifecycleAuthority = new TelegramDeliveryLifecycleDatabaseAuthority($database);
         $lifecycleConnection = $lifecycleAuthority->requireConnection($runtimeConnection);
-        $killer = $database->connection('telegram_interactive_lifecycle_killer');
-        $lockName = TelegramDeliveryDatabaseAuthoritySurfaceV1::installationLockName($lifecycleConnection);
+        $killer = $database->connection('telegram_interactive_runtime_killer');
         $migration = require database_path('migrations/2026_08_31_000100_enable_telegram_interactive_delivery_presentations.php');
         $withInstallationLock = new ReflectionMethod($migration, 'withInstallationLock');
         $withInstallationLock->setAccessible(true);
+        $ddlInstallationLockName = new ReflectionMethod($migration, 'ddlInstallationLockName');
+        $ddlInstallationLockName->setAccessible(true);
+        $ddlLockName = $ddlInstallationLockName->invoke($migration, $runtimeConnection);
+        self::assertIsString($ddlLockName);
         $killedConnectionId = null;
+        $contenderOwnsDdlLock = false;
+        $stagedTableExisted = false;
 
         try {
             try {
-                $withInstallationLock->invoke($migration, $lifecycleConnection, function () use (
-                    $lifecycleConnection,
+                $withInstallationLock->invoke($migration, $runtimeConnection, $lifecycleConnection, function () use (
+                    $runtimeConnection,
                     $killer,
+                    $ddlLockName,
                     &$killedConnectionId,
+                    &$contenderOwnsDdlLock,
                 ): void {
-                    $session = $lifecycleConnection->selectOne('SELECT CONNECTION_ID() AS connection_id', [], false);
+                    $session = $runtimeConnection->selectOne('SELECT CONNECTION_ID() AS connection_id', [], false);
                     self::assertNotNull($session);
                     $killedConnectionId = (int) $session->connection_id;
                     $killer->getPdo()->exec('KILL CONNECTION '.$killedConnectionId);
 
-                    // Without the fail-closed reconnector this would transparently
-                    // reconnect on a new MariaDB session after GET_LOCK was lost.
-                    $lifecycleConnection->selectOne('SELECT 1 AS unlocked_continuation', [], false);
+                    // MariaDB releases the DDL advisory lock with the dead session.
+                    // A contender can own it before the first runner's next statement.
+                    $acquired = $killer->selectOne('SELECT GET_LOCK(?, 5) AS acquired', [$ddlLockName], false);
+                    self::assertNotNull($acquired);
+                    self::assertSame(1, (int) $acquired->acquired);
+                    $contenderOwnsDdlLock = true;
+
+                    // No liveness probe is issued against the killed session. Attempt
+                    // the exact protected RENAME TABLE shape used by production rollback.
+                    // Normal Laravel reconnect would execute it on a replacement session
+                    // while the contender owns the DDL installation lock.
+                    $runtimeConnection->statement(
+                        'RENAME TABLE `telegram_delivery_interactive_presentations` TO `'.self::ROLLBACK_TABLE.'`',
+                    );
                 });
-                self::fail('Losing the interactive installation-lock owner session must abort the migration critical section.');
+                self::fail('Losing the DDL-lock owner session must abort before protected DDL can continue.');
             } catch (RuntimeException $exception) {
-                self::assertStringContainsString('installation lock cleanup failed', $exception->getMessage());
+                self::assertStringContainsString('DDL installation lock cleanup failed', $exception->getMessage());
             }
 
             self::assertIsInt($killedConnectionId);
-            $acquired = $killer->selectOne('SELECT GET_LOCK(?, 5) AS acquired', [$lockName], false);
-            self::assertNotNull($acquired);
-            self::assertSame(1, (int) $acquired->acquired);
-            $released = $killer->selectOne('SELECT RELEASE_LOCK(?) AS released', [$lockName], false);
+            self::assertTrue($contenderOwnsDdlLock);
+            $stagedTableExisted = $killer->getSchemaBuilder()->hasTable(self::ROLLBACK_TABLE);
+            self::assertTrue($killer->getSchemaBuilder()->hasTable(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE));
+
+            $released = $killer->selectOne('SELECT RELEASE_LOCK(?) AS released', [$ddlLockName], false);
             self::assertNotNull($released);
             self::assertSame(1, (int) $released->released);
+            $contenderOwnsDdlLock = false;
 
-            // withInstallationLock() must restore Laravel's normal reconnector
-            // only after the failed critical section has been aborted.
-            $restoredSession = $lifecycleConnection->selectOne('SELECT CONNECTION_ID() AS connection_id', [], false);
+            $restoredSession = $runtimeConnection->selectOne('SELECT CONNECTION_ID() AS connection_id', [], false);
             self::assertNotNull($restoredSession);
             self::assertNotSame($killedConnectionId, (int) $restoredSession->connection_id);
         } finally {
+            if ($contenderOwnsDdlLock) {
+                try {
+                    $killer->selectOne('SELECT RELEASE_LOCK(?) AS released', [$ddlLockName], false);
+                } catch (Throwable) {
+                    // Best-effort isolated test cleanup; named connection is purged below.
+                }
+            }
+
+            $killerSchema = $killer->getSchemaBuilder();
+            if ($killerSchema->hasTable(self::ROLLBACK_TABLE)
+                && ! $killerSchema->hasTable(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)) {
+                $killer->statement(
+                    'RENAME TABLE `'.self::ROLLBACK_TABLE.'` TO `telegram_delivery_interactive_presentations`',
+                );
+            }
+            $database->purge('telegram_interactive_runtime_killer');
+        }
+
+        self::assertFalse($stagedTableExisted);
+        self::assertTrue((new TelegramDeliveryDatabaseAuthoritySurfaceV1)->isReady(
+            $runtimeConnection,
+            (new TelegramDeliveryDatabaseCapability)->expectedHash(),
+        ));
+        self::assertTrue((new TelegramDeliveryInteractivePresentationDatabaseSurfaceV1)->isReady($runtimeConnection));
+    }
+
+    public function test_interactive_lifecycle_session_loss_cannot_overlap_ddl_guarded_by_runtime_session(): void
+    {
+        $database = app(DatabaseManager::class);
+        $defaultConnection = config('database.default');
+        self::assertIsString($defaultConnection);
+        $runtimeConfig = config('database.connections.'.$defaultConnection);
+        $lifecycleConfig = config('database.connections.telegram_lifecycle');
+        self::assertIsArray($runtimeConfig);
+        self::assertIsArray($lifecycleConfig);
+        config([
+            'database.connections.telegram_interactive_runtime_contender' => $runtimeConfig,
+            'database.connections.telegram_interactive_lifecycle_killer' => $lifecycleConfig,
+        ]);
+
+        $runtimeConnection = DB::connection();
+        $lifecycleAuthority = new TelegramDeliveryLifecycleDatabaseAuthority($database);
+        $lifecycleConnection = $lifecycleAuthority->requireConnection($runtimeConnection);
+        $runtimeContender = $database->connection('telegram_interactive_runtime_contender');
+        $lifecycleContender = $database->connection('telegram_interactive_lifecycle_killer');
+        $migration = require database_path('migrations/2026_08_31_000100_enable_telegram_interactive_delivery_presentations.php');
+        $withInstallationLock = new ReflectionMethod($migration, 'withInstallationLock');
+        $withInstallationLock->setAccessible(true);
+        $ddlInstallationLockName = new ReflectionMethod($migration, 'ddlInstallationLockName');
+        $ddlInstallationLockName->setAccessible(true);
+        $ddlLockName = $ddlInstallationLockName->invoke($migration, $runtimeConnection);
+        self::assertIsString($ddlLockName);
+        $secondRunnerEntered = false;
+        $ddlRoundTripCompleted = false;
+        $firstRuntimeConnectionId = null;
+
+        try {
+            try {
+                $withInstallationLock->invoke($migration, $runtimeConnection, $lifecycleConnection, function () use (
+                    $migration,
+                    $withInstallationLock,
+                    $runtimeConnection,
+                    $lifecycleConnection,
+                    $runtimeContender,
+                    $lifecycleContender,
+                    $ddlLockName,
+                    &$secondRunnerEntered,
+                    &$ddlRoundTripCompleted,
+                    &$firstRuntimeConnectionId,
+                ): void {
+                    $runtimeSession = $runtimeConnection->selectOne('SELECT CONNECTION_ID() AS connection_id', [], false);
+                    $lifecycleSession = $lifecycleConnection->selectOne('SELECT CONNECTION_ID() AS connection_id', [], false);
+                    self::assertNotNull($runtimeSession);
+                    self::assertNotNull($lifecycleSession);
+                    $firstRuntimeConnectionId = (int) $runtimeSession->connection_id;
+
+                    $lifecycleContender->getPdo()->exec('KILL CONNECTION '.(int) $lifecycleSession->connection_id);
+
+                    // Exercise a complete second installation runner, not a bare lock
+                    // probe. It can recover the shared #179 lifecycle lock after the
+                    // killed lifecycle session disappears, but it must fail before its
+                    // operation starts because the first runner's live DDL session still
+                    // owns the dedicated interactive DDL lock.
+                    try {
+                        $withInstallationLock->invoke(
+                            $migration,
+                            $runtimeContender,
+                            $lifecycleContender,
+                            function () use (&$secondRunnerEntered): void {
+                                $secondRunnerEntered = true;
+                            },
+                        );
+                        self::fail('A second installation runner must not overlap protected interactive DDL.');
+                    } catch (RuntimeException $exception) {
+                        self::assertStringContainsString('Could not acquire the Telegram interactive DDL installation lock', $exception->getMessage());
+                    }
+                    self::assertFalse($secondRunnerEntered);
+
+                    $owner = $runtimeContender->selectOne('SELECT IS_USED_LOCK(?) AS lock_owner', [$ddlLockName], false);
+                    self::assertNotNull($owner);
+                    self::assertSame($firstRuntimeConnectionId, (int) $owner->lock_owner);
+
+                    $runtimeConnection->statement(
+                        'RENAME TABLE `telegram_delivery_interactive_presentations` TO `'.self::ROLLBACK_TABLE.'`',
+                    );
+                    $runtimeConnection->statement(
+                        'RENAME TABLE `'.self::ROLLBACK_TABLE.'` TO `telegram_delivery_interactive_presentations`',
+                    );
+                    $ddlRoundTripCompleted = true;
+                });
+                self::fail('The dead lifecycle session must make shared-lock cleanup fail closed after guarded DDL completes.');
+            } catch (RuntimeException $exception) {
+                self::assertStringContainsString('shared installation lock cleanup failed', $exception->getMessage());
+            }
+
+            self::assertIsInt($firstRuntimeConnectionId);
+            self::assertFalse($secondRunnerEntered);
+            self::assertTrue($ddlRoundTripCompleted);
+            self::assertTrue($runtimeConnection->getSchemaBuilder()->hasTable(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE));
+            self::assertFalse($runtimeConnection->getSchemaBuilder()->hasTable(self::ROLLBACK_TABLE));
+
+            // The first runner releases the DDL lock exactly even though shared-lock
+            // cleanup fails. A later runner can therefore acquire it normally.
+            $acquired = $runtimeContender->selectOne('SELECT GET_LOCK(?, 0) AS acquired', [$ddlLockName], false);
+            self::assertNotNull($acquired);
+            self::assertSame(1, (int) $acquired->acquired);
+            $released = $runtimeContender->selectOne('SELECT RELEASE_LOCK(?) AS released', [$ddlLockName], false);
+            self::assertNotNull($released);
+            self::assertSame(1, (int) $released->released);
+        } finally {
+            $database->purge('telegram_interactive_runtime_contender');
             $database->purge('telegram_interactive_lifecycle_killer');
         }
 

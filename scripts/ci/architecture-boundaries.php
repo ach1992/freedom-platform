@@ -106,7 +106,7 @@ return [
                     ]],
                 ],
                 'install_upgrade_fencing' => [
-                    'strategy' => 'shared_serialized_installation_lock',
+                    'strategy' => 'shared_lifecycle_plus_ddl_session_installation_locks',
                     'evidence' => [
                         [
                             'file' => 'database/migrations/2026_08_31_000100_enable_telegram_interactive_delivery_presentations.php',
@@ -114,7 +114,11 @@ return [
                         ],
                         [
                             'file' => 'tests/Feature/TelegramInteractiveDeliveryAuthorityTest.php',
-                            'symbol' => 'test_interactive_installation_lock_owner_session_loss_aborts_without_unlocked_reconnect',
+                            'symbol' => 'test_interactive_ddl_lock_owner_session_loss_blocks_protected_ddl_after_contender_acquires_ddl_lock',
+                        ],
+                        [
+                            'file' => 'tests/Feature/TelegramInteractiveDeliveryAuthorityTest.php',
+                            'symbol' => 'test_interactive_lifecycle_session_loss_cannot_overlap_ddl_guarded_by_runtime_session',
                         ],
                     ],
                 ],

@@ -37,7 +37,7 @@ return new class extends Migration
         $lifecycleConnection = $lifecycleAuthority->requireConnection($connection);
         $lifecycleAuthority->principalUsername($lifecycleConnection);
 
-        $this->withInstallationLock($lifecycleConnection, function () use ($connection): void {
+        $this->withInstallationLock($connection, $lifecycleConnection, function () use ($connection): void {
             $baseSurface = new TelegramDeliveryDatabaseAuthoritySurfaceV1;
             $baseCapability = new TelegramDeliveryDatabaseCapability;
             if (! $baseSurface->isReady($connection, $baseCapability->expectedHash())) {
@@ -49,17 +49,18 @@ return new class extends Migration
                 return;
             }
 
-            if (Schema::hasTable('telegram_delivery_interactive_presentations')) {
+            $schema = $connection->getSchemaBuilder();
+            if ($schema->hasTable('telegram_delivery_interactive_presentations')) {
                 if ($connection->table(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)->exists()) {
                     throw new RuntimeException('Telegram interactive presentation authority cannot repair a non-empty unrecognized surface.');
                 }
                 // Keep every authority trigger attached until the table itself is
                 // successfully removed. A dependency-sensitive DROP can fail; MariaDB
                 // removes the table's triggers atomically only when the DROP succeeds.
-                Schema::drop('telegram_delivery_interactive_presentations');
+                $schema->drop('telegram_delivery_interactive_presentations');
             }
 
-            DB::unprepared(<<<'SQL'
+            $connection->unprepared(<<<'SQL'
 CREATE TABLE telegram_delivery_interactive_presentations (
     delivery_operation_public_id CHAR(26) NOT NULL,
     keyboard_snapshot LONGTEXT NOT NULL,
@@ -81,7 +82,7 @@ CREATE TABLE telegram_delivery_interactive_presentations (
 ) ENGINE=InnoDB DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin
 SQL);
 
-            $this->createTriggers();
+            $this->createTriggers($connection);
             if (! $surface->isReady($connection)) {
                 throw new RuntimeException('Telegram interactive presentation authority did not reach its exact database surface.');
             }
@@ -107,7 +108,7 @@ SQL);
         $lifecycleConnection = $lifecycleAuthority->requireConnection($connection);
         $lifecycleAuthority->principalUsername($lifecycleConnection);
 
-        $this->withInstallationLock($lifecycleConnection, function () use ($connection, $lifecycleConnection): void {
+        $this->withInstallationLock($connection, $lifecycleConnection, function () use ($connection, $lifecycleConnection): void {
             $this->rollbackMysql($connection, $lifecycleConnection);
         });
     }
@@ -140,7 +141,7 @@ SQL);
         ?Closure $afterStagingFence = null,
     ): void {
         $this->restoreStagedTableForRetry($connection);
-        if (! Schema::hasTable(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)) {
+        if (! $connection->getSchemaBuilder()->hasTable(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)) {
             if ($this->baseLifecycleState($connection) === 'fenced') {
                 // A prior rollback can die after DROP committed but before the
                 // lifecycle finally block restored v1. With neither canonical nor
@@ -435,57 +436,124 @@ SQL);
         }
     }
 
-    private function createTriggers(): void
+    private function createTriggers(Connection $connection): void
     {
         $surface = new TelegramDeliveryInteractivePresentationDatabaseSurfaceV1;
-        DB::unprepared('CREATE TRIGGER '.TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::INSERT_TRIGGER
+        $connection->unprepared('CREATE TRIGGER '.TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::INSERT_TRIGGER
             .' BEFORE INSERT ON '.TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE
             .' FOR EACH ROW '.$surface::insertTriggerBody());
-        DB::unprepared('CREATE TRIGGER '.TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::UPDATE_TRIGGER
+        $connection->unprepared('CREATE TRIGGER '.TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::UPDATE_TRIGGER
             .' BEFORE UPDATE ON '.TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE
             .' FOR EACH ROW '.$surface::updateTriggerBody());
-        DB::unprepared('CREATE TRIGGER '.TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::DELETE_TRIGGER
+        $connection->unprepared('CREATE TRIGGER '.TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::DELETE_TRIGGER
             .' BEFORE DELETE ON '.TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE
             .' FOR EACH ROW '.$surface::deleteTriggerBody());
     }
 
     /** @param Closure():void $operation */
-    private function withInstallationLock(Connection $connection, Closure $operation): void
-    {
-        $lockName = TelegramDeliveryDatabaseAuthoritySurfaceV1::installationLockName($connection);
-        $lock = $connection->selectOne('SELECT GET_LOCK(?, 10) AS acquired', [$lockName], false);
-        if ($lock === null || (int) ($lock->acquired ?? 0) !== 1) {
-            throw new RuntimeException('Could not acquire the Telegram delivery installation lock for interactive presentation authority.');
-        }
-
-        // GET_LOCK is owned by this exact MariaDB session. Laravel normally
-        // reconnects a lost connection and retries the failed query, which would
-        // otherwise let this migration continue on a new session after MariaDB
-        // had already released the advisory lock. Match the proven #179 fence:
-        // any lifecycle-session loss aborts the critical section until cleanup.
-        $connection->setReconnector(static function (Connection $connection): never {
-            throw new RuntimeException('Telegram interactive presentation installation database session was lost while the installation lock was held.');
-        });
+    private function withInstallationLock(
+        Connection $ddlConnection,
+        Connection $lifecycleConnection,
+        Closure $operation,
+    ): void {
+        $sharedLockName = TelegramDeliveryDatabaseAuthoritySurfaceV1::installationLockName($lifecycleConnection);
+        $ddlLockName = $this->ddlInstallationLockName($ddlConnection);
+        $sharedLockAcquired = false;
+        $ddlLockAcquired = false;
+        $lifecycleReconnectDisabled = false;
+        $ddlReconnectDisabled = false;
 
         try {
-            try {
-                $operation();
-            } finally {
-                try {
-                    $released = $connection->selectOne('SELECT RELEASE_LOCK(?) AS released', [$lockName], false);
-                } catch (Throwable $exception) {
-                    $this->disconnect($connection);
-                    throw new RuntimeException('Telegram interactive presentation installation lock cleanup failed.', 0, $exception);
-                }
+            $sharedLock = $lifecycleConnection->selectOne('SELECT GET_LOCK(?, 10) AS acquired', [$sharedLockName], false);
+            if ($sharedLock === null || (int) ($sharedLock->acquired ?? 0) !== 1) {
+                throw new RuntimeException('Could not acquire the shared Telegram delivery installation lock for interactive presentation authority.');
+            }
+            $sharedLockAcquired = true;
+            $this->disableReconnectWhileLockHeld($lifecycleConnection, 'lifecycle');
+            $lifecycleReconnectDisabled = true;
 
-                if ($released === null || (int) ($released->released ?? 0) !== 1) {
-                    $this->disconnect($connection);
-                    throw new RuntimeException('Telegram interactive presentation installation lock cleanup failed.');
+            // The shared #179 lock must remain owned by the dedicated lifecycle
+            // principal because the immutable capability trigger authenticates that
+            // exact session. Protected interactive DDL therefore also takes a second
+            // database-scoped advisory lock on the exact runtime/DDL session. If the
+            // lifecycle session disappears, another runner may recover the shared
+            // lock but cannot overlap CREATE/DROP/RENAME/trigger DDL while this lock
+            // remains owned by the first runner. If the DDL session disappears, its
+            // own fail-closed reconnector prevents unlocked continuation.
+            $ddlLock = $ddlConnection->selectOne('SELECT GET_LOCK(?, 10) AS acquired', [$ddlLockName], false);
+            if ($ddlLock === null || (int) ($ddlLock->acquired ?? 0) !== 1) {
+                throw new RuntimeException('Could not acquire the Telegram interactive DDL installation lock.');
+            }
+            $ddlLockAcquired = true;
+            $this->disableReconnectWhileLockHeld($ddlConnection, 'DDL');
+            $ddlReconnectDisabled = true;
+
+            $operation();
+        } finally {
+            $cleanupFailure = null;
+
+            if ($ddlLockAcquired) {
+                try {
+                    $released = $ddlConnection->selectOne('SELECT RELEASE_LOCK(?) AS released', [$ddlLockName], false);
+                    if ($released === null || (int) ($released->released ?? 0) !== 1) {
+                        throw new RuntimeException('Telegram interactive DDL installation lock release was not exact.');
+                    }
+                } catch (Throwable $exception) {
+                    $this->disconnect($ddlConnection);
+                    $cleanupFailure = new RuntimeException(
+                        'Telegram interactive presentation DDL installation lock cleanup failed.',
+                        0,
+                        $exception,
+                    );
                 }
             }
-        } finally {
-            $this->restoreDefaultReconnector($connection);
+
+            if ($sharedLockAcquired) {
+                try {
+                    $released = $lifecycleConnection->selectOne('SELECT RELEASE_LOCK(?) AS released', [$sharedLockName], false);
+                    if ($released === null || (int) ($released->released ?? 0) !== 1) {
+                        throw new RuntimeException('Shared Telegram delivery installation lock release was not exact.');
+                    }
+                } catch (Throwable $exception) {
+                    $this->disconnect($lifecycleConnection);
+                    $cleanupFailure ??= new RuntimeException(
+                        'Telegram interactive presentation shared installation lock cleanup failed.',
+                        0,
+                        $exception,
+                    );
+                }
+            }
+
+            if ($ddlReconnectDisabled) {
+                $this->restoreDefaultReconnector($ddlConnection);
+            }
+            if ($lifecycleReconnectDisabled) {
+                $this->restoreDefaultReconnector($lifecycleConnection);
+            }
+
+            if ($cleanupFailure instanceof RuntimeException) {
+                throw $cleanupFailure;
+            }
         }
+    }
+
+    private function ddlInstallationLockName(Connection $connection): string
+    {
+        $database = $connection->getDatabaseName();
+        if ($database === '') {
+            throw new RuntimeException('Telegram interactive DDL installation lock requires an exact database name.');
+        }
+
+        return 'telegram-interactive-ddl:'.substr(hash('sha256', $database), 0, 32);
+    }
+
+    private function disableReconnectWhileLockHeld(Connection $connection, string $sessionRole): void
+    {
+        $connection->setReconnector(static function (Connection $connection) use ($sessionRole): never {
+            throw new RuntimeException(
+                'Telegram interactive presentation '.$sessionRole.' database session was lost while its installation lock was held.',
+            );
+        });
     }
 
     private function restoreDefaultReconnector(Connection $connection): void

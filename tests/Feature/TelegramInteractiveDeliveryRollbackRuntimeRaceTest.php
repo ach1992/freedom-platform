@@ -71,7 +71,7 @@ namespace {
                     }
                 : null;
 
-                $withInstallationLock->invoke($migration, $lifecycleConnection, static function () use (
+                $withInstallationLock->invoke($migration, $connection, $lifecycleConnection, static function () use (
                     $rollback,
                     $migration,
                     $connection,
