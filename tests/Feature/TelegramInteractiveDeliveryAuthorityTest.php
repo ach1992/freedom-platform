@@ -249,6 +249,138 @@ final class TelegramInteractiveDeliveryAuthorityTest extends TestCase
         self::assertSame(0, DB::table('telegram_delivery_interactive_presentations')->count());
     }
 
+    public function test_interactive_surface_rejects_column_metadata_drift_and_empty_migration_rebuilds_exact_surface(): void
+    {
+        $connection = DB::connection();
+        $surface = new TelegramDeliveryInteractivePresentationDatabaseSurfaceV1;
+        self::assertTrue($surface->isReady($connection));
+
+        $tableBefore = $connection->table('information_schema.TABLES')
+            ->where('TABLE_SCHEMA', $connection->getDatabaseName())
+            ->where('TABLE_NAME', TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)
+            ->first(['TABLE_COLLATION']);
+        self::assertNotNull($tableBefore);
+        self::assertSame('utf8mb4_bin', strtolower((string) $tableBefore->TABLE_COLLATION));
+
+        $connection->statement(<<<'SQL'
+ALTER TABLE telegram_delivery_interactive_presentations
+MODIFY keyboard_snapshot LONGTEXT
+CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL
+SQL);
+
+        $column = $connection->table('information_schema.COLUMNS')
+            ->where('TABLE_SCHEMA', $connection->getDatabaseName())
+            ->where('TABLE_NAME', TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)
+            ->where('COLUMN_NAME', 'keyboard_snapshot')
+            ->first(['COLUMN_TYPE', 'CHARACTER_SET_NAME', 'COLLATION_NAME']);
+        $tableAfter = $connection->table('information_schema.TABLES')
+            ->where('TABLE_SCHEMA', $connection->getDatabaseName())
+            ->where('TABLE_NAME', TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)
+            ->first(['TABLE_COLLATION']);
+        self::assertNotNull($column);
+        self::assertNotNull($tableAfter);
+        self::assertSame('longtext', strtolower((string) $column->COLUMN_TYPE));
+        self::assertSame('utf8mb4', strtolower((string) $column->CHARACTER_SET_NAME));
+        self::assertSame('utf8mb4_unicode_ci', strtolower((string) $column->COLLATION_NAME));
+        self::assertSame('utf8mb4_bin', strtolower((string) $tableAfter->TABLE_COLLATION));
+        self::assertFalse($surface->isReady($connection));
+        $this->assertInteractiveCapabilityRejectsCurrentSurface();
+
+        (require database_path('migrations/2026_08_31_000100_enable_telegram_interactive_delivery_presentations.php'))->up();
+
+        self::assertTrue($surface->isReady($connection));
+        $restoredColumn = $connection->table('information_schema.COLUMNS')
+            ->where('TABLE_SCHEMA', $connection->getDatabaseName())
+            ->where('TABLE_NAME', TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)
+            ->where('COLUMN_NAME', 'keyboard_snapshot')
+            ->first(['CHARACTER_SET_NAME', 'COLLATION_NAME']);
+        self::assertNotNull($restoredColumn);
+        self::assertSame('utf8mb4', strtolower((string) $restoredColumn->CHARACTER_SET_NAME));
+        self::assertSame('utf8mb4_bin', strtolower((string) $restoredColumn->COLLATION_NAME));
+    }
+
+    public function test_interactive_surface_rejects_trigger_execution_context_drift_and_empty_migration_rebuilds_exact_surface(): void
+    {
+        $connection = DB::connection();
+        $surface = new TelegramDeliveryInteractivePresentationDatabaseSurfaceV1;
+        self::assertTrue($surface->isReady($connection));
+
+        $session = $connection->selectOne('SELECT @@SESSION.sql_mode AS sql_mode', [], false);
+        self::assertNotNull($session);
+        $originalSqlMode = (string) ($session->sql_mode ?? '');
+        $driftSqlMode = $this->toggleSqlMode($originalSqlMode, 'NO_BACKSLASH_ESCAPES');
+
+        try {
+            $connection->unprepared('DROP TRIGGER IF EXISTS '.TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::UPDATE_TRIGGER);
+            $connection->statement('SET SESSION sql_mode = ?', [$driftSqlMode]);
+            $connection->unprepared(
+                'CREATE TRIGGER '.TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::UPDATE_TRIGGER
+                .' BEFORE UPDATE ON '.TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE
+                .' FOR EACH ROW '.TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::updateTriggerBody(),
+            );
+            $connection->statement('SET SESSION sql_mode = ?', [$originalSqlMode]);
+
+            $trigger = $connection->table('information_schema.TRIGGERS')
+                ->where('TRIGGER_SCHEMA', $connection->getDatabaseName())
+                ->where('TRIGGER_NAME', TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::UPDATE_TRIGGER)
+                ->first(['EVENT_MANIPULATION', 'ACTION_TIMING', 'ACTION_STATEMENT', 'SQL_MODE']);
+            self::assertNotNull($trigger);
+            self::assertSame('UPDATE', (string) $trigger->EVENT_MANIPULATION);
+            self::assertSame('BEFORE', (string) $trigger->ACTION_TIMING);
+            self::assertSame(
+                $this->normalizeMetadataSqlForTest(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::updateTriggerBody()),
+                $this->normalizeMetadataSqlForTest((string) $trigger->ACTION_STATEMENT),
+            );
+            self::assertNotSame(
+                $this->normalizeSqlModeForTest($originalSqlMode),
+                $this->normalizeSqlModeForTest((string) $trigger->SQL_MODE),
+            );
+            self::assertFalse($surface->isReady($connection));
+            $this->assertInteractiveCapabilityRejectsCurrentSurface();
+        } finally {
+            $connection->statement('SET SESSION sql_mode = ?', [$originalSqlMode]);
+        }
+
+        (require database_path('migrations/2026_08_31_000100_enable_telegram_interactive_delivery_presentations.php'))->up();
+        self::assertTrue($surface->isReady($connection));
+    }
+
+    public function test_interactive_migration_refuses_non_empty_semantically_drifted_surface(): void
+    {
+        $connection = DB::connection();
+        $surface = new TelegramDeliveryInteractivePresentationDatabaseSurfaceV1;
+        $keyboard = new TelegramInlineKeyboardSnapshot([
+            [new TelegramInlineCallbackButton('Semantic drift probe', (string) Str::ulid(), TelegramInlineButtonStyle::Primary)],
+        ]);
+        $fixture = NonRestrictedTelegramPresentationTestFactory::prepareInteractiveV2OperationWithoutSnapshot(
+            app(DatabaseManager::class),
+            $this->clock,
+            900116,
+            'interactive-semantic-drift-fixture',
+            'correlation-interactive-semantic-drift',
+            $keyboard,
+        );
+        $this->insertInteractiveSnapshotThroughExactAuthority($fixture['public_id'], $keyboard);
+        self::assertSame(1, $connection->table(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)->count());
+
+        $connection->statement(<<<'SQL'
+ALTER TABLE telegram_delivery_interactive_presentations
+MODIFY keyboard_snapshot LONGTEXT
+CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL
+SQL);
+        self::assertFalse($surface->isReady($connection));
+
+        try {
+            (require database_path('migrations/2026_08_31_000100_enable_telegram_interactive_delivery_presentations.php'))->up();
+            self::fail('A non-empty semantically unrecognized interactive surface must not be destructively repaired.');
+        } catch (RuntimeException $exception) {
+            self::assertStringContainsString('cannot repair a non-empty unrecognized surface', $exception->getMessage());
+        }
+
+        self::assertSame(1, $connection->table(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)->count());
+        self::assertFalse($surface->isReady($connection));
+    }
+
     public function test_interactive_migration_down_refuses_durable_snapshots_before_destructive_ddl(): void
     {
         $account = $this->account('rollback_durable', 900105);
@@ -833,6 +965,67 @@ final class TelegramInteractiveDeliveryAuthorityTest extends TestCase
         } catch (QueryException) {
             // Expected.
         }
+    }
+
+    private function assertInteractiveCapabilityRejectsCurrentSurface(): void
+    {
+        $connection = DB::connection();
+        $operationRan = false;
+
+        try {
+            $connection->transaction(function ($transaction) use (&$operationRan): void {
+                (new TelegramDeliveryInteractivePresentationDatabaseCapability)->runStore(
+                    $transaction,
+                    (string) Str::ulid(),
+                    str_repeat('a', 64),
+                    function () use (&$operationRan): void {
+                        $operationRan = true;
+                    },
+                );
+            });
+            self::fail('Semantically drifted interactive database authority must reject store arming.');
+        } catch (RuntimeException $exception) {
+            self::assertStringContainsString('database authority is not ready', $exception->getMessage());
+        }
+
+        self::assertFalse($operationRan);
+    }
+
+    private function toggleSqlMode(string $sqlMode, string $mode): string
+    {
+        $modes = array_values(array_filter(
+            array_map(static fn (string $value): string => trim($value), explode(',', $sqlMode)),
+            static fn (string $value): bool => $value !== '',
+        ));
+
+        $index = array_search($mode, $modes, true);
+        if ($index === false) {
+            $modes[] = $mode;
+        } else {
+            unset($modes[$index]);
+            $modes = array_values($modes);
+        }
+
+        return implode(',', $modes);
+    }
+
+    private function normalizeSqlModeForTest(string $sqlMode): string
+    {
+        $modes = array_values(array_filter(
+            array_map(static fn (string $value): string => trim($value), explode(',', $sqlMode)),
+            static fn (string $value): bool => $value !== '',
+        ));
+        sort($modes, SORT_STRING);
+
+        return implode(',', $modes);
+    }
+
+    private function normalizeMetadataSqlForTest(string $sql): string
+    {
+        $sql = str_replace(["\r\n", "\r", '`'], ["\n", "\n", ''], $sql);
+        $normalized = preg_replace('/\s+/', ' ', trim($sql));
+
+        return is_string($normalized) ? $normalized : trim($sql);
     }
 
     /** @return array{user_id:int,telegram_account_id:int,telegram_user_id:int} */

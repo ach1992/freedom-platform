@@ -17,12 +17,12 @@ final readonly class TelegramDeliveryInteractivePresentationDatabaseSurfaceV1
 
     public const DELETE_TRIGGER = 'telegram_delivery_interactive_presentations_delete_guard';
 
-    /** @var list<string> */
-    private const EXPECTED_COLUMNS = [
-        'delivery_operation_public_id',
-        'keyboard_snapshot',
-        'keyboard_snapshot_hash',
-        'created_at',
+    /** @var list<list<string|null>> */
+    private const EXPECTED_COLUMN_METADATA = [
+        ['delivery_operation_public_id', 'char(26)', 'NO', null, 'utf8mb4', 'utf8mb4_bin', ''],
+        ['keyboard_snapshot', 'longtext', 'NO', null, 'utf8mb4', 'utf8mb4_bin', ''],
+        ['keyboard_snapshot_hash', 'char(64)', 'NO', null, 'utf8mb4', 'utf8mb4_bin', ''],
+        ['created_at', 'datetime(6)', 'NO', null, null, null, ''],
     ];
 
     /** @var array<string, literal-string> */
@@ -64,19 +64,36 @@ SQL,
                 ->where('TABLE_SCHEMA', $databaseName)
                 ->where('TABLE_NAME', self::TABLE)
                 ->orderBy('ORDINAL_POSITION')
-                ->get(['COLUMN_NAME', 'COLUMN_TYPE', 'IS_NULLABLE', 'EXTRA']);
-            if ($columns->count() !== count(self::EXPECTED_COLUMNS)) {
+                ->get([
+                    'COLUMN_NAME',
+                    'ORDINAL_POSITION',
+                    'COLUMN_TYPE',
+                    'IS_NULLABLE',
+                    'COLUMN_DEFAULT',
+                    'CHARACTER_SET_NAME',
+                    'COLLATION_NAME',
+                    'EXTRA',
+                ]);
+            if ($columns->count() !== count(self::EXPECTED_COLUMN_METADATA)) {
                 return false;
             }
-            $actualNames = $columns->pluck('COLUMN_NAME')->map(static fn (mixed $name): string => (string) $name)->all();
-            if ($actualNames !== self::EXPECTED_COLUMNS) {
-                return false;
-            }
-            $expectedTypes = ['char(26)', 'longtext', 'char(64)', 'datetime(6)'];
             foreach ($columns->values() as $index => $column) {
-                if (strtolower((string) $column->COLUMN_TYPE) !== $expectedTypes[$index]
-                    || (string) $column->IS_NULLABLE !== 'NO'
-                    || (string) $column->EXTRA !== '') {
+                $contract = self::EXPECTED_COLUMN_METADATA[$index];
+                $characterSet = $column->CHARACTER_SET_NAME === null
+                    ? null
+                    : strtolower((string) $column->CHARACTER_SET_NAME);
+                $collation = $column->COLLATION_NAME === null
+                    ? null
+                    : strtolower((string) $column->COLLATION_NAME);
+
+                if ((string) $column->COLUMN_NAME !== $contract[0]
+                    || (int) $column->ORDINAL_POSITION !== $index + 1
+                    || strtolower((string) $column->COLUMN_TYPE) !== $contract[1]
+                    || (string) $column->IS_NULLABLE !== $contract[2]
+                    || $column->COLUMN_DEFAULT !== $contract[3]
+                    || $characterSet !== $contract[4]
+                    || $collation !== $contract[5]
+                    || (string) $column->EXTRA !== $contract[6]) {
                     return false;
                 }
             }
@@ -120,7 +137,15 @@ SQL,
                 ->where('TABLE_NAME', self::TABLE)
                 ->orderBy('INDEX_NAME')
                 ->orderBy('SEQ_IN_INDEX')
-                ->get(['INDEX_NAME', 'NON_UNIQUE', 'SEQ_IN_INDEX', 'COLUMN_NAME']);
+                ->get([
+                    'INDEX_NAME',
+                    'NON_UNIQUE',
+                    'SEQ_IN_INDEX',
+                    'COLUMN_NAME',
+                    'SUB_PART',
+                    'COLLATION',
+                    'INDEX_TYPE',
+                ]);
             if ($indexes->count() !== 1) {
                 return false;
             }
@@ -129,7 +154,15 @@ SQL,
                 || (string) $primary->INDEX_NAME !== 'PRIMARY'
                 || (int) $primary->NON_UNIQUE !== 0
                 || (int) $primary->SEQ_IN_INDEX !== 1
-                || (string) $primary->COLUMN_NAME !== 'delivery_operation_public_id') {
+                || (string) $primary->COLUMN_NAME !== 'delivery_operation_public_id'
+                || $primary->SUB_PART !== null
+                || (string) $primary->COLLATION !== 'A'
+                || strtoupper((string) $primary->INDEX_TYPE) !== 'BTREE') {
+                return false;
+            }
+
+            $triggerContext = $this->expectedTriggerExecutionContext($connection);
+            if ($triggerContext === null) {
                 return false;
             }
 
@@ -137,7 +170,18 @@ SQL,
                 ->where('TRIGGER_SCHEMA', $databaseName)
                 ->where('EVENT_OBJECT_TABLE', self::TABLE)
                 ->orderBy('TRIGGER_NAME')
-                ->get(['TRIGGER_NAME', 'EVENT_MANIPULATION', 'ACTION_TIMING', 'ACTION_STATEMENT']);
+                ->get([
+                    'TRIGGER_NAME',
+                    'EVENT_MANIPULATION',
+                    'ACTION_TIMING',
+                    'ACTION_STATEMENT',
+                    'ACTION_ORDER',
+                    'SQL_MODE',
+                    'DEFINER',
+                    'CHARACTER_SET_CLIENT',
+                    'COLLATION_CONNECTION',
+                    'DATABASE_COLLATION',
+                ]);
             if ($triggers->count() !== 3) {
                 return false;
             }
@@ -153,10 +197,16 @@ SQL,
                 if ($contract === null
                     || (string) $trigger->EVENT_MANIPULATION !== $contract[0]
                     || (string) $trigger->ACTION_TIMING !== $contract[1]
+                    || (int) $trigger->ACTION_ORDER !== 1
                     || ! hash_equals(
                         $this->normalizeSql($contract[2]),
                         $this->normalizeSql((string) $trigger->ACTION_STATEMENT),
-                    )) {
+                    )
+                    || $this->normalizeSqlMode($trigger->SQL_MODE ?? '') !== $triggerContext['sql_mode']
+                    || (string) ($trigger->DEFINER ?? '') !== $triggerContext['definer']
+                    || (string) ($trigger->CHARACTER_SET_CLIENT ?? '') !== $triggerContext['character_set_client']
+                    || (string) ($trigger->COLLATION_CONNECTION ?? '') !== $triggerContext['collation_connection']
+                    || (string) ($trigger->DATABASE_COLLATION ?? '') !== $triggerContext['database_collation']) {
                     return false;
                 }
             }
@@ -236,6 +286,61 @@ BEGIN
     SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Telegram interactive presentations are non-deletable.';
 END
 SQL;
+    }
+
+    /**
+     * @return null|array{
+     *     sql_mode:string,
+     *     definer:string,
+     *     character_set_client:string,
+     *     collation_connection:string,
+     *     database_collation:string
+     * }
+     */
+    private function expectedTriggerExecutionContext(Connection $connection): ?array
+    {
+        $session = $connection->selectOne(<<<'SQL'
+SELECT
+    @@SESSION.sql_mode AS sql_mode,
+    CURRENT_USER() AS definer,
+    @@SESSION.character_set_client AS character_set_client,
+    @@SESSION.collation_connection AS collation_connection
+SQL, [], false);
+        $schema = $connection->table('information_schema.SCHEMATA')
+            ->where('SCHEMA_NAME', $connection->getDatabaseName())
+            ->first(['DEFAULT_COLLATION_NAME']);
+
+        if ($session === null || $schema === null) {
+            return null;
+        }
+
+        $context = [
+            'sql_mode' => $this->normalizeSqlMode($session->sql_mode ?? ''),
+            'definer' => (string) ($session->definer ?? ''),
+            'character_set_client' => (string) ($session->character_set_client ?? ''),
+            'collation_connection' => (string) ($session->collation_connection ?? ''),
+            'database_collation' => (string) ($schema->DEFAULT_COLLATION_NAME ?? ''),
+        ];
+
+        if ($context['definer'] === ''
+            || $context['character_set_client'] === ''
+            || $context['collation_connection'] === ''
+            || $context['database_collation'] === '') {
+            return null;
+        }
+
+        return $context;
+    }
+
+    private function normalizeSqlMode(mixed $value): string
+    {
+        $modes = array_values(array_filter(
+            array_map(static fn (string $mode): string => trim($mode), explode(',', (string) $value)),
+            static fn (string $mode): bool => $mode !== '',
+        ));
+        sort($modes, SORT_STRING);
+
+        return implode(',', $modes);
     }
 
     private function normalizeSql(string $sql): string
