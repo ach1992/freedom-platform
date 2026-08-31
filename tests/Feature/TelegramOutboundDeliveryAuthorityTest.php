@@ -34,6 +34,7 @@ use Illuminate\Support\Facades\Http;
 use ReflectionClass;
 use RuntimeException;
 use Tests\Support\NonRestrictedTelegramPresentationTestFactory;
+use Tests\Support\TelegramInteractivePresentationTestFactory;
 use Tests\TestCase;
 
 /** @requirement ARCH-003 ARCH-004 DAT-003 SEC-002 SEC-008 OPS-003 QUA-001 QUA-004 QUA-007 QUA-010 */
@@ -832,6 +833,7 @@ SQL);
             new DatabaseOutboxPublisher($database, $this->clock),
             $this->runtime,
             new TelegramDeliveryDatabaseCapability,
+            TelegramInteractivePresentationTestFactory::service($this->clock, $this->runtime),
         );
     }
 
@@ -843,6 +845,7 @@ SQL);
             $this->runtime,
             $transport,
             new TelegramDeliveryDatabaseCapability,
+            TelegramInteractivePresentationTestFactory::service($this->clock, $this->runtime),
         );
     }
 

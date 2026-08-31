@@ -28,6 +28,7 @@ final readonly class TelegramDeliveryOperationExecutor
         private TelegramDeliveryRuntime $runtime,
         private TelegramMutationTransport $transport,
         private TelegramDeliveryDatabaseCapability $databaseCapability,
+        private TelegramDeliveryInteractivePresentationService $interactivePresentations,
     ) {}
 
     /** @requirement ARCH-004 DAT-003 SEC-002 SEC-008 OPS-003 QUA-001 QUA-004 QUA-007 */
@@ -65,9 +66,10 @@ final readonly class TelegramDeliveryOperationExecutor
         string $publicId,
         string $expectedOutboxEventId,
         string $expectedCorrelationId,
+        int $contractVersion = TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION,
     ): TelegramDeliveryOperationReceipt {
-        /** @var array{row: DeliveryOperationRow, boundary_entered: bool} $boundary */
-        $boundary = $this->database->connection()->transaction(function (Connection $connection) use ($publicId, $expectedOutboxEventId, $expectedCorrelationId): array {
+        /** @var array{row: DeliveryOperationRow, boundary_entered: bool, request:?TelegramMutationRequest} $boundary */
+        $boundary = $this->database->connection()->transaction(function (Connection $connection) use ($publicId, $expectedOutboxEventId, $expectedCorrelationId, $contractVersion): array {
             $this->databaseCapability->acquireRuntimeLifecycleFence($connection);
             $row = $this->operation($connection, $publicId, true);
             $this->assertExpectedOutboxIdentity($row, $expectedOutboxEventId, $expectedCorrelationId);
@@ -85,16 +87,42 @@ final readonly class TelegramDeliveryOperationExecutor
                         null,
                     ),
                     'boundary_entered' => false,
+                    'request' => null,
                 ];
             }
 
             if (! in_array($state, [TelegramDeliveryOperationState::Prepared, TelegramDeliveryOperationState::Retryable], true)) {
-                return ['row' => $row, 'boundary_entered' => false];
+                return ['row' => $row, 'boundary_entered' => false, 'request' => null];
+            }
+
+            // Interactive resolution and durable fingerprint verification must
+            // never outrun the existing #179 semantic database attestation.
+            $this->databaseCapability->assertRuntimeAuthorityReady($connection);
+
+            $interactive = match ($contractVersion) {
+                TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION => null,
+                TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_INTERACTIVE => $this->interactivePresentations->resolve(
+                    $connection,
+                    (string) $row->public_id,
+                    $this->nonZeroInt($row->recipient_chat_id, 'Telegram recipient chat identity'),
+                ),
+                default => throw new DomainException('Telegram delivery Outbox contract version is unsupported.'),
+            };
+            $request = $this->mutationRequest($row, $interactive?->keyboard);
+            $fingerprint = TelegramDeliveryRequestFingerprint::make(
+                $request,
+                (string) $row->bot_id,
+                (string) $row->correlation_id,
+                $interactive?->snapshotHash,
+            );
+            if (! hash_equals((string) $row->request_fingerprint, $fingerprint)) {
+                throw new DomainException('Telegram delivery request fingerprint no longer matches its durable presentation.');
             }
 
             return [
                 'row' => $this->enterProviderBoundary($connection, $row),
                 'boundary_entered' => true,
+                'request' => $request,
             ];
         }, 3);
 
@@ -103,7 +131,8 @@ final readonly class TelegramDeliveryOperationExecutor
             return $this->receipt($prepared);
         }
 
-        $request = $this->mutationRequest($prepared);
+        $request = $boundary['request']
+            ?? throw new RuntimeException('Telegram delivery provider boundary is missing its prepared mutation request.');
         try {
             $result = $this->transport->mutate($request);
         } catch (Throwable) {
@@ -231,8 +260,10 @@ final readonly class TelegramDeliveryOperationExecutor
     }
 
     /** @param DeliveryOperationRow $row */
-    private function mutationRequest(object $row): TelegramMutationRequest
-    {
+    private function mutationRequest(
+        object $row,
+        ?TelegramResolvedInlineKeyboardMarkup $inlineKeyboard,
+    ): TelegramMutationRequest {
         $action = TelegramDeliveryAction::tryFrom((string) $row->action)
             ?? throw new RuntimeException('Stored Telegram delivery action is invalid.');
         $presentation = $row->presentation_text === null
@@ -244,6 +275,7 @@ final readonly class TelegramDeliveryOperationExecutor
             $this->nonZeroInt($row->recipient_chat_id, 'Telegram recipient chat identity'),
             $row->target_message_id === null ? null : $this->positiveInt($row->target_message_id, 'Telegram target message identity'),
             $presentation,
+            $inlineKeyboard,
         );
     }
 

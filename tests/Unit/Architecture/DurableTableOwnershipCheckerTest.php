@@ -152,6 +152,105 @@ SQL);
         self::assertStringContainsString('durable table rename via raw ALTER TABLE ... RENAME is not ownership-attributable', $violations);
     }
 
+    public function test_exact_reciprocal_temporary_rename_lifecycle_is_accepted(): void
+    {
+        $this->migration('2026_01_01_000000_rename.php', <<<'PHP'
+<?php
+Schema::create('orders', function ($table): void {});
+DB::statement('RENAME TABLE `orders` TO `orders_rollback`');
+DB::statement('RENAME TABLE `orders_rollback` TO `orders`');
+PHP);
+
+        $violations = (new DurableTableOwnershipChecker($this->root, [
+            'durable_table_owners' => [
+                'orders' => 'Orders',
+            ],
+            'durable_table_rename_lifecycles' => [
+                [
+                    'file' => 'database/migrations/2026_01_01_000000_rename.php',
+                    'from' => 'orders',
+                    'to' => 'orders_rollback',
+                    'owner' => 'Orders',
+                ],
+                [
+                    'file' => 'database/migrations/2026_01_01_000000_rename.php',
+                    'from' => 'orders_rollback',
+                    'to' => 'orders',
+                    'owner' => 'Orders',
+                ],
+            ],
+        ]))->violations();
+
+        self::assertSame([], $violations);
+    }
+
+    public function test_temporary_rename_lifecycle_rejects_wrong_owner_missing_reciprocal_and_stale_entries(): void
+    {
+        $this->migration('2026_01_01_000000_rename.php', <<<'PHP'
+<?php
+Schema::create('orders', function ($table): void {});
+DB::statement('RENAME TABLE `orders` TO `orders_rollback`');
+PHP);
+
+        $violations = implode("\n", (new DurableTableOwnershipChecker($this->root, [
+            'durable_table_owners' => [
+                'orders' => 'Orders',
+            ],
+            'durable_table_rename_lifecycles' => [
+                [
+                    'file' => 'database/migrations/2026_01_01_000000_rename.php',
+                    'from' => 'orders',
+                    'to' => 'orders_rollback',
+                    'owner' => 'Payments',
+                ],
+                [
+                    'file' => 'database/migrations/2026_01_01_000000_rename.php',
+                    'from' => 'orders_rollback',
+                    'to' => 'orders',
+                    'owner' => 'Payments',
+                ],
+            ],
+        ]))->violations());
+
+        self::assertStringContainsString('crosses or misstates architecture ownership', $violations);
+        self::assertStringContainsString('stale/unused rename orders_rollback -> orders', $violations);
+    }
+
+    public function test_dynamic_or_unlisted_rename_cannot_use_exact_lifecycle_as_wildcard(): void
+    {
+        $this->migration('2026_01_01_000000_rename.php', <<<'PHP'
+<?php
+Schema::create('orders', function ($table): void {});
+$from = 'orders';
+$to = 'orders_rollback';
+DB::statement('RENAME TABLE `'.$from.'` TO `'.$to.'`');
+PHP);
+
+        $violations = implode("\n", (new DurableTableOwnershipChecker($this->root, [
+            'durable_table_owners' => [
+                'orders' => 'Orders',
+            ],
+            'durable_table_rename_lifecycles' => [
+                [
+                    'file' => 'database/migrations/2026_01_01_000000_rename.php',
+                    'from' => 'orders',
+                    'to' => 'orders_rollback',
+                    'owner' => 'Orders',
+                ],
+                [
+                    'file' => 'database/migrations/2026_01_01_000000_rename.php',
+                    'from' => 'orders_rollback',
+                    'to' => 'orders',
+                    'owner' => 'Orders',
+                ],
+            ],
+        ]))->violations());
+
+        self::assertStringContainsString('cannot be resolved to exact literal from/to identities', $violations);
+        self::assertStringContainsString('stale/unused rename orders -> orders_rollback', $violations);
+        self::assertStringContainsString('stale/unused rename orders_rollback -> orders', $violations);
+    }
+
     public function test_stale_owner_entry_is_rejected(): void
     {
         $this->migration('2026_01_01_000000_test.php', <<<'PHP'

@@ -15,7 +15,6 @@ use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Str;
-use JsonException;
 use RuntimeException;
 
 /**
@@ -29,6 +28,8 @@ final readonly class TelegramDeliveryQueueService
 
     public const OUTBOX_CONTRACT_VERSION = 1;
 
+    public const OUTBOX_CONTRACT_VERSION_INTERACTIVE = 2;
+
     public const OUTBOX_AGGREGATE_TYPE = 'telegram_delivery_operation';
 
     public const OUTBOX_EVENT_KEY_PREFIX = 'telegram-delivery-requested:';
@@ -39,6 +40,7 @@ final readonly class TelegramDeliveryQueueService
         private OutboxPublisher $outbox,
         private TelegramDeliveryRuntime $runtime,
         private TelegramDeliveryDatabaseCapability $databaseCapability,
+        private TelegramDeliveryInteractivePresentationService $interactivePresentations,
     ) {}
 
     /** @requirement ARCH-003 ARCH-004 DAT-003 SEC-002 SEC-008 OPS-003 QUA-001 QUA-004 QUA-007 */
@@ -49,15 +51,24 @@ final readonly class TelegramDeliveryQueueService
         ?NonRestrictedTelegramPresentation $presentation,
         string $requestKey,
         string $correlationId,
+        ?TelegramInlineKeyboardSnapshot $inlineKeyboard = null,
     ): TelegramDeliveryOperationReceipt {
         TelegramPresentationProvenanceGuard::assertQueueSource($this->database->connection());
 
         $request = new TelegramMutationRequest($action, $recipientChatId, $targetMessageId, $presentation);
+        if ($inlineKeyboard !== null && $action === TelegramDeliveryAction::Delete) {
+            throw new DomainException('Telegram delete delivery cannot carry an inline keyboard.');
+        }
         $requestKeyHash = $this->requestKeyHash($requestKey);
         $this->assertToken($correlationId, 'Telegram delivery correlation ID', 8, 64);
         $botId = $this->runtime->botId();
         $this->assertBotId($botId);
-        $fingerprint = $this->fingerprint($request, $botId, $correlationId);
+        $fingerprint = TelegramDeliveryRequestFingerprint::make(
+            $request,
+            $botId,
+            $correlationId,
+            $inlineKeyboard?->hash(),
+        );
 
         try {
             return $this->database->connection()->transaction(function (Connection $connection) use (
@@ -66,6 +77,7 @@ final readonly class TelegramDeliveryQueueService
                 $correlationId,
                 $botId,
                 $fingerprint,
+                $inlineKeyboard,
             ): TelegramDeliveryOperationReceipt {
                 // Take the shared lifecycle fence before any operation-table row/gap
                 // lock so rollback and runtime always acquire locks in one order.
@@ -83,6 +95,7 @@ final readonly class TelegramDeliveryQueueService
                     $fingerprint,
                     $correlationId,
                     $botId,
+                    $inlineKeyboard,
                 );
             }, 3);
         } catch (QueryException $exception) {
@@ -109,10 +122,14 @@ final readonly class TelegramDeliveryQueueService
         string $fingerprint,
         string $correlationId,
         string $botId,
+        ?TelegramInlineKeyboardSnapshot $inlineKeyboard,
     ): TelegramDeliveryOperationReceipt {
         $publicId = (string) Str::ulid();
         $outboxEventId = (string) Str::uuid();
         $timestamp = $this->timestamp();
+        $contractVersion = $inlineKeyboard === null
+            ? self::OUTBOX_CONTRACT_VERSION
+            : self::OUTBOX_CONTRACT_VERSION_INTERACTIVE;
 
         return $this->databaseCapability->runQueue(
             $connection,
@@ -134,6 +151,8 @@ final readonly class TelegramDeliveryQueueService
                 $botId,
                 $outboxEventId,
                 $timestamp,
+                $inlineKeyboard,
+                $contractVersion,
             ): TelegramDeliveryOperationReceipt {
                 $payload = new SafeOutboxPayload([
                     'telegram_delivery_operation_public_id' => $publicId,
@@ -146,7 +165,7 @@ final readonly class TelegramDeliveryQueueService
                     $publicId,
                     $payload,
                     $correlationId,
-                    self::OUTBOX_CONTRACT_VERSION,
+                    $contractVersion,
                 );
                 if (! hash_equals($outboxEventId, $publishedEventId)) {
                     throw new RuntimeException('Telegram delivery Outbox event identity was unexpectedly replayed.');
@@ -170,6 +189,15 @@ final readonly class TelegramDeliveryQueueService
                     'updated_at' => $timestamp,
                 ]);
 
+                if ($inlineKeyboard !== null) {
+                    $this->interactivePresentations->store(
+                        $connection,
+                        $publicId,
+                        $request->recipientChatId,
+                        $inlineKeyboard,
+                    );
+                }
+
                 $this->outbox->releaseForDispatch(
                     $outboxEventId,
                     self::OUTBOX_EVENT_KEY_PREFIX.$publicId,
@@ -178,7 +206,7 @@ final readonly class TelegramDeliveryQueueService
                     $publicId,
                     $payload,
                     $correlationId,
-                    self::OUTBOX_CONTRACT_VERSION,
+                    $contractVersion,
                 );
 
                 $created = $this->operationByPublicId($connection, $publicId, false)
@@ -265,21 +293,6 @@ final readonly class TelegramDeliveryQueueService
         }
 
         return hash('sha256', $requestKey);
-    }
-
-    /** @throws JsonException */
-    private function fingerprint(TelegramMutationRequest $request, string $botId, string $correlationId): string
-    {
-        $encoded = json_encode([
-            'action' => $request->action->value,
-            'bot_id' => $botId,
-            'correlation_id' => $correlationId,
-            'presentation_text' => $request->presentation?->text(),
-            'recipient_chat_id' => $request->recipientChatId,
-            'target_message_id' => $request->targetMessageId,
-        ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-
-        return hash('sha256', $encoded);
     }
 
     private function assertToken(string $value, string $label, int $minimum, int $maximum): void

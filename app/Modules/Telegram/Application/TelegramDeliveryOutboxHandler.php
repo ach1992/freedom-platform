@@ -16,7 +16,17 @@ use Throwable;
 final readonly class TelegramDeliveryOutboxHandler implements OutboxEventHandler
 {
     /** @param Closure():TelegramDeliveryOperationExecutor $executorResolver */
-    public function __construct(private Closure $executorResolver) {}
+    public function __construct(
+        private Closure $executorResolver,
+        private int $contractVersion = TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION,
+    ) {
+        if (! in_array($contractVersion, [
+            TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION,
+            TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_INTERACTIVE,
+        ], true)) {
+            throw new DomainException('Telegram delivery Outbox handler contract version is unsupported.');
+        }
+    }
 
     public function eventType(): string
     {
@@ -25,7 +35,7 @@ final readonly class TelegramDeliveryOutboxHandler implements OutboxEventHandler
 
     public function contractVersion(): int
     {
-        return TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION;
+        return $this->contractVersion;
     }
 
     /** @requirement ARCH-004 SEC-002 SEC-008 OPS-003 QUA-001 QUA-004 */
@@ -33,7 +43,7 @@ final readonly class TelegramDeliveryOutboxHandler implements OutboxEventHandler
     {
         $publicId = $message->payload['telegram_delivery_operation_public_id'] ?? null;
         if ($message->eventType !== TelegramDeliveryQueueService::OUTBOX_EVENT_TYPE
-            || $message->contractVersion !== TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION
+            || $message->contractVersion !== $this->contractVersion
             || $message->aggregateType !== TelegramDeliveryQueueService::OUTBOX_AGGREGATE_TYPE
             || ! is_string($publicId)
             || ! hash_equals($message->aggregateId, $publicId)
@@ -55,7 +65,12 @@ final readonly class TelegramDeliveryOutboxHandler implements OutboxEventHandler
         }
 
         try {
-            return $this->outcome($executor->execute($publicId, $message->id, $message->correlationId)->state);
+            return $this->outcome($executor->execute(
+                $publicId,
+                $message->id,
+                $message->correlationId,
+                $this->contractVersion,
+            )->state);
         } catch (DomainException) {
             return $this->outcomeAfterFailure($publicId, $message->id, $message->correlationId, true);
         } catch (Throwable) {

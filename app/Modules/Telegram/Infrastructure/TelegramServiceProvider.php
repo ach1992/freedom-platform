@@ -15,6 +15,7 @@ use App\Modules\Telegram\Application\TelegramDeliveryOperationExecutor;
 use App\Modules\Telegram\Application\TelegramDeliveryOutboxHandler;
 use App\Modules\Telegram\Application\TelegramInteractionHandlerRegistry;
 use App\Modules\Telegram\Application\TelegramInteractionPolicy;
+use App\Modules\Telegram\Application\TelegramInteractiveDeliveryOutboxHandler;
 use App\Modules\Telegram\Application\TelegramNavigationEntryGateway;
 use App\Modules\Telegram\Application\TelegramNavigationHandler;
 use App\Shared\Application\OutboxEventHandler;
@@ -99,6 +100,15 @@ final class TelegramServiceProvider extends ServiceProvider
                 fn (): TelegramDeliveryOperationExecutor => $application->make(TelegramDeliveryOperationExecutor::class),
             ),
         );
-        $this->app->tag([TelegramDeliveryOutboxHandler::class], OutboxEventHandler::class);
+        $this->app->singleton(
+            TelegramInteractiveDeliveryOutboxHandler::class,
+            fn (Application $application): TelegramInteractiveDeliveryOutboxHandler => new TelegramInteractiveDeliveryOutboxHandler(
+                fn (): TelegramDeliveryOperationExecutor => $application->make(TelegramDeliveryOperationExecutor::class),
+            ),
+        );
+        $this->app->tag([
+            TelegramDeliveryOutboxHandler::class,
+            TelegramInteractiveDeliveryOutboxHandler::class,
+        ], OutboxEventHandler::class);
     }
 }

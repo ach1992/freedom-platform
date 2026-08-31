@@ -32,6 +32,7 @@ return [
     // data-classification review boundary; RESTRICTED owners must keep using
     // their protected/reference delivery authority instead.
     'telegram_non_restricted_presentation_sources' => [
+        'app/Modules/Telegram/Application/TelegramInteractiveDeliveryOutboxHandler.php',
         'app/Modules/Telegram/Application/TelegramNavigationHandler.php',
     ],
 
@@ -89,6 +90,80 @@ return [
                     'strategy' => 'semantic_surface_readiness',
                     'evidence' => [[
                         'file' => 'app/Modules/Telegram/Application/TelegramDeliveryDatabaseAuthoritySurfaceV1.php',
+                        'symbol' => 'isReady',
+                    ]],
+                ],
+            ],
+        ],
+        'telegram_interactive_delivery_v1' => [
+            'migration' => 'database/migrations/2026_08_31_000100_enable_telegram_interactive_delivery_presentations.php',
+            'rules' => [
+                'metadata_evidence' => [
+                    'strategy' => 'semantic_metadata_attestation',
+                    'evidence' => [[
+                        'file' => 'app/Modules/Telegram/Application/TelegramDeliveryInteractivePresentationDatabaseSurfaceV1.php',
+                        'symbol' => 'isReady',
+                    ]],
+                ],
+                'install_upgrade_fencing' => [
+                    'strategy' => 'shared_lifecycle_plus_ddl_session_installation_locks',
+                    'evidence' => [
+                        [
+                            'file' => 'database/migrations/2026_08_31_000100_enable_telegram_interactive_delivery_presentations.php',
+                            'symbol' => 'withInstallationLock',
+                        ],
+                        [
+                            'file' => 'tests/Feature/TelegramInteractiveDeliveryAuthorityTest.php',
+                            'symbol' => 'test_interactive_ddl_lock_owner_session_loss_blocks_protected_ddl_after_contender_acquires_ddl_lock',
+                        ],
+                        [
+                            'file' => 'tests/Feature/TelegramInteractiveDeliveryAuthorityTest.php',
+                            'symbol' => 'test_interactive_lifecycle_session_loss_cannot_overlap_ddl_guarded_by_runtime_session',
+                        ],
+                    ],
+                ],
+                'interrupted_reentry' => [
+                    'strategy' => 'zero_data_fail_closed_rebuild',
+                    'evidence' => [[
+                        'file' => 'tests/Feature/TelegramInteractiveDeliveryAuthorityTest.php',
+                        'symbol' => 'test_interactive_migration_rebuilds_empty_incomplete_surface_and_restores_exact_readiness',
+                    ]],
+                ],
+                'rollback_preflight' => [
+                    'strategy' => 'durable_authority_and_runtime_fence_preflight',
+                    'evidence' => [
+                        [
+                            'file' => 'tests/Feature/TelegramInteractiveDeliveryAuthorityTest.php',
+                            'symbol' => 'test_interactive_migration_down_refuses_durable_snapshots_before_destructive_ddl',
+                        ],
+                        [
+                            'file' => 'tests/Feature/TelegramInteractiveDeliveryRollbackRuntimeRaceTest.php',
+                            'symbol' => 'test_late_trigger_only_writer_fails_closed_after_persistent_fence_without_deadlock_or_row_loss',
+                        ],
+                        [
+                            'file' => 'tests/Feature/TelegramInteractiveDeliveryRollbackRuntimeRaceTest.php',
+                            'symbol' => 'test_staged_trigger_only_writer_remains_fail_closed_until_destructive_drop_commits',
+                        ],
+                    ],
+                ],
+                'ddl_toctou' => [
+                    'strategy' => 'mariadb_dependency_ddl_fail_closed_reentry',
+                    'evidence' => [[
+                        'file' => 'tests/Feature/TelegramInteractiveDeliveryAuthorityTest.php',
+                        'symbol' => 'test_interactive_migration_down_fails_closed_on_external_fk_preserves_guards_and_retries_cleanly',
+                    ]],
+                ],
+                'dependency_checks' => [
+                    'strategy' => 'semantic_no_fk_contract_plus_ddl_restrict',
+                    'evidence' => [[
+                        'file' => 'tests/Feature/TelegramInteractiveDeliveryAuthorityTest.php',
+                        'symbol' => 'test_interactive_migration_down_fails_closed_on_external_fk_preserves_guards_and_retries_cleanly',
+                    ]],
+                ],
+                'postflight_readiness' => [
+                    'strategy' => 'semantic_surface_readiness',
+                    'evidence' => [[
+                        'file' => 'app/Modules/Telegram/Application/TelegramDeliveryInteractivePresentationDatabaseSurfaceV1.php',
                         'symbol' => 'isReady',
                     ]],
                 ],
@@ -340,6 +415,7 @@ return [
         'sms_delivery_attempts' => 'Identity',
         'telegram_accounts' => 'Identity',
         'telegram_delivery_authority_capability' => 'Telegram',
+        'telegram_delivery_interactive_presentations' => 'Telegram',
         'telegram_delivery_operations' => 'Telegram',
         'telegram_interaction_authority_capability' => 'Telegram',
         'telegram_interaction_callbacks' => 'Telegram',
@@ -374,6 +450,24 @@ return [
         'zarinpal_payment_observations' => 'Payments',
         'zarinpal_payment_requests' => 'Payments',
         'zarinpal_payment_verifications' => 'Payments',
+    ],
+
+    // Exact migration-local durable rename lifecycle only. Temporary identities are not general
+    // durable owners: CI requires literal from/to pairs, the owning migration path, same owner,
+    // observed usage, and a reciprocal path whenever one endpoint is only a temporary identity.
+    'durable_table_rename_lifecycles' => [
+        [
+            'file' => 'database/migrations/2026_08_31_000100_enable_telegram_interactive_delivery_presentations.php',
+            'from' => 'telegram_delivery_interactive_presentations',
+            'to' => 'telegram_delivery_interactive_presentations_rollback',
+            'owner' => 'Telegram',
+        ],
+        [
+            'file' => 'database/migrations/2026_08_31_000100_enable_telegram_interactive_delivery_presentations.php',
+            'from' => 'telegram_delivery_interactive_presentations_rollback',
+            'to' => 'telegram_delivery_interactive_presentations',
+            'owner' => 'Telegram',
+        ],
     ],
 
     // Exact migration-only trigger DDL helper retained by the historical migration chain. Runtime

@@ -24,6 +24,7 @@ use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\DB;
 use ReflectionClass;
 use Tests\Support\NonRestrictedTelegramPresentationTestFactory;
+use Tests\Support\TelegramInteractivePresentationTestFactory;
 use Tests\TestCase;
 
 /** @requirement ARCH-004 DAT-003 OPS-003 QUA-004 QUA-007 */
@@ -69,6 +70,7 @@ final class TelegramOutboundDeliveryStaleLeaseTest extends TestCase
             new DatabaseOutboxPublisher($database, $this->clock),
             $this->runtime,
             new TelegramDeliveryDatabaseCapability,
+            TelegramInteractivePresentationTestFactory::service($this->clock, $this->runtime),
         );
         $executor = new TelegramDeliveryOperationExecutor(
             $database,
@@ -76,6 +78,7 @@ final class TelegramOutboundDeliveryStaleLeaseTest extends TestCase
             $this->runtime,
             $transport,
             new TelegramDeliveryDatabaseCapability,
+            TelegramInteractivePresentationTestFactory::service($this->clock, $this->runtime),
         );
         $handler = new TelegramDeliveryOutboxHandler(
             static fn (): TelegramDeliveryOperationExecutor => $executor,

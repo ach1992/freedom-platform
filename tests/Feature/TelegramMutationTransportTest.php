@@ -4,8 +4,12 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Modules\Telegram\Application\TelegramInlineButtonStyle;
+use App\Modules\Telegram\Application\TelegramInlineCallbackButton;
+use App\Modules\Telegram\Application\TelegramInlineKeyboardSnapshot;
 use App\Modules\Telegram\Application\TelegramMutationOutcome;
 use App\Modules\Telegram\Application\TelegramMutationRequest;
+use App\Modules\Telegram\Application\TelegramResolvedInlineKeyboardMarkup;
 use App\Modules\Telegram\Domain\TelegramDeliveryAction;
 use App\Modules\Telegram\Infrastructure\HttpTelegramMutationTransport;
 use App\Modules\Telegram\Infrastructure\TelegramRuntimeConfiguration;
@@ -19,6 +23,44 @@ use Tests\TestCase;
 /** @requirement ARCH-004 SEC-002 SEC-008 INT-001 INT-002 OPS-003 QUA-001 QUA-004 */
 final class TelegramMutationTransportTest extends TestCase
 {
+    public function test_inline_keyboard_is_sent_as_validated_reply_markup_without_changing_transport_retry_semantics(): void
+    {
+        Http::fake([
+            '*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 501, 'chat' => ['id' => 900001]],
+            ], 200),
+        ]);
+
+        $callbackPublicId = '01K5A1B2C3D4E5F6G7H8J9K0MN';
+        $callbackData = 'i_'.str_repeat('A', 32);
+        $snapshot = new TelegramInlineKeyboardSnapshot([[
+            new TelegramInlineCallbackButton('Continue', $callbackPublicId, TelegramInlineButtonStyle::Primary),
+        ]]);
+        $markup = TelegramResolvedInlineKeyboardMarkup::resolve($snapshot, [
+            $callbackPublicId => $callbackData,
+        ]);
+
+        $result = $this->transport()->mutate(new TelegramMutationRequest(
+            TelegramDeliveryAction::Send,
+            900001,
+            null,
+            NonRestrictedTelegramPresentationTestFactory::plainText('choose'),
+            $markup,
+        ));
+
+        self::assertSame(TelegramMutationOutcome::Success, $result->outcome);
+        Http::assertSentCount(1);
+        $requests = Http::recorded();
+        self::assertSame([
+            'inline_keyboard' => [[
+                ['text' => 'Continue', 'callback_data' => $callbackData, 'style' => 'primary'],
+            ]],
+        ], $requests[0][0]['reply_markup']);
+        self::assertSame('[PROTECTED_TELEGRAM_INLINE_KEYBOARD]', (string) $markup);
+        self::assertStringNotContainsString($callbackData, (string) $markup);
+    }
+
     public function test_send_edit_and_delete_use_one_operation_specific_http_attempt(): void
     {
         Http::fakeSequence()

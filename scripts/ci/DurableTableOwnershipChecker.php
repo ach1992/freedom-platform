@@ -19,14 +19,16 @@ final class DurableTableOwnershipChecker
     /** @return list<string> */
     public function violations(): array
     {
-        $scan = $this->scanMigrations();
-        $discovered = $scan['tables'];
         $owners = $this->config['durable_table_owners'] ?? [];
         if (! is_array($owners)) {
             return ['durable_table_owners must be an exact table => owner map.'];
         }
 
-        $violations = $scan['violations'];
+        [$renameLifecycles, $renameConfigViolations] = $this->renameLifecycleConfig();
+        $scan = $this->scanMigrations($renameLifecycles);
+        $discovered = $scan['tables'];
+        $violations = array_merge($renameConfigViolations, $scan['violations']);
+
         foreach ($discovered as $table => $locations) {
             $owner = $owners[$table] ?? null;
             if (! is_string($owner) || trim($owner) === '') {
@@ -53,22 +55,81 @@ final class DurableTableOwnershipChecker
             }
         }
 
+        foreach ($renameLifecycles as $key => $lifecycle) {
+            if (! isset($scan['rename_usage'][$key])) {
+                $violations[] = sprintf(
+                    'durable_table_rename_lifecycles contains stale/unused rename %s -> %s in %s.',
+                    $lifecycle['from'],
+                    $lifecycle['to'],
+                    $lifecycle['file'],
+                );
+            }
+
+            $fromOwner = $owners[$lifecycle['from']] ?? null;
+            $toOwner = $owners[$lifecycle['to']] ?? null;
+            $ownedEndpoints = 0;
+            foreach ([$fromOwner, $toOwner] as $endpointOwner) {
+                if ($endpointOwner === null) {
+                    continue;
+                }
+                $ownedEndpoints++;
+                if (! is_string($endpointOwner) || ! hash_equals($lifecycle['owner'], $endpointOwner)) {
+                    $violations[] = sprintf(
+                        'durable table rename %s -> %s in %s crosses or misstates architecture ownership.',
+                        $lifecycle['from'],
+                        $lifecycle['to'],
+                        $lifecycle['file'],
+                    );
+                }
+            }
+
+            if ($ownedEndpoints === 0) {
+                $violations[] = sprintf(
+                    'durable table rename %s -> %s in %s has no migration-created owned endpoint.',
+                    $lifecycle['from'],
+                    $lifecycle['to'],
+                    $lifecycle['file'],
+                );
+            }
+
+            if ($ownedEndpoints === 1) {
+                $reverseKey = $this->renameLifecycleKey(
+                    $lifecycle['file'],
+                    $lifecycle['to'],
+                    $lifecycle['from'],
+                );
+                $reverse = $renameLifecycles[$reverseKey] ?? null;
+                if (! is_array($reverse) || ! hash_equals($lifecycle['owner'], $reverse['owner'])) {
+                    $violations[] = sprintf(
+                        'durable temporary rename identity %s in %s requires an exact reciprocal same-owner lifecycle back to %s.',
+                        $fromOwner === null ? $lifecycle['from'] : $lifecycle['to'],
+                        $lifecycle['file'],
+                        $fromOwner === null ? $lifecycle['to'] : $lifecycle['from'],
+                    );
+                }
+            }
+        }
+
         $violations = array_values(array_unique($violations));
         sort($violations, SORT_STRING);
 
         return $violations;
     }
 
-    /** @return array{tables:array<string,list<string>>,violations:list<string>} */
-    private function scanMigrations(): array
+    /**
+     * @param  array<string,array{file:string,from:string,to:string,owner:string}>  $renameLifecycles
+     * @return array{tables:array<string,list<string>>,violations:list<string>,rename_usage:array<string,true>}
+     */
+    private function scanMigrations(array $renameLifecycles): array
     {
         $directory = $this->root.'/database/migrations';
         if (! is_dir($directory)) {
-            return ['tables' => [], 'violations' => []];
+            return ['tables' => [], 'violations' => [], 'rename_usage' => []];
         }
 
         $tables = [];
         $violations = [];
+        $renameUsage = [];
         $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($directory));
         foreach ($iterator as $file) {
             if (! $file->isFile() || ! in_array($file->getExtension(), ['php', 'sql'], true)) {
@@ -84,7 +145,7 @@ final class DurableTableOwnershipChecker
 
             if ($file->getExtension() === 'sql') {
                 $this->recordRawCreateTables($tables, $relativePath, $source);
-                $this->recordUnsupportedTableRenames($violations, $relativePath, $source);
+                $this->recordTableRenames($violations, $renameUsage, $renameLifecycles, $relativePath, $source);
 
                 continue;
             }
@@ -119,13 +180,13 @@ final class DurableTableOwnershipChecker
             }
 
             $this->recordRawCreateTables($tables, $relativePath, $source);
-            $this->recordUnsupportedTableRenames($violations, $relativePath, $source);
+            $this->recordTableRenames($violations, $renameUsage, $renameLifecycles, $relativePath, $source);
 
         }
 
         ksort($tables, SORT_STRING);
 
-        return ['tables' => $tables, 'violations' => $violations];
+        return ['tables' => $tables, 'violations' => $violations, 'rename_usage' => $renameUsage];
     }
 
     /**
@@ -317,25 +378,132 @@ final class DurableTableOwnershipChecker
         return preg_match('/'.preg_quote($variable, '/').'\s*->\s*create\s*\(/', $tail) === 1;
     }
 
-    /** @param list<string> $violations */
-    private function recordUnsupportedTableRenames(array &$violations, string $path, string $source): void
-    {
-        $patterns = [
+    /**
+     * @param  list<string>  $violations
+     * @param  array<string,true>  $usage
+     * @param  array<string,array{file:string,from:string,to:string,owner:string}>  $lifecycles
+     */
+    private function recordTableRenames(
+        array &$violations,
+        array &$usage,
+        array $lifecycles,
+        string $path,
+        string $source,
+    ): void {
+        $recognized = [];
+        $exactPatterns = [
+            [
+                'pattern' => '/\bSchema::rename\s*\(\s*[\'\"]([A-Za-z0-9_]+)[\'\"]\s*,\s*[\'\"]([A-Za-z0-9_]+)[\'\"]\s*\)/',
+                'mechanism' => 'Schema::rename',
+            ],
+            [
+                'pattern' => '/\bRENAME\s+TABLE\s+`?([A-Za-z0-9_]+)`?\s+TO\s+`?([A-Za-z0-9_]+)`?/i',
+                'mechanism' => 'raw RENAME TABLE',
+            ],
+            [
+                'pattern' => '/\bALTER\s+TABLE\s+`?([A-Za-z0-9_]+)`?\s+RENAME(?:\s+TO)?\s+`?([A-Za-z0-9_]+)`?/i',
+                'mechanism' => 'raw ALTER TABLE ... RENAME',
+            ],
+        ];
+
+        foreach ($exactPatterns as $definition) {
+            preg_match_all($definition['pattern'], $source, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE);
+            foreach ($matches as $match) {
+                $offset = $match[0][1];
+                $recognized[$definition['mechanism'].'|'.$offset] = true;
+                $from = $match[1][0];
+                $to = $match[2][0];
+                $key = $this->renameLifecycleKey($path, $from, $to);
+                if (! isset($lifecycles[$key])) {
+                    $violations[] = sprintf(
+                        '%s:%d durable table rename via %s is not ownership-attributable (%s -> %s); add the exact file/from/to/owner lifecycle before using table rename.',
+                        $path,
+                        $this->lineNumber($source, $offset),
+                        $definition['mechanism'],
+                        $from,
+                        $to,
+                    );
+
+                    continue;
+                }
+
+                $usage[$key] = true;
+            }
+        }
+
+        $genericPatterns = [
             '/\bSchema::rename\s*\(/' => 'Schema::rename',
             '/\bRENAME\s+TABLE\b/i' => 'raw RENAME TABLE',
             '/\bALTER\s+TABLE\b[^;\r\n]*\bRENAME\b/i' => 'raw ALTER TABLE ... RENAME',
         ];
-        foreach ($patterns as $pattern => $mechanism) {
+        foreach ($genericPatterns as $pattern => $mechanism) {
             preg_match_all($pattern, $source, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE);
             foreach ($matches as $match) {
+                $offset = $match[0][1];
+                if (isset($recognized[$mechanism.'|'.$offset])) {
+                    continue;
+                }
                 $violations[] = sprintf(
-                    '%s:%d durable table rename via %s is not ownership-attributable; model the post-rename durable ownership lifecycle explicitly before using table rename.',
+                    '%s:%d durable table rename via %s cannot be resolved to exact literal from/to identities.',
                     $path,
-                    $this->lineNumber($source, $match[0][1]),
+                    $this->lineNumber($source, $offset),
                     $mechanism,
                 );
             }
         }
+    }
+
+    /**
+     * @return array{0:array<string,array{file:string,from:string,to:string,owner:string}>,1:list<string>}
+     */
+    private function renameLifecycleConfig(): array
+    {
+        $configured = $this->config['durable_table_rename_lifecycles'] ?? [];
+        if (! is_array($configured)) {
+            return [[], ['durable_table_rename_lifecycles must be an exact list of file/from/to/owner entries.']];
+        }
+
+        $lifecycles = [];
+        $violations = [];
+        foreach ($configured as $entry) {
+            if (! is_array($entry)
+                || array_keys($entry) !== ['file', 'from', 'to', 'owner']
+                || ! is_string($entry['file'] ?? null)
+                || ! is_string($entry['from'] ?? null)
+                || ! is_string($entry['to'] ?? null)
+                || ! is_string($entry['owner'] ?? null)
+                || preg_match('#\Adatabase/migrations/[A-Za-z0-9_./-]+\.(?:php|sql)\z#', $entry['file']) !== 1
+                || str_contains($entry['file'], '..')
+                || preg_match('/\A[A-Za-z0-9_]+\z/', $entry['from']) !== 1
+                || preg_match('/\A[A-Za-z0-9_]+\z/', $entry['to']) !== 1
+                || hash_equals($entry['from'], $entry['to'])
+                || trim($entry['owner']) === '') {
+                $violations[] = 'durable_table_rename_lifecycles contains an invalid entry; exact file/from/to/owner literals are required.';
+
+                continue;
+            }
+
+            $key = $this->renameLifecycleKey($entry['file'], $entry['from'], $entry['to']);
+            if (isset($lifecycles[$key])) {
+                $violations[] = sprintf(
+                    'durable_table_rename_lifecycles contains duplicate rename %s -> %s in %s.',
+                    $entry['from'],
+                    $entry['to'],
+                    $entry['file'],
+                );
+
+                continue;
+            }
+
+            $lifecycles[$key] = $entry;
+        }
+
+        return [$lifecycles, $violations];
+    }
+
+    private function renameLifecycleKey(string $file, string $from, string $to): string
+    {
+        return $file.'|'.$from.'|'.$to;
     }
 
     /** @param array<string,list<string>> $tables */
@@ -399,7 +567,7 @@ final class DurableTableOwnershipChecker
         }
 
         preg_match_all('/\$([A-Za-z_][A-Za-z0-9_]*)/', $candidate[2], $parameters);
-        foreach ($parameters[1] ?? [] as $index => $parameter) {
+        foreach ($parameters[1] as $index => $parameter) {
             if ($parameter === $variable) {
                 return [$candidate[1], $index];
             }
