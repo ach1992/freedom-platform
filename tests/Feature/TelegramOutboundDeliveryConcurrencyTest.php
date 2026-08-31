@@ -12,6 +12,7 @@ namespace {
     use Illuminate\Contracts\Console\Kernel;
     use Illuminate\Database\Connection;
     use Illuminate\Database\DatabaseManager;
+    use Tests\Support\ConfidentialTelegramPresentationTestFactory;
     use Tests\Support\NonRestrictedTelegramPresentationTestFactory;
     use Tests\Support\TelegramInteractivePresentationTestFactory;
 
@@ -45,6 +46,7 @@ namespace {
             $runtime,
             new TelegramDeliveryDatabaseCapability,
             TelegramInteractivePresentationTestFactory::service($clock, $runtime),
+            ConfidentialTelegramPresentationTestFactory::service($clock),
         );
 
         echo "READY\n";

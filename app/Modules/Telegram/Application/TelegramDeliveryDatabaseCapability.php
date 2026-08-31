@@ -56,11 +56,16 @@ final readonly class TelegramDeliveryDatabaseCapability
         string $fingerprint,
         string $correlationId,
         TelegramMutationRequest $request,
+        ?string $durablePresentationText,
         string $botId,
         string $outboxEventId,
         Closure $operation,
     ): mixed {
-        TelegramPresentationProvenanceGuard::assertQueueSource($connection);
+        if ($request->presentation instanceof ConfidentialTelegramPresentation) {
+            TelegramConfidentialPresentationProvenanceGuard::assertQueueSource($connection);
+        } else {
+            TelegramPresentationProvenanceGuard::assertQueueSource($connection);
+        }
         $this->assertReady($connection);
         $armed = false;
 
@@ -92,7 +97,7 @@ SQL, [
                 $botId,
                 $request->recipientChatId,
                 $request->targetMessageId,
-                $request->presentation === null ? null : hash('sha256', $request->presentation->text()),
+                $durablePresentationText === null ? null : hash('sha256', $durablePresentationText),
                 $outboxEventId,
             ]);
             $armed = true;

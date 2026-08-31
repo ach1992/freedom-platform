@@ -62,6 +62,36 @@ final readonly class TelegramDeliveryInteractivePresentationService
         }
     }
 
+    public function resolveOptional(
+        Connection $connection,
+        string $operationPublicId,
+        int $recipientChatId,
+    ): ?TelegramResolvedInteractivePresentation {
+        $this->assertOperationPublicId($operationPublicId);
+        if ($connection->transactionLevel() < 1) {
+            throw new RuntimeException('Telegram interactive presentation resolution requires the provider-boundary transaction.');
+        }
+        try {
+            $connection->selectOne(
+                'SELECT 1 AS surface_pin FROM '.TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE.' LIMIT 1',
+                [],
+                false,
+            );
+        } catch (Throwable $exception) {
+            throw new RuntimeException('Telegram interactive presentation database surface is unavailable.', 0, $exception);
+        }
+        if (! (new TelegramDeliveryInteractivePresentationDatabaseSurfaceV1)->isReady($connection)) {
+            throw new RuntimeException('Telegram interactive presentation database authority is not ready.');
+        }
+        if (! $connection->table(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)
+            ->where('delivery_operation_public_id', $operationPublicId)
+            ->exists()) {
+            return null;
+        }
+
+        return $this->resolve($connection, $operationPublicId, $recipientChatId);
+    }
+
     public function resolve(
         Connection $connection,
         string $operationPublicId,

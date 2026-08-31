@@ -23,6 +23,7 @@ final readonly class TelegramDeliveryOutboxHandler implements OutboxEventHandler
         if (! in_array($contractVersion, [
             TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION,
             TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_INTERACTIVE,
+            TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_CONFIDENTIAL,
         ], true)) {
             throw new DomainException('Telegram delivery Outbox handler contract version is unsupported.');
         }

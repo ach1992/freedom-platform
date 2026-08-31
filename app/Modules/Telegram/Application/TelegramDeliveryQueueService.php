@@ -30,6 +30,8 @@ final readonly class TelegramDeliveryQueueService
 
     public const OUTBOX_CONTRACT_VERSION_INTERACTIVE = 2;
 
+    public const OUTBOX_CONTRACT_VERSION_CONFIDENTIAL = 3;
+
     public const OUTBOX_AGGREGATE_TYPE = 'telegram_delivery_operation';
 
     public const OUTBOX_EVENT_KEY_PREFIX = 'telegram-delivery-requested:';
@@ -41,6 +43,7 @@ final readonly class TelegramDeliveryQueueService
         private TelegramDeliveryRuntime $runtime,
         private TelegramDeliveryDatabaseCapability $databaseCapability,
         private TelegramDeliveryInteractivePresentationService $interactivePresentations,
+        private TelegramDeliveryConfidentialPresentationService $confidentialPresentations,
     ) {}
 
     /** @requirement ARCH-003 ARCH-004 DAT-003 SEC-002 SEC-008 OPS-003 QUA-001 QUA-004 QUA-007 */
@@ -56,46 +59,122 @@ final readonly class TelegramDeliveryQueueService
         TelegramPresentationProvenanceGuard::assertQueueSource($this->database->connection());
 
         $request = new TelegramMutationRequest($action, $recipientChatId, $targetMessageId, $presentation);
-        if ($inlineKeyboard !== null && $action === TelegramDeliveryAction::Delete) {
+        $contractVersion = $inlineKeyboard === null
+            ? self::OUTBOX_CONTRACT_VERSION
+            : self::OUTBOX_CONTRACT_VERSION_INTERACTIVE;
+
+        return $this->queueRequest(
+            $request,
+            $presentation?->text(),
+            null,
+            $requestKey,
+            $correlationId,
+            $inlineKeyboard,
+            $contractVersion,
+        );
+    }
+
+    /** @requirement ARCH-003 ARCH-004 DAT-003 SEC-002 SEC-008 OPS-003 QUA-001 QUA-004 QUA-007 */
+    public function queueConfidential(
+        TelegramDeliveryAction $action,
+        int $recipientChatId,
+        ?int $targetMessageId,
+        ConfidentialTelegramPresentation $presentation,
+        string $requestKey,
+        string $correlationId,
+        ?TelegramInlineKeyboardSnapshot $inlineKeyboard = null,
+    ): TelegramDeliveryOperationReceipt {
+        TelegramConfidentialPresentationProvenanceGuard::assertQueueSource($this->database->connection());
+        if ($action === TelegramDeliveryAction::Delete) {
+            throw new DomainException('Confidential Telegram delivery supports send/edit presentation mutations only.');
+        }
+
+        return $this->queueRequest(
+            new TelegramMutationRequest($action, $recipientChatId, $targetMessageId, $presentation),
+            TelegramDeliveryConfidentialPresentationService::DURABLE_MARKER,
+            $presentation,
+            $requestKey,
+            $correlationId,
+            $inlineKeyboard,
+            self::OUTBOX_CONTRACT_VERSION_CONFIDENTIAL,
+        );
+    }
+
+    private function queueRequest(
+        TelegramMutationRequest $request,
+        ?string $durablePresentationText,
+        ?ConfidentialTelegramPresentation $confidentialPresentation,
+        string $requestKey,
+        string $correlationId,
+        ?TelegramInlineKeyboardSnapshot $inlineKeyboard,
+        int $contractVersion,
+    ): TelegramDeliveryOperationReceipt {
+        if ($inlineKeyboard !== null && $request->action === TelegramDeliveryAction::Delete) {
             throw new DomainException('Telegram delete delivery cannot carry an inline keyboard.');
         }
+        if ($contractVersion === self::OUTBOX_CONTRACT_VERSION_CONFIDENTIAL) {
+            if (! $request->presentation instanceof ConfidentialTelegramPresentation
+                || $confidentialPresentation !== $request->presentation
+                || $durablePresentationText !== TelegramDeliveryConfidentialPresentationService::DURABLE_MARKER
+            ) {
+                throw new RuntimeException('Telegram confidential queue contract is internally inconsistent.');
+            }
+        } elseif ($confidentialPresentation !== null
+            || $request->presentation instanceof ConfidentialTelegramPresentation
+            || $durablePresentationText !== ($request->presentation instanceof NonRestrictedTelegramPresentation
+                ? $request->presentation->text()
+                : null)
+        ) {
+            throw new RuntimeException('Telegram non-restricted queue contract is internally inconsistent.');
+        }
+
         $requestKeyHash = $this->requestKeyHash($requestKey);
         $this->assertToken($correlationId, 'Telegram delivery correlation ID', 8, 64);
         $botId = $this->runtime->botId();
         $this->assertBotId($botId);
-        $fingerprint = TelegramDeliveryRequestFingerprint::make(
+        $confidentialHashCandidates = $confidentialPresentation === null
+            ? null
+            : $this->confidentialPresentations->fingerprintHashCandidates($confidentialPresentation);
+        $fingerprintCandidates = TelegramDeliveryRequestFingerprint::candidates(
             $request,
             $botId,
             $correlationId,
             $inlineKeyboard?->hash(),
+            $confidentialHashCandidates,
         );
+        $fingerprint = $fingerprintCandidates[0];
 
         try {
             return $this->database->connection()->transaction(function (Connection $connection) use (
                 $request,
+                $durablePresentationText,
+                $confidentialPresentation,
                 $requestKeyHash,
                 $correlationId,
                 $botId,
                 $fingerprint,
+                $fingerprintCandidates,
                 $inlineKeyboard,
+                $contractVersion,
             ): TelegramDeliveryOperationReceipt {
-                // Take the shared lifecycle fence before any operation-table row/gap
-                // lock so rollback and runtime always acquire locks in one order.
                 $this->databaseCapability->acquireRuntimeLifecycleFence($connection);
 
                 $existing = $this->operationByRequestHash($connection, $requestKeyHash, true);
                 if ($existing !== null) {
-                    return $this->replayReceipt($existing, $fingerprint);
+                    return $this->replayReceipt($existing, $fingerprintCandidates);
                 }
 
                 return $this->createOperation(
                     $connection,
                     $request,
+                    $durablePresentationText,
+                    $confidentialPresentation,
                     $requestKeyHash,
                     $fingerprint,
                     $correlationId,
                     $botId,
                     $inlineKeyboard,
+                    $contractVersion,
                 );
             }, 3);
         } catch (QueryException $exception) {
@@ -103,33 +182,30 @@ final readonly class TelegramDeliveryQueueService
                 throw $exception;
             }
 
-            // A concurrent transaction may have won the unique request hash. Its
-            // commit is visible after the duplicate-key wait completes; our failed
-            // transaction (including its quarantined Outbox row) has rolled back.
             $existing = $this->operationByRequestHash($this->database->connection(), $requestKeyHash, false);
             if ($existing === null) {
                 throw $exception;
             }
 
-            return $this->replayReceipt($existing, $fingerprint);
+            return $this->replayReceipt($existing, $fingerprintCandidates);
         }
     }
 
     private function createOperation(
         Connection $connection,
         TelegramMutationRequest $request,
+        ?string $durablePresentationText,
+        ?ConfidentialTelegramPresentation $confidentialPresentation,
         string $requestKeyHash,
         string $fingerprint,
         string $correlationId,
         string $botId,
         ?TelegramInlineKeyboardSnapshot $inlineKeyboard,
+        int $contractVersion,
     ): TelegramDeliveryOperationReceipt {
         $publicId = (string) Str::ulid();
         $outboxEventId = (string) Str::uuid();
         $timestamp = $this->timestamp();
-        $contractVersion = $inlineKeyboard === null
-            ? self::OUTBOX_CONTRACT_VERSION
-            : self::OUTBOX_CONTRACT_VERSION_INTERACTIVE;
 
         return $this->databaseCapability->runQueue(
             $connection,
@@ -139,6 +215,7 @@ final readonly class TelegramDeliveryQueueService
             $fingerprint,
             $correlationId,
             $request,
+            $durablePresentationText,
             $botId,
             $outboxEventId,
             function () use (
@@ -148,6 +225,8 @@ final readonly class TelegramDeliveryQueueService
                 $fingerprint,
                 $correlationId,
                 $request,
+                $durablePresentationText,
+                $confidentialPresentation,
                 $botId,
                 $outboxEventId,
                 $timestamp,
@@ -180,7 +259,7 @@ final readonly class TelegramDeliveryQueueService
                     'bot_id' => $botId,
                     'recipient_chat_id' => $request->recipientChatId,
                     'target_message_id' => $request->targetMessageId,
-                    'presentation_text' => $request->presentation?->text(),
+                    'presentation_text' => $durablePresentationText,
                     'outbox_event_id' => $outboxEventId,
                     'state' => TelegramDeliveryOperationState::Prepared->value,
                     'state_version' => 1,
@@ -189,6 +268,14 @@ final readonly class TelegramDeliveryQueueService
                     'updated_at' => $timestamp,
                 ]);
 
+                if ($confidentialPresentation !== null) {
+                    $this->confidentialPresentations->store(
+                        $connection,
+                        $publicId,
+                        $confidentialPresentation,
+                        $fingerprint,
+                    );
+                }
                 if ($inlineKeyboard !== null) {
                     $this->interactivePresentations->store(
                         $connection,
@@ -217,10 +304,16 @@ final readonly class TelegramDeliveryQueueService
         );
     }
 
-    /** @param DeliveryOperationRow $row */
-    private function replayReceipt(object $row, string $fingerprint): TelegramDeliveryOperationReceipt
+    /**
+     * @param  DeliveryOperationRow  $row
+     * @param  non-empty-list<string>  $fingerprintCandidates
+     */
+    private function replayReceipt(object $row, array $fingerprintCandidates): TelegramDeliveryOperationReceipt
     {
-        if (! hash_equals((string) $row->request_fingerprint, $fingerprint)) {
+        if (! TelegramDeliveryRequestFingerprint::matches(
+            (string) $row->request_fingerprint,
+            $fingerprintCandidates,
+        )) {
             throw new DomainException('Telegram delivery request key was reused with conflicting semantics.');
         }
 

@@ -11,6 +11,8 @@ use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\TelegramInteractionHandler;
 use App\Modules\Telegram\Application\Contracts\TelegramMutationTransport;
 use App\Modules\Telegram\Application\Contracts\TelegramRuntime;
+use App\Modules\Telegram\Application\TelegramConfidentialDeliveryOutboxHandler;
+use App\Modules\Telegram\Application\TelegramConfidentialPresentationHasher;
 use App\Modules\Telegram\Application\TelegramDeliveryOperationExecutor;
 use App\Modules\Telegram\Application\TelegramDeliveryOutboxHandler;
 use App\Modules\Telegram\Application\TelegramInteractionHandlerRegistry;
@@ -21,13 +23,26 @@ use App\Modules\Telegram\Application\TelegramNavigationHandler;
 use App\Shared\Application\OutboxEventHandler;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Contracts\Foundation\Application;
+use Illuminate\Encryption\Encrypter;
 use Illuminate\Http\Client\Factory;
 use Illuminate\Support\ServiceProvider;
+use RuntimeException;
 
 final class TelegramServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
+        $this->app->singleton(
+            TelegramConfidentialPresentationHasher::class,
+            static function (Application $application): TelegramConfidentialPresentationHasher {
+                $encrypter = $application->make('encrypter');
+                if (! $encrypter instanceof Encrypter) {
+                    throw new RuntimeException('Telegram confidential presentation keyring is unavailable.');
+                }
+
+                return new TelegramConfidentialPresentationHasher($encrypter->getAllKeys());
+            },
+        );
         $this->app->singleton(
             TelegramRuntimeConfiguration::class,
             function (Application $application): TelegramRuntimeConfiguration {
@@ -106,9 +121,16 @@ final class TelegramServiceProvider extends ServiceProvider
                 fn (): TelegramDeliveryOperationExecutor => $application->make(TelegramDeliveryOperationExecutor::class),
             ),
         );
+        $this->app->singleton(
+            TelegramConfidentialDeliveryOutboxHandler::class,
+            fn (Application $application): TelegramConfidentialDeliveryOutboxHandler => new TelegramConfidentialDeliveryOutboxHandler(
+                fn (): TelegramDeliveryOperationExecutor => $application->make(TelegramDeliveryOperationExecutor::class),
+            ),
+        );
         $this->app->tag([
             TelegramDeliveryOutboxHandler::class,
             TelegramInteractiveDeliveryOutboxHandler::class,
+            TelegramConfidentialDeliveryOutboxHandler::class,
         ], OutboxEventHandler::class);
     }
 }

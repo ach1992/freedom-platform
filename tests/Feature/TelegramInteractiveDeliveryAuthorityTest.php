@@ -39,6 +39,7 @@ use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use ReflectionMethod;
 use RuntimeException;
+use Tests\Support\ConfidentialTelegramPresentationTestFactory;
 use Tests\Support\NonRestrictedTelegramPresentationTestFactory;
 use Tests\TestCase;
 use Throwable;
@@ -1149,6 +1150,7 @@ SQL);
             $this->runtime,
             new TelegramDeliveryDatabaseCapability,
             $this->interactivePresentations(),
+            ConfidentialTelegramPresentationTestFactory::service($this->clock),
         );
     }
 
@@ -1161,6 +1163,7 @@ SQL);
             $transport,
             new TelegramDeliveryDatabaseCapability,
             $this->interactivePresentations(),
+            ConfidentialTelegramPresentationTestFactory::service($this->clock),
         );
     }
 

@@ -27,6 +27,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use ReflectionClass;
 use RuntimeException;
+use Tests\Support\ConfidentialTelegramPresentationTestFactory;
 use Tests\Support\NonRestrictedTelegramPresentationTestFactory;
 use Tests\Support\TelegramInteractivePresentationTestFactory;
 use Tests\TestCase;
@@ -931,6 +932,7 @@ SQL);
             $transport,
             new TelegramDeliveryDatabaseCapability,
             TelegramInteractivePresentationTestFactory::service($this->clock, $this->runtime),
+            ConfidentialTelegramPresentationTestFactory::service($this->clock),
         );
         $handler = new TelegramDeliveryOutboxHandler(static fn (): TelegramDeliveryOperationExecutor => $executor);
         $dispatcher = new DatabaseOutboxDispatcher(app(DatabaseManager::class), $this->clock, 60, 2);
@@ -1068,6 +1070,7 @@ SQL);
             $transport,
             new TelegramDeliveryDatabaseCapability,
             TelegramInteractivePresentationTestFactory::service($this->clock, $this->runtime),
+            ConfidentialTelegramPresentationTestFactory::service($this->clock),
         );
         $handler = new TelegramDeliveryOutboxHandler(static fn (): TelegramDeliveryOperationExecutor => $executor);
         $handler->handle(new OutboxMessage(
@@ -1113,6 +1116,7 @@ SQL);
             $transport,
             new TelegramDeliveryDatabaseCapability,
             TelegramInteractivePresentationTestFactory::service($this->clock, $this->runtime),
+            ConfidentialTelegramPresentationTestFactory::service($this->clock),
         );
         try {
             $executor->execute($publicId, $outboxEventId, $correlationId);
@@ -1141,6 +1145,7 @@ SQL);
             $this->runtime,
             new TelegramDeliveryDatabaseCapability,
             TelegramInteractivePresentationTestFactory::service($this->clock, $this->runtime),
+            ConfidentialTelegramPresentationTestFactory::service($this->clock),
         );
     }
 

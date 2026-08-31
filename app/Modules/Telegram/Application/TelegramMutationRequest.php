@@ -13,7 +13,7 @@ final readonly class TelegramMutationRequest
         public TelegramDeliveryAction $action,
         public int $recipientChatId,
         public ?int $targetMessageId,
-        public ?NonRestrictedTelegramPresentation $presentation,
+        public NonRestrictedTelegramPresentation|ConfidentialTelegramPresentation|null $presentation,
         public ?TelegramResolvedInlineKeyboardMarkup $inlineKeyboard = null,
     ) {
         if ($recipientChatId === 0) {

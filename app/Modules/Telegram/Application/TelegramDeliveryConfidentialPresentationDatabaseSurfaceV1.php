@@ -7,42 +7,40 @@ namespace App\Modules\Telegram\Application;
 use Illuminate\Database\Connection;
 use Throwable;
 
-final readonly class TelegramDeliveryInteractivePresentationDatabaseSurfaceV1
+final readonly class TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1
 {
-    public const TABLE = 'telegram_delivery_interactive_presentations';
+    public const TABLE = 'telegram_delivery_confidential_presentations';
 
-    public const INSERT_TRIGGER = 'telegram_delivery_interactive_presentations_insert_guard';
+    public const INSERT_TRIGGER = 'telegram_delivery_confidential_presentations_insert_guard';
 
-    public const UPDATE_TRIGGER = 'telegram_delivery_interactive_presentations_update_guard';
+    public const UPDATE_TRIGGER = 'telegram_delivery_confidential_presentations_update_guard';
 
-    public const DELETE_TRIGGER = 'telegram_delivery_interactive_presentations_delete_guard';
+    public const DELETE_TRIGGER = 'telegram_delivery_confidential_presentations_delete_guard';
 
     /** @var list<list<string|null>> */
     private const EXPECTED_COLUMN_METADATA = [
         ['delivery_operation_public_id', 'char(26)', 'NO', null, 'utf8mb4', 'utf8mb4_bin', ''],
-        ['keyboard_snapshot', 'longtext', 'NO', null, 'utf8mb4', 'utf8mb4_bin', ''],
-        ['keyboard_snapshot_hash', 'char(64)', 'NO', null, 'utf8mb4', 'utf8mb4_bin', ''],
+        ['presentation_ciphertext', 'longtext', 'NO', null, 'utf8mb4', 'utf8mb4_bin', ''],
+        ['presentation_hash', 'char(64)', 'NO', null, 'utf8mb4', 'utf8mb4_bin', ''],
         ['created_at', 'datetime(6)', 'NO', null, null, null, ''],
     ];
 
     /** @var array<string, literal-string> */
     private const EXPECTED_CHECKS = [
-        'telegram_delivery_interactive_public_chk' => <<<'SQL'
+        'telegram_delivery_confidential_public_chk' => <<<'SQL'
 delivery_operation_public_id regexp '^[0-9A-HJKMNP-TV-Z]{26}$'
 and cast(delivery_operation_public_id as char charset binary) = cast(ucase(delivery_operation_public_id) as char charset binary)
 SQL,
-        'telegram_delivery_interactive_snapshot_hash_chk' => <<<'SQL'
-keyboard_snapshot_hash regexp '^[0-9a-f]{64}$'
+        'telegram_delivery_confidential_hash_chk' => <<<'SQL'
+presentation_hash regexp '^[0-9a-f]{64}$'
 SQL,
-        'telegram_delivery_interactive_snapshot_json_chk' => <<<'SQL'
-json_valid(keyboard_snapshot) = 1
-and json_type(keyboard_snapshot) = 'OBJECT'
-and octet_length(keyboard_snapshot) between 2 and 16384
+        'telegram_delivery_confidential_ciphertext_chk' => <<<'SQL'
+octet_length(presentation_ciphertext) between 1 and 65536
 SQL,
     ];
 
     /** @phpstan-impure */
-    public function isReady(Connection $connection, ?string $expectedInsertTriggerBody = null): bool
+    public function isReady(Connection $connection): bool
     {
         if ($connection->getDriverName() !== 'mysql') {
             return false;
@@ -188,7 +186,7 @@ SQL,
 
             $expected = [
                 self::DELETE_TRIGGER => ['DELETE', 'BEFORE', self::deleteTriggerBody()],
-                self::INSERT_TRIGGER => ['INSERT', 'BEFORE', $expectedInsertTriggerBody ?? self::insertTriggerBody()],
+                self::INSERT_TRIGGER => ['INSERT', 'BEFORE', self::insertTriggerBody()],
                 self::UPDATE_TRIGGER => ['UPDATE', 'BEFORE', self::updateTriggerBody()],
             ];
             foreach ($triggers as $trigger) {
@@ -239,22 +237,24 @@ BEGIN
           AND capability_row.activated_at IS NOT NULL
           AND BINARY capability_row.capability_hash = BINARY SHA2(COALESCE(@app_telegram_delivery_capability, ''), 256)
     )
-       OR COALESCE(@app_telegram_delivery_interactive_authority, '') <> 'telegram_delivery_interactive_queue_v1'
-       OR BINARY NEW.delivery_operation_public_id <> BINARY COALESCE(@app_telegram_delivery_interactive_public_id, '')
-       OR BINARY NEW.keyboard_snapshot_hash <> BINARY COALESCE(@app_telegram_delivery_interactive_snapshot_hash, '')
-       OR BINARY NEW.keyboard_snapshot_hash <> BINARY LOWER(SHA2(NEW.keyboard_snapshot, 256)) THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Telegram interactive presentation creation authority is invalid.';
+       OR COALESCE(@app_telegram_delivery_confidential_authority, '') <> 'telegram_delivery_confidential_queue_v1'
+       OR BINARY NEW.delivery_operation_public_id <> BINARY COALESCE(@app_telegram_delivery_confidential_public_id, '')
+       OR BINARY NEW.presentation_hash <> BINARY COALESCE(@app_telegram_delivery_confidential_presentation_hash, '')
+       OR BINARY LOWER(SHA2(NEW.presentation_ciphertext, 256)) <> BINARY COALESCE(@app_telegram_delivery_confidential_ciphertext_hash, '') THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Telegram confidential presentation creation authority is invalid.';
     END IF;
 
     SELECT COUNT(*) INTO valid_operation_count
     FROM telegram_delivery_operations operation_row
     INNER JOIN outbox_messages outbox_row ON outbox_row.id = operation_row.outbox_event_id
     WHERE BINARY operation_row.public_id = BINARY NEW.delivery_operation_public_id
+      AND BINARY operation_row.request_fingerprint = BINARY COALESCE(@app_telegram_delivery_confidential_fingerprint, '')
+      AND BINARY operation_row.presentation_text = BINARY '[CONFIDENTIAL_TELEGRAM_PRESENTATION]'
       AND operation_row.state = 'prepared'
       AND operation_row.state_version = 1
       AND operation_row.provider_attempts = 0
       AND BINARY outbox_row.event_type = BINARY 'telegram.delivery.requested'
-      AND outbox_row.contract_version IN (2, 3)
+      AND outbox_row.contract_version = 3
       AND BINARY outbox_row.aggregate_type = BINARY 'telegram_delivery_operation'
       AND BINARY outbox_row.aggregate_id = BINARY operation_row.public_id
       AND BINARY outbox_row.correlation_id = BINARY operation_row.correlation_id
@@ -262,58 +262,7 @@ BEGIN
       AND outbox_row.processed_at IS NULL;
 
     IF valid_operation_count <> 1 THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Telegram interactive presentation requires one prepared v2/v3 delivery operation.';
-    END IF;
-END
-SQL;
-    }
-
-    /** @return literal-string */
-    public static function legacyV2InsertTriggerBody(): string
-    {
-        return <<<'SQL'
-BEGIN
-    DECLARE capability_fence_rows INT DEFAULT 0;
-    DECLARE valid_operation_count INT DEFAULT 0;
-
-    SELECT COUNT(*) INTO capability_fence_rows
-    FROM telegram_delivery_authority_capability
-    WHERE id = 1
-    LOCK IN SHARE MODE;
-
-    IF capability_fence_rows <> 1
-       OR NOT EXISTS (
-        SELECT 1
-        FROM telegram_delivery_authority_capability capability_row
-        WHERE capability_row.id = 1
-          AND capability_row.schema_version = 1
-          AND capability_row.activated_at IS NOT NULL
-          AND BINARY capability_row.capability_hash = BINARY SHA2(COALESCE(@app_telegram_delivery_capability, ''), 256)
-    )
-       OR COALESCE(@app_telegram_delivery_interactive_authority, '') <> 'telegram_delivery_interactive_queue_v1'
-       OR BINARY NEW.delivery_operation_public_id <> BINARY COALESCE(@app_telegram_delivery_interactive_public_id, '')
-       OR BINARY NEW.keyboard_snapshot_hash <> BINARY COALESCE(@app_telegram_delivery_interactive_snapshot_hash, '')
-       OR BINARY NEW.keyboard_snapshot_hash <> BINARY LOWER(SHA2(NEW.keyboard_snapshot, 256)) THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Telegram interactive presentation creation authority is invalid.';
-    END IF;
-
-    SELECT COUNT(*) INTO valid_operation_count
-    FROM telegram_delivery_operations operation_row
-    INNER JOIN outbox_messages outbox_row ON outbox_row.id = operation_row.outbox_event_id
-    WHERE BINARY operation_row.public_id = BINARY NEW.delivery_operation_public_id
-      AND operation_row.state = 'prepared'
-      AND operation_row.state_version = 1
-      AND operation_row.provider_attempts = 0
-      AND BINARY outbox_row.event_type = BINARY 'telegram.delivery.requested'
-      AND outbox_row.contract_version = 2
-      AND BINARY outbox_row.aggregate_type = BINARY 'telegram_delivery_operation'
-      AND BINARY outbox_row.aggregate_id = BINARY operation_row.public_id
-      AND BINARY outbox_row.correlation_id = BINARY operation_row.correlation_id
-      AND outbox_row.dispatch_state = 'authority_pending'
-      AND outbox_row.processed_at IS NULL;
-
-    IF valid_operation_count <> 1 THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Telegram interactive presentation requires one prepared v2 delivery operation.';
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Telegram confidential presentation requires one exact prepared v3 delivery operation.';
     END IF;
 END
 SQL;
@@ -324,7 +273,7 @@ SQL;
     {
         return <<<'SQL'
 BEGIN
-    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Telegram interactive presentations are immutable.';
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Telegram confidential presentations are immutable.';
 END
 SQL;
     }
@@ -334,7 +283,7 @@ SQL;
     {
         return <<<'SQL'
 BEGIN
-    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Telegram interactive presentations are non-deletable.';
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Telegram confidential presentations are non-deletable.';
 END
 SQL;
     }

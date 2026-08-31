@@ -14,6 +14,7 @@ namespace {
     use Illuminate\Database\Connection;
     use Illuminate\Database\DatabaseManager;
     use Illuminate\Support\Str;
+    use Tests\Support\ConfidentialTelegramPresentationTestFactory;
     use Tests\Support\NonRestrictedTelegramPresentationTestFactory;
     use Tests\Support\TelegramInteractivePresentationTestFactory;
 
@@ -111,6 +112,7 @@ namespace {
             $runtime,
             $capability,
             TelegramInteractivePresentationTestFactory::service($clock, $runtime),
+            ConfidentialTelegramPresentationTestFactory::service($clock),
         );
 
         if ($rollbackRuntimeMode === '--telegram-rollback-runtime-trigger-hold-fence') {
