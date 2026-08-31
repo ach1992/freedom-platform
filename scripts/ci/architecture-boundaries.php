@@ -107,10 +107,16 @@ return [
                 ],
                 'install_upgrade_fencing' => [
                     'strategy' => 'shared_serialized_installation_lock',
-                    'evidence' => [[
-                        'file' => 'database/migrations/2026_08_31_000100_enable_telegram_interactive_delivery_presentations.php',
-                        'symbol' => 'withInstallationLock',
-                    ]],
+                    'evidence' => [
+                        [
+                            'file' => 'database/migrations/2026_08_31_000100_enable_telegram_interactive_delivery_presentations.php',
+                            'symbol' => 'withInstallationLock',
+                        ],
+                        [
+                            'file' => 'tests/Feature/TelegramInteractiveDeliveryAuthorityTest.php',
+                            'symbol' => 'test_interactive_installation_lock_owner_session_loss_aborts_without_unlocked_reconnect',
+                        ],
+                    ],
                 ],
                 'interrupted_reentry' => [
                     'strategy' => 'zero_data_fail_closed_rebuild',
@@ -129,6 +135,10 @@ return [
                         [
                             'file' => 'tests/Feature/TelegramInteractiveDeliveryRollbackRuntimeRaceTest.php',
                             'symbol' => 'test_late_trigger_only_writer_fails_closed_after_persistent_fence_without_deadlock_or_row_loss',
+                        ],
+                        [
+                            'file' => 'tests/Feature/TelegramInteractiveDeliveryRollbackRuntimeRaceTest.php',
+                            'symbol' => 'test_staged_trigger_only_writer_remains_fail_closed_until_destructive_drop_commits',
                         ],
                     ],
                 ],

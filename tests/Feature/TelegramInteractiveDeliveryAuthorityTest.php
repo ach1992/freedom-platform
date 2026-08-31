@@ -460,6 +460,117 @@ final class TelegramInteractiveDeliveryAuthorityTest extends TestCase
         self::assertTrue((new TelegramDeliveryInteractivePresentationDatabaseSurfaceV1)->isReady($connection));
     }
 
+    public function test_interactive_migration_down_reentry_restores_v1_after_interrupted_post_drop_fence(): void
+    {
+        $migration = require database_path('migrations/2026_08_31_000100_enable_telegram_interactive_delivery_presentations.php');
+        $database = app(DatabaseManager::class);
+        $connection = DB::connection();
+        $lifecycleAuthority = new TelegramDeliveryLifecycleDatabaseAuthority($database);
+        $lifecycleConnection = $lifecycleAuthority->requireConnection($connection);
+        $lifecycleAuthority->principalUsername($lifecycleConnection);
+        $establishFence = new ReflectionMethod($migration, 'establishPersistentRuntimeFence');
+        $establishFence->setAccessible(true);
+        $stageTable = new ReflectionMethod($migration, 'stageInteractiveTableForRollback');
+        $stageTable->setAccessible(true);
+        $withInstallationLock = new ReflectionMethod($migration, 'withInstallationLock');
+        $withInstallationLock->setAccessible(true);
+
+        // Simulate process death after state0, staging rename, and successful DROP,
+        // but before the lifecycle finally block can reactivate shared v1 authority.
+        $withInstallationLock->invoke($migration, $lifecycleConnection, function () use (
+            $establishFence,
+            $stageTable,
+            $migration,
+            $connection,
+            $lifecycleConnection,
+        ): void {
+            $establishFence->invoke($migration, $connection, $lifecycleConnection);
+            $stageTable->invoke($migration, $connection);
+            $connection->statement('DROP TABLE `'.self::ROLLBACK_TABLE.'`');
+        });
+
+        self::assertFalse((new TelegramDeliveryDatabaseAuthoritySurfaceV1)->isReady(
+            $connection,
+            (new TelegramDeliveryDatabaseCapability)->expectedHash(),
+        ));
+        self::assertFalse(Schema::hasTable(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE));
+        self::assertFalse(Schema::hasTable(self::ROLLBACK_TABLE));
+
+        $migration->down();
+
+        self::assertTrue((new TelegramDeliveryDatabaseAuthoritySurfaceV1)->isReady(
+            $connection,
+            (new TelegramDeliveryDatabaseCapability)->expectedHash(),
+        ));
+        self::assertFalse(Schema::hasTable(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE));
+        self::assertFalse(Schema::hasTable(self::ROLLBACK_TABLE));
+
+        $migration->up();
+        self::assertTrue((new TelegramDeliveryInteractivePresentationDatabaseSurfaceV1)->isReady($connection));
+    }
+
+    public function test_interactive_installation_lock_owner_session_loss_aborts_without_unlocked_reconnect(): void
+    {
+        $database = app(DatabaseManager::class);
+        $lifecycleConfig = config('database.connections.telegram_lifecycle');
+        self::assertIsArray($lifecycleConfig);
+        config(['database.connections.telegram_interactive_lifecycle_killer' => $lifecycleConfig]);
+
+        $runtimeConnection = DB::connection();
+        $lifecycleAuthority = new TelegramDeliveryLifecycleDatabaseAuthority($database);
+        $lifecycleConnection = $lifecycleAuthority->requireConnection($runtimeConnection);
+        $killer = $database->connection('telegram_interactive_lifecycle_killer');
+        $lockName = TelegramDeliveryDatabaseAuthoritySurfaceV1::installationLockName($lifecycleConnection);
+        $migration = require database_path('migrations/2026_08_31_000100_enable_telegram_interactive_delivery_presentations.php');
+        $withInstallationLock = new ReflectionMethod($migration, 'withInstallationLock');
+        $withInstallationLock->setAccessible(true);
+        $killedConnectionId = null;
+
+        try {
+            try {
+                $withInstallationLock->invoke($migration, $lifecycleConnection, function () use (
+                    $lifecycleConnection,
+                    $killer,
+                    &$killedConnectionId,
+                ): void {
+                    $session = $lifecycleConnection->selectOne('SELECT CONNECTION_ID() AS connection_id', [], false);
+                    self::assertNotNull($session);
+                    $killedConnectionId = (int) $session->connection_id;
+                    $killer->getPdo()->exec('KILL CONNECTION '.$killedConnectionId);
+
+                    // Without the fail-closed reconnector this would transparently
+                    // reconnect on a new MariaDB session after GET_LOCK was lost.
+                    $lifecycleConnection->selectOne('SELECT 1 AS unlocked_continuation', [], false);
+                });
+                self::fail('Losing the interactive installation-lock owner session must abort the migration critical section.');
+            } catch (RuntimeException $exception) {
+                self::assertStringContainsString('installation lock cleanup failed', $exception->getMessage());
+            }
+
+            self::assertIsInt($killedConnectionId);
+            $acquired = $killer->selectOne('SELECT GET_LOCK(?, 5) AS acquired', [$lockName], false);
+            self::assertNotNull($acquired);
+            self::assertSame(1, (int) $acquired->acquired);
+            $released = $killer->selectOne('SELECT RELEASE_LOCK(?) AS released', [$lockName], false);
+            self::assertNotNull($released);
+            self::assertSame(1, (int) $released->released);
+
+            // withInstallationLock() must restore Laravel's normal reconnector
+            // only after the failed critical section has been aborted.
+            $restoredSession = $lifecycleConnection->selectOne('SELECT CONNECTION_ID() AS connection_id', [], false);
+            self::assertNotNull($restoredSession);
+            self::assertNotSame($killedConnectionId, (int) $restoredSession->connection_id);
+        } finally {
+            $database->purge('telegram_interactive_lifecycle_killer');
+        }
+
+        self::assertTrue((new TelegramDeliveryDatabaseAuthoritySurfaceV1)->isReady(
+            $runtimeConnection,
+            (new TelegramDeliveryDatabaseCapability)->expectedHash(),
+        ));
+        self::assertTrue((new TelegramDeliveryInteractivePresentationDatabaseSurfaceV1)->isReady($runtimeConnection));
+    }
+
     public function test_cross_actor_callback_authority_is_rejected_atomically_before_outbox_release(): void
     {
         $owner = $this->account('cross_actor_owner', 900103);

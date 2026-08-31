@@ -13,7 +13,9 @@ namespace {
     if (in_array($interactiveRollbackMode, [
         '--telegram-interactive-trigger-hold',
         '--telegram-interactive-trigger-late',
+        '--telegram-interactive-trigger-staged-late',
         '--telegram-interactive-rollback',
+        '--telegram-interactive-rollback-staged',
     ], true)) {
         require dirname(__DIR__, 2).'/vendor/autoload.php';
         $app = require dirname(__DIR__, 2).'/bootstrap/app.php';
@@ -24,7 +26,10 @@ namespace {
         $connection = $database->connection();
         $connection->statement('SET SESSION innodb_lock_wait_timeout = 10');
 
-        if ($interactiveRollbackMode === '--telegram-interactive-rollback') {
+        if (in_array($interactiveRollbackMode, [
+            '--telegram-interactive-rollback',
+            '--telegram-interactive-rollback-staged',
+        ], true)) {
             $lifecycleAuthority = new TelegramDeliveryLifecycleDatabaseAuthority($database);
             $lifecycleConnection = $lifecycleAuthority->requireConnection($connection);
             $identity = $lifecycleConnection->selectOne('SELECT CONNECTION_ID() AS connection_id', [], false);
@@ -43,15 +48,28 @@ namespace {
                 $rollback->setAccessible(true);
                 $withInstallationLock = new ReflectionMethod($migration, 'withInstallationLock');
                 $withInstallationLock->setAccessible(true);
-                $afterRuntimeFence = static function (): void {
-                    echo "ROLLBACK_FENCE_READY\n";
-                    flush();
+                $afterRuntimeFence = $interactiveRollbackMode === '--telegram-interactive-rollback'
+                    ? static function (): void {
+                        echo "ROLLBACK_FENCE_READY\n";
+                        flush();
 
-                    $continue = fgets(STDIN);
-                    if ($continue === false || trim($continue) !== 'CONTINUE') {
-                        throw new RuntimeException('Telegram interactive rollback completion barrier was not released.');
+                        $continue = fgets(STDIN);
+                        if ($continue === false || trim($continue) !== 'CONTINUE') {
+                            throw new RuntimeException('Telegram interactive rollback completion barrier was not released.');
+                        }
                     }
-                };
+                : null;
+                $afterStagingFence = $interactiveRollbackMode === '--telegram-interactive-rollback-staged'
+                    ? static function (): void {
+                        echo "STAGING_FENCE_READY\n";
+                        flush();
+
+                        $continue = fgets(STDIN);
+                        if ($continue === false || trim($continue) !== 'CONTINUE') {
+                            throw new RuntimeException('Telegram interactive staged rollback completion barrier was not released.');
+                        }
+                    }
+                : null;
 
                 $withInstallationLock->invoke($migration, $lifecycleConnection, static function () use (
                     $rollback,
@@ -59,12 +77,14 @@ namespace {
                     $connection,
                     $lifecycleConnection,
                     $afterRuntimeFence,
+                    $afterStagingFence,
                 ): void {
                     $rollback->invoke(
                         $migration,
                         $connection,
                         $lifecycleConnection,
                         $afterRuntimeFence,
+                        $afterStagingFence,
                     );
                 });
                 echo json_encode(['ok' => true], JSON_THROW_ON_ERROR)."\n";
@@ -111,7 +131,10 @@ SQL, [
                 $operationPublicId,
                 $snapshotHash,
             ]);
-            $connection->table(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)->insert([
+            $targetTable = $interactiveRollbackMode === '--telegram-interactive-trigger-staged-late'
+                ? 'telegram_delivery_interactive_presentations_rollback'
+                : TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE;
+            $connection->table($targetTable)->insert([
                 'delivery_operation_public_id' => $operationPublicId,
                 'keyboard_snapshot' => $snapshotJson,
                 'keyboard_snapshot_hash' => $snapshotHash,
@@ -160,6 +183,7 @@ namespace Tests\Feature {
     use App\Modules\Telegram\Application\TelegramDeliveryDatabaseAuthoritySurfaceV1;
     use App\Modules\Telegram\Application\TelegramDeliveryDatabaseCapability;
     use App\Modules\Telegram\Application\TelegramDeliveryInteractivePresentationDatabaseSurfaceV1;
+    use App\Modules\Telegram\Application\TelegramDeliveryLifecycleDatabaseAuthority;
     use App\Modules\Telegram\Application\TelegramInlineButtonStyle;
     use App\Modules\Telegram\Application\TelegramInlineCallbackButton;
     use App\Modules\Telegram\Application\TelegramInlineKeyboardSnapshot;
@@ -190,6 +214,15 @@ namespace Tests\Feature {
 
             (require database_path('migrations/2026_08_25_000200_enable_telegram_outbound_delivery_authority.php'))->up();
             (require database_path('migrations/2026_08_31_000100_enable_telegram_interactive_delivery_presentations.php'))->up();
+
+            $database = app(DatabaseManager::class);
+            $connection = DB::connection();
+            self::assertTrue((new TelegramDeliveryDatabaseAuthoritySurfaceV1)->isReady(
+                $connection,
+                (new TelegramDeliveryDatabaseCapability)->expectedHash(),
+            ));
+            self::assertTrue((new TelegramDeliveryLifecycleDatabaseAuthority($database))
+                ->connectionBoundaryMatchesExpected($connection));
         }
 
         protected function tearDown(): void
@@ -301,6 +334,57 @@ namespace Tests\Feature {
             }
         }
 
+        public function test_staged_trigger_only_writer_remains_fail_closed_until_destructive_drop_commits(): void
+        {
+            [$fixture, $keyboard] = $this->prepareTriggerFixture('staged-late');
+            $triggerWorker = $this->startTriggerWorker(
+                '--telegram-interactive-trigger-staged-late',
+                $fixture['public_id'],
+                $keyboard,
+            );
+            $rollbackWorker = $this->startRollbackWorker(true);
+
+            try {
+                $triggerConnectionId = $this->readyConnectionId($triggerWorker, 'staged trigger writer');
+                $rollbackConnectionId = $this->readyConnectionId($rollbackWorker, 'staged rollback');
+                self::assertNotSame($triggerConnectionId, $rollbackConnectionId);
+
+                $this->send($rollbackWorker, 'GO');
+                self::assertSame("STAGING_FENCE_READY\n", $this->readLine($rollbackWorker, 'staged persistent rollback fence'));
+                self::assertFalse(Schema::hasTable(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE));
+                self::assertTrue(Schema::hasTable('telegram_delivery_interactive_presentations_rollback'));
+                self::assertFalse($this->baseAuthorityIsReady());
+
+                $this->send($triggerWorker, 'GO');
+                $triggerResult = $this->readJsonResult($triggerWorker, 'staged late trigger writer result');
+                self::assertFalse($triggerResult['ok'] ?? true, (string) json_encode($triggerResult));
+                self::assertStringContainsString(
+                    'Telegram interactive presentation creation authority is invalid.',
+                    (string) ($triggerResult['message'] ?? ''),
+                );
+
+                $this->send($rollbackWorker, 'CONTINUE');
+                $rollbackResult = $this->readJsonResult($rollbackWorker, 'staged rollback result');
+                self::assertTrue($rollbackResult['ok'] ?? false, (string) json_encode($rollbackResult));
+
+                self::assertFalse(Schema::hasTable(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE));
+                self::assertFalse(Schema::hasTable('telegram_delivery_interactive_presentations_rollback'));
+                self::assertSame(1, DB::table('telegram_delivery_operations')
+                    ->where('public_id', $fixture['public_id'])
+                    ->count());
+                self::assertSame(1, DB::table('outbox_messages')
+                    ->where('id', $fixture['outbox_event_id'])
+                    ->count());
+                self::assertTrue($this->baseAuthorityIsReady());
+
+                (require database_path('migrations/2026_08_31_000100_enable_telegram_interactive_delivery_presentations.php'))->up();
+                self::assertTrue((new TelegramDeliveryInteractivePresentationDatabaseSurfaceV1)->isReady(DB::connection()));
+            } finally {
+                $this->terminateWorker($triggerWorker);
+                $this->terminateWorker($rollbackWorker);
+            }
+        }
+
         /**
          * @return array{0:array{public_id:string,outbox_event_id:string},1:TelegramInlineKeyboardSnapshot}
          */
@@ -352,9 +436,13 @@ namespace Tests\Feature {
         }
 
         /** @return array{process: resource, pipes: array{0: resource, 1: resource, 2: resource}} */
-        private function startRollbackWorker(): array
+        private function startRollbackWorker(bool $afterStaging = false): array
         {
-            return $this->startWorker(['--telegram-interactive-rollback']);
+            return $this->startWorker([
+                $afterStaging
+                    ? '--telegram-interactive-rollback-staged'
+                    : '--telegram-interactive-rollback',
+            ]);
         }
 
         /**

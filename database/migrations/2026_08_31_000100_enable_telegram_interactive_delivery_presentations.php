@@ -7,6 +7,7 @@ use App\Modules\Telegram\Application\TelegramDeliveryDatabaseCapability;
 use App\Modules\Telegram\Application\TelegramDeliveryInteractivePresentationDatabaseSurfaceV1;
 use App\Modules\Telegram\Application\TelegramDeliveryLifecycleDatabaseAuthority;
 use Illuminate\Database\Connection;
+use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
@@ -120,22 +121,33 @@ SQL);
      * while state 0 is durable. The staging rename then waits only for table metadata
      * users and does not hold the capability X-lock, avoiding the MDL/row-lock
      * inversion identified by independent review. Once renamed, normal runtime
-     * code can no longer target the table; v1 can be reactivated before DROP so a
-     * crash after successful destruction cannot strand the shared authority at 0.
+     * code can no longer target the table. The state-0 fence remains active through
+     * destructive DROP so even a trigger-only writer that knows the staging name
+     * cannot create durable rows in the final DDL window. v1 is reactivated only
+     * after successful destruction (or after a failed DROP restores the table).
      *
      * A failed dependency-sensitive DROP restores the staged table to its canonical
      * name with all original triggers still attached. An interrupted rollback with
      * the staging name present is normalized back to the canonical name on retry.
      *
      * @param  null|Closure():void  $afterRuntimeFence
+     * @param  null|Closure():void  $afterStagingFence
      */
     private function rollbackMysql(
         Connection $connection,
         Connection $lifecycleConnection,
         ?Closure $afterRuntimeFence = null,
+        ?Closure $afterStagingFence = null,
     ): void {
         $this->restoreStagedTableForRetry($connection);
         if (! Schema::hasTable(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)) {
+            if ($this->baseLifecycleState($connection) === 'fenced') {
+                // A prior rollback can die after DROP committed but before the
+                // lifecycle finally block restored v1. With neither canonical nor
+                // staged interactive table present, exact state0 is resumable here.
+                $this->reactivateRuntimeAuthority($connection, $lifecycleConnection);
+            }
+
             return;
         }
 
@@ -164,12 +176,14 @@ SQL);
             $this->stageInteractiveTableForRollback($connection);
             $staged = true;
 
-            // The canonical table name is now absent, so ordinary runtime and the
-            // trigger-only producer path cannot enter between reactivation and DROP.
-            $this->reactivateRuntimeAuthority($connection, $lifecycleConnection);
-            $fenceEstablished = false;
+            if ($afterStagingFence !== null) {
+                $afterStagingFence();
+            }
 
             try {
+                // Keep schema_version=0 through DROP. The staging table retains
+                // its original triggers, so even explicit trigger-only access to
+                // the staging name remains fail-closed until destruction commits.
                 $connection->statement('DROP TABLE `'.self::ROLLBACK_TABLE.'`');
                 $staged = false;
             } catch (Throwable $exception) {
@@ -177,6 +191,9 @@ SQL);
                 $staged = false;
                 throw $exception;
             }
+
+            $this->reactivateRuntimeAuthority($connection, $lifecycleConnection);
+            $fenceEstablished = false;
 
             if ($this->baseLifecycleState($connection) !== 'active') {
                 throw new RuntimeException('Telegram interactive presentation rollback did not preserve active v1 delivery authority after table destruction.');
@@ -441,10 +458,63 @@ SQL);
             throw new RuntimeException('Could not acquire the Telegram delivery installation lock for interactive presentation authority.');
         }
 
+        // GET_LOCK is owned by this exact MariaDB session. Laravel normally
+        // reconnects a lost connection and retries the failed query, which would
+        // otherwise let this migration continue on a new session after MariaDB
+        // had already released the advisory lock. Match the proven #179 fence:
+        // any lifecycle-session loss aborts the critical section until cleanup.
+        $connection->setReconnector(static function (Connection $connection): never {
+            throw new RuntimeException('Telegram interactive presentation installation database session was lost while the installation lock was held.');
+        });
+
         try {
-            $operation();
+            try {
+                $operation();
+            } finally {
+                try {
+                    $released = $connection->selectOne('SELECT RELEASE_LOCK(?) AS released', [$lockName], false);
+                } catch (Throwable $exception) {
+                    $this->disconnect($connection);
+                    throw new RuntimeException('Telegram interactive presentation installation lock cleanup failed.', 0, $exception);
+                }
+
+                if ($released === null || (int) ($released->released ?? 0) !== 1) {
+                    $this->disconnect($connection);
+                    throw new RuntimeException('Telegram interactive presentation installation lock cleanup failed.');
+                }
+            }
         } finally {
-            $connection->selectOne('SELECT RELEASE_LOCK(?) AS released', [$lockName], false);
+            $this->restoreDefaultReconnector($connection);
+        }
+    }
+
+    private function restoreDefaultReconnector(Connection $connection): void
+    {
+        $database = app(DatabaseManager::class);
+
+        $connection->setReconnector(static function (Connection $connection) use ($database): void {
+            $name = $connection->getNameWithReadWriteType();
+            if (! is_string($name) || $name === '') {
+                throw new RuntimeException('Telegram interactive presentation database connection name is unavailable for reconnect.');
+            }
+
+            $reconnected = $database->reconnect($name);
+            if (! $reconnected instanceof Connection) {
+                throw new RuntimeException('Telegram interactive presentation database connection could not be restored.');
+            }
+
+            $connection->setPdo($reconnected->getRawPdo());
+        });
+    }
+
+    private function disconnect(Connection $connection): void
+    {
+        try {
+            $connection->disconnect();
+        } catch (Throwable) {
+            $connection->setPdo(null);
+            $connection->setReadPdo(null);
+            $connection->setDirectPdo(null);
         }
     }
 };
