@@ -128,7 +128,7 @@ return [
                         ],
                         [
                             'file' => 'tests/Feature/TelegramInteractiveDeliveryRollbackRuntimeRaceTest.php',
-                            'symbol' => 'test_interactive_rollback_excludes_late_runtime_work_between_empty_preflight_and_drop',
+                            'symbol' => 'test_late_trigger_only_writer_fails_closed_after_persistent_fence_without_deadlock_or_row_loss',
                         ],
                     ],
                 ],
@@ -136,14 +136,14 @@ return [
                     'strategy' => 'mariadb_dependency_ddl_fail_closed_reentry',
                     'evidence' => [[
                         'file' => 'tests/Feature/TelegramInteractiveDeliveryAuthorityTest.php',
-                        'symbol' => 'test_interactive_migration_down_fails_closed_on_external_fk_and_retries_cleanly',
+                        'symbol' => 'test_interactive_migration_down_fails_closed_on_external_fk_preserves_guards_and_retries_cleanly',
                     ]],
                 ],
                 'dependency_checks' => [
                     'strategy' => 'semantic_no_fk_contract_plus_ddl_restrict',
                     'evidence' => [[
                         'file' => 'tests/Feature/TelegramInteractiveDeliveryAuthorityTest.php',
-                        'symbol' => 'test_interactive_migration_down_fails_closed_on_external_fk_and_retries_cleanly',
+                        'symbol' => 'test_interactive_migration_down_fails_closed_on_external_fk_preserves_guards_and_retries_cleanly',
                     ]],
                 ],
                 'postflight_readiness' => [
@@ -436,6 +436,24 @@ return [
         'zarinpal_payment_observations' => 'Payments',
         'zarinpal_payment_requests' => 'Payments',
         'zarinpal_payment_verifications' => 'Payments',
+    ],
+
+    // Exact migration-local durable rename lifecycle only. Temporary identities are not general
+    // durable owners: CI requires literal from/to pairs, the owning migration path, same owner,
+    // observed usage, and a reciprocal path whenever one endpoint is only a temporary identity.
+    'durable_table_rename_lifecycles' => [
+        [
+            'file' => 'database/migrations/2026_08_31_000100_enable_telegram_interactive_delivery_presentations.php',
+            'from' => 'telegram_delivery_interactive_presentations',
+            'to' => 'telegram_delivery_interactive_presentations_rollback',
+            'owner' => 'Telegram',
+        ],
+        [
+            'file' => 'database/migrations/2026_08_31_000100_enable_telegram_interactive_delivery_presentations.php',
+            'from' => 'telegram_delivery_interactive_presentations_rollback',
+            'to' => 'telegram_delivery_interactive_presentations',
+            'owner' => 'Telegram',
+        ],
     ],
 
     // Exact migration-only trigger DDL helper retained by the historical migration chain. Runtime

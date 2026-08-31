@@ -6,10 +6,12 @@ namespace Tests\Feature;
 
 use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\TelegramMutationTransport;
+use App\Modules\Telegram\Application\TelegramDeliveryDatabaseAuthoritySurfaceV1;
 use App\Modules\Telegram\Application\TelegramDeliveryDatabaseCapability;
 use App\Modules\Telegram\Application\TelegramDeliveryInteractivePresentationDatabaseCapability;
 use App\Modules\Telegram\Application\TelegramDeliveryInteractivePresentationDatabaseSurfaceV1;
 use App\Modules\Telegram\Application\TelegramDeliveryInteractivePresentationService;
+use App\Modules\Telegram\Application\TelegramDeliveryLifecycleDatabaseAuthority;
 use App\Modules\Telegram\Application\TelegramDeliveryOperationExecutor;
 use App\Modules\Telegram\Application\TelegramDeliveryQueueService;
 use App\Modules\Telegram\Application\TelegramInlineButtonStyle;
@@ -35,6 +37,7 @@ use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
+use ReflectionMethod;
 use RuntimeException;
 use Tests\Support\NonRestrictedTelegramPresentationTestFactory;
 use Tests\TestCase;
@@ -43,6 +46,8 @@ use Tests\TestCase;
 final class TelegramInteractiveDeliveryAuthorityTest extends TestCase
 {
     use DatabaseTruncation;
+
+    private const ROLLBACK_TABLE = 'telegram_delivery_interactive_presentations_rollback';
 
     private TelegramInteractiveDeliveryTestClock $clock;
 
@@ -286,45 +291,173 @@ final class TelegramInteractiveDeliveryAuthorityTest extends TestCase
         self::assertSame(1, DB::table('telegram_delivery_interactive_presentations')->count());
     }
 
-    public function test_interactive_migration_down_fails_closed_on_external_fk_and_retries_cleanly(): void
+    public function test_interactive_migration_down_fails_closed_on_external_fk_preserves_guards_and_retries_cleanly(): void
     {
         $migration = require database_path('migrations/2026_08_31_000100_enable_telegram_interactive_delivery_presentations.php');
+        $surface = new TelegramDeliveryInteractivePresentationDatabaseSurfaceV1;
         DB::unprepared('DROP TABLE IF EXISTS telegram_interactive_fk_probe');
-        DB::unprepared(<<<'SQL'
-CREATE TABLE telegram_interactive_fk_probe (
-    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-    delivery_operation_public_id CHAR(26) NOT NULL,
-    PRIMARY KEY (id),
-    CONSTRAINT telegram_interactive_fk_probe_fk
-        FOREIGN KEY (delivery_operation_public_id)
-        REFERENCES telegram_delivery_interactive_presentations (delivery_operation_public_id)
-) ENGINE=InnoDB DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin
-SQL);
+        $this->createInteractiveIncomingForeignKeyProbe();
 
         try {
             try {
                 $migration->down();
                 self::fail('Interactive authority rollback must fail closed while an external FK depends on the surface.');
             } catch (QueryException) {
-                // MariaDB rejects the destructive table drop while the external FK exists.
+                // MariaDB rejects the dependency-sensitive DROP TABLE.
             }
 
-            self::assertTrue(Schema::hasTable('telegram_delivery_interactive_presentations'));
-            self::assertFalse((new TelegramDeliveryInteractivePresentationDatabaseSurfaceV1)->isReady(DB::connection()));
+            self::assertTrue(Schema::hasTable(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE));
+            self::assertFalse($surface->isReady(DB::connection()));
+            self::assertSame($this->expectedInteractiveTriggerNames(), $this->interactiveTriggerNames());
+            self::assertTrue((new TelegramDeliveryDatabaseAuthoritySurfaceV1)->isReady(
+                DB::connection(),
+                (new TelegramDeliveryDatabaseCapability)->expectedHash(),
+            ));
+
+            $keyboard = new TelegramInlineKeyboardSnapshot([
+                [new TelegramInlineCallbackButton('Guard probe', (string) Str::ulid(), TelegramInlineButtonStyle::Primary)],
+            ]);
+            $fixture = NonRestrictedTelegramPresentationTestFactory::prepareInteractiveV2OperationWithoutSnapshot(
+                app(DatabaseManager::class),
+                $this->clock,
+                900106,
+                'interactive-guard-preservation-fixture',
+                'correlation-interactive-guard-preservation',
+                $keyboard,
+            );
+            $this->insertInteractiveSnapshotThroughExactAuthority($fixture['public_id'], $keyboard);
+
+            try {
+                DB::table(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)->insert([
+                    'delivery_operation_public_id' => (string) Str::ulid(),
+                    'keyboard_snapshot' => $keyboard->json(),
+                    'keyboard_snapshot_hash' => $keyboard->hash(),
+                    'created_at' => '2026-08-31 00:00:00.000000',
+                ]);
+                self::fail('Surviving interactive INSERT guard must reject unauthorized creation after a failed DROP.');
+            } catch (QueryException $exception) {
+                self::assertStringContainsString('creation authority is invalid', strtolower($exception->getMessage()));
+            }
+
+            try {
+                DB::table(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)
+                    ->where('delivery_operation_public_id', $fixture['public_id'])
+                    ->update(['keyboard_snapshot_hash' => str_repeat('a', 64)]);
+                self::fail('Surviving interactive UPDATE guard must preserve immutable snapshots after a failed DROP.');
+            } catch (QueryException $exception) {
+                self::assertStringContainsString('interactive presentations are immutable', strtolower($exception->getMessage()));
+            }
+
+            try {
+                DB::table(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)
+                    ->where('delivery_operation_public_id', $fixture['public_id'])
+                    ->delete();
+                self::fail('Surviving interactive DELETE guard must preserve durable snapshots after a failed DROP.');
+            } catch (QueryException $exception) {
+                self::assertStringContainsString('interactive presentations are non-deletable', strtolower($exception->getMessage()));
+            }
 
             DB::unprepared('DROP TABLE telegram_interactive_fk_probe');
+            self::assertTrue($surface->isReady(DB::connection()), 'Removing only the external FK must restore readiness without migration repair.');
+            self::assertSame($this->expectedInteractiveTriggerNames(), $this->interactiveTriggerNames());
+
+            DB::statement('TRUNCATE TABLE '.TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE);
             $migration->down();
-            self::assertFalse(Schema::hasTable('telegram_delivery_interactive_presentations'));
+            self::assertFalse(Schema::hasTable(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE));
 
             $migration->up();
-            self::assertTrue((new TelegramDeliveryInteractivePresentationDatabaseSurfaceV1)->isReady(DB::connection()));
+            self::assertTrue($surface->isReady(DB::connection()));
         } finally {
             DB::unprepared('DROP TABLE IF EXISTS telegram_interactive_fk_probe');
-            if (! Schema::hasTable('telegram_delivery_interactive_presentations')
-                || ! (new TelegramDeliveryInteractivePresentationDatabaseSurfaceV1)->isReady(DB::connection())) {
+            if (! Schema::hasTable(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)
+                || ! $surface->isReady(DB::connection())) {
+                if (Schema::hasTable(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)) {
+                    DB::statement('TRUNCATE TABLE '.TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE);
+                }
                 $migration->up();
             }
         }
+    }
+
+    public function test_interactive_migration_up_dependency_failure_preserves_existing_guards_and_recovers_without_repair(): void
+    {
+        $migration = require database_path('migrations/2026_08_31_000100_enable_telegram_interactive_delivery_presentations.php');
+        $surface = new TelegramDeliveryInteractivePresentationDatabaseSurfaceV1;
+        self::assertTrue($surface->isReady(DB::connection()));
+        self::assertSame(0, DB::table(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)->count());
+
+        DB::unprepared('DROP TABLE IF EXISTS telegram_interactive_fk_probe');
+        $this->createInteractiveIncomingForeignKeyProbe();
+
+        try {
+            self::assertFalse($surface->isReady(DB::connection()));
+            try {
+                $migration->up();
+                self::fail('Interactive authority re-entry must not strip guards before a dependency-sensitive rebuild DROP.');
+            } catch (QueryException) {
+                // MariaDB rejects the rebuild DROP while the external FK exists.
+            }
+
+            self::assertTrue(Schema::hasTable(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE));
+            self::assertSame($this->expectedInteractiveTriggerNames(), $this->interactiveTriggerNames());
+
+            DB::unprepared('DROP TABLE telegram_interactive_fk_probe');
+            self::assertTrue($surface->isReady(DB::connection()), 'Removing the external FK alone must recover the still-guarded exact surface.');
+
+            $migration->up();
+            self::assertTrue($surface->isReady(DB::connection()));
+        } finally {
+            DB::unprepared('DROP TABLE IF EXISTS telegram_interactive_fk_probe');
+        }
+    }
+
+    public function test_interactive_migration_down_reentry_resumes_from_persistent_fence_before_table_drop(): void
+    {
+        $migration = require database_path('migrations/2026_08_31_000100_enable_telegram_interactive_delivery_presentations.php');
+        $database = app(DatabaseManager::class);
+        $connection = DB::connection();
+        $lifecycleAuthority = new TelegramDeliveryLifecycleDatabaseAuthority($database);
+        $lifecycleConnection = $lifecycleAuthority->requireConnection($connection);
+        $lifecycleAuthority->principalUsername($lifecycleConnection);
+        $establishFence = new ReflectionMethod($migration, 'establishPersistentRuntimeFence');
+        $establishFence->setAccessible(true);
+        $stageTable = new ReflectionMethod($migration, 'stageInteractiveTableForRollback');
+        $stageTable->setAccessible(true);
+        $withInstallationLock = new ReflectionMethod($migration, 'withInstallationLock');
+        $withInstallationLock->setAccessible(true);
+
+        // Simulate process death after the durable state-0 fence commits and the
+        // canonical table has been atomically moved to its rollback staging name,
+        // but before v1 reactivation and destructive DROP begin.
+        $withInstallationLock->invoke($migration, $lifecycleConnection, function () use (
+            $establishFence,
+            $stageTable,
+            $migration,
+            $connection,
+            $lifecycleConnection,
+        ): void {
+            $establishFence->invoke($migration, $connection, $lifecycleConnection);
+            $stageTable->invoke($migration, $connection);
+        });
+
+        self::assertFalse((new TelegramDeliveryDatabaseAuthoritySurfaceV1)->isReady(
+            $connection,
+            (new TelegramDeliveryDatabaseCapability)->expectedHash(),
+        ));
+        self::assertFalse(Schema::hasTable(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE));
+        self::assertTrue(Schema::hasTable(self::ROLLBACK_TABLE));
+
+        $migration->down();
+
+        self::assertTrue((new TelegramDeliveryDatabaseAuthoritySurfaceV1)->isReady(
+            $connection,
+            (new TelegramDeliveryDatabaseCapability)->expectedHash(),
+        ));
+        self::assertFalse(Schema::hasTable(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE));
+        self::assertFalse(Schema::hasTable(self::ROLLBACK_TABLE));
+
+        $migration->up();
+        self::assertTrue((new TelegramDeliveryInteractivePresentationDatabaseSurfaceV1)->isReady($connection));
     }
 
     public function test_cross_actor_callback_authority_is_rejected_atomically_before_outbox_release(): void
@@ -471,6 +604,82 @@ SQL);
             'telegram_account_id' => $telegramAccountId,
             'telegram_user_id' => $telegramUserId,
         ];
+    }
+
+    private function createInteractiveIncomingForeignKeyProbe(): void
+    {
+        DB::unprepared(<<<'SQL'
+CREATE TABLE telegram_interactive_fk_probe (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    delivery_operation_public_id CHAR(26) NOT NULL,
+    PRIMARY KEY (id),
+    CONSTRAINT telegram_interactive_fk_probe_fk
+        FOREIGN KEY (delivery_operation_public_id)
+        REFERENCES telegram_delivery_interactive_presentations (delivery_operation_public_id)
+) ENGINE=InnoDB DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin
+SQL);
+    }
+
+    /** @return list<string> */
+    private function interactiveTriggerNames(): array
+    {
+        /** @var list<string> $names */
+        $names = DB::table('information_schema.TRIGGERS')
+            ->where('TRIGGER_SCHEMA', DB::connection()->getDatabaseName())
+            ->where('EVENT_OBJECT_TABLE', TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)
+            ->pluck('TRIGGER_NAME')
+            ->map(static fn (mixed $name): string => (string) $name)
+            ->sort()
+            ->values()
+            ->all();
+
+        return $names;
+    }
+
+    /** @return list<string> */
+    private function expectedInteractiveTriggerNames(): array
+    {
+        $names = [
+            TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::DELETE_TRIGGER,
+            TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::INSERT_TRIGGER,
+            TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::UPDATE_TRIGGER,
+        ];
+        sort($names, SORT_STRING);
+
+        return $names;
+    }
+
+    private function insertInteractiveSnapshotThroughExactAuthority(
+        string $operationPublicId,
+        TelegramInlineKeyboardSnapshot $keyboard,
+    ): void {
+        $connection = DB::connection();
+        $connection->statement(<<<'SQL'
+SET @app_telegram_delivery_capability = ?,
+    @app_telegram_delivery_interactive_authority = 'telegram_delivery_interactive_queue_v1',
+    @app_telegram_delivery_interactive_public_id = ?,
+    @app_telegram_delivery_interactive_snapshot_hash = ?
+SQL, [
+            (new TelegramDeliveryDatabaseCapability)->value(),
+            $operationPublicId,
+            $keyboard->hash(),
+        ]);
+
+        try {
+            $connection->table(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)->insert([
+                'delivery_operation_public_id' => $operationPublicId,
+                'keyboard_snapshot' => $keyboard->json(),
+                'keyboard_snapshot_hash' => $keyboard->hash(),
+                'created_at' => '2026-08-31 00:00:00.000000',
+            ]);
+        } finally {
+            $connection->statement(<<<'SQL'
+SET @app_telegram_delivery_interactive_snapshot_hash = NULL,
+    @app_telegram_delivery_interactive_public_id = NULL,
+    @app_telegram_delivery_interactive_authority = NULL,
+    @app_telegram_delivery_capability = NULL
+SQL);
+        }
     }
 
     private function queue(): TelegramDeliveryQueueService
