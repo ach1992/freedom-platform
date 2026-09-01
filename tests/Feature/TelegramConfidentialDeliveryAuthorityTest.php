@@ -30,6 +30,7 @@ use App\Shared\Infrastructure\DatabaseOutboxDispatcher;
 use App\Shared\Infrastructure\DatabaseOutboxPublisher;
 use DateTimeImmutable;
 use DomainException;
+use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Contracts\Encryption\StringEncrypter;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\QueryException;
@@ -222,9 +223,10 @@ final class TelegramConfidentialDeliveryAuthorityTest extends TestCase
             'correlation-confidential-decryption-failure-1',
         );
 
+        $transport = new TelegramConfidentialDeliveryRecordingTransport;
         try {
             $this->executor(
-                new TelegramConfidentialDeliveryRecordingTransport,
+                $transport,
                 new TelegramConfidentialDeliveryThrowingEncrypter($plaintext),
             )->execute(
                 $created->publicId,
@@ -238,6 +240,14 @@ final class TelegramConfidentialDeliveryAuthorityTest extends TestCase
             self::assertNull($exception->getPrevious());
             self::assertStringNotContainsString($plaintext, (string) $exception);
         }
+
+        self::assertSame(0, $transport->attempts);
+        self::assertNull($transport->presentationText);
+        $this->assertDatabaseHas('telegram_delivery_operations', [
+            'public_id' => $created->publicId,
+            'state' => 'prepared',
+            'provider_attempts' => 0,
+        ]);
     }
 
     public function test_v3_executor_decrypts_only_before_provider_boundary_and_never_sends_marker(): void
@@ -268,49 +278,150 @@ final class TelegramConfidentialDeliveryAuthorityTest extends TestCase
         self::assertSame(0, $transport->transactionLevelDuringMutation);
     }
 
-    public function test_v3_replay_and_provider_resolution_survive_application_key_rotation(): void
+    public function test_v3_replay_and_provider_resolution_survive_real_application_key_rotation(): void
     {
-        $oldKey = str_repeat('o', 32);
-        $newKey = str_repeat('n', 32);
+        $oldConfiguredKey = config('app.key');
+        $oldConfiguredPreviousKeys = config('app.previous_keys', []);
+        self::assertIsString($oldConfiguredKey);
+        self::assertNotSame('', $oldConfiguredKey);
+        self::assertIsArray($oldConfiguredPreviousKeys);
+
+        $oldApplicationEncrypter = app('encrypter');
+        self::assertInstanceOf(Encrypter::class, $oldApplicationEncrypter);
         $plaintext = 'rotation-safe private account summary';
-        $oldHasher = new TelegramConfidentialPresentationHasher([$oldKey]);
-        $oldEncrypter = new Encrypter($oldKey, 'AES-256-CBC');
+        $presentation = ConfidentialTelegramPresentationTestFactory::plainText($plaintext);
         $created = ConfidentialTelegramPresentationTestFactory::queue(
-            $this->queue($oldEncrypter, $oldHasher),
+            $this->queue(),
             TelegramDeliveryAction::Send,
             900509,
             null,
-            ConfidentialTelegramPresentationTestFactory::plainText($plaintext),
+            $presentation,
             'confidential-request-key-rotation',
             'correlation-confidential-key-rotation',
         );
+        $oldCapabilityHash = DB::table('telegram_delivery_authority_capability')
+            ->where('id', 1)
+            ->value('capability_hash');
+        $oldOperation = DB::table('telegram_delivery_operations')
+            ->where('public_id', $created->publicId)
+            ->first(['request_fingerprint']);
+        $oldCompanion = DB::table(TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1::TABLE)
+            ->where('delivery_operation_public_id', $created->publicId)
+            ->first(['presentation_ciphertext', 'presentation_hash']);
+        self::assertIsString($oldCapabilityHash);
+        self::assertNotNull($oldOperation);
+        self::assertNotNull($oldCompanion);
 
-        $rotatedHasher = new TelegramConfidentialPresentationHasher([$newKey, $oldKey]);
-        $rotatedEncrypter = new Encrypter($newKey, 'AES-256-CBC');
-        $rotatedEncrypter->previousKeys([$oldKey]);
-        $replayed = ConfidentialTelegramPresentationTestFactory::queue(
-            $this->queue($rotatedEncrypter, $rotatedHasher),
-            TelegramDeliveryAction::Send,
-            900509,
-            null,
-            ConfidentialTelegramPresentationTestFactory::plainText($plaintext),
-            'confidential-request-key-rotation',
-            'correlation-confidential-key-rotation',
-        );
+        $newConfiguredKey = 'base64:'.base64_encode(str_repeat('n', 32));
+        self::assertNotSame($oldConfiguredKey, $newConfiguredKey);
 
-        self::assertTrue($replayed->replayed);
-        self::assertSame($created->publicId, $replayed->publicId);
-        $transport = new TelegramConfidentialDeliveryRecordingTransport;
-        $completed = $this->executor($transport, $rotatedEncrypter, $rotatedHasher)->execute(
-            $created->publicId,
-            $created->outboxEventId,
-            'correlation-confidential-key-rotation',
-            TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_CONFIDENTIAL,
-        );
+        try {
+            config([
+                'app.key' => $newConfiguredKey,
+                'app.previous_keys' => [$oldConfiguredKey],
+            ]);
+            $this->rebuildApplicationEncryptionKeyring();
 
-        self::assertSame(TelegramDeliveryOperationState::Succeeded, $completed->state);
-        self::assertSame($plaintext, $transport->presentationText);
-        self::assertSame(1, $transport->attempts);
+            $rotatedCapability = new TelegramDeliveryDatabaseCapability;
+            self::assertNotSame($rotatedCapability->expectedHash(), $oldCapabilityHash);
+            self::assertNotNull($rotatedCapability->valueMatchingHash($oldCapabilityHash));
+            $rotatedEncrypter = app('encrypter');
+            self::assertInstanceOf(Encrypter::class, $rotatedEncrypter);
+            self::assertCount(2, $rotatedEncrypter->getAllKeys());
+
+            $replayed = ConfidentialTelegramPresentationTestFactory::queue(
+                $this->queue(),
+                TelegramDeliveryAction::Send,
+                900509,
+                null,
+                ConfidentialTelegramPresentationTestFactory::plainText($plaintext),
+                'confidential-request-key-rotation',
+                'correlation-confidential-key-rotation',
+            );
+            self::assertTrue($replayed->replayed);
+            self::assertSame($created->publicId, $replayed->publicId);
+
+            $transport = new TelegramConfidentialDeliveryRecordingTransport;
+            $completed = $this->executor($transport)->execute(
+                $created->publicId,
+                $created->outboxEventId,
+                'correlation-confidential-key-rotation',
+                TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_CONFIDENTIAL,
+            );
+            self::assertSame(TelegramDeliveryOperationState::Succeeded, $completed->state);
+            self::assertSame($plaintext, $transport->presentationText);
+            self::assertSame(1, $transport->attempts);
+
+            $reloadedOperation = DB::table('telegram_delivery_operations')
+                ->where('public_id', $created->publicId)
+                ->first(['request_fingerprint']);
+            $reloadedCompanion = DB::table(TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1::TABLE)
+                ->where('delivery_operation_public_id', $created->publicId)
+                ->first(['presentation_ciphertext', 'presentation_hash']);
+            self::assertNotNull($reloadedOperation);
+            self::assertNotNull($reloadedCompanion);
+            self::assertSame((string) $oldOperation->request_fingerprint, (string) $reloadedOperation->request_fingerprint);
+            self::assertSame((string) $oldCompanion->presentation_ciphertext, (string) $reloadedCompanion->presentation_ciphertext);
+            self::assertSame((string) $oldCompanion->presentation_hash, (string) $reloadedCompanion->presentation_hash);
+
+            $newPresentation = ConfidentialTelegramPresentationTestFactory::plainText('new-key confidential presentation');
+            $newCreated = ConfidentialTelegramPresentationTestFactory::queue(
+                $this->queue(),
+                TelegramDeliveryAction::Send,
+                900510,
+                null,
+                $newPresentation,
+                'confidential-request-after-key-rotation',
+                'correlation-confidential-after-key-rotation',
+            );
+            $newCompanion = DB::table(TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1::TABLE)
+                ->where('delivery_operation_public_id', $newCreated->publicId)
+                ->first(['presentation_ciphertext', 'presentation_hash']);
+            self::assertNotNull($newCompanion);
+            self::assertSame(
+                $this->hasher()->integrityHash($newPresentation, $newCreated->publicId),
+                (string) $newCompanion->presentation_hash,
+            );
+            self::assertSame(
+                'new-key confidential presentation',
+                $rotatedEncrypter->decryptString((string) $newCompanion->presentation_ciphertext),
+            );
+            try {
+                $oldApplicationEncrypter->decryptString((string) $newCompanion->presentation_ciphertext);
+                self::fail('New confidential ciphertext must not be encrypted with the retired application key.');
+            } catch (DecryptException) {
+                // Expected: new ciphertext is current-key-only.
+            }
+
+            config(['app.previous_keys' => []]);
+            $this->rebuildApplicationEncryptionKeyring();
+            self::assertNull((new TelegramDeliveryDatabaseCapability)->valueMatchingHash($oldCapabilityHash));
+
+            $blockedTransport = new TelegramConfidentialDeliveryRecordingTransport;
+            try {
+                $this->executor($blockedTransport)->execute(
+                    $newCreated->publicId,
+                    $newCreated->outboxEventId,
+                    'correlation-confidential-after-key-rotation',
+                    TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_CONFIDENTIAL,
+                );
+                self::fail('Removing the application key required by the durable delivery capability must fail closed.');
+            } catch (RuntimeException $exception) {
+                self::assertStringContainsString('not accepting runtime work', $exception->getMessage());
+            }
+            self::assertSame(0, $blockedTransport->attempts);
+            $this->assertDatabaseHas('telegram_delivery_operations', [
+                'public_id' => $newCreated->publicId,
+                'state' => 'prepared',
+                'provider_attempts' => 0,
+            ]);
+        } finally {
+            config([
+                'app.key' => $oldConfiguredKey,
+                'app.previous_keys' => $oldConfiguredPreviousKeys,
+            ]);
+            $this->rebuildApplicationEncryptionKeyring();
+        }
     }
 
     public function test_contract_v3_outbox_handler_dispatches_through_existing_state_machine(): void
@@ -481,6 +592,105 @@ final class TelegramConfidentialDeliveryAuthorityTest extends TestCase
         ]);
     }
 
+    public function test_persisted_undecryptable_confidential_ciphertext_fails_before_provider_boundary(): void
+    {
+        $created = ConfidentialTelegramPresentationTestFactory::queue(
+            $this->queue(),
+            TelegramDeliveryAction::Send,
+            900511,
+            null,
+            ConfidentialTelegramPresentationTestFactory::plainText('durable ciphertext corruption must fail closed'),
+            'confidential-request-ciphertext-corruption',
+            'correlation-confidential-ciphertext-corruption',
+        );
+        $this->temporarilyRemoveConfidentialUpdateGuard();
+        DB::table(TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1::TABLE)
+            ->where('delivery_operation_public_id', $created->publicId)
+            ->update(['presentation_ciphertext' => 'not-a-valid-laravel-encrypted-envelope']);
+        $this->restoreConfidentialUpdateGuard();
+        self::assertTrue((new TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1)->isReady(DB::connection()));
+
+        $transport = new TelegramConfidentialDeliveryRecordingTransport;
+        try {
+            $this->executor($transport)->execute(
+                $created->publicId,
+                $created->outboxEventId,
+                'correlation-confidential-ciphertext-corruption',
+                TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_CONFIDENTIAL,
+            );
+            self::fail('Undecryptable durable confidential ciphertext must fail before provider mutation.');
+        } catch (DomainException $exception) {
+            self::assertSame('Telegram confidential presentation integrity validation failed.', $exception->getMessage());
+        }
+
+        self::assertSame(0, $transport->attempts);
+        self::assertNull($transport->presentationText);
+        $this->assertDatabaseHas('telegram_delivery_operations', [
+            'public_id' => $created->publicId,
+            'presentation_text' => '[CONFIDENTIAL_TELEGRAM_PRESENTATION]',
+            'state' => 'prepared',
+            'provider_attempts' => 0,
+        ]);
+    }
+
+    public function test_cross_operation_confidential_companion_transplant_fails_before_provider_boundary(): void
+    {
+        $first = ConfidentialTelegramPresentationTestFactory::queue(
+            $this->queue(),
+            TelegramDeliveryAction::Send,
+            900512,
+            null,
+            ConfidentialTelegramPresentationTestFactory::plainText('first operation confidential material'),
+            'confidential-request-transplant-source',
+            'correlation-confidential-transplant-source',
+        );
+        $second = ConfidentialTelegramPresentationTestFactory::queue(
+            $this->queue(),
+            TelegramDeliveryAction::Send,
+            900513,
+            null,
+            ConfidentialTelegramPresentationTestFactory::plainText('second operation confidential material'),
+            'confidential-request-transplant-target',
+            'correlation-confidential-transplant-target',
+        );
+        $sourceCompanion = DB::table(TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1::TABLE)
+            ->where('delivery_operation_public_id', $first->publicId)
+            ->first(['presentation_ciphertext', 'presentation_hash']);
+        self::assertNotNull($sourceCompanion);
+
+        $this->temporarilyRemoveConfidentialUpdateGuard();
+        DB::table(TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1::TABLE)
+            ->where('delivery_operation_public_id', $second->publicId)
+            ->update([
+                'presentation_ciphertext' => (string) $sourceCompanion->presentation_ciphertext,
+                'presentation_hash' => (string) $sourceCompanion->presentation_hash,
+            ]);
+        $this->restoreConfidentialUpdateGuard();
+        self::assertTrue((new TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1)->isReady(DB::connection()));
+
+        $transport = new TelegramConfidentialDeliveryRecordingTransport;
+        try {
+            $this->executor($transport)->execute(
+                $second->publicId,
+                $second->outboxEventId,
+                'correlation-confidential-transplant-target',
+                TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_CONFIDENTIAL,
+            );
+            self::fail('Cross-operation confidential companion material must fail before provider mutation.');
+        } catch (DomainException $exception) {
+            self::assertSame('Telegram confidential presentation integrity validation failed.', $exception->getMessage());
+        }
+
+        self::assertSame(0, $transport->attempts);
+        self::assertNull($transport->presentationText);
+        $this->assertDatabaseHas('telegram_delivery_operations', [
+            'public_id' => $second->publicId,
+            'presentation_text' => '[CONFIDENTIAL_TELEGRAM_PRESENTATION]',
+            'state' => 'prepared',
+            'provider_attempts' => 0,
+        ]);
+    }
+
     public function test_direct_confidential_companion_insert_update_delete_are_rejected(): void
     {
         try {
@@ -580,6 +790,12 @@ final class TelegramConfidentialDeliveryAuthorityTest extends TestCase
         $providerCallback = $transport->inlineKeyboardPayload['inline_keyboard'][0][0]['callback_data'] ?? null;
         self::assertSame($callback->token, $providerCallback);
         self::assertSame('خلاصه محرمانه حساب', $transport->presentationText);
+    }
+
+    private function rebuildApplicationEncryptionKeyring(): void
+    {
+        $this->app->forgetInstance('encrypter');
+        $this->app->forgetInstance(TelegramConfidentialPresentationHasher::class);
     }
 
     private function temporarilyRemoveConfidentialDeleteGuard(): void

@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use App\Modules\Telegram\Application\TelegramDeliveryDatabaseAuthoritySurfaceV1;
+use App\Modules\Telegram\Application\TelegramDeliveryDatabaseCapability;
 use App\Modules\Telegram\Application\TelegramDeliveryForeignKeyMetadataAttestor;
 use App\Modules\Telegram\Application\TelegramDeliveryLifecycleDatabaseAuthority;
 use Illuminate\Database\Connection;
@@ -219,7 +220,7 @@ return new class extends Migration
         if ($capability === null
             || (int) $capability->id !== 1
             || ! is_string($capability->capability_hash)
-            || ! hash_equals($this->capabilityHash(), $capability->capability_hash)
+            || $this->capabilityValueMatchingHash($capability->capability_hash) === null
             || (int) $capability->schema_version !== 0
             || $capability->activated_at !== null) {
             return false;
@@ -250,8 +251,23 @@ return new class extends Migration
 
     private function authorityReady(Connection $connection): bool
     {
+        if (! $connection->getSchemaBuilder()->hasTable('telegram_delivery_authority_capability')) {
+            return false;
+        }
+
+        try {
+            $capabilityHash = $connection->table('telegram_delivery_authority_capability')
+                ->where('id', 1)
+                ->value('capability_hash');
+        } catch (Throwable) {
+            return false;
+        }
+        if (! is_string($capabilityHash) || $this->capabilityValueMatchingHash($capabilityHash) === null) {
+            return false;
+        }
+
         return (new TelegramDeliveryDatabaseAuthoritySurfaceV1)
-            ->isReady($connection, $this->capabilityHash());
+            ->isReady($connection, $capabilityHash);
     }
 
     private function rollbackFenceReady(Connection $connection): bool
@@ -273,7 +289,7 @@ return new class extends Migration
         return $capability !== null
             && (int) $capability->id === 1
             && is_string($capability->capability_hash)
-            && hash_equals($this->capabilityHash(), $capability->capability_hash)
+            && $this->capabilityValueMatchingHash($capability->capability_hash) !== null
             && (int) $capability->schema_version === 0
             && $capability->activated_at === null;
     }
@@ -294,10 +310,13 @@ WHERE id = 1
 FOR UPDATE
 SQL, [], false);
 
+            $capabilityValue = $capability !== null && is_string($capability->capability_hash ?? null)
+                ? $this->capabilityValueMatchingHash($capability->capability_hash)
+                : null;
             if ($capability === null
                 || (int) ($capability->id ?? 0) !== 1
                 || ! is_string($capability->capability_hash ?? null)
-                || ! hash_equals($this->capabilityHash(), $capability->capability_hash)
+                || $capabilityValue === null
                 || (int) ($capability->schema_version ?? -1) !== 1
                 || ($capability->activated_at ?? null) === null) {
                 throw new RuntimeException('Cannot establish Telegram delivery rollback fence because the active capability row changed.');
@@ -315,7 +334,7 @@ SQL, [], false);
                 $lifecycleConnection->statement(<<<'SQL'
 SET @app_telegram_delivery_capability = ?,
     @app_telegram_delivery_lifecycle_authority = 'rollback'
-SQL, [$this->capabilityValue()]);
+SQL, [$capabilityValue]);
                 $armed = true;
 
                 $updated = $lifecycleConnection->table('telegram_delivery_authority_capability')
@@ -373,7 +392,7 @@ SQL, [$this->capabilityValue()]);
                 if ($rows->count() !== 1
                     || (int) $rows->first()->id !== 1
                     || ! is_string($rows->first()->capability_hash)
-                    || ! hash_equals($this->capabilityHash(), $rows->first()->capability_hash)
+                    || $this->capabilityValueMatchingHash($rows->first()->capability_hash) === null
                 ) {
                     throw new RuntimeException('Telegram delivery database capability does not match the application key or singleton authority.');
                 }
@@ -435,7 +454,7 @@ SQL, [$this->capabilityValue()]);
         if ($capability === null
             || (int) $capability->id !== 1
             || ! is_string($capability->capability_hash)
-            || ! hash_equals($this->capabilityHash(), $capability->capability_hash)
+            || $this->capabilityValueMatchingHash($capability->capability_hash) === null
             || (int) $capability->schema_version !== 0
             || $capability->activated_at !== null) {
             return false;
@@ -837,6 +856,15 @@ SQL);
 
     private function activateAuthority(Connection $connection, Connection $lifecycleConnection): void
     {
+        $capabilityHash = $lifecycleConnection->table('telegram_delivery_authority_capability')
+            ->where('id', 1)
+            ->value('capability_hash');
+        $capabilityValue = is_string($capabilityHash)
+            ? $this->capabilityValueMatchingHash($capabilityHash)
+            : null;
+        if ($capabilityValue === null) {
+            throw new RuntimeException('Telegram delivery database capability does not match the configured application keyring.');
+        }
         $armed = false;
 
         DB::statement('ALTER TABLE telegram_delivery_authority_capability DROP CONSTRAINT telegram_delivery_capability_schema_version_chk');
@@ -850,7 +878,7 @@ SQL);
             $lifecycleConnection->statement(<<<'SQL'
 SET @app_telegram_delivery_capability = ?,
     @app_telegram_delivery_lifecycle_authority = 'activate'
-SQL, [$this->capabilityValue()]);
+SQL, [$capabilityValue]);
             $armed = true;
             $updated = $lifecycleConnection->table('telegram_delivery_authority_capability')
                 ->where('id', 1)
@@ -1394,18 +1422,13 @@ END
 SQL);
     }
 
-    private function capabilityValue(): string
-    {
-        $key = config('app.key');
-        if (! is_string($key) || $key === '') {
-            throw new RuntimeException('Telegram delivery database capability key is unavailable.');
-        }
-
-        return hash_hmac('sha256', 'telegram-delivery-database-authority-v1', $key);
-    }
-
     private function capabilityHash(): string
     {
-        return hash('sha256', $this->capabilityValue());
+        return (new TelegramDeliveryDatabaseCapability)->expectedHash();
+    }
+
+    private function capabilityValueMatchingHash(string $capabilityHash): ?string
+    {
+        return (new TelegramDeliveryDatabaseCapability)->valueMatchingHash($capabilityHash);
     }
 };

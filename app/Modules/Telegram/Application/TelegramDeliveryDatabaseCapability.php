@@ -28,6 +28,23 @@ final readonly class TelegramDeliveryDatabaseCapability
         return hash('sha256', $this->value());
     }
 
+    /**
+     * Match the persisted historical v1 capability against exact configured
+     * APP_KEY / APP_PREVIOUS_KEYS strings. This intentionally does not use the
+     * Encrypter's parsed key bytes: the original #179 capability was derived
+     * from the raw configured app.key string and must remain byte-compatible.
+     */
+    public function valueMatchingHash(string $capabilityHash): ?string
+    {
+        foreach ($this->configuredValues() as $value) {
+            if (hash_equals(hash('sha256', $value), $capabilityHash)) {
+                return $value;
+            }
+        }
+
+        return null;
+    }
+
     public function acquireRuntimeLifecycleFence(Connection $connection): void
     {
         if ($connection->transactionLevel() < 1) {
@@ -66,7 +83,7 @@ final readonly class TelegramDeliveryDatabaseCapability
         } else {
             TelegramPresentationProvenanceGuard::assertQueueSource($connection);
         }
-        $this->assertReady($connection);
+        $capabilityValue = $this->assertReady($connection);
         $armed = false;
 
         try {
@@ -87,7 +104,7 @@ SET @app_telegram_delivery_capability = ?,
     @app_telegram_delivery_effect_public_id = NULL,
     @app_telegram_delivery_effect_expected_version = NULL
 SQL, [
-                $this->value(),
+                $capabilityValue,
                 $authority,
                 $publicId,
                 $requestHash,
@@ -121,7 +138,7 @@ SQL, [
         int $expectedVersion,
         Closure $operation,
     ): mixed {
-        $this->assertReady($connection);
+        $capabilityValue = $this->assertReady($connection);
         $armed = false;
 
         try {
@@ -142,7 +159,7 @@ SET @app_telegram_delivery_capability = ?,
     @app_telegram_delivery_effect_public_id = ?,
     @app_telegram_delivery_effect_expected_version = ?
 SQL, [
-                $this->value(),
+                $capabilityValue,
                 $authority,
                 $publicId,
                 $expectedVersion,
@@ -155,17 +172,17 @@ SQL, [
         }
     }
 
-    private function assertReady(Connection $connection): void
+    private function assertReady(Connection $connection): string
     {
         if ($connection->transactionLevel() < 1) {
             throw new RuntimeException('Telegram delivery database authority must be armed inside a database transaction.');
         }
 
-        $this->acquireRuntimeLifecycleFence($connection);
+        $capabilityValue = $this->lockActiveCapability($connection);
         $this->pinAuthorityMetadata($connection);
         try {
             $ready = (new TelegramDeliveryDatabaseAuthoritySurfaceV1)
-                ->isReady($connection, $this->expectedHash());
+                ->isReady($connection, hash('sha256', $capabilityValue));
         } catch (Throwable $exception) {
             throw new RuntimeException('Telegram delivery database authority is not fully activated.', 0, $exception);
         }
@@ -173,9 +190,11 @@ SQL, [
         if (! $ready) {
             throw new RuntimeException('Telegram delivery database authority is not fully activated.');
         }
+
+        return $capabilityValue;
     }
 
-    private function lockActiveCapability(Connection $connection): void
+    private function lockActiveCapability(Connection $connection): string
     {
         try {
             $capability = $connection->selectOne(<<<'SQL'
@@ -188,14 +207,44 @@ SQL, [], false);
             throw new RuntimeException('Telegram delivery database authority is not accepting runtime work.', 0, $exception);
         }
 
+        $capabilityValue = $capability !== null && is_string($capability->capability_hash ?? null)
+            ? $this->valueMatchingHash($capability->capability_hash)
+            : null;
         if ($capability === null
             || (int) ($capability->id ?? 0) !== 1
             || ! is_string($capability->capability_hash ?? null)
-            || ! hash_equals($this->expectedHash(), $capability->capability_hash)
+            || $capabilityValue === null
             || (int) ($capability->schema_version ?? -1) !== 1
             || ($capability->activated_at ?? null) === null) {
             throw new RuntimeException('Telegram delivery database authority is not accepting runtime work.');
         }
+
+        return $capabilityValue;
+    }
+
+    /** @return list<string> */
+    private function configuredValues(): array
+    {
+        $currentKey = config('app.key');
+        $previousKeys = config('app.previous_keys', []);
+        if (! is_string($currentKey) || $currentKey === '' || ! is_array($previousKeys)) {
+            throw new RuntimeException('Telegram delivery database capability keyring is unavailable.');
+        }
+
+        $keys = [$currentKey];
+        foreach ($previousKeys as $previousKey) {
+            if (! is_string($previousKey) || $previousKey === '') {
+                throw new RuntimeException('Telegram delivery database capability keyring is unavailable.');
+            }
+            if (! in_array($previousKey, $keys, true)) {
+                $keys[] = $previousKey;
+            }
+        }
+
+        return array_map(
+            static fn (string $key): string => hash_hmac('sha256', self::CONTEXT, $key),
+            $keys,
+        );
     }
 
     private function pinAuthorityMetadata(Connection $connection): void

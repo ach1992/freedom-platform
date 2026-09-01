@@ -382,6 +382,54 @@ SQL);
         self::assertFalse($surface->isReady($connection));
     }
 
+    public function test_interactive_migration_lifecycle_accepts_exact_previous_application_key_capability(): void
+    {
+        $oldConfiguredKey = config('app.key');
+        $oldPreviousKeys = config('app.previous_keys', []);
+        self::assertIsString($oldConfiguredKey);
+        self::assertNotSame('', $oldConfiguredKey);
+        self::assertIsArray($oldPreviousKeys);
+        $oldCapabilityHash = DB::table('telegram_delivery_authority_capability')
+            ->where('id', 1)
+            ->value('capability_hash');
+        self::assertIsString($oldCapabilityHash);
+        $newConfiguredKey = 'base64:'.base64_encode(str_repeat('i', 32));
+        $migration = require database_path('migrations/2026_08_31_000100_enable_telegram_interactive_delivery_presentations.php');
+
+        try {
+            config([
+                'app.key' => $newConfiguredKey,
+                'app.previous_keys' => [$oldConfiguredKey],
+            ]);
+            $capability = new TelegramDeliveryDatabaseCapability;
+            self::assertNotSame($capability->expectedHash(), $oldCapabilityHash);
+            self::assertNotNull($capability->valueMatchingHash($oldCapabilityHash));
+
+            $migration->down();
+            self::assertFalse(Schema::hasTable(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE));
+            self::assertTrue((new TelegramDeliveryDatabaseAuthoritySurfaceV1)->isReady(DB::connection(), $oldCapabilityHash));
+            self::assertSame(
+                $oldCapabilityHash,
+                DB::table('telegram_delivery_authority_capability')->where('id', 1)->value('capability_hash'),
+            );
+
+            $migration->up();
+            self::assertTrue((new TelegramDeliveryInteractivePresentationDatabaseSurfaceV1)->isReady(DB::connection()));
+            self::assertSame(
+                $oldCapabilityHash,
+                DB::table('telegram_delivery_authority_capability')->where('id', 1)->value('capability_hash'),
+            );
+        } finally {
+            config([
+                'app.key' => $oldConfiguredKey,
+                'app.previous_keys' => $oldPreviousKeys,
+            ]);
+            if (! Schema::hasTable(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)) {
+                $migration->up();
+            }
+        }
+    }
+
     public function test_interactive_migration_down_refuses_durable_snapshots_before_destructive_ddl(): void
     {
         $account = $this->account('rollback_durable', 900105);

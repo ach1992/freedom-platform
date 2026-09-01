@@ -46,6 +46,58 @@ final class TelegramConfidentialDeliveryMigrationSafetyTest extends TestCase
         (require database_path('migrations/2026_09_01_000100_enable_telegram_confidential_delivery_presentations.php'))->up();
     }
 
+    public function test_confidential_migration_lifecycle_accepts_exact_previous_application_key_capability(): void
+    {
+        $oldConfiguredKey = config('app.key');
+        $oldPreviousKeys = config('app.previous_keys', []);
+        self::assertIsString($oldConfiguredKey);
+        self::assertNotSame('', $oldConfiguredKey);
+        self::assertIsArray($oldPreviousKeys);
+        $oldCapabilityHash = DB::table('telegram_delivery_authority_capability')
+            ->where('id', 1)
+            ->value('capability_hash');
+        self::assertIsString($oldCapabilityHash);
+        $newConfiguredKey = 'base64:'.base64_encode(str_repeat('c', 32));
+        $migration = require database_path('migrations/2026_09_01_000100_enable_telegram_confidential_delivery_presentations.php');
+
+        try {
+            config([
+                'app.key' => $newConfiguredKey,
+                'app.previous_keys' => [$oldConfiguredKey],
+            ]);
+            $capability = new TelegramDeliveryDatabaseCapability;
+            self::assertNotSame($capability->expectedHash(), $oldCapabilityHash);
+            self::assertNotNull($capability->valueMatchingHash($oldCapabilityHash));
+
+            $migration->down();
+            self::assertFalse(Schema::hasTable(TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1::TABLE));
+            self::assertTrue((new TelegramDeliveryDatabaseAuthoritySurfaceV1)->isReady(DB::connection(), $oldCapabilityHash));
+            self::assertTrue((new TelegramDeliveryInteractivePresentationDatabaseSurfaceV1)->isReady(
+                DB::connection(),
+                TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::legacyV2InsertTriggerBody(),
+            ));
+            self::assertSame(
+                $oldCapabilityHash,
+                DB::table('telegram_delivery_authority_capability')->where('id', 1)->value('capability_hash'),
+            );
+
+            $migration->up();
+            self::assertTrue((new TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1)->isReady(DB::connection()));
+            self::assertSame(
+                $oldCapabilityHash,
+                DB::table('telegram_delivery_authority_capability')->where('id', 1)->value('capability_hash'),
+            );
+        } finally {
+            config([
+                'app.key' => $oldConfiguredKey,
+                'app.previous_keys' => $oldPreviousKeys,
+            ]);
+            if (! Schema::hasTable(TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1::TABLE)) {
+                $migration->up();
+            }
+        }
+    }
+
     public function test_migration_refuses_non_empty_semantically_drifted_surface(): void
     {
         $created = ConfidentialTelegramPresentationTestFactory::queue(
@@ -620,10 +672,15 @@ SQL);
 
     private function baseAuthorityIsReady(): bool
     {
-        return (new TelegramDeliveryDatabaseAuthoritySurfaceV1)->isReady(
-            DB::connection(),
-            (new TelegramDeliveryDatabaseCapability)->expectedHash(),
-        );
+        $capabilityHash = DB::table('telegram_delivery_authority_capability')
+            ->where('id', 1)
+            ->value('capability_hash');
+        if (! is_string($capabilityHash)
+            || (new TelegramDeliveryDatabaseCapability)->valueMatchingHash($capabilityHash) === null) {
+            return false;
+        }
+
+        return (new TelegramDeliveryDatabaseAuthoritySurfaceV1)->isReady(DB::connection(), $capabilityHash);
     }
 }
 

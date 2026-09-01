@@ -40,7 +40,12 @@ return new class extends Migration
         $this->withInstallationLock($connection, $lifecycleConnection, function () use ($connection): void {
             $baseSurface = new TelegramDeliveryDatabaseAuthoritySurfaceV1;
             $baseCapability = new TelegramDeliveryDatabaseCapability;
-            if (! $baseSurface->isReady($connection, $baseCapability->expectedHash())) {
+            $persistedCapabilityHash = $connection->table('telegram_delivery_authority_capability')
+                ->where('id', 1)
+                ->value('capability_hash');
+            if (! is_string($persistedCapabilityHash)
+                || $baseCapability->valueMatchingHash($persistedCapabilityHash) === null
+                || ! $baseSurface->isReady($connection, $persistedCapabilityHash)) {
                 throw new RuntimeException('Telegram interactive presentation authority requires the active v1 delivery authority.');
             }
 
@@ -273,10 +278,13 @@ FROM telegram_delivery_authority_capability
 WHERE id = 1
 FOR UPDATE
 SQL, [], false);
+            $capabilityValue = $capability !== null && is_string($capability->capability_hash ?? null)
+                ? $capabilityAuthority->valueMatchingHash($capability->capability_hash)
+                : null;
             if ($capability === null
                 || (int) ($capability->id ?? 0) !== 1
                 || ! is_string($capability->capability_hash ?? null)
-                || ! hash_equals($capabilityAuthority->expectedHash(), $capability->capability_hash)
+                || $capabilityValue === null
                 || (int) ($capability->schema_version ?? -1) !== 1
                 || ($capability->activated_at ?? null) === null) {
                 throw new RuntimeException('Telegram interactive presentation rollback could not establish the v1 persistent lifecycle fence.');
@@ -287,7 +295,7 @@ SQL, [], false);
                 $lifecycleConnection->statement(<<<'SQL'
 SET @app_telegram_delivery_capability = ?,
     @app_telegram_delivery_lifecycle_authority = 'rollback'
-SQL, [$capabilityAuthority->value()]);
+SQL, [$capabilityValue]);
                 $armed = true;
                 $updated = $lifecycleConnection->table('telegram_delivery_authority_capability')
                     ->where('id', 1)
@@ -341,10 +349,13 @@ FROM telegram_delivery_authority_capability
 WHERE id = 1
 FOR UPDATE
 SQL, [], false);
+            $capabilityValue = $capability !== null && is_string($capability->capability_hash ?? null)
+                ? $capabilityAuthority->valueMatchingHash($capability->capability_hash)
+                : null;
             if ($capability === null
                 || (int) ($capability->id ?? 0) !== 1
                 || ! is_string($capability->capability_hash ?? null)
-                || ! hash_equals($capabilityAuthority->expectedHash(), $capability->capability_hash)
+                || $capabilityValue === null
                 || (int) ($capability->schema_version ?? -1) !== 0
                 || ($capability->activated_at ?? null) !== null) {
                 throw new RuntimeException('Telegram interactive presentation rollback cannot reactivate a changed v1 lifecycle fence.');
@@ -355,7 +366,7 @@ SQL, [], false);
                 $lifecycleConnection->statement(<<<'SQL'
 SET @app_telegram_delivery_capability = ?,
     @app_telegram_delivery_lifecycle_authority = 'activate'
-SQL, [$capabilityAuthority->value()]);
+SQL, [$capabilityValue]);
                 $armed = true;
                 $updated = $lifecycleConnection->table('telegram_delivery_authority_capability')
                     ->where('id', 1)
@@ -380,7 +391,7 @@ SQL, [$capabilityAuthority->value()]);
             ->first(['capability_hash', 'schema_version', 'activated_at']);
         if ($capability === null
             || ! is_string($capability->capability_hash ?? null)
-            || ! hash_equals($capabilityAuthority->expectedHash(), $capability->capability_hash)
+            || $capabilityAuthority->valueMatchingHash($capability->capability_hash) === null
             || (int) ($capability->schema_version ?? -1) !== 1
             || ($capability->activated_at ?? null) === null) {
             throw new RuntimeException('Telegram interactive presentation rollback lifecycle reactivation did not reach the exact active row state.');
@@ -403,11 +414,11 @@ SQL, [$capabilityAuthority->value()]);
         }
 
         $capability = $rows->first();
-        $expectedHash = (new TelegramDeliveryDatabaseCapability)->expectedHash();
+        $capabilityAuthority = new TelegramDeliveryDatabaseCapability;
         if ($capability === null
             || (int) ($capability->id ?? 0) !== 1
             || ! is_string($capability->capability_hash ?? null)
-            || ! hash_equals($expectedHash, $capability->capability_hash)) {
+            || $capabilityAuthority->valueMatchingHash($capability->capability_hash) === null) {
             return 'invalid';
         }
 
