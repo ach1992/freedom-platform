@@ -14,6 +14,8 @@ use App\Modules\Payments\Usdt\Application\UsdtRateResolver;
 use App\Modules\Payments\Usdt\Infrastructure\UsdtRuntimeFactory;
 use App\Modules\Payments\Zarinpal\Application\Contracts\ZarinpalTransport;
 use App\Modules\Payments\Zarinpal\Infrastructure\HttpZarinpalTransport;
+use App\Modules\Provisioning\Application\TelegramOwnedServiceProjectionService;
+use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceProjection;
 use Illuminate\Http\Client\Factory as HttpFactory;
 use Illuminate\Support\ServiceProvider;
 use RuntimeException;
@@ -26,6 +28,7 @@ class AppServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->bind(CustomerIdentityProfileWriter::class, CustomerIdentityProfilePersistence::class);
+        $this->app->bind(TelegramOwnedServiceProjection::class, TelegramOwnedServiceProjectionService::class);
         $this->app->bind(CardToCardAdjustmentGenerator::class, SecureCardToCardAdjustmentGenerator::class);
         $this->app->bind(ZarinpalTransport::class, HttpZarinpalTransport::class);
         $this->app->bind(

@@ -20,6 +20,8 @@ use App\Modules\Provisioning\Application\ServiceOperationalContext;
 use App\Modules\Provisioning\Application\ServiceOperationalDatabaseCapability;
 use App\Modules\Provisioning\Application\ServiceOwnershipTransferService;
 use App\Modules\Provisioning\Application\ServiceRepairService;
+use App\Modules\Provisioning\Application\ServiceSynchronizationService;
+use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceProjection;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Migrations\Migration;
@@ -932,6 +934,112 @@ final class ServiceOperationalAuthorityTest extends TestCase
         self::assertNull($target->order_id);
         self::assertSame(1, DB::table('orders')->count());
         self::assertSame(1, DB::table('service_subscriptions')->count());
+    }
+
+    /** @requirement SVC-001 DAT-002 DAT-003 SEC-002 QUA-001 */
+    public function test_telegram_owned_service_projection_is_self_only_uses_current_sync_and_hides_stale_remote_facts(): void
+    {
+        $fixture = $this->operationalFixture('telegram-owned-projection');
+        $attached = $this->attachedService(
+            $fixture,
+            'remote-telegram-owned',
+            'telegram-owned-user',
+            'telegram-owned-import',
+        );
+        self::assertIsString($attached->serviceSubscriptionPublicId);
+        $servicePublicId = $attached->serviceSubscriptionPublicId;
+        $projection = $this->app->make(TelegramOwnedServiceProjection::class);
+
+        $emptyUserId = $this->benefitUser();
+        $empty = $projection->pageForSelf($emptyUserId, $emptyUserId, 1, 6);
+        self::assertSame([], $empty->items);
+        self::assertSame(0, $empty->totalItems);
+        self::assertSame(1, $empty->totalPages);
+
+        $syncRunsBeforeRead = DB::table('service_sync_runs')->count();
+        $page = $projection->pageForSelf($fixture['user_id'], $fixture['user_id'], 1, 6);
+        self::assertSame(1, $page->totalItems);
+        self::assertCount(1, $page->items);
+        $item = $page->items[0];
+        self::assertSame($servicePublicId, $item->publicId);
+        self::assertMatchesRegularExpression('/\A[0-9a-f]{40}\z/', $item->selectionToken);
+        self::assertNotSame($servicePublicId, $item->selectionToken);
+        self::assertNotSame('', $item->planNameFa);
+        self::assertNotSame('', $item->serverNameFa);
+
+        $repeat = $projection->pageForSelf($fixture['user_id'], $fixture['user_id'], 1, 6);
+        self::assertSame($item->selectionToken, $repeat->items[0]->selectionToken);
+
+        $noSync = $projection->detailForSelf($fixture['user_id'], $fixture['user_id'], $item->selectionToken);
+        self::assertSame('none', $noSync->syncState);
+        self::assertNull($noSync->remoteDisposition);
+        self::assertNull($noSync->remoteStatus);
+        self::assertNull($noSync->dataLimitBytes);
+        self::assertNull($noSync->usedBytes);
+        self::assertNull($noSync->observedAt);
+        self::assertSame($syncRunsBeforeRead, DB::table('service_sync_runs')->count(), 'Read projection must not trigger synchronization.');
+
+        try {
+            $projection->pageForSelf($emptyUserId, $fixture['user_id'], 1, 6);
+            self::fail('Owned Service projection must reject a different subject user.');
+        } catch (AuthorizationException) {
+            // Expected self-only boundary.
+        }
+        try {
+            $projection->detailForSelf($emptyUserId, $emptyUserId, $item->selectionToken);
+            self::fail('Another actor must not resolve an owned Service selection token.');
+        } catch (AuthorizationException) {
+            // Expected owner-bound selection.
+        }
+
+        $fixture['adapter']->seed(new RemoteServiceSnapshot(
+            'remote-telegram-owned',
+            'telegram-owned-user',
+            PanelServiceStatus::Active,
+            10_000,
+            2_500,
+            new \DateTimeImmutable('2026-10-01T04:00:00+00:00'),
+            hash('sha256', 'canonical:remote-telegram-owned:telegram-owned-user:current'),
+            hash('sha256', 'equivalence:remote-telegram-owned:telegram-owned-user'),
+        ));
+        $sync = $this->app->make(ServiceSynchronizationService::class)->syncOne($servicePublicId);
+        self::assertSame(1, $sync->processed);
+        self::assertSame(0, $sync->failures);
+
+        $current = $projection->detailForSelf($fixture['user_id'], $fixture['user_id'], $item->selectionToken);
+        self::assertSame('current', $current->syncState);
+        self::assertSame('present', $current->remoteDisposition);
+        self::assertSame('active', $current->remoteStatus);
+        self::assertSame(10_000, $current->dataLimitBytes);
+        self::assertSame(2_500, $current->usedBytes);
+        self::assertSame(7_500, $current->remainingBytes());
+        self::assertSame('2026-10-01 04:00:00.000000', $current->expiresAt);
+        self::assertNotNull($current->observedAt);
+
+        $newOwnerUserId = $this->benefitUser();
+        $transfer = $this->app->make(ServiceOwnershipTransferService::class)->transfer(
+            $servicePublicId,
+            $newOwnerUserId,
+            $this->context('telegram-owned-transfer', $fixture['owner_id']),
+        );
+        self::assertSame($newOwnerUserId, $transfer->toUserId);
+
+        $oldOwnerPage = $projection->pageForSelf($fixture['user_id'], $fixture['user_id'], 1, 6);
+        self::assertSame(0, $oldOwnerPage->totalItems);
+        $newOwnerPage = $projection->pageForSelf($newOwnerUserId, $newOwnerUserId, 1, 6);
+        self::assertSame(1, $newOwnerPage->totalItems);
+        $newOwnerItem = $newOwnerPage->items[0];
+        self::assertSame($servicePublicId, $newOwnerItem->publicId);
+        self::assertNotSame($item->selectionToken, $newOwnerItem->selectionToken);
+
+        $stale = $projection->detailForSelf($newOwnerUserId, $newOwnerUserId, $newOwnerItem->selectionToken);
+        self::assertSame('stale', $stale->syncState);
+        self::assertNull($stale->remoteDisposition);
+        self::assertNull($stale->remoteStatus);
+        self::assertNull($stale->dataLimitBytes);
+        self::assertNull($stale->usedBytes);
+        self::assertNull($stale->expiresAt);
+        self::assertNotNull($stale->observedAt, 'Stale state may disclose only when the last observation occurred, not stale remote facts.');
     }
 
     /** @return array{owner_id:int,user_id:int,offering_id:int,target_id:int,adapter:ServiceOperationalPanelAdapter} */

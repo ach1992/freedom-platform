@@ -7,6 +7,7 @@ return [
         'home' => "Welcome to Freedom Platform.\n\nMain menu\nChoose an option below.\n/cancel — Close the current session",
         'buttons' => [
             'my_account' => 'My Account',
+            'my_services' => 'My Services',
             'back' => 'Back',
         ],
         'account' => [
@@ -17,32 +18,45 @@ return [
             'yes' => 'Yes',
             'no' => 'No',
             'values' => [
-                'account_type' => [
-                    'customer' => 'Customer',
-                    'agent' => 'Agent',
-                ],
+                'account_type' => ['customer' => 'Customer', 'agent' => 'Agent'],
                 'account_status' => [
-                    'active' => 'Active',
-                    'limited' => 'Limited',
-                    'suspended' => 'Suspended',
-                    'blocked' => 'Blocked',
+                    'active' => 'Active', 'limited' => 'Limited', 'suspended' => 'Suspended', 'blocked' => 'Blocked',
                 ],
-                'tier' => [
-                    'new' => 'New',
-                    'normal' => 'Normal',
-                    'loyal' => 'Loyal',
-                    'vip' => 'VIP',
-                ],
+                'tier' => ['new' => 'New', 'normal' => 'Normal', 'loyal' => 'Loyal', 'vip' => 'VIP'],
                 'verification' => [
-                    'unverified' => 'Unverified',
-                    'pending' => 'Pending',
-                    'verified' => 'Verified',
-                    'rejected' => 'Rejected',
+                    'unverified' => 'Unverified', 'pending' => 'Pending', 'verified' => 'Verified', 'rejected' => 'Rejected',
                 ],
                 'identity_type' => [
-                    'national_id' => 'National ID',
-                    'bank_card' => 'Bank card',
-                    'full_name' => 'Full name',
+                    'national_id' => 'National ID', 'bank_card' => 'Bank card', 'full_name' => 'Full name',
+                ],
+            ],
+        ],
+        'services' => [
+            'list' => "My Services\n\n:items\n\nPage :page of :total_pages — :total_items service(s)",
+            'list_item' => "#:number — :public_id\n:plan · :server\nState: :state",
+            'empty' => "My Services\n\nYou do not have any services yet.",
+            'service_button' => 'Service #:number',
+            'previous' => 'Previous',
+            'next' => 'Next',
+            'not_available' => 'Not available',
+            'detail' => "Service Details\n\nService ID: :public_id\nPlan: :plan\nServer: :server\nLifecycle: :state\nProvisioned: :provisioned_at\n\nSynchronization\nEvidence state: :sync_state\nRemote evidence: :remote_disposition\nRemote status: :remote_status\nData limit: :data_limit\nUsed: :used\nRemaining: :remaining\nExpires: :expires_at\nObserved: :observed_at",
+            'values' => [
+                'lifecycle' => [
+                    'active' => 'Active', 'suspended' => 'Suspended', 'retired' => 'Retired',
+                ],
+                'sync_state' => [
+                    'none' => 'No synchronization evidence',
+                    'current' => 'Current',
+                    'stale' => 'Stale — remote facts hidden',
+                ],
+                'remote_disposition' => [
+                    'present' => 'Present',
+                    'missing' => 'Missing',
+                    'unavailable' => 'Temporarily unavailable',
+                    'identity_mismatch' => 'Identity mismatch',
+                ],
+                'remote_status' => [
+                    'active' => 'Active', 'suspended' => 'Suspended', 'expired' => 'Expired', 'disabled' => 'Disabled', 'unknown' => 'Unknown',
                 ],
             ],
         ],
