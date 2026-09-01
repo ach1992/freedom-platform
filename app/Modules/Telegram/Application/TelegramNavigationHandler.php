@@ -25,11 +25,15 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
 
     private const STATE_SERVICE_DETAIL = 'service_detail';
 
+    private const STATE_SERVICE_SEARCH = 'service_search';
+
     private const ACTION_MY_ACCOUNT = 'navigation.my_account';
 
     private const ACTION_MY_SERVICES = 'navigation.my_services';
 
     private const ACTION_SERVICES_PAGE = 'navigation.services.page';
+
+    private const ACTION_SERVICES_SEARCH = 'navigation.services.search';
 
     private const ACTION_SERVICE_DETAIL_PREFIX = 'navigation.service.';
 
@@ -99,6 +103,12 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             return;
         }
 
+        if ($action->sessionState === self::STATE_SERVICE_SEARCH) {
+            $this->handleServiceSearch($action);
+
+            return;
+        }
+
         throw new RuntimeException('Telegram navigation session state is unsupported.');
     }
 
@@ -132,6 +142,11 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
 
                 return;
             }
+            if ($action->callbackAction === self::ACTION_SERVICES_SEARCH && $action->callbackPayload === []) {
+                $this->showServiceSearch($action);
+
+                return;
+            }
             if (is_string($action->callbackAction)
                 && str_starts_with($action->callbackAction, self::ACTION_SERVICE_DETAIL_PREFIX)
                 && $action->callbackPayload === []) {
@@ -149,6 +164,33 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
 
         if ($action->kind === TelegramInteractionActionKind::Back || $this->isEntryCommand($action->messageText)) {
             $this->returnHome($action);
+        }
+    }
+
+    private function handleServiceSearch(TelegramInteractionAction $action): void
+    {
+        if ($action->kind === TelegramInteractionActionKind::Callback) {
+            if ($action->callbackAction !== self::ACTION_BACK || $action->callbackPayload !== []) {
+                throw new RuntimeException('Telegram Service search callback action is unsupported.');
+            }
+
+            $this->returnMyServices($action);
+
+            return;
+        }
+
+        if ($action->kind === TelegramInteractionActionKind::Back) {
+            $this->returnMyServices($action);
+
+            return;
+        }
+        if ($this->isEntryCommand($action->messageText)) {
+            $this->returnHome($action);
+
+            return;
+        }
+        if ($action->messageText !== null) {
+            $this->searchService($action, $action->messageText);
         }
     }
 
@@ -234,11 +276,54 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         $this->renderMyServices($action, $session->version, $services, $locale, $action->requestKey);
     }
 
+    private function showServiceSearch(TelegramInteractionAction $action): void
+    {
+        $page = $this->pageFromPayload($action->sessionPayload);
+        $locale = $this->localeForActor($action->userId);
+        $session = $this->sessions->transition(
+            $action->sessionPublicId,
+            $action->sessionVersion,
+            self::STATE_SERVICE_SEARCH,
+            ['page' => $page],
+            'nav-service-search-transition:'.$action->requestKey,
+        );
+        $this->assertActorBinding($action, $session->userId);
+        $this->renderServiceSearchMessage($action, $session->version, $locale, 'prompt');
+    }
+
+    private function searchService(TelegramInteractionAction $action, string $searchTerm): void
+    {
+        $page = $this->pageFromPayload($action->sessionPayload);
+        $result = $this->services->searchForSelf($action->userId, $action->userId, $searchTerm);
+        $locale = $this->localeForActor($action->userId);
+        if ($result->status === TelegramOwnedServiceSearchResult::MATCHED) {
+            if ($result->selectionToken === null) {
+                throw new RuntimeException('Telegram Service search match is incomplete.');
+            }
+            $detail = $this->services->detailForSelf($action->userId, $action->userId, $result->selectionToken);
+            $this->transitionToServiceDetail($action, $detail, $page, $locale);
+
+            return;
+        }
+
+        $surface = $result->status === TelegramOwnedServiceSearchResult::AMBIGUOUS ? 'ambiguous' : 'not_found';
+        $this->renderServiceSearchMessage($action, $action->sessionVersion, $locale, $surface);
+    }
+
     private function showServiceDetail(TelegramInteractionAction $action, string $selectionToken): void
     {
         $page = $this->pageFromPayload($action->sessionPayload);
         $detail = $this->services->detailForSelf($action->userId, $action->userId, $selectionToken);
         $locale = $this->localeForActor($action->userId);
+        $this->transitionToServiceDetail($action, $detail, $page, $locale);
+    }
+
+    private function transitionToServiceDetail(
+        TelegramInteractionAction $action,
+        TelegramOwnedServiceDetail $detail,
+        int $page,
+        string $locale,
+    ): void {
         $session = $this->sessions->transition(
             $action->sessionPublicId,
             $action->sessionVersion,
@@ -266,6 +351,37 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             $this->serviceDetailText($detail, $locale),
             'nav-service-detail-delivery:'.$action->requestKey,
             'service-detail',
+            $keyboard,
+        );
+    }
+
+    private function renderServiceSearchMessage(
+        TelegramInteractionAction $action,
+        int $sessionVersion,
+        string $locale,
+        string $surface,
+    ): void {
+        if (! in_array($surface, ['prompt', 'not_found', 'ambiguous'], true)) {
+            throw new RuntimeException('Telegram Service search presentation surface is invalid.');
+        }
+        $back = $this->callbacks->issue(
+            $action->sessionPublicId,
+            $sessionVersion,
+            self::ACTION_BACK,
+            [],
+            'nav-service-search-back:'.$surface.':'.$action->requestKey,
+        );
+        $keyboard = new TelegramInlineKeyboardSnapshot([[
+            new TelegramInlineCallbackButton(
+                $this->translation('telegram.navigation.buttons.back', $locale),
+                $back->publicId,
+            ),
+        ]]);
+        $this->queueConfidential(
+            $action,
+            $this->translation('telegram.navigation.services.search.'.$surface, $locale),
+            'nav-service-search-delivery:'.$surface.':'.$action->requestKey,
+            'service-search-'.$surface,
             $keyboard,
         );
     }
@@ -416,6 +532,19 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         if ($pagination !== []) {
             $rows[] = $pagination;
         }
+
+        $search = $this->callbacks->issue(
+            $action->sessionPublicId,
+            $sessionVersion,
+            self::ACTION_SERVICES_SEARCH,
+            [],
+            'nav-services-search:'.$requestKey,
+        );
+        $rows[] = [new TelegramInlineCallbackButton(
+            $this->translation('telegram.navigation.services.search.button', $locale),
+            $search->publicId,
+            TelegramInlineButtonStyle::Primary,
+        )];
 
         $back = $this->callbacks->issue(
             $action->sessionPublicId,

@@ -39,6 +39,12 @@ return [
             'previous' => 'Previous',
             'next' => 'Next',
             'not_available' => 'Not available',
+            'search' => [
+                'button' => 'Search',
+                'prompt' => "Search My Services\n\nSend the exact Service ID, Order ID, or service username.\nSearch is private and exact.",
+                'not_found' => "No matching service was found in your account.\n\nTry the exact Service ID, Order ID, or service username.",
+                'ambiguous' => "More than one of your services uses that username.\n\nSearch by exact Service ID or Order ID to choose one safely.",
+            ],
             'detail' => "Service Details\n\nService ID: :public_id\nPlan: :plan\nServer: :server\nLifecycle: :state\nProvisioned: :provisioned_at\n\nSynchronization\nEvidence state: :sync_state\nRemote evidence: :remote_disposition\nRemote status: :remote_status\nData limit: :data_limit\nUsed: :used\nRemaining: :remaining\nExpires: :expires_at\nObserved: :observed_at",
             'values' => [
                 'lifecycle' => [
@@ -47,6 +53,7 @@ return [
                 'sync_state' => [
                     'none' => 'No synchronization evidence',
                     'current' => 'Current',
+                    'cached' => 'Cached — current synchronization unavailable; showing last confirmed facts',
                     'stale' => 'Stale — remote facts hidden',
                 ],
                 'remote_disposition' => [

@@ -30,7 +30,7 @@ final readonly class TelegramOwnedServiceDetail
         if (! in_array($lifecycleState, ['active', 'suspended', 'retired'], true)) {
             throw new InvalidArgumentException('Telegram owned Service detail lifecycle state is invalid.');
         }
-        if (! in_array($syncState, ['none', 'current', 'stale'], true)) {
+        if (! in_array($syncState, ['none', 'current', 'cached', 'stale'], true)) {
             throw new InvalidArgumentException('Telegram owned Service synchronization state is invalid.');
         }
         if ($remoteDisposition !== null && ! in_array($remoteDisposition, ['present', 'missing', 'unavailable', 'identity_mismatch'], true)) {
@@ -50,13 +50,17 @@ final readonly class TelegramOwnedServiceDetail
                 throw new InvalidArgumentException('Telegram owned Service detail label is invalid.');
             }
         }
-        if ($syncState !== 'current'
+        if (! in_array($syncState, ['current', 'cached'], true)
             && ($remoteDisposition !== null || $remoteStatus !== null || $dataLimitBytes !== null || $usedBytes !== null || $expiresAt !== null)) {
             throw new InvalidArgumentException('Telegram owned Service stale or absent synchronization must not expose remote facts.');
         }
-        if ($remoteDisposition !== 'present'
+        if ($syncState === 'current' && $remoteDisposition !== 'present'
             && ($remoteStatus !== null || $dataLimitBytes !== null || $usedBytes !== null || $expiresAt !== null)) {
             throw new InvalidArgumentException('Telegram owned Service non-present remote evidence must not expose remote facts.');
+        }
+        if ($syncState === 'cached'
+            && ($remoteDisposition !== 'unavailable' || $remoteStatus === null || $observedAt === null)) {
+            throw new InvalidArgumentException('Telegram owned Service cached synchronization evidence is invalid.');
         }
         foreach ([$planNameEn, $serverNameEn] as $optionalLabel) {
             if ($optionalLabel !== null && ($optionalLabel === '' || ! mb_check_encoding($optionalLabel, 'UTF-8'))) {

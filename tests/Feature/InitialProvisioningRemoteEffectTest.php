@@ -44,6 +44,8 @@ use App\Modules\Provisioning\Application\InitialProvisioningQueueService;
 use App\Modules\Provisioning\Application\InitialProvisioningRecoveryService;
 use App\Modules\Provisioning\Application\ProvisioningQueueReceipt;
 use App\Modules\Provisioning\Domain\ProvisioningState;
+use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceProjection;
+use App\Modules\Telegram\Application\TelegramOwnedServiceSearchResult;
 use App\Shared\Application\OutboxDispatchOutcome;
 use App\Shared\Application\OutboxMessage;
 use App\Shared\Domain\Money;
@@ -342,6 +344,35 @@ final class InitialProvisioningRemoteEffectTest extends TestCase
         self::assertSame($receipt->remoteServiceId, $replay->remoteServiceId);
         self::assertCount($callCount, $scenario['adapter']->calls);
         self::assertSame(1, DB::table('plan_offering_route_selections')->count());
+    }
+
+    public function test_telegram_owned_service_search_resolves_provisioned_username_without_provider_read(): void
+    {
+        $scenario = $this->scenario('telegram-search-provisioned');
+        $receipt = $this->executor()->execute($scenario['queue']->provisioningOperationPublicId);
+        self::assertSame(ProvisioningState::Succeeded, $receipt->state);
+
+        $operation = DB::table('provisioning_operations')
+            ->where('id', $scenario['queue']->provisioningOperationId)
+            ->first(['remote_username']);
+        self::assertNotNull($operation);
+        self::assertIsString($operation->remote_username);
+        self::assertNotSame('', $operation->remote_username);
+        $service = DB::table('service_subscriptions')
+            ->where('id', $scenario['queue']->serviceSubscriptionId)
+            ->first(['public_id', 'user_id']);
+        self::assertNotNull($service);
+        $providerCallCount = count($scenario['adapter']->calls);
+
+        $result = $this->app->make(TelegramOwnedServiceProjection::class)->searchForSelf(
+            (int) $service->user_id,
+            (int) $service->user_id,
+            (string) $operation->remote_username,
+        );
+
+        self::assertSame(TelegramOwnedServiceSearchResult::MATCHED, $result->status);
+        self::assertMatchesRegularExpression('/\A[0-9a-f]{40}\z/', (string) $result->selectionToken);
+        self::assertSame($providerCallCount, count($scenario['adapter']->calls), 'Search must consume durable username authority without a provider read.');
     }
 
     public function test_retryable_attempt_reuses_durable_route_and_adopts_exact_preexisting_remote_without_create(): void
