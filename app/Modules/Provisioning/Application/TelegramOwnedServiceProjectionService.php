@@ -5,11 +5,13 @@ declare(strict_types=1);
 namespace App\Modules\Provisioning\Application;
 
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceProjection;
+use App\Modules\Telegram\Application\TelegramOwnedServiceAction;
 use App\Modules\Telegram\Application\TelegramOwnedServiceDetail;
 use App\Modules\Telegram\Application\TelegramOwnedServiceListItem;
 use App\Modules\Telegram\Application\TelegramOwnedServicePage;
 use App\Modules\Telegram\Application\TelegramOwnedServiceSearchResult;
 use Illuminate\Auth\Access\AuthorizationException;
+use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
 use InvalidArgumentException;
 use RuntimeException;
@@ -18,7 +20,10 @@ final readonly class TelegramOwnedServiceProjectionService implements TelegramOw
 {
     private const MAXIMUM_PAGE_SIZE = 6;
 
-    public function __construct(private DatabaseManager $database) {}
+    public function __construct(
+        private DatabaseManager $database,
+        private TelegramOwnedServiceAllowedActionResolver $allowedActionResolver,
+    ) {}
 
     public function pageForSelf(int $actorUserId, int $subjectUserId, int $page, int $pageSize): TelegramOwnedServicePage
     {
@@ -89,6 +94,8 @@ final readonly class TelegramOwnedServiceProjectionService implements TelegramOw
             ->first([
                 'service.id', 'service.public_id', 'service.lifecycle_state', 'service.lifecycle_version',
                 'service.remote_identity_generation', 'service.mutation_generation', 'service.provisioned_at',
+                'service.service_target_id', 'service.remote_service_id', 'service.remote_deleted_at',
+                'item.plan_offering_id',
                 'product.name_fa as product_name_fa', 'product.name_en as product_name_en',
                 'variant.name_fa as variant_name_fa', 'variant.name_en as variant_name_en',
                 'server.name_fa as server_name_fa', 'server.name_en as server_name_en',
@@ -170,9 +177,20 @@ final readonly class TelegramOwnedServiceProjectionService implements TelegramOw
             }
         }
 
+        $lifecycleState = $this->databaseString($service->lifecycle_state ?? null, 'Service lifecycle state');
+        $allowedActions = $this->allowedActions(
+            $connection,
+            $this->positiveDatabaseInt($service->plan_offering_id ?? null, 'Service Plan Offering ID'),
+            $lifecycleState,
+            $service->provisioned_at ?? null,
+            $service->service_target_id ?? null,
+            $service->remote_service_id ?? null,
+            $service->remote_deleted_at ?? null,
+        );
+
         return new TelegramOwnedServiceDetail(
             $this->databaseString($service->public_id ?? null, 'Service public ID'),
-            $this->databaseString($service->lifecycle_state ?? null, 'Service lifecycle state'),
+            $lifecycleState,
             $this->planName($service->product_name_fa ?? null, $service->variant_name_fa ?? null),
             $this->optionalPlanName($service->product_name_en ?? null, $service->variant_name_en ?? null),
             $this->databaseString($service->server_name_fa ?? null, 'Service server label'),
@@ -185,6 +203,7 @@ final readonly class TelegramOwnedServiceProjectionService implements TelegramOw
             $usedBytes,
             $expiresAt,
             $observedAt,
+            $allowedActions,
         );
     }
 
@@ -234,6 +253,71 @@ final readonly class TelegramOwnedServiceProjectionService implements TelegramOw
             ->all());
 
         return $this->searchResult($subjectUserId, array_values(array_merge($importMatches, $provisioningMatches)));
+    }
+
+    /** @return list<TelegramOwnedServiceAction> */
+    private function allowedActions(
+        Connection $connection,
+        int $planOfferingId,
+        string $lifecycleState,
+        mixed $provisionedAt,
+        mixed $serviceTargetId,
+        mixed $remoteServiceId,
+        mixed $remoteDeletedAt,
+    ): array {
+        $fullyProvisioned = $provisionedAt !== null
+            && $remoteDeletedAt === null
+            && is_string($remoteServiceId)
+            && $remoteServiceId !== '';
+        if (! $fullyProvisioned) {
+            return $this->allowedActionResolver->resolve($lifecycleState, false, [], [], []);
+        }
+
+        $targetId = $this->positiveDatabaseInt($serviceTargetId, 'Service target ID');
+        $actionCodes = array_map(
+            static fn (TelegramOwnedServiceAction $action): string => $action->value,
+            TelegramOwnedServiceAction::ordered(),
+        );
+
+        $policies = [];
+        $policyRows = $connection->table('plan_offering_operations')
+            ->where('plan_offering_id', $planOfferingId)
+            ->whereIn('operation_code', $actionCodes)
+            ->get(['operation_code', 'customer_enabled', 'required_capability_code']);
+        foreach ($policyRows as $policy) {
+            $operationCode = $this->databaseString($policy->operation_code ?? null, 'Service operation policy code');
+            $requiredCapability = $policy->required_capability_code ?? null;
+            $policies[$operationCode] = [
+                'customer_enabled' => (bool) ($policy->customer_enabled ?? false),
+                'required_capability_code' => $requiredCapability === null
+                    ? null
+                    : $this->databaseString($requiredCapability, 'Service operation policy capability'),
+            ];
+        }
+
+        $packageTypes = [];
+        foreach ($connection->table('plan_offering_packages')
+            ->where('plan_offering_id', $planOfferingId)
+            ->distinct()
+            ->pluck('package_type') as $packageType) {
+            $packageTypes[] = $this->databaseString($packageType, 'Service package type');
+        }
+
+        $verifiedCapabilities = [];
+        foreach ($connection->table('panel_target_capabilities')
+            ->where('panel_service_target_id', $targetId)
+            ->where('verification_status', 'verified')
+            ->pluck('capability_code') as $capabilityCode) {
+            $verifiedCapabilities[] = $this->databaseString($capabilityCode, 'Service target capability');
+        }
+
+        return $this->allowedActionResolver->resolve(
+            $lifecycleState,
+            true,
+            $policies,
+            $packageTypes,
+            $verifiedCapabilities,
+        );
     }
 
     /** @param list<mixed> $publicIds */
@@ -305,6 +389,16 @@ final readonly class TelegramOwnedServiceProjectionService implements TelegramOw
         }
 
         return $value;
+    }
+
+    private function positiveDatabaseInt(mixed $value, string $label): int
+    {
+        $validated = filter_var($value, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+        if ($validated === false) {
+            throw new RuntimeException($label.' is invalid.');
+        }
+
+        return (int) $validated;
     }
 
     private function optionalNonNegativeInt(mixed $value, string $label): ?int
