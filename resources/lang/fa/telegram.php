@@ -7,6 +7,7 @@ return [
         'home' => "به Freedom Platform خوش آمدید.\n\nمنوی اصلی\nیکی از گزینه‌های زیر را انتخاب کنید.\n/cancel — بستن نشست فعلی",
         'buttons' => [
             'my_account' => 'حساب من',
+            'my_services' => 'سرویس‌های من',
             'back' => 'بازگشت',
         ],
         'account' => [
@@ -17,32 +18,45 @@ return [
             'yes' => 'بله',
             'no' => 'خیر',
             'values' => [
-                'account_type' => [
-                    'customer' => 'مشتری',
-                    'agent' => 'نماینده',
-                ],
+                'account_type' => ['customer' => 'مشتری', 'agent' => 'نماینده'],
                 'account_status' => [
-                    'active' => 'فعال',
-                    'limited' => 'محدود',
-                    'suspended' => 'تعلیق‌شده',
-                    'blocked' => 'مسدود',
+                    'active' => 'فعال', 'limited' => 'محدود', 'suspended' => 'تعلیق‌شده', 'blocked' => 'مسدود',
                 ],
-                'tier' => [
-                    'new' => 'جدید',
-                    'normal' => 'عادی',
-                    'loyal' => 'وفادار',
-                    'vip' => 'ویژه (VIP)',
-                ],
+                'tier' => ['new' => 'جدید', 'normal' => 'عادی', 'loyal' => 'وفادار', 'vip' => 'ویژه (VIP)'],
                 'verification' => [
-                    'unverified' => 'تأییدنشده',
-                    'pending' => 'در انتظار',
-                    'verified' => 'تأییدشده',
-                    'rejected' => 'ردشده',
+                    'unverified' => 'تأییدنشده', 'pending' => 'در انتظار', 'verified' => 'تأییدشده', 'rejected' => 'ردشده',
                 ],
                 'identity_type' => [
-                    'national_id' => 'کد ملی',
-                    'bank_card' => 'کارت بانکی',
-                    'full_name' => 'نام و نام خانوادگی',
+                    'national_id' => 'کد ملی', 'bank_card' => 'کارت بانکی', 'full_name' => 'نام و نام خانوادگی',
+                ],
+            ],
+        ],
+        'services' => [
+            'list' => "سرویس‌های من\n\n:items\n\nصفحه :page از :total_pages — :total_items سرویس",
+            'list_item' => "#:number — :public_id\n:plan · :server\nوضعیت: :state",
+            'empty' => "سرویس‌های من\n\nهنوز سرویسی برای شما ثبت نشده است.",
+            'service_button' => 'سرویس #:number',
+            'previous' => 'قبلی',
+            'next' => 'بعدی',
+            'not_available' => 'ثبت نشده',
+            'detail' => "جزئیات سرویس\n\nشناسه سرویس: :public_id\nپلن: :plan\nسرور: :server\nوضعیت محلی: :state\nزمان ایجاد سرویس: :provisioned_at\n\nهمگام‌سازی\nوضعیت شواهد: :sync_state\nوضعیت مشاهده: :remote_disposition\nوضعیت سرویس: :remote_status\nحجم کل: :data_limit\nمصرف‌شده: :used\nباقی‌مانده: :remaining\nانقضا: :expires_at\nآخرین مشاهده: :observed_at",
+            'values' => [
+                'lifecycle' => [
+                    'active' => 'فعال', 'suspended' => 'تعلیق‌شده', 'retired' => 'بازنشسته',
+                ],
+                'sync_state' => [
+                    'none' => 'هنوز همگام‌سازی ثبت نشده',
+                    'current' => 'به‌روز',
+                    'stale' => 'قدیمی — اطلاعات راه‌دور نمایش داده نمی‌شود',
+                ],
+                'remote_disposition' => [
+                    'present' => 'موجود',
+                    'missing' => 'یافت نشد',
+                    'unavailable' => 'موقتاً در دسترس نیست',
+                    'identity_mismatch' => 'ناهماهنگی هویت سرویس',
+                ],
+                'remote_status' => [
+                    'active' => 'فعال', 'suspended' => 'تعلیق‌شده', 'expired' => 'منقضی', 'disabled' => 'غیرفعال', 'unknown' => 'نامشخص',
                 ],
             ],
         ],

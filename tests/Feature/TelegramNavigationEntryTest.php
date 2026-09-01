@@ -5,10 +5,14 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Modules\Promotions\Application\ReferralAttributionService;
+use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceProjection;
 use App\Modules\Telegram\Application\TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1;
 use App\Modules\Telegram\Application\TelegramDeliveryInteractivePresentationDatabaseSurfaceV1;
 use App\Modules\Telegram\Application\TelegramDeliveryQueueService;
 use App\Modules\Telegram\Application\TelegramNavigationEntryGateway;
+use App\Modules\Telegram\Application\TelegramOwnedServiceDetail;
+use App\Modules\Telegram\Application\TelegramOwnedServiceListItem;
+use App\Modules\Telegram\Application\TelegramOwnedServicePage;
 use App\Modules\Telegram\Application\TelegramUpdateProcessor;
 use App\Modules\Wallet\Application\LedgerEntryDraft;
 use App\Modules\Wallet\Application\LedgerPostingService;
@@ -408,6 +412,417 @@ SQL);
         self::assertSame($backCallbackCount, DB::table('telegram_interaction_callbacks')->where('telegram_interaction_session_id', $sessionId)->where('action', 'navigation.back')->count());
         self::assertSame($operationCount, DB::table('telegram_delivery_operations')->where('recipient_chat_id', $telegramUserId)->count());
         self::assertSame($outboxCount, DB::table('outbox_messages')->where('event_type', TelegramDeliveryQueueService::OUTBOX_EVENT_TYPE)->count());
+    }
+
+    public function test_my_services_list_and_detail_reuse_same_session_and_keep_service_identity_out_of_common_durable_state(): void
+    {
+        $selectionToken = str_repeat('a', 40);
+        $servicePublicId = '01J00000000000000000000000';
+        $projection = new class($selectionToken, $servicePublicId) implements TelegramOwnedServiceProjection
+        {
+            public bool $detailAvailable = true;
+
+            public function __construct(
+                private readonly string $selectionToken,
+                private readonly string $servicePublicId,
+            ) {}
+
+            public function pageForSelf(int $actorUserId, int $subjectUserId, int $page, int $pageSize): TelegramOwnedServicePage
+            {
+                if ($actorUserId !== $subjectUserId || $page !== 1 || $pageSize !== 6) {
+                    throw new RuntimeException('Unexpected My Services projection request.');
+                }
+
+                return new TelegramOwnedServicePage([
+                    new TelegramOwnedServiceListItem(
+                        $this->selectionToken,
+                        $this->servicePublicId,
+                        'active',
+                        'پلن تست',
+                        'Test plan',
+                        'سرور تست',
+                        'Test server',
+                        '2026-09-01 04:00:00.000000',
+                    ),
+                ], 1, 1, 1);
+            }
+
+            public function detailForSelf(int $actorUserId, int $subjectUserId, string $selectionToken): TelegramOwnedServiceDetail
+            {
+                if ($actorUserId !== $subjectUserId || $selectionToken !== $this->selectionToken) {
+                    throw new RuntimeException('Unexpected Service detail projection request.');
+                }
+                if (! $this->detailAvailable) {
+                    throw new RuntimeException('Service detail is no longer available to the actor.');
+                }
+
+                return new TelegramOwnedServiceDetail(
+                    $this->servicePublicId,
+                    'active',
+                    'پلن تست',
+                    'Test plan',
+                    'سرور تست',
+                    'Test server',
+                    '2026-09-01 04:00:00.000000',
+                    'current',
+                    'present',
+                    'active',
+                    10 * 1024 * 1024 * 1024,
+                    3 * 1024 * 1024 * 1024,
+                    '2026-10-01 04:00:00.000000',
+                    '2026-09-01 04:05:00.000000',
+                );
+            }
+        };
+        $this->app->instance(TelegramOwnedServiceProjection::class, $projection);
+
+        $telegramUserId = 9650;
+        $this->accept($this->payload(6500, $telegramUserId, 'navigation_services', 'fa', '/start'));
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $processor->process('123456789', 6500);
+
+        $account = DB::table('telegram_accounts')->where('telegram_user_id', $telegramUserId)->first(['id']);
+        self::assertNotNull($account);
+        $session = DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', (int) $account->id)
+            ->first(['id', 'public_id', 'state', 'version']);
+        self::assertNotNull($session);
+        self::assertSame('home', (string) $session->state);
+        self::assertSame(1, (int) $session->version);
+
+        $servicesCallback = DB::table('telegram_interaction_callbacks')
+            ->where('action', 'navigation.my_services')
+            ->first(['public_id', 'action_payload', 'token_ciphertext']);
+        self::assertNotNull($servicesCallback);
+        self::assertSame('{}', (string) $servicesCallback->action_payload);
+        $servicesToken = $this->app->make(StringEncrypter::class)
+            ->decryptString((string) $servicesCallback->token_ciphertext);
+        $this->accept($this->callbackPayload(6501, $telegramUserId, 'navigation_services', 'fa', $servicesToken));
+        $processor->process('123456789', 6501);
+
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'id' => (int) $session->id,
+            'state' => 'my_services',
+            'version' => 2,
+            'payload' => '{"page":1}',
+        ]);
+        self::assertSame(1, DB::table('telegram_interaction_sessions')->where('telegram_account_id', (int) $account->id)->count());
+
+        $listOperation = DB::table('telegram_delivery_operations')->orderByDesc('id')->first();
+        self::assertNotNull($listOperation);
+        self::assertSame('[CONFIDENTIAL_TELEGRAM_PRESENTATION]', (string) $listOperation->presentation_text);
+        $listCiphertext = DB::table(TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1::TABLE)
+            ->where('delivery_operation_public_id', (string) $listOperation->public_id)
+            ->value('presentation_ciphertext');
+        self::assertIsString($listCiphertext);
+        $listText = $this->app->make(StringEncrypter::class)->decryptString($listCiphertext);
+        self::assertStringContainsString('سرویس‌های من', $listText);
+        self::assertStringContainsString($servicePublicId, $listText);
+        self::assertStringContainsString('پلن تست', $listText);
+        self::assertStringContainsString('سرور تست', $listText);
+
+        $detailCallback = DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $session->id)
+            ->where('session_version', 2)
+            ->where('action', 'navigation.service.'.$selectionToken)
+            ->first(['public_id', 'action', 'action_payload', 'token_ciphertext']);
+        self::assertNotNull($detailCallback);
+        self::assertSame('{}', (string) $detailCallback->action_payload);
+        self::assertStringNotContainsString($servicePublicId, (string) $detailCallback->action);
+        $detailToken = $this->app->make(StringEncrypter::class)
+            ->decryptString((string) $detailCallback->token_ciphertext);
+
+        $listSnapshot = DB::table(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)
+            ->where('delivery_operation_public_id', (string) $listOperation->public_id)
+            ->value('keyboard_snapshot');
+        self::assertIsString($listSnapshot);
+        $listOutbox = DB::table('outbox_messages')
+            ->where('aggregate_id', (string) $listOperation->public_id)
+            ->value('payload');
+        self::assertIsString($listOutbox);
+        $commonEvidence = $listSnapshot."\n".$listOutbox."\n".(string) DB::table('telegram_interaction_sessions')
+            ->where('id', (int) $session->id)
+            ->value('payload')."\n".(string) $detailCallback->action_payload;
+        self::assertStringNotContainsString($servicePublicId, $commonEvidence);
+        self::assertStringNotContainsString($selectionToken, $commonEvidence);
+        self::assertStringNotContainsString($detailToken, $commonEvidence);
+
+        $this->accept($this->payload(6502, 9750, 'navigation_services_other', 'fa', '/start'));
+        $processor->process('123456789', 6502);
+        $operationCountBeforeCrossActor = DB::table('telegram_delivery_operations')->count();
+        $this->accept($this->callbackPayload(6503, 9750, 'navigation_services_other', 'fa', $detailToken));
+        $processor->process('123456789', 6503);
+        self::assertSame($operationCountBeforeCrossActor, DB::table('telegram_delivery_operations')->count());
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'id' => (int) $session->id,
+            'state' => 'my_services',
+            'version' => 2,
+        ]);
+
+        $projection->detailAvailable = false;
+        $this->accept($this->callbackPayload(6504, $telegramUserId, 'navigation_services', 'fa', $detailToken));
+        try {
+            $processor->process('123456789', 6504);
+            self::fail('Unavailable owner projection must keep the accepted callback retryable without advancing the session.');
+        } catch (RuntimeException $exception) {
+            self::assertSame('Telegram update processing failed.', $exception->getMessage());
+        }
+        $this->assertDatabaseHas('processed_telegram_updates', [
+            'update_id' => 6504,
+            'state' => 'failed',
+            'attempt_count' => 1,
+        ]);
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'id' => (int) $session->id,
+            'state' => 'my_services',
+            'version' => 2,
+            'payload' => '{"page":1}',
+        ]);
+        $this->assertDatabaseHas('telegram_interaction_callbacks', [
+            'public_id' => (string) $detailCallback->public_id,
+            'state' => 'accepted',
+            'accepted_update_id' => 6504,
+        ]);
+
+        $projection->detailAvailable = true;
+        $processor->process('123456789', 6504);
+        $this->assertDatabaseHas('processed_telegram_updates', [
+            'update_id' => 6504,
+            'state' => 'processed',
+            'attempt_count' => 2,
+        ]);
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'id' => (int) $session->id,
+            'state' => 'service_detail',
+            'version' => 3,
+            'payload' => '{"page":1}',
+        ]);
+
+        $detailOperation = DB::table('telegram_delivery_operations')->orderByDesc('id')->first();
+        self::assertNotNull($detailOperation);
+        self::assertSame('[CONFIDENTIAL_TELEGRAM_PRESENTATION]', (string) $detailOperation->presentation_text);
+        $detailCiphertext = DB::table(TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1::TABLE)
+            ->where('delivery_operation_public_id', (string) $detailOperation->public_id)
+            ->value('presentation_ciphertext');
+        self::assertIsString($detailCiphertext);
+        $detailText = $this->app->make(StringEncrypter::class)->decryptString($detailCiphertext);
+        self::assertStringContainsString('جزئیات سرویس', $detailText);
+        self::assertStringContainsString($servicePublicId, $detailText);
+        self::assertStringContainsString('10.00 GiB', $detailText);
+        self::assertStringContainsString('3.00 GiB', $detailText);
+        self::assertStringContainsString('7.00 GiB', $detailText);
+        self::assertStringContainsString('موجود', $detailText);
+
+        $backCallback = DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $session->id)
+            ->where('session_version', 3)
+            ->where('action', 'navigation.back')
+            ->first(['token_ciphertext']);
+        self::assertNotNull($backCallback);
+        $backToken = $this->app->make(StringEncrypter::class)
+            ->decryptString((string) $backCallback->token_ciphertext);
+        $this->accept($this->callbackPayload(6505, $telegramUserId, 'navigation_services', 'fa', $backToken));
+        $processor->process('123456789', 6505);
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'id' => (int) $session->id,
+            'state' => 'my_services',
+            'version' => 4,
+            'payload' => '{"page":1}',
+        ]);
+    }
+
+    public function test_my_services_empty_state_is_confidential_and_back_remains_deterministic(): void
+    {
+        $projection = new class implements TelegramOwnedServiceProjection
+        {
+            public function pageForSelf(int $actorUserId, int $subjectUserId, int $page, int $pageSize): TelegramOwnedServicePage
+            {
+                if ($actorUserId !== $subjectUserId || $page !== 1 || $pageSize !== 6) {
+                    throw new RuntimeException('Unexpected empty My Services projection request.');
+                }
+
+                return new TelegramOwnedServicePage([], 1, 1, 0);
+            }
+
+            public function detailForSelf(int $actorUserId, int $subjectUserId, string $selectionToken): TelegramOwnedServiceDetail
+            {
+                throw new RuntimeException('Empty My Services must not resolve a detail projection.');
+            }
+        };
+        $this->app->instance(TelegramOwnedServiceProjection::class, $projection);
+
+        $telegramUserId = 9650;
+        $this->accept($this->payload(6550, $telegramUserId, 'navigation_services_empty', 'fa', '/start'));
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $processor->process('123456789', 6550);
+
+        $account = DB::table('telegram_accounts')->where('telegram_user_id', $telegramUserId)->first(['id']);
+        self::assertNotNull($account);
+        $session = DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', (int) $account->id)
+            ->first(['id']);
+        self::assertNotNull($session);
+        $servicesCallback = DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $session->id)
+            ->where('action', 'navigation.my_services')
+            ->first(['token_ciphertext']);
+        self::assertNotNull($servicesCallback);
+        $servicesToken = $this->app->make(StringEncrypter::class)
+            ->decryptString((string) $servicesCallback->token_ciphertext);
+        $this->accept($this->callbackPayload(6551, $telegramUserId, 'navigation_services_empty', 'fa', $servicesToken));
+        $processor->process('123456789', 6551);
+
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'id' => (int) $session->id,
+            'state' => 'my_services',
+            'version' => 2,
+            'payload' => '{"page":1}',
+        ]);
+        self::assertSame(0, DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $session->id)
+            ->where('session_version', 2)
+            ->where('action', 'like', 'navigation.service.%')
+            ->count());
+
+        $operation = DB::table('telegram_delivery_operations')->orderByDesc('id')->first(['public_id', 'presentation_text']);
+        self::assertNotNull($operation);
+        self::assertSame('[CONFIDENTIAL_TELEGRAM_PRESENTATION]', (string) $operation->presentation_text);
+        $ciphertext = DB::table(TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1::TABLE)
+            ->where('delivery_operation_public_id', (string) $operation->public_id)
+            ->value('presentation_ciphertext');
+        self::assertIsString($ciphertext);
+        $text = $this->app->make(StringEncrypter::class)->decryptString($ciphertext);
+        self::assertStringContainsString('سرویس‌های من', $text);
+        self::assertStringContainsString('هنوز سرویسی برای شما ثبت نشده است.', $text);
+
+        $backCallback = DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $session->id)
+            ->where('session_version', 2)
+            ->where('action', 'navigation.back')
+            ->first(['token_ciphertext']);
+        self::assertNotNull($backCallback);
+        $backToken = $this->app->make(StringEncrypter::class)
+            ->decryptString((string) $backCallback->token_ciphertext);
+        $this->accept($this->callbackPayload(6552, $telegramUserId, 'navigation_services_empty', 'fa', $backToken));
+        $processor->process('123456789', 6552);
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'id' => (int) $session->id,
+            'state' => 'home',
+            'version' => 3,
+            'payload' => '{}',
+        ]);
+    }
+
+    public function test_my_services_uses_english_list_and_no_sync_detail_copy(): void
+    {
+        $selectionToken = str_repeat('b', 40);
+        $servicePublicId = '01J00000000000000000000001';
+        $projection = new class($selectionToken, $servicePublicId) implements TelegramOwnedServiceProjection
+        {
+            public function __construct(
+                private readonly string $selectionToken,
+                private readonly string $servicePublicId,
+            ) {}
+
+            public function pageForSelf(int $actorUserId, int $subjectUserId, int $page, int $pageSize): TelegramOwnedServicePage
+            {
+                if ($actorUserId !== $subjectUserId || $page !== 1 || $pageSize !== 6) {
+                    throw new RuntimeException('Unexpected English My Services projection request.');
+                }
+
+                return new TelegramOwnedServicePage([
+                    new TelegramOwnedServiceListItem(
+                        $this->selectionToken,
+                        $this->servicePublicId,
+                        'retired',
+                        'پلن فارسی',
+                        'English plan',
+                        'سرور فارسی',
+                        'English server',
+                        null,
+                    ),
+                ], 1, 1, 1);
+            }
+
+            public function detailForSelf(int $actorUserId, int $subjectUserId, string $selectionToken): TelegramOwnedServiceDetail
+            {
+                if ($actorUserId !== $subjectUserId || $selectionToken !== $this->selectionToken) {
+                    throw new RuntimeException('Unexpected English Service detail projection request.');
+                }
+
+                return new TelegramOwnedServiceDetail(
+                    $this->servicePublicId,
+                    'retired',
+                    'پلن فارسی',
+                    'English plan',
+                    'سرور فارسی',
+                    'English server',
+                    null,
+                    'none',
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                );
+            }
+        };
+        $this->app->instance(TelegramOwnedServiceProjection::class, $projection);
+
+        $telegramUserId = 9660;
+        $this->accept($this->payload(6600, $telegramUserId, 'navigation_services_en', 'en', '/start'));
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $processor->process('123456789', 6600);
+
+        $servicesCallback = DB::table('telegram_interaction_callbacks')
+            ->where('action', 'navigation.my_services')
+            ->first(['token_ciphertext']);
+        self::assertNotNull($servicesCallback);
+        $servicesToken = $this->app->make(StringEncrypter::class)
+            ->decryptString((string) $servicesCallback->token_ciphertext);
+        $this->accept($this->callbackPayload(6601, $telegramUserId, 'navigation_services_en', 'en', $servicesToken));
+        $processor->process('123456789', 6601);
+
+        $listOperation = DB::table('telegram_delivery_operations')->orderByDesc('id')->first(['public_id']);
+        self::assertNotNull($listOperation);
+        $listCiphertext = DB::table(TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1::TABLE)
+            ->where('delivery_operation_public_id', (string) $listOperation->public_id)
+            ->value('presentation_ciphertext');
+        self::assertIsString($listCiphertext);
+        $listText = $this->app->make(StringEncrypter::class)->decryptString($listCiphertext);
+        self::assertStringContainsString('My Services', $listText);
+        self::assertStringContainsString('English plan', $listText);
+        self::assertStringContainsString('English server', $listText);
+        self::assertStringContainsString('Retired', $listText);
+        self::assertStringContainsString($servicePublicId, $listText);
+        self::assertStringNotContainsString('پلن فارسی', $listText);
+        self::assertStringNotContainsString('سرور فارسی', $listText);
+
+        $detailCallback = DB::table('telegram_interaction_callbacks')
+            ->where('action', 'navigation.service.'.$selectionToken)
+            ->first(['token_ciphertext']);
+        self::assertNotNull($detailCallback);
+        $detailToken = $this->app->make(StringEncrypter::class)
+            ->decryptString((string) $detailCallback->token_ciphertext);
+        $this->accept($this->callbackPayload(6602, $telegramUserId, 'navigation_services_en', 'en', $detailToken));
+        $processor->process('123456789', 6602);
+
+        $detailOperation = DB::table('telegram_delivery_operations')->orderByDesc('id')->first(['public_id']);
+        self::assertNotNull($detailOperation);
+        $detailCiphertext = DB::table(TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1::TABLE)
+            ->where('delivery_operation_public_id', (string) $detailOperation->public_id)
+            ->value('presentation_ciphertext');
+        self::assertIsString($detailCiphertext);
+        $detailText = $this->app->make(StringEncrypter::class)->decryptString($detailCiphertext);
+        self::assertStringContainsString('Service Details', $detailText);
+        self::assertStringContainsString('English plan', $detailText);
+        self::assertStringContainsString('English server', $detailText);
+        self::assertStringContainsString('Retired', $detailText);
+        self::assertStringContainsString('No synchronization evidence', $detailText);
+        self::assertStringContainsString('Not available', $detailText);
+        self::assertStringNotContainsString('پلن فارسی', $detailText);
+        self::assertStringNotContainsString('سرور فارسی', $detailText);
     }
 
     public function test_arbitrary_text_and_non_private_start_do_not_implicitly_create_navigation_authority(): void
