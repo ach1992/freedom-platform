@@ -48,6 +48,9 @@ final class TelegramOwnedServiceAllowedActionsProjectionTest extends TestCase
         $page = $projection->pageForSelf($fixture['user_id'], $fixture['user_id'], 1, 6);
         self::assertCount(1, $page->items);
         $selectionToken = $page->items[0]->selectionToken;
+        $syncRunsBeforeRead = DB::table('service_sync_runs')->count();
+        $provisioningOperationsBeforeRead = DB::table('provisioning_operations')->count();
+        $outboxBeforeRead = DB::table('outbox_messages')->count();
 
         self::assertSame([], $projection->detailForSelf(
             $fixture['user_id'],
@@ -173,8 +176,9 @@ final class TelegramOwnedServiceAllowedActionsProjectionTest extends TestCase
             // Expected owner-only boundary.
         }
 
-        self::assertSame(0, DB::table('service_sync_runs')->count(), 'Allowed-action projection must not trigger provider synchronization.');
-        self::assertSame(0, DB::table('service_mutation_operations')->count(), 'Allowed-action projection must not create Service mutations.');
+        self::assertSame($syncRunsBeforeRead, DB::table('service_sync_runs')->count(), 'Allowed-action projection must not trigger provider synchronization.');
+        self::assertSame($provisioningOperationsBeforeRead, DB::table('provisioning_operations')->count(), 'Allowed-action projection must not create provisioning or Service mutation authority.');
+        self::assertSame($outboxBeforeRead, DB::table('outbox_messages')->count(), 'Allowed-action projection must not enqueue external effects.');
     }
 
     /** @return array{owner_id:int,user_id:int,offering_id:int,target_id:int,adapter:ServiceOperationalPanelAdapter} */
