@@ -39,13 +39,15 @@ return [
             'previous' => 'Previous',
             'next' => 'Next',
             'not_available' => 'Not available',
+            'allowed_actions_none' => 'None currently available',
+            'allowed_actions_separator' => ', ',
             'search' => [
                 'button' => 'Search',
                 'prompt' => "Search My Services\n\nSend the exact Service ID, Order ID, or service username.\nSearch is private and exact.",
                 'not_found' => "No matching service was found in your account.\n\nTry the exact Service ID, Order ID, or service username.",
                 'ambiguous' => "More than one of your services uses that username.\n\nSearch by exact Service ID or Order ID to choose one safely.",
             ],
-            'detail' => "Service Details\n\nService ID: :public_id\nPlan: :plan\nServer: :server\nLifecycle: :state\nProvisioned: :provisioned_at\n\nSynchronization\nEvidence state: :sync_state\nRemote evidence: :remote_disposition\nRemote status: :remote_status\nData limit: :data_limit\nUsed: :used\nRemaining: :remaining\nExpires: :expires_at\nObserved: :observed_at",
+            'detail' => "Service Details\n\nService ID: :public_id\nPlan: :plan\nServer: :server\nLifecycle: :state\nProvisioned: :provisioned_at\nAllowed actions: :allowed_actions\n\nSynchronization\nEvidence state: :sync_state\nRemote evidence: :remote_disposition\nRemote status: :remote_status\nData limit: :data_limit\nUsed: :used\nRemaining: :remaining\nExpires: :expires_at\nObserved: :observed_at",
             'values' => [
                 'lifecycle' => [
                     'active' => 'Active', 'suspended' => 'Suspended', 'retired' => 'Retired',
@@ -64,6 +66,13 @@ return [
                 ],
                 'remote_status' => [
                     'active' => 'Active', 'suspended' => 'Suspended', 'expired' => 'Expired', 'disabled' => 'Disabled', 'unknown' => 'Unknown',
+                ],
+                'action' => [
+                    'renew' => 'Renew',
+                    'add_data' => 'Add data',
+                    'add_days' => 'Add days',
+                    'add_data_days' => 'Add data and days',
+                    'reset_usage' => 'Reset usage',
                 ],
             ],
         ],
