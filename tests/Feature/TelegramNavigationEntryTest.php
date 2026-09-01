@@ -631,6 +631,88 @@ SQL);
         ]);
     }
 
+    public function test_my_services_empty_state_is_confidential_and_back_remains_deterministic(): void
+    {
+        $projection = new class implements TelegramOwnedServiceProjection
+        {
+            public function pageForSelf(int $actorUserId, int $subjectUserId, int $page, int $pageSize): TelegramOwnedServicePage
+            {
+                if ($actorUserId !== $subjectUserId || $page !== 1 || $pageSize !== 6) {
+                    throw new RuntimeException('Unexpected empty My Services projection request.');
+                }
+
+                return new TelegramOwnedServicePage([], 1, 1, 0);
+            }
+
+            public function detailForSelf(int $actorUserId, int $subjectUserId, string $selectionToken): TelegramOwnedServiceDetail
+            {
+                throw new RuntimeException('Empty My Services must not resolve a detail projection.');
+            }
+        };
+        $this->app->instance(TelegramOwnedServiceProjection::class, $projection);
+
+        $telegramUserId = 9650;
+        $this->accept($this->payload(6550, $telegramUserId, 'navigation_services_empty', 'fa', '/start'));
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $processor->process('123456789', 6550);
+
+        $account = DB::table('telegram_accounts')->where('telegram_user_id', $telegramUserId)->first(['id']);
+        self::assertNotNull($account);
+        $session = DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', (int) $account->id)
+            ->first(['id']);
+        self::assertNotNull($session);
+        $servicesCallback = DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $session->id)
+            ->where('action', 'navigation.my_services')
+            ->first(['token_ciphertext']);
+        self::assertNotNull($servicesCallback);
+        $servicesToken = $this->app->make(StringEncrypter::class)
+            ->decryptString((string) $servicesCallback->token_ciphertext);
+        $this->accept($this->callbackPayload(6551, $telegramUserId, 'navigation_services_empty', 'fa', $servicesToken));
+        $processor->process('123456789', 6551);
+
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'id' => (int) $session->id,
+            'state' => 'my_services',
+            'version' => 2,
+            'payload' => '{"page":1}',
+        ]);
+        self::assertSame(0, DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $session->id)
+            ->where('session_version', 2)
+            ->where('action', 'like', 'navigation.service.%')
+            ->count());
+
+        $operation = DB::table('telegram_delivery_operations')->orderByDesc('id')->first(['public_id', 'presentation_text']);
+        self::assertNotNull($operation);
+        self::assertSame('[CONFIDENTIAL_TELEGRAM_PRESENTATION]', (string) $operation->presentation_text);
+        $ciphertext = DB::table(TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1::TABLE)
+            ->where('delivery_operation_public_id', (string) $operation->public_id)
+            ->value('presentation_ciphertext');
+        self::assertIsString($ciphertext);
+        $text = $this->app->make(StringEncrypter::class)->decryptString($ciphertext);
+        self::assertStringContainsString('سرویس‌های من', $text);
+        self::assertStringContainsString('هنوز سرویسی برای شما ثبت نشده است.', $text);
+
+        $backCallback = DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $session->id)
+            ->where('session_version', 2)
+            ->where('action', 'navigation.back')
+            ->first(['token_ciphertext']);
+        self::assertNotNull($backCallback);
+        $backToken = $this->app->make(StringEncrypter::class)
+            ->decryptString((string) $backCallback->token_ciphertext);
+        $this->accept($this->callbackPayload(6552, $telegramUserId, 'navigation_services_empty', 'fa', $backToken));
+        $processor->process('123456789', 6552);
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'id' => (int) $session->id,
+            'state' => 'home',
+            'version' => 3,
+            'payload' => '{}',
+        ]);
+    }
+
     public function test_my_services_uses_english_list_and_no_sync_detail_copy(): void
     {
         $selectionToken = str_repeat('b', 40);
@@ -652,7 +734,7 @@ SQL);
                     new TelegramOwnedServiceListItem(
                         $this->selectionToken,
                         $this->servicePublicId,
-                        'suspended',
+                        'retired',
                         'پلن فارسی',
                         'English plan',
                         'سرور فارسی',
@@ -670,7 +752,7 @@ SQL);
 
                 return new TelegramOwnedServiceDetail(
                     $this->servicePublicId,
-                    'suspended',
+                    'retired',
                     'پلن فارسی',
                     'English plan',
                     'سرور فارسی',
@@ -712,7 +794,7 @@ SQL);
         self::assertStringContainsString('My Services', $listText);
         self::assertStringContainsString('English plan', $listText);
         self::assertStringContainsString('English server', $listText);
-        self::assertStringContainsString('Suspended', $listText);
+        self::assertStringContainsString('Retired', $listText);
         self::assertStringContainsString($servicePublicId, $listText);
         self::assertStringNotContainsString('پلن فارسی', $listText);
         self::assertStringNotContainsString('سرور فارسی', $listText);
@@ -736,7 +818,7 @@ SQL);
         self::assertStringContainsString('Service Details', $detailText);
         self::assertStringContainsString('English plan', $detailText);
         self::assertStringContainsString('English server', $detailText);
-        self::assertStringContainsString('Suspended', $detailText);
+        self::assertStringContainsString('Retired', $detailText);
         self::assertStringContainsString('No synchronization evidence', $detailText);
         self::assertStringContainsString('Not available', $detailText);
         self::assertStringNotContainsString('پلن فارسی', $detailText);
