@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\Modules\Telegram\Application\TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1;
 use App\Modules\Telegram\Application\TelegramDeliveryDatabaseAuthoritySurfaceV1;
 use App\Modules\Telegram\Application\TelegramDeliveryDatabaseCapability;
 use App\Modules\Telegram\Application\TelegramDeliveryInteractivePresentationDatabaseSurfaceV1;
@@ -15,17 +16,17 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
-    private const ROLLBACK_TABLE = 'telegram_delivery_interactive_presentations_rollback';
+    private const ROLLBACK_TABLE = 'telegram_delivery_confidential_presentations_rollback';
 
     public function up(): void
     {
         $connection = DB::connection();
         if ($connection->getDriverName() !== 'mysql') {
-            if (! Schema::hasTable('telegram_delivery_interactive_presentations')) {
-                Schema::create('telegram_delivery_interactive_presentations', function (Blueprint $table): void {
+            if (! Schema::hasTable('telegram_delivery_confidential_presentations')) {
+                Schema::create('telegram_delivery_confidential_presentations', function (Blueprint $table): void {
                     $table->char('delivery_operation_public_id', 26)->primary();
-                    $table->longText('keyboard_snapshot');
-                    $table->char('keyboard_snapshot_hash', 64);
+                    $table->longText('presentation_ciphertext');
+                    $table->char('presentation_hash', 64);
                     $table->dateTime('created_at', 6);
                 });
             }
@@ -46,50 +47,60 @@ return new class extends Migration
             if (! is_string($persistedCapabilityHash)
                 || $baseCapability->valueMatchingHash($persistedCapabilityHash) === null
                 || ! $baseSurface->isReady($connection, $persistedCapabilityHash)) {
-                throw new RuntimeException('Telegram interactive presentation authority requires the active v1 delivery authority.');
+                throw new RuntimeException('Telegram confidential presentation authority requires the active v1 delivery authority.');
             }
 
-            $surface = new TelegramDeliveryInteractivePresentationDatabaseSurfaceV1;
+            $surface = new TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1;
+            $schema = $connection->getSchemaBuilder();
+            $hasConfidentialSurface = $schema->hasTable(TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1::TABLE);
+
+            // A durable unrecognized confidential surface is a hard preflight
+            // failure. Refuse it before upgrading the shared #209 trigger so an
+            // unsuccessful #212 install cannot leave a needless partial schema
+            // mutation behind. Exact durable surfaces remain recoverable.
+            if ($hasConfidentialSurface
+                && ! $surface->isReady($connection)
+                && $connection->table(TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1::TABLE)->exists()
+            ) {
+                throw new RuntimeException('Telegram confidential presentation authority cannot repair a non-empty unrecognized surface.');
+            }
+
+            $this->ensureInteractiveV3Trigger($connection);
+
             if ($surface->isReady($connection)) {
                 return;
             }
 
-            $schema = $connection->getSchemaBuilder();
-            if ($schema->hasTable('telegram_delivery_interactive_presentations')) {
-                if ($connection->table(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)->exists()) {
-                    throw new RuntimeException('Telegram interactive presentation authority cannot repair a non-empty unrecognized surface.');
-                }
+            if ($hasConfidentialSurface) {
                 // Keep every authority trigger attached until the table itself is
                 // successfully removed. A dependency-sensitive DROP can fail; MariaDB
                 // removes the table's triggers atomically only when the DROP succeeds.
-                $schema->drop('telegram_delivery_interactive_presentations');
+                $schema->drop('telegram_delivery_confidential_presentations');
             }
 
             $connection->unprepared(<<<'SQL'
-CREATE TABLE telegram_delivery_interactive_presentations (
+CREATE TABLE telegram_delivery_confidential_presentations (
     delivery_operation_public_id CHAR(26) NOT NULL,
-    keyboard_snapshot LONGTEXT NOT NULL,
-    keyboard_snapshot_hash CHAR(64) NOT NULL,
+    presentation_ciphertext LONGTEXT NOT NULL,
+    presentation_hash CHAR(64) NOT NULL,
     created_at DATETIME(6) NOT NULL,
     PRIMARY KEY (delivery_operation_public_id),
-    CONSTRAINT telegram_delivery_interactive_public_chk CHECK (
+    CONSTRAINT telegram_delivery_confidential_public_chk CHECK (
         delivery_operation_public_id REGEXP '^[0-9A-HJKMNP-TV-Z]{26}$'
         AND BINARY delivery_operation_public_id = BINARY UPPER(delivery_operation_public_id)
     ),
-    CONSTRAINT telegram_delivery_interactive_snapshot_hash_chk CHECK (
-        keyboard_snapshot_hash REGEXP '^[0-9a-f]{64}$'
+    CONSTRAINT telegram_delivery_confidential_hash_chk CHECK (
+        presentation_hash REGEXP '^[0-9a-f]{64}$'
     ),
-    CONSTRAINT telegram_delivery_interactive_snapshot_json_chk CHECK (
-        JSON_VALID(keyboard_snapshot) = 1
-        AND JSON_TYPE(keyboard_snapshot) = 'OBJECT'
-        AND OCTET_LENGTH(keyboard_snapshot) BETWEEN 2 AND 16384
+    CONSTRAINT telegram_delivery_confidential_ciphertext_chk CHECK (
+        OCTET_LENGTH(presentation_ciphertext) BETWEEN 1 AND 65536
     )
 ) ENGINE=InnoDB DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin
 SQL);
 
             $this->createTriggers($connection);
             if (! $surface->isReady($connection)) {
-                throw new RuntimeException('Telegram interactive presentation authority did not reach its exact database surface.');
+                throw new RuntimeException('Telegram confidential presentation authority did not reach its exact database surface.');
             }
         });
     }
@@ -98,13 +109,13 @@ SQL);
     {
         $connection = DB::connection();
         if ($connection->getDriverName() !== 'mysql') {
-            if (! Schema::hasTable('telegram_delivery_interactive_presentations')) {
+            if (! Schema::hasTable('telegram_delivery_confidential_presentations')) {
                 return;
             }
-            if ($connection->table(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)->exists()) {
-                throw new RuntimeException('Telegram interactive presentation authority cannot be removed while durable snapshots exist.');
+            if ($connection->table(TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1::TABLE)->exists()) {
+                throw new RuntimeException('Telegram confidential presentation authority cannot be removed while durable confidential presentations exist.');
             }
-            Schema::dropIfExists('telegram_delivery_interactive_presentations');
+            Schema::dropIfExists('telegram_delivery_confidential_presentations');
 
             return;
         }
@@ -119,7 +130,7 @@ SQL);
     }
 
     /**
-     * Persist the existing #179 capability as state 0, then move the interactive
+     * Persist the existing #179 capability as state 0, then move the confidential
      * table to a rollback-only staging name before restoring v1 runtime authority.
      *
      * The 1 -> 0 transition drains producers that already entered through either
@@ -146,19 +157,21 @@ SQL);
         ?Closure $afterStagingFence = null,
     ): void {
         $this->restoreStagedTableForRetry($connection);
-        if (! $connection->getSchemaBuilder()->hasTable(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)) {
+        if (! $connection->getSchemaBuilder()->hasTable(TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1::TABLE)) {
+            // A completed #212 rollback must restore the exact pre-#212 interactive
+            // v2 trigger, not leave the current v2/v3 trigger behind for older code.
+            $this->restoreLegacyInteractiveV2Trigger($connection);
             if ($this->baseLifecycleState($connection) === 'fenced') {
                 // A prior rollback can die after DROP committed but before the
-                // lifecycle finally block restored v1. With neither canonical nor
-                // staged interactive table present, exact state0 is resumable here.
+                // trigger downgrade and/or lifecycle finally block restored v1.
                 $this->reactivateRuntimeAuthority($connection, $lifecycleConnection);
             }
 
             return;
         }
 
-        if ($connection->table(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)->exists()) {
-            throw new RuntimeException('Telegram interactive presentation authority cannot be removed while durable snapshots exist.');
+        if ($connection->table(TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1::TABLE)->exists()) {
+            throw new RuntimeException('Telegram confidential presentation authority cannot be removed while durable confidential presentations exist.');
         }
 
         // Re-attest the lifecycle boundary while this session owns the shared
@@ -175,11 +188,11 @@ SQL);
                 $afterRuntimeFence();
             }
 
-            if ($connection->table(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)->exists()) {
-                throw new RuntimeException('Telegram interactive presentation authority cannot be removed while durable snapshots exist.');
+            if ($connection->table(TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1::TABLE)->exists()) {
+                throw new RuntimeException('Telegram confidential presentation authority cannot be removed while durable confidential presentations exist.');
             }
 
-            $this->stageInteractiveTableForRollback($connection);
+            $this->stageConfidentialTableForRollback($connection);
             $staged = true;
 
             if ($afterStagingFence !== null) {
@@ -198,11 +211,12 @@ SQL);
                 throw $exception;
             }
 
+            $this->restoreLegacyInteractiveV2Trigger($connection);
             $this->reactivateRuntimeAuthority($connection, $lifecycleConnection);
             $fenceEstablished = false;
 
             if ($this->baseLifecycleState($connection) !== 'active') {
-                throw new RuntimeException('Telegram interactive presentation rollback did not preserve active v1 delivery authority after table destruction.');
+                throw new RuntimeException('Telegram confidential presentation rollback did not preserve active v1 delivery authority after table destruction.');
             }
         } finally {
             if ($staged) {
@@ -216,45 +230,45 @@ SQL);
         }
     }
 
-    private function stageInteractiveTableForRollback(Connection $connection): void
+    private function stageConfidentialTableForRollback(Connection $connection): void
     {
         $schema = $connection->getSchemaBuilder();
-        if (! $schema->hasTable(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)
+        if (! $schema->hasTable(TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1::TABLE)
             || $schema->hasTable(self::ROLLBACK_TABLE)) {
-            throw new RuntimeException('Telegram interactive presentation rollback staging identity is not available.');
+            throw new RuntimeException('Telegram confidential presentation rollback staging identity is not available.');
         }
 
         $connection->statement(
-            'RENAME TABLE `telegram_delivery_interactive_presentations` TO `telegram_delivery_interactive_presentations_rollback`',
+            'RENAME TABLE `telegram_delivery_confidential_presentations` TO `telegram_delivery_confidential_presentations_rollback`',
         );
 
         $postRenameSchema = $connection->getSchemaBuilder();
-        if ($postRenameSchema->hasTable(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)
+        if ($postRenameSchema->hasTable(TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1::TABLE)
             || ! $postRenameSchema->hasTable(self::ROLLBACK_TABLE)) {
-            throw new RuntimeException('Telegram interactive presentation rollback staging rename did not reach the exact expected state.');
+            throw new RuntimeException('Telegram confidential presentation rollback staging rename did not reach the exact expected state.');
         }
     }
 
     private function restoreStagedTableForRetry(Connection $connection): void
     {
         $schema = $connection->getSchemaBuilder();
-        $hasCanonical = $schema->hasTable(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE);
+        $hasCanonical = $schema->hasTable(TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1::TABLE);
         $hasStaged = $schema->hasTable(self::ROLLBACK_TABLE);
         if (! $hasStaged) {
             return;
         }
         if ($hasCanonical) {
-            throw new RuntimeException('Telegram interactive presentation rollback found both canonical and staged authority tables.');
+            throw new RuntimeException('Telegram confidential presentation rollback found both canonical and staged authority tables.');
         }
 
         $connection->statement(
-            'RENAME TABLE `telegram_delivery_interactive_presentations_rollback` TO `telegram_delivery_interactive_presentations`',
+            'RENAME TABLE `telegram_delivery_confidential_presentations_rollback` TO `telegram_delivery_confidential_presentations`',
         );
 
         $postRestoreSchema = $connection->getSchemaBuilder();
-        if (! $postRestoreSchema->hasTable(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)
+        if (! $postRestoreSchema->hasTable(TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1::TABLE)
             || $postRestoreSchema->hasTable(self::ROLLBACK_TABLE)) {
-            throw new RuntimeException('Telegram interactive presentation rollback could not restore the staged authority table.');
+            throw new RuntimeException('Telegram confidential presentation rollback could not restore the staged authority table.');
         }
     }
 
@@ -267,7 +281,7 @@ SQL);
             return;
         }
         if ($state !== 'active') {
-            throw new RuntimeException('Telegram interactive presentation rollback requires the exact active or rollback-fenced v1 delivery authority.');
+            throw new RuntimeException('Telegram confidential presentation rollback requires the exact active or rollback-fenced v1 delivery authority.');
         }
 
         $capabilityAuthority = new TelegramDeliveryDatabaseCapability;
@@ -287,7 +301,7 @@ SQL, [], false);
                 || $capabilityValue === null
                 || (int) ($capability->schema_version ?? -1) !== 1
                 || ($capability->activated_at ?? null) === null) {
-                throw new RuntimeException('Telegram interactive presentation rollback could not establish the v1 persistent lifecycle fence.');
+                throw new RuntimeException('Telegram confidential presentation rollback could not establish the v1 persistent lifecycle fence.');
             }
 
             $armed = false;
@@ -306,7 +320,7 @@ SQL, [$capabilityValue]);
                         'activated_at' => null,
                     ]);
                 if ($updated !== 1) {
-                    throw new RuntimeException('Telegram interactive presentation rollback lifecycle fence activation was rejected.');
+                    throw new RuntimeException('Telegram confidential presentation rollback lifecycle fence activation was rejected.');
                 }
             } finally {
                 if ($armed) {
@@ -316,7 +330,7 @@ SQL, [$capabilityValue]);
         }, 1);
 
         if ($this->baseLifecycleState($connection) !== 'fenced') {
-            throw new RuntimeException('Telegram interactive presentation rollback lifecycle fence did not reach the persistent disabled state.');
+            throw new RuntimeException('Telegram confidential presentation rollback lifecycle fence did not reach the persistent disabled state.');
         }
     }
 
@@ -329,13 +343,13 @@ SQL, [$capabilityValue]);
             return;
         }
         if ($state !== 'fenced') {
-            throw new RuntimeException('Telegram interactive presentation rollback cannot reactivate an unrecognized v1 delivery lifecycle state.');
+            throw new RuntimeException('Telegram confidential presentation rollback cannot reactivate an unrecognized v1 delivery lifecycle state.');
         }
 
         $this->reactivateRuntimeAuthorityLifecycleOnly($lifecycleConnection);
 
         if ($this->baseLifecycleState($connection) !== 'active') {
-            throw new RuntimeException('Telegram interactive presentation rollback did not restore the active v1 delivery authority.');
+            throw new RuntimeException('Telegram confidential presentation rollback did not restore the active v1 delivery authority.');
         }
     }
 
@@ -358,7 +372,7 @@ SQL, [], false);
                 || $capabilityValue === null
                 || (int) ($capability->schema_version ?? -1) !== 0
                 || ($capability->activated_at ?? null) !== null) {
-                throw new RuntimeException('Telegram interactive presentation rollback cannot reactivate a changed v1 lifecycle fence.');
+                throw new RuntimeException('Telegram confidential presentation rollback cannot reactivate a changed v1 lifecycle fence.');
             }
 
             $armed = false;
@@ -377,7 +391,7 @@ SQL, [$capabilityValue]);
                         'activated_at' => now('UTC'),
                     ]);
                 if ($updated !== 1) {
-                    throw new RuntimeException('Telegram interactive presentation rollback v1 lifecycle reactivation was rejected.');
+                    throw new RuntimeException('Telegram confidential presentation rollback v1 lifecycle reactivation was rejected.');
                 }
             } finally {
                 if ($armed) {
@@ -394,7 +408,7 @@ SQL, [$capabilityValue]);
             || $capabilityAuthority->valueMatchingHash($capability->capability_hash) === null
             || (int) ($capability->schema_version ?? -1) !== 1
             || ($capability->activated_at ?? null) === null) {
-            throw new RuntimeException('Telegram interactive presentation rollback lifecycle reactivation did not reach the exact active row state.');
+            throw new RuntimeException('Telegram confidential presentation rollback lifecycle reactivation did not reach the exact active row state.');
         }
     }
 
@@ -447,17 +461,55 @@ SQL);
         }
     }
 
-    private function createTriggers(Connection $connection): void
+    private function restoreLegacyInteractiveV2Trigger(Connection $connection): void
     {
         $surface = new TelegramDeliveryInteractivePresentationDatabaseSurfaceV1;
-        $connection->unprepared('CREATE TRIGGER '.TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::INSERT_TRIGGER
+        if ($surface->isReady($connection, $surface::legacyV2InsertTriggerBody())) {
+            return;
+        }
+        if (! $surface->isReady($connection)) {
+            throw new RuntimeException('Telegram confidential rollback cannot restore legacy v2 from an unrecognized interactive presentation authority.');
+        }
+
+        $connection->unprepared('CREATE OR REPLACE TRIGGER '.TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::INSERT_TRIGGER
+            .' BEFORE INSERT ON '.TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE
+            .' FOR EACH ROW '.$surface::legacyV2InsertTriggerBody());
+
+        if (! $surface->isReady($connection, $surface::legacyV2InsertTriggerBody())) {
+            throw new RuntimeException('Telegram confidential rollback did not restore the exact legacy v2 interactive trigger.');
+        }
+    }
+
+    private function ensureInteractiveV3Trigger(Connection $connection): void
+    {
+        $surface = new TelegramDeliveryInteractivePresentationDatabaseSurfaceV1;
+        if ($surface->isReady($connection)) {
+            return;
+        }
+        if (! $surface->isReady($connection, $surface::legacyV2InsertTriggerBody())) {
+            throw new RuntimeException('Telegram confidential delivery cannot upgrade an unrecognized interactive presentation authority.');
+        }
+
+        $connection->unprepared('CREATE OR REPLACE TRIGGER '.TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::INSERT_TRIGGER
             .' BEFORE INSERT ON '.TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE
             .' FOR EACH ROW '.$surface::insertTriggerBody());
-        $connection->unprepared('CREATE TRIGGER '.TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::UPDATE_TRIGGER
-            .' BEFORE UPDATE ON '.TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE
+
+        if (! $surface->isReady($connection)) {
+            throw new RuntimeException('Telegram confidential delivery did not upgrade the interactive v2/v3 trigger exactly.');
+        }
+    }
+
+    private function createTriggers(Connection $connection): void
+    {
+        $surface = new TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1;
+        $connection->unprepared('CREATE TRIGGER '.TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1::INSERT_TRIGGER
+            .' BEFORE INSERT ON '.TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1::TABLE
+            .' FOR EACH ROW '.$surface::insertTriggerBody());
+        $connection->unprepared('CREATE TRIGGER '.TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1::UPDATE_TRIGGER
+            .' BEFORE UPDATE ON '.TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1::TABLE
             .' FOR EACH ROW '.$surface::updateTriggerBody());
-        $connection->unprepared('CREATE TRIGGER '.TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::DELETE_TRIGGER
-            .' BEFORE DELETE ON '.TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE
+        $connection->unprepared('CREATE TRIGGER '.TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1::DELETE_TRIGGER
+            .' BEFORE DELETE ON '.TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1::TABLE
             .' FOR EACH ROW '.$surface::deleteTriggerBody());
     }
 
@@ -477,7 +529,7 @@ SQL);
         try {
             $sharedLock = $lifecycleConnection->selectOne('SELECT GET_LOCK(?, 10) AS acquired', [$sharedLockName], false);
             if ($sharedLock === null || (int) ($sharedLock->acquired ?? 0) !== 1) {
-                throw new RuntimeException('Could not acquire the shared Telegram delivery installation lock for interactive presentation authority.');
+                throw new RuntimeException('Could not acquire the shared Telegram delivery installation lock for confidential presentation authority.');
             }
             $sharedLockAcquired = true;
             $this->disableReconnectWhileLockHeld($lifecycleConnection, 'lifecycle');
@@ -485,7 +537,7 @@ SQL);
 
             // The shared #179 lock must remain owned by the dedicated lifecycle
             // principal because the immutable capability trigger authenticates that
-            // exact session. Protected interactive DDL therefore also takes a second
+            // exact session. Protected confidential DDL therefore also takes a second
             // database-scoped advisory lock on the exact runtime/DDL session. If the
             // lifecycle session disappears, another runner may recover the shared
             // lock but cannot overlap CREATE/DROP/RENAME/trigger DDL while this lock
@@ -493,7 +545,7 @@ SQL);
             // own fail-closed reconnector prevents unlocked continuation.
             $ddlLock = $ddlConnection->selectOne('SELECT GET_LOCK(?, 10) AS acquired', [$ddlLockName], false);
             if ($ddlLock === null || (int) ($ddlLock->acquired ?? 0) !== 1) {
-                throw new RuntimeException('Could not acquire the Telegram interactive DDL installation lock.');
+                throw new RuntimeException('Could not acquire the Telegram confidential DDL installation lock.');
             }
             $ddlLockAcquired = true;
             $this->disableReconnectWhileLockHeld($ddlConnection, 'DDL');
@@ -507,12 +559,12 @@ SQL);
                 try {
                     $released = $ddlConnection->selectOne('SELECT RELEASE_LOCK(?) AS released', [$ddlLockName], false);
                     if ($released === null || (int) ($released->released ?? 0) !== 1) {
-                        throw new RuntimeException('Telegram interactive DDL installation lock release was not exact.');
+                        throw new RuntimeException('Telegram confidential DDL installation lock release was not exact.');
                     }
                 } catch (Throwable $exception) {
                     $this->disconnect($ddlConnection);
                     $cleanupFailure = new RuntimeException(
-                        'Telegram interactive presentation DDL installation lock cleanup failed.',
+                        'Telegram confidential presentation DDL installation lock cleanup failed.',
                         0,
                         $exception,
                     );
@@ -528,7 +580,7 @@ SQL);
                 } catch (Throwable $exception) {
                     $this->disconnect($lifecycleConnection);
                     $cleanupFailure ??= new RuntimeException(
-                        'Telegram interactive presentation shared installation lock cleanup failed.',
+                        'Telegram confidential presentation shared installation lock cleanup failed.',
                         0,
                         $exception,
                     );
@@ -552,9 +604,14 @@ SQL);
     {
         $database = $connection->getDatabaseName();
         if ($database === '') {
-            throw new RuntimeException('Telegram interactive DDL installation lock requires an exact database name.');
+            throw new RuntimeException('Telegram confidential DDL installation lock requires an exact database name.');
         }
 
+        // #212 mutates the #209 interactive INSERT trigger as part of the same
+        // protected schema transition. Reuse the exact historical #209 DDL-session
+        // lock identity so lifecycle-session loss cannot let an interactive runner
+        // overlap this migration on the shared trigger surface. A separate
+        // confidential-only lock would leave that cross-migration window open.
         return 'telegram-interactive-ddl:'.substr(hash('sha256', $database), 0, 32);
     }
 
@@ -562,7 +619,7 @@ SQL);
     {
         $connection->setReconnector(static function (Connection $connection) use ($sessionRole): never {
             throw new RuntimeException(
-                'Telegram interactive presentation '.$sessionRole.' database session was lost while its installation lock was held.',
+                'Telegram confidential presentation '.$sessionRole.' database session was lost while its installation lock was held.',
             );
         });
     }
@@ -574,12 +631,12 @@ SQL);
         $connection->setReconnector(static function (Connection $connection) use ($database): void {
             $name = $connection->getNameWithReadWriteType();
             if (! is_string($name) || $name === '') {
-                throw new RuntimeException('Telegram interactive presentation database connection name is unavailable for reconnect.');
+                throw new RuntimeException('Telegram confidential presentation database connection name is unavailable for reconnect.');
             }
 
             $reconnected = $database->reconnect($name);
             if (! $reconnected instanceof Connection) {
-                throw new RuntimeException('Telegram interactive presentation database connection could not be restored.');
+                throw new RuntimeException('Telegram confidential presentation database connection could not be restored.');
             }
 
             $connection->setPdo($reconnected->getRawPdo());

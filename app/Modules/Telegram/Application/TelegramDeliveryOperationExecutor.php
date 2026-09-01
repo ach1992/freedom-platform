@@ -29,6 +29,7 @@ final readonly class TelegramDeliveryOperationExecutor
         private TelegramMutationTransport $transport,
         private TelegramDeliveryDatabaseCapability $databaseCapability,
         private TelegramDeliveryInteractivePresentationService $interactivePresentations,
+        private TelegramDeliveryConfidentialPresentationService $confidentialPresentations,
     ) {}
 
     /** @requirement ARCH-004 DAT-003 SEC-002 SEC-008 OPS-003 QUA-001 QUA-004 QUA-007 */
@@ -99,23 +100,55 @@ final readonly class TelegramDeliveryOperationExecutor
             // never outrun the existing #179 semantic database attestation.
             $this->databaseCapability->assertRuntimeAuthorityReady($connection);
 
-            $interactive = match ($contractVersion) {
-                TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION => null,
-                TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_INTERACTIVE => $this->interactivePresentations->resolve(
+            $recipientChatId = $this->nonZeroInt($row->recipient_chat_id, 'Telegram recipient chat identity');
+            $interactive = null;
+            $confidential = null;
+            if ($contractVersion === TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION) {
+                // Historical v1: exact non-restricted text only.
+            } elseif ($contractVersion === TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_INTERACTIVE) {
+                $interactive = $this->interactivePresentations->resolve(
                     $connection,
                     (string) $row->public_id,
-                    $this->nonZeroInt($row->recipient_chat_id, 'Telegram recipient chat identity'),
-                ),
-                default => throw new DomainException('Telegram delivery Outbox contract version is unsupported.'),
-            };
-            $request = $this->mutationRequest($row, $interactive?->keyboard);
-            $fingerprint = TelegramDeliveryRequestFingerprint::make(
+                    $recipientChatId,
+                );
+            } elseif ($contractVersion === TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_CONFIDENTIAL) {
+                if (! hash_equals(
+                    TelegramDeliveryConfidentialPresentationService::DURABLE_MARKER,
+                    (string) ($row->presentation_text ?? ''),
+                )) {
+                    throw new DomainException('Telegram confidential delivery operation marker is invalid.');
+                }
+                $confidential = $this->confidentialPresentations->resolve(
+                    $connection,
+                    (string) $row->public_id,
+                );
+                $interactive = $this->interactivePresentations->resolveOptional(
+                    $connection,
+                    (string) $row->public_id,
+                    $recipientChatId,
+                );
+            } else {
+                throw new DomainException('Telegram delivery Outbox contract version is unsupported.');
+            }
+            $request = $this->mutationRequest(
+                $row,
+                $interactive?->keyboard,
+                $confidential?->presentation,
+            );
+            $confidentialHashCandidates = $confidential === null
+                ? null
+                : $this->confidentialPresentations->fingerprintHashCandidates($confidential->presentation);
+            $fingerprintCandidates = TelegramDeliveryRequestFingerprint::candidates(
                 $request,
                 (string) $row->bot_id,
                 (string) $row->correlation_id,
                 $interactive?->snapshotHash,
+                $confidentialHashCandidates,
             );
-            if (! hash_equals((string) $row->request_fingerprint, $fingerprint)) {
+            if (! TelegramDeliveryRequestFingerprint::matches(
+                (string) $row->request_fingerprint,
+                $fingerprintCandidates,
+            )) {
                 throw new DomainException('Telegram delivery request fingerprint no longer matches its durable presentation.');
             }
 
@@ -263,12 +296,14 @@ final readonly class TelegramDeliveryOperationExecutor
     private function mutationRequest(
         object $row,
         ?TelegramResolvedInlineKeyboardMarkup $inlineKeyboard,
+        ?ConfidentialTelegramPresentation $confidentialPresentation = null,
     ): TelegramMutationRequest {
         $action = TelegramDeliveryAction::tryFrom((string) $row->action)
             ?? throw new RuntimeException('Stored Telegram delivery action is invalid.');
-        $presentation = $row->presentation_text === null
-            ? null
-            : NonRestrictedTelegramPresentation::restorePersisted((string) $row->presentation_text);
+        $presentation = $confidentialPresentation;
+        if ($presentation === null && $row->presentation_text !== null) {
+            $presentation = NonRestrictedTelegramPresentation::restorePersisted((string) $row->presentation_text);
+        }
 
         return new TelegramMutationRequest(
             $action,

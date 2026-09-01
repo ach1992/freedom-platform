@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace Tests\Support;
 
-use App\Modules\Telegram\Application\NonRestrictedTelegramPresentation;
+use App\Modules\Telegram\Application\ConfidentialTelegramPresentation;
+use App\Modules\Telegram\Application\TelegramConfidentialPresentationHasher;
+use App\Modules\Telegram\Application\TelegramDeliveryConfidentialPresentationDatabaseCapability;
+use App\Modules\Telegram\Application\TelegramDeliveryConfidentialPresentationService;
 use App\Modules\Telegram\Application\TelegramDeliveryDatabaseCapability;
 use App\Modules\Telegram\Application\TelegramDeliveryOperationReceipt;
 use App\Modules\Telegram\Application\TelegramDeliveryQueueService;
@@ -16,77 +19,81 @@ use App\Modules\Telegram\Domain\TelegramDeliveryOperationState;
 use App\Shared\Application\Clock;
 use App\Shared\Application\SafeOutboxPayload;
 use App\Shared\Infrastructure\DatabaseOutboxPublisher;
+use Illuminate\Contracts\Encryption\StringEncrypter;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Support\Str;
 use LogicException;
 use ReflectionClass;
+use RuntimeException;
 
-final class NonRestrictedTelegramPresentationTestFactory
+final class ConfidentialTelegramPresentationTestFactory
 {
-    public static function plainText(string $text): NonRestrictedTelegramPresentation
+    public static function plainText(string $text): ConfidentialTelegramPresentation
     {
-        $reflection = new ReflectionClass(NonRestrictedTelegramPresentation::class);
+        $reflection = new ReflectionClass(ConfidentialTelegramPresentation::class);
         $validated = $reflection->getMethod('validated')->invoke(null, $text);
-        if (! $validated instanceof NonRestrictedTelegramPresentation) {
-            throw new LogicException('Unable to create Telegram presentation test fixture.');
+        if (! $validated instanceof ConfidentialTelegramPresentation) {
+            throw new RuntimeException('Unable to create confidential Telegram presentation test fixture.');
         }
 
         return $validated;
     }
 
-    public static function queue(
-        TelegramDeliveryQueueService $queue,
-        TelegramDeliveryAction $action,
-        int $recipientChatId,
-        ?int $targetMessageId,
-        ?NonRestrictedTelegramPresentation $presentation,
-        string $requestKey,
-        string $correlationId,
-    ): TelegramDeliveryOperationReceipt {
-        return $queue->queue(
-            $action,
-            $recipientChatId,
-            $targetMessageId,
-            $presentation,
-            $requestKey,
-            $correlationId,
+    public static function rawValue(ConfidentialTelegramPresentation $presentation): string
+    {
+        $reflection = new ReflectionClass(ConfidentialTelegramPresentation::class);
+        $plaintext = $reflection->getMethod('plaintext')->invoke($presentation);
+        if (! is_string($plaintext)) {
+            throw new RuntimeException('Unable to reveal confidential Telegram presentation test fixture.');
+        }
+
+        return $plaintext;
+    }
+
+    public static function service(
+        Clock $clock,
+        ?StringEncrypter $encrypter = null,
+        ?TelegramConfidentialPresentationHasher $hasher = null,
+    ): TelegramDeliveryConfidentialPresentationService {
+        return new TelegramDeliveryConfidentialPresentationService(
+            $clock,
+            $encrypter ?? app(StringEncrypter::class),
+            new TelegramDeliveryConfidentialPresentationDatabaseCapability,
+            $hasher ?? app(TelegramConfidentialPresentationHasher::class),
         );
     }
 
     /**
-     * Create the exact prepared v2 delivery envelope without its interactive
-     * snapshot. This deliberately test-only seam lets MariaDB concurrency tests
-     * exercise the interactive INSERT trigger itself instead of taking the
-     * application lifecycle fence first.
+     * Prepare exact v3 operation/Outbox authority without inserting the companion.
+     * Used only by direct-trigger rollback concurrency tests.
      *
-     * @return array{public_id:string,outbox_event_id:string}
+     * @return array{public_id:string,outbox_event_id:string,presentation_ciphertext:string,presentation_hash:string,ciphertext_hash:string,request_fingerprint:string}
      */
-    public static function prepareInteractiveV2OperationWithoutSnapshot(
+    public static function prepareV3OperationWithoutCompanion(
         DatabaseManager $database,
         Clock $clock,
         int $recipientChatId,
         string $requestKey,
         string $correlationId,
-        TelegramInlineKeyboardSnapshot $inlineKeyboard,
         string $botId = '123456',
     ): array {
+        $presentation = self::plainText('confidential trigger-only rollback fixture');
+        $hasher = app(TelegramConfidentialPresentationHasher::class);
         $request = new TelegramMutationRequest(
             TelegramDeliveryAction::Send,
             $recipientChatId,
             null,
-            self::plainText('interactive trigger-only rollback fixture'),
+            $presentation,
         );
         $publicId = (string) Str::ulid();
         $outboxEventId = (string) Str::uuid();
         $requestKeyHash = hash('sha256', $requestKey);
-        $fingerprint = TelegramDeliveryRequestFingerprint::make(
-            $request,
-            $botId,
-            $correlationId,
-            $inlineKeyboard->hash(),
-        );
+        $fingerprint = TelegramDeliveryRequestFingerprint::make($request, $botId, $correlationId, null, $hasher->fingerprintHash($presentation));
         $timestamp = $clock->now()->format('Y-m-d H:i:s.u');
+        $ciphertext = app(StringEncrypter::class)->encryptString(self::rawValue($presentation));
+        $presentationHash = $hasher->integrityHash($presentation, $publicId);
+        $ciphertextHash = hash('sha256', $ciphertext);
         $capability = new TelegramDeliveryDatabaseCapability;
         $outbox = new DatabaseOutboxPublisher($database, $clock);
 
@@ -101,6 +108,9 @@ final class NonRestrictedTelegramPresentationTestFactory
             $request,
             $botId,
             $timestamp,
+            $ciphertext,
+            $presentationHash,
+            $ciphertextHash,
         ): array {
             return $capability->runQueue(
                 $connection,
@@ -110,7 +120,7 @@ final class NonRestrictedTelegramPresentationTestFactory
                 $fingerprint,
                 $correlationId,
                 $request,
-                $request->presentation?->text(),
+                TelegramDeliveryConfidentialPresentationService::DURABLE_MARKER,
                 $botId,
                 $outboxEventId,
                 function () use (
@@ -124,6 +134,9 @@ final class NonRestrictedTelegramPresentationTestFactory
                     $request,
                     $botId,
                     $timestamp,
+                    $ciphertext,
+                    $presentationHash,
+                    $ciphertextHash,
                 ): array {
                     $payload = new SafeOutboxPayload([
                         'telegram_delivery_operation_public_id' => $publicId,
@@ -136,10 +149,10 @@ final class NonRestrictedTelegramPresentationTestFactory
                         $publicId,
                         $payload,
                         $correlationId,
-                        TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_INTERACTIVE,
+                        TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_CONFIDENTIAL,
                     );
                     if (! hash_equals($outboxEventId, $published)) {
-                        throw new LogicException('Interactive trigger fixture Outbox identity was unexpectedly replayed.');
+                        throw new LogicException('Confidential trigger fixture Outbox identity was unexpectedly replayed.');
                     }
 
                     $connection->table('telegram_delivery_operations')->insert([
@@ -151,7 +164,7 @@ final class NonRestrictedTelegramPresentationTestFactory
                         'bot_id' => $botId,
                         'recipient_chat_id' => $request->recipientChatId,
                         'target_message_id' => $request->targetMessageId,
-                        'presentation_text' => $request->presentation?->text(),
+                        'presentation_text' => TelegramDeliveryConfidentialPresentationService::DURABLE_MARKER,
                         'outbox_event_id' => $outboxEventId,
                         'state' => TelegramDeliveryOperationState::Prepared->value,
                         'state_version' => 1,
@@ -163,23 +176,27 @@ final class NonRestrictedTelegramPresentationTestFactory
                     return [
                         'public_id' => $publicId,
                         'outbox_event_id' => $outboxEventId,
+                        'presentation_ciphertext' => $ciphertext,
+                        'presentation_hash' => $presentationHash,
+                        'ciphertext_hash' => $ciphertextHash,
+                        'request_fingerprint' => $fingerprint,
                     ];
                 },
             );
         }, 3);
     }
 
-    public static function queueInteractive(
+    public static function queue(
         TelegramDeliveryQueueService $queue,
         TelegramDeliveryAction $action,
         int $recipientChatId,
         ?int $targetMessageId,
-        ?NonRestrictedTelegramPresentation $presentation,
+        ConfidentialTelegramPresentation $presentation,
         string $requestKey,
         string $correlationId,
-        TelegramInlineKeyboardSnapshot $inlineKeyboard,
+        ?TelegramInlineKeyboardSnapshot $inlineKeyboard = null,
     ): TelegramDeliveryOperationReceipt {
-        return $queue->queue(
+        return $queue->queueConfidential(
             $action,
             $recipientChatId,
             $targetMessageId,

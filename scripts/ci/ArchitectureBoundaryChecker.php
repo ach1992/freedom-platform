@@ -19,6 +19,9 @@ final class ArchitectureBoundaryChecker
     /** @var array<string,true> */
     private array $usedTelegramPresentationSources = [];
 
+    /** @var array<string,true> */
+    private array $usedTelegramConfidentialPresentationSources = [];
+
     /** @param array<string,mixed> $config */
     public function __construct(
         private readonly string $root,
@@ -33,6 +36,7 @@ final class ArchitectureBoundaryChecker
         $this->usedPersistenceExceptions = [];
         $this->usedMigrationTriggerDdlHelpers = [];
         $this->usedTelegramPresentationSources = [];
+        $this->usedTelegramConfidentialPresentationSources = [];
 
         foreach ($this->phpFiles('app/Modules') as $relativePath => $source) {
             $this->scanModuleFile($relativePath, $source, $violations, $edges);
@@ -40,6 +44,7 @@ final class ArchitectureBoundaryChecker
             $this->scanOpaquePersistence($relativePath, $source, $violations);
             $this->scanUnattributablePersistenceMechanisms($relativePath, $source, $violations);
             $this->scanTelegramGenericDeliveryBoundary($relativePath, $source, $violations);
+            $this->scanTelegramConfidentialDeliveryBoundary($relativePath, $source, $violations);
         }
 
         foreach ($this->phpFiles('app/Shared') as $relativePath => $source) {
@@ -48,6 +53,7 @@ final class ArchitectureBoundaryChecker
             $this->scanOpaquePersistence($relativePath, $source, $violations);
             $this->scanUnattributablePersistenceMechanisms($relativePath, $source, $violations);
             $this->scanTelegramGenericDeliveryBoundary($relativePath, $source, $violations);
+            $this->scanTelegramConfidentialDeliveryBoundary($relativePath, $source, $violations);
         }
 
         foreach ($this->phpFiles('routes') as $relativePath => $source) {
@@ -55,6 +61,7 @@ final class ArchitectureBoundaryChecker
             $this->scanOpaquePersistence($relativePath, $source, $violations);
             $this->scanUnattributablePersistenceMechanisms($relativePath, $source, $violations);
             $this->scanTelegramGenericDeliveryBoundary($relativePath, $source, $violations);
+            $this->scanTelegramConfidentialDeliveryBoundary($relativePath, $source, $violations);
         }
 
         $edges = array_values(array_unique($edges));
@@ -63,6 +70,7 @@ final class ArchitectureBoundaryChecker
         array_push($violations, ...$this->persistenceExceptionViolations());
         array_push($violations, ...$this->migrationTriggerDdlHelperViolations());
         array_push($violations, ...$this->telegramPresentationSourceViolations());
+        array_push($violations, ...$this->telegramConfidentialPresentationSourceViolations());
 
         $violations = array_values(array_unique($violations));
         sort($violations, SORT_STRING);
@@ -1182,10 +1190,23 @@ final class ArchitectureBoundaryChecker
             'app/Modules/Telegram/Application/NonRestrictedTelegramPresentationSource.php',
             'app/Modules/Telegram/Application/TelegramDeliveryDatabaseCapability.php',
             'app/Modules/Telegram/Application/TelegramDeliveryOperationExecutor.php',
+            'app/Modules/Telegram/Application/TelegramDeliveryRequestFingerprint.php',
             'app/Modules/Telegram/Application/TelegramDeliveryOutboxHandler.php',
+            'app/Modules/Telegram/Infrastructure/HttpTelegramMutationTransport.php',
             'app/Modules/Telegram/Application/TelegramDeliveryQueueService.php',
             'app/Modules/Telegram/Application/TelegramMutationRequest.php',
             'app/Modules/Telegram/Application/TelegramPresentationProvenanceGuard.php',
+            'app/Modules/Telegram/Application/ConfidentialTelegramPresentation.php',
+            'app/Modules/Telegram/Application/TelegramConfidentialPresentationHasher.php',
+            'app/Modules/Telegram/Application/ConfidentialTelegramPresentationFactory.php',
+            'app/Modules/Telegram/Application/ConfidentialTelegramPresentationSource.php',
+            'app/Modules/Telegram/Application/TelegramConfidentialPresentationProvenanceGuard.php',
+            'app/Modules/Telegram/Application/TelegramDeliveryConfidentialPresentationDatabaseCapability.php',
+            'app/Modules/Telegram/Application/TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1.php',
+            'app/Modules/Telegram/Application/TelegramDeliveryConfidentialPresentationService.php',
+            'app/Modules/Telegram/Application/TelegramResolvedConfidentialPresentation.php',
+            'app/Modules/Telegram/Application/TelegramConfidentialDeliveryOutboxHandler.php',
+            'app/Modules/Telegram/Infrastructure/TelegramServiceProvider.php',
         ];
         if (in_array($relativePath, $internalPaths, true)) {
             return;
@@ -1211,6 +1232,179 @@ final class ArchitectureBoundaryChecker
         }
 
         $this->usedTelegramPresentationSources[$relativePath] = true;
+    }
+
+    /** @param list<string> $violations */
+    private function scanTelegramConfidentialDeliveryBoundary(string $relativePath, string $source, array &$violations): void
+    {
+        $restrictedMethods = [
+            'fromReviewedConfidentialSource' => [
+                'app/Modules/Telegram/Application/ConfidentialTelegramPresentation.php',
+                'app/Modules/Telegram/Application/ConfidentialTelegramPresentationFactory.php',
+            ],
+            'keyedHash' => [
+                'app/Modules/Telegram/Application/ConfidentialTelegramPresentation.php',
+                'app/Modules/Telegram/Application/TelegramConfidentialPresentationHasher.php',
+            ],
+            'revealConfidentialText' => [
+                'app/Modules/Telegram/Application/ConfidentialTelegramPresentation.php',
+                'app/Modules/Telegram/Application/TelegramDeliveryConfidentialPresentationService.php',
+                'app/Modules/Telegram/Infrastructure/HttpTelegramMutationTransport.php',
+            ],
+            'restoreDecrypted' => [
+                'app/Modules/Telegram/Application/ConfidentialTelegramPresentation.php',
+                'app/Modules/Telegram/Application/TelegramDeliveryConfidentialPresentationService.php',
+            ],
+        ];
+        foreach ($restrictedMethods as $method => $allowedPaths) {
+            if ($this->containsCodeTokenText($source, $method) && ! in_array($relativePath, $allowedPaths, true)) {
+                $violations[] = sprintf(
+                    '%s may not call or dynamically reference internal confidential Telegram presentation method %s.',
+                    $relativePath,
+                    $method,
+                );
+            }
+        }
+
+        $restrictedInternalSymbols = [
+            'TelegramConfidentialPresentationHasher' => [
+                'app/Modules/Telegram/Application/ConfidentialTelegramPresentation.php',
+                'app/Modules/Telegram/Application/TelegramConfidentialPresentationHasher.php',
+                'app/Modules/Telegram/Application/TelegramConfidentialPresentationProvenanceGuard.php',
+                'app/Modules/Telegram/Application/TelegramDeliveryConfidentialPresentationService.php',
+                'app/Modules/Telegram/Infrastructure/TelegramServiceProvider.php',
+            ],
+            'TelegramDeliveryConfidentialPresentationService' => [
+                'app/Modules/Telegram/Application/ConfidentialTelegramPresentation.php',
+                'app/Modules/Telegram/Application/TelegramConfidentialPresentationProvenanceGuard.php',
+                'app/Modules/Telegram/Application/TelegramDeliveryConfidentialPresentationDatabaseCapability.php',
+                'app/Modules/Telegram/Application/TelegramDeliveryConfidentialPresentationService.php',
+                'app/Modules/Telegram/Application/TelegramDeliveryOperationExecutor.php',
+                'app/Modules/Telegram/Application/TelegramDeliveryQueueService.php',
+            ],
+            'TelegramDeliveryConfidentialPresentationDatabaseCapability' => [
+                'app/Modules/Telegram/Application/TelegramConfidentialPresentationProvenanceGuard.php',
+                'app/Modules/Telegram/Application/TelegramDeliveryConfidentialPresentationDatabaseCapability.php',
+                'app/Modules/Telegram/Application/TelegramDeliveryConfidentialPresentationService.php',
+            ],
+            'TelegramResolvedConfidentialPresentation' => [
+                'app/Modules/Telegram/Application/TelegramDeliveryConfidentialPresentationService.php',
+                'app/Modules/Telegram/Application/TelegramResolvedConfidentialPresentation.php',
+            ],
+            'TelegramMutationTransport' => [
+                'app/Modules/Telegram/Application/TelegramConfidentialPresentationProvenanceGuard.php',
+                'app/Modules/Telegram/Application/Contracts/TelegramMutationTransport.php',
+                'app/Modules/Telegram/Application/TelegramDeliveryOperationExecutor.php',
+                'app/Modules/Telegram/Infrastructure/HttpTelegramMutationTransport.php',
+                'app/Modules/Telegram/Infrastructure/TelegramServiceProvider.php',
+            ],
+            'HttpTelegramMutationTransport' => [
+                'app/Modules/Telegram/Application/TelegramConfidentialPresentationProvenanceGuard.php',
+                'app/Modules/Telegram/Infrastructure/HttpTelegramMutationTransport.php',
+                'app/Modules/Telegram/Infrastructure/TelegramServiceProvider.php',
+            ],
+            'TelegramMutationRequest' => [
+                'app/Modules/Telegram/Application/Contracts/TelegramMutationTransport.php',
+                'app/Modules/Telegram/Application/TelegramConfidentialPresentationProvenanceGuard.php',
+                'app/Modules/Telegram/Application/TelegramDeliveryDatabaseCapability.php',
+                'app/Modules/Telegram/Application/TelegramDeliveryOperationExecutor.php',
+                'app/Modules/Telegram/Application/TelegramDeliveryQueueService.php',
+                'app/Modules/Telegram/Application/TelegramDeliveryRequestFingerprint.php',
+                'app/Modules/Telegram/Application/TelegramMutationRequest.php',
+                'app/Modules/Telegram/Application/TelegramPresentationProvenanceGuard.php',
+                'app/Modules/Telegram/Infrastructure/HttpTelegramMutationTransport.php',
+            ],
+            'TelegramDeliveryOperationExecutor' => [
+                'app/Modules/Telegram/Application/NonRestrictedTelegramPresentation.php',
+                'app/Modules/Telegram/Application/TelegramConfidentialDeliveryOutboxHandler.php',
+                'app/Modules/Telegram/Infrastructure/TelegramServiceProvider.php',
+                'app/Modules/Telegram/Application/TelegramConfidentialPresentationProvenanceGuard.php',
+                'app/Modules/Telegram/Application/TelegramDeliveryConfidentialPresentationService.php',
+                'app/Modules/Telegram/Application/TelegramDeliveryOperationExecutor.php',
+                'app/Modules/Telegram/Application/TelegramDeliveryOutboxHandler.php',
+                'app/Modules/Telegram/Application/TelegramInteractiveDeliveryOutboxHandler.php',
+                'app/Modules/Telegram/Application/TelegramPresentationProvenanceGuard.php',
+                'app/Modules/Telegram/Infrastructure/TelegramServiceProvider.php',
+            ],
+            'TelegramConfidentialDeliveryOutboxHandler' => [
+                'app/Modules/Telegram/Application/TelegramConfidentialDeliveryOutboxHandler.php',
+                'app/Modules/Telegram/Infrastructure/TelegramServiceProvider.php',
+                'app/Modules/Telegram/Application/TelegramConfidentialPresentationProvenanceGuard.php',
+                'app/Modules/Telegram/Infrastructure/TelegramServiceProvider.php',
+            ],
+        ];
+        foreach ($restrictedInternalSymbols as $symbol => $allowedPaths) {
+            if ($this->containsCodeTokenText($source, $symbol) && ! in_array($relativePath, $allowedPaths, true)) {
+                $violations[] = sprintf(
+                    '%s may not reference internal confidential Telegram authority symbol %s.',
+                    $relativePath,
+                    $symbol,
+                );
+            }
+        }
+
+        $symbols = [
+            'ConfidentialTelegramPresentation',
+            'ConfidentialTelegramPresentationFactory',
+            'ConfidentialTelegramPresentationSource',
+            'TelegramConfidentialPresentationProvenanceGuard',
+            'TelegramConfidentialPresentationHasher',
+            'queueConfidential',
+        ];
+        $usesBoundary = false;
+        foreach ($symbols as $symbol) {
+            if ($this->containsCodeTokenText($source, $symbol)) {
+                $usesBoundary = true;
+                break;
+            }
+        }
+        if (! $usesBoundary) {
+            return;
+        }
+
+        $internalPaths = [
+            'app/Modules/Telegram/Application/ConfidentialTelegramPresentation.php',
+            'app/Modules/Telegram/Application/TelegramConfidentialPresentationHasher.php',
+            'app/Modules/Telegram/Application/ConfidentialTelegramPresentationFactory.php',
+            'app/Modules/Telegram/Application/ConfidentialTelegramPresentationSource.php',
+            'app/Modules/Telegram/Application/TelegramConfidentialPresentationProvenanceGuard.php',
+            'app/Modules/Telegram/Application/TelegramDeliveryConfidentialPresentationDatabaseCapability.php',
+            'app/Modules/Telegram/Application/TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1.php',
+            'app/Modules/Telegram/Application/TelegramDeliveryConfidentialPresentationService.php',
+            'app/Modules/Telegram/Application/TelegramDeliveryDatabaseCapability.php',
+            'app/Modules/Telegram/Application/TelegramDeliveryOperationExecutor.php',
+            'app/Modules/Telegram/Application/TelegramDeliveryRequestFingerprint.php',
+            'app/Modules/Telegram/Application/TelegramDeliveryQueueService.php',
+            'app/Modules/Telegram/Infrastructure/HttpTelegramMutationTransport.php',
+            'app/Modules/Telegram/Application/TelegramMutationRequest.php',
+            'app/Modules/Telegram/Application/TelegramResolvedConfidentialPresentation.php',
+            'app/Modules/Telegram/Application/TelegramConfidentialDeliveryOutboxHandler.php',
+            'app/Modules/Telegram/Infrastructure/TelegramServiceProvider.php',
+        ];
+        if (in_array($relativePath, $internalPaths, true)) {
+            return;
+        }
+
+        if (! str_starts_with($relativePath, 'app/Modules/Telegram/')) {
+            $violations[] = sprintf(
+                '%s confidential Telegram delivery is Telegram-owned and cannot be consumed by another module, Shared code, or routes.',
+                $relativePath,
+            );
+
+            return;
+        }
+
+        $sources = $this->config['telegram_confidential_presentation_sources'] ?? [];
+        if (! is_array($sources) || ! in_array($relativePath, $sources, true)) {
+            $violations[] = sprintf(
+                '%s confidential Telegram delivery source is not explicitly reviewed; add the exact Telegram Application/Presentation source path only after data-classification review.',
+                $relativePath,
+            );
+
+            return;
+        }
+
+        $this->usedTelegramConfidentialPresentationSources[$relativePath] = true;
     }
 
     private function containsCodeTokenText(string $source, string $needle): bool
@@ -1261,6 +1455,38 @@ final class ArchitectureBoundaryChecker
 
             if (! isset($this->usedTelegramPresentationSources[$source])) {
                 $violations[] = 'telegram_non_restricted_presentation_sources contains stale/unused entry '.$source.'.';
+            }
+        }
+
+        return $violations;
+    }
+
+    /** @return list<string> */
+    private function telegramConfidentialPresentationSourceViolations(): array
+    {
+        $sources = $this->config['telegram_confidential_presentation_sources'] ?? [];
+        if (! is_array($sources)) {
+            return ['telegram_confidential_presentation_sources must be an exact list of reviewed Telegram source paths.'];
+        }
+
+        $violations = [];
+        $seen = [];
+        foreach ($sources as $source) {
+            if (! is_string($source)
+                || preg_match('#^app/Modules/Telegram/(?:Application|Presentation)/.+\.php$#', $source) !== 1
+            ) {
+                $violations[] = 'telegram_confidential_presentation_sources contains an invalid or non-Telegram source path.';
+
+                continue;
+            }
+            if (isset($seen[$source])) {
+                $violations[] = 'telegram_confidential_presentation_sources contains duplicate entry '.$source.'.';
+
+                continue;
+            }
+            $seen[$source] = true;
+            if (! isset($this->usedTelegramConfidentialPresentationSources[$source])) {
+                $violations[] = 'telegram_confidential_presentation_sources contains stale/unused entry '.$source.'.';
             }
         }
 

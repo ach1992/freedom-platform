@@ -27,6 +27,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use ReflectionClass;
 use RuntimeException;
+use Tests\Support\ConfidentialTelegramPresentationTestFactory;
 use Tests\Support\NonRestrictedTelegramPresentationTestFactory;
 use Tests\Support\TelegramInteractivePresentationTestFactory;
 use Tests\TestCase;
@@ -410,6 +411,59 @@ SQL);
 
         $this->assertReentryFailsForDurableIncompleteSurface();
         self::assertFalse(Schema::hasColumn('telegram_delivery_authority_capability', 'schema_version'));
+    }
+
+    public function test_previous_application_key_keeps_existing_capability_valid_until_safe_full_reinstall(): void
+    {
+        $oldConfiguredKey = config('app.key');
+        $oldPreviousKeys = config('app.previous_keys', []);
+        self::assertIsString($oldConfiguredKey);
+        self::assertNotSame('', $oldConfiguredKey);
+        self::assertIsArray($oldPreviousKeys);
+
+        $oldCapabilityHash = DB::table('telegram_delivery_authority_capability')
+            ->where('id', 1)
+            ->value('capability_hash');
+        self::assertIsString($oldCapabilityHash);
+        $newConfiguredKey = 'base64:'.base64_encode(str_repeat('r', 32));
+        self::assertNotSame($oldConfiguredKey, $newConfiguredKey);
+
+        try {
+            config([
+                'app.key' => $newConfiguredKey,
+                'app.previous_keys' => [$oldConfiguredKey],
+            ]);
+            $rotatedCapability = new TelegramDeliveryDatabaseCapability;
+            self::assertNotSame($rotatedCapability->expectedHash(), $oldCapabilityHash);
+            self::assertNotNull($rotatedCapability->valueMatchingHash($oldCapabilityHash));
+
+            // Re-entry against the already-active surface must recognize only the
+            // exact configured previous-key capability; it must not rewrite it.
+            $this->runMigrationUp();
+            self::assertSame(
+                $oldCapabilityHash,
+                DB::table('telegram_delivery_authority_capability')->where('id', 1)->value('capability_hash'),
+            );
+            self::assertTrue((new TelegramDeliveryDatabaseAuthoritySurfaceV1)->isReady(DB::connection(), $oldCapabilityHash));
+
+            // With no durable delivery authority, the existing reviewed rollback
+            // path can remove the old capability and a fresh install binds to the
+            // new current key. This is explicit lifecycle work, never self-heal.
+            $this->migration()->down();
+            self::assertFalse(Schema::hasTable('telegram_delivery_authority_capability'));
+            self::assertFalse(Schema::hasTable('telegram_delivery_operations'));
+
+            $this->runMigrationUp();
+            self::assertSame(
+                $rotatedCapability->expectedHash(),
+                DB::table('telegram_delivery_authority_capability')->where('id', 1)->value('capability_hash'),
+            );
+        } finally {
+            config([
+                'app.key' => $oldConfiguredKey,
+                'app.previous_keys' => $oldPreviousKeys,
+            ]);
+        }
     }
 
     public function test_capability_hash_mismatch_never_self_heals_even_without_durable_rows(): void
@@ -931,6 +985,7 @@ SQL);
             $transport,
             new TelegramDeliveryDatabaseCapability,
             TelegramInteractivePresentationTestFactory::service($this->clock, $this->runtime),
+            ConfidentialTelegramPresentationTestFactory::service($this->clock),
         );
         $handler = new TelegramDeliveryOutboxHandler(static fn (): TelegramDeliveryOperationExecutor => $executor);
         $dispatcher = new DatabaseOutboxDispatcher(app(DatabaseManager::class), $this->clock, 60, 2);
@@ -1068,6 +1123,7 @@ SQL);
             $transport,
             new TelegramDeliveryDatabaseCapability,
             TelegramInteractivePresentationTestFactory::service($this->clock, $this->runtime),
+            ConfidentialTelegramPresentationTestFactory::service($this->clock),
         );
         $handler = new TelegramDeliveryOutboxHandler(static fn (): TelegramDeliveryOperationExecutor => $executor);
         $handler->handle(new OutboxMessage(
@@ -1113,6 +1169,7 @@ SQL);
             $transport,
             new TelegramDeliveryDatabaseCapability,
             TelegramInteractivePresentationTestFactory::service($this->clock, $this->runtime),
+            ConfidentialTelegramPresentationTestFactory::service($this->clock),
         );
         try {
             $executor->execute($publicId, $outboxEventId, $correlationId);
@@ -1141,6 +1198,7 @@ SQL);
             $this->runtime,
             new TelegramDeliveryDatabaseCapability,
             TelegramInteractivePresentationTestFactory::service($this->clock, $this->runtime),
+            ConfidentialTelegramPresentationTestFactory::service($this->clock),
         );
     }
 

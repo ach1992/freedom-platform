@@ -33,6 +33,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use ReflectionClass;
 use RuntimeException;
+use Tests\Support\ConfidentialTelegramPresentationTestFactory;
 use Tests\Support\NonRestrictedTelegramPresentationTestFactory;
 use Tests\Support\TelegramInteractivePresentationTestFactory;
 use Tests\TestCase;
@@ -834,6 +835,7 @@ SQL);
             $this->runtime,
             new TelegramDeliveryDatabaseCapability,
             TelegramInteractivePresentationTestFactory::service($this->clock, $this->runtime),
+            ConfidentialTelegramPresentationTestFactory::service($this->clock),
         );
     }
 
@@ -846,6 +848,7 @@ SQL);
             $transport,
             new TelegramDeliveryDatabaseCapability,
             TelegramInteractivePresentationTestFactory::service($this->clock, $this->runtime),
+            ConfidentialTelegramPresentationTestFactory::service($this->clock),
         );
     }
 

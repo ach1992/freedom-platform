@@ -335,6 +335,145 @@ PHP);
         self::assertSame([], $reviewed['violations']);
     }
 
+    public function test_confidential_telegram_delivery_is_telegram_owned_and_rejects_cross_module_consumers(): void
+    {
+        $this->write('app/Modules/Customers/Application/UnsafeConfidentialDelivery.php', <<<'PHP'
+<?php
+namespace App\Modules\Customers\Application;
+use App\Modules\Telegram\Application\ConfidentialTelegramPresentationFactory;
+final class UnsafeConfidentialDelivery
+{
+    public function __construct(private ConfidentialTelegramPresentationFactory $factory) {}
+}
+PHP);
+
+        $result = $this->checker(['Customers' => ['Telegram']])->check();
+        self::assertStringContainsString(
+            'confidential Telegram delivery is Telegram-owned and cannot be consumed by another module',
+            implode("\n", $result['violations']),
+        );
+    }
+
+    public function test_confidential_telegram_source_requires_exact_reviewed_path(): void
+    {
+        $path = 'app/Modules/Telegram/Application/PrivateAccountPresentation.php';
+        $this->write($path, <<<'PHP'
+<?php
+namespace App\Modules\Telegram\Application;
+final class PrivateAccountPresentation
+{
+    public function __construct(private ConfidentialTelegramPresentationFactory $factory) {}
+}
+PHP);
+
+        $unreviewed = $this->checker()->check();
+        self::assertStringContainsString(
+            'confidential Telegram delivery source is not explicitly reviewed',
+            implode("\n", $unreviewed['violations']),
+        );
+
+        $reviewed = $this->checker([], [], [$path])->check();
+        self::assertSame([], $reviewed['violations']);
+    }
+
+    public function test_confidential_telegram_reviewed_source_cannot_consume_internal_decrypt_or_persistence_service(): void
+    {
+        $path = 'app/Modules/Telegram/Application/ReviewedButUnsafeConfidentialGateway.php';
+        $this->write($path, <<<'PHP'
+<?php
+namespace App\Modules\Telegram\Application;
+final class ReviewedButUnsafeConfidentialGateway
+{
+    public function __construct(
+        private TelegramDeliveryConfidentialPresentationService $presentations,
+        private TelegramDeliveryConfidentialPresentationDatabaseCapability $capability,
+        private TelegramConfidentialPresentationHasher $hasher,
+    ) {}
+    public function leak(ConfidentialTelegramPresentation $presentation): string
+    {
+        return $presentation->revealConfidentialText();
+    }
+}
+PHP);
+
+        $result = $this->checker([], [], [$path])->check();
+        $violations = implode("\n", $result['violations']);
+
+        self::assertStringContainsString(
+            'may not reference internal confidential Telegram authority symbol TelegramDeliveryConfidentialPresentationService',
+            $violations,
+        );
+        self::assertStringContainsString(
+            'may not reference internal confidential Telegram authority symbol TelegramDeliveryConfidentialPresentationDatabaseCapability',
+            $violations,
+        );
+        self::assertStringContainsString(
+            'may not call or dynamically reference internal confidential Telegram presentation method revealConfidentialText',
+            $violations,
+        );
+        self::assertStringContainsString(
+            'may not reference internal confidential Telegram authority symbol TelegramConfidentialPresentationHasher',
+            $violations,
+        );
+    }
+
+    public function test_confidential_telegram_reviewed_source_cannot_bypass_queue_through_transport_or_executor(): void
+    {
+        $path = 'app/Modules/Telegram/Application/ReviewedButUnsafeConfidentialTransport.php';
+        $this->write($path, <<<'PHP'
+<?php
+namespace App\Modules\Telegram\Application;
+use App\Modules\Telegram\Application\Contracts\TelegramMutationTransport;
+final class ReviewedButUnsafeConfidentialTransport
+{
+    public function __construct(
+        private ConfidentialTelegramPresentationFactory $factory,
+        private TelegramMutationTransport $transport,
+        private TelegramDeliveryOperationExecutor $executor,
+    ) {}
+
+    public function bypass(TelegramMutationRequest $request): void
+    {
+        $this->transport->mutate($request);
+    }
+}
+PHP);
+
+        $result = $this->checker([], [], [$path])->check();
+        $violations = implode("\n", $result['violations']);
+
+        self::assertStringContainsString(
+            'may not reference internal confidential Telegram authority symbol TelegramMutationTransport',
+            $violations,
+        );
+        self::assertStringContainsString(
+            'may not reference internal confidential Telegram authority symbol TelegramMutationRequest',
+            $violations,
+        );
+        self::assertStringContainsString(
+            'may not reference internal confidential Telegram authority symbol TelegramDeliveryOperationExecutor',
+            $violations,
+        );
+    }
+
+    public function test_confidential_telegram_source_allowlist_rejects_non_telegram_and_stale_entries(): void
+    {
+        $result = $this->checker([], [], [
+            'app/Modules/Customers/Application/Unsafe.php',
+            'app/Modules/Telegram/Application/StalePrivate.php',
+        ])->check();
+        $violations = implode("\n", $result['violations']);
+
+        self::assertStringContainsString(
+            'telegram_confidential_presentation_sources contains an invalid or non-Telegram source path',
+            $violations,
+        );
+        self::assertStringContainsString(
+            'telegram_confidential_presentation_sources contains stale/unused entry app/Modules/Telegram/Application/StalePrivate.php',
+            $violations,
+        );
+    }
+
     public function test_generic_boundary_defers_split_string_semantics_to_dedicated_provenance_checker(): void
     {
         $this->write('app/Modules/Provisioning/Application/DynamicTelegramEscape.php', <<<'PHP'
@@ -468,13 +607,18 @@ PHP);
     /**
      * @param  array<string,list<string>>  $allowed
      * @param  list<string>  $telegramPresentationSources
+     * @param  list<string>  $telegramConfidentialPresentationSources
      */
-    private function checker(array $allowed = [], array $telegramPresentationSources = []): ArchitectureBoundaryChecker
-    {
+    private function checker(
+        array $allowed = [],
+        array $telegramPresentationSources = [],
+        array $telegramConfidentialPresentationSources = [],
+    ): ArchitectureBoundaryChecker {
         return new ArchitectureBoundaryChecker($this->root, [
             'allowed_module_dependencies' => $allowed,
             'cycle_exceptions' => [],
             'telegram_non_restricted_presentation_sources' => $telegramPresentationSources,
+            'telegram_confidential_presentation_sources' => $telegramConfidentialPresentationSources,
             'durable_table_owners' => [
                 'audit_logs' => 'SharedAppendOnly',
                 'ledger_entries' => 'Wallet',

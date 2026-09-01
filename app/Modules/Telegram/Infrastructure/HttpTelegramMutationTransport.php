@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Infrastructure;
 
+use App\Modules\Telegram\Application\ConfidentialTelegramPresentation;
 use App\Modules\Telegram\Application\Contracts\TelegramMutationTransport;
+use App\Modules\Telegram\Application\NonRestrictedTelegramPresentation;
 use App\Modules\Telegram\Application\TelegramMutationOutcome;
 use App\Modules\Telegram\Application\TelegramMutationRequest;
 use App\Modules\Telegram\Application\TelegramMutationResult;
@@ -58,13 +60,13 @@ final readonly class HttpTelegramMutationTransport implements TelegramMutationTr
         $payload = match ($request->action) {
             TelegramDeliveryAction::Send => [
                 'chat_id' => $request->recipientChatId,
-                'text' => $request->presentation?->text(),
+                'text' => $this->presentationText($request),
                 'link_preview_options' => ['is_disabled' => true],
             ],
             TelegramDeliveryAction::Edit => [
                 'chat_id' => $request->recipientChatId,
                 'message_id' => $request->targetMessageId,
-                'text' => $request->presentation?->text(),
+                'text' => $this->presentationText($request),
                 'link_preview_options' => ['is_disabled' => true],
             ],
             TelegramDeliveryAction::Delete => [
@@ -78,6 +80,15 @@ final readonly class HttpTelegramMutationTransport implements TelegramMutationTr
         }
 
         return $payload;
+    }
+
+    private function presentationText(TelegramMutationRequest $request): ?string
+    {
+        return match (true) {
+            $request->presentation instanceof NonRestrictedTelegramPresentation => $request->presentation->text(),
+            $request->presentation instanceof ConfidentialTelegramPresentation => $request->presentation->revealConfidentialText(),
+            default => null,
+        };
     }
 
     private function result(TelegramMutationRequest $request, Response $response): TelegramMutationResult
