@@ -14,7 +14,7 @@ return [
         'Payments' => ['AccessControl', 'Orders', 'Wallet'],
         'Promotions' => ['AccessControl', 'Wallet'],
         'Provisioning' => ['AccessControl', 'Catalog', 'Orders', 'Panels', 'Payments', 'Telegram', 'Wallet'],
-        'Telegram' => ['Identity'],
+        'Telegram' => ['Customers', 'Identity', 'Promotions', 'Wallet'],
         'Wallet' => ['AccessControl'],
     ],
     'domain_dependency_exceptions' => [
@@ -31,7 +31,9 @@ return [
     // persistable Telegram presentation path. Each addition is a deliberate
     // data-classification review boundary; RESTRICTED owners must keep using
     // their protected/reference delivery authority instead.
-    'telegram_confidential_presentation_sources' => [],
+    'telegram_confidential_presentation_sources' => [
+        'app/Modules/Telegram/Application/TelegramNavigationHandler.php',
+    ],
     'telegram_non_restricted_presentation_sources' => [
         'app/Modules/Telegram/Application/TelegramInteractiveDeliveryOutboxHandler.php',
         'app/Modules/Telegram/Application/TelegramNavigationHandler.php',

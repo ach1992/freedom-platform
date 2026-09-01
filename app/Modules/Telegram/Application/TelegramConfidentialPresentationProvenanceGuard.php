@@ -12,12 +12,14 @@ use LogicException;
 /**
  * Runtime authority for CONFIDENTIAL Telegram presentation construction/queueing.
  * The reviewed source set is deliberately distinct from generic non-restricted
- * presentation provenance and starts empty until a private journey is reviewed.
+ * presentation provenance and contains only exact reviewed private journeys.
  */
 final class TelegramConfidentialPresentationProvenanceGuard
 {
     /** @var list<string> */
-    public const REVIEWED_SOURCE_FILES = [];
+    public const REVIEWED_SOURCE_FILES = [
+        'app/Modules/Telegram/Application/TelegramNavigationHandler.php',
+    ];
 
     /** @var list<string> */
     private const TRUSTED_TRAMPOLINE_FILES = [
@@ -33,6 +35,7 @@ final class TelegramConfidentialPresentationProvenanceGuard
         'app/Modules/Telegram/Application/TelegramConfidentialPresentationProvenanceGuard.php',
         'app/Modules/Telegram/Application/TelegramDeliveryConfidentialPresentationDatabaseCapability.php',
         'app/Modules/Telegram/Application/TelegramDeliveryConfidentialPresentationService.php',
+        'app/Modules/Telegram/Application/TelegramDeliveryDatabaseCapability.php',
         'app/Modules/Telegram/Application/TelegramDeliveryOperationExecutor.php',
         'app/Modules/Telegram/Application/TelegramDeliveryQueueService.php',
         'app/Modules/Telegram/Application/TelegramMutationRequest.php',
