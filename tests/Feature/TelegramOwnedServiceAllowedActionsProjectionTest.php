@@ -4,6 +4,13 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Modules\Catalog\Application\CatalogChangeContext;
+use App\Modules\Catalog\Application\PlanOfferingService;
+use App\Modules\Catalog\Domain\OfferingOperationCode;
+use App\Modules\Catalog\Domain\OfferingOperationPolicy;
+use App\Modules\Catalog\Domain\OfferingPackageDefinition;
+use App\Modules\Catalog\Domain\OfferingPackageType;
+use App\Modules\Catalog\Domain\PlanOfferingDefinition;
 use App\Modules\Panels\Application\Contracts\PanelServiceStatus;
 use App\Modules\Panels\Application\Contracts\RemoteServiceSnapshot;
 use App\Modules\Panels\Application\PanelAdapterRegistry;
@@ -19,6 +26,7 @@ use Illuminate\Database\Migrations\Migration;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
+use RuntimeException;
 use Tests\Support\CreatesBenefitCodeFixtures;
 use Tests\TestCase;
 
@@ -38,134 +46,111 @@ final class TelegramOwnedServiceAllowedActionsProjectionTest extends TestCase
         $migration->up();
     }
 
-    public function test_projection_uses_current_policy_package_verified_capability_and_owner_truth_without_sync_dependency(): void
+    public function test_projection_uses_current_immutable_policy_package_and_verified_capability_truth(): void
     {
-        $fixture = $this->operationalFixture('telegram-allowed-actions');
-        $attached = $this->attachedService($fixture, 'remote-allowed-actions', 'allowed-actions-user');
-        self::assertIsString($attached->serviceSubscriptionPublicId);
+        $projection = $this->app->make(TelegramOwnedServiceProjection::class);
+
+        $missingPackage = $this->operationalFixture(
+            'missing-renewal-package',
+            withRenewalPackage: false,
+            verifiedCapabilities: ['update_expiry'],
+        );
+        $this->attachedService($missingPackage, 'remote-missing-package', 'missing-package-user');
+        self::assertSame(
+            [],
+            $projection->detailForSelf(
+                $missingPackage['user_id'],
+                $missingPackage['user_id'],
+                $this->selectionToken($projection, $missingPackage['user_id']),
+            )->allowedActions,
+            'A verified intrinsic capability must not bypass the missing renewal package.',
+        );
+
+        $disabledPolicy = $this->operationalFixture(
+            'disabled-renew-policy',
+            renewCustomerEnabled: false,
+            withRenewalPackage: true,
+            verifiedCapabilities: ['update_expiry'],
+        );
+        $this->attachedService($disabledPolicy, 'remote-disabled-policy', 'disabled-policy-user');
+        self::assertSame(
+            [],
+            $projection->detailForSelf(
+                $disabledPolicy['user_id'],
+                $disabledPolicy['user_id'],
+                $this->selectionToken($projection, $disabledPolicy['user_id']),
+            )->allowedActions,
+            'Administrator availability must not substitute for customer_enabled.',
+        );
+
+        $capabilityFixture = $this->operationalFixture(
+            'runtime-capability-truth',
+            withRenewalPackage: true,
+        );
+        $this->attachedService($capabilityFixture, 'remote-capability-truth', 'capability-truth-user');
+        $selectionToken = $this->selectionToken($projection, $capabilityFixture['user_id']);
+
+        self::assertSame(
+            [],
+            $projection->detailForSelf(
+                $capabilityFixture['user_id'],
+                $capabilityFixture['user_id'],
+                $selectionToken,
+            )->allowedActions,
+            'A renewal package and customer policy are insufficient without update_expiry.',
+        );
+
+        $this->insertCapability($capabilityFixture['target_id'], 'update_expiry', 'declared');
+        self::assertSame(
+            [],
+            $projection->detailForSelf(
+                $capabilityFixture['user_id'],
+                $capabilityFixture['user_id'],
+                $selectionToken,
+            )->allowedActions,
+            'Declared capability evidence must fail closed.',
+        );
+
+        $this->setCapabilityVerified($capabilityFixture['target_id'], 'update_expiry');
+        self::assertSame(
+            [TelegramOwnedServiceAction::Renew],
+            $projection->detailForSelf(
+                $capabilityFixture['user_id'],
+                $capabilityFixture['user_id'],
+                $selectionToken,
+            )->allowedActions,
+            'The next detail read must use current verified capability truth rather than cached availability.',
+        );
+    }
+
+    public function test_projection_exposes_only_supported_actions_and_is_owner_bound_and_effect_free(): void
+    {
+        $fixture = $this->operationalFixture(
+            'supported-actions',
+            withRenewalPackage: true,
+            withAddDataPolicy: true,
+            withResetUsagePolicy: true,
+            withChangePlanPolicy: true,
+            verifiedCapabilities: ['update_expiry', 'add_data_allowance', 'reset_usage'],
+        );
+        $this->attachedService($fixture, 'remote-supported-actions', 'supported-actions-user');
 
         $projection = $this->app->make(TelegramOwnedServiceProjection::class);
-        $page = $projection->pageForSelf($fixture['user_id'], $fixture['user_id'], 1, 6);
-        self::assertCount(1, $page->items);
-        $selectionToken = $page->items[0]->selectionToken;
-        $syncRunsBeforeRead = DB::table('service_sync_runs')->count();
-        $provisioningOperationsBeforeRead = DB::table('provisioning_operations')->count();
-        $outboxBeforeRead = DB::table('outbox_messages')->count();
+        $selectionToken = $this->selectionToken($projection, $fixture['user_id']);
+        $effectsBeforeRead = $this->effectCounts();
 
-        self::assertSame([], $projection->detailForSelf(
-            $fixture['user_id'],
-            $fixture['user_id'],
-            $selectionToken,
-        )->allowedActions, 'Renew policy alone is insufficient without a renewal package and intrinsic capability.');
-
-        $now = now('UTC');
-        DB::table('plan_offering_packages')->insert([
-            'plan_offering_id' => $fixture['offering_id'],
-            'code' => 'telegram-renewal-package',
-            'package_type' => 'renewal',
-            'name_fa' => 'تمدید تست',
-            'name_en' => 'Test renewal',
-            'price_irr' => 100_000,
-            'duration_days' => 30,
-            'data_bytes' => null,
-            'discount_eligible' => true,
-            'sort_order' => 10,
-            'created_at' => $now,
-            'updated_at' => $now,
-        ]);
-        self::assertSame([], $projection->detailForSelf(
-            $fixture['user_id'],
-            $fixture['user_id'],
-            $selectionToken,
-        )->allowedActions, 'Package presence must not bypass missing verified update_expiry capability.');
-
-        $this->insertCapability($fixture['target_id'], 'update_expiry', 'verified');
         self::assertSame(
-            [TelegramOwnedServiceAction::Renew],
-            $projection->detailForSelf($fixture['user_id'], $fixture['user_id'], $selectionToken)->allowedActions,
-        );
-
-        DB::table('panel_target_capabilities')
-            ->where('panel_service_target_id', $fixture['target_id'])
-            ->where('capability_code', 'update_expiry')
-            ->update(['verification_status' => 'stale', 'updated_at' => $now]);
-        self::assertSame([], $projection->detailForSelf(
-            $fixture['user_id'],
-            $fixture['user_id'],
-            $selectionToken,
-        )->allowedActions, 'Declared/stale capability evidence must fail closed.');
-        DB::table('panel_target_capabilities')
-            ->where('panel_service_target_id', $fixture['target_id'])
-            ->where('capability_code', 'update_expiry')
-            ->update(['verification_status' => 'verified', 'updated_at' => $now]);
-
-        DB::table('plan_offering_operations')->insert([
-            'plan_offering_id' => $fixture['offering_id'],
-            'operation_code' => 'add_data',
-            'customer_enabled' => true,
-            'administrator_enabled' => true,
-            'price_irr' => 0,
-            'discount_eligible' => true,
-            'required_capability_code' => null,
-            'created_at' => $now,
-            'updated_at' => $now,
-        ]);
-        self::assertSame(
-            [TelegramOwnedServiceAction::Renew],
-            $projection->detailForSelf($fixture['user_id'], $fixture['user_id'], $selectionToken)->allowedActions,
-            'Customer policy and package must still require the intrinsic capability.',
-        );
-        $this->insertCapability($fixture['target_id'], 'add_data_allowance', 'verified');
-        self::assertSame(
-            [TelegramOwnedServiceAction::Renew, TelegramOwnedServiceAction::AddData],
-            $projection->detailForSelf($fixture['user_id'], $fixture['user_id'], $selectionToken)->allowedActions,
-        );
-
-        DB::table('plan_offering_operations')->insert([
-            'plan_offering_id' => $fixture['offering_id'],
-            'operation_code' => 'reset_usage',
-            'customer_enabled' => true,
-            'administrator_enabled' => true,
-            'price_irr' => 0,
-            'discount_eligible' => false,
-            'required_capability_code' => null,
-            'created_at' => $now,
-            'updated_at' => $now,
-        ]);
-        self::assertSame(
-            [TelegramOwnedServiceAction::Renew, TelegramOwnedServiceAction::AddData],
-            $projection->detailForSelf($fixture['user_id'], $fixture['user_id'], $selectionToken)->allowedActions,
-            'Reset usage must require verified reset_usage capability but no paid package.',
-        );
-        $this->insertCapability($fixture['target_id'], 'reset_usage', 'verified');
-        self::assertSame(
-            [TelegramOwnedServiceAction::Renew, TelegramOwnedServiceAction::AddData, TelegramOwnedServiceAction::ResetUsage],
-            $projection->detailForSelf($fixture['user_id'], $fixture['user_id'], $selectionToken)->allowedActions,
-        );
-
-        DB::table('plan_offering_operations')
-            ->where('plan_offering_id', $fixture['offering_id'])
-            ->where('operation_code', 'reset_usage')
-            ->update(['required_capability_code' => 'custom_reset_gate', 'updated_at' => $now]);
-        self::assertSame(
-            [TelegramOwnedServiceAction::Renew, TelegramOwnedServiceAction::AddData],
-            $projection->detailForSelf($fixture['user_id'], $fixture['user_id'], $selectionToken)->allowedActions,
-            'Policy-specific capability is additive to the intrinsic reset capability.',
-        );
-        $this->insertCapability($fixture['target_id'], 'custom_reset_gate', 'verified');
-        self::assertSame(
-            [TelegramOwnedServiceAction::Renew, TelegramOwnedServiceAction::AddData, TelegramOwnedServiceAction::ResetUsage],
-            $projection->detailForSelf($fixture['user_id'], $fixture['user_id'], $selectionToken)->allowedActions,
-        );
-
-        DB::table('plan_offering_operations')
-            ->where('plan_offering_id', $fixture['offering_id'])
-            ->where('operation_code', 'renew')
-            ->update(['customer_enabled' => false, 'updated_at' => $now]);
-        self::assertSame(
-            [TelegramOwnedServiceAction::AddData, TelegramOwnedServiceAction::ResetUsage],
-            $projection->detailForSelf($fixture['user_id'], $fixture['user_id'], $selectionToken)->allowedActions,
-            'Administrator availability must not substitute for customer_enabled.',
+            [
+                TelegramOwnedServiceAction::Renew,
+                TelegramOwnedServiceAction::AddData,
+                TelegramOwnedServiceAction::ResetUsage,
+            ],
+            $projection->detailForSelf(
+                $fixture['user_id'],
+                $fixture['user_id'],
+                $selectionToken,
+            )->allowedActions,
+            'Only supported customer actions backed by package and capability truth may be exposed; change_plan remains out of scope.',
         );
 
         $otherUserId = $this->benefitUser();
@@ -176,30 +161,184 @@ final class TelegramOwnedServiceAllowedActionsProjectionTest extends TestCase
             // Expected owner-only boundary.
         }
 
-        self::assertSame($syncRunsBeforeRead, DB::table('service_sync_runs')->count(), 'Allowed-action projection must not trigger provider synchronization.');
-        self::assertSame($provisioningOperationsBeforeRead, DB::table('provisioning_operations')->count(), 'Allowed-action projection must not create provisioning or Service mutation authority.');
-        self::assertSame($outboxBeforeRead, DB::table('outbox_messages')->count(), 'Allowed-action projection must not enqueue external effects.');
+        self::assertSame($effectsBeforeRead, $this->effectCounts(), 'Allowed-action projection reads must create no sync, provisioning, or Outbox effects.');
     }
 
-    /** @return array{owner_id:int,user_id:int,offering_id:int,target_id:int,adapter:ServiceOperationalPanelAdapter} */
-    private function operationalFixture(string $suffix): array
-    {
-        $offering = $this->activeBenefitOffering('service-operational-'.$suffix);
+    /**
+     * @param  list<string>  $verifiedCapabilities
+     * @return array{owner_id:int,user_id:int,offering_id:int,target_id:int,adapter:ServiceOperationalPanelAdapter}
+     */
+    private function operationalFixture(
+        string $suffix,
+        bool $renewCustomerEnabled = true,
+        bool $withRenewalPackage = false,
+        bool $withAddDataPolicy = false,
+        bool $withResetUsagePolicy = false,
+        bool $withChangePlanPolicy = false,
+        array $verifiedCapabilities = [],
+    ): array {
         $ownerId = $this->benefitOwner();
         $userId = $this->benefitUser();
-        $targetId = (int) DB::table('plan_offerings')->where('id', $offering['id'])->value('panel_service_target_id');
+        $dependencies = $this->usageOfferingDependencies('service-operational-'.$suffix);
+        $code = 'svc-action-'.substr(hash('sha256', $suffix), 0, 16);
+        $baseDefinition = $this->usageOfferingDefinition($dependencies, 1_000_000, true, $code);
+
+        $operations = [
+            new OfferingOperationPolicy(
+                OfferingOperationCode::Renew,
+                $renewCustomerEnabled,
+                true,
+                0,
+                true,
+                'create_service',
+            ),
+        ];
+        if ($withAddDataPolicy) {
+            $operations[] = new OfferingOperationPolicy(
+                OfferingOperationCode::AddData,
+                true,
+                true,
+                0,
+                true,
+                null,
+            );
+        }
+        if ($withResetUsagePolicy) {
+            $operations[] = new OfferingOperationPolicy(
+                OfferingOperationCode::ResetUsage,
+                true,
+                true,
+                0,
+                false,
+                null,
+            );
+        }
+        if ($withChangePlanPolicy) {
+            $operations[] = new OfferingOperationPolicy(
+                OfferingOperationCode::ChangePlan,
+                true,
+                true,
+                0,
+                false,
+                null,
+            );
+        }
+
+        $packages = $baseDefinition->packages;
+        if ($withRenewalPackage) {
+            $packages[] = new OfferingPackageDefinition(
+                'renew-'.$code,
+                OfferingPackageType::Renewal,
+                'تمدید تست',
+                'Test renewal',
+                100_000,
+                30,
+                null,
+                true,
+                10,
+            );
+        }
+
+        $definition = new PlanOfferingDefinition(
+            $baseDefinition->code,
+            $baseDefinition->productId,
+            $baseDefinition->variantId,
+            $baseDefinition->salesServerId,
+            $baseDefinition->serviceTargetId,
+            $baseDefinition->serviceMode,
+            $baseDefinition->audience,
+            $baseDefinition->serverSelectionMode,
+            $baseDefinition->protocolSelectionMode,
+            $baseDefinition->tagMatchMode,
+            $baseDefinition->basePriceIrr,
+            $baseDefinition->durationDays,
+            $baseDefinition->dataAllowanceBytes,
+            $baseDefinition->deviceLimit,
+            $baseDefinition->sortOrder,
+            $baseDefinition->minPurchaseQuantity,
+            $baseDefinition->maxPurchaseQuantity,
+            $baseDefinition->discountEligible,
+            $baseDefinition->autoRenewAllowed,
+            $baseDefinition->customPlanAllowed,
+            $baseDefinition->trialAllowed,
+            $baseDefinition->tierCodes,
+            $baseDefinition->tagIds,
+            $baseDefinition->protocols,
+            $baseDefinition->requiredCapabilities,
+            $operations,
+            $packages,
+        );
+
+        $created = $this->app->make(PlanOfferingService::class)->create(
+            $definition,
+            new CatalogChangeContext(
+                'svc-action-create-'.substr(hash('sha256', $suffix), 0, 32),
+                'svc-action-create-correlation-'.substr(hash('sha256', $suffix), 0, 20),
+                'telegram_service_action_test',
+                'Create immutable Service action projection fixture.',
+                $ownerId,
+            ),
+        );
+        $offeringId = $created->targetId;
+        $targetId = $dependencies['target_id'];
         $connectionId = (int) DB::table('panel_service_targets')->where('id', $targetId)->value('panel_connection_id');
+        $now = now('UTC');
+        $capabilitiesHash = hash('sha256', 'svc-action-capabilities:'.$suffix);
+        $evidenceHash = hash('sha256', 'svc-action-evidence:'.$suffix);
+
+        foreach (array_values(array_unique($verifiedCapabilities)) as $capability) {
+            $this->insertCapability($targetId, $capability, 'declared');
+        }
+        DB::table('panel_target_capabilities')
+            ->where('panel_service_target_id', $targetId)
+            ->update([
+                'verification_status' => 'verified',
+                'evidence_hash' => $evidenceHash,
+                'verified_at' => $now,
+                'updated_at' => $now,
+            ]);
         DB::table('panel_connections')->where('id', $connectionId)->update([
             'encrypted_credentials' => Crypt::encryptString(json_encode(['token' => 'service-operational-test'], JSON_THROW_ON_ERROR)),
             'base_url' => 'https://panel.example.com',
             'state' => 'active',
-            'updated_at' => now('UTC'),
+            'last_test_status' => 'success',
+            'last_panel_version' => 'service-action-test-1.0.0',
+            'last_capabilities_hash' => $capabilitiesHash,
+            'last_tested_at' => $now,
+            'updated_at' => $now,
         ]);
-        DB::table('panel_service_targets')->where('id', $targetId)->update(['state' => 'active', 'updated_at' => now('UTC')]);
+        DB::table('panel_service_targets')->where('id', $targetId)->update([
+            'state' => 'active',
+            'capability_status' => 'verified',
+            'capability_evidence_hash' => $evidenceHash,
+            'capability_verified_at' => $now,
+            'verified_connection_version' => 1,
+            'updated_at' => $now,
+        ]);
+        DB::table('sales_servers')->where('id', $dependencies['server_id'])->update([
+            'state' => 'active',
+            'visibility' => 'listed',
+            'updated_at' => $now,
+        ]);
 
-        $now = now('UTC');
+        $version = (int) DB::table('plan_offerings')->where('id', $offeringId)->value('version');
+        $activated = $this->app->make(PlanOfferingService::class)->activate(
+            $offeringId,
+            $version,
+            new CatalogChangeContext(
+                'svc-action-activate-'.substr(hash('sha256', $suffix), 0, 32),
+                'svc-action-activate-correlation-'.substr(hash('sha256', $suffix), 0, 20),
+                'telegram_service_action_test',
+                'Activate immutable Service action projection fixture.',
+                $ownerId,
+            ),
+        );
+        if (! $activated->changed) {
+            throw new RuntimeException('Service action projection fixture offering could not be activated.');
+        }
+
         $profileId = (int) DB::table('panel_protocol_profiles')->insertGetId([
-            'code' => 'svc-action-'.substr(hash('sha256', $suffix), 0, 20),
+            'code' => 'svc-action-profile-'.substr(hash('sha256', $suffix), 0, 16),
             'name_fa' => 'Service action test profile',
             'name_en' => 'Service action test profile',
             'protocol_family' => 'vless',
@@ -242,7 +381,7 @@ final class TelegramOwnedServiceAllowedActionsProjectionTest extends TestCase
         return [
             'owner_id' => $ownerId,
             'user_id' => $userId,
-            'offering_id' => $offering['id'],
+            'offering_id' => $offeringId,
             'target_id' => $targetId,
             'adapter' => $adapter,
         ];
@@ -280,6 +419,24 @@ final class TelegramOwnedServiceAllowedActionsProjectionTest extends TestCase
         return $service->attach($preview->importPublicId, $context);
     }
 
+    private function selectionToken(TelegramOwnedServiceProjection $projection, int $userId): string
+    {
+        $page = $projection->pageForSelf($userId, $userId, 1, 6);
+        self::assertCount(1, $page->items);
+
+        return $page->items[0]->selectionToken;
+    }
+
+    /** @return array{sync_runs:int,provisioning_operations:int,outbox_messages:int} */
+    private function effectCounts(): array
+    {
+        return [
+            'sync_runs' => DB::table('service_sync_runs')->count(),
+            'provisioning_operations' => DB::table('provisioning_operations')->count(),
+            'outbox_messages' => DB::table('outbox_messages')->count(),
+        ];
+    }
+
     private function insertCapability(int $targetId, string $code, string $verificationStatus): void
     {
         $now = now('UTC');
@@ -292,5 +449,20 @@ final class TelegramOwnedServiceAllowedActionsProjectionTest extends TestCase
             'created_at' => $now,
             'updated_at' => $now,
         ]);
+    }
+
+    private function setCapabilityVerified(int $targetId, string $code): void
+    {
+        $now = now('UTC');
+        $updated = DB::table('panel_target_capabilities')
+            ->where('panel_service_target_id', $targetId)
+            ->where('capability_code', $code)
+            ->update([
+                'verification_status' => 'verified',
+                'evidence_hash' => hash('sha256', 'evidence:'.$code),
+                'verified_at' => $now,
+                'updated_at' => $now,
+            ]);
+        self::assertSame(1, $updated, 'Expected exactly one target capability row to become verified.');
     }
 }
