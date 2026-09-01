@@ -631,6 +631,118 @@ SQL);
         ]);
     }
 
+    public function test_my_services_uses_english_list_and_no_sync_detail_copy(): void
+    {
+        $selectionToken = str_repeat('b', 40);
+        $servicePublicId = '01J00000000000000000000001';
+        $projection = new class($selectionToken, $servicePublicId) implements TelegramOwnedServiceProjection
+        {
+            public function __construct(
+                private readonly string $selectionToken,
+                private readonly string $servicePublicId,
+            ) {}
+
+            public function pageForSelf(int $actorUserId, int $subjectUserId, int $page, int $pageSize): TelegramOwnedServicePage
+            {
+                if ($actorUserId !== $subjectUserId || $page !== 1 || $pageSize !== 6) {
+                    throw new RuntimeException('Unexpected English My Services projection request.');
+                }
+
+                return new TelegramOwnedServicePage([
+                    new TelegramOwnedServiceListItem(
+                        $this->selectionToken,
+                        $this->servicePublicId,
+                        'suspended',
+                        'پلن فارسی',
+                        'English plan',
+                        'سرور فارسی',
+                        'English server',
+                        null,
+                    ),
+                ], 1, 1, 1);
+            }
+
+            public function detailForSelf(int $actorUserId, int $subjectUserId, string $selectionToken): TelegramOwnedServiceDetail
+            {
+                if ($actorUserId !== $subjectUserId || $selectionToken !== $this->selectionToken) {
+                    throw new RuntimeException('Unexpected English Service detail projection request.');
+                }
+
+                return new TelegramOwnedServiceDetail(
+                    $this->servicePublicId,
+                    'suspended',
+                    'پلن فارسی',
+                    'English plan',
+                    'سرور فارسی',
+                    'English server',
+                    null,
+                    'none',
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                );
+            }
+        };
+        $this->app->instance(TelegramOwnedServiceProjection::class, $projection);
+
+        $telegramUserId = 9660;
+        $this->accept($this->payload(6600, $telegramUserId, 'navigation_services_en', 'en', '/start'));
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $processor->process('123456789', 6600);
+
+        $servicesCallback = DB::table('telegram_interaction_callbacks')
+            ->where('action', 'navigation.my_services')
+            ->first(['token_ciphertext']);
+        self::assertNotNull($servicesCallback);
+        $servicesToken = $this->app->make(StringEncrypter::class)
+            ->decryptString((string) $servicesCallback->token_ciphertext);
+        $this->accept($this->callbackPayload(6601, $telegramUserId, 'navigation_services_en', 'en', $servicesToken));
+        $processor->process('123456789', 6601);
+
+        $listOperation = DB::table('telegram_delivery_operations')->orderByDesc('id')->first(['public_id']);
+        self::assertNotNull($listOperation);
+        $listCiphertext = DB::table(TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1::TABLE)
+            ->where('delivery_operation_public_id', (string) $listOperation->public_id)
+            ->value('presentation_ciphertext');
+        self::assertIsString($listCiphertext);
+        $listText = $this->app->make(StringEncrypter::class)->decryptString($listCiphertext);
+        self::assertStringContainsString('My Services', $listText);
+        self::assertStringContainsString('English plan', $listText);
+        self::assertStringContainsString('English server', $listText);
+        self::assertStringContainsString('Suspended', $listText);
+        self::assertStringContainsString($servicePublicId, $listText);
+        self::assertStringNotContainsString('پلن فارسی', $listText);
+        self::assertStringNotContainsString('سرور فارسی', $listText);
+
+        $detailCallback = DB::table('telegram_interaction_callbacks')
+            ->where('action', 'navigation.service.'.$selectionToken)
+            ->first(['token_ciphertext']);
+        self::assertNotNull($detailCallback);
+        $detailToken = $this->app->make(StringEncrypter::class)
+            ->decryptString((string) $detailCallback->token_ciphertext);
+        $this->accept($this->callbackPayload(6602, $telegramUserId, 'navigation_services_en', 'en', $detailToken));
+        $processor->process('123456789', 6602);
+
+        $detailOperation = DB::table('telegram_delivery_operations')->orderByDesc('id')->first(['public_id']);
+        self::assertNotNull($detailOperation);
+        $detailCiphertext = DB::table(TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1::TABLE)
+            ->where('delivery_operation_public_id', (string) $detailOperation->public_id)
+            ->value('presentation_ciphertext');
+        self::assertIsString($detailCiphertext);
+        $detailText = $this->app->make(StringEncrypter::class)->decryptString($detailCiphertext);
+        self::assertStringContainsString('Service Details', $detailText);
+        self::assertStringContainsString('English plan', $detailText);
+        self::assertStringContainsString('English server', $detailText);
+        self::assertStringContainsString('Suspended', $detailText);
+        self::assertStringContainsString('No synchronization evidence', $detailText);
+        self::assertStringContainsString('Not available', $detailText);
+        self::assertStringNotContainsString('پلن فارسی', $detailText);
+        self::assertStringNotContainsString('سرور فارسی', $detailText);
+    }
+
     public function test_arbitrary_text_and_non_private_start_do_not_implicitly_create_navigation_authority(): void
     {
         $processor = $this->app->make(TelegramUpdateProcessor::class);
