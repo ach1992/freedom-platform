@@ -29,6 +29,8 @@ final class ServiceOperationalPanelAdapter implements PanelAdapter
 
     public bool $lookupUnavailable = false;
 
+    public ?RemoteServiceSnapshot $forcedLookupSnapshot = null;
+
     public ?Closure $afterLookup = null;
 
     public function seed(RemoteServiceSnapshot $snapshot): void
@@ -61,6 +63,9 @@ final class ServiceOperationalPanelAdapter implements PanelAdapter
         $afterLookup = $this->afterLookup;
         $this->afterLookup = null;
         $afterLookup?->__invoke();
+        if ($this->forcedLookupSnapshot !== null) {
+            return $this->forcedLookupSnapshot;
+        }
 
         return $this->services[$remoteId] ?? null;
     }

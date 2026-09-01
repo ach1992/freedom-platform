@@ -22,6 +22,7 @@ use App\Modules\Provisioning\Application\ServiceOwnershipTransferService;
 use App\Modules\Provisioning\Application\ServiceRepairService;
 use App\Modules\Provisioning\Application\ServiceSynchronizationService;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceProjection;
+use App\Modules\Telegram\Application\TelegramOwnedServiceSearchResult;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Migrations\Migration;
@@ -937,7 +938,7 @@ final class ServiceOperationalAuthorityTest extends TestCase
     }
 
     /** @requirement SVC-001 DAT-002 DAT-003 SEC-002 QUA-001 */
-    public function test_telegram_owned_service_projection_is_self_only_uses_current_sync_and_hides_stale_remote_facts(): void
+    public function test_telegram_owned_service_projection_searches_only_current_owner_and_uses_safe_cached_sync_fallback(): void
     {
         $fixture = $this->operationalFixture('telegram-owned-projection');
         $attached = $this->attachedService(
@@ -947,7 +948,9 @@ final class ServiceOperationalAuthorityTest extends TestCase
             'telegram-owned-import',
         );
         self::assertIsString($attached->serviceSubscriptionPublicId);
+        self::assertIsString($attached->orderPublicId);
         $servicePublicId = $attached->serviceSubscriptionPublicId;
+        $orderPublicId = $attached->orderPublicId;
         $projection = $this->app->make(TelegramOwnedServiceProjection::class);
 
         $emptyUserId = $this->benefitUser();
@@ -964,32 +967,41 @@ final class ServiceOperationalAuthorityTest extends TestCase
         self::assertSame($servicePublicId, $item->publicId);
         self::assertMatchesRegularExpression('/\A[0-9a-f]{40}\z/', $item->selectionToken);
         self::assertNotSame($servicePublicId, $item->selectionToken);
-        self::assertNotSame('', $item->planNameFa);
-        self::assertNotSame('', $item->serverNameFa);
 
-        $repeat = $projection->pageForSelf($fixture['user_id'], $fixture['user_id'], 1, 6);
-        self::assertSame($item->selectionToken, $repeat->items[0]->selectionToken);
+        foreach ([strtolower($servicePublicId), strtolower($orderPublicId), 'telegram-owned-user'] as $term) {
+            $match = $projection->searchForSelf($fixture['user_id'], $fixture['user_id'], $term);
+            self::assertSame(TelegramOwnedServiceSearchResult::MATCHED, $match->status);
+            self::assertSame($item->selectionToken, $match->selectionToken);
+        }
+        self::assertSame(
+            TelegramOwnedServiceSearchResult::NOT_FOUND,
+            $projection->searchForSelf($fixture['user_id'], $fixture['user_id'], 'TELEGRAM-OWNED-USER')->status,
+            'Username matching must be binary/exact rather than inheriting a case-insensitive database collation.',
+        );
+        self::assertSame(
+            TelegramOwnedServiceSearchResult::NOT_FOUND,
+            $projection->searchForSelf($fixture['user_id'], $fixture['user_id'], ' telegram-owned-user ')->status,
+            'Username matching must not silently trim or otherwise broaden the exact private search term.',
+        );
+        foreach ([$servicePublicId, $orderPublicId, 'telegram-owned-user'] as $otherActorTerm) {
+            self::assertSame(
+                TelegramOwnedServiceSearchResult::NOT_FOUND,
+                $projection->searchForSelf($emptyUserId, $emptyUserId, $otherActorTerm)->status,
+                'Another actor must not learn that an exact identifier or username exists.',
+            );
+        }
+        self::assertSame($syncRunsBeforeRead, DB::table('service_sync_runs')->count(), 'Search/read projection must not trigger synchronization.');
 
         $noSync = $projection->detailForSelf($fixture['user_id'], $fixture['user_id'], $item->selectionToken);
         self::assertSame('none', $noSync->syncState);
         self::assertNull($noSync->remoteDisposition);
         self::assertNull($noSync->remoteStatus);
-        self::assertNull($noSync->dataLimitBytes);
-        self::assertNull($noSync->usedBytes);
-        self::assertNull($noSync->observedAt);
-        self::assertSame($syncRunsBeforeRead, DB::table('service_sync_runs')->count(), 'Read projection must not trigger synchronization.');
 
         try {
             $projection->pageForSelf($emptyUserId, $fixture['user_id'], 1, 6);
             self::fail('Owned Service projection must reject a different subject user.');
         } catch (AuthorizationException) {
             // Expected self-only boundary.
-        }
-        try {
-            $projection->detailForSelf($emptyUserId, $emptyUserId, $item->selectionToken);
-            self::fail('Another actor must not resolve an owned Service selection token.');
-        } catch (AuthorizationException) {
-            // Expected owner-bound selection.
         }
 
         $fixture['adapter']->seed(new RemoteServiceSnapshot(
@@ -1005,7 +1017,6 @@ final class ServiceOperationalAuthorityTest extends TestCase
         $sync = $this->app->make(ServiceSynchronizationService::class)->syncOne($servicePublicId);
         self::assertSame(1, $sync->processed);
         self::assertSame(0, $sync->failures);
-
         $current = $projection->detailForSelf($fixture['user_id'], $fixture['user_id'], $item->selectionToken);
         self::assertSame('current', $current->syncState);
         self::assertSame('present', $current->remoteDisposition);
@@ -1013,8 +1024,76 @@ final class ServiceOperationalAuthorityTest extends TestCase
         self::assertSame(10_000, $current->dataLimitBytes);
         self::assertSame(2_500, $current->usedBytes);
         self::assertSame(7_500, $current->remainingBytes());
-        self::assertSame('2026-10-01 04:00:00.000000', $current->expiresAt);
-        self::assertNotNull($current->observedAt);
+        $confirmedObservedAt = $current->observedAt;
+        self::assertNotNull($confirmedObservedAt);
+
+        $fixture['adapter']->lookupUnavailable = true;
+        $unavailableSync = $this->app->make(ServiceSynchronizationService::class)->syncOne($servicePublicId);
+        self::assertSame(1, $unavailableSync->processed);
+        self::assertSame(1, $unavailableSync->failures);
+        $cached = $projection->detailForSelf($fixture['user_id'], $fixture['user_id'], $item->selectionToken);
+        self::assertSame('cached', $cached->syncState);
+        self::assertSame('unavailable', $cached->remoteDisposition);
+        self::assertSame('active', $cached->remoteStatus);
+        self::assertSame(10_000, $cached->dataLimitBytes);
+        self::assertSame(2_500, $cached->usedBytes);
+        self::assertSame(7_500, $cached->remainingBytes());
+        self::assertSame($confirmedObservedAt, $cached->observedAt, 'Cached facts must retain the prior confirmed observation time.');
+
+        $fixture['adapter']->lookupUnavailable = false;
+        $fixture['adapter']->remove('remote-telegram-owned');
+        $missingSync = $this->app->make(ServiceSynchronizationService::class)->syncOne($servicePublicId);
+        self::assertSame(1, $missingSync->processed);
+        $missing = $projection->detailForSelf($fixture['user_id'], $fixture['user_id'], $item->selectionToken);
+        self::assertSame('current', $missing->syncState);
+        self::assertSame('missing', $missing->remoteDisposition);
+        self::assertNull($missing->remoteStatus);
+        self::assertNull($missing->dataLimitBytes);
+        self::assertNull($missing->usedBytes);
+        self::assertNull($missing->expiresAt);
+
+        $fixture['adapter']->lookupUnavailable = true;
+        $afterMissingUnavailableSync = $this->app->make(ServiceSynchronizationService::class)->syncOne($servicePublicId);
+        self::assertSame(1, $afterMissingUnavailableSync->failures);
+        $afterMissingUnavailable = $projection->detailForSelf($fixture['user_id'], $fixture['user_id'], $item->selectionToken);
+        self::assertSame('current', $afterMissingUnavailable->syncState);
+        self::assertSame('unavailable', $afterMissingUnavailable->remoteDisposition);
+        self::assertNull($afterMissingUnavailable->remoteStatus, 'A later unavailable observation must not revive facts invalidated by a missing disposition.');
+        self::assertNull($afterMissingUnavailable->dataLimitBytes);
+        self::assertNull($afterMissingUnavailable->usedBytes);
+        $fixture['adapter']->lookupUnavailable = false;
+
+        $fixture['adapter']->forcedLookupSnapshot = new RemoteServiceSnapshot(
+            'wrong-remote-identity',
+            'telegram-owned-user',
+            PanelServiceStatus::Active,
+            99_999,
+            88_888,
+            new \DateTimeImmutable('2026-11-01T04:00:00+00:00'),
+            hash('sha256', 'canonical:wrong-remote-identity'),
+            hash('sha256', 'equivalence:wrong-remote-identity'),
+        );
+        $mismatchSync = $this->app->make(ServiceSynchronizationService::class)->syncOne($servicePublicId);
+        self::assertSame(1, $mismatchSync->processed);
+        $mismatch = $projection->detailForSelf($fixture['user_id'], $fixture['user_id'], $item->selectionToken);
+        self::assertSame('current', $mismatch->syncState);
+        self::assertSame('identity_mismatch', $mismatch->remoteDisposition);
+        self::assertNull($mismatch->remoteStatus);
+        self::assertNull($mismatch->dataLimitBytes);
+        self::assertNull($mismatch->usedBytes);
+        self::assertNull($mismatch->expiresAt);
+        $fixture['adapter']->forcedLookupSnapshot = null;
+
+        $fixture['adapter']->lookupUnavailable = true;
+        $afterMismatchUnavailableSync = $this->app->make(ServiceSynchronizationService::class)->syncOne($servicePublicId);
+        self::assertSame(1, $afterMismatchUnavailableSync->failures);
+        $afterMismatchUnavailable = $projection->detailForSelf($fixture['user_id'], $fixture['user_id'], $item->selectionToken);
+        self::assertSame('current', $afterMismatchUnavailable->syncState);
+        self::assertSame('unavailable', $afterMismatchUnavailable->remoteDisposition);
+        self::assertNull($afterMismatchUnavailable->remoteStatus, 'A later unavailable observation must not revive facts invalidated by identity mismatch.');
+        self::assertNull($afterMismatchUnavailable->dataLimitBytes);
+        self::assertNull($afterMismatchUnavailable->usedBytes);
+        $fixture['adapter']->lookupUnavailable = false;
 
         $newOwnerUserId = $this->benefitUser();
         $transfer = $this->app->make(ServiceOwnershipTransferService::class)->transfer(
@@ -1023,23 +1102,37 @@ final class ServiceOperationalAuthorityTest extends TestCase
             $this->context('telegram-owned-transfer', $fixture['owner_id']),
         );
         self::assertSame($newOwnerUserId, $transfer->toUserId);
-
-        $oldOwnerPage = $projection->pageForSelf($fixture['user_id'], $fixture['user_id'], 1, 6);
-        self::assertSame(0, $oldOwnerPage->totalItems);
-        $newOwnerPage = $projection->pageForSelf($newOwnerUserId, $newOwnerUserId, 1, 6);
-        self::assertSame(1, $newOwnerPage->totalItems);
-        $newOwnerItem = $newOwnerPage->items[0];
-        self::assertSame($servicePublicId, $newOwnerItem->publicId);
-        self::assertNotSame($item->selectionToken, $newOwnerItem->selectionToken);
-
-        $stale = $projection->detailForSelf($newOwnerUserId, $newOwnerUserId, $newOwnerItem->selectionToken);
+        self::assertSame(TelegramOwnedServiceSearchResult::NOT_FOUND, $projection->searchForSelf($fixture['user_id'], $fixture['user_id'], $servicePublicId)->status);
+        $newOwnerMatch = $projection->searchForSelf($newOwnerUserId, $newOwnerUserId, $servicePublicId);
+        self::assertSame(TelegramOwnedServiceSearchResult::MATCHED, $newOwnerMatch->status);
+        self::assertNotSame($item->selectionToken, $newOwnerMatch->selectionToken);
+        self::assertNotNull($newOwnerMatch->selectionToken);
+        $stale = $projection->detailForSelf($newOwnerUserId, $newOwnerUserId, $newOwnerMatch->selectionToken);
         self::assertSame('stale', $stale->syncState);
         self::assertNull($stale->remoteDisposition);
         self::assertNull($stale->remoteStatus);
-        self::assertNull($stale->dataLimitBytes);
-        self::assertNull($stale->usedBytes);
-        self::assertNull($stale->expiresAt);
-        self::assertNotNull($stale->observedAt, 'Stale state may disclose only when the last observation occurred, not stale remote facts.');
+
+        $noCacheAttached = $this->attachedService($fixture, 'remote-no-cache', 'no-cache-user', 'telegram-no-cache-import');
+        self::assertIsString($noCacheAttached->serviceSubscriptionPublicId);
+        $noCacheMatch = $projection->searchForSelf($fixture['user_id'], $fixture['user_id'], $noCacheAttached->serviceSubscriptionPublicId);
+        self::assertSame(TelegramOwnedServiceSearchResult::MATCHED, $noCacheMatch->status);
+        self::assertNotNull($noCacheMatch->selectionToken);
+        $fixture['adapter']->lookupUnavailable = true;
+        $noCacheSync = $this->app->make(ServiceSynchronizationService::class)->syncOne($noCacheAttached->serviceSubscriptionPublicId);
+        self::assertSame(1, $noCacheSync->failures);
+        $noCache = $projection->detailForSelf($fixture['user_id'], $fixture['user_id'], $noCacheMatch->selectionToken);
+        self::assertSame('current', $noCache->syncState);
+        self::assertSame('unavailable', $noCache->remoteDisposition);
+        self::assertNull($noCache->remoteStatus);
+        self::assertNull($noCache->dataLimitBytes);
+        self::assertNull($noCache->usedBytes);
+        $fixture['adapter']->lookupUnavailable = false;
+
+        $this->attachedService($fixture, 'remote-ambiguous-one', 'shared-search-user', 'telegram-ambiguous-one');
+        $this->attachedService($fixture, 'remote-ambiguous-two', 'shared-search-user', 'telegram-ambiguous-two');
+        $ambiguous = $projection->searchForSelf($fixture['user_id'], $fixture['user_id'], 'shared-search-user');
+        self::assertSame(TelegramOwnedServiceSearchResult::AMBIGUOUS, $ambiguous->status);
+        self::assertNull($ambiguous->selectionToken);
     }
 
     /** @return array{owner_id:int,user_id:int,offering_id:int,target_id:int,adapter:ServiceOperationalPanelAdapter} */

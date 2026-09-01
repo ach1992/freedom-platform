@@ -8,6 +8,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceProjection;
 use App\Modules\Telegram\Application\TelegramOwnedServiceDetail;
 use App\Modules\Telegram\Application\TelegramOwnedServiceListItem;
 use App\Modules\Telegram\Application\TelegramOwnedServicePage;
+use App\Modules\Telegram\Application\TelegramOwnedServiceSearchResult;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\DatabaseManager;
 use InvalidArgumentException;
@@ -96,23 +97,78 @@ final readonly class TelegramOwnedServiceProjectionService implements TelegramOw
             throw new AuthorizationException('Telegram owned Service is unavailable for this actor.');
         }
 
-        $snapshot = $connection->table('service_sync_snapshots')
+        $currentSnapshot = $connection->table('service_sync_snapshots')
             ->where('service_subscription_id', (int) $service->id)
+            ->where('local_lifecycle_state', (string) $service->lifecycle_state)
+            ->where('local_lifecycle_version', (int) $service->lifecycle_version)
+            ->where('local_remote_identity_generation', (int) $service->remote_identity_generation)
+            ->where('local_mutation_generation', (int) $service->mutation_generation)
             ->orderByDesc('observed_at')
             ->orderByDesc('id')
             ->first([
-                'local_lifecycle_state', 'local_lifecycle_version',
-                'local_remote_identity_generation', 'local_mutation_generation',
-                'remote_disposition', 'remote_status', 'remote_data_limit_bytes',
+                'id', 'remote_disposition', 'remote_status', 'remote_data_limit_bytes',
                 'remote_used_bytes', 'remote_expires_at', 'observed_at',
             ]);
-        $snapshotIsCurrent = $snapshot !== null
-            && (string) $snapshot->local_lifecycle_state === (string) $service->lifecycle_state
-            && (int) $snapshot->local_lifecycle_version === (int) $service->lifecycle_version
-            && (int) $snapshot->local_remote_identity_generation === (int) $service->remote_identity_generation
-            && (int) $snapshot->local_mutation_generation === (int) $service->mutation_generation;
-        $syncState = $snapshot === null ? 'none' : ($snapshotIsCurrent ? 'current' : 'stale');
-        $remoteFactsVisible = $snapshotIsCurrent && (string) $snapshot->remote_disposition === 'present';
+
+        $syncState = 'none';
+        $remoteDisposition = null;
+        $remoteStatus = null;
+        $dataLimitBytes = null;
+        $usedBytes = null;
+        $expiresAt = null;
+        $observedAt = null;
+
+        if ($currentSnapshot !== null) {
+            $syncState = 'current';
+            $remoteDisposition = $this->databaseString($currentSnapshot->remote_disposition ?? null, 'Service remote disposition');
+            $observedAt = $this->databaseString($currentSnapshot->observed_at ?? null, 'Service observation time');
+            if ($remoteDisposition === 'present') {
+                $remoteStatus = $this->optionalDatabaseString($currentSnapshot->remote_status ?? null);
+                $dataLimitBytes = $this->optionalNonNegativeInt($currentSnapshot->remote_data_limit_bytes ?? null, 'Service remote data limit');
+                $usedBytes = $this->optionalNonNegativeInt($currentSnapshot->remote_used_bytes ?? null, 'Service remote usage');
+                $expiresAt = $this->optionalDatabaseString($currentSnapshot->remote_expires_at ?? null);
+            } elseif ($remoteDisposition === 'unavailable') {
+                $latestPriorAuthoritative = $connection->table('service_sync_snapshots')
+                    ->where('service_subscription_id', (int) $service->id)
+                    ->where('local_lifecycle_state', (string) $service->lifecycle_state)
+                    ->where('local_lifecycle_version', (int) $service->lifecycle_version)
+                    ->where('local_remote_identity_generation', (int) $service->remote_identity_generation)
+                    ->where('local_mutation_generation', (int) $service->mutation_generation)
+                    ->where('remote_disposition', '<>', 'unavailable')
+                    ->where(function ($query) use ($currentSnapshot): void {
+                        $query->where('observed_at', '<', (string) $currentSnapshot->observed_at)
+                            ->orWhere(function ($sameTime) use ($currentSnapshot): void {
+                                $sameTime->where('observed_at', (string) $currentSnapshot->observed_at)
+                                    ->where('id', '<', (int) $currentSnapshot->id);
+                            });
+                    })
+                    ->orderByDesc('observed_at')
+                    ->orderByDesc('id')
+                    ->first([
+                        'remote_disposition', 'remote_status', 'remote_data_limit_bytes', 'remote_used_bytes',
+                        'remote_expires_at', 'observed_at',
+                    ]);
+                if ($latestPriorAuthoritative !== null
+                    && (string) $latestPriorAuthoritative->remote_disposition === 'present') {
+                    $syncState = 'cached';
+                    $remoteStatus = $this->databaseString($latestPriorAuthoritative->remote_status ?? null, 'Cached Service remote status');
+                    $dataLimitBytes = $this->optionalNonNegativeInt($latestPriorAuthoritative->remote_data_limit_bytes ?? null, 'Cached Service remote data limit');
+                    $usedBytes = $this->optionalNonNegativeInt($latestPriorAuthoritative->remote_used_bytes ?? null, 'Cached Service remote usage');
+                    $expiresAt = $this->optionalDatabaseString($latestPriorAuthoritative->remote_expires_at ?? null);
+                    $observedAt = $this->databaseString($latestPriorAuthoritative->observed_at ?? null, 'Cached Service observation time');
+                }
+            }
+        } else {
+            $latestSnapshot = $connection->table('service_sync_snapshots')
+                ->where('service_subscription_id', (int) $service->id)
+                ->orderByDesc('observed_at')
+                ->orderByDesc('id')
+                ->first(['observed_at']);
+            if ($latestSnapshot !== null) {
+                $syncState = 'stale';
+                $observedAt = $this->databaseString($latestSnapshot->observed_at ?? null, 'Stale Service observation time');
+            }
+        }
 
         return new TelegramOwnedServiceDetail(
             $this->databaseString($service->public_id ?? null, 'Service public ID'),
@@ -123,13 +179,80 @@ final readonly class TelegramOwnedServiceProjectionService implements TelegramOw
             $this->optionalDatabaseString($service->server_name_en ?? null),
             $this->optionalDatabaseString($service->provisioned_at ?? null),
             $syncState,
-            $snapshotIsCurrent ? $this->databaseString($snapshot->remote_disposition ?? null, 'Service remote disposition') : null,
-            $remoteFactsVisible ? $this->optionalDatabaseString($snapshot->remote_status ?? null) : null,
-            $remoteFactsVisible ? $this->optionalNonNegativeInt($snapshot->remote_data_limit_bytes ?? null, 'Service remote data limit') : null,
-            $remoteFactsVisible ? $this->optionalNonNegativeInt($snapshot->remote_used_bytes ?? null, 'Service remote usage') : null,
-            $remoteFactsVisible ? $this->optionalDatabaseString($snapshot->remote_expires_at ?? null) : null,
-            $snapshot === null ? null : $this->databaseString($snapshot->observed_at ?? null, 'Service observation time'),
+            $remoteDisposition,
+            $remoteStatus,
+            $dataLimitBytes,
+            $usedBytes,
+            $expiresAt,
+            $observedAt,
         );
+    }
+
+    public function searchForSelf(int $actorUserId, int $subjectUserId, string $searchTerm): TelegramOwnedServiceSearchResult
+    {
+        $this->assertSelf($actorUserId, $subjectUserId);
+        $term = $searchTerm;
+        if ($term === '' || ! mb_check_encoding($term, 'UTF-8') || str_contains($term, "\0") || mb_strlen($term) > 191) {
+            return TelegramOwnedServiceSearchResult::notFound();
+        }
+
+        $connection = $this->database->connection();
+        if (preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/i', $term) === 1) {
+            $identifier = strtoupper($term);
+            $identifierMatches = array_values($connection->table('service_subscriptions as service')
+                ->join('orders as order_row', 'order_row.id', '=', 'service.order_id')
+                ->where('service.user_id', $subjectUserId)
+                ->where(function ($query) use ($identifier): void {
+                    $query->whereRaw('BINARY service.public_id = ?', [$identifier])
+                        ->orWhereRaw('BINARY order_row.public_id = ?', [$identifier]);
+                })
+                ->limit(2)
+                ->pluck('service.public_id')
+                ->all());
+            $identifierResult = $this->searchResult($subjectUserId, $identifierMatches);
+            if ($identifierResult->status !== TelegramOwnedServiceSearchResult::NOT_FOUND) {
+                return $identifierResult;
+            }
+        }
+
+        $importMatches = array_values($connection->table('service_subscriptions as service')
+            ->join('service_imports as import_row', 'import_row.service_subscription_id', '=', 'service.id')
+            ->where('service.user_id', $subjectUserId)
+            ->where('import_row.state', 'attached')
+            ->whereRaw('BINARY import_row.remote_username = ?', [$term])
+            ->limit(2)
+            ->pluck('service.public_id')
+            ->all());
+        $provisioningMatches = array_values($connection->table('service_subscriptions as service')
+            ->join('provisioning_operations as operation', 'operation.service_subscription_id', '=', 'service.id')
+            ->where('service.user_id', $subjectUserId)
+            ->where('operation.operation_type', 'initial_provision')
+            ->whereNotNull('operation.remote_username')
+            ->whereRaw('BINARY operation.remote_username = ?', [$term])
+            ->limit(2)
+            ->pluck('service.public_id')
+            ->all());
+
+        return $this->searchResult($subjectUserId, array_values(array_merge($importMatches, $provisioningMatches)));
+    }
+
+    /** @param list<mixed> $publicIds */
+    private function searchResult(int $subjectUserId, array $publicIds): TelegramOwnedServiceSearchResult
+    {
+        $matches = [];
+        foreach ($publicIds as $publicId) {
+            $value = $this->databaseString($publicId, 'Service search public ID');
+            $matches[$value] = true;
+            if (count($matches) > 1) {
+                return TelegramOwnedServiceSearchResult::ambiguous();
+            }
+        }
+        $matchedPublicIds = array_keys($matches);
+        if ($matchedPublicIds === []) {
+            return TelegramOwnedServiceSearchResult::notFound();
+        }
+
+        return TelegramOwnedServiceSearchResult::matched($this->selectionToken($subjectUserId, $matchedPublicIds[0]));
     }
 
     private function assertSelf(int $actorUserId, int $subjectUserId): void
