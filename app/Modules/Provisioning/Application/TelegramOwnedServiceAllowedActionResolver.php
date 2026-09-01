@@ -18,9 +18,9 @@ final readonly class TelegramOwnedServiceAllowedActionResolver
     ];
 
     /**
-     * @param array<string,array{customer_enabled:bool,required_capability_code:?string}> $policies
-     * @param list<string> $packageTypes
-     * @param list<string> $verifiedCapabilities
+     * @param  array<string,array{customer_enabled:bool,required_capability_code:?string}>  $policies
+     * @param  list<string>  $packageTypes
+     * @param  list<string>  $verifiedCapabilities
      * @return list<TelegramOwnedServiceAction>
      */
     public function resolve(
