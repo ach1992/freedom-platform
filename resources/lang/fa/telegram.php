@@ -39,13 +39,15 @@ return [
             'previous' => 'قبلی',
             'next' => 'بعدی',
             'not_available' => 'ثبت نشده',
+            'allowed_actions_none' => 'در حال حاضر عملیاتی در دسترس نیست',
+            'allowed_actions_separator' => '، ',
             'search' => [
                 'button' => 'جستجو',
                 'prompt' => "جستجوی سرویس‌های من\n\nشناسه دقیق سرویس، شناسه سفارش یا نام کاربری سرویس را ارسال کنید.\nجستجو خصوصی و دقیق است.",
                 'not_found' => "سرویس منطبقی در حساب شما پیدا نشد.\n\nشناسه دقیق سرویس، شناسه سفارش یا نام کاربری سرویس را دوباره بررسی کنید.",
                 'ambiguous' => "بیش از یک سرویس شما این نام کاربری را دارد.\n\nبرای انتخاب امن، با شناسه دقیق سرویس یا شناسه سفارش جستجو کنید.",
             ],
-            'detail' => "جزئیات سرویس\n\nشناسه سرویس: :public_id\nپلن: :plan\nسرور: :server\nوضعیت محلی: :state\nزمان ایجاد سرویس: :provisioned_at\n\nهمگام‌سازی\nوضعیت شواهد: :sync_state\nوضعیت مشاهده: :remote_disposition\nوضعیت سرویس: :remote_status\nحجم کل: :data_limit\nمصرف‌شده: :used\nباقی‌مانده: :remaining\nانقضا: :expires_at\nآخرین مشاهده: :observed_at",
+            'detail' => "جزئیات سرویس\n\nشناسه سرویس: :public_id\nپلن: :plan\nسرور: :server\nوضعیت محلی: :state\nزمان ایجاد سرویس: :provisioned_at\nعملیات مجاز: :allowed_actions\n\nهمگام‌سازی\nوضعیت شواهد: :sync_state\nوضعیت مشاهده: :remote_disposition\nوضعیت سرویس: :remote_status\nحجم کل: :data_limit\nمصرف‌شده: :used\nباقی‌مانده: :remaining\nانقضا: :expires_at\nآخرین مشاهده: :observed_at",
             'values' => [
                 'lifecycle' => [
                     'active' => 'فعال', 'suspended' => 'تعلیق‌شده', 'retired' => 'بازنشسته',
@@ -64,6 +66,13 @@ return [
                 ],
                 'remote_status' => [
                     'active' => 'فعال', 'suspended' => 'تعلیق‌شده', 'expired' => 'منقضی', 'disabled' => 'غیرفعال', 'unknown' => 'نامشخص',
+                ],
+                'action' => [
+                    'renew' => 'تمدید',
+                    'add_data' => 'افزایش حجم',
+                    'add_days' => 'افزایش زمان',
+                    'add_data_days' => 'افزایش حجم و زمان',
+                    'reset_usage' => 'بازنشانی مصرف',
                 ],
             ],
         ],

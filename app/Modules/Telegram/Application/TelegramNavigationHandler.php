@@ -641,6 +641,15 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         $remoteStatus = $service->remoteStatus === null
             ? $notAvailable
             : $this->localizedServiceValue('remote_status', $service->remoteStatus, $locale);
+        $allowedActions = $service->allowedActions === []
+            ? $this->translation('telegram.navigation.services.allowed_actions_none', $locale)
+            : implode(
+                $this->translation('telegram.navigation.services.allowed_actions_separator', $locale),
+                array_map(
+                    fn (TelegramOwnedServiceAction $action): string => $this->localizedServiceValue('action', $action->value, $locale),
+                    $service->allowedActions,
+                ),
+            );
 
         return $this->translation('telegram.navigation.services.detail', $locale, [
             'public_id' => $service->publicId,
@@ -648,6 +657,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             'plan' => $this->localizedLabel($service->planNameFa, $service->planNameEn, $locale),
             'server' => $this->localizedLabel($service->serverNameFa, $service->serverNameEn, $locale),
             'provisioned_at' => $service->provisionedAt ?? $notAvailable,
+            'allowed_actions' => $allowedActions,
             'sync_state' => $syncState,
             'remote_disposition' => $remoteDisposition,
             'remote_status' => $remoteStatus,
