@@ -8,6 +8,7 @@ use InvalidArgumentException;
 
 final readonly class TelegramOwnedServiceDetail
 {
+    /** @param list<TelegramOwnedServiceAction> $allowedActions */
     public function __construct(
         public string $publicId,
         public string $lifecycleState,
@@ -23,6 +24,7 @@ final readonly class TelegramOwnedServiceDetail
         public ?int $usedBytes,
         public ?string $expiresAt,
         public ?string $observedAt,
+        public array $allowedActions = [],
     ) {
         if (preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/', $publicId) !== 1) {
             throw new InvalidArgumentException('Telegram owned Service detail public identifier is invalid.');
@@ -67,6 +69,11 @@ final readonly class TelegramOwnedServiceDetail
                 throw new InvalidArgumentException('Telegram owned Service optional detail label is invalid.');
             }
         }
+
+        $this->assertAllowedActions($allowedActions);
+        if (($lifecycleState === 'retired' || $provisionedAt === null) && $allowedActions !== []) {
+            throw new InvalidArgumentException('Telegram owned Service unavailable lifecycle must not expose allowed actions.');
+        }
     }
 
     public function remainingBytes(): ?int
@@ -76,5 +83,32 @@ final readonly class TelegramOwnedServiceDetail
         }
 
         return max(0, $this->dataLimitBytes - $this->usedBytes);
+    }
+
+    /** @param list<TelegramOwnedServiceAction> $allowedActions */
+    private function assertAllowedActions(array $allowedActions): void
+    {
+        if (! array_is_list($allowedActions)) {
+            throw new InvalidArgumentException('Telegram owned Service allowed actions must be a list.');
+        }
+
+        $positions = [];
+        foreach (TelegramOwnedServiceAction::ordered() as $position => $action) {
+            $positions[$action->value] = $position;
+        }
+
+        $lastPosition = -1;
+        $seen = [];
+        foreach ($allowedActions as $action) {
+            if (! $action instanceof TelegramOwnedServiceAction) {
+                throw new InvalidArgumentException('Telegram owned Service allowed action is invalid.');
+            }
+            $position = $positions[$action->value] ?? null;
+            if (! is_int($position) || isset($seen[$action->value]) || $position <= $lastPosition) {
+                throw new InvalidArgumentException('Telegram owned Service allowed action order is invalid.');
+            }
+            $seen[$action->value] = true;
+            $lastPosition = $position;
+        }
     }
 }
