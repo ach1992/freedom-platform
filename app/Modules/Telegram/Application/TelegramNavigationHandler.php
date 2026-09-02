@@ -1376,11 +1376,21 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
     private function returnPurchaseOffering(TelegramInteractionAction $action): void
     {
         $state = $this->purchaseQuoteStateFromPayload($action->sessionPayload);
-        $offering = $this->purchaseCatalog->offeringForSelf(
-            $action->userId,
-            $action->userId,
-            $state['offering_selection'],
-        );
+        try {
+            $offering = $this->purchaseCatalog->offeringForSelf(
+                $action->userId,
+                $action->userId,
+                $state['offering_selection'],
+            );
+        } catch (AuthorizationException) {
+            try {
+                $this->returnPurchaseCatalogFromQuote($action, $state['page']);
+            } catch (AuthorizationException|\DomainException) {
+                // The actor or session changed while returning from a stale Quote. Fail closed without retrying the update.
+            }
+
+            return;
+        }
         $locale = $this->localeForActor($action->userId);
         $session = $this->sessions->transition(
             $action->sessionPublicId,
@@ -1391,6 +1401,26 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         );
         $this->assertActorBinding($action, $session->userId);
         $this->renderPurchaseOffering($action, $session->version, $offering, $locale, $action->requestKey);
+    }
+
+    private function returnPurchaseCatalogFromQuote(TelegramInteractionAction $action, int $page): void
+    {
+        $locale = $this->localeForActor($action->userId);
+        $catalog = $this->purchaseCatalog->pageForSelf(
+            $action->userId,
+            $action->userId,
+            $page,
+            self::PURCHASE_PAGE_SIZE,
+        );
+        $session = $this->sessions->transition(
+            $action->sessionPublicId,
+            $action->sessionVersion,
+            self::STATE_PURCHASE_CATALOG,
+            ['page' => $catalog->page],
+            'nav-purchase-quote-stale-back-transition:'.$action->requestKey,
+        );
+        $this->assertActorBinding($action, $session->userId);
+        $this->renderPurchaseCatalog($action, $session->version, $catalog, $locale, $action->requestKey);
     }
 
     private function returnPurchaseCatalog(TelegramInteractionAction $action): void
