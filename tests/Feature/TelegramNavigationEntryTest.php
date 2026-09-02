@@ -23,6 +23,7 @@ use App\Modules\Wallet\Domain\IrrMoney;
 use App\Modules\Wallet\Domain\LedgerDirection;
 use Illuminate\Contracts\Encryption\StringEncrypter;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
+use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
 use RuntimeException;
@@ -159,6 +160,7 @@ final class TelegramNavigationEntryTest extends TestCase
             if (DB::connection()->getDriverName() === 'mysql') {
                 DB::unprepared('DROP TRIGGER IF EXISTS telegram_navigation_test_fail_processed_6402');
                 DB::unprepared('DROP TRIGGER IF EXISTS telegram_navigation_test_fail_processed_6903');
+                DB::unprepared('DROP TRIGGER IF EXISTS telegram_navigation_test_fail_processed_7007');
                 DB::unprepared('DROP TRIGGER IF EXISTS telegram_navigation_test_fail_processed_6105');
                 $this->truncateTablesForAllConnections();
             }
@@ -821,7 +823,7 @@ SQL);
         ]);
 
         $this->accept($this->callbackPayload(7006, $telegramUserId, 'navigation_resend', 'fa', $resendToken));
-        $processor->process('123456789', 7006);
+        $processor->process('123456789', 7007);
         self::assertCount(1, $resender->calls);
         self::assertSame($operationCountBefore + 1, DB::table('telegram_delivery_operations')->count());
 
@@ -1277,6 +1279,217 @@ SQL);
         self::assertStringNotContainsString('پلن جستجو', $detail);
     }
 
+    public function test_admin_usdt_rate_journey_is_permission_filtered_confidential_and_crash_replay_idempotent(): void
+    {
+        Config::set('usdt.rate.min_irr', '100000');
+        Config::set('usdt.rate.max_irr', '10000000');
+        Config::set('usdt.rate.manual_irr', '900000');
+        $telegramUserId = 9700;
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+
+        $this->accept($this->payload(7000, $telegramUserId, 'navigation_admin_rate', 'fa', '/start'));
+        $processor->process('123456789', 7000);
+        $account = DB::table('telegram_accounts')->where('telegram_user_id', $telegramUserId)->first(['id', 'user_id']);
+        self::assertNotNull($account);
+        self::assertSame(0, DB::table('telegram_interaction_callbacks')->where('action', 'navigation.admin')->count());
+
+        $administratorId = $this->financeAdministratorForUser((int) $account->user_id);
+        self::assertGreaterThan(0, $administratorId);
+        $this->accept($this->payload(7001, $telegramUserId, 'navigation_admin_rate', 'fa', '/menu'));
+        $processor->process('123456789', 7001);
+
+        $session = DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', (int) $account->id)
+            ->first(['id', 'state', 'version', 'payload']);
+        self::assertNotNull($session);
+        self::assertSame('home', (string) $session->state);
+        $adminCallback = DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $session->id)
+            ->where('session_version', (int) $session->version)
+            ->where('action', 'navigation.admin')
+            ->orderByDesc('id')
+            ->first(['action_payload', 'token_ciphertext']);
+        self::assertNotNull($adminCallback);
+        self::assertSame('{}', (string) $adminCallback->action_payload);
+        $adminToken = $this->app->make(StringEncrypter::class)->decryptString((string) $adminCallback->token_ciphertext);
+
+        $otherTelegramUserId = 9701;
+        $this->accept($this->payload(7010, $otherTelegramUserId, 'navigation_admin_other', 'fa', '/start'));
+        $processor->process('123456789', 7010);
+        $operationCountBeforeCrossActor = DB::table('telegram_delivery_operations')->count();
+        $this->accept($this->callbackPayload(7011, $otherTelegramUserId, 'navigation_admin_other', 'fa', $adminToken));
+        $processor->process('123456789', 7011);
+        self::assertSame($operationCountBeforeCrossActor, DB::table('telegram_delivery_operations')->count());
+
+        $this->accept($this->callbackPayload(7002, $telegramUserId, 'navigation_admin_rate', 'fa', $adminToken));
+        $processor->process('123456789', 7002);
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'id' => (int) $session->id,
+            'state' => 'admin_control',
+            'payload' => '{}',
+        ]);
+        self::assertStringContainsString('مرکز مدیریت', $this->latestConfidentialPresentation());
+
+        $rateCallback = DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $session->id)
+            ->where('action', 'navigation.admin.usdt_rate')
+            ->orderByDesc('id')
+            ->first(['action_payload', 'token_ciphertext']);
+        self::assertNotNull($rateCallback);
+        self::assertSame('{}', (string) $rateCallback->action_payload);
+        $rateToken = $this->app->make(StringEncrypter::class)->decryptString((string) $rateCallback->token_ciphertext);
+        $this->accept($this->callbackPayload(7003, $telegramUserId, 'navigation_admin_rate', 'fa', $rateToken));
+        $processor->process('123456789', 7003);
+
+        $ratePresentation = $this->latestConfidentialPresentation();
+        self::assertStringContainsString('900,000', $ratePresentation);
+        self::assertStringContainsString('USDT', $ratePresentation);
+        self::assertStringContainsString('NOWPayments', $ratePresentation);
+        self::assertStringNotContainsString('payments.usdt.manage', $ratePresentation);
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'id' => (int) $session->id,
+            'state' => 'admin_usdt_rate',
+            'payload' => '{}',
+        ]);
+        $commonEvidence = $this->navigationCommonDurableEvidence((int) $session->id, $telegramUserId);
+        self::assertStringNotContainsString('900000', $commonEvidence);
+        self::assertStringNotContainsString('payments.usdt.manage', $commonEvidence);
+        self::assertStringNotContainsString('created_by_administrator_id', $commonEvidence);
+
+        $editCallback = DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $session->id)
+            ->where('action', 'navigation.admin.usdt_rate.edit')
+            ->orderByDesc('id')
+            ->first(['action_payload', 'token_ciphertext']);
+        self::assertNotNull($editCallback);
+        self::assertSame('{}', (string) $editCallback->action_payload);
+        $editToken = $this->app->make(StringEncrypter::class)->decryptString((string) $editCallback->token_ciphertext);
+        $this->accept($this->callbackPayload(7004, $telegramUserId, 'navigation_admin_rate', 'fa', $editToken));
+        $processor->process('123456789', 7004);
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'id' => (int) $session->id,
+            'state' => 'admin_usdt_rate_edit',
+            'payload' => '{}',
+        ]);
+
+        $this->accept($this->payload(7005, $telegramUserId, 'navigation_admin_rate', 'fa', '۹۰,۰۰۰'));
+        $processor->process('123456789', 7005);
+        self::assertSame(0, DB::table('usdt_manual_rate_versions')->count());
+        self::assertSame(0, DB::table('audit_logs')->where('action', 'payments.usdt.manual_rate.updated')->count());
+        self::assertStringContainsString('معتبر نیست', $this->latestConfidentialPresentation());
+
+        $this->accept($this->payload(7006, $telegramUserId, 'navigation_admin_rate', 'fa', '۹۹۹۹۹'));
+        $processor->process('123456789', 7006);
+        self::assertSame(0, DB::table('usdt_manual_rate_versions')->count());
+        self::assertSame(0, DB::table('audit_logs')->where('action', 'payments.usdt.manual_rate.updated')->count());
+        self::assertStringContainsString('معتبر نیست', $this->latestConfidentialPresentation());
+
+        $rawRateInput = '۹۱۰۰۰۰';
+        $this->accept($this->payload(7007, $telegramUserId, 'navigation_admin_rate', 'fa', $rawRateInput));
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER telegram_navigation_test_fail_processed_7007
+BEFORE UPDATE ON processed_telegram_updates
+FOR EACH ROW
+BEGIN
+    IF OLD.bot_id = '123456789' AND OLD.update_id = 7007 AND NEW.state = 'processed' THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'simulated-post-admin-rate-dispatch-failure';
+    END IF;
+END
+SQL);
+        try {
+            try {
+                $processor->process('123456789', 7007);
+                self::fail('The simulated post-rate-dispatch failure must keep the accepted rate update retryable.');
+            } catch (RuntimeException $exception) {
+                self::assertSame('Telegram update processing failed.', $exception->getMessage());
+                self::assertStringNotContainsString($rawRateInput, $exception->getMessage());
+            }
+        } finally {
+            DB::unprepared('DROP TRIGGER IF EXISTS telegram_navigation_test_fail_processed_7007');
+        }
+
+        self::assertSame(1, DB::table('usdt_manual_rate_versions')->count());
+        self::assertSame('910000.00000000', (string) DB::table('usdt_manual_rate_versions')->value('rate_irr'));
+        self::assertSame(1, DB::table('audit_logs')->where('action', 'payments.usdt.manual_rate.updated')->count());
+        $this->assertDatabaseHas('processed_telegram_updates', [
+            'update_id' => 7007,
+            'state' => 'failed',
+            'attempt_count' => 1,
+        ]);
+        self::assertStringNotContainsString($rawRateInput, $this->navigationCommonDurableEvidence((int) $session->id, $telegramUserId));
+
+        $processor->process('123456789', 7007);
+        $this->assertDatabaseHas('processed_telegram_updates', [
+            'update_id' => 7007,
+            'state' => 'processed',
+            'attempt_count' => 2,
+        ]);
+        self::assertSame(1, DB::table('usdt_manual_rate_versions')->count());
+        self::assertSame(1, DB::table('audit_logs')->where('action', 'payments.usdt.manual_rate.updated')->count());
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'id' => (int) $session->id,
+            'state' => 'admin_usdt_rate',
+            'payload' => '{}',
+        ]);
+        $updatedPresentation = $this->latestConfidentialPresentation();
+        self::assertStringContainsString('با موفقیت ثبت شد', $updatedPresentation);
+        self::assertStringContainsString('910,000', $updatedPresentation);
+    }
+
+    public function test_admin_usdt_rate_edit_reauthorizes_after_permission_revocation_before_message_execution(): void
+    {
+        Config::set('usdt.rate.min_irr', '100000');
+        Config::set('usdt.rate.max_irr', '10000000');
+        Config::set('usdt.rate.manual_irr', '900000');
+        $telegramUserId = 9710;
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+
+        $this->accept($this->payload(7020, $telegramUserId, 'navigation_admin_revoke', 'en', '/start'));
+        $processor->process('123456789', 7020);
+        $account = DB::table('telegram_accounts')->where('telegram_user_id', $telegramUserId)->first(['id', 'user_id']);
+        self::assertNotNull($account);
+        $administratorId = $this->financeAdministratorForUser((int) $account->user_id);
+
+        $this->accept($this->payload(7021, $telegramUserId, 'navigation_admin_revoke', 'en', '/menu'));
+        $processor->process('123456789', 7021);
+        $adminToken = $this->callbackToken('navigation.admin', (int) $account->id);
+        $this->accept($this->callbackPayload(7022, $telegramUserId, 'navigation_admin_revoke', 'en', $adminToken));
+        $processor->process('123456789', 7022);
+        self::assertStringContainsString('Administrator Control Center', $this->latestConfidentialPresentation());
+        $rateToken = $this->callbackToken('navigation.admin.usdt_rate', (int) $account->id);
+        $this->accept($this->callbackPayload(7023, $telegramUserId, 'navigation_admin_revoke', 'en', $rateToken));
+        $processor->process('123456789', 7023);
+        self::assertStringContainsString('Manual USDT Rate', $this->latestConfidentialPresentation());
+        self::assertStringContainsString('NOWPayments', $this->latestConfidentialPresentation());
+        $editToken = $this->callbackToken('navigation.admin.usdt_rate.edit', (int) $account->id);
+        $this->accept($this->callbackPayload(7024, $telegramUserId, 'navigation_admin_revoke', 'en', $editToken));
+        $processor->process('123456789', 7024);
+        self::assertStringContainsString('Change Manual USDT Rate', $this->latestConfidentialPresentation());
+
+        DB::table('administrator_role_assignments')->where('administrator_id', $administratorId)->update([
+            'revoked_at' => now('UTC'),
+            'updated_at' => now('UTC'),
+        ]);
+        DB::table('administrators')->where('id', $administratorId)->update([
+            'permission_version' => DB::raw('permission_version + 1'),
+            'updated_at' => now('UTC'),
+        ]);
+
+        $this->accept($this->payload(7025, $telegramUserId, 'navigation_admin_revoke', 'en', '920000'));
+        $processor->process('123456789', 7025);
+
+        self::assertSame(0, DB::table('usdt_manual_rate_versions')->count());
+        self::assertSame(0, DB::table('audit_logs')->where('action', 'payments.usdt.manual_rate.updated')->count());
+        $session = DB::table('telegram_interaction_sessions')->where('telegram_account_id', (int) $account->id)->first(['state', 'version']);
+        self::assertNotNull($session);
+        self::assertSame('home', (string) $session->state);
+        self::assertSame(0, DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', DB::table('telegram_interaction_sessions')->where('telegram_account_id', (int) $account->id)->value('id'))
+            ->where('session_version', (int) $session->version)
+            ->where('action', 'navigation.admin')
+            ->count());
+    }
+
     public function test_arbitrary_text_and_non_private_start_do_not_implicitly_create_navigation_authority(): void
     {
         $processor = $this->app->make(TelegramUpdateProcessor::class);
@@ -1410,6 +1623,49 @@ SQL);
                 'data' => $token,
             ],
         ];
+    }
+
+    private function financeAdministratorForUser(int $userId): int
+    {
+        $now = now('UTC');
+        $administratorId = (int) DB::table('administrators')->insertGetId([
+            'user_id' => $userId,
+            'status' => 'active',
+            'is_owner' => false,
+            'permission_version' => 1,
+            'last_authenticated_at' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $roleId = DB::table('roles')->where('code', 'finance')->where('is_active', true)->value('id');
+        self::assertIsNumeric($roleId);
+        DB::table('administrator_role_assignments')->insert([
+            'administrator_id' => $administratorId,
+            'role_id' => (int) $roleId,
+            'granted_by_administrator_id' => null,
+            'granted_at' => $now,
+            'revoked_at' => null,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        return $administratorId;
+    }
+
+    private function callbackToken(string $action, int $telegramAccountId): string
+    {
+        $sessionId = DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', $telegramAccountId)
+            ->value('id');
+        self::assertIsNumeric($sessionId);
+        $ciphertext = DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $sessionId)
+            ->where('action', $action)
+            ->orderByDesc('id')
+            ->value('token_ciphertext');
+        self::assertIsString($ciphertext);
+
+        return $this->app->make(StringEncrypter::class)->decryptString($ciphertext);
     }
 
     private function latestConfidentialPresentation(): string

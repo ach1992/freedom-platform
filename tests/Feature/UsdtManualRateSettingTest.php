@@ -6,6 +6,7 @@ namespace Tests\Feature;
 
 use App\Modules\AccessControl\Application\AdministratorPermissionAuthorizer;
 use App\Modules\Payments\Usdt\Application\UsdtManualRateSettingService;
+use App\Modules\Telegram\Application\Contracts\TelegramManagedUsdtRateSettings;
 use App\Shared\Application\Clock;
 use Database\Seeders\DatabaseSeeder;
 use DateTimeImmutable;
@@ -104,6 +105,69 @@ final class UsdtManualRateSettingTest extends TestCase
         } catch (AuthorizationException) {
             self::assertSame(0, DB::table('usdt_manual_rate_versions')->count());
         }
+    }
+
+    public function test_telegram_managed_rate_bridge_reauthorizes_from_user_identity_and_reuses_canonical_idempotency(): void
+    {
+        Config::set('usdt.rate.manual_irr', '900000');
+        $administratorId = $this->financeAdministrator();
+        $userId = (int) DB::table('administrators')->where('id', $administratorId)->value('user_id');
+        self::assertGreaterThan(0, $userId);
+
+        $bridge = $this->app->make(TelegramManagedUsdtRateSettings::class);
+        self::assertTrue($bridge->availableFor($userId));
+
+        $bootstrap = $bridge->currentFor($userId);
+        self::assertNotNull($bootstrap);
+        self::assertNull($bootstrap->version);
+        self::assertSame('900000.00000000', $bootstrap->rateIrr);
+        self::assertSame('bootstrap', $bootstrap->source);
+
+        $created = $bridge->setFor($userId, '910000', 'telegram-rate-bridge-0001', 'telegram-rate-corr-0001');
+        $replayed = $bridge->setFor($userId, '910000.00000000', 'telegram-rate-bridge-0001', 'telegram-rate-corr-0001');
+        self::assertNotNull($created->version);
+        self::assertSame($created->version, $replayed->version);
+        self::assertFalse($created->replayed);
+        self::assertTrue($replayed->replayed);
+        self::assertSame(1, DB::table('usdt_manual_rate_versions')->count());
+        self::assertSame(1, DB::table('audit_logs')->where('action', 'payments.usdt.manual_rate.updated')->count());
+
+        DB::table('administrators')->where('id', $administratorId)->update([
+            'status' => 'disabled',
+            'updated_at' => now('UTC'),
+        ]);
+        self::assertFalse($bridge->availableFor($userId));
+        try {
+            $bridge->setFor($userId, '920000', 'telegram-rate-bridge-0002', 'telegram-rate-corr-0002');
+            self::fail('Disabled administrator must not retain Telegram managed-rate authority.');
+        } catch (AuthorizationException) {
+            self::assertSame(1, DB::table('usdt_manual_rate_versions')->count());
+        }
+    }
+
+    public function test_telegram_managed_rate_bridge_accepts_active_owner_without_finance_role_and_denies_ungranted_admin(): void
+    {
+        Config::set('usdt.rate.manual_irr', '900000');
+        $now = now('UTC');
+        $ownerUserId = $this->user();
+        DB::table('administrators')->insert([
+            'user_id' => $ownerUserId,
+            'status' => 'active',
+            'is_owner' => true,
+            'permission_version' => 1,
+            'last_authenticated_at' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $bridge = $this->app->make(TelegramManagedUsdtRateSettings::class);
+        self::assertTrue($bridge->availableFor($ownerUserId));
+        self::assertSame('900000.00000000', $bridge->currentFor($ownerUserId)?->rateIrr);
+
+        $ungrantedAdministratorId = $this->administrator();
+        $ungrantedUserId = (int) DB::table('administrators')->where('id', $ungrantedAdministratorId)->value('user_id');
+        self::assertFalse($bridge->availableFor($ungrantedUserId));
+        $this->expectException(AuthorizationException::class);
+        $bridge->currentFor($ungrantedUserId);
     }
 
     public function test_database_history_cannot_be_updated_or_deleted(): void
