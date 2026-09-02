@@ -5,11 +5,13 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Modules\Promotions\Application\ReferralAttributionService;
+use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceDeliveryResender;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceProjection;
 use App\Modules\Telegram\Application\TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1;
 use App\Modules\Telegram\Application\TelegramDeliveryInteractivePresentationDatabaseSurfaceV1;
 use App\Modules\Telegram\Application\TelegramDeliveryQueueService;
 use App\Modules\Telegram\Application\TelegramNavigationEntryGateway;
+use App\Modules\Telegram\Application\TelegramOwnedServiceDeliveryResendStatus;
 use App\Modules\Telegram\Application\TelegramOwnedServiceDetail;
 use App\Modules\Telegram\Application\TelegramOwnedServiceListItem;
 use App\Modules\Telegram\Application\TelegramOwnedServicePage;
@@ -90,6 +92,30 @@ final class TelegramNavigationOwnedServiceSearchProjection implements TelegramOw
             'ambiguous-search' => TelegramOwnedServiceSearchResult::ambiguous(),
             default => TelegramOwnedServiceSearchResult::notFound(),
         };
+    }
+}
+
+final class TelegramNavigationOwnedServiceDeliveryResender implements TelegramOwnedServiceDeliveryResender
+{
+    /** @var list<array{actor_user_id:int,service_public_id:string,request_key:string,correlation_id:string}> */
+    public array $calls = [];
+
+    public TelegramOwnedServiceDeliveryResendStatus $status = TelegramOwnedServiceDeliveryResendStatus::Queued;
+
+    public function resendForSelf(
+        int $actorUserId,
+        string $servicePublicId,
+        string $requestKey,
+        string $correlationId,
+    ): TelegramOwnedServiceDeliveryResendStatus {
+        $this->calls[] = [
+            'actor_user_id' => $actorUserId,
+            'service_public_id' => $servicePublicId,
+            'request_key' => $requestKey,
+            'correlation_id' => $correlationId,
+        ];
+
+        return $this->status;
     }
 }
 
@@ -703,6 +729,153 @@ SQL);
             'version' => 4,
             'payload' => '{"page":1}',
         ]);
+    }
+
+    public function test_my_services_secure_resend_uses_owner_bound_callback_stable_identity_and_safe_confirmation(): void
+    {
+        $selectionToken = str_repeat('e', 40);
+        $servicePublicId = '01J00000000000000000000004';
+        $projection = new TelegramNavigationOwnedServiceSearchProjection($selectionToken, $servicePublicId);
+        $resender = new TelegramNavigationOwnedServiceDeliveryResender;
+        $this->app->instance(TelegramOwnedServiceProjection::class, $projection);
+        $this->app->instance(TelegramOwnedServiceDeliveryResender::class, $resender);
+
+        $telegramUserId = 9680;
+        $this->accept($this->payload(7000, $telegramUserId, 'navigation_resend', 'fa', '/start'));
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $processor->process('123456789', 7000);
+        $ownerUserId = (int) DB::table('telegram_accounts')
+            ->where('telegram_user_id', $telegramUserId)
+            ->value('user_id');
+        self::assertGreaterThan(0, $ownerUserId);
+
+        $servicesCallback = DB::table('telegram_interaction_callbacks')
+            ->where('action', 'navigation.my_services')
+            ->orderByDesc('id')
+            ->first(['token_ciphertext']);
+        self::assertNotNull($servicesCallback);
+        $servicesToken = $this->app->make(StringEncrypter::class)
+            ->decryptString((string) $servicesCallback->token_ciphertext);
+        $this->accept($this->callbackPayload(7001, $telegramUserId, 'navigation_resend', 'fa', $servicesToken));
+        $processor->process('123456789', 7001);
+
+        $detailCallback = DB::table('telegram_interaction_callbacks')
+            ->where('action', 'navigation.service.'.$selectionToken)
+            ->orderByDesc('id')
+            ->first(['token_ciphertext']);
+        self::assertNotNull($detailCallback);
+        $detailToken = $this->app->make(StringEncrypter::class)
+            ->decryptString((string) $detailCallback->token_ciphertext);
+        $this->accept($this->callbackPayload(7002, $telegramUserId, 'navigation_resend', 'fa', $detailToken));
+        $processor->process('123456789', 7002);
+
+        $accountId = (int) DB::table('telegram_accounts')->where('telegram_user_id', $telegramUserId)->value('id');
+        $session = DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', $accountId)
+            ->first(['id', 'state', 'version', 'payload']);
+        self::assertNotNull($session);
+        self::assertSame('service_detail', (string) $session->state);
+        self::assertSame(3, (int) $session->version);
+        self::assertSame('{"page":1}', (string) $session->payload);
+
+        $resendCallback = DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $session->id)
+            ->where('session_version', 3)
+            ->where('action', 'navigation.service.resend')
+            ->first(['public_id', 'action_payload', 'token_ciphertext']);
+        self::assertNotNull($resendCallback);
+        self::assertSame(
+            json_encode(['service_selection' => $selectionToken], JSON_THROW_ON_ERROR),
+            (string) $resendCallback->action_payload,
+        );
+        self::assertStringNotContainsString($servicePublicId, (string) $resendCallback->action_payload);
+        $resendToken = $this->app->make(StringEncrypter::class)
+            ->decryptString((string) $resendCallback->token_ciphertext);
+
+        $this->accept($this->payload(7003, 9780, 'navigation_resend_other', 'fa', '/start'));
+        $processor->process('123456789', 7003);
+        $this->accept($this->callbackPayload(7004, 9780, 'navigation_resend_other', 'fa', $resendToken));
+        $processor->process('123456789', 7004);
+        self::assertSame([], $resender->calls);
+
+        $operationCountBefore = DB::table('telegram_delivery_operations')->count();
+        $this->accept($this->callbackPayload(7005, $telegramUserId, 'navigation_resend', 'fa', $resendToken));
+        $processor->process('123456789', 7005);
+        self::assertSame([[
+            'actor_user_id' => $ownerUserId,
+            'service_public_id' => $servicePublicId,
+            'request_key' => 'telegram-service-resend:'.(string) $resendCallback->public_id,
+            'correlation_id' => 'telegram-resend:'.(string) $resendCallback->public_id,
+        ]], $resender->calls);
+        self::assertSame($operationCountBefore + 1, DB::table('telegram_delivery_operations')->count());
+        $confirmation = $this->latestConfidentialPresentation();
+        self::assertStringContainsString('مسیر محافظت‌شده', $confirmation);
+        self::assertStringNotContainsString($servicePublicId, $confirmation);
+        self::assertStringNotContainsString($selectionToken, $confirmation);
+        self::assertStringNotContainsString('http', mb_strtolower($confirmation));
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'id' => (int) $session->id,
+            'state' => 'service_detail',
+            'version' => 3,
+            'payload' => '{"page":1}',
+        ]);
+
+        $this->accept($this->callbackPayload(7006, $telegramUserId, 'navigation_resend', 'fa', $resendToken));
+        $processor->process('123456789', 7006);
+        self::assertCount(1, $resender->calls);
+        self::assertSame($operationCountBefore + 1, DB::table('telegram_delivery_operations')->count());
+
+        $backCallback = DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $session->id)
+            ->where('session_version', 3)
+            ->where('action', 'navigation.back')
+            ->orderByDesc('id')
+            ->first(['token_ciphertext']);
+        self::assertNotNull($backCallback);
+        $backToken = $this->app->make(StringEncrypter::class)
+            ->decryptString((string) $backCallback->token_ciphertext);
+        $this->accept($this->callbackPayload(7007, $telegramUserId, 'navigation_resend', 'fa', $backToken));
+        $processor->process('123456789', 7007);
+
+        $detailAgain = DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $session->id)
+            ->where('session_version', 4)
+            ->where('action', 'navigation.service.'.$selectionToken)
+            ->orderByDesc('id')
+            ->first(['token_ciphertext']);
+        self::assertNotNull($detailAgain);
+        $detailAgainToken = $this->app->make(StringEncrypter::class)
+            ->decryptString((string) $detailAgain->token_ciphertext);
+        $this->accept($this->callbackPayload(7008, $telegramUserId, 'navigation_resend', 'fa', $detailAgainToken));
+        $processor->process('123456789', 7008);
+
+        $blockedResend = DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $session->id)
+            ->where('session_version', 5)
+            ->where('action', 'navigation.service.resend')
+            ->orderByDesc('id')
+            ->first(['token_ciphertext']);
+        self::assertNotNull($blockedResend);
+        $blockedToken = $this->app->make(StringEncrypter::class)
+            ->decryptString((string) $blockedResend->token_ciphertext);
+        $resender->status = TelegramOwnedServiceDeliveryResendStatus::TemporarilyBlocked;
+        $this->accept($this->callbackPayload(7009, $telegramUserId, 'navigation_resend', 'fa', $blockedToken));
+        $processor->process('123456789', 7009);
+        self::assertCount(2, $resender->calls);
+        $blockedCopy = $this->latestConfidentialPresentation();
+        self::assertStringContainsString('کمی بعد دوباره تلاش کنید', $blockedCopy);
+        self::assertStringNotContainsString($servicePublicId, $blockedCopy);
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'id' => (int) $session->id,
+            'state' => 'service_detail',
+            'version' => 5,
+            'payload' => '{"page":1}',
+        ]);
+
+        /** @var array<string, mixed> $english */
+        $english = require resource_path('lang/en/telegram.php');
+        self::assertStringContainsString('protected delivery', (string) $english['navigation']['services']['resend']['queued']);
+        self::assertStringContainsString('try again later', mb_strtolower((string) $english['navigation']['services']['resend']['temporarily_blocked']));
     }
 
     public function test_my_services_empty_state_is_confidential_and_back_remains_deterministic(): void

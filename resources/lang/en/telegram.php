@@ -41,6 +41,12 @@ return [
             'not_available' => 'Not available',
             'allowed_actions_none' => 'None currently available',
             'allowed_actions_separator' => ', ',
+            'resend' => [
+                'button' => 'Resend secure details',
+                'queued' => "Secure Service details were queued for protected delivery.\n\nNo credential, link, or QR data is shown in this confirmation.",
+                'temporarily_blocked' => "Secure Service details cannot be resent right now because another Service operation or delivery is still in progress.\n\nPlease try again later.",
+                'unavailable' => 'This Service is no longer available for secure resend.',
+            ],
             'search' => [
                 'button' => 'Search',
                 'prompt' => "Search My Services\n\nSend the exact Service ID, Order ID, or service username.\nSearch is private and exact.",

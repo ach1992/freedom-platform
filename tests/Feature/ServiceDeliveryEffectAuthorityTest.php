@@ -30,9 +30,11 @@ use App\Modules\Provisioning\Domain\ServiceDeliveryEffectState;
 use App\Modules\Provisioning\Domain\ServiceDeliveryPurpose;
 use App\Modules\Provisioning\Domain\ServiceMutationType;
 use App\Modules\Telegram\Application\Contracts\ProtectedTelegramMessageSender;
+use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceDeliveryResender;
 use App\Modules\Telegram\Application\ProtectedTelegramPresentation;
 use App\Modules\Telegram\Application\ProtectedTelegramSendOutcome;
 use App\Modules\Telegram\Application\ProtectedTelegramSendResult;
+use App\Modules\Telegram\Application\TelegramOwnedServiceDeliveryResendStatus;
 use App\Modules\Telegram\Infrastructure\HttpProtectedTelegramMessageSender;
 use App\Modules\Telegram\Infrastructure\TelegramRuntimeConfiguration;
 use App\Shared\Application\OutboxDispatchOutcome;
@@ -222,6 +224,90 @@ final class ServiceDeliveryEffectAuthorityTest extends TestCase
         } catch (QueryException) {
             // Expected.
         }
+    }
+
+    public function test_telegram_owned_resend_bridge_reuses_canonical_audit_outbox_idempotency_and_temporary_fence(): void
+    {
+        $secretLink = 'https://subscription.example.test/'.str_repeat('t', 48);
+        $scenario = $this->provisionedScenario(
+            'telegram-owned-resend-bridge',
+            $secretLink,
+            new ProtectedTelegramSendResult(
+                ProtectedTelegramSendOutcome::UncertainResult,
+                'telegram_transport_uncertain',
+            ),
+        );
+        $this->insertTelegramAccount($scenario['user_id']);
+        $bridge = $this->app->make(TelegramOwnedServiceDeliveryResender::class);
+
+        $requestKey = 'telegram-service-resend:01J00000000000000000000100';
+        $correlationId = 'telegram-resend:01J00000000000000000000100';
+        self::assertSame(
+            TelegramOwnedServiceDeliveryResendStatus::Queued,
+            $bridge->resendForSelf($scenario['user_id'], $scenario['service_public_id'], $requestKey, $correlationId),
+        );
+        self::assertSame(1, DB::table('service_delivery_attempts')->where('service_subscription_id', $scenario['service_id'])->count());
+        self::assertSame(1, DB::table('outbox_messages')
+            ->where('event_type', ServiceDeliveryAttemptQueueService::OUTBOX_EVENT_TYPE)->count());
+        self::assertSame(1, DB::table('audit_logs')->where('action', ServiceDeliveryResendAudit::ACTION)->count());
+        $audit = DB::table('audit_logs')->where('action', ServiceDeliveryResendAudit::ACTION)->first([
+            'actor_type', 'actor_id', 'target_id', 'reason_code', 'reason', 'correlation_id', 'request_fingerprint',
+        ]);
+        self::assertNotNull($audit);
+        self::assertSame('user', (string) $audit->actor_type);
+        self::assertSame((string) $scenario['user_id'], (string) $audit->actor_id);
+        self::assertSame($scenario['service_public_id'], (string) $audit->target_id);
+        self::assertSame('telegram.my_services', (string) $audit->reason_code);
+        self::assertSame('Telegram My Services self-service secure resend request.', (string) $audit->reason);
+        self::assertSame($correlationId, (string) $audit->correlation_id);
+        self::assertSame(hash('sha256', $requestKey), (string) $audit->request_fingerprint);
+
+        self::assertSame(
+            TelegramOwnedServiceDeliveryResendStatus::Queued,
+            $bridge->resendForSelf($scenario['user_id'], $scenario['service_public_id'], $requestKey, $correlationId),
+        );
+        self::assertSame(1, DB::table('service_delivery_attempts')->where('service_subscription_id', $scenario['service_id'])->count());
+        self::assertSame(1, DB::table('outbox_messages')
+            ->where('event_type', ServiceDeliveryAttemptQueueService::OUTBOX_EVENT_TYPE)->count());
+        self::assertSame(1, DB::table('audit_logs')->where('action', ServiceDeliveryResendAudit::ACTION)->count());
+
+        self::assertSame(
+            TelegramOwnedServiceDeliveryResendStatus::Unavailable,
+            $bridge->resendForSelf(
+                $scenario['user_id'] + 1000000,
+                $scenario['service_public_id'],
+                'telegram-service-resend:01J00000000000000000000101',
+                'telegram-resend:01J00000000000000000000101',
+            ),
+        );
+        self::assertSame(1, DB::table('service_delivery_attempts')->where('service_subscription_id', $scenario['service_id'])->count());
+        self::assertSame(1, DB::table('audit_logs')->where('action', ServiceDeliveryResendAudit::ACTION)->count());
+
+        $outboxEventId = DB::table('service_delivery_attempts')
+            ->where('service_subscription_id', $scenario['service_id'])
+            ->value('outbox_event_id');
+        self::assertIsString($outboxEventId);
+        self::assertSame(
+            OutboxDispatchOutcome::UncertainResult,
+            $this->deliveryHandler()->handle($this->outboxMessage($outboxEventId)),
+        );
+        self::assertSame(ServiceDeliveryEffectState::Uncertain->value, DB::table('service_delivery_effects')->value('state'));
+        self::assertCount(1, $scenario['doubles']->sendCalls);
+
+        self::assertSame(
+            TelegramOwnedServiceDeliveryResendStatus::TemporarilyBlocked,
+            $bridge->resendForSelf(
+                $scenario['user_id'],
+                $scenario['service_public_id'],
+                'telegram-service-resend:01J00000000000000000000102',
+                'telegram-resend:01J00000000000000000000102',
+            ),
+        );
+        self::assertSame(1, DB::table('service_delivery_attempts')->where('service_subscription_id', $scenario['service_id'])->count());
+        self::assertSame(1, DB::table('outbox_messages')
+            ->where('event_type', ServiceDeliveryAttemptQueueService::OUTBOX_EVENT_TYPE)->count());
+        self::assertSame(1, DB::table('audit_logs')->where('action', ServiceDeliveryResendAudit::ACTION)->count());
+        self::assertStringNotContainsString($secretLink, json_encode($audit, JSON_THROW_ON_ERROR));
     }
 
     public function test_direct_resend_audit_forgery_without_database_authority_fails_closed(): void
