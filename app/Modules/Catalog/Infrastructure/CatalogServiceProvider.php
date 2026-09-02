@@ -13,6 +13,7 @@ use App\Modules\Catalog\Application\CustomPlanEligibility;
 use App\Modules\Catalog\Application\CustomPlanOperationalVerifier;
 use App\Modules\Catalog\Application\CustomPlanPolicyService;
 use App\Modules\Catalog\Application\CustomPlanUsernameNormalizer;
+use App\Modules\Catalog\Application\PlanOfferingActorEligibility;
 use App\Modules\Catalog\Application\PlanOfferingRoutePolicyService;
 use App\Modules\Catalog\Application\PlanOfferingRouteSelector;
 use App\Modules\Catalog\Application\PlanOfferingService;
@@ -107,6 +108,7 @@ final class CatalogServiceProvider extends ServiceProvider
             PlanOfferingRouteSelector::class,
             fn (Application $application): PlanOfferingRouteSelector => new PlanOfferingRouteSelector(
                 $application->make(DatabaseManager::class),
+                $application->make(PlanOfferingActorEligibility::class),
                 $application->make(RouteOperationalVerifier::class),
                 $application->make(TargetCapacityAllocator::class),
                 $application->make(Clock::class),
