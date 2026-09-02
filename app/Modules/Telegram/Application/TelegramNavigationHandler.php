@@ -18,6 +18,7 @@ use App\Modules\Wallet\Application\WalletSelfBalanceService;
 use App\Modules\Wallet\Application\WalletSelfBalanceSummary;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Contracts\Translation\Translator;
+use Illuminate\Database\DatabaseManager;
 use RuntimeException;
 
 final readonly class TelegramNavigationHandler implements TelegramInteractionHandler
@@ -35,6 +36,8 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
     private const STATE_ADMIN_USDT_RATE = 'admin_usdt_rate';
 
     private const STATE_ADMIN_USDT_RATE_EDIT = 'admin_usdt_rate_edit';
+
+    private const STATE_ADMIN_USDT_RATE_SUBMITTING = 'admin_usdt_rate_submitting';
 
     private const ACTION_MY_ACCOUNT = 'navigation.my_account';
 
@@ -71,6 +74,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         private TelegramOwnedServiceProjection $services,
         private TelegramOwnedServiceDeliveryResender $serviceDeliveryResender,
         private TelegramManagedUsdtRateSettings $managedUsdtRateSettings,
+        private DatabaseManager $database,
     ) {}
 
     public function flow(): string
@@ -418,7 +422,11 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
     private function setAdminUsdtRate(TelegramInteractionAction $action, string $input): void
     {
         if (! $this->managedUsdtRateSettings->availableFor($action->userId)) {
-            $this->returnHome($action);
+            try {
+                $this->returnHome($action);
+            } catch (\DomainException) {
+                // A concurrent interaction already moved this session. Fail closed.
+            }
 
             return;
         }
@@ -426,36 +434,69 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         $locale = $this->localeForActor($action->userId);
         $normalized = $this->normalizeUsdtRateInput($input);
         if ($normalized === null) {
-            $this->renderAdminUsdtRateEdit($action, $action->sessionVersion, $locale, 'invalid');
+            try {
+                $this->renderAdminUsdtRateEdit($action, $action->sessionVersion, $locale, 'invalid');
+            } catch (\DomainException) {
+                // A concurrent interaction already moved this session. Fail closed.
+            }
 
             return;
         }
 
         try {
-            $rate = $this->managedUsdtRateSettings->setFor(
-                $action->userId,
-                $normalized,
-                $this->usdtRateRequestKey($action),
-                $this->usdtRateCorrelationId($action),
-            );
+            [$session, $rate] = $this->database->connection()->transaction(function () use ($action, $normalized): array {
+                $claim = $this->sessions->transition(
+                    $action->sessionPublicId,
+                    $action->sessionVersion,
+                    self::STATE_ADMIN_USDT_RATE_SUBMITTING,
+                    [],
+                    'nav-admin-usdt-rate-claim:'.hash('sha256', $action->requestKey),
+                );
+                $this->assertActorBinding($action, $claim->userId);
+
+                try {
+                    $rate = $this->managedUsdtRateSettings->setFor(
+                        $action->userId,
+                        $normalized,
+                        $this->usdtRateRequestKey($action),
+                        $this->usdtRateCorrelationId($action),
+                    );
+                } catch (\DomainException $exception) {
+                    throw new TelegramManagedUsdtRateInputRejected($exception);
+                }
+
+                $session = $this->sessions->transition(
+                    $action->sessionPublicId,
+                    $claim->version,
+                    self::STATE_ADMIN_USDT_RATE,
+                    [],
+                    'nav-admin-usdt-rate-set:'.hash('sha256', $action->requestKey),
+                );
+                $this->assertActorBinding($action, $session->userId);
+
+                return [$session, $rate];
+            }, 3);
         } catch (AuthorizationException) {
-            $this->returnHome($action);
+            try {
+                $this->returnHome($action);
+            } catch (\DomainException) {
+                // A concurrent interaction already moved this session. Fail closed.
+            }
+
+            return;
+        } catch (TelegramManagedUsdtRateInputRejected) {
+            try {
+                $this->renderAdminUsdtRateEdit($action, $action->sessionVersion, $locale, 'invalid');
+            } catch (\DomainException) {
+                // A concurrent interaction already moved this session. Fail closed.
+            }
 
             return;
         } catch (\DomainException) {
-            $this->renderAdminUsdtRateEdit($action, $action->sessionVersion, $locale, 'invalid');
-
+            // The accepted message lost the session-version race before the financial mutation.
             return;
         }
 
-        $session = $this->sessions->transition(
-            $action->sessionPublicId,
-            $action->sessionVersion,
-            self::STATE_ADMIN_USDT_RATE,
-            [],
-            'nav-admin-usdt-rate-set:'.hash('sha256', $action->requestKey),
-        );
-        $this->assertActorBinding($action, $session->userId);
         $this->renderAdminUsdtRate(
             $action,
             $session->version,
