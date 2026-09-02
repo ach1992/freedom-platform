@@ -1695,9 +1695,29 @@ SQL);
         ]);
         self::assertStringContainsString('گزینه سرویس', $this->latestConfidentialPresentation());
 
-        $this->accept($this->callbackPayload(6987, $telegramUserId, 'navigation_purchase_quote', 'fa', $quoteToken));
+        DB::table('users')->where('id', (int) $account->user_id)->update([
+            'locale' => 'en',
+            'updated_at' => now('UTC'),
+        ]);
+        $englishQuote = DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $session->id)
+            ->where('session_version', 6)
+            ->where('action', 'navigation.purchase.quote')
+            ->first(['token_ciphertext']);
+        self::assertNotNull($englishQuote);
+        $englishQuoteToken = $this->app->make(StringEncrypter::class)->decryptString((string) $englishQuote->token_ciphertext);
+        $this->accept($this->callbackPayload(6987, $telegramUserId, 'navigation_purchase_quote', 'en', $englishQuoteToken));
         $processor->process('123456789', 6987);
-        self::assertCount(1, $quotes->calls);
+        self::assertCount(2, $quotes->calls);
+        $englishPresentation = $this->latestConfidentialPresentation();
+        self::assertStringContainsString('Service Purchase Quote', $englishPresentation);
+        self::assertStringContainsString('Final amount: 900,000 IRR', $englishPresentation);
+        self::assertStringContainsString('No payment, capacity reservation, order, or provisioning has been created yet.', $englishPresentation);
+        self::assertStringNotContainsString('پیش‌فاکتور خرید سرویس', $englishPresentation);
+
+        $this->accept($this->callbackPayload(6988, $telegramUserId, 'navigation_purchase_quote', 'en', $quoteToken));
+        $processor->process('123456789', 6988);
+        self::assertCount(2, $quotes->calls);
         self::assertSame($before, $this->purchaseMutationCounts());
     }
 
