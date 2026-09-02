@@ -8,6 +8,7 @@ use App\Modules\Customers\Application\CustomerAccountSummary;
 use App\Modules\Customers\Application\CustomerAccountSummaryService;
 use App\Modules\Promotions\Application\ReferralSelfSummary;
 use App\Modules\Promotions\Application\ReferralSelfSummaryService;
+use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCatalog;
 use App\Modules\Telegram\Application\Contracts\TelegramInteractionHandler;
 use App\Modules\Telegram\Application\Contracts\TelegramManagedUsdtRateSettings;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceDeliveryResender;
@@ -24,6 +25,10 @@ use RuntimeException;
 final readonly class TelegramNavigationHandler implements TelegramInteractionHandler
 {
     private const STATE_MY_ACCOUNT = 'my_account';
+
+    private const STATE_PURCHASE_CATALOG = 'purchase_catalog';
+
+    private const STATE_PURCHASE_OFFERING = 'purchase_offering';
 
     private const STATE_MY_SERVICES = 'my_services';
 
@@ -42,6 +47,12 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
     private const STATE_ADMIN_USDT_RATE_SUBMITTING = 'admin_usdt_rate_submitting';
 
     private const ACTION_MY_ACCOUNT = 'navigation.my_account';
+
+    private const ACTION_PURCHASE_CATALOG = 'navigation.purchase';
+
+    private const ACTION_PURCHASE_PAGE = 'navigation.purchase.page';
+
+    private const ACTION_PURCHASE_OFFERING_PREFIX = 'navigation.purchase.';
 
     private const ACTION_MY_SERVICES = 'navigation.my_services';
 
@@ -63,6 +74,8 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
 
     private const ACTION_BACK = 'navigation.back';
 
+    private const PURCHASE_PAGE_SIZE = 6;
+
     private const SERVICE_PAGE_SIZE = 6;
 
     public function __construct(
@@ -75,6 +88,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         private CustomerAccountSummaryService $customers,
         private WalletSelfBalanceService $wallets,
         private ReferralSelfSummaryService $referrals,
+        private TelegramCustomerPurchaseCatalog $purchaseCatalog,
         private TelegramOwnedServiceProjection $services,
         private TelegramOwnedServiceDeliveryResender $serviceDeliveryResender,
         private TelegramManagedUsdtRateSettings $managedUsdtRateSettings,
@@ -95,6 +109,11 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
                 }
                 if ($action->callbackAction === self::ACTION_MY_ACCOUNT) {
                     $this->showMyAccount($action);
+
+                    return;
+                }
+                if ($action->callbackAction === self::ACTION_PURCHASE_CATALOG) {
+                    $this->showPurchaseCatalog($action, 1);
 
                     return;
                 }
@@ -119,6 +138,18 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
 
         if ($action->sessionState === self::STATE_MY_ACCOUNT) {
             $this->handleMyAccount($action);
+
+            return;
+        }
+
+        if ($action->sessionState === self::STATE_PURCHASE_CATALOG) {
+            $this->handlePurchaseCatalog($action);
+
+            return;
+        }
+
+        if ($action->sessionState === self::STATE_PURCHASE_OFFERING) {
+            $this->handlePurchaseOffering($action);
 
             return;
         }
@@ -166,6 +197,61 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         }
 
         throw new RuntimeException('Telegram navigation session state is unsupported.');
+    }
+
+    private function handlePurchaseCatalog(TelegramInteractionAction $action): void
+    {
+        if ($action->kind === TelegramInteractionActionKind::Callback) {
+            if ($action->callbackAction === self::ACTION_BACK && $action->callbackPayload === []) {
+                $this->returnHome($action);
+
+                return;
+            }
+            if ($action->callbackAction === self::ACTION_PURCHASE_PAGE) {
+                $this->showPurchaseCatalog($action, $this->purchasePageFromPayload($action->callbackPayload));
+
+                return;
+            }
+            if (is_string($action->callbackAction)
+                && str_starts_with($action->callbackAction, self::ACTION_PURCHASE_OFFERING_PREFIX)
+                && $action->callbackPayload === []) {
+                $selectionToken = substr($action->callbackAction, strlen(self::ACTION_PURCHASE_OFFERING_PREFIX));
+                if (preg_match('/\A[0-9a-f]{40}\z/', $selectionToken) !== 1) {
+                    throw new RuntimeException('Telegram purchase offering selection token is invalid.');
+                }
+                $this->showPurchaseOffering($action, $selectionToken);
+
+                return;
+            }
+
+            throw new RuntimeException('Telegram purchase catalog callback action is unsupported.');
+        }
+
+        if ($action->kind === TelegramInteractionActionKind::Back || $this->isEntryCommand($action->messageText)) {
+            $this->returnHome($action);
+        }
+    }
+
+    private function handlePurchaseOffering(TelegramInteractionAction $action): void
+    {
+        if ($action->kind === TelegramInteractionActionKind::Callback) {
+            if ($action->callbackAction !== self::ACTION_BACK || $action->callbackPayload !== []) {
+                throw new RuntimeException('Telegram purchase offering callback action is unsupported.');
+            }
+
+            $this->returnPurchaseCatalog($action);
+
+            return;
+        }
+
+        if ($action->kind === TelegramInteractionActionKind::Back) {
+            $this->returnPurchaseCatalog($action);
+
+            return;
+        }
+        if ($this->isEntryCommand($action->messageText)) {
+            $this->returnHome($action);
+        }
     }
 
     private function handleMyAccount(TelegramInteractionAction $action): void
@@ -809,6 +895,63 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         return 'tg-usdt-rate:'.$this->callbackPublicId($action);
     }
 
+    private function showPurchaseCatalog(TelegramInteractionAction $action, int $page): void
+    {
+        $locale = $this->localeForActor($action->userId);
+        $catalog = $this->purchaseCatalog->pageForSelf(
+            $action->userId,
+            $action->userId,
+            $page,
+            self::PURCHASE_PAGE_SIZE,
+        );
+        $session = $this->sessions->transition(
+            $action->sessionPublicId,
+            $action->sessionVersion,
+            self::STATE_PURCHASE_CATALOG,
+            ['page' => $catalog->page],
+            'nav-purchase-transition:'.$action->requestKey,
+        );
+        $this->assertActorBinding($action, $session->userId);
+
+        $this->renderPurchaseCatalog($action, $session->version, $catalog, $locale, $action->requestKey);
+    }
+
+    private function showPurchaseOffering(TelegramInteractionAction $action, string $selectionToken): void
+    {
+        $page = $this->purchasePageFromPayload($action->sessionPayload);
+        $offering = $this->purchaseCatalog->offeringForSelf($action->userId, $action->userId, $selectionToken);
+        $locale = $this->localeForActor($action->userId);
+        $session = $this->sessions->transition(
+            $action->sessionPublicId,
+            $action->sessionVersion,
+            self::STATE_PURCHASE_OFFERING,
+            ['page' => $page, 'offering_selection' => $selectionToken],
+            'nav-purchase-offering-transition:'.$action->requestKey,
+        );
+        $this->assertActorBinding($action, $session->userId);
+        $back = $this->callbacks->issue(
+            $session->publicId,
+            $session->version,
+            self::ACTION_BACK,
+            [],
+            'nav-purchase-offering-back:'.$action->requestKey,
+        );
+        $keyboard = new TelegramInlineKeyboardSnapshot([[
+            new TelegramInlineCallbackButton(
+                $this->translation('telegram.navigation.buttons.back', $locale),
+                $back->publicId,
+            ),
+        ]]);
+
+        $this->queueConfidential(
+            $action,
+            $this->purchaseOfferingText($offering, $locale),
+            'nav-purchase-offering-delivery:'.$action->requestKey,
+            'purchase-offering',
+            $keyboard,
+        );
+    }
+
     private function showMyAccount(TelegramInteractionAction $action): void
     {
         $session = $this->sessions->transition(
@@ -1074,6 +1217,28 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         );
     }
 
+    private function returnPurchaseCatalog(TelegramInteractionAction $action): void
+    {
+        $page = $this->purchasePageFromPayload($action->sessionPayload);
+        $locale = $this->localeForActor($action->userId);
+        $catalog = $this->purchaseCatalog->pageForSelf(
+            $action->userId,
+            $action->userId,
+            $page,
+            self::PURCHASE_PAGE_SIZE,
+        );
+        $session = $this->sessions->transition(
+            $action->sessionPublicId,
+            $action->sessionVersion,
+            self::STATE_PURCHASE_CATALOG,
+            ['page' => $catalog->page],
+            'nav-purchase-back-transition:'.$action->requestKey,
+        );
+        $this->assertActorBinding($action, $session->userId);
+
+        $this->renderPurchaseCatalog($action, $session->version, $catalog, $locale, $action->requestKey);
+    }
+
     private function returnMyServices(TelegramInteractionAction $action): void
     {
         $page = $this->pageFromPayload($action->sessionPayload);
@@ -1137,12 +1302,26 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
                 $account->publicId,
                 TelegramInlineButtonStyle::Primary,
             )],
-            [new TelegramInlineCallbackButton(
-                $this->translation('telegram.navigation.buttons.my_services', $locale),
-                $services->publicId,
-                TelegramInlineButtonStyle::Primary,
-            )],
         ];
+        if ($customer->accountType === 'customer' && $customer->accountStatus === 'active') {
+            $purchase = $this->callbacks->issue(
+                $action->sessionPublicId,
+                $sessionVersion,
+                self::ACTION_PURCHASE_CATALOG,
+                [],
+                'nav-home-purchase:'.$requestKey,
+            );
+            $rows[] = [new TelegramInlineCallbackButton(
+                $this->translation('telegram.navigation.buttons.buy_service', $locale),
+                $purchase->publicId,
+                TelegramInlineButtonStyle::Primary,
+            )];
+        }
+        $rows[] = [new TelegramInlineCallbackButton(
+            $this->translation('telegram.navigation.buttons.my_services', $locale),
+            $services->publicId,
+            TelegramInlineButtonStyle::Primary,
+        )];
         if ($this->managedUsdtRateSettings->availableFor($action->userId)) {
             $admin = $this->callbacks->issue(
                 $action->sessionPublicId,
@@ -1178,6 +1357,82 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             'nav-home-delivery:'.$requestKey,
             $this->correlationId($action, 'home'),
             $keyboard,
+        );
+    }
+
+    private function renderPurchaseCatalog(
+        TelegramInteractionAction $action,
+        int $sessionVersion,
+        TelegramCustomerPurchaseCatalogPage $catalog,
+        string $locale,
+        string $requestKey,
+    ): void {
+        $rows = [];
+        foreach ($catalog->items as $offset => $offering) {
+            $callback = $this->callbacks->issue(
+                $action->sessionPublicId,
+                $sessionVersion,
+                self::ACTION_PURCHASE_OFFERING_PREFIX.$offering->selectionToken,
+                [],
+                'nav-purchase-item:'.$requestKey.':'.($offset + 1),
+            );
+            $rows[] = [new TelegramInlineCallbackButton(
+                $this->translation('telegram.navigation.purchase.offering_button', $locale, [
+                    'number' => ($catalog->page - 1) * self::PURCHASE_PAGE_SIZE + $offset + 1,
+                ]),
+                $callback->publicId,
+            )];
+        }
+
+        $pagination = [];
+        if ($catalog->page > 1) {
+            $previous = $this->callbacks->issue(
+                $action->sessionPublicId,
+                $sessionVersion,
+                self::ACTION_PURCHASE_PAGE,
+                ['page' => $catalog->page - 1],
+                'nav-purchase-previous:'.$requestKey,
+            );
+            $pagination[] = new TelegramInlineCallbackButton(
+                $this->translation('telegram.navigation.purchase.previous', $locale),
+                $previous->publicId,
+            );
+        }
+        if ($catalog->page < $catalog->totalPages) {
+            $next = $this->callbacks->issue(
+                $action->sessionPublicId,
+                $sessionVersion,
+                self::ACTION_PURCHASE_PAGE,
+                ['page' => $catalog->page + 1],
+                'nav-purchase-next:'.$requestKey,
+            );
+            $pagination[] = new TelegramInlineCallbackButton(
+                $this->translation('telegram.navigation.purchase.next', $locale),
+                $next->publicId,
+            );
+        }
+        if ($pagination !== []) {
+            $rows[] = $pagination;
+        }
+
+        $back = $this->callbacks->issue(
+            $action->sessionPublicId,
+            $sessionVersion,
+            self::ACTION_BACK,
+            [],
+            'nav-purchase-back:'.$requestKey,
+        );
+        $rows[] = [new TelegramInlineCallbackButton(
+            $this->translation('telegram.navigation.buttons.back', $locale),
+            $back->publicId,
+        )];
+
+        $this->queueConfidential(
+            $action,
+            $this->purchaseCatalogText($catalog, $locale),
+            'nav-purchase-delivery:'.$requestKey,
+            'purchase-catalog',
+            new TelegramInlineKeyboardSnapshot($rows),
         );
     }
 
@@ -1268,6 +1523,58 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             'services',
             new TelegramInlineKeyboardSnapshot($rows),
         );
+    }
+
+    private function purchaseCatalogText(TelegramCustomerPurchaseCatalogPage $catalog, string $locale): string
+    {
+        if ($catalog->items === []) {
+            return $this->translation('telegram.navigation.purchase.empty', $locale);
+        }
+
+        $lines = [];
+        foreach ($catalog->items as $offset => $offering) {
+            $lines[] = $this->translation('telegram.navigation.purchase.list_item', $locale, [
+                'number' => ($catalog->page - 1) * self::PURCHASE_PAGE_SIZE + $offset + 1,
+                'category' => $this->localizedLabel($offering->categoryNameFa, $offering->categoryNameEn, $locale),
+                'plan' => $this->purchasePlanLabel($offering, $locale),
+                'mode' => $this->localizedLabel($offering->serviceModeLabelFa, $offering->serviceModeLabelEn, $locale),
+                'price' => $this->formatIrr($offering->basePriceIrr),
+                'duration' => $offering->durationDays,
+            ]);
+        }
+
+        return $this->translation('telegram.navigation.purchase.list', $locale, [
+            'items' => implode("\n\n", $lines),
+            'page' => $catalog->page,
+            'total_pages' => $catalog->totalPages,
+            'total_items' => $catalog->totalItems,
+        ]);
+    }
+
+    private function purchaseOfferingText(TelegramCustomerPurchaseOffering $offering, string $locale): string
+    {
+        $notAvailable = $this->translation('telegram.navigation.purchase.not_available', $locale);
+
+        return $this->translation('telegram.navigation.purchase.detail', $locale, [
+            'category' => $this->localizedLabel($offering->categoryNameFa, $offering->categoryNameEn, $locale),
+            'plan' => $this->purchasePlanLabel($offering, $locale),
+            'mode' => $this->localizedLabel($offering->serviceModeLabelFa, $offering->serviceModeLabelEn, $locale),
+            'price' => $this->formatIrr($offering->basePriceIrr),
+            'duration' => $offering->durationDays,
+            'data' => $this->formatBytes($offering->dataAllowanceBytes, $notAvailable),
+            'devices' => $offering->deviceLimit === null ? $notAvailable : (string) $offering->deviceLimit,
+        ]);
+    }
+
+    private function purchasePlanLabel(TelegramCustomerPurchaseOffering $offering, string $locale): string
+    {
+        $product = $this->localizedLabel($offering->productNameFa, $offering->productNameEn, $locale);
+        $variant = $locale === 'en' ? $offering->variantNameEn : $offering->variantNameFa;
+        if ($variant === null) {
+            $variant = $offering->variantNameFa ?? $offering->variantNameEn;
+        }
+
+        return $variant === null ? $product : $product.' — '.$variant;
     }
 
     private function accountText(
@@ -1450,6 +1757,30 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         $customer = $this->customers->forSelf($userId, $userId);
 
         return $customer->locale === 'en' ? 'en' : 'fa';
+    }
+
+    /** @param array<string, mixed> $payload */
+    private function purchasePageFromPayload(array $payload): int
+    {
+        if (! is_int($payload['page'] ?? null) || $payload['page'] < 1) {
+            throw new RuntimeException('Telegram purchase page state is invalid.');
+        }
+        $allowedKeys = ['page'];
+        if (array_key_exists('offering_selection', $payload)) {
+            if (! is_string($payload['offering_selection'])
+                || preg_match('/\A[0-9a-f]{40}\z/', $payload['offering_selection']) !== 1) {
+                throw new RuntimeException('Telegram purchase offering state is invalid.');
+            }
+            $allowedKeys[] = 'offering_selection';
+        }
+        $keys = array_keys($payload);
+        sort($keys, SORT_STRING);
+        sort($allowedKeys, SORT_STRING);
+        if ($keys !== $allowedKeys) {
+            throw new RuntimeException('Telegram purchase state payload is invalid.');
+        }
+
+        return $payload['page'];
     }
 
     /** @param array<string, mixed> $payload */

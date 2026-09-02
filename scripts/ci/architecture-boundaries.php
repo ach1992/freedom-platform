@@ -5,7 +5,7 @@ declare(strict_types=1);
 return [
     'allowed_module_dependencies' => [
         'Agents' => ['AccessControl', 'Identity'],
-        'Catalog' => ['AccessControl', 'Customers', 'Identity', 'Panels'],
+        'Catalog' => ['AccessControl', 'Customers', 'Identity', 'Panels', 'Telegram'],
         'Customers' => ['AccessControl', 'Identity'],
         'Identity' => ['AccessControl'],
         'Installer' => ['Operations'],

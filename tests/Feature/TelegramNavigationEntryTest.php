@@ -5,8 +5,11 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Modules\Promotions\Application\ReferralAttributionService;
+use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCatalog;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceDeliveryResender;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceProjection;
+use App\Modules\Telegram\Application\TelegramCustomerPurchaseCatalogPage;
+use App\Modules\Telegram\Application\TelegramCustomerPurchaseOffering;
 use App\Modules\Telegram\Application\TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1;
 use App\Modules\Telegram\Application\TelegramDeliveryInteractivePresentationDatabaseSurfaceV1;
 use App\Modules\Telegram\Application\TelegramDeliveryQueueService;
@@ -34,6 +37,107 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
 use RuntimeException;
 use Tests\TestCase;
+
+final class TelegramNavigationCustomerPurchaseCatalog implements TelegramCustomerPurchaseCatalog
+{
+    /** @var list<array{actor_user_id:int,subject_user_id:int,page:int,page_size:int}> */
+    public array $pageCalls = [];
+
+    /** @var list<array{actor_user_id:int,subject_user_id:int,selection_token:string}> */
+    public array $offeringCalls = [];
+
+    /** @var list<TelegramCustomerPurchaseOffering> */
+    private array $items;
+
+    public string $mode = 'normal';
+
+    public function __construct()
+    {
+        $this->items = [
+            new TelegramCustomerPurchaseOffering(
+                str_repeat('c', 40),
+                'دسته خرید',
+                'Purchase category',
+                'پلن خرید',
+                'Purchase plan',
+                'نسخه پایه',
+                'Base variant',
+                'استاندارد',
+                'Standard',
+                900_000,
+                30,
+                50 * 1024 * 1024 * 1024,
+                2,
+            ),
+            new TelegramCustomerPurchaseOffering(
+                str_repeat('d', 40),
+                'دسته دوم',
+                'Second category',
+                'پلن دوم',
+                'Second plan',
+                null,
+                null,
+                'اقتصادی',
+                'Economy',
+                700_000,
+                15,
+                null,
+                null,
+            ),
+        ];
+    }
+
+    public function pageForSelf(int $actorUserId, int $subjectUserId, int $page, int $pageSize): TelegramCustomerPurchaseCatalogPage
+    {
+        $this->pageCalls[] = [
+            'actor_user_id' => $actorUserId,
+            'subject_user_id' => $subjectUserId,
+            'page' => $page,
+            'page_size' => $pageSize,
+        ];
+        if ($actorUserId !== $subjectUserId || $pageSize !== 6) {
+            throw new RuntimeException('Unexpected Telegram purchase catalog page request.');
+        }
+        if ($this->mode === 'empty') {
+            if ($page !== 1) {
+                throw new RuntimeException('Unexpected empty Telegram purchase catalog page request.');
+            }
+
+            return new TelegramCustomerPurchaseCatalogPage([], 1, 1, 0);
+        }
+        if ($this->mode === 'paginated') {
+            if (! in_array($page, [1, 2], true)) {
+                throw new RuntimeException('Unexpected paginated Telegram purchase catalog page request.');
+            }
+
+            return new TelegramCustomerPurchaseCatalogPage([$this->items[$page - 1]], $page, 2, 2);
+        }
+        if ($page !== 1) {
+            throw new RuntimeException('Unexpected Telegram purchase catalog page request.');
+        }
+
+        return new TelegramCustomerPurchaseCatalogPage($this->items, 1, 1, count($this->items));
+    }
+
+    public function offeringForSelf(int $actorUserId, int $subjectUserId, string $selectionToken): TelegramCustomerPurchaseOffering
+    {
+        $this->offeringCalls[] = [
+            'actor_user_id' => $actorUserId,
+            'subject_user_id' => $subjectUserId,
+            'selection_token' => $selectionToken,
+        ];
+        if ($actorUserId !== $subjectUserId) {
+            throw new RuntimeException('Unexpected Telegram purchase catalog cross-actor detail request.');
+        }
+        foreach ($this->items as $item) {
+            if ($item->selectionToken === $selectionToken) {
+                return $item;
+            }
+        }
+
+        throw new RuntimeException('Unexpected Telegram purchase catalog selection token.');
+    }
+}
 
 final class TelegramNavigationOwnedServiceSearchProjection implements TelegramOwnedServiceProjection
 {
@@ -126,7 +230,7 @@ final class TelegramNavigationOwnedServiceDeliveryResender implements TelegramOw
     }
 }
 
-/** @requirement ONB-002 ONB-003 USR-001 ADM-002 ACL-001 ACL-002 ACL-003 USDT-002 IPG-002 ARCH-003 ARCH-004 DAT-002 DAT-003 SEC-002 SEC-003 OPS-003 QUA-001 QUA-004 */
+/** @requirement ONB-002 ONB-003 USR-001 BUY-001 BUY-003 CAT-002 CAT-003 CAT-008 ADM-002 ACL-001 ACL-002 ACL-003 USDT-002 IPG-002 ARCH-003 ARCH-004 DAT-002 DAT-003 SEC-002 SEC-003 OPS-003 QUA-001 QUA-004 */
 final class TelegramNavigationEntryTest extends TestCase
 {
     use DatabaseTruncation;
@@ -1286,6 +1390,233 @@ SQL);
         self::assertStringNotContainsString('پلن جستجو', $detail);
     }
 
+    public function test_customer_purchase_catalog_uses_existing_navigation_confidential_delivery_and_replay_fences(): void
+    {
+        $catalog = new TelegramNavigationCustomerPurchaseCatalog;
+        $this->app->instance(TelegramCustomerPurchaseCatalog::class, $catalog);
+        $telegramUserId = 9690;
+        $otherTelegramUserId = 9691;
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+
+        $this->accept($this->payload(6950, $telegramUserId, 'navigation_purchase', 'fa', '/start'));
+        $processor->process('123456789', 6950);
+        $account = DB::table('telegram_accounts')->where('telegram_user_id', $telegramUserId)->first(['id', 'user_id']);
+        self::assertNotNull($account);
+        $session = DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', (int) $account->id)
+            ->first(['id', 'state', 'version', 'payload']);
+        self::assertNotNull($session);
+        self::assertSame('home', (string) $session->state);
+        self::assertSame(1, (int) $session->version);
+
+        $purchase = DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $session->id)
+            ->where('action', 'navigation.purchase')
+            ->first(['action_payload', 'token_ciphertext']);
+        self::assertNotNull($purchase);
+        self::assertSame('{}', (string) $purchase->action_payload);
+        $purchaseToken = $this->app->make(StringEncrypter::class)->decryptString((string) $purchase->token_ciphertext);
+        $before = $this->purchaseMutationCounts();
+
+        $this->accept($this->payload(6951, $otherTelegramUserId, 'navigation_purchase_other', 'fa', '/start'));
+        $processor->process('123456789', 6951);
+        $this->accept($this->callbackPayload(6952, $otherTelegramUserId, 'navigation_purchase_other', 'fa', $purchaseToken));
+        $processor->process('123456789', 6952);
+        self::assertSame([], $catalog->pageCalls);
+        self::assertSame($before, $this->purchaseMutationCounts());
+
+        $this->accept($this->callbackPayload(6953, $telegramUserId, 'navigation_purchase', 'fa', $purchaseToken));
+        $processor->process('123456789', 6953);
+        self::assertSame([[
+            'actor_user_id' => (int) $account->user_id,
+            'subject_user_id' => (int) $account->user_id,
+            'page' => 1,
+            'page_size' => 6,
+        ]], $catalog->pageCalls);
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'id' => (int) $session->id,
+            'state' => 'purchase_catalog',
+            'version' => 2,
+            'payload' => '{"page":1}',
+        ]);
+        $catalogPresentation = $this->latestConfidentialPresentation();
+        self::assertStringContainsString('خرید سرویس', $catalogPresentation);
+        self::assertStringContainsString('پلن خرید — نسخه پایه', $catalogPresentation);
+        self::assertStringContainsString('900,000', $catalogPresentation);
+        self::assertSame($before, $this->purchaseMutationCounts());
+
+        $item = DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $session->id)
+            ->where('session_version', 2)
+            ->where('action', 'navigation.purchase.'.str_repeat('c', 40))
+            ->first(['action_payload', 'token_ciphertext']);
+        $staleSibling = DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $session->id)
+            ->where('session_version', 2)
+            ->where('action', 'navigation.purchase.'.str_repeat('d', 40))
+            ->first(['token_ciphertext']);
+        self::assertNotNull($item);
+        self::assertNotNull($staleSibling);
+        self::assertSame('{}', (string) $item->action_payload);
+        $itemToken = $this->app->make(StringEncrypter::class)->decryptString((string) $item->token_ciphertext);
+        $staleSiblingToken = $this->app->make(StringEncrypter::class)->decryptString((string) $staleSibling->token_ciphertext);
+        $common = $this->navigationCommonDurableEvidence((int) $session->id, $telegramUserId);
+        self::assertStringNotContainsString('plan_offering_id', $common);
+        self::assertStringNotContainsString('sales_server_id', $common);
+        self::assertStringNotContainsString('panel_service_target_id', $common);
+        self::assertStringNotContainsString('panel_connection_id', $common);
+        self::assertStringNotContainsString('پلن خرید — نسخه پایه', $common);
+        self::assertStringNotContainsString('900,000', $common);
+
+        $operationCount = DB::table('telegram_delivery_operations')->where('recipient_chat_id', $telegramUserId)->count();
+        $processor->process('123456789', 6953);
+        self::assertCount(1, $catalog->pageCalls);
+        self::assertSame($operationCount, DB::table('telegram_delivery_operations')->where('recipient_chat_id', $telegramUserId)->count());
+
+        $this->accept($this->callbackPayload(6954, $telegramUserId, 'navigation_purchase', 'fa', $itemToken));
+        $processor->process('123456789', 6954);
+        self::assertSame([[
+            'actor_user_id' => (int) $account->user_id,
+            'subject_user_id' => (int) $account->user_id,
+            'selection_token' => str_repeat('c', 40),
+        ]], $catalog->offeringCalls);
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'id' => (int) $session->id,
+            'state' => 'purchase_offering',
+            'version' => 3,
+            'payload' => json_encode([
+                'offering_selection' => str_repeat('c', 40),
+                'page' => 1,
+            ], JSON_THROW_ON_ERROR),
+        ]);
+        $detail = $this->latestConfidentialPresentation();
+        self::assertStringContainsString('گزینه سرویس', $detail);
+        self::assertStringContainsString('هنوز هیچ پیش‌فاکتور، پرداخت، رزرو ظرفیت، سفارش یا پروویژنینگی ایجاد نشده است.', $detail);
+        self::assertSame($before, $this->purchaseMutationCounts());
+
+        $back = DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $session->id)
+            ->where('session_version', 3)
+            ->where('action', 'navigation.back')
+            ->first(['token_ciphertext']);
+        self::assertNotNull($back);
+        $backToken = $this->app->make(StringEncrypter::class)->decryptString((string) $back->token_ciphertext);
+        $this->accept($this->callbackPayload(6955, $telegramUserId, 'navigation_purchase', 'fa', $backToken));
+        $processor->process('123456789', 6955);
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'id' => (int) $session->id,
+            'state' => 'purchase_catalog',
+            'version' => 4,
+            'payload' => '{"page":1}',
+        ]);
+        self::assertCount(2, $catalog->pageCalls);
+
+        $this->accept($this->callbackPayload(6956, $telegramUserId, 'navigation_purchase', 'fa', $staleSiblingToken));
+        $processor->process('123456789', 6956);
+        self::assertCount(1, $catalog->offeringCalls);
+        self::assertSame($before, $this->purchaseMutationCounts());
+    }
+
+    public function test_customer_purchase_catalog_empty_english_pagination_and_home_filtering_are_deterministic(): void
+    {
+        $catalog = new TelegramNavigationCustomerPurchaseCatalog;
+        $catalog->mode = 'paginated';
+        $this->app->instance(TelegramCustomerPurchaseCatalog::class, $catalog);
+        $telegramUserId = 9692;
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+
+        $this->accept($this->payload(6960, $telegramUserId, 'navigation_purchase_en', 'en', '/start'));
+        $processor->process('123456789', 6960);
+        $account = DB::table('telegram_accounts')->where('telegram_user_id', $telegramUserId)->first(['id', 'user_id']);
+        self::assertNotNull($account);
+        $session = DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', (int) $account->id)
+            ->first(['id']);
+        self::assertNotNull($session);
+        $purchase = DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $session->id)
+            ->where('session_version', 1)
+            ->where('action', 'navigation.purchase')
+            ->first(['token_ciphertext']);
+        self::assertNotNull($purchase);
+        $purchaseToken = $this->app->make(StringEncrypter::class)->decryptString((string) $purchase->token_ciphertext);
+        $before = $this->purchaseMutationCounts();
+
+        $this->accept($this->callbackPayload(6961, $telegramUserId, 'navigation_purchase_en', 'en', $purchaseToken));
+        $processor->process('123456789', 6961);
+        $pageOne = $this->latestConfidentialPresentation();
+        self::assertStringContainsString('Buy Service', $pageOne);
+        self::assertStringContainsString('Purchase plan — Base variant', $pageOne);
+        self::assertStringContainsString('Page 1 of 2 — 2 available option(s)', $pageOne);
+        self::assertStringNotContainsString('پلن خرید', $pageOne);
+        $next = DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $session->id)
+            ->where('session_version', 2)
+            ->where('action', 'navigation.purchase.page')
+            ->where('action_payload', '{"page":2}')
+            ->first(['token_ciphertext']);
+        self::assertNotNull($next);
+        $nextToken = $this->app->make(StringEncrypter::class)->decryptString((string) $next->token_ciphertext);
+
+        $this->accept($this->callbackPayload(6962, $telegramUserId, 'navigation_purchase_en', 'en', $nextToken));
+        $processor->process('123456789', 6962);
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'id' => (int) $session->id,
+            'state' => 'purchase_catalog',
+            'version' => 3,
+            'payload' => '{"page":2}',
+        ]);
+        $pageTwo = $this->latestConfidentialPresentation();
+        self::assertStringContainsString('Second plan', $pageTwo);
+        self::assertStringContainsString('Page 2 of 2 — 2 available option(s)', $pageTwo);
+        self::assertSame($before, $this->purchaseMutationCounts());
+
+        DB::table('users')->where('id', (int) $account->user_id)->update([
+            'account_type' => 'agent',
+            'updated_at' => now('UTC'),
+        ]);
+        $this->accept($this->payload(6963, $telegramUserId, 'navigation_purchase_en', 'en', '/menu'));
+        $processor->process('123456789', 6963);
+        $currentVersion = (int) DB::table('telegram_interaction_sessions')->where('id', (int) $session->id)->value('version');
+        self::assertSame(4, $currentVersion);
+        self::assertSame(0, DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $session->id)
+            ->where('session_version', $currentVersion)
+            ->where('action', 'navigation.purchase')
+            ->count());
+        self::assertSame($before, $this->purchaseMutationCounts());
+
+        $catalog->mode = 'empty';
+        $emptyTelegramUserId = 9693;
+        $this->accept($this->payload(6970, $emptyTelegramUserId, 'navigation_purchase_empty', 'en', '/start'));
+        $processor->process('123456789', 6970);
+        $emptyAccount = DB::table('telegram_accounts')->where('telegram_user_id', $emptyTelegramUserId)->first(['id']);
+        self::assertNotNull($emptyAccount);
+        $emptySession = DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', (int) $emptyAccount->id)
+            ->first(['id']);
+        self::assertNotNull($emptySession);
+        $emptyPurchase = DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $emptySession->id)
+            ->where('session_version', 1)
+            ->where('action', 'navigation.purchase')
+            ->first(['token_ciphertext']);
+        self::assertNotNull($emptyPurchase);
+        $emptyPurchaseToken = $this->app->make(StringEncrypter::class)->decryptString((string) $emptyPurchase->token_ciphertext);
+        $this->accept($this->callbackPayload(6971, $emptyTelegramUserId, 'navigation_purchase_empty', 'en', $emptyPurchaseToken));
+        $processor->process('123456789', 6971);
+        self::assertStringContainsString(
+            'No currently eligible service offering is available for your account.',
+            $this->latestConfidentialPresentation(),
+        );
+        self::assertSame(0, DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $emptySession->id)
+            ->where('session_version', 2)
+            ->where('action', 'like', 'navigation.purchase.%')
+            ->count());
+        self::assertSame($before, $this->purchaseMutationCounts());
+    }
+
     public function test_admin_usdt_rate_journey_is_permission_filtered_confidential_and_crash_replay_idempotent(): void
     {
         Config::set('usdt.rate.min_irr', '100000');
@@ -1977,6 +2308,19 @@ SQL);
             'created_at' => $now,
             'updated_at' => $now,
         ]);
+    }
+
+    /** @return array<string,int> */
+    private function purchaseMutationCounts(): array
+    {
+        return [
+            'quotes' => DB::table('quotes')->count(),
+            'route_selections' => DB::table('plan_offering_route_selections')->count(),
+            'capacity_reservations' => DB::table('panel_capacity_reservations')->count(),
+            'payment_intents' => DB::table('payment_intents')->count(),
+            'orders' => DB::table('orders')->count(),
+            'services' => DB::table('service_subscriptions')->count(),
+        ];
     }
 
     /** @return array<string,int> */

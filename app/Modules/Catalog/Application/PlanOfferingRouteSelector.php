@@ -7,7 +7,6 @@ namespace App\Modules\Catalog\Application;
 use App\Modules\Catalog\Domain\PlanOfferingRouteType;
 use App\Modules\Catalog\Domain\PlanOfferingServerSelectionMode;
 use App\Modules\Catalog\Domain\RouteCandidateUnavailable;
-use App\Modules\Catalog\Domain\RouteSelectionActor;
 use App\Modules\Panels\Application\CapacityOperationContext;
 use App\Modules\Panels\Application\TargetCapacityAllocator;
 use App\Shared\Application\Clock;
@@ -21,6 +20,7 @@ final readonly class PlanOfferingRouteSelector
 {
     public function __construct(
         private DatabaseManager $database,
+        private PlanOfferingActorEligibility $actorEligibility,
         private RouteOperationalVerifier $verifier,
         private TargetCapacityAllocator $capacity,
         private Clock $clock,
@@ -49,10 +49,15 @@ final readonly class PlanOfferingRouteSelector
                     return $replay;
                 }
 
-                $actor = $this->authoritativeActor($connection, $request->userId, $request->actor);
+                $actor = $this->actorEligibility->authoritativeActor($connection, $request->userId, $request->actor);
                 $offering = $this->lockedOffering($connection, $request->offeringId);
-                $this->assertAudience($offering->audience, $request->actor);
-                $this->assertEligibility($connection, $offering, $actor);
+                $this->actorEligibility->assertAudience($offering->audience, $request->actor);
+                $this->actorEligibility->assertOfferingEligibility(
+                    $connection,
+                    $offering->id,
+                    $offering->tag_match_mode,
+                    $actor,
+                );
                 $protocolProfileId = $this->resolveProtocol($connection, $offering, $request->requestedProtocolProfileId);
                 $policy = $this->lockedPolicy($connection, $request->offeringId);
                 $routes = $this->lockedRoutes($connection, $policy->id);
@@ -155,41 +160,6 @@ final readonly class PlanOfferingRouteSelector
         }
     }
 
-    /** @return object{tier_code: ?string, tag_ids: list<int>} */
-    private function authoritativeActor(Connection $connection, int $userId, RouteSelectionActor $actor): object
-    {
-        /** @var object{account_status: string}|null $user */
-        $user = $connection->table('users')->where('id', $userId)->lockForUpdate()->first(['account_status']);
-        if ($user === null || $user->account_status !== 'active') {
-            throw new DomainException('Route selection actor is unavailable.');
-        }
-        if ($actor === RouteSelectionActor::Agent
-            && ! $connection->table('agent_profiles')->where('user_id', $userId)->where('status', 'active')->exists()
-        ) {
-            throw new DomainException('Route selection requires an active agent profile.');
-        }
-
-        /** @var object{tier_code: ?string}|null $profile */
-        $profile = $connection->table('customer_profiles as profile')
-            ->leftJoin('customer_tiers as tier', 'tier.id', '=', 'profile.current_tier_id')
-            ->where('profile.user_id', $userId)
-            ->first(['tier.code as tier_code']);
-        if ($profile === null) {
-            throw new DomainException('Route selection requires a customer profile.');
-        }
-        /** @var list<int|string> $tagRows */
-        $tagRows = $connection->table('customer_tag_assignments')
-            ->where('user_id', $userId)
-            ->whereNull('removed_at')
-            ->pluck('tag_id')
-            ->all();
-
-        return (object) [
-            'tier_code' => $profile->tier_code,
-            'tag_ids' => array_map(static fn (int|string $id): int => (int) $id, $tagRows),
-        ];
-    }
-
     /** @return object{id: int, audience: string, server_selection_mode: string, protocol_selection_mode: string, tag_match_mode: string} */
     private function lockedOffering(Connection $connection, int $offeringId): object
     {
@@ -209,50 +179,6 @@ final readonly class PlanOfferingRouteSelector
             'protocol_selection_mode' => $row->protocol_selection_mode,
             'tag_match_mode' => $row->tag_match_mode,
         ];
-    }
-
-    private function assertAudience(string $audience, RouteSelectionActor $actor): void
-    {
-        $allowed = $audience === 'both'
-            || ($audience === 'customers' && $actor === RouteSelectionActor::Customer)
-            || ($audience === 'agents' && $actor === RouteSelectionActor::Agent);
-        if (! $allowed) {
-            throw new DomainException('Offering audience does not allow this route selection actor.');
-        }
-    }
-
-    /**
-     * @param  object{id: int, audience: string, server_selection_mode: string, protocol_selection_mode: string, tag_match_mode: string}  $offering
-     * @param  object{tier_code: ?string, tag_ids: list<int>}  $actor
-     */
-    private function assertEligibility(Connection $connection, object $offering, object $actor): void
-    {
-        /** @var list<int|string> $tierRows */
-        $tierRows = $connection->table('plan_offering_tiers')
-            ->where('plan_offering_id', $offering->id)
-            ->pluck('tier_code')
-            ->all();
-        $tiers = array_map(static fn (int|string $code): string => (string) $code, $tierRows);
-        if ($tiers !== [] && ($actor->tier_code === null || ! in_array($actor->tier_code, $tiers, true))) {
-            throw new DomainException('Route selection actor tier is not eligible.');
-        }
-
-        /** @var list<int|string> $tagRows */
-        $tagRows = $connection->table('plan_offering_tags')
-            ->where('plan_offering_id', $offering->id)
-            ->pluck('customer_tag_id')
-            ->all();
-        $requiredTags = array_map(static fn (int|string $id): int => (int) $id, $tagRows);
-        if ($requiredTags === []) {
-            return;
-        }
-        $matching = array_intersect($requiredTags, $actor->tag_ids);
-        $eligible = $offering->tag_match_mode === 'any'
-            ? $matching !== []
-            : count($matching) === count($requiredTags);
-        if (! $eligible) {
-            throw new DomainException('Route selection actor tags are not eligible.');
-        }
     }
 
     /**

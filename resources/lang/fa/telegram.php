@@ -7,6 +7,7 @@ return [
         'home' => "به Freedom Platform خوش آمدید.\n\nمنوی اصلی\nیکی از گزینه‌های زیر را انتخاب کنید.\n/cancel — بستن نشست فعلی",
         'buttons' => [
             'my_account' => 'حساب من',
+            'buy_service' => 'خرید سرویس',
             'my_services' => 'سرویس‌های من',
             'admin' => 'مدیریت',
             'back' => 'بازگشت',
@@ -52,6 +53,36 @@ return [
                     'bootstrap' => 'پیش‌فرض راه‌اندازی',
                 ],
             ],
+        ],
+        'purchase' => [
+            'list' => 'خرید سرویس
+
+:items
+
+صفحه :page از :total_pages — :total_items گزینه در دسترس',
+            'list_item' => '#:number — :plan
+دسته‌بندی: :category
+نوع سرویس: :mode
+قیمت پایه: :price ریال
+مدت: :duration روز',
+            'empty' => 'خرید سرویس
+
+در حال حاضر گزینه واجد شرایطی برای حساب شما در دسترس نیست.',
+            'offering_button' => 'گزینه #:number',
+            'previous' => 'قبلی',
+            'next' => 'بعدی',
+            'not_available' => 'ثبت نشده',
+            'detail' => 'گزینه سرویس
+
+دسته‌بندی: :category
+پلن: :plan
+نوع سرویس: :mode
+قیمت پایه: :price ریال
+مدت: :duration روز
+حجم: :data
+تعداد دستگاه: :devices
+
+این مرحله فقط مرور کاتالوگ است. هنوز هیچ پیش‌فاکتور، پرداخت، رزرو ظرفیت، سفارش یا پروویژنینگی ایجاد نشده است.',
         ],
         'services' => [
             'list' => "سرویس‌های من\n\n:items\n\nصفحه :page از :total_pages — :total_items سرویس",

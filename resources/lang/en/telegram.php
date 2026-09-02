@@ -7,6 +7,7 @@ return [
         'home' => "Welcome to Freedom Platform.\n\nMain menu\nChoose an option below.\n/cancel — Close the current session",
         'buttons' => [
             'my_account' => 'My Account',
+            'buy_service' => 'Buy Service',
             'my_services' => 'My Services',
             'admin' => 'Administration',
             'back' => 'Back',
@@ -52,6 +53,36 @@ return [
                     'bootstrap' => 'Bootstrap fallback',
                 ],
             ],
+        ],
+        'purchase' => [
+            'list' => 'Buy Service
+
+:items
+
+Page :page of :total_pages — :total_items available option(s)',
+            'list_item' => '#:number — :plan
+Category: :category
+Mode: :mode
+Base price: :price IRR
+Duration: :duration days',
+            'empty' => 'Buy Service
+
+No currently eligible service offering is available for your account.',
+            'offering_button' => 'Option #:number',
+            'previous' => 'Previous',
+            'next' => 'Next',
+            'not_available' => 'Not available',
+            'detail' => 'Service Option
+
+Category: :category
+Plan: :plan
+Mode: :mode
+Base price: :price IRR
+Duration: :duration days
+Data: :data
+Device limit: :devices
+
+This is catalog discovery only. No quote, payment, capacity reservation, order, or provisioning has been created yet.',
         ],
         'services' => [
             'list' => "My Services\n\n:items\n\nPage :page of :total_pages — :total_items service(s)",
