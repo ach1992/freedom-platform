@@ -125,7 +125,7 @@ final class TelegramNavigationOwnedServiceDeliveryResender implements TelegramOw
     }
 }
 
-/** @requirement ONB-002 ONB-003 USR-001 ARCH-003 ARCH-004 DAT-003 SEC-003 OPS-003 QUA-004 */
+/** @requirement ONB-002 ONB-003 USR-001 ADM-002 ACL-001 ACL-002 USDT-002 IPG-002 ARCH-003 ARCH-004 DAT-002 DAT-003 SEC-002 SEC-003 OPS-003 QUA-001 QUA-004 */
 final class TelegramNavigationEntryTest extends TestCase
 {
     use DatabaseTruncation;
