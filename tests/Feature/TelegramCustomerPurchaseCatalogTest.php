@@ -6,6 +6,8 @@ namespace Tests\Feature;
 
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCatalog;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseQuote;
+use App\Modules\Telegram\Application\TelegramCustomerPurchaseCatalogPage;
+use App\Modules\Telegram\Application\TelegramCustomerPurchaseOffering;
 use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PanelsAccessFoundationSeeder;
@@ -141,6 +143,83 @@ final class TelegramCustomerPurchaseCatalogTest extends TestCase
         } catch (AuthorizationException) {
             self::assertSame($expected, $this->businessEffectCounts());
         }
+    }
+
+    public function test_quote_contract_refreshes_display_terms_after_canonical_quote_lock(): void
+    {
+        $scenario = $this->scenario();
+        $realCatalog = $this->app->make(TelegramCustomerPurchaseCatalog::class);
+        $current = $realCatalog->pageForSelf($scenario['user_id'], $scenario['user_id'], 1, 6)->items[0];
+        $stale = new TelegramCustomerPurchaseOffering(
+            $current->selectionToken,
+            $current->offeringCode,
+            $current->categoryNameFa,
+            $current->categoryNameEn,
+            'سرویس قدیمی',
+            'Stale service',
+            $current->variantNameFa,
+            $current->variantNameEn,
+            $current->serviceModeLabelFa,
+            $current->serviceModeLabelEn,
+            $current->basePriceIrr,
+            15,
+            $current->dataAllowanceBytes,
+            $current->deviceLimit,
+        );
+        $sequencedCatalog = new class($realCatalog, $stale) implements TelegramCustomerPurchaseCatalog
+        {
+            public int $offeringCalls = 0;
+
+            public function __construct(
+                private readonly TelegramCustomerPurchaseCatalog $delegate,
+                private readonly TelegramCustomerPurchaseOffering $stale,
+            ) {}
+
+            public function pageForSelf(
+                int $actorUserId,
+                int $subjectUserId,
+                int $page,
+                int $pageSize,
+            ): TelegramCustomerPurchaseCatalogPage {
+                return $this->delegate->pageForSelf($actorUserId, $subjectUserId, $page, $pageSize);
+            }
+
+            public function offeringForSelf(
+                int $actorUserId,
+                int $subjectUserId,
+                string $selectionToken,
+            ): TelegramCustomerPurchaseOffering {
+                $this->offeringCalls++;
+                if ($this->offeringCalls === 1) {
+                    if (! hash_equals($this->stale->selectionToken, $selectionToken)) {
+                        throw new \RuntimeException('Unexpected stale Telegram purchase selection token.');
+                    }
+
+                    return $this->stale;
+                }
+
+                return $this->delegate->offeringForSelf($actorUserId, $subjectUserId, $selectionToken);
+            }
+        };
+        $this->app->instance(TelegramCustomerPurchaseCatalog::class, $sequencedCatalog);
+        $quotes = $this->app->make(TelegramCustomerPurchaseQuote::class);
+        $callbackPublicId = (string) Str::ulid();
+        $acceptedAt = new DateTimeImmutable('now', new DateTimeZone('UTC'));
+
+        $preview = $quotes->quoteForSelf(
+            $scenario['user_id'],
+            $scenario['user_id'],
+            $current->selectionToken,
+            $acceptedAt,
+            'telegram-purchase-quote:'.$callbackPublicId,
+            'tg-purchase-quote:'.$callbackPublicId,
+        );
+
+        self::assertSame(2, $sequencedCatalog->offeringCalls);
+        self::assertSame('Standard service', $preview->offering->productNameEn);
+        self::assertSame(30, $preview->offering->durationDays);
+        self::assertNotSame('Stale service', $preview->offering->productNameEn);
+        self::assertSame(1, DB::table('quotes')->count());
     }
 
     public function test_projection_reauthorizes_current_actor_tier_tag_and_account_state(): void

@@ -80,27 +80,20 @@ final readonly class TelegramCustomerPurchaseQuoteService implements TelegramCus
                 $correlationId,
             );
 
-            /** @var object{code:string,state:string,visibility:string,base_price_irr:int|string}|null $row */
-            $row = $connection->table('plan_offerings')
-                ->where('id', $quote->planOfferingId)
-                ->first(['code', 'state', 'visibility', 'base_price_irr']);
-            if ($row === null
-                || $row->state !== 'active'
-                || $row->visibility !== 'visible'
-                || ! hash_equals((string) $row->code, $offering->offeringCode)
-                || (int) $row->base_price_irr !== $offering->basePriceIrr) {
-                throw new AuthorizationException('Telegram purchase Quote offering is no longer current.');
-            }
-
-            if (! hash_equals($quote->offeringCode, $offering->offeringCode)
+            $currentOffering = $this->catalog->offeringForSelf(
+                $actorUserId,
+                $subjectUserId,
+                $offeringSelectionToken,
+            );
+            if (! hash_equals($quote->offeringCode, $currentOffering->offeringCode)
                 || $quote->userId !== $subjectUserId
-                || $quote->basePriceIrr !== $offering->basePriceIrr
+                || $quote->basePriceIrr !== $currentOffering->basePriceIrr
                 || $quote->currency !== 'IRR') {
-                throw new RuntimeException('Telegram purchase Quote does not match the selected offering.');
+                throw new RuntimeException('Telegram purchase Quote does not match the current selected offering.');
             }
 
             return new TelegramCustomerPurchaseQuotePreview(
-                $offering,
+                $currentOffering,
                 $quote->quotePublicId,
                 $quote->configurationSnapshotHash,
                 $quote->basePriceIrr,
