@@ -184,6 +184,29 @@ final class UsdtManualRateSettingTest extends TestCase
         self::assertSame('900000.00000000', $this->service()->current()?->rateIrr);
     }
 
+    public function test_invalid_manual_rate_format_is_a_domain_rejection_without_persistence(): void
+    {
+        $finance = $this->financeAdministrator();
+
+        try {
+            $this->service()->set($finance, '000900000', 'usdt-rate-setting-format', 'corr-usdt-rate-format');
+            self::fail('Expected invalid manual rate format to be rejected.');
+        } catch (\DomainException) {
+            self::assertSame(0, DB::table('usdt_manual_rate_versions')->count());
+            self::assertSame(0, DB::table('audit_logs')->where('action', 'payments.usdt.manual_rate.updated')->count());
+        }
+    }
+
+    public function test_invalid_configured_rate_bounds_remain_runtime_configuration_failures(): void
+    {
+        Config::set('usdt.rate.min_irr', 'invalid');
+        Config::set('usdt.rate.max_irr', '10000000');
+        $finance = $this->financeAdministrator();
+
+        $this->expectException(\RuntimeException::class);
+        $this->service()->set($finance, '900000', 'usdt-rate-setting-config', 'corr-usdt-rate-config');
+    }
+
     public function test_manual_rate_outside_shared_sanity_bounds_is_rejected(): void
     {
         $finance = $this->financeAdministrator();

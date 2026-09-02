@@ -12,6 +12,7 @@ use DomainException;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
+use InvalidArgumentException;
 use RuntimeException;
 use stdClass;
 
@@ -143,14 +144,25 @@ final readonly class UsdtManualRateSettingService
     /** @return numeric-string */
     private function validatedRate(string $rateIrr): string
     {
-        $normalized = UsdtDecimal::rate(trim($rateIrr));
+        try {
+            $normalized = UsdtDecimal::rate(trim($rateIrr));
+        } catch (InvalidArgumentException $exception) {
+            throw new DomainException('USDT manual rate is invalid.', 0, $exception);
+        }
+
         $minimum = $this->config->get('usdt.rate.min_irr');
         $maximum = $this->config->get('usdt.rate.max_irr');
         if (! is_string($minimum) || ! is_string($maximum)) {
             throw new RuntimeException('USDT manual rate bounds are not configured.');
         }
-        $min = UsdtDecimal::rate($minimum);
-        $max = UsdtDecimal::rate($maximum);
+
+        try {
+            $min = UsdtDecimal::rate($minimum);
+            $max = UsdtDecimal::rate($maximum);
+        } catch (InvalidArgumentException $exception) {
+            throw new RuntimeException('USDT manual rate bounds are invalid.', 0, $exception);
+        }
+
         if (bccomp($normalized, $min, 8) < 0 || bccomp($normalized, $max, 8) > 0) {
             throw new DomainException('USDT manual rate is outside the configured sanity bounds.');
         }

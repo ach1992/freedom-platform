@@ -165,7 +165,7 @@ final class TelegramNavigationEntryTest extends TestCase
             if (DB::connection()->getDriverName() === 'mysql') {
                 DB::unprepared('DROP TRIGGER IF EXISTS telegram_navigation_test_fail_processed_6402');
                 DB::unprepared('DROP TRIGGER IF EXISTS telegram_navigation_test_fail_processed_6903');
-                DB::unprepared('DROP TRIGGER IF EXISTS telegram_navigation_test_fail_processed_7007');
+                DB::unprepared('DROP TRIGGER IF EXISTS telegram_navigation_test_fail_processed_7009');
                 DB::unprepared('DROP TRIGGER IF EXISTS telegram_navigation_test_fail_admin_rate_finalize');
                 DB::unprepared('DROP TRIGGER IF EXISTS telegram_navigation_test_fail_processed_6105');
                 $this->truncateTablesForAllConnections();
@@ -1384,49 +1384,55 @@ SQL);
         self::assertSame(0, DB::table('audit_logs')->where('action', 'payments.usdt.manual_rate.updated')->count());
         self::assertStringContainsString('معتبر نیست', $this->latestConfidentialPresentation());
 
-        $this->accept($this->payload(7006, $telegramUserId, 'navigation_admin_rate', 'fa', '۹۹۹۹۹'));
+        $this->accept($this->payload(7006, $telegramUserId, 'navigation_admin_rate', 'fa', '۰'));
         $processor->process('123456789', 7006);
         self::assertSame(0, DB::table('usdt_manual_rate_versions')->count());
         self::assertSame(0, DB::table('audit_logs')->where('action', 'payments.usdt.manual_rate.updated')->count());
         self::assertStringContainsString('معتبر نیست', $this->latestConfidentialPresentation());
 
+        $this->accept($this->payload(7007, $telegramUserId, 'navigation_admin_rate', 'fa', '۹۹۹۹۹'));
+        $processor->process('123456789', 7007);
+        self::assertSame(0, DB::table('usdt_manual_rate_versions')->count());
+        self::assertSame(0, DB::table('audit_logs')->where('action', 'payments.usdt.manual_rate.updated')->count());
+        self::assertStringContainsString('معتبر نیست', $this->latestConfidentialPresentation());
+
         $rawRateInput = '۹۱۰۰۰۰';
-        $this->accept($this->payload(7007, $telegramUserId, 'navigation_admin_rate', 'fa', $rawRateInput));
+        $this->accept($this->payload(7009, $telegramUserId, 'navigation_admin_rate', 'fa', $rawRateInput));
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER telegram_navigation_test_fail_processed_7007
+CREATE TRIGGER telegram_navigation_test_fail_processed_7009
 BEFORE UPDATE ON processed_telegram_updates
 FOR EACH ROW
 BEGIN
-    IF OLD.bot_id = '123456789' AND OLD.update_id = 7007 AND NEW.state = 'processed' THEN
+    IF OLD.bot_id = '123456789' AND OLD.update_id = 7009 AND NEW.state = 'processed' THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'simulated-post-admin-rate-dispatch-failure';
     END IF;
 END
 SQL);
         try {
             try {
-                $processor->process('123456789', 7007);
+                $processor->process('123456789', 7009);
                 self::fail('The simulated post-rate-dispatch failure must keep the accepted rate update retryable.');
             } catch (RuntimeException $exception) {
                 self::assertSame('Telegram update processing failed.', $exception->getMessage());
                 self::assertStringNotContainsString($rawRateInput, $exception->getMessage());
             }
         } finally {
-            DB::unprepared('DROP TRIGGER IF EXISTS telegram_navigation_test_fail_processed_7007');
+            DB::unprepared('DROP TRIGGER IF EXISTS telegram_navigation_test_fail_processed_7009');
         }
 
         self::assertSame(1, DB::table('usdt_manual_rate_versions')->count());
         self::assertSame('910000.00000000', (string) DB::table('usdt_manual_rate_versions')->value('rate_irr'));
         self::assertSame(1, DB::table('audit_logs')->where('action', 'payments.usdt.manual_rate.updated')->count());
         $this->assertDatabaseHas('processed_telegram_updates', [
-            'update_id' => 7007,
+            'update_id' => 7009,
             'state' => 'failed',
             'attempt_count' => 1,
         ]);
         self::assertStringNotContainsString($rawRateInput, $this->navigationCommonDurableEvidence((int) $session->id, $telegramUserId));
 
-        $processor->process('123456789', 7007);
+        $processor->process('123456789', 7009);
         $this->assertDatabaseHas('processed_telegram_updates', [
-            'update_id' => 7007,
+            'update_id' => 7009,
             'state' => 'processed',
             'attempt_count' => 2,
         ]);
