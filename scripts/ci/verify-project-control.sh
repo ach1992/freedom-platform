@@ -123,9 +123,18 @@ grep -F 'High/Critical work involving financial integrity' CONTRIBUTING.md >/dev
 grep -F 'Merge style never substitutes for review or the applicable green CI tier.' CONTRIBUTING.md >/dev/null \
     || fail 'contribution guide lacks merge-method safety rule'
 
-# Duplicate mutable project status and retired coordination files are forbidden.
+# Duplicate mutable project status and retired coordination/one-time staging artifacts are forbidden.
 for forbidden in PROJECT_STATUS.md docs/project-status.json docs/development/project-status.schema.json; do
     test ! -e "$forbidden" || fail "duplicate mutable project status remains: $forbidden"
+done
+
+for retired_staging_path in \
+    deploy/staging/configure-aapanel-site.sh \
+    deploy/staging/prepare-php-functions.sh \
+    deploy/staging/prepare-runtime-paths.sh \
+    deploy/staging/recover-operations-migration.sh; do
+    test ! -e "$retired_staging_path" \
+        || fail "retired one-time staging artifact returned to the active tree: $retired_staging_path"
 done
 
 # The active documentation tree is allowlisted. Historical task records belong in Git/GitHub history.
