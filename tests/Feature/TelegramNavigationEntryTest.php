@@ -830,7 +830,7 @@ SQL);
         ]);
 
         $this->accept($this->callbackPayload(7006, $telegramUserId, 'navigation_resend', 'fa', $resendToken));
-        $processor->process('123456789', 7007);
+        $processor->process('123456789', 7006);
         self::assertCount(1, $resender->calls);
         self::assertSame($operationCountBefore + 1, DB::table('telegram_delivery_operations')->count());
 
