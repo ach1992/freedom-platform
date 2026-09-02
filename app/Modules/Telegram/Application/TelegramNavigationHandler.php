@@ -37,6 +37,8 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
 
     private const STATE_ADMIN_USDT_RATE_EDIT = 'admin_usdt_rate_edit';
 
+    private const STATE_ADMIN_USDT_RATE_CONFIRM = 'admin_usdt_rate_confirm';
+
     private const STATE_ADMIN_USDT_RATE_SUBMITTING = 'admin_usdt_rate_submitting';
 
     private const ACTION_MY_ACCOUNT = 'navigation.my_account';
@@ -56,6 +58,8 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
     private const ACTION_ADMIN_USDT_RATE = 'navigation.admin.usdt_rate';
 
     private const ACTION_ADMIN_USDT_RATE_EDIT = 'navigation.admin.usdt_rate.edit';
+
+    private const ACTION_ADMIN_USDT_RATE_CONFIRM = 'navigation.admin.usdt_rate.confirm';
 
     private const ACTION_BACK = 'navigation.back';
 
@@ -151,6 +155,12 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
 
         if ($action->sessionState === self::STATE_ADMIN_USDT_RATE_EDIT) {
             $this->handleAdminUsdtRateEdit($action);
+
+            return;
+        }
+
+        if ($action->sessionState === self::STATE_ADMIN_USDT_RATE_CONFIRM) {
+            $this->handleAdminUsdtRateConfirm($action);
 
             return;
         }
@@ -339,7 +349,34 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             return;
         }
         if ($action->messageText !== null) {
-            $this->setAdminUsdtRate($action, $action->messageText);
+            $this->prepareAdminUsdtRateConfirmation($action, $action->messageText);
+        }
+    }
+
+    private function handleAdminUsdtRateConfirm(TelegramInteractionAction $action): void
+    {
+        if ($action->kind === TelegramInteractionActionKind::Callback) {
+            if ($action->callbackAction === self::ACTION_BACK && $action->callbackPayload === []) {
+                $this->showAdminUsdtRateEdit($action);
+
+                return;
+            }
+            if ($action->callbackAction === self::ACTION_ADMIN_USDT_RATE_CONFIRM && $action->callbackPayload === []) {
+                $this->confirmAdminUsdtRate($action);
+
+                return;
+            }
+
+            throw new RuntimeException('Telegram administrator USDT rate confirmation callback action is unsupported.');
+        }
+
+        if ($action->kind === TelegramInteractionActionKind::Back) {
+            $this->showAdminUsdtRateEdit($action);
+
+            return;
+        }
+        if ($this->isEntryCommand($action->messageText)) {
+            $this->returnHome($action);
         }
     }
 
@@ -419,9 +456,19 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         );
     }
 
-    private function setAdminUsdtRate(TelegramInteractionAction $action, string $input): void
+    private function prepareAdminUsdtRateConfirmation(TelegramInteractionAction $action, string $input): void
     {
-        if (! $this->managedUsdtRateSettings->availableFor($action->userId)) {
+        $locale = $this->localeForActor($action->userId);
+        $normalized = $this->normalizeUsdtRateInput($input);
+        if ($normalized === null) {
+            $this->renderAdminUsdtRateEdit($action, $action->sessionVersion, $locale, 'invalid');
+
+            return;
+        }
+
+        try {
+            $validated = $this->managedUsdtRateSettings->validateFor($action->userId, $normalized);
+        } catch (AuthorizationException) {
             try {
                 $this->returnHome($action);
             } catch (\DomainException) {
@@ -429,19 +476,38 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             }
 
             return;
-        }
-
-        $locale = $this->localeForActor($action->userId);
-        $normalized = $this->normalizeUsdtRateInput($input);
-        if ($normalized === null) {
-            try {
-                $this->renderAdminUsdtRateEdit($action, $action->sessionVersion, $locale, 'invalid');
-            } catch (\DomainException) {
-                // A concurrent interaction already moved this session. Fail closed.
-            }
+        } catch (\DomainException) {
+            $this->renderAdminUsdtRateEdit($action, $action->sessionVersion, $locale, 'invalid');
 
             return;
         }
+
+        try {
+            $session = $this->sessions->transition(
+                $action->sessionPublicId,
+                $action->sessionVersion,
+                self::STATE_ADMIN_USDT_RATE_CONFIRM,
+                ['rate_irr' => $validated],
+                'nav-admin-usdt-rate-confirm-preview:'.hash('sha256', $action->requestKey),
+            );
+        } catch (\DomainException) {
+            // Another accepted interaction already moved this edit session. No financial mutation occurred.
+            return;
+        }
+        $this->assertActorBinding($action, $session->userId);
+        $this->renderAdminUsdtRateConfirmation(
+            $action,
+            $session->version,
+            $validated,
+            $locale,
+            $action->requestKey,
+        );
+    }
+
+    private function confirmAdminUsdtRate(TelegramInteractionAction $action): void
+    {
+        $locale = $this->localeForActor($action->userId);
+        $normalized = $this->pendingUsdtRateFromPayload($action->sessionPayload);
 
         try {
             [$session, $rate] = $this->database->connection()->transaction(function () use ($action, $normalized): array {
@@ -486,14 +552,14 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             return;
         } catch (TelegramManagedUsdtRateInputRejected) {
             try {
-                $this->renderAdminUsdtRateEdit($action, $action->sessionVersion, $locale, 'invalid');
+                $this->showAdminUsdtRateEdit($action);
             } catch (\DomainException) {
                 // A concurrent interaction already moved this session. Fail closed.
             }
 
             return;
         } catch (\DomainException) {
-            // The accepted message lost the session-version race before the financial mutation.
+            // The accepted confirmation lost the session-version race before the financial mutation.
             return;
         }
 
@@ -591,6 +657,50 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         );
     }
 
+    private function renderAdminUsdtRateConfirmation(
+        TelegramInteractionAction $action,
+        int $sessionVersion,
+        string $rateIrr,
+        string $locale,
+        string $requestKey,
+    ): void {
+        $confirm = $this->callbacks->issue(
+            $action->sessionPublicId,
+            $sessionVersion,
+            self::ACTION_ADMIN_USDT_RATE_CONFIRM,
+            [],
+            'nav-admin-usdt-rate-confirm:'.$requestKey,
+        );
+        $back = $this->callbacks->issue(
+            $action->sessionPublicId,
+            $sessionVersion,
+            self::ACTION_BACK,
+            [],
+            'nav-admin-usdt-rate-confirm-back:'.$requestKey,
+        );
+        $keyboard = new TelegramInlineKeyboardSnapshot([
+            [new TelegramInlineCallbackButton(
+                $this->translation('telegram.navigation.admin.usdt_rate.confirm_button', $locale),
+                $confirm->publicId,
+                TelegramInlineButtonStyle::Primary,
+            )],
+            [new TelegramInlineCallbackButton(
+                $this->translation('telegram.navigation.buttons.back', $locale),
+                $back->publicId,
+            )],
+        ]);
+
+        $this->queueConfidential(
+            $action,
+            $this->translation('telegram.navigation.admin.usdt_rate.confirm', $locale, [
+                'rate' => $this->formatUsdtRateIrr($rateIrr),
+            ]),
+            'nav-admin-usdt-rate-confirm-delivery:'.$requestKey,
+            'usdt-rate-confirm',
+            $keyboard,
+        );
+    }
+
     private function renderAdminUsdtRateEdit(
         TelegramInteractionAction $action,
         int $sessionVersion,
@@ -646,6 +756,21 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         ]);
     }
 
+    /** @param array<string, mixed> $payload */
+    private function pendingUsdtRateFromPayload(array $payload): string
+    {
+        if (count($payload) !== 1 || ! array_key_exists('rate_irr', $payload) || ! is_string($payload['rate_irr'])) {
+            throw new RuntimeException('Telegram administrator USDT rate confirmation payload is invalid.');
+        }
+
+        $rate = $payload['rate_irr'];
+        if (preg_match('/\A[0-9]+\.[0-9]{8}\z/', $rate) !== 1) {
+            throw new RuntimeException('Telegram administrator USDT rate confirmation value is invalid.');
+        }
+
+        return $rate;
+    }
+
     private function normalizeUsdtRateInput(string $input): ?string
     {
         $normalized = strtr(trim($input), [
@@ -676,12 +801,12 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
 
     private function usdtRateRequestKey(TelegramInteractionAction $action): string
     {
-        return 'telegram-usdt-rate:'.hash('sha256', $action->requestKey);
+        return 'telegram-usdt-rate:'.$this->callbackPublicId($action);
     }
 
     private function usdtRateCorrelationId(TelegramInteractionAction $action): string
     {
-        return 'tg-usdt-rate:'.substr(hash('sha256', $action->requestKey), 0, 40);
+        return 'tg-usdt-rate:'.$this->callbackPublicId($action);
     }
 
     private function showMyAccount(TelegramInteractionAction $action): void
@@ -912,7 +1037,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
     {
         if ($action->callbackPublicId === null
             || preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/', $action->callbackPublicId) !== 1) {
-            throw new RuntimeException('Telegram Service resend callback identity is invalid.');
+            throw new RuntimeException('Telegram callback identity is invalid.');
         }
 
         return $action->callbackPublicId;

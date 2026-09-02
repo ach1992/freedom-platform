@@ -49,13 +49,31 @@ final readonly class UsdtManualRateSettingService
             return null;
         }
 
+        try {
+            $bootstrapRate = $this->validatedRate($bootstrap);
+        } catch (DomainException $exception) {
+            throw new RuntimeException('USDT manual bootstrap rate configuration is invalid.', 0, $exception);
+        }
+
         return new UsdtManualRateSettingReceipt(
             null,
-            $this->validatedRate($bootstrap),
+            $bootstrapRate,
             'bootstrap',
             null,
             null,
         );
+    }
+
+    /** @return numeric-string */
+    public function validateForUpdate(int $administratorId, string $rateIrr): string
+    {
+        if ($administratorId < 1) {
+            throw new DomainException('Administrator ID must be positive.');
+        }
+
+        $this->authorizer->authorize($administratorId, self::PERMISSION);
+
+        return $this->validatedRate($rateIrr);
     }
 
     /** @requirement USDT-002 IPG-002 DAT-002 DAT-003 DAT-004 SEC-002 QUA-004 */

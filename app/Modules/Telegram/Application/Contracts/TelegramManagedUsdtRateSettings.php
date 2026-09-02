@@ -12,6 +12,9 @@ interface TelegramManagedUsdtRateSettings
 
     public function currentFor(int $actorUserId): ?TelegramManagedUsdtRateSnapshot;
 
+    /** @return numeric-string */
+    public function validateFor(int $actorUserId, string $rateIrr): string;
+
     public function setFor(
         int $actorUserId,
         string $rateIrr,

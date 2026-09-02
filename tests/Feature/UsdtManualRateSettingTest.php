@@ -116,6 +116,10 @@ final class UsdtManualRateSettingTest extends TestCase
 
         $bridge = $this->app->make(TelegramManagedUsdtRateSettings::class);
         self::assertTrue($bridge->availableFor($userId));
+        self::assertFalse((bool) DB::table('permissions')->where('code', 'payments.usdt.manage')->value('requires_approval'));
+        self::assertSame('910000.00000000', $bridge->validateFor($userId, '910000'));
+        self::assertSame(0, DB::table('usdt_manual_rate_versions')->count());
+        self::assertSame(0, DB::table('audit_logs')->where('action', 'payments.usdt.manual_rate.updated')->count());
 
         $bootstrap = $bridge->currentFor($userId);
         self::assertNotNull($bootstrap);
@@ -137,6 +141,12 @@ final class UsdtManualRateSettingTest extends TestCase
             'updated_at' => now('UTC'),
         ]);
         self::assertFalse($bridge->availableFor($userId));
+        try {
+            $bridge->validateFor($userId, '920000');
+            self::fail('Disabled administrator must not validate Telegram managed-rate candidates.');
+        } catch (AuthorizationException) {
+            self::assertSame(1, DB::table('usdt_manual_rate_versions')->count());
+        }
         try {
             $bridge->setFor($userId, '920000', 'telegram-rate-bridge-0002', 'telegram-rate-corr-0002');
             self::fail('Disabled administrator must not retain Telegram managed-rate authority.');
@@ -205,6 +215,14 @@ final class UsdtManualRateSettingTest extends TestCase
 
         $this->expectException(\RuntimeException::class);
         $this->service()->set($finance, '900000', 'usdt-rate-setting-config', 'corr-usdt-rate-config');
+    }
+
+    public function test_invalid_bootstrap_rate_remains_a_runtime_configuration_failure(): void
+    {
+        Config::set('usdt.rate.manual_irr', 'invalid');
+
+        $this->expectException(\RuntimeException::class);
+        $this->service()->current();
     }
 
     public function test_manual_rate_outside_shared_sanity_bounds_is_rejected(): void

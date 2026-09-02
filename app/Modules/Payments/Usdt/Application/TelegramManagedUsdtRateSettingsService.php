@@ -30,6 +30,13 @@ final readonly class TelegramManagedUsdtRateSettingsService implements TelegramM
         return $current === null ? null : $this->snapshot($current);
     }
 
+    public function validateFor(int $actorUserId, string $rateIrr): string
+    {
+        $administratorId = $this->administrators->authorizeUser($actorUserId, self::PERMISSION);
+
+        return $this->rates->validateForUpdate($administratorId, $rateIrr);
+    }
+
     public function setFor(
         int $actorUserId,
         string $rateIrr,
