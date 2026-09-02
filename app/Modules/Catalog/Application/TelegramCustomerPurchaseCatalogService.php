@@ -133,6 +133,7 @@ final readonly class TelegramCustomerPurchaseCatalogService implements TelegramC
             $offeringCode = $this->databaseString($row->code, 'Plan Offering code');
             $items[] = new TelegramCustomerPurchaseOffering(
                 $this->selectionToken($userId, $offeringCode),
+                $offeringCode,
                 $this->databaseString($row->category_name_fa, 'Purchase category Persian label'),
                 $this->optionalDatabaseString($row->category_name_en),
                 $this->databaseString($row->product_name_fa, 'Purchase product Persian label'),

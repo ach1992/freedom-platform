@@ -7,6 +7,7 @@ namespace App\Providers;
 use App\Modules\Catalog\Application\TelegramCustomerPurchaseCatalogService;
 use App\Modules\Customers\Application\CustomerIdentityProfilePersistence;
 use App\Modules\Identity\Application\Contracts\CustomerIdentityProfileWriter;
+use App\Modules\Orders\Application\TelegramCustomerPurchaseQuoteService;
 use App\Modules\Payments\CardToCard\Application\Contracts\CardToCardAdjustmentGenerator;
 use App\Modules\Payments\CardToCard\Infrastructure\SecureCardToCardAdjustmentGenerator;
 use App\Modules\Payments\NowPayments\Application\Contracts\NowPaymentsTransport;
@@ -19,6 +20,7 @@ use App\Modules\Payments\Zarinpal\Infrastructure\HttpZarinpalTransport;
 use App\Modules\Provisioning\Application\TelegramOwnedServiceDeliveryResendService;
 use App\Modules\Provisioning\Application\TelegramOwnedServiceProjectionService;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCatalog;
+use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseQuote;
 use App\Modules\Telegram\Application\Contracts\TelegramManagedUsdtRateSettings;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceDeliveryResender;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceProjection;
@@ -35,6 +37,7 @@ class AppServiceProvider extends ServiceProvider
     {
         $this->app->bind(CustomerIdentityProfileWriter::class, CustomerIdentityProfilePersistence::class);
         $this->app->bind(TelegramCustomerPurchaseCatalog::class, TelegramCustomerPurchaseCatalogService::class);
+        $this->app->bind(TelegramCustomerPurchaseQuote::class, TelegramCustomerPurchaseQuoteService::class);
         $this->app->bind(TelegramOwnedServiceProjection::class, TelegramOwnedServiceProjectionService::class);
         $this->app->bind(TelegramOwnedServiceDeliveryResender::class, TelegramOwnedServiceDeliveryResendService::class);
         $this->app->bind(TelegramManagedUsdtRateSettings::class, TelegramManagedUsdtRateSettingsService::class);

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Telegram\Application;
 
 use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
+use DateTimeImmutable;
 
 final readonly class TelegramInteractionAction
 {
@@ -30,5 +31,6 @@ final readonly class TelegramInteractionAction
         public ?string $callbackAction,
         public array $callbackPayload,
         public bool $replayed,
+        public ?DateTimeImmutable $callbackAcceptedAt = null,
     ) {}
 }

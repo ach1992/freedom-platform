@@ -10,6 +10,7 @@ final readonly class TelegramCustomerPurchaseOffering
 {
     public function __construct(
         public string $selectionToken,
+        public string $offeringCode,
         public string $categoryNameFa,
         public ?string $categoryNameEn,
         public string $productNameFa,
@@ -25,6 +26,9 @@ final readonly class TelegramCustomerPurchaseOffering
     ) {
         if (preg_match('/\A[0-9a-f]{40}\z/', $selectionToken) !== 1) {
             throw new InvalidArgumentException('Telegram purchase offering selection token is invalid.');
+        }
+        if (preg_match('/\A[a-z0-9][a-z0-9_.-]{0,63}\z/', $offeringCode) !== 1) {
+            throw new InvalidArgumentException('Telegram purchase offering public code is invalid.');
         }
         foreach ([$categoryNameFa, $productNameFa, $serviceModeLabelFa] as $label) {
             if ($label === '' || ! mb_check_encoding($label, 'UTF-8')) {

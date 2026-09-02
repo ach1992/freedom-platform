@@ -83,6 +83,18 @@ Data: :data
 Device limit: :devices
 
 This is catalog discovery only. No quote, payment, capacity reservation, order, or provisioning has been created yet.',
+            'quote_button' => 'View quote',
+            'quote' => 'Service Purchase Quote
+
+Quote ID: :quote_id
+Plan: :plan
+Base price: :base_price :currency
+Effective price: :effective_price :currency
+Discount: :discount :currency
+Final amount: :final_price :currency
+Valid until: :expires_at (Tehran time)
+
+This is a recorded commercial snapshot only. No payment, capacity reservation, order, or provisioning has been created yet.',
         ],
         'services' => [
             'list' => "My Services\n\n:items\n\nPage :page of :total_pages — :total_items service(s)",

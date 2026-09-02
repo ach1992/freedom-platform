@@ -412,6 +412,7 @@ final readonly class TelegramInteractionCallbackService
             is_numeric($callback->accepted_update_id) ? (int) $callback->accepted_update_id : null,
             $state === 'completed',
             $replayed,
+            $callback->accepted_at === null ? null : $this->parseTime((string) $callback->accepted_at),
         );
     }
 
