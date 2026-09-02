@@ -9,11 +9,13 @@ use App\Modules\Customers\Application\CustomerAccountSummaryService;
 use App\Modules\Promotions\Application\ReferralSelfSummary;
 use App\Modules\Promotions\Application\ReferralSelfSummaryService;
 use App\Modules\Telegram\Application\Contracts\TelegramInteractionHandler;
+use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceDeliveryResender;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceProjection;
 use App\Modules\Telegram\Domain\TelegramDeliveryAction;
 use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
 use App\Modules\Wallet\Application\WalletSelfBalanceService;
 use App\Modules\Wallet\Application\WalletSelfBalanceSummary;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Contracts\Translation\Translator;
 use RuntimeException;
 
@@ -37,6 +39,8 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
 
     private const ACTION_SERVICE_DETAIL_PREFIX = 'navigation.service.';
 
+    private const ACTION_SERVICE_RESEND = 'navigation.service.resend';
+
     private const ACTION_BACK = 'navigation.back';
 
     private const SERVICE_PAGE_SIZE = 6;
@@ -52,6 +56,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         private WalletSelfBalanceService $wallets,
         private ReferralSelfSummaryService $referrals,
         private TelegramOwnedServiceProjection $services,
+        private TelegramOwnedServiceDeliveryResender $serviceDeliveryResender,
     ) {}
 
     public function flow(): string
@@ -197,13 +202,18 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
     private function handleServiceDetail(TelegramInteractionAction $action): void
     {
         if ($action->kind === TelegramInteractionActionKind::Callback) {
-            if ($action->callbackAction !== self::ACTION_BACK || $action->callbackPayload !== []) {
-                throw new RuntimeException('Telegram Service detail callback action is unsupported.');
+            if ($action->callbackAction === self::ACTION_BACK && $action->callbackPayload === []) {
+                $this->returnMyServices($action);
+
+                return;
+            }
+            if ($action->callbackAction === self::ACTION_SERVICE_RESEND) {
+                $this->resendServiceDelivery($action, $this->serviceSelectionToken($action->callbackPayload));
+
+                return;
             }
 
-            $this->returnMyServices($action);
-
-            return;
+            throw new RuntimeException('Telegram Service detail callback action is unsupported.');
         }
 
         if ($action->kind === TelegramInteractionActionKind::Back) {
@@ -301,7 +311,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
                 throw new RuntimeException('Telegram Service search match is incomplete.');
             }
             $detail = $this->services->detailForSelf($action->userId, $action->userId, $result->selectionToken);
-            $this->transitionToServiceDetail($action, $detail, $page, $locale);
+            $this->transitionToServiceDetail($action, $detail, $result->selectionToken, $page, $locale);
 
             return;
         }
@@ -315,12 +325,13 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         $page = $this->pageFromPayload($action->sessionPayload);
         $detail = $this->services->detailForSelf($action->userId, $action->userId, $selectionToken);
         $locale = $this->localeForActor($action->userId);
-        $this->transitionToServiceDetail($action, $detail, $page, $locale);
+        $this->transitionToServiceDetail($action, $detail, $selectionToken, $page, $locale);
     }
 
     private function transitionToServiceDetail(
         TelegramInteractionAction $action,
         TelegramOwnedServiceDetail $detail,
+        string $selectionToken,
         int $page,
         string $locale,
     ): void {
@@ -332,12 +343,78 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             'nav-service-detail-transition:'.$action->requestKey,
         );
         $this->assertActorBinding($action, $session->userId);
+        $rows = [];
+        if ($this->canOfferServiceResend($detail)) {
+            $resend = $this->callbacks->issue(
+                $session->publicId,
+                $session->version,
+                self::ACTION_SERVICE_RESEND,
+                ['service_selection' => $selectionToken],
+                'nav-service-detail-resend:'.$action->requestKey,
+            );
+            $rows[] = [new TelegramInlineCallbackButton(
+                $this->translation('telegram.navigation.services.resend.button', $locale),
+                $resend->publicId,
+                TelegramInlineButtonStyle::Primary,
+            )];
+        }
+
         $back = $this->callbacks->issue(
             $session->publicId,
             $session->version,
             self::ACTION_BACK,
             [],
             'nav-service-detail-back:'.$action->requestKey,
+        );
+        $rows[] = [new TelegramInlineCallbackButton(
+            $this->translation('telegram.navigation.buttons.back', $locale),
+            $back->publicId,
+        )];
+        $keyboard = new TelegramInlineKeyboardSnapshot($rows);
+
+        $this->queueConfidential(
+            $action,
+            $this->serviceDetailText($detail, $locale),
+            'nav-service-detail-delivery:'.$action->requestKey,
+            'service-detail',
+            $keyboard,
+        );
+    }
+
+    private function resendServiceDelivery(TelegramInteractionAction $action, string $selectionToken): void
+    {
+        $locale = $this->localeForActor($action->userId);
+
+        try {
+            $detail = $this->services->detailForSelf($action->userId, $action->userId, $selectionToken);
+        } catch (AuthorizationException) {
+            $this->renderServiceResendResult($action, TelegramOwnedServiceDeliveryResendStatus::Unavailable, $locale);
+
+            return;
+        }
+
+        $callbackPublicId = $this->callbackPublicId($action);
+        $status = $this->serviceDeliveryResender->resendForSelf(
+            $action->userId,
+            $detail->publicId,
+            'telegram-service-resend:'.$callbackPublicId,
+            'telegram-resend:'.$callbackPublicId,
+        );
+
+        $this->renderServiceResendResult($action, $status, $locale);
+    }
+
+    private function renderServiceResendResult(
+        TelegramInteractionAction $action,
+        TelegramOwnedServiceDeliveryResendStatus $status,
+        string $locale,
+    ): void {
+        $back = $this->callbacks->issue(
+            $action->sessionPublicId,
+            $action->sessionVersion,
+            self::ACTION_BACK,
+            [],
+            'nav-service-resend-back:'.$action->requestKey,
         );
         $keyboard = new TelegramInlineKeyboardSnapshot([[
             new TelegramInlineCallbackButton(
@@ -348,11 +425,39 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
 
         $this->queueConfidential(
             $action,
-            $this->serviceDetailText($detail, $locale),
-            'nav-service-detail-delivery:'.$action->requestKey,
-            'service-detail',
+            $this->translation('telegram.navigation.services.resend.'.$status->value, $locale),
+            'nav-service-resend-delivery:'.$action->requestKey,
+            'service-resend-'.$status->value,
             $keyboard,
         );
+    }
+
+    private function canOfferServiceResend(TelegramOwnedServiceDetail $detail): bool
+    {
+        return $detail->provisionedAt !== null
+            && in_array($detail->lifecycleState, ['active', 'suspended'], true);
+    }
+
+    /** @param array<string, mixed> $payload */
+    private function serviceSelectionToken(array $payload): string
+    {
+        if (array_keys($payload) !== ['service_selection']
+            || ! is_string($payload['service_selection'] ?? null)
+            || preg_match('/\A[0-9a-f]{40}\z/', $payload['service_selection']) !== 1) {
+            throw new RuntimeException('Telegram Service resend selection is invalid.');
+        }
+
+        return $payload['service_selection'];
+    }
+
+    private function callbackPublicId(TelegramInteractionAction $action): string
+    {
+        if ($action->callbackPublicId === null
+            || preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/', $action->callbackPublicId) !== 1) {
+            throw new RuntimeException('Telegram Service resend callback identity is invalid.');
+        }
+
+        return $action->callbackPublicId;
     }
 
     private function renderServiceSearchMessage(
