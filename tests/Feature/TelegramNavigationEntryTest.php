@@ -1461,6 +1461,12 @@ SQL);
         $itemToken = $this->app->make(StringEncrypter::class)->decryptString((string) $item->token_ciphertext);
         $staleSiblingToken = $this->app->make(StringEncrypter::class)->decryptString((string) $staleSibling->token_ciphertext);
         $common = $this->navigationCommonDurableEvidence((int) $session->id, $telegramUserId);
+        self::assertStringNotContainsString('plan_offering_id', $common);
+        self::assertStringNotContainsString('sales_server_id', $common);
+        self::assertStringNotContainsString('panel_service_target_id', $common);
+        self::assertStringNotContainsString('panel_connection_id', $common);
+        self::assertStringNotContainsString('پلن خرید — نسخه پایه', $common);
+        self::assertStringNotContainsString('900,000', $common);
 
         $operationCount = DB::table('telegram_delivery_operations')->where('recipient_chat_id', $telegramUserId)->count();
         $processor->process('123456789', 6953);
