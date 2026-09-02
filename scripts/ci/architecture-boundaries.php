@@ -11,7 +11,7 @@ return [
         'Installer' => ['Operations'],
         'Orders' => ['AccessControl', 'Agents'],
         'Panels' => ['AccessControl'],
-        'Payments' => ['AccessControl', 'Orders', 'Wallet'],
+        'Payments' => ['AccessControl', 'Orders', 'Telegram', 'Wallet'],
         'Promotions' => ['AccessControl', 'Wallet'],
         'Provisioning' => ['AccessControl', 'Catalog', 'Orders', 'Panels', 'Payments', 'Telegram', 'Wallet'],
         'Telegram' => ['Customers', 'Identity', 'Promotions', 'Wallet'],

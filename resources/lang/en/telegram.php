@@ -8,6 +8,7 @@ return [
         'buttons' => [
             'my_account' => 'My Account',
             'my_services' => 'My Services',
+            'admin' => 'Administration',
             'back' => 'Back',
         ],
         'account' => [
@@ -28,6 +29,27 @@ return [
                 ],
                 'identity_type' => [
                     'national_id' => 'National ID', 'bank_card' => 'Bank card', 'full_name' => 'Full name',
+                ],
+            ],
+        ],
+        'admin' => [
+            'control' => "Administrator Control Center\n\nAdministrative settings and tools are shown only when your current permission allows them and are re-authorized when executed.",
+            'buttons' => [
+                'usdt_rate' => 'USDT / NOWPayments rate',
+            ],
+            'usdt_rate' => [
+                'view' => "Manual USDT Rate\n\nCurrent rate: :rate IRR per USDT\nSource: :source\nManaged version: :version\n\nThe same rate is used for direct USDT and, under the current Owner policy, as the USD pricing proxy for NOWPayments.",
+                'unset' => "Manual USDT Rate\n\nNo managed rate or bootstrap fallback is currently available.\n\nThis setting is the shared direct-USDT rate and the USD pricing proxy for NOWPayments.",
+                'edit_button' => 'Change rate',
+                'prompt' => "Change Manual USDT Rate\n\nSend the new IRR amount per USDT as a number only.\nExample: 900000\n\nPersian and Arabic digits are also accepted.",
+                'confirm' => "Confirm Manual USDT Rate Change\n\nNew rate: :rate IRR per USDT\n\nThis rate affects future direct-USDT pricing and the NOWPayments USD pricing proxy. Existing payment snapshots are not rewritten.\n\nNo change is saved until you press “Confirm rate change”.",
+                'confirm_button' => 'Confirm rate change',
+                'invalid' => "The rate is invalid or outside the configured allowed bounds.\n\nSend a valid IRR amount per USDT.",
+                'updated_notice' => 'The managed rate was saved successfully.',
+                'not_managed' => 'None',
+                'sources' => [
+                    'managed' => 'Managed',
+                    'bootstrap' => 'Bootstrap fallback',
                 ],
             ],
         ],

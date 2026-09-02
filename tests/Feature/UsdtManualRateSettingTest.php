@@ -6,6 +6,7 @@ namespace Tests\Feature;
 
 use App\Modules\AccessControl\Application\AdministratorPermissionAuthorizer;
 use App\Modules\Payments\Usdt\Application\UsdtManualRateSettingService;
+use App\Modules\Telegram\Application\Contracts\TelegramManagedUsdtRateSettings;
 use App\Shared\Application\Clock;
 use Database\Seeders\DatabaseSeeder;
 use DateTimeImmutable;
@@ -106,6 +107,79 @@ final class UsdtManualRateSettingTest extends TestCase
         }
     }
 
+    public function test_telegram_managed_rate_bridge_reauthorizes_from_user_identity_and_reuses_canonical_idempotency(): void
+    {
+        Config::set('usdt.rate.manual_irr', '900000');
+        $administratorId = $this->financeAdministrator();
+        $userId = (int) DB::table('administrators')->where('id', $administratorId)->value('user_id');
+        self::assertGreaterThan(0, $userId);
+
+        $bridge = $this->app->make(TelegramManagedUsdtRateSettings::class);
+        self::assertTrue($bridge->availableFor($userId));
+        self::assertFalse((bool) DB::table('permissions')->where('code', 'payments.usdt.manage')->value('requires_approval'));
+        self::assertSame('910000.00000000', $bridge->validateFor($userId, '910000'));
+        self::assertSame(0, DB::table('usdt_manual_rate_versions')->count());
+        self::assertSame(0, DB::table('audit_logs')->where('action', 'payments.usdt.manual_rate.updated')->count());
+
+        $bootstrap = $bridge->currentFor($userId);
+        self::assertNotNull($bootstrap);
+        self::assertNull($bootstrap->version);
+        self::assertSame('900000.00000000', $bootstrap->rateIrr);
+        self::assertSame('bootstrap', $bootstrap->source);
+
+        $created = $bridge->setFor($userId, '910000', 'telegram-rate-bridge-0001', 'telegram-rate-corr-0001');
+        $replayed = $bridge->setFor($userId, '910000.00000000', 'telegram-rate-bridge-0001', 'telegram-rate-corr-0001');
+        self::assertNotNull($created->version);
+        self::assertSame($created->version, $replayed->version);
+        self::assertFalse($created->replayed);
+        self::assertTrue($replayed->replayed);
+        self::assertSame(1, DB::table('usdt_manual_rate_versions')->count());
+        self::assertSame(1, DB::table('audit_logs')->where('action', 'payments.usdt.manual_rate.updated')->count());
+
+        DB::table('administrators')->where('id', $administratorId)->update([
+            'status' => 'disabled',
+            'updated_at' => now('UTC'),
+        ]);
+        self::assertFalse($bridge->availableFor($userId));
+        try {
+            $bridge->validateFor($userId, '920000');
+            self::fail('Disabled administrator must not validate Telegram managed-rate candidates.');
+        } catch (AuthorizationException) {
+            self::assertSame(1, DB::table('usdt_manual_rate_versions')->count());
+        }
+        try {
+            $bridge->setFor($userId, '920000', 'telegram-rate-bridge-0002', 'telegram-rate-corr-0002');
+            self::fail('Disabled administrator must not retain Telegram managed-rate authority.');
+        } catch (AuthorizationException) {
+            self::assertSame(1, DB::table('usdt_manual_rate_versions')->count());
+        }
+    }
+
+    public function test_telegram_managed_rate_bridge_accepts_active_owner_without_finance_role_and_denies_ungranted_admin(): void
+    {
+        Config::set('usdt.rate.manual_irr', '900000');
+        $now = now('UTC');
+        $ownerUserId = $this->user();
+        DB::table('administrators')->insert([
+            'user_id' => $ownerUserId,
+            'status' => 'active',
+            'is_owner' => true,
+            'permission_version' => 1,
+            'last_authenticated_at' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $bridge = $this->app->make(TelegramManagedUsdtRateSettings::class);
+        self::assertTrue($bridge->availableFor($ownerUserId));
+        self::assertSame('900000.00000000', $bridge->currentFor($ownerUserId)?->rateIrr);
+
+        $ungrantedAdministratorId = $this->administrator();
+        $ungrantedUserId = (int) DB::table('administrators')->where('id', $ungrantedAdministratorId)->value('user_id');
+        self::assertFalse($bridge->availableFor($ungrantedUserId));
+        $this->expectException(AuthorizationException::class);
+        $bridge->currentFor($ungrantedUserId);
+    }
+
     public function test_database_history_cannot_be_updated_or_deleted(): void
     {
         Config::set('usdt.rate.manual_irr', null);
@@ -118,6 +192,37 @@ final class UsdtManualRateSettingTest extends TestCase
         ]));
         $this->assertQueryRejected(fn (): int => DB::table('usdt_manual_rate_versions')->where('id', $created->version)->delete());
         self::assertSame('900000.00000000', $this->service()->current()?->rateIrr);
+    }
+
+    public function test_invalid_manual_rate_format_is_a_domain_rejection_without_persistence(): void
+    {
+        $finance = $this->financeAdministrator();
+
+        try {
+            $this->service()->set($finance, '000900000', 'usdt-rate-setting-format', 'corr-usdt-rate-format');
+            self::fail('Expected invalid manual rate format to be rejected.');
+        } catch (\DomainException) {
+            self::assertSame(0, DB::table('usdt_manual_rate_versions')->count());
+            self::assertSame(0, DB::table('audit_logs')->where('action', 'payments.usdt.manual_rate.updated')->count());
+        }
+    }
+
+    public function test_invalid_configured_rate_bounds_remain_runtime_configuration_failures(): void
+    {
+        Config::set('usdt.rate.min_irr', 'invalid');
+        Config::set('usdt.rate.max_irr', '10000000');
+        $finance = $this->financeAdministrator();
+
+        $this->expectException(\RuntimeException::class);
+        $this->service()->set($finance, '900000', 'usdt-rate-setting-config', 'corr-usdt-rate-config');
+    }
+
+    public function test_invalid_bootstrap_rate_remains_a_runtime_configuration_failure(): void
+    {
+        Config::set('usdt.rate.manual_irr', 'invalid');
+
+        $this->expectException(\RuntimeException::class);
+        $this->service()->current();
     }
 
     public function test_manual_rate_outside_shared_sanity_bounds_is_rejected(): void
