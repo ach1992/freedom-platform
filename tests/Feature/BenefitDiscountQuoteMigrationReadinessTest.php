@@ -57,11 +57,7 @@ final class BenefitDiscountQuoteMigrationReadinessTest extends TestCase
         $database = DB::connection()->getDatabaseName();
         $triggerName = 'benefit_discount_quote_consumptions_insert_guard';
 
-        $body = DB::table('information_schema.TRIGGERS')
-            ->where('TRIGGER_SCHEMA', $database)
-            ->where('TRIGGER_NAME', $triggerName)
-            ->value('ACTION_STATEMENT');
-        self::assertIsString($body);
+        $body = $this->triggerBody($database, $triggerName);
         self::assertStringContainsString('source_quote.user_id = NEW.user_id', $body);
 
         $weakened = str_replace(
@@ -78,21 +74,38 @@ final class BenefitDiscountQuoteMigrationReadinessTest extends TestCase
         self::assertStringContainsString("JSON_EXTRACT(NEW.configuration_snapshot, '$.grant_public_id')", $weakened);
         self::assertStringContainsString('Benefit discount Quote consumption identity mismatch.', $weakened);
 
-        DB::unprepared('DROP TRIGGER '.$triggerName);
-        DB::unprepared(
-            'CREATE TRIGGER '.$triggerName.
-            ' BEFORE INSERT ON benefit_code_discount_quote_consumptions FOR EACH ROW '.$weakened,
-        );
-
+        $this->replaceInsertTrigger($triggerName, $weakened);
         $migration->up();
 
-        $repaired = DB::table('information_schema.TRIGGERS')
-            ->where('TRIGGER_SCHEMA', $database)
-            ->where('TRIGGER_NAME', $triggerName)
-            ->value('ACTION_STATEMENT');
-        self::assertIsString($repaired);
+        $repaired = $this->triggerBody($database, $triggerName);
         self::assertStringContainsString('source_quote.user_id = NEW.user_id', $repaired);
         self::assertStringNotContainsString('source_quote.user_id = source_quote.user_id', $repaired);
+
+        $caseWeakened = str_replace('$.grant_public_id', '$.GRANT_PUBLIC_ID', $repaired);
+        self::assertNotSame($repaired, $caseWeakened);
+        $this->replaceInsertTrigger($triggerName, $caseWeakened);
+        $migration->up();
+
+        $literalRepaired = $this->triggerBody($database, $triggerName);
+        self::assertStringContainsString("JSON_EXTRACT(NEW.configuration_snapshot, '$.grant_public_id')", $literalRepaired);
+        self::assertStringNotContainsString('$.GRANT_PUBLIC_ID', $literalRepaired);
+
+        DB::unprepared(
+            'CREATE TRIGGER benefit_discount_quote_consumptions_unexpected_guard '.
+            'AFTER INSERT ON benefit_code_discount_quote_consumptions FOR EACH ROW BEGIN SET @bdqc_unexpected = 1; END',
+        );
+        $migration->up();
+        $triggerNames = DB::table('information_schema.TRIGGERS')
+            ->where('TRIGGER_SCHEMA', $database)
+            ->where('EVENT_OBJECT_TABLE', 'benefit_code_discount_quote_consumptions')
+            ->orderBy('TRIGGER_NAME')
+            ->pluck('TRIGGER_NAME')
+            ->all();
+        self::assertSame([
+            'benefit_discount_quote_consumptions_delete_guard',
+            'benefit_discount_quote_consumptions_insert_guard',
+            'benefit_discount_quote_consumptions_update_guard',
+        ], $triggerNames);
         self::assertSame(0, DB::table('benefit_code_discount_quote_consumptions')->count());
     }
 
@@ -102,6 +115,26 @@ final class BenefitDiscountQuoteMigrationReadinessTest extends TestCase
         $migration = require database_path('migrations/2026_09_03_000100_enable_benefit_discount_quote_consumption.php');
 
         return $migration;
+    }
+
+    private function triggerBody(string $database, string $triggerName): string
+    {
+        $body = DB::table('information_schema.TRIGGERS')
+            ->where('TRIGGER_SCHEMA', $database)
+            ->where('TRIGGER_NAME', $triggerName)
+            ->value('ACTION_STATEMENT');
+        self::assertIsString($body);
+
+        return $body;
+    }
+
+    private function replaceInsertTrigger(string $triggerName, string $body): void
+    {
+        DB::unprepared('DROP TRIGGER '.$triggerName);
+        DB::unprepared(
+            'CREATE TRIGGER '.$triggerName.
+            ' BEFORE INSERT ON benefit_code_discount_quote_consumptions FOR EACH ROW '.$body,
+        );
     }
 
     private function normalizeSql(string $sql): string
