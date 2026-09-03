@@ -1,0 +1,114 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Tests\Feature;
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
+use Tests\TestCase;
+
+/** @requirement BUY-002 PRO-001 PRO-002 DAT-003 DAT-004 SEC-001 SEC-002 QUA-001 QUA-004 */
+final class BenefitDiscountQuoteMigrationReadinessTest extends TestCase
+{
+    use RefreshDatabase;
+
+    public function test_reentry_repairs_exact_column_shape_and_same_name_wrong_check_clause(): void
+    {
+        $migration = $this->migration();
+        $migration->up();
+        $database = DB::connection()->getDatabaseName();
+
+        DB::statement('ALTER TABLE benefit_code_discount_quote_consumptions MODIFY correlation_id VARCHAR(65) NOT NULL');
+        $migration->up();
+
+        $columnType = DB::table('information_schema.COLUMNS')
+            ->where('TABLE_SCHEMA', $database)
+            ->where('TABLE_NAME', 'benefit_code_discount_quote_consumptions')
+            ->where('COLUMN_NAME', 'correlation_id')
+            ->value('COLUMN_TYPE');
+        self::assertSame('varchar(64)', strtolower((string) $columnType));
+
+        DB::statement('ALTER TABLE benefit_code_discount_quote_consumptions DROP CONSTRAINT benefit_discount_quote_consumption_amount_chk');
+        DB::statement('ALTER TABLE benefit_code_discount_quote_consumptions ADD CONSTRAINT benefit_discount_quote_consumption_amount_chk CHECK (`discount_irr` >= 0)');
+        $weakenedClause = DB::table('information_schema.CHECK_CONSTRAINTS')
+            ->where('CONSTRAINT_SCHEMA', $database)
+            ->where('TABLE_NAME', 'benefit_code_discount_quote_consumptions')
+            ->where('CONSTRAINT_NAME', 'benefit_discount_quote_consumption_amount_chk')
+            ->value('CHECK_CLAUSE');
+        self::assertSame('discount_irr >= 0', $this->normalizeSql((string) $weakenedClause));
+
+        $migration->up();
+
+        $repairedClause = DB::table('information_schema.CHECK_CONSTRAINTS')
+            ->where('CONSTRAINT_SCHEMA', $database)
+            ->where('TABLE_NAME', 'benefit_code_discount_quote_consumptions')
+            ->where('CONSTRAINT_NAME', 'benefit_discount_quote_consumption_amount_chk')
+            ->value('CHECK_CLAUSE');
+        self::assertSame('discount_irr >= 1', $this->normalizeSql((string) $repairedClause));
+        self::assertSame(0, DB::table('benefit_code_discount_quote_consumptions')->count());
+    }
+
+    public function test_reentry_repairs_semantically_weakened_same_name_trigger_that_retains_old_markers(): void
+    {
+        $migration = $this->migration();
+        $migration->up();
+        $database = DB::connection()->getDatabaseName();
+        $triggerName = 'benefit_discount_quote_consumptions_insert_guard';
+
+        $body = DB::table('information_schema.TRIGGERS')
+            ->where('TRIGGER_SCHEMA', $database)
+            ->where('TRIGGER_NAME', $triggerName)
+            ->value('ACTION_STATEMENT');
+        self::assertIsString($body);
+        self::assertStringContainsString('source_quote.user_id = NEW.user_id', $body);
+
+        $weakened = str_replace(
+            'source_quote.user_id = NEW.user_id',
+            'source_quote.user_id = source_quote.user_id',
+            $body,
+        );
+        self::assertNotSame($body, $weakened);
+        self::assertStringContainsString(
+            'grant_record.pricing_rule_version_id = resolution.pricing_rule_version_id',
+            $weakened,
+        );
+        self::assertStringContainsString('JSON_LENGTH(NEW.configuration_snapshot) = 10', $weakened);
+        self::assertStringContainsString("JSON_EXTRACT(NEW.configuration_snapshot, '$.grant_public_id')", $weakened);
+        self::assertStringContainsString('Benefit discount Quote consumption identity mismatch.', $weakened);
+
+        DB::unprepared('DROP TRIGGER '.$triggerName);
+        DB::unprepared(
+            'CREATE TRIGGER '.$triggerName.
+            ' BEFORE INSERT ON benefit_code_discount_quote_consumptions FOR EACH ROW '.$weakened,
+        );
+
+        $migration->up();
+
+        $repaired = DB::table('information_schema.TRIGGERS')
+            ->where('TRIGGER_SCHEMA', $database)
+            ->where('TRIGGER_NAME', $triggerName)
+            ->value('ACTION_STATEMENT');
+        self::assertIsString($repaired);
+        self::assertStringContainsString('source_quote.user_id = NEW.user_id', $repaired);
+        self::assertStringNotContainsString('source_quote.user_id = source_quote.user_id', $repaired);
+        self::assertSame(0, DB::table('benefit_code_discount_quote_consumptions')->count());
+    }
+
+    private function migration(): Migration
+    {
+        /** @var Migration $migration */
+        $migration = require database_path('migrations/2026_09_03_000100_enable_benefit_discount_quote_consumption.php');
+
+        return $migration;
+    }
+
+    private function normalizeSql(string $sql): string
+    {
+        $normalized = preg_replace('/\s+/', ' ', strtolower(str_replace('`', '', $sql)));
+        self::assertIsString($normalized);
+
+        return trim($normalized);
+    }
+}
