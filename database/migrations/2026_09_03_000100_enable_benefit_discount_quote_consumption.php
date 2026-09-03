@@ -198,11 +198,12 @@ return new class extends Migration
             'benefit_discount_quote_consumption_amount_chk' => 'CHECK',
             'benefit_discount_quote_consumption_hashes_chk' => 'CHECK',
             'benefit_discount_quote_consumption_snapshot_chk' => 'CHECK',
+            'configuration_snapshot' => 'CHECK',
         ];
         $rows = DB::table('information_schema.TABLE_CONSTRAINTS')
             ->where('CONSTRAINT_SCHEMA', $database)
             ->where('TABLE_NAME', self::TABLE)
-            ->whereIn('CONSTRAINT_NAME', array_keys($expected))
+            ->whereIn('CONSTRAINT_TYPE', ['FOREIGN KEY', 'CHECK'])
             ->get(['CONSTRAINT_NAME', 'CONSTRAINT_TYPE']);
         $actual = [];
         foreach ($rows as $row) {
@@ -240,15 +241,33 @@ return new class extends Migration
             return false;
         }
 
+        $expectedReferentialActions = array_fill_keys(array_keys($expectedForeignKeys), ['RESTRICT', 'RESTRICT']);
+        $referentialRows = DB::table('information_schema.REFERENTIAL_CONSTRAINTS')
+            ->where('CONSTRAINT_SCHEMA', $database)
+            ->where('TABLE_NAME', self::TABLE)
+            ->get(['CONSTRAINT_NAME', 'DELETE_RULE', 'UPDATE_RULE']);
+        $actualReferentialActions = [];
+        foreach ($referentialRows as $row) {
+            $actualReferentialActions[(string) $row->CONSTRAINT_NAME] = [
+                strtoupper((string) $row->DELETE_RULE),
+                strtoupper((string) $row->UPDATE_RULE),
+            ];
+        }
+        ksort($expectedReferentialActions, SORT_STRING);
+        ksort($actualReferentialActions, SORT_STRING);
+        if ($actualReferentialActions !== $expectedReferentialActions) {
+            return false;
+        }
+
         $expectedChecks = [
             'benefit_discount_quote_consumption_amount_chk' => '`discount_irr` >= 1',
             'benefit_discount_quote_consumption_hashes_chk' => "`request_payload_hash` REGEXP '^[0-9a-f]{64}$' AND `grant_configuration_hash` REGEXP '^[0-9a-f]{64}$' AND `pricing_rule_resolution_configuration_hash` REGEXP '^[0-9a-f]{64}$' AND `source_quote_configuration_hash` REGEXP '^[0-9a-f]{64}$' AND `discounted_quote_configuration_hash` REGEXP '^[0-9a-f]{64}$' AND `configuration_hash` REGEXP '^[0-9a-f]{64}$'",
             'benefit_discount_quote_consumption_snapshot_chk' => "JSON_VALID(`configuration_snapshot`) AND JSON_TYPE(`configuration_snapshot`) = 'OBJECT' AND JSON_LENGTH(`configuration_snapshot`) = 10 AND OCTET_LENGTH(`configuration_snapshot`) < 8192",
+            'configuration_snapshot' => 'JSON_VALID(`configuration_snapshot`)',
         ];
         $checkRows = DB::table('information_schema.CHECK_CONSTRAINTS')
             ->where('CONSTRAINT_SCHEMA', $database)
             ->where('TABLE_NAME', self::TABLE)
-            ->whereIn('CONSTRAINT_NAME', array_keys($expectedChecks))
             ->get(['CONSTRAINT_NAME', 'CHECK_CLAUSE']);
         $actualChecks = [];
         foreach ($checkRows as $row) {

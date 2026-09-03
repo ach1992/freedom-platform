@@ -50,6 +50,55 @@ final class BenefitDiscountQuoteMigrationReadinessTest extends TestCase
         self::assertSame(0, DB::table('benefit_code_discount_quote_consumptions')->count());
     }
 
+    public function test_reentry_repairs_same_name_fk_referential_actions_and_unexpected_check(): void
+    {
+        $migration = $this->migration();
+        $migration->up();
+        $database = DB::connection()->getDatabaseName();
+
+        DB::statement('ALTER TABLE benefit_code_discount_quote_consumptions DROP FOREIGN KEY bdqc_user_fk');
+        DB::statement(
+            'ALTER TABLE benefit_code_discount_quote_consumptions '.
+            'ADD CONSTRAINT bdqc_user_fk FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) '.
+            'ON DELETE CASCADE ON UPDATE CASCADE',
+        );
+        $weakenedRules = DB::table('information_schema.REFERENTIAL_CONSTRAINTS')
+            ->where('CONSTRAINT_SCHEMA', $database)
+            ->where('TABLE_NAME', 'benefit_code_discount_quote_consumptions')
+            ->where('CONSTRAINT_NAME', 'bdqc_user_fk')
+            ->first(['DELETE_RULE', 'UPDATE_RULE']);
+        self::assertNotNull($weakenedRules);
+        self::assertSame('CASCADE', (string) $weakenedRules->DELETE_RULE);
+        self::assertSame('CASCADE', (string) $weakenedRules->UPDATE_RULE);
+
+        $migration->up();
+
+        $repairedRules = DB::table('information_schema.REFERENTIAL_CONSTRAINTS')
+            ->where('CONSTRAINT_SCHEMA', $database)
+            ->where('TABLE_NAME', 'benefit_code_discount_quote_consumptions')
+            ->where('CONSTRAINT_NAME', 'bdqc_user_fk')
+            ->first(['DELETE_RULE', 'UPDATE_RULE']);
+        self::assertNotNull($repairedRules);
+        self::assertSame('RESTRICT', (string) $repairedRules->DELETE_RULE);
+        self::assertSame('RESTRICT', (string) $repairedRules->UPDATE_RULE);
+
+        DB::statement(
+            'ALTER TABLE benefit_code_discount_quote_consumptions '.
+            'ADD CONSTRAINT bdqc_unexpected_check CHECK (`discount_irr` >= 1 AND CHAR_LENGTH(`rule_code_snapshot`) > 0)',
+        );
+        self::assertContains('bdqc_unexpected_check', $this->checkConstraintNames($database));
+
+        $migration->up();
+
+        self::assertSame([
+            'benefit_discount_quote_consumption_amount_chk',
+            'benefit_discount_quote_consumption_hashes_chk',
+            'benefit_discount_quote_consumption_snapshot_chk',
+            'configuration_snapshot',
+        ], $this->checkConstraintNames($database));
+        self::assertSame(0, DB::table('benefit_code_discount_quote_consumptions')->count());
+    }
+
     public function test_reentry_repairs_semantically_weakened_same_name_trigger_that_retains_old_markers(): void
     {
         $migration = $this->migration();
@@ -115,6 +164,18 @@ final class BenefitDiscountQuoteMigrationReadinessTest extends TestCase
         $migration = require database_path('migrations/2026_09_03_000100_enable_benefit_discount_quote_consumption.php');
 
         return $migration;
+    }
+
+    /** @return list<string> */
+    private function checkConstraintNames(string $database): array
+    {
+        return DB::table('information_schema.CHECK_CONSTRAINTS')
+            ->where('CONSTRAINT_SCHEMA', $database)
+            ->where('TABLE_NAME', 'benefit_code_discount_quote_consumptions')
+            ->orderBy('CONSTRAINT_NAME')
+            ->pluck('CONSTRAINT_NAME')
+            ->map(static fn (mixed $name): string => (string) $name)
+            ->all();
     }
 
     private function triggerBody(string $database, string $triggerName): string
