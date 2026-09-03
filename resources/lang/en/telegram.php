@@ -102,8 +102,9 @@ This is a recorded commercial snapshot only. No payment, capacity reservation, o
             ],
             'payment_methods_button' => 'Payment methods',
             'payment_methods' => [
-                'list' => "Eligible Payment Methods\n\n:items\n\nThis list comes from the current persisted PAY-001 decision. No Order, Payment Intent, wallet debit, gateway request, or payment has been created yet.",
+                'list' => "Eligible Payment Methods\n\n:items\n\nThis list comes from the current persisted PAY-001 decision. A stable Order is now awaiting payment, but no Payment Intent, wallet debit, gateway request, or payment has been created yet.",
                 'item' => ':number. :method',
+                'selected' => "Selected payment method: :method\n\nYour Order remains awaiting payment. No Payment Intent, wallet debit, gateway request, or payment has been created yet.",
                 'empty' => "Payment Methods\n\nNo payment method is currently eligible for this Quote.\n\nNo Order, Payment Intent, or financial effect has been created.",
                 'methods' => [
                     'wallet' => 'Wallet',
@@ -113,6 +114,7 @@ This is a recorded commercial snapshot only. No payment, capacity reservation, o
                     'zarinpal' => 'Zarinpal',
                     'nowpayments' => 'NOWPayments',
                     'other' => 'Payment method #:number',
+                    'other_selected' => 'Selected payment method',
                 ],
             ],
         ],

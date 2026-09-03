@@ -110,6 +110,40 @@ final readonly class PurchaseOrderService
         }
     }
 
+    /** @requirement BUY-001 BUY-002 PAY-001 DAT-002 DAT-003 DAT-004 SEC-002 QUA-001 QUA-004 */
+    public function currentFromQuote(string $quotePublicId, int $actorUserId): PurchaseOrderOpeningReceipt
+    {
+        $this->assertUlid($quotePublicId, 'Source Quote public ID');
+        if ($actorUserId < 1) {
+            throw new DomainException('Order actor user ID is invalid.');
+        }
+
+        return $this->database->connection()->transaction(function (Connection $connection) use ($quotePublicId, $actorUserId): PurchaseOrderOpeningReceipt {
+            $quote = $this->quoteByPublicId($connection, $quotePublicId, true);
+            if ($quote === null) {
+                throw new DomainException('Purchase Quote does not exist.');
+            }
+            $this->assertOpenQuoteAuthority($quote, $actorUserId);
+            $this->assertOpenQuoteIsCurrent($quote);
+
+            $order = $this->orderByQuoteId(
+                $connection,
+                $this->positiveDatabaseInt($quote->id, 'Source Quote ID'),
+                true,
+            );
+            if ($order === null) {
+                throw new DomainException('Pre-payment purchase Order does not exist.');
+            }
+
+            $receipt = $this->openingReplayReceipt($connection, $order, $quote, $actorUserId);
+            if ($receipt->state !== OrderState::AwaitingPayment || $receipt->stateVersion !== 0) {
+                throw new DomainException('Pre-payment purchase Order is no longer awaiting payment.');
+            }
+
+            return $receipt;
+        }, self::DEADLOCK_RETRY_ATTEMPTS);
+    }
+
     /** @requirement BUY-001 BUY-002 PAY-002 DAT-002 DAT-003 DAT-004 SEC-002 QUA-001 QUA-004 */
     public function createFromSettlement(string $settlementPublicId, string $correlationId): PurchaseOrderReceipt
     {

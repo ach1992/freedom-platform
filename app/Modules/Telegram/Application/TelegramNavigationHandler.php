@@ -10,6 +10,7 @@ use App\Modules\Promotions\Application\ReferralSelfSummary;
 use App\Modules\Promotions\Application\ReferralSelfSummaryService;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCatalog;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseDiscountQuote;
+use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseOrder;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchasePaymentMethods;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseQuote;
 use App\Modules\Telegram\Application\Contracts\TelegramInteractionHandler;
@@ -40,6 +41,10 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
     private const STATE_PURCHASE_PAYMENT_METHODS = 'purchase_payment_methods';
 
     private const STATE_PURCHASE_PAYMENT_METHODS_SUBMITTING = 'purchase_payment_methods_submitting';
+
+    private const STATE_PURCHASE_PAYMENT_METHOD_SELECTED = 'purchase_payment_method_selected';
+
+    private const STATE_PURCHASE_PAYMENT_METHOD_SELECTING = 'purchase_payment_method_selecting';
 
     private const STATE_PURCHASE_QUOTE = 'purchase_quote';
 
@@ -72,6 +77,8 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
     private const ACTION_PURCHASE_DISCOUNT = 'navigation.purchase.discount';
 
     private const ACTION_PURCHASE_PAYMENT_METHODS = 'navigation.purchase.payment_methods';
+
+    private const ACTION_PURCHASE_PAYMENT_METHOD_SELECT = 'navigation.purchase.payment_method.select';
 
     private const ACTION_PURCHASE_QUOTE = 'navigation.purchase.quote';
 
@@ -114,6 +121,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         private TelegramCustomerPurchaseQuote $purchaseQuotes,
         private TelegramCustomerPurchaseDiscountQuote $purchaseDiscountQuotes,
         private TelegramCustomerPurchasePaymentMethods $purchasePaymentMethods,
+        private TelegramCustomerPurchaseOrder $purchaseOrders,
         private TelegramCustomerPurchaseCatalog $purchaseCatalog,
         private TelegramOwnedServiceProjection $services,
         private TelegramOwnedServiceDeliveryResender $serviceDeliveryResender,
@@ -194,6 +202,12 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
 
         if ($action->sessionState === self::STATE_PURCHASE_PAYMENT_METHODS) {
             $this->handlePurchasePaymentMethods($action);
+
+            return;
+        }
+
+        if ($action->sessionState === self::STATE_PURCHASE_PAYMENT_METHOD_SELECTED) {
+            $this->handlePurchasePaymentMethodSelected($action);
 
             return;
         }
@@ -371,6 +385,11 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
     private function handlePurchasePaymentMethods(TelegramInteractionAction $action): void
     {
         if ($action->kind === TelegramInteractionActionKind::Callback) {
+            if ($action->callbackAction === self::ACTION_PURCHASE_PAYMENT_METHOD_SELECT) {
+                $this->selectPurchasePaymentMethod($action, $this->purchasePaymentMethodFromPayload($action->callbackPayload));
+
+                return;
+            }
             if ($action->callbackAction !== self::ACTION_BACK || $action->callbackPayload !== []) {
                 throw new RuntimeException('Telegram purchase payment-method callback action is unsupported.');
             }
@@ -382,6 +401,28 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
 
         if ($action->kind === TelegramInteractionActionKind::Back) {
             $this->returnPurchaseOfferingFromPaymentMethods($action);
+
+            return;
+        }
+        if ($this->isEntryCommand($action->messageText)) {
+            $this->returnHome($action);
+        }
+    }
+
+    private function handlePurchasePaymentMethodSelected(TelegramInteractionAction $action): void
+    {
+        if ($action->kind === TelegramInteractionActionKind::Callback) {
+            if ($action->callbackAction !== self::ACTION_BACK || $action->callbackPayload !== []) {
+                throw new RuntimeException('Telegram selected payment-method callback action is unsupported.');
+            }
+
+            $this->returnPurchasePaymentMethodsFromSelection($action);
+
+            return;
+        }
+
+        if ($action->kind === TelegramInteractionActionKind::Back) {
+            $this->returnPurchasePaymentMethodsFromSelection($action);
 
             return;
         }
@@ -1443,6 +1484,16 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
                 $paymentState = $state;
                 $paymentState['payment_decision_public_id'] = $decision->decisionPublicId;
                 $paymentState['payment_decision_configuration_hash'] = $decision->configurationSnapshotHash;
+                if ($decision->methodCodes !== []) {
+                    $order = $this->purchaseOrders->openForSelf(
+                        $action->userId,
+                        $action->userId,
+                        $state['quote_public_id'],
+                        $state['quote_configuration_hash'],
+                        'telegram-order:'.$this->callbackPublicId($action),
+                    );
+                    $paymentState['order_public_id'] = $order->orderPublicId;
+                }
                 $session = $this->sessions->transition(
                     $action->sessionPublicId,
                     $claim->version,
@@ -1483,6 +1534,21 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         string $locale,
         string $requestKey,
     ): void {
+        $rows = [];
+        foreach ($decision->methodCodes as $offset => $methodCode) {
+            $selection = $this->callbacks->issue(
+                $action->sessionPublicId,
+                $sessionVersion,
+                self::ACTION_PURCHASE_PAYMENT_METHOD_SELECT,
+                ['method_code' => $methodCode],
+                'nav-purchase-payment-method-select:'.hash('sha256', $requestKey.':'.$methodCode),
+            );
+            $rows[] = [new TelegramInlineCallbackButton(
+                $this->purchasePaymentMethodLabel($methodCode, $locale, $offset + 1),
+                $selection->publicId,
+                TelegramInlineButtonStyle::Primary,
+            )];
+        }
         $back = $this->callbacks->issue(
             $action->sessionPublicId,
             $sessionVersion,
@@ -1490,17 +1556,115 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             [],
             'nav-purchase-payment-methods-back:'.$requestKey,
         );
-        $keyboard = new TelegramInlineKeyboardSnapshot([[new TelegramInlineCallbackButton(
+        $rows[] = [new TelegramInlineCallbackButton(
             $this->translation('telegram.navigation.buttons.back', $locale),
             $back->publicId,
-        )]]);
+        )];
 
         $this->queueConfidential(
             $action,
             $this->purchasePaymentMethodsText($decision, $locale),
             'nav-purchase-payment-methods-delivery:'.$requestKey,
             $decision->methodCodes === [] ? 'purchase-payment-methods-empty' : 'purchase-payment-methods',
-            $keyboard,
+            new TelegramInlineKeyboardSnapshot($rows),
+        );
+    }
+
+    private function selectPurchasePaymentMethod(TelegramInteractionAction $action, string $methodCode): void
+    {
+        $state = $this->purchasePaymentMethodsStateFromPayload($action->sessionPayload);
+        if (! isset($state['order_public_id'])) {
+            throw new RuntimeException('Telegram purchase payment method cannot be selected without a pre-payment Order.');
+        }
+
+        try {
+            [$session, $selection] = $this->database->connection()->transaction(function () use ($action, $state, $methodCode): array {
+                $claim = $this->sessions->transition(
+                    $action->sessionPublicId,
+                    $action->sessionVersion,
+                    self::STATE_PURCHASE_PAYMENT_METHOD_SELECTING,
+                    $state,
+                    'nav-purchase-payment-method-select-claim:'.hash('sha256', $action->requestKey),
+                );
+                $this->assertActorBinding($action, $claim->userId);
+
+                $this->purchaseOrders->currentForSelf(
+                    $action->userId,
+                    $action->userId,
+                    $state['order_public_id'],
+                    $state['quote_public_id'],
+                    $state['quote_configuration_hash'],
+                );
+                $selection = $this->purchasePaymentMethods->selectForSelf(
+                    $action->userId,
+                    $action->userId,
+                    $state['quote_public_id'],
+                    $state['quote_configuration_hash'],
+                    $state['payment_decision_public_id'],
+                    $state['payment_decision_configuration_hash'],
+                    $methodCode,
+                );
+
+                $selectedState = $state;
+                $selectedState['payment_method_code'] = $selection->methodCode;
+                $session = $this->sessions->transition(
+                    $action->sessionPublicId,
+                    $claim->version,
+                    self::STATE_PURCHASE_PAYMENT_METHOD_SELECTED,
+                    $selectedState,
+                    'nav-purchase-payment-method-selected:'.$action->requestKey,
+                );
+                $this->assertActorBinding($action, $session->userId);
+
+                return [$session, $selection];
+            }, 3);
+        } catch (AuthorizationException) {
+            try {
+                $this->returnPurchaseOfferingFromPaymentMethods($action);
+            } catch (AuthorizationException|\DomainException) {
+                // Quote, Order, decision or method changed while selecting. Fail closed.
+            }
+
+            return;
+        } catch (\DomainException) {
+            // Another accepted interaction won the same payment-method session version.
+            return;
+        }
+
+        $this->renderPurchasePaymentMethodSelected(
+            $action,
+            $session->version,
+            $selection->methodCode,
+            $this->localeForActor($action->userId),
+            $action->requestKey,
+        );
+    }
+
+    private function renderPurchasePaymentMethodSelected(
+        TelegramInteractionAction $action,
+        int $sessionVersion,
+        string $methodCode,
+        string $locale,
+        string $requestKey,
+    ): void {
+        $back = $this->callbacks->issue(
+            $action->sessionPublicId,
+            $sessionVersion,
+            self::ACTION_BACK,
+            [],
+            'nav-purchase-payment-method-selected-back:'.$requestKey,
+        );
+        $this->queueConfidential(
+            $action,
+            $this->translation('telegram.navigation.purchase.payment_methods.selected', $locale, [
+                'method' => $this->purchaseSelectedPaymentMethodLabel($methodCode, $locale),
+            ]),
+            'nav-purchase-payment-method-selected-delivery:'.$requestKey,
+            'purchase-payment-method-selected',
+            new TelegramInlineKeyboardSnapshot([[new TelegramInlineCallbackButton(
+                $this->translation('telegram.navigation.buttons.back', $locale),
+                $back->publicId,
+            )]]),
         );
     }
 
@@ -1838,6 +2002,62 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         );
         $this->assertActorBinding($action, $session->userId);
         $this->renderPurchaseOffering($action, $session->version, $offering, $locale, $action->requestKey);
+    }
+
+    private function returnPurchasePaymentMethodsFromSelection(TelegramInteractionAction $action): void
+    {
+        $state = $this->purchasePaymentMethodSelectedStateFromPayload($action->sessionPayload);
+        try {
+            [$session, $decision] = $this->database->connection()->transaction(function () use ($action, $state): array {
+                $this->purchaseOrders->currentForSelf(
+                    $action->userId,
+                    $action->userId,
+                    $state['order_public_id'],
+                    $state['quote_public_id'],
+                    $state['quote_configuration_hash'],
+                );
+                $decision = $this->purchasePaymentMethods->currentForSelf(
+                    $action->userId,
+                    $action->userId,
+                    $state['quote_public_id'],
+                    $state['quote_configuration_hash'],
+                    $state['payment_decision_public_id'],
+                    $state['payment_decision_configuration_hash'],
+                );
+
+                $methodsState = $state;
+                unset($methodsState['payment_method_code']);
+                $session = $this->sessions->transition(
+                    $action->sessionPublicId,
+                    $action->sessionVersion,
+                    self::STATE_PURCHASE_PAYMENT_METHODS,
+                    $methodsState,
+                    'nav-purchase-payment-method-selected-back-transition:'.$action->requestKey,
+                );
+                $this->assertActorBinding($action, $session->userId);
+
+                return [$session, $decision];
+            }, 3);
+        } catch (AuthorizationException) {
+            try {
+                $this->returnPurchaseCatalogFromQuote($action, $state['page']);
+            } catch (AuthorizationException|\DomainException) {
+                // Commercial authority changed while returning from the selected method. Fail closed.
+            }
+
+            return;
+        } catch (\DomainException) {
+            // Another accepted interaction moved the selected-method session before Back could commit.
+            return;
+        }
+
+        $this->renderPurchasePaymentMethods(
+            $action,
+            $session->version,
+            $decision,
+            $this->localeForActor($action->userId),
+            $action->requestKey,
+        );
     }
 
     private function returnPurchaseOfferingFromPaymentMethods(TelegramInteractionAction $action): void
@@ -2287,6 +2507,17 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         ]);
     }
 
+    private function purchaseSelectedPaymentMethodLabel(string $methodCode, string $locale): string
+    {
+        $key = 'telegram.navigation.purchase.payment_methods.methods.'.$methodCode;
+        $translated = $this->translation($key, $locale);
+        if ($translated !== $key) {
+            return $translated;
+        }
+
+        return $this->translation('telegram.navigation.purchase.payment_methods.methods.other_selected', $locale);
+    }
+
     private function formatBusinessDateTime(DateTimeImmutable $value): string
     {
         $timezone = config('business.display_timezone');
@@ -2590,26 +2821,68 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
 
     /**
      * @param  array<string, mixed>  $payload
-     * @return array{page:int,offering_selection:string,quote_public_id:string,quote_configuration_hash:string,payment_decision_public_id:string,payment_decision_configuration_hash:string,discount_consumption_public_id?:string,discount_consumption_configuration_hash?:string,promotion_resolution_public_id?:string}
+     * @return array{page:int,offering_selection:string,quote_public_id:string,quote_configuration_hash:string,payment_decision_public_id:string,payment_decision_configuration_hash:string,order_public_id?:string,discount_consumption_public_id?:string,discount_consumption_configuration_hash?:string,promotion_resolution_public_id?:string}
      */
     private function purchasePaymentMethodsStateFromPayload(array $payload): array
     {
         if (! is_string($payload['payment_decision_public_id'] ?? null)
             || preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/i', $payload['payment_decision_public_id']) !== 1
             || ! is_string($payload['payment_decision_configuration_hash'] ?? null)
-            || preg_match('/\A[0-9a-f]{64}\z/', $payload['payment_decision_configuration_hash']) !== 1) {
+            || preg_match('/\A[0-9a-f]{64}\z/', $payload['payment_decision_configuration_hash']) !== 1
+            || (isset($payload['order_public_id'])
+                && (! is_string($payload['order_public_id'])
+                    || preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/i', $payload['order_public_id']) !== 1))) {
             throw new RuntimeException('Telegram purchase payment-method state is invalid.');
         }
         $quotePayload = $payload;
         $decisionPublicId = $quotePayload['payment_decision_public_id'];
         $decisionConfigurationHash = $quotePayload['payment_decision_configuration_hash'];
-        unset($quotePayload['payment_decision_public_id'], $quotePayload['payment_decision_configuration_hash']);
+        $orderPublicId = $quotePayload['order_public_id'] ?? null;
+        unset($quotePayload['payment_decision_public_id'], $quotePayload['payment_decision_configuration_hash'], $quotePayload['order_public_id']);
         $state = $this->purchaseQuoteStateFromPayload($quotePayload);
         $state['payment_decision_public_id'] = $decisionPublicId;
         $state['payment_decision_configuration_hash'] = $decisionConfigurationHash;
+        if (is_string($orderPublicId)) {
+            $state['order_public_id'] = $orderPublicId;
+        }
 
-        /** @var array{page:int,offering_selection:string,quote_public_id:string,quote_configuration_hash:string,payment_decision_public_id:string,payment_decision_configuration_hash:string,discount_consumption_public_id?:string,discount_consumption_configuration_hash?:string,promotion_resolution_public_id?:string} $state */
+        /** @var array{page:int,offering_selection:string,quote_public_id:string,quote_configuration_hash:string,payment_decision_public_id:string,payment_decision_configuration_hash:string,order_public_id?:string,discount_consumption_public_id?:string,discount_consumption_configuration_hash?:string,promotion_resolution_public_id?:string} $state */
         return $state;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array{page:int,offering_selection:string,quote_public_id:string,quote_configuration_hash:string,payment_decision_public_id:string,payment_decision_configuration_hash:string,order_public_id:string,payment_method_code:string,discount_consumption_public_id?:string,discount_consumption_configuration_hash?:string,promotion_resolution_public_id?:string}
+     */
+    private function purchasePaymentMethodSelectedStateFromPayload(array $payload): array
+    {
+        if (! is_string($payload['payment_method_code'] ?? null)
+            || preg_match('/\A[a-z][a-z0-9_.-]{1,63}\z/', $payload['payment_method_code']) !== 1) {
+            throw new RuntimeException('Telegram selected payment-method state is invalid.');
+        }
+        $methodsPayload = $payload;
+        $methodCode = $methodsPayload['payment_method_code'];
+        unset($methodsPayload['payment_method_code']);
+        $state = $this->purchasePaymentMethodsStateFromPayload($methodsPayload);
+        if (! isset($state['order_public_id'])) {
+            throw new RuntimeException('Telegram selected payment-method Order identity is unavailable.');
+        }
+        $state['payment_method_code'] = $methodCode;
+
+        /** @var array{page:int,offering_selection:string,quote_public_id:string,quote_configuration_hash:string,payment_decision_public_id:string,payment_decision_configuration_hash:string,order_public_id:string,payment_method_code:string,discount_consumption_public_id?:string,discount_consumption_configuration_hash?:string,promotion_resolution_public_id?:string} $state */
+        return $state;
+    }
+
+    /** @param array<string, mixed> $payload */
+    private function purchasePaymentMethodFromPayload(array $payload): string
+    {
+        if (array_keys($payload) !== ['method_code']
+            || ! is_string($payload['method_code'] ?? null)
+            || preg_match('/\A[a-z][a-z0-9_.-]{1,63}\z/', $payload['method_code']) !== 1) {
+            throw new RuntimeException('Telegram payment-method callback payload is invalid.');
+        }
+
+        return $payload['method_code'];
     }
 
     /** @param array<string, mixed> $payload */

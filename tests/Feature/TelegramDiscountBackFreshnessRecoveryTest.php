@@ -12,6 +12,7 @@ use App\Modules\Telegram\Application\TelegramCustomerPurchaseCatalogPage;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseDiscountQuotePreview;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseOffering;
 use App\Modules\Telegram\Application\TelegramCustomerPurchasePaymentMethodsDecision;
+use App\Modules\Telegram\Application\TelegramCustomerPurchasePaymentMethodSelection;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseQuotePreview;
 use App\Modules\Telegram\Application\TelegramUpdateProcessor;
 use DateTimeImmutable;
@@ -174,6 +175,29 @@ final class StaleDiscountBackPaymentMethods implements TelegramCustomerPurchaseP
             ['wallet'],
             false,
         );
+    }
+
+    public function currentForSelf(
+        int $actorUserId,
+        int $subjectUserId,
+        string $quotePublicId,
+        string $quoteConfigurationHash,
+        string $decisionPublicId,
+        string $decisionConfigurationHash,
+    ): TelegramCustomerPurchasePaymentMethodsDecision {
+        throw new RuntimeException('Stale-Back recovery must not revalidate payment-method authority.');
+    }
+
+    public function selectForSelf(
+        int $actorUserId,
+        int $subjectUserId,
+        string $quotePublicId,
+        string $quoteConfigurationHash,
+        string $decisionPublicId,
+        string $decisionConfigurationHash,
+        string $methodCode,
+    ): TelegramCustomerPurchasePaymentMethodSelection {
+        throw new RuntimeException('Stale-Back recovery must not select a payment method.');
     }
 }
 

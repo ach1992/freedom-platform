@@ -9,6 +9,7 @@ use App\Modules\Customers\Application\CustomerIdentityProfilePersistence;
 use App\Modules\Identity\Application\Contracts\CustomerIdentityProfileWriter;
 use App\Modules\Orders\Application\Contracts\QuoteDiscountAuthority;
 use App\Modules\Orders\Application\TelegramCustomerPurchaseDiscountQuoteService;
+use App\Modules\Orders\Application\TelegramCustomerPurchaseOrderService;
 use App\Modules\Orders\Application\TelegramCustomerPurchaseQuoteService;
 use App\Modules\Payments\CardToCard\Application\Contracts\CardToCardAdjustmentGenerator;
 use App\Modules\Payments\CardToCard\Infrastructure\SecureCardToCardAdjustmentGenerator;
@@ -25,6 +26,7 @@ use App\Modules\Provisioning\Application\TelegramOwnedServiceDeliveryResendServi
 use App\Modules\Provisioning\Application\TelegramOwnedServiceProjectionService;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCatalog;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseDiscountQuote;
+use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseOrder;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchasePaymentMethods;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseQuote;
 use App\Modules\Telegram\Application\Contracts\TelegramManagedUsdtRateSettings;
@@ -47,6 +49,7 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind(TelegramCustomerPurchaseDiscountQuote::class, TelegramCustomerPurchaseDiscountQuoteService::class);
         $this->app->bind(TelegramCustomerPurchaseQuote::class, TelegramCustomerPurchaseQuoteService::class);
         $this->app->bind(TelegramCustomerPurchasePaymentMethods::class, TelegramCustomerPurchasePaymentMethodsService::class);
+        $this->app->bind(TelegramCustomerPurchaseOrder::class, TelegramCustomerPurchaseOrderService::class);
         $this->app->bind(TelegramOwnedServiceProjection::class, TelegramOwnedServiceProjectionService::class);
         $this->app->bind(TelegramOwnedServiceDeliveryResender::class, TelegramOwnedServiceDeliveryResendService::class);
         $this->app->bind(TelegramManagedUsdtRateSettings::class, TelegramManagedUsdtRateSettingsService::class);
