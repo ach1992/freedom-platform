@@ -22,6 +22,9 @@ final class ArchitectureBoundaryChecker
     /** @var array<string,true> */
     private array $usedTelegramConfidentialPresentationSources = [];
 
+    /** @var array<string,true> */
+    private array $usedModuleDependencyReferenceExceptions = [];
+
     /** @param array<string,mixed> $config */
     public function __construct(
         private readonly string $root,
@@ -37,6 +40,7 @@ final class ArchitectureBoundaryChecker
         $this->usedMigrationTriggerDdlHelpers = [];
         $this->usedTelegramPresentationSources = [];
         $this->usedTelegramConfidentialPresentationSources = [];
+        $this->usedModuleDependencyReferenceExceptions = [];
 
         foreach ($this->phpFiles('app/Modules') as $relativePath => $source) {
             $this->scanModuleFile($relativePath, $source, $violations, $edges);
@@ -67,6 +71,7 @@ final class ArchitectureBoundaryChecker
         $edges = array_values(array_unique($edges));
         sort($edges, SORT_STRING);
         array_push($violations, ...$this->cycleViolations($edges));
+        array_push($violations, ...$this->moduleDependencyReferenceExceptionViolations());
         array_push($violations, ...$this->persistenceExceptionViolations());
         array_push($violations, ...$this->migrationTriggerDdlHelperViolations());
         array_push($violations, ...$this->telegramPresentationSourceViolations());
@@ -155,6 +160,10 @@ final class ArchitectureBoundaryChecker
                     );
                 }
 
+                continue;
+            }
+
+            if ($this->consumeModuleDependencyReferenceException($relativePath, $name)) {
                 continue;
             }
 
@@ -1487,6 +1496,51 @@ final class ArchitectureBoundaryChecker
             $seen[$source] = true;
             if (! isset($this->usedTelegramConfidentialPresentationSources[$source])) {
                 $violations[] = 'telegram_confidential_presentation_sources contains stale/unused entry '.$source.'.';
+            }
+        }
+
+        return $violations;
+    }
+
+    private function consumeModuleDependencyReferenceException(string $relativePath, string $reference): bool
+    {
+        $key = $relativePath.'|'.$reference;
+        $exceptions = $this->config['module_dependency_reference_exceptions'] ?? [];
+        if (! is_array($exceptions) || ! in_array($key, $exceptions, true)) {
+            return false;
+        }
+
+        $this->usedModuleDependencyReferenceExceptions[$key] = true;
+
+        return true;
+    }
+
+    /** @return list<string> */
+    private function moduleDependencyReferenceExceptionViolations(): array
+    {
+        $exceptions = $this->config['module_dependency_reference_exceptions'] ?? [];
+        if (! is_array($exceptions)) {
+            return ['module_dependency_reference_exceptions must be an exact list of source-path|Application-symbol entries.'];
+        }
+
+        $violations = [];
+        $seen = [];
+        foreach ($exceptions as $exception) {
+            if (! is_string($exception)
+                || preg_match('#^app/Modules/[A-Za-z0-9]+/Application/.+\.php\|App\\\\Modules\\\\[A-Za-z0-9]+\\\\Application\\\\.+$#', $exception) !== 1
+            ) {
+                $violations[] = 'module_dependency_reference_exceptions contains an invalid non-exact Application boundary entry.';
+
+                continue;
+            }
+            if (isset($seen[$exception])) {
+                $violations[] = 'module_dependency_reference_exceptions contains duplicate entry '.$exception.'.';
+
+                continue;
+            }
+            $seen[$exception] = true;
+            if (! isset($this->usedModuleDependencyReferenceExceptions[$exception])) {
+                $violations[] = 'module_dependency_reference_exceptions contains stale/unused entry '.$exception.'.';
             }
         }
 

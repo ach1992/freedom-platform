@@ -27,6 +27,63 @@ final readonly class TelegramCustomerPurchaseQuoteService implements TelegramCus
     ) {}
 
     /** @requirement BUY-001 BUY-002 BUY-003 DAT-002 DAT-003 SEC-002 QUA-001 */
+    public function previewForSelf(
+        int $actorUserId,
+        int $subjectUserId,
+        string $offeringSelectionToken,
+        string $quotePublicId,
+        string $quoteConfigurationHash,
+    ): TelegramCustomerPurchaseQuotePreview {
+        if ($actorUserId < 1 || $subjectUserId < 1 || $actorUserId !== $subjectUserId) {
+            throw new AuthorizationException('Telegram purchase Quote self access denied.');
+        }
+        if (preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/i', $quotePublicId) !== 1
+            || preg_match('/\A[0-9a-f]{64}\z/', $quoteConfigurationHash) !== 1) {
+            throw new RuntimeException('Telegram purchase Quote preview identity is invalid.');
+        }
+
+        return $this->database->connection()->transaction(function () use (
+            $actorUserId,
+            $subjectUserId,
+            $offeringSelectionToken,
+            $quotePublicId,
+            $quoteConfigurationHash,
+        ): TelegramCustomerPurchaseQuotePreview {
+            $offering = $this->catalog->offeringForSelf($actorUserId, $subjectUserId, $offeringSelectionToken);
+            try {
+                $quote = $this->quotes->current($quotePublicId);
+            } catch (RuntimeException $exception) {
+                if ($exception->getMessage() === 'Quote has expired.') {
+                    throw new AuthorizationException('Telegram purchase Quote preview is unavailable.', previous: $exception);
+                }
+
+                throw $exception;
+            }
+            if ($quote->userId !== $subjectUserId
+                || ! hash_equals($quote->configurationSnapshotHash, $quoteConfigurationHash)
+                || ! hash_equals($quote->offeringCode, $offering->offeringCode)
+                || $quote->basePriceIrr !== $offering->basePriceIrr
+                || $quote->currency !== 'IRR') {
+                throw new AuthorizationException('Telegram purchase Quote preview is unavailable.');
+            }
+
+            return new TelegramCustomerPurchaseQuotePreview(
+                $offering,
+                $quote->quotePublicId,
+                $quote->configurationSnapshotHash,
+                $quote->basePriceIrr,
+                $quote->effectivePriceIrr,
+                $quote->discountIrr,
+                $quote->finalPriceIrr,
+                $quote->currency,
+                $quote->validFrom,
+                $quote->expiresAt,
+                true,
+            );
+        }, 3);
+    }
+
+    /** @requirement BUY-001 BUY-002 BUY-003 DAT-002 DAT-003 SEC-002 QUA-001 */
     public function quoteForSelf(
         int $actorUserId,
         int $subjectUserId,

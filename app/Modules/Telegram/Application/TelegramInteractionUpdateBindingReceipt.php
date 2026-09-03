@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Application;
 
+use DateTimeImmutable;
+
 final readonly class TelegramInteractionUpdateBindingReceipt
 {
     /** @param array<string, mixed> $sessionPayload */
@@ -19,5 +21,6 @@ final readonly class TelegramInteractionUpdateBindingReceipt
         public ?int $sessionVersion,
         public array $sessionPayload,
         public bool $replayed,
+        public DateTimeImmutable $acceptedAt,
     ) {}
 }

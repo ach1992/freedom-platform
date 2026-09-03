@@ -327,6 +327,159 @@ final readonly class PromotionRuleService
         }
     }
 
+    /** @requirement PRO-001 PRO-002 BUY-002 DAT-002 DAT-003 SEC-001 SEC-002 QUA-001 */
+    public function resolveSpecific(
+        PromotionSpecificResolutionRequest $specific,
+        PromotionResolutionContext $context,
+    ): PromotionResolutionReceipt {
+        if ($context->actorUserId !== $specific->userId) {
+            throw new AuthorizationException('Promotion specific resolution actor is not authorized for this subject.');
+        }
+        $requestPayloadHash = $this->specificResolutionRequestHash($specific);
+
+        try {
+            return $this->database->connection()->transaction(function (Connection $connection) use (
+                $specific,
+                $requestPayloadHash,
+            ): PromotionResolutionReceipt {
+                $existing = $this->resolutionByKey($connection, $specific->resolutionKey, true);
+                if ($existing !== null) {
+                    return $this->resolutionReceipt($existing, $requestPayloadHash, true);
+                }
+
+                /** @var object{account_type:string,account_status:string}|null $user */
+                $user = $connection->table('users')
+                    ->where('id', $specific->userId)
+                    ->lockForUpdate()
+                    ->first(['account_type', 'account_status']);
+                if ($user === null || $user->account_status !== 'active' || ! in_array($user->account_type, ['customer', 'agent'], true)) {
+                    throw new DomainException('Promotion specific resolution requires an active customer or agent.');
+                }
+
+                /** @var object{id:int|string,product_id:int|string,sales_server_id:int|string,discount_eligible:int|bool|string}|null $offering */
+                $offering = $connection->table('plan_offerings')
+                    ->where('id', $specific->planOfferingId)
+                    ->lockForUpdate()
+                    ->first(['id', 'product_id', 'sales_server_id', 'discount_eligible']);
+                if ($offering === null || ! (bool) $offering->discount_eligible) {
+                    throw new DomainException('Promotion specific resolution offering is not discount eligible.');
+                }
+
+                /** @var RuleVersionRow|null $selected */
+                $selected = $connection->table('pricing_rule_versions as v')
+                    ->join('pricing_rules as r', 'r.id', '=', 'v.pricing_rule_id')
+                    ->where('v.id', $specific->pricingRuleVersionId)
+                    ->lockForUpdate()
+                    ->first($this->versionColumns());
+                if ($selected === null
+                    || ! hash_equals($selected->configuration_hash, $specific->ruleConfigurationHash)
+                    || $selected->kind !== PromotionRuleKind::Promotion->value) {
+                    throw new DomainException('Promotion specific rule identity is unavailable.');
+                }
+                $this->assertStoredConfiguration($selected);
+
+                $ruleId = $this->positiveDatabaseInt($selected->pricing_rule_id, 'Promotion rule ID');
+                $activeReservations = $connection->table('promotion_usage_reservations as reservation')
+                    ->leftJoin('promotion_usage_releases as release', 'release.promotion_usage_reservation_id', '=', 'reservation.id')
+                    ->where('reservation.pricing_rule_id', $ruleId)
+                    ->whereNull('release.id')
+                    ->get(['reservation.id', 'reservation.user_id']);
+                $observedTotalUses = $activeReservations->count();
+                $observedUserUses = $activeReservations->filter(
+                    static fn (object $row): bool => (int) $row->user_id === $specific->userId,
+                )->count();
+                $hasPriorSuccessfulPurchase = $connection->table('purchase_settlements')
+                    ->where('user_id', $specific->userId)
+                    ->orderBy('id')
+                    ->lockForUpdate()
+                    ->first(['id']) !== null;
+
+                $request = new PromotionResolutionRequest(
+                    $specific->resolutionKey,
+                    $specific->userId,
+                    $specific->planOfferingId,
+                    $specific->action,
+                    $specific->inputPriceIrr,
+                    $observedTotalUses,
+                    $observedUserUses,
+                    $hasPriorSuccessfulPurchase,
+                );
+                [$tierCode, $tagIds] = $this->subjectPromotionFacts($connection, $specific->userId);
+                if (! $this->ruleQualifies(
+                    $selected,
+                    $request,
+                    $user->account_type,
+                    $offering,
+                    $tierCode,
+                    $tagIds,
+                    $this->clock->now()->setTimezone(new DateTimeZone('UTC')),
+                )) {
+                    throw new DomainException('Promotion specific rule is not currently eligible for this purchase.');
+                }
+
+                $discountIrr = $this->calculateDiscount($selected, $specific->inputPriceIrr);
+                if ($discountIrr < 1) {
+                    throw new DomainException('Promotion specific rule does not produce a positive discount.');
+                }
+                $ruleVersion = $this->positiveDatabaseInt($selected->version, 'Promotion rule version');
+                /** @var array<string, mixed> $ruleConfiguration */
+                $ruleConfiguration = json_decode($selected->configuration_snapshot, true, flags: JSON_THROW_ON_ERROR);
+                $snapshot = [
+                    'formula_version' => self::RESOLUTION_FORMULA_VERSION,
+                    'matched' => true,
+                    'rule_code' => $selected->rule_code,
+                    'rule_configuration' => $ruleConfiguration,
+                    'rule_configuration_hash' => $selected->configuration_hash,
+                    'rule_kind' => PromotionRuleKind::Promotion->value,
+                    'rule_version' => $ruleVersion,
+                ];
+                ksort($snapshot, SORT_STRING);
+                $snapshotJson = json_encode($snapshot, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
+                if (strlen($snapshotJson) > 8192) {
+                    throw new RuntimeException('Promotion resolution snapshot exceeds the storage boundary.');
+                }
+                $snapshotHash = hash('sha256', $snapshotJson);
+                $resolutionId = (int) $connection->table('pricing_rule_resolutions')->insertGetId([
+                    'public_id' => (string) Str::ulid(),
+                    'resolution_key' => $specific->resolutionKey,
+                    'request_payload_hash' => $requestPayloadHash,
+                    'user_id' => $specific->userId,
+                    'plan_offering_id' => $specific->planOfferingId,
+                    'action' => $specific->action->value,
+                    'input_price_irr' => $specific->inputPriceIrr,
+                    'observed_total_uses' => $observedTotalUses,
+                    'observed_user_uses' => $observedUserUses,
+                    'had_prior_successful_purchase' => $hasPriorSuccessfulPurchase,
+                    'referral_source_code' => null,
+                    'pricing_rule_id' => $ruleId,
+                    'pricing_rule_version_id' => $specific->pricingRuleVersionId,
+                    'rule_code_snapshot' => $selected->rule_code,
+                    'rule_kind_snapshot' => PromotionRuleKind::Promotion->value,
+                    'rule_version' => $ruleVersion,
+                    'rule_configuration_hash' => $selected->configuration_hash,
+                    'discount_irr' => $discountIrr,
+                    'configuration_snapshot' => $snapshotJson,
+                    'configuration_snapshot_hash' => $snapshotHash,
+                    'created_at' => $this->timestamp(),
+                ]);
+
+                $created = $this->resolutionById($connection, $resolutionId);
+                if ($created === null) {
+                    throw new RuntimeException('Promotion specific resolution persistence failed.');
+                }
+
+                return $this->resolutionReceipt($created, $requestPayloadHash, false);
+            });
+        } catch (QueryException $exception) {
+            $existing = $this->resolutionByKey($this->database->connection(), $specific->resolutionKey);
+            if ($existing !== null) {
+                return $this->resolutionReceipt($existing, $requestPayloadHash, true);
+            }
+
+            throw $exception;
+        }
+    }
+
     private function insertVersion(
         Connection $connection,
         int $ruleId,
@@ -456,82 +609,14 @@ final readonly class PromotionRuleService
             }
         }
 
-        $tierCode = $connection->table('customer_profiles as p')
-            ->join('customer_tiers as t', 't.id', '=', 'p.current_tier_id')
-            ->where('p.user_id', $request->userId)
-            ->where('t.is_active', true)
-            ->value('t.code');
-        $tierCode = is_string($tierCode) ? $tierCode : null;
-        /** @var list<int> $tagIds */
-        $tagIds = $connection->table('customer_tag_assignments as a')
-            ->join('customer_tags as t', 't.id', '=', 'a.tag_id')
-            ->where('a.user_id', $request->userId)
-            ->whereNull('a.removed_at')
-            ->where('t.is_active', true)
-            ->pluck('a.tag_id')
-            ->map(static fn (mixed $id): int => (int) $id)
-            ->all();
-
+        [$tierCode, $tagIds] = $this->subjectPromotionFacts($connection, $request->userId);
         $now = $this->clock->now()->setTimezone(new DateTimeZone('UTC'));
         /** @var list<RuleVersionRow> $qualified */
         $qualified = [];
         foreach ($latestByRule as $row) {
-            $this->assertStoredConfiguration($row);
-            $state = PromotionRuleState::tryFrom($row->state) ?? throw new RuntimeException('Stored promotion rule state is invalid.');
-            if ($state !== PromotionRuleState::Active) {
-                continue;
+            if ($this->ruleQualifies($row, $request, $accountType, $offering, $tierCode, $tagIds, $now)) {
+                $qualified[] = $row;
             }
-            $audience = PromotionAudience::tryFrom($row->audience) ?? throw new RuntimeException('Stored promotion audience is invalid.');
-            if (! $audience->allows($accountType)) {
-                continue;
-            }
-            if ($request->inputPriceIrr < $this->nonNegativeDatabaseInt($row->minimum_order_irr, 'Promotion minimum order')) {
-                continue;
-            }
-            if ($row->effective_from !== null && $now < $this->storedDateTime($row->effective_from)) {
-                continue;
-            }
-            if ($row->effective_until !== null && $now >= $this->storedDateTime($row->effective_until)) {
-                continue;
-            }
-            if ($row->total_use_limit !== null && $request->observedTotalUses >= $this->positiveDatabaseInt($row->total_use_limit, 'Promotion total use limit')) {
-                continue;
-            }
-            if ($row->per_user_use_limit !== null && $request->observedUserUses >= $this->positiveDatabaseInt($row->per_user_use_limit, 'Promotion per-user use limit')) {
-                continue;
-            }
-            if ((bool) $row->first_purchase_only && $request->hasPriorSuccessfulPurchase) {
-                continue;
-            }
-            if ($row->tier_code !== null && ! hash_equals($row->tier_code, $tierCode ?? '')) {
-                continue;
-            }
-            if ($row->customer_tag_id !== null && ! in_array((int) $row->customer_tag_id, $tagIds, true)) {
-                continue;
-            }
-            if ($row->plan_offering_id !== null && (int) $row->plan_offering_id !== $request->planOfferingId) {
-                continue;
-            }
-            if ($row->product_id !== null && (int) $row->product_id !== (int) $offering->product_id) {
-                continue;
-            }
-            if ($row->sales_server_id !== null && (int) $row->sales_server_id !== (int) $offering->sales_server_id) {
-                continue;
-            }
-            if ($row->action !== null && ! hash_equals($row->action, $request->action->value)) {
-                continue;
-            }
-
-            $kind = PromotionRuleKind::tryFrom($row->kind) ?? throw new RuntimeException('Stored promotion rule kind is invalid.');
-            if ($kind === PromotionRuleKind::Referral) {
-                if ($request->referralSourceCode === null || ! hash_equals((string) $row->referral_source_code, $request->referralSourceCode)) {
-                    continue;
-                }
-            } elseif ($request->referralSourceCode !== null && $row->referral_source_code !== null) {
-                throw new RuntimeException('Stored promotion referral shape is invalid.');
-            }
-
-            $qualified[] = $row;
         }
 
         if ($qualified === []) {
@@ -544,6 +629,100 @@ final readonly class PromotionRuleService
         }
 
         return $winners[0];
+    }
+
+    /** @return array{0:?string,1:list<int>} */
+    private function subjectPromotionFacts(Connection $connection, int $userId): array
+    {
+        $tierCode = $connection->table('customer_profiles as p')
+            ->join('customer_tiers as t', 't.id', '=', 'p.current_tier_id')
+            ->where('p.user_id', $userId)
+            ->where('t.is_active', true)
+            ->value('t.code');
+        $tierCode = is_string($tierCode) ? $tierCode : null;
+        /** @var list<int> $tagIds */
+        $tagIds = $connection->table('customer_tag_assignments as a')
+            ->join('customer_tags as t', 't.id', '=', 'a.tag_id')
+            ->where('a.user_id', $userId)
+            ->whereNull('a.removed_at')
+            ->where('t.is_active', true)
+            ->pluck('a.tag_id')
+            ->map(static fn (mixed $id): int => (int) $id)
+            ->all();
+
+        return [$tierCode, $tagIds];
+    }
+
+    /**
+     * @param  RuleVersionRow  $row
+     * @param  object{product_id:int|string,sales_server_id:int|string,discount_eligible:int|bool|string}  $offering
+     * @param  list<int>  $tagIds
+     */
+    private function ruleQualifies(
+        object $row,
+        PromotionResolutionRequest $request,
+        string $accountType,
+        object $offering,
+        ?string $tierCode,
+        array $tagIds,
+        DateTimeImmutable $now,
+    ): bool {
+        $this->assertStoredConfiguration($row);
+        $state = PromotionRuleState::tryFrom($row->state) ?? throw new RuntimeException('Stored promotion rule state is invalid.');
+        if ($state !== PromotionRuleState::Active) {
+            return false;
+        }
+        $audience = PromotionAudience::tryFrom($row->audience) ?? throw new RuntimeException('Stored promotion audience is invalid.');
+        if (! $audience->allows($accountType)) {
+            return false;
+        }
+        if ($request->inputPriceIrr < $this->nonNegativeDatabaseInt($row->minimum_order_irr, 'Promotion minimum order')) {
+            return false;
+        }
+        if ($row->effective_from !== null && $now < $this->storedDateTime($row->effective_from)) {
+            return false;
+        }
+        if ($row->effective_until !== null && $now >= $this->storedDateTime($row->effective_until)) {
+            return false;
+        }
+        if ($row->total_use_limit !== null && $request->observedTotalUses >= $this->positiveDatabaseInt($row->total_use_limit, 'Promotion total use limit')) {
+            return false;
+        }
+        if ($row->per_user_use_limit !== null && $request->observedUserUses >= $this->positiveDatabaseInt($row->per_user_use_limit, 'Promotion per-user use limit')) {
+            return false;
+        }
+        if ((bool) $row->first_purchase_only && $request->hasPriorSuccessfulPurchase) {
+            return false;
+        }
+        if ($row->tier_code !== null && ! hash_equals($row->tier_code, $tierCode ?? '')) {
+            return false;
+        }
+        if ($row->customer_tag_id !== null && ! in_array((int) $row->customer_tag_id, $tagIds, true)) {
+            return false;
+        }
+        if ($row->plan_offering_id !== null && (int) $row->plan_offering_id !== $request->planOfferingId) {
+            return false;
+        }
+        if ($row->product_id !== null && (int) $row->product_id !== (int) $offering->product_id) {
+            return false;
+        }
+        if ($row->sales_server_id !== null && (int) $row->sales_server_id !== (int) $offering->sales_server_id) {
+            return false;
+        }
+        if ($row->action !== null && ! hash_equals($row->action, $request->action->value)) {
+            return false;
+        }
+
+        $kind = PromotionRuleKind::tryFrom($row->kind) ?? throw new RuntimeException('Stored promotion rule kind is invalid.');
+        if ($kind === PromotionRuleKind::Referral) {
+            return $request->referralSourceCode !== null
+                && hash_equals((string) $row->referral_source_code, $request->referralSourceCode);
+        }
+        if ($request->referralSourceCode !== null && $row->referral_source_code !== null) {
+            throw new RuntimeException('Stored promotion referral shape is invalid.');
+        }
+
+        return true;
     }
 
     /** @param RuleVersionRow $row */
@@ -694,6 +873,18 @@ final readonly class PromotionRuleService
             'administrator_id' => $administratorId,
             'configuration' => $this->configurationSnapshot($ruleCode, $kind, $definition),
             'operation' => $operation,
+        ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES));
+    }
+
+    private function specificResolutionRequestHash(PromotionSpecificResolutionRequest $request): string
+    {
+        return hash('sha256', json_encode([
+            'action' => $request->action->value,
+            'input_price_irr' => $request->inputPriceIrr,
+            'plan_offering_id' => $request->planOfferingId,
+            'pricing_rule_version_id' => $request->pricingRuleVersionId,
+            'rule_configuration_hash' => $request->ruleConfigurationHash,
+            'user_id' => $request->userId,
         ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES));
     }
 

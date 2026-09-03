@@ -9,6 +9,7 @@ use App\Modules\Customers\Application\CustomerAccountSummaryService;
 use App\Modules\Promotions\Application\ReferralSelfSummary;
 use App\Modules\Promotions\Application\ReferralSelfSummaryService;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCatalog;
+use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseDiscountQuote;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchasePaymentMethods;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseQuote;
 use App\Modules\Telegram\Application\Contracts\TelegramInteractionHandler;
@@ -31,6 +32,10 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
     private const STATE_MY_ACCOUNT = 'my_account';
 
     private const STATE_PURCHASE_CATALOG = 'purchase_catalog';
+
+    private const STATE_PURCHASE_DISCOUNT_INPUT = 'purchase_discount_input';
+
+    private const STATE_PURCHASE_DISCOUNT_SUBMITTING = 'purchase_discount_submitting';
 
     private const STATE_PURCHASE_PAYMENT_METHODS = 'purchase_payment_methods';
 
@@ -63,6 +68,8 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
     private const ACTION_PURCHASE_CATALOG = 'navigation.purchase';
 
     private const ACTION_PURCHASE_PAGE = 'navigation.purchase.page';
+
+    private const ACTION_PURCHASE_DISCOUNT = 'navigation.purchase.discount';
 
     private const ACTION_PURCHASE_PAYMENT_METHODS = 'navigation.purchase.payment_methods';
 
@@ -105,6 +112,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         private WalletSelfBalanceService $wallets,
         private ReferralSelfSummaryService $referrals,
         private TelegramCustomerPurchaseQuote $purchaseQuotes,
+        private TelegramCustomerPurchaseDiscountQuote $purchaseDiscountQuotes,
         private TelegramCustomerPurchasePaymentMethods $purchasePaymentMethods,
         private TelegramCustomerPurchaseCatalog $purchaseCatalog,
         private TelegramOwnedServiceProjection $services,
@@ -174,6 +182,12 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
 
         if ($action->sessionState === self::STATE_PURCHASE_QUOTE) {
             $this->handlePurchaseQuote($action);
+
+            return;
+        }
+
+        if ($action->sessionState === self::STATE_PURCHASE_DISCOUNT_INPUT) {
+            $this->handlePurchaseDiscountInput($action);
 
             return;
         }
@@ -291,7 +305,15 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
 
     private function handlePurchaseQuote(TelegramInteractionAction $action): void
     {
+        $state = $this->purchaseQuoteStateFromPayload($action->sessionPayload);
         if ($action->kind === TelegramInteractionActionKind::Callback) {
+            if ($action->callbackAction === self::ACTION_PURCHASE_DISCOUNT
+                && $action->callbackPayload === []
+                && ! $this->purchaseQuoteHasDiscount($state)) {
+                $this->showPurchaseDiscountInput($action, $state);
+
+                return;
+            }
             if ($action->callbackAction === self::ACTION_PURCHASE_PAYMENT_METHODS && $action->callbackPayload === []) {
                 $this->showPurchasePaymentMethods($action);
 
@@ -313,6 +335,36 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         }
         if ($this->isEntryCommand($action->messageText)) {
             $this->returnHome($action);
+        }
+    }
+
+    private function handlePurchaseDiscountInput(TelegramInteractionAction $action): void
+    {
+        $state = $this->purchaseQuoteStateFromPayload($action->sessionPayload);
+        if ($this->purchaseQuoteHasDiscount($state)) {
+            throw new RuntimeException('Telegram discounted Quote cannot accept another discount code.');
+        }
+        if ($action->kind === TelegramInteractionActionKind::Callback) {
+            if ($action->callbackAction !== self::ACTION_BACK || $action->callbackPayload !== []) {
+                throw new RuntimeException('Telegram purchase discount callback action is unsupported.');
+            }
+
+            $this->returnPurchaseQuoteFromDiscountInput($action, $state);
+
+            return;
+        }
+        if ($action->kind === TelegramInteractionActionKind::Back) {
+            $this->returnPurchaseQuoteFromDiscountInput($action, $state);
+
+            return;
+        }
+        if ($this->isEntryCommand($action->messageText)) {
+            $this->returnHome($action);
+
+            return;
+        }
+        if ($action->messageText !== null) {
+            $this->showPurchaseDiscountQuote($action, $state);
         }
     }
 
@@ -1090,39 +1142,271 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             return;
         }
 
-        $paymentMethods = $this->callbacks->issue(
-            $session->publicId,
+        $quoteState = [
+            'page' => $state['page'],
+            'offering_selection' => $state['offering_selection'],
+            'quote_public_id' => $preview->quotePublicId,
+            'quote_configuration_hash' => $preview->configurationSnapshotHash,
+        ];
+        $this->renderPurchaseQuote(
+            $action,
             $session->version,
+            $preview,
+            $quoteState,
+            $this->localeForActor($action->userId),
+            $action->requestKey,
+        );
+    }
+
+    /**
+     * @param  array{page:int,offering_selection:string,quote_public_id:string,quote_configuration_hash:string,discount_consumption_public_id?:string,discount_consumption_configuration_hash?:string,promotion_resolution_public_id?:string}  $state
+     */
+    private function renderPurchaseQuote(
+        TelegramInteractionAction $action,
+        int $sessionVersion,
+        TelegramCustomerPurchaseQuotePreview $preview,
+        array $state,
+        string $locale,
+        string $requestKey,
+    ): void {
+        $rows = [];
+        if (! $this->purchaseQuoteHasDiscount($state)) {
+            $discount = $this->callbacks->issue(
+                $action->sessionPublicId,
+                $sessionVersion,
+                self::ACTION_PURCHASE_DISCOUNT,
+                [],
+                'nav-purchase-quote-discount:'.$requestKey,
+            );
+            $rows[] = [new TelegramInlineCallbackButton(
+                $this->translation('telegram.navigation.purchase.discount.button', $locale),
+                $discount->publicId,
+            )];
+        }
+        $paymentMethods = $this->callbacks->issue(
+            $action->sessionPublicId,
+            $sessionVersion,
             self::ACTION_PURCHASE_PAYMENT_METHODS,
             [],
-            'nav-purchase-quote-payment-methods:'.$action->requestKey,
+            'nav-purchase-quote-payment-methods:'.$requestKey,
         );
+        $rows[] = [new TelegramInlineCallbackButton(
+            $this->translation('telegram.navigation.purchase.payment_methods_button', $locale),
+            $paymentMethods->publicId,
+            TelegramInlineButtonStyle::Primary,
+        )];
         $back = $this->callbacks->issue(
-            $session->publicId,
-            $session->version,
+            $action->sessionPublicId,
+            $sessionVersion,
             self::ACTION_BACK,
             [],
-            'nav-purchase-quote-back:'.$action->requestKey,
+            'nav-purchase-quote-back:'.$requestKey,
         );
-        $locale = $this->localeForActor($action->userId);
-        $keyboard = new TelegramInlineKeyboardSnapshot([
-            [new TelegramInlineCallbackButton(
-                $this->translation('telegram.navigation.purchase.payment_methods_button', $locale),
-                $paymentMethods->publicId,
-                TelegramInlineButtonStyle::Primary,
-            )],
-            [new TelegramInlineCallbackButton(
-                $this->translation('telegram.navigation.buttons.back', $locale),
-                $back->publicId,
-            )],
-        ]);
+        $rows[] = [new TelegramInlineCallbackButton(
+            $this->translation('telegram.navigation.buttons.back', $locale),
+            $back->publicId,
+        )];
 
         $this->queueConfidential(
             $action,
             $this->purchaseQuoteText($preview, $locale),
-            'nav-purchase-quote-delivery:'.$action->requestKey,
-            'purchase-quote',
-            $keyboard,
+            'nav-purchase-quote-delivery:'.$requestKey,
+            $this->purchaseQuoteHasDiscount($state) ? 'purchase-quote-discounted' : 'purchase-quote',
+            new TelegramInlineKeyboardSnapshot($rows),
+        );
+    }
+
+    /**
+     * @param  array{page:int,offering_selection:string,quote_public_id:string,quote_configuration_hash:string,discount_consumption_public_id?:string,discount_consumption_configuration_hash?:string,promotion_resolution_public_id?:string}  $state
+     */
+    private function showPurchaseDiscountInput(TelegramInteractionAction $action, array $state): void
+    {
+        $session = $this->sessions->transition(
+            $action->sessionPublicId,
+            $action->sessionVersion,
+            self::STATE_PURCHASE_DISCOUNT_INPUT,
+            $state,
+            'nav-purchase-discount-input-transition:'.$action->requestKey,
+        );
+        $this->assertActorBinding($action, $session->userId);
+        $this->renderPurchaseDiscountPrompt(
+            $action,
+            $session->version,
+            $this->localeForActor($action->userId),
+            $action->requestKey,
+            false,
+        );
+    }
+
+    /**
+     * @param  array{page:int,offering_selection:string,quote_public_id:string,quote_configuration_hash:string,discount_consumption_public_id?:string,discount_consumption_configuration_hash?:string,promotion_resolution_public_id?:string}  $state
+     */
+    private function showPurchaseDiscountQuote(TelegramInteractionAction $action, array $state): void
+    {
+        if ($action->messageAcceptedAt === null) {
+            throw new RuntimeException('Telegram purchase discount input acceptance time is unavailable.');
+        }
+        $code = $action->messageText === null ? '' : trim($action->messageText);
+        if ($code === '' || strlen($code) > 256) {
+            $this->renderPurchaseDiscountPrompt(
+                $action,
+                $action->sessionVersion,
+                $this->localeForActor($action->userId),
+                $action->requestKey,
+                true,
+            );
+
+            return;
+        }
+        $operationKey = hash('sha256', $action->requestKey);
+
+        try {
+            [$session, $preview] = $this->database->connection()->transaction(function () use (
+                $action,
+                $state,
+                $code,
+                $operationKey,
+            ): array {
+                $claim = $this->sessions->transition(
+                    $action->sessionPublicId,
+                    $action->sessionVersion,
+                    self::STATE_PURCHASE_DISCOUNT_SUBMITTING,
+                    $state,
+                    'nav-purchase-discount-claim:'.hash('sha256', $action->requestKey),
+                );
+                $this->assertActorBinding($action, $claim->userId);
+
+                $preview = $this->purchaseDiscountQuotes->requoteForSelf(
+                    $action->userId,
+                    $action->userId,
+                    $state['offering_selection'],
+                    $state['quote_public_id'],
+                    $state['quote_configuration_hash'],
+                    $code,
+                    $action->messageAcceptedAt,
+                    $operationKey,
+                );
+                $quoteState = [
+                    'page' => $state['page'],
+                    'offering_selection' => $state['offering_selection'],
+                    'quote_public_id' => $preview->quote->quotePublicId,
+                    'quote_configuration_hash' => $preview->quote->configurationSnapshotHash,
+                    'discount_consumption_public_id' => $preview->discountConsumptionPublicId,
+                    'discount_consumption_configuration_hash' => $preview->discountConsumptionConfigurationHash,
+                    'promotion_resolution_public_id' => $preview->promotionResolutionPublicId,
+                ];
+                $session = $this->sessions->transition(
+                    $action->sessionPublicId,
+                    $claim->version,
+                    self::STATE_PURCHASE_QUOTE,
+                    $quoteState,
+                    'nav-purchase-discount-transition:'.$action->requestKey,
+                );
+                $this->assertActorBinding($action, $session->userId);
+
+                return [$session, $preview];
+            }, 3);
+        } catch (AuthorizationException|\DomainException|\InvalidArgumentException) {
+            try {
+                $this->renderPurchaseDiscountPrompt(
+                    $action,
+                    $action->sessionVersion,
+                    $this->localeForActor($action->userId),
+                    $action->requestKey,
+                    true,
+                );
+            } catch (\DomainException) {
+                // Another accepted interaction already moved the input session. Fail closed without leaking the code.
+            }
+
+            return;
+        }
+
+        $quoteState = [
+            'page' => $state['page'],
+            'offering_selection' => $state['offering_selection'],
+            'quote_public_id' => $preview->quote->quotePublicId,
+            'quote_configuration_hash' => $preview->quote->configurationSnapshotHash,
+            'discount_consumption_public_id' => $preview->discountConsumptionPublicId,
+            'discount_consumption_configuration_hash' => $preview->discountConsumptionConfigurationHash,
+            'promotion_resolution_public_id' => $preview->promotionResolutionPublicId,
+        ];
+        $this->renderPurchaseQuote(
+            $action,
+            $session->version,
+            $preview->quote,
+            $quoteState,
+            $this->localeForActor($action->userId),
+            $action->requestKey,
+        );
+    }
+
+    private function renderPurchaseDiscountPrompt(
+        TelegramInteractionAction $action,
+        int $sessionVersion,
+        string $locale,
+        string $requestKey,
+        bool $rejected,
+    ): void {
+        $back = $this->callbacks->issue(
+            $action->sessionPublicId,
+            $sessionVersion,
+            self::ACTION_BACK,
+            [],
+            'nav-purchase-discount-back:'.$requestKey,
+        );
+        $this->queueConfidential(
+            $action,
+            $this->translation(
+                $rejected ? 'telegram.navigation.purchase.discount.rejected' : 'telegram.navigation.purchase.discount.prompt',
+                $locale,
+            ),
+            'nav-purchase-discount-delivery:'.$requestKey,
+            $rejected ? 'purchase-discount-rejected' : 'purchase-discount-input',
+            new TelegramInlineKeyboardSnapshot([[new TelegramInlineCallbackButton(
+                $this->translation('telegram.navigation.buttons.back', $locale),
+                $back->publicId,
+            )]]),
+        );
+    }
+
+    /**
+     * @param  array{page:int,offering_selection:string,quote_public_id:string,quote_configuration_hash:string,discount_consumption_public_id?:string,discount_consumption_configuration_hash?:string,promotion_resolution_public_id?:string}  $state
+     */
+    private function returnPurchaseQuoteFromDiscountInput(TelegramInteractionAction $action, array $state): void
+    {
+        try {
+            $preview = $this->purchaseQuotes->previewForSelf(
+                $action->userId,
+                $action->userId,
+                $state['offering_selection'],
+                $state['quote_public_id'],
+                $state['quote_configuration_hash'],
+            );
+        } catch (AuthorizationException) {
+            try {
+                $this->returnPurchaseCatalogFromQuote($action, $state['page']);
+            } catch (AuthorizationException|\DomainException) {
+                // Source Quote or actor changed while returning from discount input. Fail closed.
+            }
+
+            return;
+        }
+        $session = $this->sessions->transition(
+            $action->sessionPublicId,
+            $action->sessionVersion,
+            self::STATE_PURCHASE_QUOTE,
+            $state,
+            'nav-purchase-discount-back-transition:'.$action->requestKey,
+        );
+        $this->assertActorBinding($action, $session->userId);
+        $this->renderPurchaseQuote(
+            $action,
+            $session->version,
+            $preview,
+            $state,
+            $this->localeForActor($action->userId),
+            $action->requestKey,
         );
     }
 
@@ -1148,18 +1432,14 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
                     $this->purchasePaymentMethodsDecisionKey($action),
                 );
 
+                $paymentState = $state;
+                $paymentState['payment_decision_public_id'] = $decision->decisionPublicId;
+                $paymentState['payment_decision_configuration_hash'] = $decision->configurationSnapshotHash;
                 $session = $this->sessions->transition(
                     $action->sessionPublicId,
                     $claim->version,
                     self::STATE_PURCHASE_PAYMENT_METHODS,
-                    [
-                        'page' => $state['page'],
-                        'offering_selection' => $state['offering_selection'],
-                        'quote_public_id' => $state['quote_public_id'],
-                        'quote_configuration_hash' => $state['quote_configuration_hash'],
-                        'payment_decision_public_id' => $decision->decisionPublicId,
-                        'payment_decision_configuration_hash' => $decision->configurationSnapshotHash,
-                    ],
+                    $paymentState,
                     'nav-purchase-payment-methods-transition:'.$action->requestKey,
                 );
                 $this->assertActorBinding($action, $session->userId);
@@ -2247,13 +2527,23 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
 
     /**
      * @param  array<string, mixed>  $payload
-     * @return array{page:int,offering_selection:string,quote_public_id:string,quote_configuration_hash:string}
+     * @return array{page:int,offering_selection:string,quote_public_id:string,quote_configuration_hash:string,discount_consumption_public_id?:string,discount_consumption_configuration_hash?:string,promotion_resolution_public_id?:string}
      */
     private function purchaseQuoteStateFromPayload(array $payload): array
     {
         $keys = array_keys($payload);
         sort($keys, SORT_STRING);
-        if ($keys !== ['offering_selection', 'page', 'quote_configuration_hash', 'quote_public_id']
+        $baseKeys = ['offering_selection', 'page', 'quote_configuration_hash', 'quote_public_id'];
+        $discountedKeys = [
+            'discount_consumption_configuration_hash',
+            'discount_consumption_public_id',
+            'offering_selection',
+            'page',
+            'promotion_resolution_public_id',
+            'quote_configuration_hash',
+            'quote_public_id',
+        ];
+        if (! in_array($keys, [$baseKeys, $discountedKeys], true)
             || ! is_int($payload['page'] ?? null)
             || $payload['page'] < 1
             || ! is_string($payload['offering_selection'] ?? null)
@@ -2264,47 +2554,54 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             || preg_match('/\A[0-9a-f]{64}\z/', $payload['quote_configuration_hash']) !== 1) {
             throw new RuntimeException('Telegram purchase Quote state is invalid.');
         }
+        if ($keys === $discountedKeys
+            && (! is_string($payload['discount_consumption_public_id'] ?? null)
+                || preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/i', $payload['discount_consumption_public_id']) !== 1
+                || ! is_string($payload['discount_consumption_configuration_hash'] ?? null)
+                || preg_match('/\A[0-9a-f]{64}\z/', $payload['discount_consumption_configuration_hash']) !== 1
+                || ! is_string($payload['promotion_resolution_public_id'] ?? null)
+                || preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/i', $payload['promotion_resolution_public_id']) !== 1)) {
+            throw new RuntimeException('Telegram discounted Quote state is invalid.');
+        }
 
-        return [
-            'page' => $payload['page'],
-            'offering_selection' => $payload['offering_selection'],
-            'quote_public_id' => $payload['quote_public_id'],
-            'quote_configuration_hash' => $payload['quote_configuration_hash'],
-        ];
+        /** @var array{page:int,offering_selection:string,quote_public_id:string,quote_configuration_hash:string,discount_consumption_public_id?:string,discount_consumption_configuration_hash?:string,promotion_resolution_public_id?:string} $payload */
+        return $payload;
+    }
+
+    /**
+     * @param  array{page:int,offering_selection:string,quote_public_id:string,quote_configuration_hash:string,discount_consumption_public_id?:string,discount_consumption_configuration_hash?:string,promotion_resolution_public_id?:string}  $state
+     */
+    private function purchaseQuoteHasDiscount(array $state): bool
+    {
+        return isset(
+            $state['discount_consumption_public_id'],
+            $state['discount_consumption_configuration_hash'],
+            $state['promotion_resolution_public_id'],
+        );
     }
 
     /**
      * @param  array<string, mixed>  $payload
-     * @return array{page:int,offering_selection:string,quote_public_id:string,quote_configuration_hash:string,payment_decision_public_id:string,payment_decision_configuration_hash:string}
+     * @return array{page:int,offering_selection:string,quote_public_id:string,quote_configuration_hash:string,payment_decision_public_id:string,payment_decision_configuration_hash:string,discount_consumption_public_id?:string,discount_consumption_configuration_hash?:string,promotion_resolution_public_id?:string}
      */
     private function purchasePaymentMethodsStateFromPayload(array $payload): array
     {
-        $keys = array_keys($payload);
-        sort($keys, SORT_STRING);
-        if ($keys !== ['offering_selection', 'page', 'payment_decision_configuration_hash', 'payment_decision_public_id', 'quote_configuration_hash', 'quote_public_id']
-            || ! is_int($payload['page'] ?? null)
-            || $payload['page'] < 1
-            || ! is_string($payload['offering_selection'] ?? null)
-            || preg_match('/\A[0-9a-f]{40}\z/', $payload['offering_selection']) !== 1
-            || ! is_string($payload['quote_public_id'] ?? null)
-            || preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/i', $payload['quote_public_id']) !== 1
-            || ! is_string($payload['quote_configuration_hash'] ?? null)
-            || preg_match('/\A[0-9a-f]{64}\z/', $payload['quote_configuration_hash']) !== 1
-            || ! is_string($payload['payment_decision_public_id'] ?? null)
+        if (! is_string($payload['payment_decision_public_id'] ?? null)
             || preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/i', $payload['payment_decision_public_id']) !== 1
             || ! is_string($payload['payment_decision_configuration_hash'] ?? null)
             || preg_match('/\A[0-9a-f]{64}\z/', $payload['payment_decision_configuration_hash']) !== 1) {
             throw new RuntimeException('Telegram purchase payment-method state is invalid.');
         }
+        $quotePayload = $payload;
+        $decisionPublicId = $quotePayload['payment_decision_public_id'];
+        $decisionConfigurationHash = $quotePayload['payment_decision_configuration_hash'];
+        unset($quotePayload['payment_decision_public_id'], $quotePayload['payment_decision_configuration_hash']);
+        $state = $this->purchaseQuoteStateFromPayload($quotePayload);
+        $state['payment_decision_public_id'] = $decisionPublicId;
+        $state['payment_decision_configuration_hash'] = $decisionConfigurationHash;
 
-        return [
-            'page' => $payload['page'],
-            'offering_selection' => $payload['offering_selection'],
-            'quote_public_id' => $payload['quote_public_id'],
-            'quote_configuration_hash' => $payload['quote_configuration_hash'],
-            'payment_decision_public_id' => $payload['payment_decision_public_id'],
-            'payment_decision_configuration_hash' => $payload['payment_decision_configuration_hash'],
-        ];
+        /** @var array{page:int,offering_selection:string,quote_public_id:string,quote_configuration_hash:string,payment_decision_public_id:string,payment_decision_configuration_hash:string,discount_consumption_public_id?:string,discount_consumption_configuration_hash?:string,promotion_resolution_public_id?:string} $state */
+        return $state;
     }
 
     /** @param array<string, mixed> $payload */

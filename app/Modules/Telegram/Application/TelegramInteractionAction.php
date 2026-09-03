@@ -32,5 +32,6 @@ final readonly class TelegramInteractionAction
         public array $callbackPayload,
         public bool $replayed,
         public ?DateTimeImmutable $callbackAcceptedAt = null,
+        public ?DateTimeImmutable $messageAcceptedAt = null,
     ) {}
 }

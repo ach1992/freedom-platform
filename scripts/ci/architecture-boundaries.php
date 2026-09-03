@@ -17,6 +17,16 @@ return [
         'Telegram' => ['Customers', 'Identity', 'Promotions', 'Wallet'],
         'Wallet' => ['AccessControl'],
     ],
+    // Exact dependency-inversion seams where an owning module implements a
+    // consumer-owned Application contract without creating a broad module edge.
+    // Each entry is source-path plus exact imported symbol.
+    'module_dependency_reference_exceptions' => [
+        'app/Modules/Promotions/Application/BenefitCodeDiscountQuoteAuthority.php|App\\Modules\\Orders\\Application\\Contracts\\QuoteDiscountAuthority',
+        'app/Modules/Promotions/Application/BenefitCodeDiscountQuoteAuthority.php|App\\Modules\\Orders\\Application\\QuoteDiscountAuthorization',
+        'app/Modules/Promotions/Application/BenefitCodeDiscountQuoteAuthority.php|App\\Modules\\Orders\\Application\\QuoteDiscountAuthorizationRequest',
+        'app/Modules/Promotions/Application/BenefitCodeDiscountQuoteAuthority.php|App\\Modules\\Orders\\Application\\QuoteDiscountConsumptionReceipt',
+        'app/Modules/Promotions/Application/BenefitCodeDiscountQuoteAuthority.php|App\\Modules\\Orders\\Application\\QuoteDiscountConsumptionRequest',
+    ],
     'domain_dependency_exceptions' => [
         'app/Modules/Catalog/Domain/CustomPlanPolicyDefinition.php|Customers\\Domain',
         'app/Modules/Catalog/Domain/OfferingOperationPolicy.php|Panels\\Domain',
@@ -333,6 +343,7 @@ return [
         'benefit_code_campaigns' => 'Promotions',
         'benefit_code_disables' => 'Promotions',
         'benefit_code_discount_grants' => 'Promotions',
+        'benefit_code_discount_quote_consumptions' => 'Promotions',
         'benefit_code_free_service_entitlements' => 'Promotions',
         'benefit_code_issuances' => 'Promotions',
         'benefit_code_redemptions' => 'Promotions',

@@ -9,6 +9,14 @@ use DateTimeImmutable;
 
 interface TelegramCustomerPurchaseQuote
 {
+    public function previewForSelf(
+        int $actorUserId,
+        int $subjectUserId,
+        string $offeringSelectionToken,
+        string $quotePublicId,
+        string $quoteConfigurationHash,
+    ): TelegramCustomerPurchaseQuotePreview;
+
     public function quoteForSelf(
         int $actorUserId,
         int $subjectUserId,
