@@ -99,6 +99,68 @@ final class BenefitDiscountQuoteMigrationReadinessTest extends TestCase
         self::assertSame(0, DB::table('benefit_code_discount_quote_consumptions')->count());
     }
 
+    public function test_reentry_repairs_restrictive_unique_and_prefix_unique_index_drift(): void
+    {
+        $migration = $this->migration();
+        $migration->up();
+        $database = DB::connection()->getDatabaseName();
+
+        DB::statement(
+            'CREATE UNIQUE INDEX bdqc_unexpected_user_uq '.
+            'ON benefit_code_discount_quote_consumptions (`user_id`)',
+        );
+        self::assertSame(1, DB::table('information_schema.STATISTICS')
+            ->where('TABLE_SCHEMA', $database)
+            ->where('TABLE_NAME', 'benefit_code_discount_quote_consumptions')
+            ->where('INDEX_NAME', 'bdqc_unexpected_user_uq')
+            ->where('NON_UNIQUE', 0)
+            ->count());
+
+        $migration->up();
+
+        self::assertFalse(DB::table('information_schema.STATISTICS')
+            ->where('TABLE_SCHEMA', $database)
+            ->where('TABLE_NAME', 'benefit_code_discount_quote_consumptions')
+            ->where('INDEX_NAME', 'bdqc_unexpected_user_uq')
+            ->exists());
+
+        $indexName = 'benefit_code_discount_quote_consumptions_consumption_key_unique';
+        DB::statement('ALTER TABLE benefit_code_discount_quote_consumptions DROP INDEX '.$indexName);
+        DB::statement(
+            'CREATE UNIQUE INDEX '.$indexName.' '.
+            'ON benefit_code_discount_quote_consumptions (`consumption_key`(64))',
+        );
+        $prefixLength = DB::table('information_schema.STATISTICS')
+            ->where('TABLE_SCHEMA', $database)
+            ->where('TABLE_NAME', 'benefit_code_discount_quote_consumptions')
+            ->where('INDEX_NAME', $indexName)
+            ->value('SUB_PART');
+        self::assertSame(64, (int) $prefixLength);
+
+        $migration->up();
+
+        $repairedPrefixLength = DB::table('information_schema.STATISTICS')
+            ->where('TABLE_SCHEMA', $database)
+            ->where('TABLE_NAME', 'benefit_code_discount_quote_consumptions')
+            ->where('INDEX_NAME', $indexName)
+            ->value('SUB_PART');
+        self::assertNull($repairedPrefixLength);
+
+        $operationalIndex = 'bdqc_extra_operational_idx';
+        DB::statement(
+            'CREATE INDEX '.$operationalIndex.' '.
+            'ON benefit_code_discount_quote_consumptions (`rule_code_snapshot`, `created_at`)',
+        );
+        $migration->up();
+        self::assertSame(2, DB::table('information_schema.STATISTICS')
+            ->where('TABLE_SCHEMA', $database)
+            ->where('TABLE_NAME', 'benefit_code_discount_quote_consumptions')
+            ->where('INDEX_NAME', $operationalIndex)
+            ->where('NON_UNIQUE', 1)
+            ->count());
+        self::assertSame(0, DB::table('benefit_code_discount_quote_consumptions')->count());
+    }
+
     public function test_reentry_repairs_semantically_weakened_same_name_trigger_that_retains_old_markers(): void
     {
         $migration = $this->migration();

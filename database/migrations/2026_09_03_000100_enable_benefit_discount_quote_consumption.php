@@ -285,31 +285,45 @@ return new class extends Migration
     private function indexesReady(string $database): bool
     {
         $expected = [
-            'bdqc_discount_quote_uq' => [0, ['discounted_quote_id']],
-            'bdqc_grant_uq' => [0, ['benefit_code_discount_grant_id']],
-            'bdqc_resolution_uq' => [0, ['pricing_rule_resolution_id']],
-            'bdqc_source_quote_uq' => [0, ['source_quote_id']],
-            'benefit_code_discount_quote_consumptions_consumption_key_unique' => [0, ['consumption_key']],
-            'benefit_code_discount_quote_consumptions_public_id_unique' => [0, ['public_id']],
-            'benefit_discount_quote_consumption_user_idx' => [1, ['user_id', 'created_at']],
+            'PRIMARY' => [0, [['id', null]]],
+            'bdqc_discount_quote_uq' => [0, [['discounted_quote_id', null]]],
+            'bdqc_grant_uq' => [0, [['benefit_code_discount_grant_id', null]]],
+            'bdqc_resolution_uq' => [0, [['pricing_rule_resolution_id', null]]],
+            'bdqc_source_quote_uq' => [0, [['source_quote_id', null]]],
+            'benefit_code_discount_quote_consumptions_consumption_key_unique' => [0, [['consumption_key', null]]],
+            'benefit_code_discount_quote_consumptions_public_id_unique' => [0, [['public_id', null]]],
+            'benefit_discount_quote_consumption_user_idx' => [1, [['user_id', null], ['created_at', null]]],
         ];
         $rows = DB::table('information_schema.STATISTICS')
             ->where('TABLE_SCHEMA', $database)
             ->where('TABLE_NAME', self::TABLE)
-            ->whereIn('INDEX_NAME', array_keys($expected))
             ->orderBy('INDEX_NAME')
             ->orderBy('SEQ_IN_INDEX')
-            ->get(['INDEX_NAME', 'COLUMN_NAME', 'NON_UNIQUE']);
+            ->get(['INDEX_NAME', 'COLUMN_NAME', 'NON_UNIQUE', 'SUB_PART']);
         $actual = [];
         foreach ($rows as $row) {
             $name = (string) $row->INDEX_NAME;
             $actual[$name] ??= [(int) $row->NON_UNIQUE, []];
-            $actual[$name][1][] = (string) $row->COLUMN_NAME;
+            if ($actual[$name][0] !== (int) $row->NON_UNIQUE) {
+                return false;
+            }
+            $actual[$name][1][] = [
+                (string) $row->COLUMN_NAME,
+                $row->SUB_PART === null ? null : (int) $row->SUB_PART,
+            ];
         }
-        ksort($expected, SORT_STRING);
-        ksort($actual, SORT_STRING);
+        foreach ($expected as $name => $definition) {
+            if (! isset($actual[$name]) || $actual[$name] !== $definition) {
+                return false;
+            }
+        }
+        foreach ($actual as $name => [$nonUnique]) {
+            if (! isset($expected[$name]) && $nonUnique === 0) {
+                return false;
+            }
+        }
 
-        return $actual === $expected;
+        return true;
     }
 
     private function triggersReady(string $database): bool

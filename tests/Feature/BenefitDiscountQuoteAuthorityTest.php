@@ -526,6 +526,103 @@ final class BenefitDiscountQuoteAuthorityTest extends TestCase
         self::assertSame(1, DB::table('benefit_code_discount_quote_consumptions')->count());
     }
 
+    public function test_migration_reentry_rejects_non_empty_restrictive_unique_index_without_destructive_rebuild(): void
+    {
+        $fixture = $this->discountFixture('migration-non-empty-unique-readiness');
+        $authority = $this->app->make(QuoteDiscountAuthority::class);
+        $authorization = $authority->authorize(new QuoteDiscountAuthorizationRequest(
+            'discount-migration-unique-auth-0001',
+            $fixture['user_id'],
+            $fixture['source_quote']->quotePublicId,
+            $fixture['source_quote']->configurationSnapshotHash,
+            $fixture['code'],
+            'discount-migration-unique-correlation',
+        ));
+        $discountedQuote = $this->discountedQuote(
+            $fixture,
+            $authorization->ruleCode,
+            $authorization->discountIrr,
+            'migration-non-empty-unique-readiness',
+        );
+        $authority->consume(new QuoteDiscountConsumptionRequest(
+            'discount-migration-unique-consume-0001',
+            $fixture['user_id'],
+            $authorization,
+            $discountedQuote->quotePublicId,
+            $discountedQuote->configurationSnapshotHash,
+            'discount-migration-unique-correlation',
+        ));
+        self::assertSame(1, DB::table('benefit_code_discount_quote_consumptions')->count());
+
+        /** @var Migration $migration */
+        $migration = require database_path('migrations/2026_09_03_000100_enable_benefit_discount_quote_consumption.php');
+        $database = DB::connection()->getDatabaseName();
+        $indexName = 'bdqc_nonempty_unexpected_user_uq';
+        DB::statement(
+            'CREATE UNIQUE INDEX '.$indexName.' '.
+            'ON benefit_code_discount_quote_consumptions (`user_id`)',
+        );
+
+        try {
+            $migration->up();
+            self::fail('Expected non-empty restrictive unique-index drift to fail safe without destructive rebuild.');
+        } catch (RuntimeException $exception) {
+            self::assertSame(
+                'Benefit discount Quote authority cannot repair a non-empty incomplete surface.',
+                $exception->getMessage(),
+            );
+        }
+
+        self::assertSame(1, DB::table('benefit_code_discount_quote_consumptions')->count());
+        self::assertSame(1, DB::table('information_schema.STATISTICS')
+            ->where('TABLE_SCHEMA', $database)
+            ->where('TABLE_NAME', 'benefit_code_discount_quote_consumptions')
+            ->where('INDEX_NAME', $indexName)
+            ->where('NON_UNIQUE', 0)
+            ->count());
+
+        DB::statement('ALTER TABLE benefit_code_discount_quote_consumptions DROP INDEX '.$indexName);
+        $migration->up();
+        self::assertSame(1, DB::table('benefit_code_discount_quote_consumptions')->count());
+    }
+
+    public function test_same_user_can_commit_independent_discount_consumptions(): void
+    {
+        $firstFixture = $this->discountFixture('same-user-first');
+        $secondFixture = $this->discountFixture('same-user-second', $firstFixture['user_id']);
+        $authority = $this->app->make(QuoteDiscountAuthority::class);
+
+        foreach ([['first', $firstFixture], ['second', $secondFixture]] as [$suffix, $fixture]) {
+            $authorization = $authority->authorize(new QuoteDiscountAuthorizationRequest(
+                'discount-same-user-'.$suffix.'-auth-0001',
+                $fixture['user_id'],
+                $fixture['source_quote']->quotePublicId,
+                $fixture['source_quote']->configurationSnapshotHash,
+                $fixture['code'],
+                'discount-same-user-'.$suffix.'-correlation',
+            ));
+            $discountedQuote = $this->discountedQuote(
+                $fixture,
+                $authorization->ruleCode,
+                $authorization->discountIrr,
+                'same-user-'.$suffix,
+            );
+            $authority->consume(new QuoteDiscountConsumptionRequest(
+                'discount-same-user-'.$suffix.'-consume-0001',
+                $fixture['user_id'],
+                $authorization,
+                $discountedQuote->quotePublicId,
+                $discountedQuote->configurationSnapshotHash,
+                'discount-same-user-'.$suffix.'-correlation',
+            ));
+        }
+
+        self::assertSame($firstFixture['user_id'], $secondFixture['user_id']);
+        self::assertSame(2, DB::table('benefit_code_discount_quote_consumptions')
+            ->where('user_id', $firstFixture['user_id'])
+            ->count());
+    }
+
     public function test_migration_reentry_rejects_non_empty_backtick_literal_drift_without_destructive_rebuild(): void
     {
         $fixture = $this->discountFixture('migration-non-empty-literal-readiness');
@@ -721,7 +818,7 @@ final class BenefitDiscountQuoteAuthorityTest extends TestCase
     }
 
     /** @return array{user_id:int,offering:array{id:int,product_id:int,server_id:int},rule:object,code:string,source_quote:QuoteReceipt} */
-    private function discountFixture(string $suffix): array
+    private function discountFixture(string $suffix, ?int $existingUserId = null): array
     {
         $offering = $this->activeBenefitOffering('discount-'.$suffix);
         $currentVersion = (int) DB::table('plan_offerings')->where('id', $offering['id'])->value('version');
@@ -737,7 +834,7 @@ final class BenefitDiscountQuoteAuthorityTest extends TestCase
                 $this->benefitOwner(),
             ),
         );
-        $userId = $this->benefitUser('customer');
+        $userId = $existingUserId ?? $this->benefitUser('customer');
         $rule = $this->usageRule($offering['id'], 'discount.rule.'.substr(hash('sha256', $suffix), 0, 16), 90_000);
         $this->benefitCampaign(
             'benefit.discount.'.substr(hash('sha256', $suffix), 0, 12),
