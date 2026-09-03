@@ -1306,6 +1306,14 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
 
                 return [$session, $preview];
             }, 3);
+        } catch (TelegramCustomerPurchaseQuoteRefreshRequired) {
+            try {
+                $this->returnPurchaseCatalogFromQuote($action, $state['page']);
+            } catch (AuthorizationException|\DomainException) {
+                // Another accepted interaction already moved the input session. Fail closed without leaking the code.
+            }
+
+            return;
         } catch (AuthorizationException|\DomainException|\InvalidArgumentException) {
             try {
                 $this->renderPurchaseDiscountPrompt(

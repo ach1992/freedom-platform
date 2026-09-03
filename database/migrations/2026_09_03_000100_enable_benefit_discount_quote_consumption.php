@@ -62,7 +62,7 @@ return new class extends Migration
 
         DB::statement('ALTER TABLE benefit_code_discount_quote_consumptions ADD CONSTRAINT benefit_discount_quote_consumption_amount_chk CHECK (`discount_irr` >= 1)');
         DB::statement("ALTER TABLE benefit_code_discount_quote_consumptions ADD CONSTRAINT benefit_discount_quote_consumption_hashes_chk CHECK (`request_payload_hash` REGEXP '^[0-9a-f]{64}$' AND `grant_configuration_hash` REGEXP '^[0-9a-f]{64}$' AND `pricing_rule_resolution_configuration_hash` REGEXP '^[0-9a-f]{64}$' AND `source_quote_configuration_hash` REGEXP '^[0-9a-f]{64}$' AND `discounted_quote_configuration_hash` REGEXP '^[0-9a-f]{64}$' AND `configuration_hash` REGEXP '^[0-9a-f]{64}$')");
-        DB::statement("ALTER TABLE benefit_code_discount_quote_consumptions ADD CONSTRAINT benefit_discount_quote_consumption_snapshot_chk CHECK (JSON_VALID(`configuration_snapshot`) AND JSON_TYPE(`configuration_snapshot`) = 'OBJECT' AND JSON_LENGTH(`configuration_snapshot`) <= 16 AND OCTET_LENGTH(`configuration_snapshot`) < 8192)");
+        DB::statement("ALTER TABLE benefit_code_discount_quote_consumptions ADD CONSTRAINT benefit_discount_quote_consumption_snapshot_chk CHECK (JSON_VALID(`configuration_snapshot`) AND JSON_TYPE(`configuration_snapshot`) = 'OBJECT' AND JSON_LENGTH(`configuration_snapshot`) = 10 AND OCTET_LENGTH(`configuration_snapshot`) < 8192)");
 
         DB::unprepared(<<<'SQL'
 CREATE TRIGGER benefit_discount_quote_consumptions_insert_guard
@@ -117,6 +117,17 @@ BEGIN
           AND discounted_quote.final_price_irr = source_quote.effective_price_irr - NEW.discount_irr
           AND discounted_quote.currency = 'IRR'
           AND discounted_quote.configuration_snapshot_hash = NEW.discounted_quote_configuration_hash
+          AND JSON_LENGTH(NEW.configuration_snapshot) = 10
+          AND CAST(JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.discount_irr')) AS SIGNED) = NEW.discount_irr
+          AND JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.discounted_quote_configuration_hash')) = NEW.discounted_quote_configuration_hash
+          AND JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.discounted_quote_public_id')) = discounted_quote.public_id
+          AND JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.grant_configuration_hash')) = NEW.grant_configuration_hash
+          AND JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.grant_public_id')) = grant_record.public_id
+          AND JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.resolution_configuration_hash')) = NEW.pricing_rule_resolution_configuration_hash
+          AND JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.resolution_public_id')) = resolution.public_id
+          AND JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.rule_code')) = NEW.rule_code_snapshot
+          AND JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.source_quote_configuration_hash')) = NEW.source_quote_configuration_hash
+          AND JSON_UNQUOTE(JSON_EXTRACT(NEW.configuration_snapshot, '$.source_quote_public_id')) = source_quote.public_id
     ) THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Benefit discount Quote consumption identity mismatch.';
     END IF;
@@ -269,22 +280,50 @@ SQL);
     private function triggersReady(string $database): bool
     {
         $expected = [
-            'benefit_discount_quote_consumptions_delete_guard' => ['BEFORE', 'DELETE'],
-            'benefit_discount_quote_consumptions_insert_guard' => ['BEFORE', 'INSERT'],
-            'benefit_discount_quote_consumptions_update_guard' => ['BEFORE', 'UPDATE'],
+            'benefit_discount_quote_consumptions_delete_guard' => ['BEFORE', 'DELETE', [
+                'Benefit discount Quote consumption cannot be deleted.',
+            ]],
+            'benefit_discount_quote_consumptions_insert_guard' => ['BEFORE', 'INSERT', [
+                'grant_record.pricing_rule_version_id = resolution.pricing_rule_version_id',
+                'JSON_LENGTH(NEW.configuration_snapshot) = 10',
+                "JSON_EXTRACT(NEW.configuration_snapshot, '$.grant_public_id')",
+                "JSON_EXTRACT(NEW.configuration_snapshot, '$.source_quote_public_id')",
+                "JSON_EXTRACT(NEW.configuration_snapshot, '$.discounted_quote_public_id')",
+                'discounted_quote.final_price_irr = source_quote.effective_price_irr - NEW.discount_irr',
+                'SHA2(CAST(NEW.configuration_snapshot AS CHAR), 256)',
+                'Benefit discount Quote consumption identity mismatch.',
+                'Benefit discount Quote consumption hash mismatch.',
+            ]],
+            'benefit_discount_quote_consumptions_update_guard' => ['BEFORE', 'UPDATE', [
+                'Benefit discount Quote consumption is immutable.',
+            ]],
         ];
         $rows = DB::table('information_schema.TRIGGERS')
             ->where('TRIGGER_SCHEMA', $database)
             ->where('EVENT_OBJECT_TABLE', self::TABLE)
             ->whereIn('TRIGGER_NAME', array_keys($expected))
-            ->get(['TRIGGER_NAME', 'ACTION_TIMING', 'EVENT_MANIPULATION']);
+            ->get(['TRIGGER_NAME', 'ACTION_TIMING', 'EVENT_MANIPULATION', 'ACTION_STATEMENT']);
         $actual = [];
         foreach ($rows as $row) {
-            $actual[(string) $row->TRIGGER_NAME] = [(string) $row->ACTION_TIMING, (string) $row->EVENT_MANIPULATION];
+            $actual[(string) $row->TRIGGER_NAME] = [
+                (string) $row->ACTION_TIMING,
+                (string) $row->EVENT_MANIPULATION,
+                (string) $row->ACTION_STATEMENT,
+            ];
         }
-        ksort($expected, SORT_STRING);
-        ksort($actual, SORT_STRING);
+        foreach ($expected as $name => [$timing, $event, $markers]) {
+            if (! isset($actual[$name])
+                || $actual[$name][0] !== $timing
+                || $actual[$name][1] !== $event) {
+                return false;
+            }
+            foreach ($markers as $marker) {
+                if (! str_contains($actual[$name][2], $marker)) {
+                    return false;
+                }
+            }
+        }
 
-        return $actual === $expected;
+        return count($actual) === count($expected);
     }
 };

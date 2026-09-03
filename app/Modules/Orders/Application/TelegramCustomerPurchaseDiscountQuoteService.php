@@ -10,6 +10,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCatalog;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseDiscountQuote;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseDiscountQuotePreview;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseQuotePreview;
+use App\Modules\Telegram\Application\TelegramCustomerPurchaseQuoteRefreshRequired;
 use DateTimeImmutable;
 use DateTimeZone;
 use Illuminate\Auth\Access\AuthorizationException;
@@ -61,8 +62,30 @@ final readonly class TelegramCustomerPurchaseDiscountQuoteService implements Tel
             $correlationId,
             $expiresAt,
         ): TelegramCustomerPurchaseDiscountQuotePreview {
-            $offering = $this->catalog->offeringForSelf($actorUserId, $subjectUserId, $offeringSelectionToken);
-            $sourceQuote = $this->quotes->current($sourceQuotePublicId);
+            try {
+                $offering = $this->catalog->offeringForSelf($actorUserId, $subjectUserId, $offeringSelectionToken);
+            } catch (AuthorizationException $exception) {
+                throw new TelegramCustomerPurchaseQuoteRefreshRequired(
+                    'Telegram discount source Offering requires refresh.',
+                    previous: $exception,
+                );
+            }
+            try {
+                $sourceQuote = $this->quotes->current($sourceQuotePublicId);
+            } catch (\DomainException $exception) {
+                throw new TelegramCustomerPurchaseQuoteRefreshRequired(
+                    'Telegram discount source Quote requires refresh.',
+                    previous: $exception,
+                );
+            } catch (RuntimeException $exception) {
+                if ($exception->getMessage() !== 'Quote has expired.') {
+                    throw $exception;
+                }
+                throw new TelegramCustomerPurchaseQuoteRefreshRequired(
+                    'Telegram discount source Quote requires refresh.',
+                    previous: $exception,
+                );
+            }
             if ($sourceQuote->userId !== $subjectUserId
                 || ! hash_equals($sourceQuote->configurationSnapshotHash, $sourceQuoteConfigurationHash)
                 || ! hash_equals($sourceQuote->offeringCode, $offering->offeringCode)
@@ -71,21 +94,28 @@ final readonly class TelegramCustomerPurchaseDiscountQuoteService implements Tel
                 || $sourceQuote->discountIrr !== 0
                 || $sourceQuote->discountReferenceCode !== null
                 || $sourceQuote->currency !== 'IRR') {
-                throw new AuthorizationException('Telegram discount source Quote is unavailable.');
+                throw new TelegramCustomerPurchaseQuoteRefreshRequired('Telegram discount source Quote requires refresh.');
             }
 
-            $authorization = $this->discounts->authorize(new QuoteDiscountAuthorizationRequest(
-                'telegram-discount-auth:'.$operationKey,
-                $actorUserId,
-                $sourceQuotePublicId,
-                $sourceQuoteConfigurationHash,
-                $code,
-                $correlationId,
-            ));
+            try {
+                $authorization = $this->discounts->authorize(new QuoteDiscountAuthorizationRequest(
+                    'telegram-discount-auth:'.$operationKey,
+                    $actorUserId,
+                    $sourceQuotePublicId,
+                    $sourceQuoteConfigurationHash,
+                    $code,
+                    $correlationId,
+                ));
+            } catch (QuoteDiscountSourceQuoteUnavailable $exception) {
+                throw new TelegramCustomerPurchaseQuoteRefreshRequired(
+                    'Telegram discount source Quote requires refresh.',
+                    previous: $exception,
+                );
+            }
 
             $offeringId = $connection->table('plan_offerings')->where('code', $offering->offeringCode)->value('id');
             if (! is_int($offeringId) && ! is_string($offeringId)) {
-                throw new AuthorizationException('Telegram discounted Quote offering is unavailable.');
+                throw new TelegramCustomerPurchaseQuoteRefreshRequired('Telegram discounted Quote Offering requires refresh.');
             }
             $quote = $this->quotes->create(
                 'telegram-discount-quote:'.$operationKey,
@@ -120,10 +150,19 @@ final readonly class TelegramCustomerPurchaseDiscountQuoteService implements Tel
                 $quote->configurationSnapshotHash,
                 $correlationId,
             ));
-            $currentOffering = $this->catalog->offeringForSelf($actorUserId, $subjectUserId, $offeringSelectionToken);
+            try {
+                $currentOffering = $this->catalog->offeringForSelf($actorUserId, $subjectUserId, $offeringSelectionToken);
+            } catch (AuthorizationException $exception) {
+                throw new TelegramCustomerPurchaseQuoteRefreshRequired(
+                    'Telegram discounted Quote Offering requires refresh.',
+                    previous: $exception,
+                );
+            }
             if (! hash_equals($currentOffering->offeringCode, $quote->offeringCode)
                 || $currentOffering->basePriceIrr !== $quote->basePriceIrr) {
-                throw new RuntimeException('Telegram discounted Quote offering changed before completion.');
+                throw new TelegramCustomerPurchaseQuoteRefreshRequired(
+                    'Telegram discounted Quote Offering changed before completion.',
+                );
             }
 
             return new TelegramCustomerPurchaseDiscountQuotePreview(

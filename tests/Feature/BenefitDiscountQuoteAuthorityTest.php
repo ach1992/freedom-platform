@@ -25,6 +25,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCatalog;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseDiscountQuote;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseCatalogPage;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseOffering;
+use App\Modules\Telegram\Application\TelegramCustomerPurchaseQuoteRefreshRequired;
 use App\Shared\Application\Clock;
 use DateTimeImmutable;
 use DateTimeZone;
@@ -35,6 +36,7 @@ use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Str;
 use RuntimeException;
 use Tests\Support\CreatesBenefitCodeFixtures;
 use Tests\TestCase;
@@ -189,6 +191,89 @@ final class BenefitDiscountQuoteAuthorityTest extends TestCase
         self::assertStringNotContainsString(str_replace('-', '', strtoupper($fixture['code'])), strtoupper($serialized));
     }
 
+    public function test_provenance_insert_guard_rejects_extra_plaintext_and_wrong_public_identity_snapshots(): void
+    {
+        $fixture = $this->discountFixture('snapshot-guard');
+        $authority = $this->app->make(QuoteDiscountAuthority::class);
+        $authorization = $authority->authorize(new QuoteDiscountAuthorizationRequest(
+            'discount-snapshot-guard-auth-0001',
+            $fixture['user_id'],
+            $fixture['source_quote']->quotePublicId,
+            $fixture['source_quote']->configurationSnapshotHash,
+            $fixture['code'],
+            'discount-snapshot-guard-correlation',
+        ));
+        $discountedQuote = $this->discountedQuote(
+            $fixture,
+            $authorization->ruleCode,
+            $authorization->discountIrr,
+            'snapshot-guard',
+        );
+        $grantId = (int) DB::table('benefit_code_discount_grants')->where('public_id', $authorization->grantPublicId)->value('id');
+        $resolutionId = (int) DB::table('pricing_rule_resolutions')->where('public_id', $authorization->resolutionPublicId)->value('id');
+        $sourceQuoteId = (int) DB::table('quotes')->where('public_id', $authorization->sourceQuotePublicId)->value('id');
+        $discountedQuoteId = (int) DB::table('quotes')->where('public_id', $discountedQuote->quotePublicId)->value('id');
+        $baseSnapshot = [
+            'discount_irr' => $authorization->discountIrr,
+            'discounted_quote_configuration_hash' => $discountedQuote->configurationSnapshotHash,
+            'discounted_quote_public_id' => $discountedQuote->quotePublicId,
+            'grant_configuration_hash' => $authorization->grantConfigurationHash,
+            'grant_public_id' => $authorization->grantPublicId,
+            'resolution_configuration_hash' => $authorization->resolutionConfigurationHash,
+            'resolution_public_id' => $authorization->resolutionPublicId,
+            'rule_code' => $authorization->ruleCode,
+            'source_quote_configuration_hash' => $authorization->sourceQuoteConfigurationHash,
+            'source_quote_public_id' => $authorization->sourceQuotePublicId,
+        ];
+        ksort($baseSnapshot, SORT_STRING);
+
+        $insert = function (array $snapshot, string $key) use (
+            $fixture,
+            $authorization,
+            $discountedQuote,
+            $grantId,
+            $resolutionId,
+            $sourceQuoteId,
+            $discountedQuoteId,
+        ): void {
+            ksort($snapshot, SORT_STRING);
+            $json = json_encode($snapshot, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
+            DB::table('benefit_code_discount_quote_consumptions')->insert([
+                'public_id' => (string) Str::ulid(),
+                'consumption_key' => $key,
+                'request_payload_hash' => str_repeat('f', 64),
+                'user_id' => $fixture['user_id'],
+                'benefit_code_discount_grant_id' => $grantId,
+                'pricing_rule_resolution_id' => $resolutionId,
+                'source_quote_id' => $sourceQuoteId,
+                'discounted_quote_id' => $discountedQuoteId,
+                'rule_code_snapshot' => $authorization->ruleCode,
+                'discount_irr' => $authorization->discountIrr,
+                'grant_configuration_hash' => $authorization->grantConfigurationHash,
+                'pricing_rule_resolution_configuration_hash' => $authorization->resolutionConfigurationHash,
+                'source_quote_configuration_hash' => $authorization->sourceQuoteConfigurationHash,
+                'discounted_quote_configuration_hash' => $discountedQuote->configurationSnapshotHash,
+                'configuration_snapshot' => $json,
+                'configuration_hash' => hash('sha256', $json),
+                'correlation_id' => 'snapshot-guard-correlation',
+                'created_at' => $this->utcNow()->format('Y-m-d H:i:s.u'),
+            ]);
+        };
+
+        $plaintextSnapshot = $baseSnapshot + ['submitted_code' => $fixture['code']];
+        $this->assertExpectedException(
+            fn () => $insert($plaintextSnapshot, 'discount-snapshot-extra-plaintext-0001'),
+            QueryException::class,
+        );
+        $wrongIdentitySnapshot = $baseSnapshot;
+        $wrongIdentitySnapshot['source_quote_public_id'] = str_pad('01Z', 26, '0');
+        $this->assertExpectedException(
+            fn () => $insert($wrongIdentitySnapshot, 'discount-snapshot-wrong-identity-0001'),
+            QueryException::class,
+        );
+        self::assertSame(0, DB::table('benefit_code_discount_quote_consumptions')->count());
+    }
+
     public function test_same_requote_operation_key_with_changed_code_conflicts_without_second_effect(): void
     {
         $fixture = $this->discountFixture('changed-code-replay');
@@ -235,6 +320,42 @@ final class BenefitDiscountQuoteAuthorityTest extends TestCase
             'consumptions' => DB::table('benefit_code_discount_quote_consumptions')->count(),
             'quotes' => DB::table('quotes')->count(),
         ]);
+    }
+
+    public function test_expired_source_quote_maps_to_telegram_refresh_before_discount_authority_effect(): void
+    {
+        $fixture = $this->discountFixture('expired-source-telegram');
+        $future = $this->utcNow()->modify('+2 hours');
+        $this->app->instance(Clock::class, new readonly class($future) implements Clock
+        {
+            public function __construct(private DateTimeImmutable $value) {}
+
+            public function now(): DateTimeImmutable
+            {
+                return $this->value;
+            }
+        });
+        $offeringCode = (string) DB::table('plan_offerings')->where('id', $fixture['offering']['id'])->value('code');
+        $offering = $this->telegramOffering($offeringCode, 1_000_000);
+        $this->app->instance(TelegramCustomerPurchaseCatalog::class, new SequencedDiscountPurchaseCatalog($offering, $offering));
+        $service = $this->app->make(TelegramCustomerPurchaseDiscountQuote::class);
+
+        $this->assertExpectedException(fn () => $service->requoteForSelf(
+            $fixture['user_id'],
+            $fixture['user_id'],
+            $offering->selectionToken,
+            $fixture['source_quote']->quotePublicId,
+            $fixture['source_quote']->configurationSnapshotHash,
+            $fixture['code'],
+            $this->utcNow(),
+            hash('sha256', 'expired-source-telegram-operation'),
+        ), TelegramCustomerPurchaseQuoteRefreshRequired::class);
+
+        self::assertSame(0, DB::table('benefit_code_redemptions')->count());
+        self::assertSame(0, DB::table('benefit_code_discount_grants')->count());
+        self::assertSame(0, DB::table('pricing_rule_resolutions')->count());
+        self::assertSame(0, DB::table('benefit_code_discount_quote_consumptions')->count());
+        self::assertSame(1, DB::table('quotes')->count());
     }
 
     public function test_expired_source_quote_fails_before_redemption_resolution_or_discounted_quote(): void
@@ -290,6 +411,20 @@ final class BenefitDiscountQuoteAuthorityTest extends TestCase
             ->where('INDEX_NAME', 'benefit_code_discount_quote_consumptions_consumption_key_unique')
             ->where('NON_UNIQUE', 0)
             ->count());
+
+        DB::unprepared('DROP TRIGGER benefit_discount_quote_consumptions_insert_guard');
+        DB::unprepared('CREATE TRIGGER benefit_discount_quote_consumptions_insert_guard BEFORE INSERT ON benefit_code_discount_quote_consumptions FOR EACH ROW BEGIN SET @benefit_discount_quote_noop = 1; END');
+        $migration->up();
+        $insertGuard = DB::table('information_schema.TRIGGERS')
+            ->where('TRIGGER_SCHEMA', DB::connection()->getDatabaseName())
+            ->where('TRIGGER_NAME', 'benefit_discount_quote_consumptions_insert_guard')
+            ->value('ACTION_STATEMENT');
+        self::assertIsString($insertGuard);
+        self::assertStringContainsString(
+            "JSON_EXTRACT(NEW.configuration_snapshot, '$.grant_public_id')",
+            $insertGuard,
+        );
+        self::assertStringContainsString('Benefit discount Quote consumption identity mismatch.', $insertGuard);
 
         $migration->down();
         self::assertFalse(Schema::hasTable('benefit_code_discount_quote_consumptions'));
@@ -428,7 +563,7 @@ final class BenefitDiscountQuoteAuthorityTest extends TestCase
             $fixture['code'],
             $this->utcNow(),
             hash('sha256', 'atomic-rollback-operation'),
-        ), RuntimeException::class);
+        ), TelegramCustomerPurchaseQuoteRefreshRequired::class);
 
         self::assertSame(2, $catalog->offeringCalls);
         self::assertSame(0, DB::table('benefit_code_redemptions')->count());

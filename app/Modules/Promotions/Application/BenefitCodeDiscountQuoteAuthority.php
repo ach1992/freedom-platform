@@ -9,6 +9,7 @@ use App\Modules\Orders\Application\QuoteDiscountAuthorization;
 use App\Modules\Orders\Application\QuoteDiscountAuthorizationRequest;
 use App\Modules\Orders\Application\QuoteDiscountConsumptionReceipt;
 use App\Modules\Orders\Application\QuoteDiscountConsumptionRequest;
+use App\Modules\Orders\Application\QuoteDiscountSourceQuoteUnavailable;
 use App\Modules\Promotions\BenefitCodes\Application\BenefitCodeRedemptionContext;
 use App\Modules\Promotions\BenefitCodes\Application\BenefitCodeRedemptionRequest;
 use App\Modules\Promotions\BenefitCodes\Application\BenefitCodeService;
@@ -222,11 +223,11 @@ final readonly class BenefitCodeDiscountQuoteAuthority implements QuoteDiscountA
             || (int) $quote->discount_irr !== 0
             || $quote->currency !== 'IRR'
             || ! hash_equals($quote->configuration_snapshot_hash, $request->sourceQuoteConfigurationHash)) {
-            throw new AuthorizationException('Source Quote is not eligible for a discount grant.');
+            throw new QuoteDiscountSourceQuoteUnavailable('Source Quote is not eligible for a discount grant.');
         }
         $now = $this->clock->now()->setTimezone(new DateTimeZone('UTC'));
         if ($now < $this->storedDateTime($quote->valid_from) || $now >= $this->storedDateTime($quote->expires_at)) {
-            throw new DomainException('Source Quote has expired.');
+            throw new QuoteDiscountSourceQuoteUnavailable('Source Quote has expired.');
         }
         $offeringId = $this->positiveInt($quote->plan_offering_id, 'Discount source Quote offering ID');
         $offeringVersion = $this->positiveInt($quote->offering_version, 'Discount source Quote offering version');
@@ -249,7 +250,7 @@ final readonly class BenefitCodeDiscountQuoteAuthority implements QuoteDiscountA
             || ! (bool) $offering->discount_eligible
             || $offering->state !== 'active'
             || $offering->visibility !== 'visible') {
-            throw new DomainException('Source Quote commercial terms are stale.');
+            throw new QuoteDiscountSourceQuoteUnavailable('Source Quote commercial terms are stale.');
         }
 
         return $quote;
