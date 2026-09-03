@@ -372,6 +372,7 @@ return new class extends Migration
         return trim($normalized);
     }
 
+    /** @return literal-string */
     private function insertGuardBody(): string
     {
         return <<<'SQL'
@@ -447,11 +448,13 @@ END
 SQL;
     }
 
+    /** @return literal-string */
     private function updateGuardBody(): string
     {
         return "BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Benefit discount Quote consumption is immutable.'; END";
     }
 
+    /** @return literal-string */
     private function deleteGuardBody(): string
     {
         return "BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Benefit discount Quote consumption cannot be deleted.'; END";
