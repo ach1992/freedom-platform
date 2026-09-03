@@ -95,6 +95,11 @@ Final amount: :final_price :currency
 Valid until: :expires_at (Tehran time)
 
 This is a recorded commercial snapshot only. No payment, capacity reservation, order, or provisioning has been created yet.',
+            'discount' => [
+                'button' => 'Apply discount code',
+                'prompt' => 'Send the discount code in one message. The code is not copied into conversation state, callbacks, or reply text. Use Back to continue without a discount.',
+                'rejected' => 'The discount code or current Quote cannot be applied. No discount, payment reservation, Order, or Payment Intent was committed. You can send another code or go Back.',
+            ],
             'payment_methods_button' => 'Payment methods',
             'payment_methods' => [
                 'list' => "Eligible Payment Methods\n\n:items\n\nThis list comes from the current persisted PAY-001 decision. No Order, Payment Intent, wallet debit, gateway request, or payment has been created yet.",

@@ -126,6 +126,8 @@ final readonly class TelegramInteractionDispatcher
             null,
             [],
             $binding->replayed,
+            null,
+            $binding->acceptedAt,
         ));
 
         return new TelegramInteractionDispatchResult(TelegramInteractionDispatchStatus::Handled, $binding->sessionPublicId);

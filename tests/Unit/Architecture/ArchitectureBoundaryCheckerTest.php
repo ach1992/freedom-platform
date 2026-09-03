@@ -159,6 +159,37 @@ PHP);
         self::assertStringContainsString('Module dependency cycle detected: Orders <-> Payments', implode("\n", $result['violations']));
     }
 
+    public function test_exact_consumer_contract_reference_exception_is_narrow_and_does_not_create_a_module_edge(): void
+    {
+        $this->write('app/Modules/Promotions/Application/DiscountAuthority.php', <<<'PHP'
+<?php
+namespace App\Modules\Promotions\Application;
+use App\Modules\Orders\Application\Contracts\QuoteDiscountAuthority;
+use App\Modules\Orders\Application\QuoteService;
+PHP);
+
+        $result = $this->checker([], [], [], [
+            'app/Modules/Promotions/Application/DiscountAuthority.php|App\\Modules\\Orders\\Application\\Contracts\\QuoteDiscountAuthority',
+        ])->check();
+        $violations = implode("\n", $result['violations']);
+
+        self::assertStringNotContainsString('QuoteDiscountAuthority', $violations);
+        self::assertStringContainsString('undeclared module dependency Promotions -> Orders', $violations);
+        self::assertSame(['Promotions>Orders'], $result['edges']);
+    }
+
+    public function test_consumer_contract_reference_exception_rejects_stale_entries(): void
+    {
+        $result = $this->checker([], [], [], [
+            'app/Modules/Promotions/Application/DiscountAuthority.php|App\\Modules\\Orders\\Application\\Contracts\\QuoteDiscountAuthority',
+        ])->check();
+
+        self::assertStringContainsString(
+            'module_dependency_reference_exceptions contains stale/unused entry',
+            implode("\n", $result['violations']),
+        );
+    }
+
     public function test_presentation_and_routes_cannot_mutate_tables_directly(): void
     {
         $this->write('app/Modules/Orders/Presentation/Http/OrderController.php', <<<'PHP'
@@ -613,9 +644,11 @@ PHP);
         array $allowed = [],
         array $telegramPresentationSources = [],
         array $telegramConfidentialPresentationSources = [],
+        array $moduleDependencyReferenceExceptions = [],
     ): ArchitectureBoundaryChecker {
         return new ArchitectureBoundaryChecker($this->root, [
             'allowed_module_dependencies' => $allowed,
+            'module_dependency_reference_exceptions' => $moduleDependencyReferenceExceptions,
             'cycle_exceptions' => [],
             'telegram_non_restricted_presentation_sources' => $telegramPresentationSources,
             'telegram_confidential_presentation_sources' => $telegramConfidentialPresentationSources,

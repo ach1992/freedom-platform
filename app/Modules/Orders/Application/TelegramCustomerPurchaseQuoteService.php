@@ -27,6 +27,67 @@ final readonly class TelegramCustomerPurchaseQuoteService implements TelegramCus
     ) {}
 
     /** @requirement BUY-001 BUY-002 BUY-003 DAT-002 DAT-003 SEC-002 QUA-001 */
+    public function previewForSelf(
+        int $actorUserId,
+        int $subjectUserId,
+        string $offeringSelectionToken,
+        string $quotePublicId,
+        string $quoteConfigurationHash,
+    ): TelegramCustomerPurchaseQuotePreview {
+        if ($actorUserId < 1 || $subjectUserId < 1 || $actorUserId !== $subjectUserId) {
+            throw new AuthorizationException('Telegram purchase Quote self access denied.');
+        }
+        if (preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/i', $quotePublicId) !== 1
+            || preg_match('/\A[0-9a-f]{64}\z/', $quoteConfigurationHash) !== 1) {
+            throw new RuntimeException('Telegram purchase Quote preview identity is invalid.');
+        }
+
+        return $this->database->connection()->transaction(function (Connection $connection) use (
+            $actorUserId,
+            $subjectUserId,
+            $offeringSelectionToken,
+            $quotePublicId,
+            $quoteConfigurationHash,
+        ): TelegramCustomerPurchaseQuotePreview {
+            $offering = $this->catalog->offeringForSelf($actorUserId, $subjectUserId, $offeringSelectionToken);
+            $offeringIdentity = $this->currentOfferingIdentity($connection, $offering->offeringCode);
+            try {
+                $quote = $this->quotes->current($quotePublicId);
+            } catch (RuntimeException $exception) {
+                if ($exception->getMessage() === 'Quote has expired.') {
+                    throw new AuthorizationException('Telegram purchase Quote preview is unavailable.', previous: $exception);
+                }
+
+                throw $exception;
+            }
+            if ($quote->userId !== $subjectUserId
+                || ! hash_equals($quote->configurationSnapshotHash, $quoteConfigurationHash)
+                || ! hash_equals($quote->offeringCode, $offering->offeringCode)
+                || $quote->offeringVersion !== $offeringIdentity['version']
+                || ! hash_equals($quote->offeringConfigurationHash, $offeringIdentity['configuration_hash'])
+                || $quote->basePriceIrr !== $offeringIdentity['base_price_irr']
+                || $quote->basePriceIrr !== $offering->basePriceIrr
+                || $quote->currency !== 'IRR') {
+                throw new AuthorizationException('Telegram purchase Quote preview is unavailable.');
+            }
+
+            return new TelegramCustomerPurchaseQuotePreview(
+                $offering,
+                $quote->quotePublicId,
+                $quote->configurationSnapshotHash,
+                $quote->basePriceIrr,
+                $quote->effectivePriceIrr,
+                $quote->discountIrr,
+                $quote->finalPriceIrr,
+                $quote->currency,
+                $quote->validFrom,
+                $quote->expiresAt,
+                true,
+            );
+        }, 3);
+    }
+
+    /** @requirement BUY-001 BUY-002 BUY-003 DAT-002 DAT-003 SEC-002 QUA-001 */
     public function quoteForSelf(
         int $actorUserId,
         int $subjectUserId,
@@ -57,18 +118,12 @@ final readonly class TelegramCustomerPurchaseQuoteService implements TelegramCus
                 $subjectUserId,
                 $offeringSelectionToken,
             );
-
-            $offeringId = $connection->table('plan_offerings')
-                ->where('code', $offering->offeringCode)
-                ->value('id');
-            if (! is_int($offeringId) && ! is_string($offeringId)) {
-                throw new AuthorizationException('Telegram purchase Quote offering is unavailable.');
-            }
+            $offeringIdentity = $this->currentOfferingIdentity($connection, $offering->offeringCode);
 
             $quote = $this->quotes->create(
                 $quoteKey,
                 $subjectUserId,
-                $this->positiveDatabaseInt($offeringId, 'Telegram purchase Quote offering ID'),
+                $offeringIdentity['id'],
                 new QuotePricingInput(
                     QuoteOverrideSource::None,
                     null,
@@ -87,6 +142,9 @@ final readonly class TelegramCustomerPurchaseQuoteService implements TelegramCus
             );
             if (! hash_equals($quote->offeringCode, $currentOffering->offeringCode)
                 || $quote->userId !== $subjectUserId
+                || $quote->offeringVersion !== $offeringIdentity['version']
+                || ! hash_equals($quote->offeringConfigurationHash, $offeringIdentity['configuration_hash'])
+                || $quote->basePriceIrr !== $offeringIdentity['base_price_irr']
                 || $quote->basePriceIrr !== $currentOffering->basePriceIrr
                 || $quote->currency !== 'IRR') {
                 throw new RuntimeException('Telegram purchase Quote does not match the current selected offering.');
@@ -108,6 +166,38 @@ final readonly class TelegramCustomerPurchaseQuoteService implements TelegramCus
         }, 3);
     }
 
+    /** @return array{id:int,version:int,configuration_hash:string,base_price_irr:int} */
+    private function currentOfferingIdentity(Connection $connection, string $offeringCode): array
+    {
+        /** @var object{id:int|string,version:int|string,base_price_irr:int|string}|null $row */
+        $row = $connection->table('plan_offerings')
+            ->where('code', $offeringCode)
+            ->lockForUpdate()
+            ->first(['id', 'version', 'base_price_irr']);
+        if ($row === null) {
+            throw new AuthorizationException('Telegram purchase Quote offering is unavailable.');
+        }
+
+        $offeringId = $this->positiveDatabaseInt($row->id, 'Telegram purchase Quote offering ID');
+        $version = $this->positiveDatabaseInt($row->version, 'Telegram purchase Quote offering version');
+        $basePriceIrr = $this->nonNegativeDatabaseInt($row->base_price_irr, 'Telegram purchase Quote offering base price');
+        $configurationHash = $connection->table('plan_offering_histories')
+            ->where('plan_offering_id', $offeringId)
+            ->where('version', $version)
+            ->lockForUpdate()
+            ->value('to_configuration_hash');
+        if (! is_string($configurationHash) || preg_match('/\A[0-9a-f]{64}\z/', $configurationHash) !== 1) {
+            throw new AuthorizationException('Telegram purchase Quote offering is unavailable.');
+        }
+
+        return [
+            'id' => $offeringId,
+            'version' => $version,
+            'configuration_hash' => $configurationHash,
+            'base_price_irr' => $basePriceIrr,
+        ];
+    }
+
     private function callbackPublicId(string $quoteKey, string $correlationId): string
     {
         if (preg_match('/\Atelegram-purchase-quote:([0-9A-HJKMNP-TV-Z]{26})\z/i', $quoteKey, $matches) !== 1) {
@@ -124,6 +214,16 @@ final readonly class TelegramCustomerPurchaseQuoteService implements TelegramCus
     private function positiveDatabaseInt(mixed $value, string $label): int
     {
         $normalized = filter_var($value, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+        if ($normalized === false) {
+            throw new RuntimeException($label.' is invalid.');
+        }
+
+        return $normalized;
+    }
+
+    private function nonNegativeDatabaseInt(mixed $value, string $label): int
+    {
+        $normalized = filter_var($value, FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]]);
         if ($normalized === false) {
             throw new RuntimeException($label.' is invalid.');
         }

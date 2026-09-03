@@ -11,7 +11,7 @@ use InvalidArgumentException;
 use RuntimeException;
 
 /**
- * @phpstan-type BindingRow object{id:int|string,bot_id:string,update_id:int|string,telegram_account_id:int|string,user_id:int|string,telegram_user_id:int|string,kind:string,request_hash:string,telegram_interaction_session_id:int|string|null,session_version:int|string|null}
+ * @phpstan-type BindingRow object{id:int|string,bot_id:string,update_id:int|string,telegram_account_id:int|string,user_id:int|string,telegram_user_id:int|string,kind:string,request_hash:string,telegram_interaction_session_id:int|string|null,session_version:int|string|null,created_at:string}
  * @phpstan-type BindingSessionRow object{public_id:string,telegram_account_id:int|string,user_id:int|string,telegram_user_id:int|string,flow:string}
  * @phpstan-type BindingTransitionRow object{to_state:string,to_payload:string}
  */
@@ -155,6 +155,7 @@ final readonly class TelegramInteractionUpdateBindingService
                 null,
                 [],
                 $replayed,
+                $this->bindingAcceptedAt((string) $binding->created_at),
             );
         }
         if (! is_numeric($binding->session_version)) {
@@ -193,7 +194,18 @@ final readonly class TelegramInteractionUpdateBindingService
             (int) $binding->session_version,
             $this->payloadFromJson((string) $snapshot->to_payload),
             $replayed,
+            $this->bindingAcceptedAt((string) $binding->created_at),
         );
+    }
+
+    private function bindingAcceptedAt(string $value): \DateTimeImmutable
+    {
+        $parsed = \DateTimeImmutable::createFromFormat('!Y-m-d H:i:s.u', $value, new \DateTimeZone('UTC'));
+        if ($parsed === false) {
+            throw new RuntimeException('Telegram interaction update binding acceptance timestamp is invalid.');
+        }
+
+        return $parsed;
     }
 
     /** @return array<string, mixed> */
