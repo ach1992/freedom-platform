@@ -158,13 +158,13 @@ final class StaleDiscountBackPaymentMethods implements TelegramCustomerPurchaseP
         string $quoteConfigurationHash,
         string $decisionKey,
     ): TelegramCustomerPurchasePaymentMethodsDecision {
-        $this->calls[] = compact(
-            'actorUserId',
-            'subjectUserId',
-            'quotePublicId',
-            'quoteConfigurationHash',
-            'decisionKey',
-        );
+        $this->calls[] = [
+            'actor_user_id' => $actorUserId,
+            'subject_user_id' => $subjectUserId,
+            'quote_public_id' => $quotePublicId,
+            'quote_configuration_hash' => $quoteConfigurationHash,
+            'decision_key' => $decisionKey,
+        ];
 
         return new TelegramCustomerPurchasePaymentMethodsDecision(
             str_pad('01P', 26, '0'),
