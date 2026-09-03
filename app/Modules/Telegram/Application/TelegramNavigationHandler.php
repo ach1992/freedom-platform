@@ -9,6 +9,7 @@ use App\Modules\Customers\Application\CustomerAccountSummaryService;
 use App\Modules\Promotions\Application\ReferralSelfSummary;
 use App\Modules\Promotions\Application\ReferralSelfSummaryService;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCatalog;
+use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseQuote;
 use App\Modules\Telegram\Application\Contracts\TelegramInteractionHandler;
 use App\Modules\Telegram\Application\Contracts\TelegramManagedUsdtRateSettings;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceDeliveryResender;
@@ -17,6 +18,8 @@ use App\Modules\Telegram\Domain\TelegramDeliveryAction;
 use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
 use App\Modules\Wallet\Application\WalletSelfBalanceService;
 use App\Modules\Wallet\Application\WalletSelfBalanceSummary;
+use DateTimeImmutable;
+use DateTimeZone;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Contracts\Translation\Translator;
 use Illuminate\Database\DatabaseManager;
@@ -27,6 +30,10 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
     private const STATE_MY_ACCOUNT = 'my_account';
 
     private const STATE_PURCHASE_CATALOG = 'purchase_catalog';
+
+    private const STATE_PURCHASE_QUOTE = 'purchase_quote';
+
+    private const STATE_PURCHASE_QUOTE_SUBMITTING = 'purchase_quote_submitting';
 
     private const STATE_PURCHASE_OFFERING = 'purchase_offering';
 
@@ -51,6 +58,8 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
     private const ACTION_PURCHASE_CATALOG = 'navigation.purchase';
 
     private const ACTION_PURCHASE_PAGE = 'navigation.purchase.page';
+
+    private const ACTION_PURCHASE_QUOTE = 'navigation.purchase.quote';
 
     private const ACTION_PURCHASE_OFFERING_PREFIX = 'navigation.purchase.';
 
@@ -88,6 +97,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         private CustomerAccountSummaryService $customers,
         private WalletSelfBalanceService $wallets,
         private ReferralSelfSummaryService $referrals,
+        private TelegramCustomerPurchaseQuote $purchaseQuotes,
         private TelegramCustomerPurchaseCatalog $purchaseCatalog,
         private TelegramOwnedServiceProjection $services,
         private TelegramOwnedServiceDeliveryResender $serviceDeliveryResender,
@@ -150,6 +160,12 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
 
         if ($action->sessionState === self::STATE_PURCHASE_OFFERING) {
             $this->handlePurchaseOffering($action);
+
+            return;
+        }
+
+        if ($action->sessionState === self::STATE_PURCHASE_QUOTE) {
+            $this->handlePurchaseQuote($action);
 
             return;
         }
@@ -235,6 +251,11 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
     private function handlePurchaseOffering(TelegramInteractionAction $action): void
     {
         if ($action->kind === TelegramInteractionActionKind::Callback) {
+            if ($action->callbackAction === self::ACTION_PURCHASE_QUOTE && $action->callbackPayload === []) {
+                $this->showPurchaseQuote($action);
+
+                return;
+            }
             if ($action->callbackAction !== self::ACTION_BACK || $action->callbackPayload !== []) {
                 throw new RuntimeException('Telegram purchase offering callback action is unsupported.');
             }
@@ -246,6 +267,28 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
 
         if ($action->kind === TelegramInteractionActionKind::Back) {
             $this->returnPurchaseCatalog($action);
+
+            return;
+        }
+        if ($this->isEntryCommand($action->messageText)) {
+            $this->returnHome($action);
+        }
+    }
+
+    private function handlePurchaseQuote(TelegramInteractionAction $action): void
+    {
+        if ($action->kind === TelegramInteractionActionKind::Callback) {
+            if ($action->callbackAction !== self::ACTION_BACK || $action->callbackPayload !== []) {
+                throw new RuntimeException('Telegram purchase Quote callback action is unsupported.');
+            }
+
+            $this->returnPurchaseOffering($action);
+
+            return;
+        }
+
+        if ($action->kind === TelegramInteractionActionKind::Back) {
+            $this->returnPurchaseOffering($action);
 
             return;
         }
@@ -895,6 +938,16 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         return 'tg-usdt-rate:'.$this->callbackPublicId($action);
     }
 
+    private function purchaseQuoteRequestKey(TelegramInteractionAction $action): string
+    {
+        return 'telegram-purchase-quote:'.$this->callbackPublicId($action);
+    }
+
+    private function purchaseQuoteCorrelationId(TelegramInteractionAction $action): string
+    {
+        return 'tg-purchase-quote:'.$this->callbackPublicId($action);
+    }
+
     private function showPurchaseCatalog(TelegramInteractionAction $action, int $page): void
     {
         $locale = $this->localeForActor($action->userId);
@@ -929,24 +982,127 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             'nav-purchase-offering-transition:'.$action->requestKey,
         );
         $this->assertActorBinding($action, $session->userId);
+        $this->renderPurchaseOffering($action, $session->version, $offering, $locale, $action->requestKey);
+    }
+
+    private function showPurchaseQuote(TelegramInteractionAction $action): void
+    {
+        $state = $this->purchaseOfferingStateFromPayload($action->sessionPayload);
+        if ($action->callbackAcceptedAt === null) {
+            throw new RuntimeException('Telegram purchase Quote callback acceptance time is unavailable.');
+        }
+
+        try {
+            [$session, $preview] = $this->database->connection()->transaction(function () use ($action, $state): array {
+                $claim = $this->sessions->transition(
+                    $action->sessionPublicId,
+                    $action->sessionVersion,
+                    self::STATE_PURCHASE_QUOTE_SUBMITTING,
+                    [
+                        'page' => $state['page'],
+                        'offering_selection' => $state['offering_selection'],
+                    ],
+                    'nav-purchase-quote-claim:'.hash('sha256', $action->requestKey),
+                );
+                $this->assertActorBinding($action, $claim->userId);
+
+                $preview = $this->purchaseQuotes->quoteForSelf(
+                    $action->userId,
+                    $action->userId,
+                    $state['offering_selection'],
+                    $action->callbackAcceptedAt,
+                    $this->purchaseQuoteRequestKey($action),
+                    $this->purchaseQuoteCorrelationId($action),
+                );
+
+                $session = $this->sessions->transition(
+                    $action->sessionPublicId,
+                    $claim->version,
+                    self::STATE_PURCHASE_QUOTE,
+                    [
+                        'page' => $state['page'],
+                        'offering_selection' => $state['offering_selection'],
+                        'quote_public_id' => $preview->quotePublicId,
+                        'quote_configuration_hash' => $preview->configurationSnapshotHash,
+                    ],
+                    'nav-purchase-quote-transition:'.$action->requestKey,
+                );
+                $this->assertActorBinding($action, $session->userId);
+
+                return [$session, $preview];
+            }, 3);
+        } catch (AuthorizationException) {
+            try {
+                $this->returnPurchaseCatalog($action);
+            } catch (AuthorizationException|\DomainException) {
+                // Another accepted interaction already moved this purchase session. Fail closed.
+            }
+
+            return;
+        } catch (\DomainException) {
+            // The accepted Quote action lost the session-version race before its durable Quote could commit.
+            return;
+        }
+
         $back = $this->callbacks->issue(
             $session->publicId,
             $session->version,
             self::ACTION_BACK,
             [],
-            'nav-purchase-offering-back:'.$action->requestKey,
+            'nav-purchase-quote-back:'.$action->requestKey,
         );
         $keyboard = new TelegramInlineKeyboardSnapshot([[
             new TelegramInlineCallbackButton(
-                $this->translation('telegram.navigation.buttons.back', $locale),
+                $this->translation('telegram.navigation.buttons.back', $this->localeForActor($action->userId)),
                 $back->publicId,
             ),
         ]]);
 
         $this->queueConfidential(
             $action,
+            $this->purchaseQuoteText($preview, $this->localeForActor($action->userId)),
+            'nav-purchase-quote-delivery:'.$action->requestKey,
+            'purchase-quote',
+            $keyboard,
+        );
+    }
+
+    private function renderPurchaseOffering(
+        TelegramInteractionAction $action,
+        int $sessionVersion,
+        TelegramCustomerPurchaseOffering $offering,
+        string $locale,
+        string $requestKey,
+    ): void {
+        $quote = $this->callbacks->issue(
+            $action->sessionPublicId,
+            $sessionVersion,
+            self::ACTION_PURCHASE_QUOTE,
+            [],
+            'nav-purchase-offering-quote:'.$requestKey,
+        );
+        $back = $this->callbacks->issue(
+            $action->sessionPublicId,
+            $sessionVersion,
+            self::ACTION_BACK,
+            [],
+            'nav-purchase-offering-back:'.$requestKey,
+        );
+        $keyboard = new TelegramInlineKeyboardSnapshot([
+            [new TelegramInlineCallbackButton(
+                $this->translation('telegram.navigation.purchase.quote_button', $locale),
+                $quote->publicId,
+            )],
+            [new TelegramInlineCallbackButton(
+                $this->translation('telegram.navigation.buttons.back', $locale),
+                $back->publicId,
+            )],
+        ]);
+
+        $this->queueConfidential(
+            $action,
             $this->purchaseOfferingText($offering, $locale),
-            'nav-purchase-offering-delivery:'.$action->requestKey,
+            'nav-purchase-offering-delivery:'.$requestKey,
             'purchase-offering',
             $keyboard,
         );
@@ -1215,6 +1371,56 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             'service-search-'.$surface,
             $keyboard,
         );
+    }
+
+    private function returnPurchaseOffering(TelegramInteractionAction $action): void
+    {
+        $state = $this->purchaseQuoteStateFromPayload($action->sessionPayload);
+        try {
+            $offering = $this->purchaseCatalog->offeringForSelf(
+                $action->userId,
+                $action->userId,
+                $state['offering_selection'],
+            );
+        } catch (AuthorizationException) {
+            try {
+                $this->returnPurchaseCatalogFromQuote($action, $state['page']);
+            } catch (AuthorizationException|\DomainException) {
+                // The actor or session changed while returning from a stale Quote. Fail closed without retrying the update.
+            }
+
+            return;
+        }
+        $locale = $this->localeForActor($action->userId);
+        $session = $this->sessions->transition(
+            $action->sessionPublicId,
+            $action->sessionVersion,
+            self::STATE_PURCHASE_OFFERING,
+            ['page' => $state['page'], 'offering_selection' => $state['offering_selection']],
+            'nav-purchase-quote-back-transition:'.$action->requestKey,
+        );
+        $this->assertActorBinding($action, $session->userId);
+        $this->renderPurchaseOffering($action, $session->version, $offering, $locale, $action->requestKey);
+    }
+
+    private function returnPurchaseCatalogFromQuote(TelegramInteractionAction $action, int $page): void
+    {
+        $locale = $this->localeForActor($action->userId);
+        $catalog = $this->purchaseCatalog->pageForSelf(
+            $action->userId,
+            $action->userId,
+            $page,
+            self::PURCHASE_PAGE_SIZE,
+        );
+        $session = $this->sessions->transition(
+            $action->sessionPublicId,
+            $action->sessionVersion,
+            self::STATE_PURCHASE_CATALOG,
+            ['page' => $catalog->page],
+            'nav-purchase-quote-stale-back-transition:'.$action->requestKey,
+        );
+        $this->assertActorBinding($action, $session->userId);
+        $this->renderPurchaseCatalog($action, $session->version, $catalog, $locale, $action->requestKey);
     }
 
     private function returnPurchaseCatalog(TelegramInteractionAction $action): void
@@ -1566,6 +1772,30 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         ]);
     }
 
+    private function purchaseQuoteText(TelegramCustomerPurchaseQuotePreview $preview, string $locale): string
+    {
+        return $this->translation('telegram.navigation.purchase.quote', $locale, [
+            'quote_id' => $preview->quotePublicId,
+            'plan' => $this->purchasePlanLabel($preview->offering, $locale),
+            'base_price' => $this->formatIrr($preview->basePriceIrr),
+            'effective_price' => $this->formatIrr($preview->effectivePriceIrr),
+            'discount' => $this->formatIrr($preview->discountIrr),
+            'final_price' => $this->formatIrr($preview->finalPriceIrr),
+            'currency' => $preview->currency,
+            'expires_at' => $this->formatBusinessDateTime($preview->expiresAt),
+        ]);
+    }
+
+    private function formatBusinessDateTime(DateTimeImmutable $value): string
+    {
+        $timezone = config('business.display_timezone');
+        if (! is_string($timezone) || $timezone === '') {
+            throw new RuntimeException('Telegram business display timezone is invalid.');
+        }
+
+        return $value->setTimezone(new DateTimeZone($timezone))->format('Y-m-d H:i');
+    }
+
     private function purchasePlanLabel(TelegramCustomerPurchaseOffering $offering, string $locale): string
     {
         $product = $this->localizedLabel($offering->productNameFa, $offering->productNameEn, $locale);
@@ -1783,7 +2013,54 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         return $payload['page'];
     }
 
-    /** @param array<string, mixed> $payload */
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array{page:int,offering_selection:string}
+     */
+    private function purchaseOfferingStateFromPayload(array $payload): array
+    {
+        $keys = array_keys($payload);
+        sort($keys, SORT_STRING);
+        if ($keys !== ['offering_selection', 'page']
+            || ! is_int($payload['page'] ?? null)
+            || $payload['page'] < 1
+            || ! is_string($payload['offering_selection'] ?? null)
+            || preg_match('/\A[0-9a-f]{40}\z/', $payload['offering_selection']) !== 1) {
+            throw new RuntimeException('Telegram purchase offering state is invalid.');
+        }
+
+        return ['page' => $payload['page'], 'offering_selection' => $payload['offering_selection']];
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array{page:int,offering_selection:string,quote_public_id:string,quote_configuration_hash:string}
+     */
+    private function purchaseQuoteStateFromPayload(array $payload): array
+    {
+        $keys = array_keys($payload);
+        sort($keys, SORT_STRING);
+        if ($keys !== ['offering_selection', 'page', 'quote_configuration_hash', 'quote_public_id']
+            || ! is_int($payload['page'] ?? null)
+            || $payload['page'] < 1
+            || ! is_string($payload['offering_selection'] ?? null)
+            || preg_match('/\A[0-9a-f]{40}\z/', $payload['offering_selection']) !== 1
+            || ! is_string($payload['quote_public_id'] ?? null)
+            || preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/i', $payload['quote_public_id']) !== 1
+            || ! is_string($payload['quote_configuration_hash'] ?? null)
+            || preg_match('/\A[0-9a-f]{64}\z/', $payload['quote_configuration_hash']) !== 1) {
+            throw new RuntimeException('Telegram purchase Quote state is invalid.');
+        }
+
+        return [
+            'page' => $payload['page'],
+            'offering_selection' => $payload['offering_selection'],
+            'quote_public_id' => $payload['quote_public_id'],
+            'quote_configuration_hash' => $payload['quote_configuration_hash'],
+        ];
+    }
+
+    /** @param  array<string, mixed>  $payload */
     private function pageFromPayload(array $payload): int
     {
         if (array_keys($payload) !== ['page'] || ! is_int($payload['page'] ?? null) || $payload['page'] < 1) {

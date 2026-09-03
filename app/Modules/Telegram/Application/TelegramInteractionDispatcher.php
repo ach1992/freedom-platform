@@ -190,6 +190,7 @@ final readonly class TelegramInteractionDispatcher
             $callback->action,
             $callback->payload,
             $callback->replayed,
+            $callback->acceptedAt,
         ));
         $this->callbacks->complete($callback->publicId);
 

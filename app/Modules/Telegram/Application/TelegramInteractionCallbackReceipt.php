@@ -30,5 +30,6 @@ final readonly class TelegramInteractionCallbackReceipt
         public ?int $acceptedUpdateId,
         public bool $completed,
         public bool $replayed,
+        public ?DateTimeImmutable $acceptedAt = null,
     ) {}
 }

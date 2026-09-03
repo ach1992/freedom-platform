@@ -5,9 +5,14 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCatalog;
+use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseQuote;
+use App\Modules\Telegram\Application\TelegramCustomerPurchaseCatalogPage;
+use App\Modules\Telegram\Application\TelegramCustomerPurchaseOffering;
 use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PanelsAccessFoundationSeeder;
+use DateTimeImmutable;
+use DateTimeZone;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -38,6 +43,7 @@ final class TelegramCustomerPurchaseCatalogTest extends TestCase
         self::assertSame(1, $page->totalItems);
         self::assertCount(1, $page->items);
         $offering = $page->items[0];
+        self::assertSame('purchase-standard', $offering->offeringCode);
         self::assertSame('دسته خرید', $offering->categoryNameFa);
         self::assertSame('Purchase category', $offering->categoryNameEn);
         self::assertSame('سرویس استاندارد', $offering->productNameFa);
@@ -66,6 +72,154 @@ final class TelegramCustomerPurchaseCatalogTest extends TestCase
         self::assertSame(0, $full->totalItems);
         self::assertSame([], $full->items);
         self::assertSame($before, $this->businessEffectCounts());
+    }
+
+    public function test_quote_contract_creates_one_canonical_zero_discount_quote_and_replays_without_other_purchase_effects(): void
+    {
+        $scenario = $this->scenario();
+        $catalog = $this->app->make(TelegramCustomerPurchaseCatalog::class);
+        $offering = $catalog->pageForSelf($scenario['user_id'], $scenario['user_id'], 1, 6)->items[0];
+        $quotes = $this->app->make(TelegramCustomerPurchaseQuote::class);
+        $before = $this->businessEffectCounts();
+        $callbackPublicId = (string) Str::ulid();
+        $acceptedAt = new DateTimeImmutable('now', new DateTimeZone('UTC'));
+
+        $preview = $quotes->quoteForSelf(
+            $scenario['user_id'],
+            $scenario['user_id'],
+            $offering->selectionToken,
+            $acceptedAt,
+            'telegram-purchase-quote:'.$callbackPublicId,
+            'tg-purchase-quote:'.$callbackPublicId,
+        );
+
+        self::assertSame('purchase-standard', $preview->offering->offeringCode);
+        self::assertSame(900_000, $preview->basePriceIrr);
+        self::assertSame(900_000, $preview->effectivePriceIrr);
+        self::assertSame(0, $preview->discountIrr);
+        self::assertSame(900_000, $preview->finalPriceIrr);
+        self::assertSame('IRR', $preview->currency);
+        self::assertFalse($preview->replayed);
+        self::assertMatchesRegularExpression('/\A[0-9A-HJKMNP-TV-Z]{26}\z/i', $preview->quotePublicId);
+        self::assertMatchesRegularExpression('/\A[0-9a-f]{64}\z/', $preview->configurationSnapshotHash);
+        self::assertGreaterThan($preview->validFrom, $preview->expiresAt);
+        self::assertSame(900, $preview->expiresAt->getTimestamp() - $acceptedAt->getTimestamp());
+        self::assertGreaterThanOrEqual(899, $preview->expiresAt->getTimestamp() - $preview->validFrom->getTimestamp());
+        self::assertLessThanOrEqual(900, $preview->expiresAt->getTimestamp() - $preview->validFrom->getTimestamp());
+
+        $afterCreate = $this->businessEffectCounts();
+        $expected = $before;
+        $expected['quotes']++;
+        self::assertSame($expected, $afterCreate);
+
+        $replay = $quotes->quoteForSelf(
+            $scenario['user_id'],
+            $scenario['user_id'],
+            $offering->selectionToken,
+            $acceptedAt,
+            'telegram-purchase-quote:'.$callbackPublicId,
+            'tg-purchase-quote:'.$callbackPublicId,
+        );
+        self::assertTrue($replay->replayed);
+        self::assertSame($preview->quotePublicId, $replay->quotePublicId);
+        self::assertSame($preview->configurationSnapshotHash, $replay->configurationSnapshotHash);
+        self::assertSame($expected, $this->businessEffectCounts());
+
+        DB::table('customer_tag_assignments')
+            ->where('user_id', $scenario['user_id'])
+            ->where('tag_id', $scenario['eligible_tag_id'])
+            ->update(['removed_at' => now('UTC'), 'updated_at' => now('UTC')]);
+        $staleCallbackPublicId = (string) Str::ulid();
+        try {
+            $quotes->quoteForSelf(
+                $scenario['user_id'],
+                $scenario['user_id'],
+                $offering->selectionToken,
+                $acceptedAt,
+                'telegram-purchase-quote:'.$staleCallbackPublicId,
+                'tg-purchase-quote:'.$staleCallbackPublicId,
+            );
+            self::fail('Expected stale purchase Quote selection to fail after eligibility revocation.');
+        } catch (AuthorizationException) {
+            self::assertSame($expected, $this->businessEffectCounts());
+        }
+    }
+
+    public function test_quote_contract_refreshes_display_terms_after_canonical_quote_lock(): void
+    {
+        $scenario = $this->scenario();
+        $realCatalog = $this->app->make(TelegramCustomerPurchaseCatalog::class);
+        $current = $realCatalog->pageForSelf($scenario['user_id'], $scenario['user_id'], 1, 6)->items[0];
+        $stale = new TelegramCustomerPurchaseOffering(
+            $current->selectionToken,
+            $current->offeringCode,
+            $current->categoryNameFa,
+            $current->categoryNameEn,
+            'سرویس قدیمی',
+            'Stale service',
+            $current->variantNameFa,
+            $current->variantNameEn,
+            $current->serviceModeLabelFa,
+            $current->serviceModeLabelEn,
+            $current->basePriceIrr,
+            15,
+            $current->dataAllowanceBytes,
+            $current->deviceLimit,
+        );
+        $sequencedCatalog = new class($realCatalog, $stale) implements TelegramCustomerPurchaseCatalog
+        {
+            public int $offeringCalls = 0;
+
+            public function __construct(
+                private readonly TelegramCustomerPurchaseCatalog $delegate,
+                private readonly TelegramCustomerPurchaseOffering $stale,
+            ) {}
+
+            public function pageForSelf(
+                int $actorUserId,
+                int $subjectUserId,
+                int $page,
+                int $pageSize,
+            ): TelegramCustomerPurchaseCatalogPage {
+                return $this->delegate->pageForSelf($actorUserId, $subjectUserId, $page, $pageSize);
+            }
+
+            public function offeringForSelf(
+                int $actorUserId,
+                int $subjectUserId,
+                string $selectionToken,
+            ): TelegramCustomerPurchaseOffering {
+                $this->offeringCalls++;
+                if ($this->offeringCalls === 1) {
+                    if (! hash_equals($this->stale->selectionToken, $selectionToken)) {
+                        throw new \RuntimeException('Unexpected stale Telegram purchase selection token.');
+                    }
+
+                    return $this->stale;
+                }
+
+                return $this->delegate->offeringForSelf($actorUserId, $subjectUserId, $selectionToken);
+            }
+        };
+        $this->app->instance(TelegramCustomerPurchaseCatalog::class, $sequencedCatalog);
+        $quotes = $this->app->make(TelegramCustomerPurchaseQuote::class);
+        $callbackPublicId = (string) Str::ulid();
+        $acceptedAt = new DateTimeImmutable('now', new DateTimeZone('UTC'));
+
+        $preview = $quotes->quoteForSelf(
+            $scenario['user_id'],
+            $scenario['user_id'],
+            $current->selectionToken,
+            $acceptedAt,
+            'telegram-purchase-quote:'.$callbackPublicId,
+            'tg-purchase-quote:'.$callbackPublicId,
+        );
+
+        self::assertSame(2, $sequencedCatalog->offeringCalls);
+        self::assertSame('Standard service', $preview->offering->productNameEn);
+        self::assertSame(30, $preview->offering->durationDays);
+        self::assertNotSame('Stale service', $preview->offering->productNameEn);
+        self::assertSame(1, DB::table('quotes')->count());
     }
 
     public function test_projection_reauthorizes_current_actor_tier_tag_and_account_state(): void
@@ -316,6 +470,25 @@ final class TelegramCustomerPurchaseCatalogTest extends TestCase
             'visibility' => 'visible',
             'version' => 2,
             'updated_at' => $now,
+        ]);
+
+        DB::table('plan_offering_histories')->insert([
+            'plan_offering_id' => $eligibleOfferingId,
+            'version' => 2,
+            'action' => 'activated',
+            'from_state' => 'draft',
+            'to_state' => 'active',
+            'from_visibility' => 'hidden',
+            'to_visibility' => 'visible',
+            'from_configuration_hash' => hash('sha256', 'purchase-standard-config-v1'),
+            'to_configuration_hash' => hash('sha256', 'purchase-standard-config-v2'),
+            'before_safe_data' => json_encode(['state' => 'draft', 'visibility' => 'hidden'], JSON_THROW_ON_ERROR),
+            'after_safe_data' => json_encode(['state' => 'active', 'visibility' => 'visible'], JSON_THROW_ON_ERROR),
+            'actor_administrator_id' => $administratorId,
+            'reason_code' => 'test_fixture_activation',
+            'reason' => 'Canonical purchase Quote fixture snapshot.',
+            'correlation_id' => 'telegram-purchase-quote-fixture',
+            'created_at' => $now,
         ]);
 
         $ineligibleOfferingId = $this->offering(
