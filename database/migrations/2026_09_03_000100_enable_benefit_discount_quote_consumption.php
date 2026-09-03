@@ -322,20 +322,21 @@ return new class extends Migration
         $rows = DB::table('information_schema.TRIGGERS')
             ->where('TRIGGER_SCHEMA', $database)
             ->where('EVENT_OBJECT_TABLE', self::TABLE)
-            ->get(['TRIGGER_NAME', 'ACTION_TIMING', 'EVENT_MANIPULATION', 'ACTION_STATEMENT']);
+            ->get(['TRIGGER_NAME', 'ACTION_TIMING', 'EVENT_MANIPULATION', 'ACTION_STATEMENT', 'SQL_MODE']);
         $actual = [];
         foreach ($rows as $row) {
             $actual[(string) $row->TRIGGER_NAME] = [
                 (string) $row->ACTION_TIMING,
                 (string) $row->EVENT_MANIPULATION,
                 (string) $row->ACTION_STATEMENT,
+                (string) $row->SQL_MODE,
             ];
         }
         foreach ($expected as $name => [$timing, $event, $body]) {
             if (! isset($actual[$name])
                 || $actual[$name][0] !== $timing
                 || $actual[$name][1] !== $event
-                || $this->normalizeSql($actual[$name][2]) !== $this->normalizeSql($body)) {
+                || $this->normalizeSql($actual[$name][2], $actual[$name][3]) !== $this->normalizeSql($body)) {
                 return false;
             }
         }
@@ -343,12 +344,12 @@ return new class extends Migration
         return count($actual) === count($expected);
     }
 
-    private function normalizeSql(string $sql): string
+    private function normalizeSql(string $sql, ?string $sqlMode = null): string
     {
         $normalized = '';
         $inSingleQuote = false;
         $pendingSpace = false;
-        $backslashEscapesEnabled = $this->backslashEscapesEnabled();
+        $backslashEscapesEnabled = $this->backslashEscapesEnabled($sqlMode);
         $length = strlen($sql);
         for ($index = 0; $index < $length; $index++) {
             $character = $sql[$index];
@@ -404,10 +405,12 @@ return new class extends Migration
         return trim($normalized);
     }
 
-    private function backslashEscapesEnabled(): bool
+    private function backslashEscapesEnabled(?string $sqlMode = null): bool
     {
-        $row = DB::selectOne('SELECT @@SESSION.sql_mode AS sql_mode');
-        $sqlMode = is_object($row) && property_exists($row, 'sql_mode') ? (string) $row->sql_mode : '';
+        if ($sqlMode === null) {
+            $row = DB::selectOne('SELECT @@SESSION.sql_mode AS sql_mode');
+            $sqlMode = is_object($row) && property_exists($row, 'sql_mode') ? (string) $row->sql_mode : '';
+        }
         $modes = array_filter(array_map('trim', explode(',', strtoupper($sqlMode))));
 
         return ! in_array('NO_BACKSLASH_ESCAPES', $modes, true);

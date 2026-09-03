@@ -211,6 +211,56 @@ final class BenefitDiscountQuoteMigrationReadinessTest extends TestCase
         self::assertSame(0, DB::table('benefit_code_discount_quote_consumptions')->count());
     }
 
+    public function test_reentry_uses_the_installed_trigger_sql_mode_when_parsing_literals(): void
+    {
+        $migration = $this->migration();
+        $migration->up();
+        $database = DB::connection()->getDatabaseName();
+        $triggerName = 'benefit_discount_quote_consumptions_insert_guard';
+        $canonicalTrigger = $this->triggerBody($database, $triggerName);
+        $driftedTrigger = str_replace(
+            "Benefit discount Quote consumption identity mismatch.';",
+            "Benefit discount Quote consumption identity mismatch.\\';",
+            $canonicalTrigger,
+            $replacementCount,
+        );
+        self::assertGreaterThan(0, $replacementCount);
+        self::assertNotSame($canonicalTrigger, $driftedTrigger);
+
+        $row = DB::selectOne('SELECT @@SESSION.sql_mode AS sql_mode');
+        $originalSqlMode = is_object($row) && property_exists($row, 'sql_mode') ? (string) $row->sql_mode : '';
+        $modes = array_values(array_filter(array_map('trim', explode(',', $originalSqlMode))));
+        if (! in_array('NO_BACKSLASH_ESCAPES', array_map('strtoupper', $modes), true)) {
+            $modes[] = 'NO_BACKSLASH_ESCAPES';
+        }
+
+        try {
+            DB::statement('SET SESSION sql_mode = ?', [implode(',', $modes)]);
+            $this->replaceInsertTrigger($triggerName, $driftedTrigger);
+        } finally {
+            DB::statement('SET SESSION sql_mode = ?', [$originalSqlMode]);
+        }
+
+        $installed = DB::table('information_schema.TRIGGERS')
+            ->where('TRIGGER_SCHEMA', $database)
+            ->where('TRIGGER_NAME', $triggerName)
+            ->first(['ACTION_STATEMENT', 'SQL_MODE']);
+        self::assertNotNull($installed);
+        self::assertStringContainsString('NO_BACKSLASH_ESCAPES', strtoupper((string) $installed->SQL_MODE));
+        self::assertStringContainsString("identity mismatch.\\';", (string) $installed->ACTION_STATEMENT);
+
+        $migration->up();
+
+        $repaired = DB::table('information_schema.TRIGGERS')
+            ->where('TRIGGER_SCHEMA', $database)
+            ->where('TRIGGER_NAME', $triggerName)
+            ->first(['ACTION_STATEMENT', 'SQL_MODE']);
+        self::assertNotNull($repaired);
+        self::assertStringContainsString('Benefit discount Quote consumption identity mismatch.', (string) $repaired->ACTION_STATEMENT);
+        self::assertStringNotContainsString("identity mismatch.\\';", (string) $repaired->ACTION_STATEMENT);
+        self::assertSame(0, DB::table('benefit_code_discount_quote_consumptions')->count());
+    }
+
     private function migration(): Migration
     {
         /** @var Migration $migration */
