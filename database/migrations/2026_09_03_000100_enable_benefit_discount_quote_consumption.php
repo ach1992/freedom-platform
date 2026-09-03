@@ -303,7 +303,6 @@ return new class extends Migration
         $rows = DB::table('information_schema.TRIGGERS')
             ->where('TRIGGER_SCHEMA', $database)
             ->where('EVENT_OBJECT_TABLE', self::TABLE)
-            ->whereIn('TRIGGER_NAME', array_keys($expected))
             ->get(['TRIGGER_NAME', 'ACTION_TIMING', 'EVENT_MANIPULATION', 'ACTION_STATEMENT']);
         $actual = [];
         foreach ($rows as $row) {
@@ -327,9 +326,46 @@ return new class extends Migration
 
     private function normalizeSql(string $sql): string
     {
-        $normalized = preg_replace('/\s+/', ' ', strtolower(str_replace('`', '', $sql)));
-        if (! is_string($normalized)) {
-            throw new RuntimeException('Benefit discount Quote authority SQL normalization failed.');
+        $sql = str_replace('`', '', $sql);
+        $normalized = '';
+        $inSingleQuote = false;
+        $pendingSpace = false;
+        $length = strlen($sql);
+        for ($index = 0; $index < $length; $index++) {
+            $character = $sql[$index];
+            if ($character === "'") {
+                if ($pendingSpace && $normalized !== '' && ! str_ends_with($normalized, ' ')) {
+                    $normalized .= ' ';
+                }
+                $pendingSpace = false;
+                $normalized .= $character;
+                if ($inSingleQuote && $index + 1 < $length && $sql[$index + 1] === "'") {
+                    $normalized .= "'";
+                    $index++;
+                    continue;
+                }
+                $inSingleQuote = ! $inSingleQuote;
+
+                continue;
+            }
+            if ($inSingleQuote) {
+                $normalized .= $character;
+
+                continue;
+            }
+            if (ctype_space($character)) {
+                $pendingSpace = true;
+
+                continue;
+            }
+            if ($pendingSpace && $normalized !== '' && ! str_ends_with($normalized, ' ')) {
+                $normalized .= ' ';
+            }
+            $pendingSpace = false;
+            $normalized .= strtolower($character);
+        }
+        if ($inSingleQuote) {
+            throw new RuntimeException('Benefit discount Quote authority SQL normalization encountered an unterminated literal.');
         }
 
         return trim($normalized);
