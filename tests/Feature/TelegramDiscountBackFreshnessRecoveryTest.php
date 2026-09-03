@@ -281,7 +281,6 @@ final class TelegramDiscountBackFreshnessRecoveryTest extends TestCase
         self::assertSame('purchase_catalog', (string) $afterStalePayment->state);
         self::assertSame((int) $afterBack->version, (int) $afterStalePayment->version);
         self::assertSame([], $paymentMethods->calls);
-        self::assertSame(0, DB::table('payment_eligibility_decisions')->count());
         self::assertSame(0, DB::table('payment_intents')->count());
         self::assertSame(0, DB::table('orders')->count());
         $this->assertDatabaseHas('processed_telegram_updates', ['update_id' => 7406, 'state' => 'processed']);

@@ -28,7 +28,7 @@ final class PurchaseQuoteFreshnessCatalog implements TelegramCustomerPurchaseCat
         private readonly string $selectionToken,
         private readonly string $offeringCode,
         private readonly int $basePriceIrr,
-        public int $durationDays,
+        private readonly int $durationDays,
     ) {}
 
     public function pageForSelf(int $actorUserId, int $subjectUserId, int $page, int $pageSize): TelegramCustomerPurchaseCatalogPage
@@ -73,7 +73,7 @@ final class TelegramCustomerPurchaseQuoteFreshnessTest extends TestCase
         $this->seed();
     }
 
-    public function test_preview_rejects_same_code_same_price_quote_after_offering_configuration_version_drift(): void
+    public function test_preview_rejects_same_code_same_price_quote_after_offering_version_drift(): void
     {
         $offering = $this->activeBenefitOffering('telegram-quote-freshness');
         $currentVersion = (int) DB::table('plan_offerings')->where('id', $offering['id'])->value('version');
@@ -120,51 +120,63 @@ final class TelegramCustomerPurchaseQuoteFreshnessTest extends TestCase
         self::assertSame($configured->code, $storedQuote->offeringCode);
         self::assertSame((int) $configured->base_price_irr, $storedQuote->basePriceIrr);
 
-        /** @var object{version:int|string,duration_days:int|string,base_price_irr:int|string,state:string,visibility:string}|null $row */
+        /** @var object{version:int|string,base_price_irr:int|string}|null $row */
         $row = DB::table('plan_offerings')
             ->where('id', $offering['id'])
-            ->first(['version', 'duration_days', 'base_price_irr', 'state', 'visibility']);
+            ->first(['version', 'base_price_irr']);
         self::assertNotNull($row);
-        $fromHash = DB::table('plan_offering_histories')
+
+        $service = $this->app->make(PlanOfferingService::class);
+        $hidden = $service->setVisibility(
+            $offering['id'],
+            (int) $row->version,
+            ProductVisibility::Hidden,
+            new CatalogChangeContext(
+                'telegram-quote-freshness-hidden',
+                'telegram-quote-freshness-hidden-correlation',
+                'telegram_quote_freshness_test',
+                'Hide the Offering through the canonical lifecycle authority to advance its version.',
+                $this->benefitOwner(),
+            ),
+        );
+        self::assertTrue($hidden->changed);
+
+        $hiddenVersion = (int) DB::table('plan_offerings')
+            ->where('id', $offering['id'])
+            ->value('version');
+        $visible = $service->setVisibility(
+            $offering['id'],
+            $hiddenVersion,
+            ProductVisibility::Visible,
+            new CatalogChangeContext(
+                'telegram-quote-freshness-visible-again',
+                'telegram-quote-freshness-visible-again-correlation',
+                'telegram_quote_freshness_test',
+                'Restore the Offering through the canonical lifecycle authority without changing code or price.',
+                $this->benefitOwner(),
+            ),
+        );
+        self::assertTrue($visible->changed);
+
+        /** @var object{version:int|string,base_price_irr:int|string,visibility:string}|null $currentRow */
+        $currentRow = DB::table('plan_offerings')
+            ->where('id', $offering['id'])
+            ->first(['version', 'base_price_irr', 'visibility']);
+        self::assertNotNull($currentRow);
+        $currentHash = DB::table('plan_offering_histories')
             ->where('plan_offering_id', $offering['id'])
-            ->where('version', (int) $row->version)
+            ->where('version', (int) $currentRow->version)
             ->value('to_configuration_hash');
-        self::assertIsString($fromHash);
-        $nextVersion = (int) $row->version + 1;
-        $nextDuration = (int) $row->duration_days + 15;
-        $nextHash = hash('sha256', 'telegram-purchase-quote-config-drift:'.$offering['id'].':'.$nextVersion);
-        DB::table('plan_offerings')->where('id', $offering['id'])->update([
-            'duration_days' => $nextDuration,
-            'version' => $nextVersion,
-            'updated_at' => now('UTC'),
-        ]);
-        DB::table('plan_offering_histories')->insert([
-            'plan_offering_id' => $offering['id'],
-            'version' => $nextVersion,
-            'action' => 'catalog.plan_offering.update',
-            'from_state' => (string) $row->state,
-            'to_state' => (string) $row->state,
-            'from_visibility' => (string) $row->visibility,
-            'to_visibility' => (string) $row->visibility,
-            'from_configuration_hash' => $fromHash,
-            'to_configuration_hash' => $nextHash,
-            'before_safe_data' => json_encode(['duration_days' => (int) $row->duration_days], JSON_THROW_ON_ERROR),
-            'after_safe_data' => json_encode(['duration_days' => $nextDuration], JSON_THROW_ON_ERROR),
-            'actor_administrator_id' => $this->benefitOwner(),
-            'reason_code' => 'telegram_quote_freshness_test',
-            'reason' => 'Simulate same-code same-price authoritative Offering configuration drift.',
-            'correlation_id' => 'telegram-quote-freshness-drift',
-            'created_at' => now('UTC'),
-        ]);
-        $catalog->durationDays = $nextDuration;
+        self::assertIsString($currentHash);
+
         $current = $catalog->offeringForSelf($userId, $userId, $selectionToken);
         self::assertSame($selectionToken, $current->selectionToken);
         self::assertSame($storedQuote->offeringCode, $current->offeringCode);
         self::assertSame($storedQuote->basePriceIrr, $current->basePriceIrr);
-        self::assertSame($nextDuration, $current->durationDays);
-        self::assertNotSame($storedQuote->offeringVersion, $nextVersion);
-        self::assertNotSame($storedQuote->offeringConfigurationHash, $nextHash);
-
+        self::assertSame($storedQuote->basePriceIrr, (int) $currentRow->base_price_irr);
+        self::assertSame('visible', $currentRow->visibility);
+        self::assertNotSame($storedQuote->offeringVersion, (int) $currentRow->version);
+        self::assertSame($storedQuote->offeringConfigurationHash, $currentHash);
         try {
             $quotes->previewForSelf(
                 $userId,
