@@ -342,6 +342,7 @@ return new class extends Migration
                 if ($inSingleQuote && $index + 1 < $length && $sql[$index + 1] === "'") {
                     $normalized .= "'";
                     $index++;
+
                     continue;
                 }
                 $inSingleQuote = ! $inSingleQuote;
