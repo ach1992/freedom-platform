@@ -95,6 +95,21 @@ return [
 اعتبار تا: :expires_at (زمان تهران)
 
 این پیش‌فاکتور فقط یک snapshot تجاری ثبت‌شده است. هنوز هیچ پرداخت، رزرو ظرفیت، سفارش یا پروویژنینگی ایجاد نشده است.',
+            'payment_methods_button' => 'روش‌های پرداخت',
+            'payment_methods' => [
+                'list' => "روش‌های پرداخت مجاز\n\n:items\n\nاین فهرست از تصمیم فعلی و ثبت‌شده PAY-001 ساخته شده است. هنوز هیچ سفارش، Payment Intent، برداشت کیف پول، درخواست درگاه یا پرداختی ایجاد نشده است.",
+                'item' => ':number. :method',
+                'empty' => "روش‌های پرداخت\n\nدر حال حاضر هیچ روش پرداخت واجد شرایطی برای این پیش‌فاکتور در دسترس نیست.\n\nهیچ سفارش، Payment Intent یا اثر مالی ایجاد نشده است.",
+                'methods' => [
+                    'wallet' => 'کیف پول',
+                    'card_to_card' => 'کارت‌به‌کارت',
+                    'gift_card' => 'گیفت‌کارت',
+                    'usdt_bep20' => 'USDT (BEP20)',
+                    'zarinpal' => 'زرین‌پال',
+                    'nowpayments' => 'NOWPayments',
+                    'other' => 'روش پرداخت #:number',
+                ],
+            ],
         ],
         'services' => [
             'list' => "سرویس‌های من\n\n:items\n\nصفحه :page از :total_pages — :total_items سرویس",

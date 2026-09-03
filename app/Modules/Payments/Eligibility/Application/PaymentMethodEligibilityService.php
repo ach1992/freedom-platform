@@ -301,22 +301,32 @@ final readonly class PaymentMethodEligibilityService
     }
 
     /** @requirement PAY-001 BUY-002 ACL-002 DAT-002 DAT-003 DAT-004 SEC-002 SEC-003 QUA-001 */
-    public function evaluate(string $decisionKey, int $actorUserId, string $sourceQuotePublicId): PaymentEligibilityDecisionReceipt
-    {
+    public function evaluate(
+        string $decisionKey,
+        int $actorUserId,
+        string $sourceQuotePublicId,
+        ?string $expectedQuoteConfigurationHash = null,
+    ): PaymentEligibilityDecisionReceipt {
         $this->assertKey($decisionKey, 'Payment eligibility decision key');
-        if ($actorUserId < 1 || ! Str::isUlid($sourceQuotePublicId)) {
+        if ($actorUserId < 1 || ! Str::isUlid($sourceQuotePublicId)
+            || ($expectedQuoteConfigurationHash !== null
+                && preg_match('/\A[0-9a-f]{64}\z/', $expectedQuoteConfigurationHash) !== 1)) {
             throw new InvalidArgumentException('Payment eligibility decision input is invalid.');
         }
-        $requestHash = $this->hash([
+        $requestPayload = [
             'actor_user_id' => $actorUserId,
             'source_quote_public_id' => $sourceQuotePublicId,
-        ]);
+        ];
+        if ($expectedQuoteConfigurationHash !== null) {
+            $requestPayload['expected_quote_configuration_hash'] = $expectedQuoteConfigurationHash;
+        }
+        $requestHash = $this->hash($requestPayload);
         $connection = $this->database->connection();
 
         try {
-            return $connection->transaction(function (Connection $connection) use ($decisionKey, $actorUserId, $sourceQuotePublicId, $requestHash): PaymentEligibilityDecisionReceipt {
+            return $connection->transaction(function (Connection $connection) use ($decisionKey, $actorUserId, $sourceQuotePublicId, $expectedQuoteConfigurationHash, $requestHash): PaymentEligibilityDecisionReceipt {
                 $now = $this->clock->now()->setTimezone(new DateTimeZone('UTC'));
-                $facts = $this->loadFacts($connection, $actorUserId, $sourceQuotePublicId, $now);
+                $facts = $this->loadFacts($connection, $actorUserId, $sourceQuotePublicId, $now, $expectedQuoteConfigurationHash);
                 $existing = $this->decisionByKey($connection, $decisionKey, true);
                 if ($existing !== null) {
                     $this->assertReplayAccess($facts);
@@ -460,9 +470,9 @@ final readonly class PaymentMethodEligibilityService
                 return $this->decisionReceipt($connection, $stored, false);
             });
         } catch (QueryException $exception) {
-            return $connection->transaction(function (Connection $connection) use ($decisionKey, $actorUserId, $sourceQuotePublicId, $requestHash, $exception): PaymentEligibilityDecisionReceipt {
+            return $connection->transaction(function (Connection $connection) use ($decisionKey, $actorUserId, $sourceQuotePublicId, $expectedQuoteConfigurationHash, $requestHash, $exception): PaymentEligibilityDecisionReceipt {
                 $now = $this->clock->now()->setTimezone(new DateTimeZone('UTC'));
-                $facts = $this->loadFacts($connection, $actorUserId, $sourceQuotePublicId, $now);
+                $facts = $this->loadFacts($connection, $actorUserId, $sourceQuotePublicId, $now, $expectedQuoteConfigurationHash);
                 $existing = $this->decisionByKey($connection, $decisionKey, true);
                 if ($existing !== null) {
                     $this->assertReplayAccess($facts);
@@ -688,8 +698,13 @@ final readonly class PaymentMethodEligibilityService
     /**
      * @return Facts
      */
-    private function loadFacts(Connection $connection, int $actorUserId, string $quotePublicId, DateTimeImmutable $now): array
-    {
+    private function loadFacts(
+        Connection $connection,
+        int $actorUserId,
+        string $quotePublicId,
+        DateTimeImmutable $now,
+        ?string $expectedQuoteConfigurationHash,
+    ): array {
         /** @var object{quote_id:int|string,quote_public_id:string,user_id:int|string,action_snapshot:string,currency:string,final_price_irr:int|string,expires_at:string,configuration_snapshot_hash:string,account_type:string,account_status:string,offering_code:string,product_id:int|string,sales_server_id:int|string,identity_verification_status:?string,tier_code:?string,agent_status:?string}|null $row */
         $row = $connection->table('quotes as quotes')
             ->join('users as users', 'users.id', '=', 'quotes.user_id')
@@ -708,6 +723,10 @@ final readonly class PaymentMethodEligibilityService
             ]);
         if ($row === null || (int) $row->user_id !== $actorUserId) {
             throw new AuthorizationException('Payment eligibility decision access denied.');
+        }
+        if ($expectedQuoteConfigurationHash !== null
+            && ! hash_equals((string) $row->configuration_snapshot_hash, $expectedQuoteConfigurationHash)) {
+            throw new RuntimeException('Payment eligibility Quote snapshot does not match the expected configuration.');
         }
         if ((string) $row->currency !== 'IRR' || (int) $row->final_price_irr < 0) {
             throw new RuntimeException('Payment eligibility requires an IRR Quote.');
