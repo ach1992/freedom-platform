@@ -2008,21 +2008,36 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
     {
         $state = $this->purchasePaymentMethodSelectedStateFromPayload($action->sessionPayload);
         try {
-            $this->purchaseOrders->currentForSelf(
-                $action->userId,
-                $action->userId,
-                $state['order_public_id'],
-                $state['quote_public_id'],
-                $state['quote_configuration_hash'],
-            );
-            $decision = $this->purchasePaymentMethods->currentForSelf(
-                $action->userId,
-                $action->userId,
-                $state['quote_public_id'],
-                $state['quote_configuration_hash'],
-                $state['payment_decision_public_id'],
-                $state['payment_decision_configuration_hash'],
-            );
+            [$session, $decision] = $this->database->connection()->transaction(function () use ($action, $state): array {
+                $this->purchaseOrders->currentForSelf(
+                    $action->userId,
+                    $action->userId,
+                    $state['order_public_id'],
+                    $state['quote_public_id'],
+                    $state['quote_configuration_hash'],
+                );
+                $decision = $this->purchasePaymentMethods->currentForSelf(
+                    $action->userId,
+                    $action->userId,
+                    $state['quote_public_id'],
+                    $state['quote_configuration_hash'],
+                    $state['payment_decision_public_id'],
+                    $state['payment_decision_configuration_hash'],
+                );
+
+                $methodsState = $state;
+                unset($methodsState['payment_method_code']);
+                $session = $this->sessions->transition(
+                    $action->sessionPublicId,
+                    $action->sessionVersion,
+                    self::STATE_PURCHASE_PAYMENT_METHODS,
+                    $methodsState,
+                    'nav-purchase-payment-method-selected-back-transition:'.$action->requestKey,
+                );
+                $this->assertActorBinding($action, $session->userId);
+
+                return [$session, $decision];
+            }, 3);
         } catch (AuthorizationException) {
             try {
                 $this->returnPurchaseCatalogFromQuote($action, $state['page']);
@@ -2031,16 +2046,11 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             }
 
             return;
+        } catch (\DomainException) {
+            // Another accepted interaction moved the selected-method session before Back could commit.
+            return;
         }
-        unset($state['payment_method_code']);
-        $session = $this->sessions->transition(
-            $action->sessionPublicId,
-            $action->sessionVersion,
-            self::STATE_PURCHASE_PAYMENT_METHODS,
-            $state,
-            'nav-purchase-payment-method-selected-back-transition:'.$action->requestKey,
-        );
-        $this->assertActorBinding($action, $session->userId);
+
         $this->renderPurchasePaymentMethods(
             $action,
             $session->version,
