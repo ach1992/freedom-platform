@@ -95,6 +95,21 @@ Final amount: :final_price :currency
 Valid until: :expires_at (Tehran time)
 
 This is a recorded commercial snapshot only. No payment, capacity reservation, order, or provisioning has been created yet.',
+            'payment_methods_button' => 'Payment methods',
+            'payment_methods' => [
+                'list' => "Eligible Payment Methods\n\n:items\n\nThis list comes from the current persisted PAY-001 decision. No Order, Payment Intent, wallet debit, gateway request, or payment has been created yet.",
+                'item' => ':number. :method',
+                'empty' => "Payment Methods\n\nNo payment method is currently eligible for this Quote.\n\nNo Order, Payment Intent, or financial effect has been created.",
+                'methods' => [
+                    'wallet' => 'Wallet',
+                    'card_to_card' => 'Card to card',
+                    'gift_card' => 'Gift card',
+                    'usdt_bep20' => 'USDT (BEP20)',
+                    'zarinpal' => 'Zarinpal',
+                    'nowpayments' => 'NOWPayments',
+                    'other' => 'Payment method #:number',
+                ],
+            ],
         ],
         'services' => [
             'list' => "My Services\n\n:items\n\nPage :page of :total_pages — :total_items service(s)",

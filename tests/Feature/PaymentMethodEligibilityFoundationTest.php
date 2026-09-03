@@ -10,6 +10,7 @@ use App\Modules\Orders\Domain\QuoteOverrideSource;
 use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
 use App\Modules\Payments\Eligibility\Domain\PaymentEligibilityRuleDefinition;
 use App\Modules\Payments\Eligibility\Domain\PaymentEligibilityRuleEffect;
+use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchasePaymentMethods;
 use App\Shared\Application\Clock;
 use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
@@ -19,6 +20,7 @@ use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use RuntimeException;
 use Tests\TestCase;
 
@@ -93,6 +95,59 @@ final class PaymentMethodEligibilityFoundationTest extends TestCase
         self::assertTrue($replay->replayed);
         self::assertSame($decision->decisionId, $replay->decisionId);
         self::assertSame($decision->configurationSnapshotHash, $replay->configurationSnapshotHash);
+    }
+
+    public function test_telegram_purchase_projection_reuses_pay_001_route_order_replay_and_quote_snapshot_fence(): void
+    {
+        $administratorId = $this->ownerAdministrator();
+        $quote = $this->quoteFor($this->quoteUser('customer'));
+        $service = $this->app->make(PaymentMethodEligibilityService::class);
+        $this->configureHealthyMethod($service, $administratorId, 'wallet', 20);
+        $this->configureHealthyMethod($service, $administratorId, 'zarinpal', 10);
+        $projection = $this->app->make(TelegramCustomerPurchasePaymentMethods::class);
+        $callbackPublicId = (string) Str::ulid();
+        $decisionKey = 'telegram-purchase-payment-methods:'.$callbackPublicId;
+
+        $decision = $projection->discoverForSelf(
+            $quote->userId,
+            $quote->userId,
+            $quote->quotePublicId,
+            $quote->configurationSnapshotHash,
+            $decisionKey,
+        );
+
+        self::assertSame(['zarinpal', 'wallet'], $decision->methodCodes);
+        self::assertSame($quote->quotePublicId, $decision->sourceQuotePublicId);
+        self::assertSame($quote->configurationSnapshotHash, $decision->sourceQuoteConfigurationHash);
+        self::assertFalse($decision->replayed);
+        self::assertSame(1, DB::table('payment_method_eligibility_decisions')->count());
+        self::assertSame(0, DB::table('payment_intents')->count());
+        self::assertSame(0, DB::table('orders')->count());
+        self::assertSame(0, DB::table('ledger_transactions')->count());
+
+        $replay = $projection->discoverForSelf(
+            $quote->userId,
+            $quote->userId,
+            $quote->quotePublicId,
+            $quote->configurationSnapshotHash,
+            $decisionKey,
+        );
+        self::assertTrue($replay->replayed);
+        self::assertSame($decision->decisionPublicId, $replay->decisionPublicId);
+        self::assertSame(1, DB::table('payment_method_eligibility_decisions')->count());
+
+        try {
+            $projection->discoverForSelf(
+                $quote->userId,
+                $quote->userId,
+                $quote->quotePublicId,
+                str_repeat('f', 64),
+                'telegram-purchase-payment-methods:'.(string) Str::ulid(),
+            );
+            self::fail('Expected forged Telegram Quote configuration hash to fail closed.');
+        } catch (AuthorizationException) {
+            self::assertSame(1, DB::table('payment_method_eligibility_decisions')->count());
+        }
     }
 
     public function test_deny_and_equal_precedence_conflict_fail_closed_but_user_allow_never_bypasses_health(): void
