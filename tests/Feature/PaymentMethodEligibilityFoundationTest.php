@@ -136,6 +136,61 @@ final class PaymentMethodEligibilityFoundationTest extends TestCase
         self::assertSame($decision->decisionPublicId, $replay->decisionPublicId);
         self::assertSame(1, DB::table('payment_method_eligibility_decisions')->count());
 
+        $current = $projection->currentForSelf(
+            $quote->userId,
+            $quote->userId,
+            $quote->quotePublicId,
+            $quote->configurationSnapshotHash,
+            $decision->decisionPublicId,
+            $decision->configurationSnapshotHash,
+        );
+        self::assertSame(['zarinpal', 'wallet'], $current->methodCodes);
+        self::assertTrue($current->replayed);
+
+        $selected = $projection->selectForSelf(
+            $quote->userId,
+            $quote->userId,
+            $quote->quotePublicId,
+            $quote->configurationSnapshotHash,
+            $decision->decisionPublicId,
+            $decision->configurationSnapshotHash,
+            'wallet',
+        );
+        self::assertSame('wallet', $selected->methodCode);
+        self::assertSame($decision->decisionPublicId, $selected->decisionPublicId);
+        self::assertSame($quote->quotePublicId, $selected->sourceQuotePublicId);
+        self::assertSame(0, DB::table('payment_intents')->count());
+        self::assertSame(0, DB::table('orders')->count());
+
+        try {
+            $projection->selectForSelf(
+                $quote->userId,
+                $quote->userId,
+                $quote->quotePublicId,
+                $quote->configurationSnapshotHash,
+                $decision->decisionPublicId,
+                $decision->configurationSnapshotHash,
+                'not_eligible_gateway',
+            );
+            self::fail('Expected a method absent from the persisted PAY-001 decision to fail closed.');
+        } catch (AuthorizationException) {
+            self::assertSame(0, DB::table('payment_intents')->count());
+        }
+
+        try {
+            $projection->currentForSelf(
+                $quote->userId,
+                $quote->userId,
+                $quote->quotePublicId,
+                $quote->configurationSnapshotHash,
+                $decision->decisionPublicId,
+                str_repeat('f', 64),
+            );
+            self::fail('Expected forged Telegram PAY-001 decision hash to fail closed.');
+        } catch (AuthorizationException) {
+            self::assertSame(1, DB::table('payment_method_eligibility_decisions')->count());
+        }
+
         try {
             $projection->discoverForSelf(
                 $quote->userId,

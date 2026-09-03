@@ -7,6 +7,7 @@ namespace Tests\Feature;
 use App\Modules\Promotions\Application\ReferralAttributionService;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCatalog;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseDiscountQuote;
+use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseOrder;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchasePaymentMethods;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseQuote;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceDeliveryResender;
@@ -14,7 +15,9 @@ use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceProjection;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseCatalogPage;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseDiscountQuotePreview;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseOffering;
+use App\Modules\Telegram\Application\TelegramCustomerPurchaseOrderReceipt;
 use App\Modules\Telegram\Application\TelegramCustomerPurchasePaymentMethodsDecision;
+use App\Modules\Telegram\Application\TelegramCustomerPurchasePaymentMethodSelection;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseQuotePreview;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseQuoteRefreshRequired;
 use App\Modules\Telegram\Application\TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1;
@@ -351,6 +354,57 @@ final class TelegramNavigationCustomerPurchasePaymentMethods implements Telegram
         );
     }
 
+    public function currentForSelf(
+        int $actorUserId,
+        int $subjectUserId,
+        string $quotePublicId,
+        string $quoteConfigurationHash,
+        string $decisionPublicId,
+        string $decisionConfigurationHash,
+    ): TelegramCustomerPurchasePaymentMethodsDecision {
+        if (! $this->available
+            || $actorUserId !== $subjectUserId
+            || $quotePublicId !== $this->quotePublicId
+            || $quoteConfigurationHash !== $this->quoteConfigurationHash
+            || $decisionPublicId !== str_pad('01P', 26, '0')
+            || $decisionConfigurationHash !== str_repeat('b', 64)) {
+            throw new AuthorizationException('Telegram purchase payment methods are unavailable.');
+        }
+
+        return new TelegramCustomerPurchasePaymentMethodsDecision(
+            $decisionPublicId,
+            $quotePublicId,
+            $quoteConfigurationHash,
+            $decisionConfigurationHash,
+            $this->methodCodes,
+            true,
+        );
+    }
+
+    public function selectForSelf(
+        int $actorUserId,
+        int $subjectUserId,
+        string $quotePublicId,
+        string $quoteConfigurationHash,
+        string $decisionPublicId,
+        string $decisionConfigurationHash,
+        string $methodCode,
+    ): TelegramCustomerPurchasePaymentMethodSelection {
+        $decision = $this->currentForSelf(
+            $actorUserId,
+            $subjectUserId,
+            $quotePublicId,
+            $quoteConfigurationHash,
+            $decisionPublicId,
+            $decisionConfigurationHash,
+        );
+        if (! in_array($methodCode, $decision->methodCodes, true)) {
+            throw new AuthorizationException('Telegram purchase payment method is unavailable.');
+        }
+
+        return new TelegramCustomerPurchasePaymentMethodSelection($decisionPublicId, $quotePublicId, $methodCode);
+    }
+
     /** @return array{actor_user_id:int,subject_user_id:int,quote_public_id:string,quote_configuration_hash:string,decision_key:string} */
     public function latestCall(): array
     {
@@ -359,6 +413,80 @@ final class TelegramNavigationCustomerPurchasePaymentMethods implements Telegram
         }
 
         return $this->calls[array_key_last($this->calls)];
+    }
+}
+
+final class TelegramNavigationCustomerPurchaseOrder implements TelegramCustomerPurchaseOrder
+{
+    /** @var list<array{actor_user_id:int,subject_user_id:int,quote_public_id:string,quote_configuration_hash:string,correlation_id:string}> */
+    public array $openCalls = [];
+
+    public string $orderPublicId;
+
+    public string $quotePublicId;
+
+    public string $quoteConfigurationHash;
+
+    public function __construct()
+    {
+        $this->orderPublicId = str_pad('01N', 26, '0');
+        $this->quotePublicId = str_pad('01K', 26, '0');
+        $this->quoteConfigurationHash = str_repeat('a', 64);
+    }
+
+    public function openForSelf(
+        int $actorUserId,
+        int $subjectUserId,
+        string $quotePublicId,
+        string $quoteConfigurationHash,
+        string $correlationId,
+    ): TelegramCustomerPurchaseOrderReceipt {
+        if ($actorUserId !== $subjectUserId
+            || $quotePublicId !== $this->quotePublicId
+            || $quoteConfigurationHash !== $this->quoteConfigurationHash
+            || preg_match('/\Atelegram-order:[0-9A-HJKMNP-TV-Z]{26}\z/i', $correlationId) !== 1) {
+            throw new AuthorizationException('Telegram purchase Order is unavailable.');
+        }
+        $this->openCalls[] = [
+            'actor_user_id' => $actorUserId,
+            'subject_user_id' => $subjectUserId,
+            'quote_public_id' => $quotePublicId,
+            'quote_configuration_hash' => $quoteConfigurationHash,
+            'correlation_id' => $correlationId,
+        ];
+
+        return new TelegramCustomerPurchaseOrderReceipt(
+            $this->orderPublicId,
+            $quotePublicId,
+            $quoteConfigurationHash,
+            910_000,
+            'IRR',
+            count($this->openCalls) > 1,
+        );
+    }
+
+    public function currentForSelf(
+        int $actorUserId,
+        int $subjectUserId,
+        string $orderPublicId,
+        string $quotePublicId,
+        string $quoteConfigurationHash,
+    ): TelegramCustomerPurchaseOrderReceipt {
+        if ($actorUserId !== $subjectUserId
+            || $orderPublicId !== $this->orderPublicId
+            || $quotePublicId !== $this->quotePublicId
+            || $quoteConfigurationHash !== $this->quoteConfigurationHash) {
+            throw new AuthorizationException('Telegram purchase Order is unavailable.');
+        }
+
+        return new TelegramCustomerPurchaseOrderReceipt(
+            $orderPublicId,
+            $quotePublicId,
+            $quoteConfigurationHash,
+            910_000,
+            'IRR',
+            true,
+        );
     }
 }
 
@@ -1894,10 +2022,12 @@ SQL);
         $quotes = new TelegramNavigationCustomerPurchaseQuote($catalog);
         $discounts = new TelegramNavigationCustomerPurchaseDiscountQuote($catalog);
         $paymentMethods = new TelegramNavigationCustomerPurchasePaymentMethods;
+        $purchaseOrders = new TelegramNavigationCustomerPurchaseOrder;
         $this->app->instance(TelegramCustomerPurchaseCatalog::class, $catalog);
         $this->app->instance(TelegramCustomerPurchaseQuote::class, $quotes);
         $this->app->instance(TelegramCustomerPurchaseDiscountQuote::class, $discounts);
         $this->app->instance(TelegramCustomerPurchasePaymentMethods::class, $paymentMethods);
+        $this->app->instance(TelegramCustomerPurchaseOrder::class, $purchaseOrders);
         $telegramUserId = 9714;
         $processor = $this->app->make(TelegramUpdateProcessor::class);
 
@@ -1984,6 +2114,8 @@ SQL);
 
         $paymentMethods->quotePublicId = str_pad('01D', 26, '0');
         $paymentMethods->quoteConfigurationHash = str_repeat('d', 64);
+        $purchaseOrders->quotePublicId = str_pad('01D', 26, '0');
+        $purchaseOrders->quoteConfigurationHash = str_repeat('d', 64);
         $paymentToken = $this->callbackToken('navigation.purchase.payment_methods', (int) $account->id);
         $this->accept($this->callbackPayload(7136, $telegramUserId, 'navigation_purchase_discount', 'fa', $paymentToken));
         $processor->process('123456789', 7136);
@@ -1998,6 +2130,10 @@ SQL);
         self::assertSame(str_pad('01C', 26, '0'), $paymentPayload['discount_consumption_public_id']);
         self::assertSame(str_pad('01R', 26, '0'), $paymentPayload['promotion_resolution_public_id']);
         self::assertSame(str_pad('01D', 26, '0'), $paymentPayload['quote_public_id']);
+        self::assertSame(str_pad('01N', 26, '0'), $paymentPayload['order_public_id']);
+        self::assertCount(1, $purchaseOrders->openCalls);
+        self::assertSame(str_pad('01D', 26, '0'), $purchaseOrders->openCalls[0]['quote_public_id']);
+        self::assertSame(str_repeat('d', 64), $purchaseOrders->openCalls[0]['quote_configuration_hash']);
         self::assertStringNotContainsString($rawCode, (string) $paymentState->payload);
     }
 
@@ -2168,9 +2304,11 @@ SQL);
         $catalog = new TelegramNavigationCustomerPurchaseCatalog;
         $quotes = new TelegramNavigationCustomerPurchaseQuote($catalog);
         $paymentMethods = new TelegramNavigationCustomerPurchasePaymentMethods;
+        $purchaseOrders = new TelegramNavigationCustomerPurchaseOrder;
         $this->app->instance(TelegramCustomerPurchaseCatalog::class, $catalog);
         $this->app->instance(TelegramCustomerPurchaseQuote::class, $quotes);
         $this->app->instance(TelegramCustomerPurchasePaymentMethods::class, $paymentMethods);
+        $this->app->instance(TelegramCustomerPurchaseOrder::class, $purchaseOrders);
         $telegramUserId = 9710;
         $otherTelegramUserId = 9711;
         $processor = $this->app->make(TelegramUpdateProcessor::class);
@@ -2230,6 +2368,7 @@ SQL);
             'version' => 7,
             'payload' => json_encode([
                 'offering_selection' => str_repeat('c', 40),
+                'order_public_id' => str_pad('01N', 26, '0'),
                 'page' => 1,
                 'payment_decision_configuration_hash' => str_repeat('b', 64),
                 'payment_decision_public_id' => str_pad('01P', 26, '0'),
@@ -2248,13 +2387,15 @@ SQL);
         self::assertStringContainsString('2. زرین‌پال', $presentation);
         self::assertStringContainsString('3. روش پرداخت #3', $presentation);
         self::assertStringNotContainsString('future_gateway', $presentation);
-        self::assertStringContainsString('هنوز هیچ سفارش، Payment Intent', $presentation);
+        self::assertStringContainsString('سفارش در وضعیت انتظار پرداخت', $presentation);
+        self::assertStringContainsString(str_pad('01N', 26, '0'), $this->navigationCommonDurableEvidence((int) $session->id, $telegramUserId));
+        self::assertCount(1, $purchaseOrders->openCalls);
         self::assertSame($before, $this->purchaseMutationCounts());
 
         $common = $this->navigationCommonDurableEvidence((int) $session->id, $telegramUserId);
         self::assertStringContainsString(str_pad('01P', 26, '0'), $common);
         self::assertStringContainsString(str_repeat('b', 64), $common);
-        self::assertStringNotContainsString('future_gateway', $common);
+        self::assertStringContainsString('future_gateway', $common);
         self::assertStringNotContainsString('payment_method_version_id', $common);
         self::assertStringNotContainsString('rule_code', $common);
         self::assertStringNotContainsString('health', $common);
@@ -2262,21 +2403,69 @@ SQL);
         $operationCount = DB::table('telegram_delivery_operations')->where('recipient_chat_id', $telegramUserId)->count();
         $processor->process('123456789', 7106);
         self::assertCount(1, $paymentMethods->calls);
+        self::assertCount(1, $purchaseOrders->openCalls);
         self::assertSame($operationCount, DB::table('telegram_delivery_operations')->where('recipient_chat_id', $telegramUserId)->count());
+
+        $walletCallback = DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $session->id)
+            ->where('session_version', 7)
+            ->where('action', 'navigation.purchase.payment_method.select')
+            ->where('action_payload', json_encode(['method_code' => 'wallet'], JSON_THROW_ON_ERROR))
+            ->first(['public_id', 'action_payload', 'token_ciphertext']);
+        self::assertNotNull($walletCallback);
+        self::assertSame('{"method_code":"wallet"}', (string) $walletCallback->action_payload);
+        $walletToken = $this->app->make(StringEncrypter::class)->decryptString((string) $walletCallback->token_ciphertext);
+        $this->accept($this->callbackPayload(7107, $telegramUserId, 'navigation_purchase_payment_methods', 'fa', $walletToken));
+        $processor->process('123456789', 7107);
+
+        $selected = DB::table('telegram_interaction_sessions')
+            ->where('id', (int) $session->id)
+            ->first(['state', 'version', 'payload']);
+        self::assertNotNull($selected);
+        self::assertSame('purchase_payment_method_selected', (string) $selected->state);
+        self::assertSame(9, (int) $selected->version);
+        /** @var array<string,mixed> $selectedPayload */
+        $selectedPayload = json_decode((string) $selected->payload, true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('wallet', $selectedPayload['payment_method_code'] ?? null);
+        self::assertSame(str_pad('01N', 26, '0'), $selectedPayload['order_public_id'] ?? null);
+        self::assertSame(str_pad('01P', 26, '0'), $selectedPayload['payment_decision_public_id'] ?? null);
+        self::assertSame(str_pad('01K', 26, '0'), $selectedPayload['quote_public_id'] ?? null);
+        self::assertSame(0, DB::table('payment_intents')->count());
+        self::assertStringContainsString('کیف پول', $this->latestConfidentialPresentation());
+        self::assertStringContainsString('انتظار پرداخت', $this->latestConfidentialPresentation());
+
+        $selectedOperationCount = DB::table('telegram_delivery_operations')->where('recipient_chat_id', $telegramUserId)->count();
+        $processor->process('123456789', 7107);
+        self::assertSame(9, (int) DB::table('telegram_interaction_sessions')->where('id', (int) $session->id)->value('version'));
+        self::assertSame($selectedOperationCount, DB::table('telegram_delivery_operations')->where('recipient_chat_id', $telegramUserId)->count());
+
+        $selectedBackToken = $this->callbackToken('navigation.back', (int) $account->id);
+        $this->accept($this->callbackPayload(7108, $telegramUserId, 'navigation_purchase_payment_methods', 'fa', $selectedBackToken));
+        $processor->process('123456789', 7108);
+        $methodsAgain = DB::table('telegram_interaction_sessions')
+            ->where('id', (int) $session->id)
+            ->first(['state', 'version', 'payload']);
+        self::assertNotNull($methodsAgain);
+        self::assertSame('purchase_payment_methods', (string) $methodsAgain->state);
+        self::assertSame(10, (int) $methodsAgain->version);
+        self::assertCount(1, $paymentMethods->calls);
+        self::assertCount(1, $purchaseOrders->openCalls);
+        self::assertSame(0, DB::table('payment_intents')->count());
 
         $catalog->offeringAvailable = false;
         $backToken = $this->callbackToken('navigation.back', (int) $account->id);
-        $this->accept($this->callbackPayload(7107, $telegramUserId, 'navigation_purchase_payment_methods', 'fa', $backToken));
-        $processor->process('123456789', 7107);
+        $this->accept($this->callbackPayload(7109, $telegramUserId, 'navigation_purchase_payment_methods', 'fa', $backToken));
+        $processor->process('123456789', 7109);
         $after = DB::table('telegram_interaction_sessions')
             ->where('id', (int) $session->id)
             ->first(['state', 'version', 'payload']);
         self::assertNotNull($after);
         self::assertSame('purchase_catalog', (string) $after->state);
-        self::assertSame(8, (int) $after->version);
+        self::assertSame(11, (int) $after->version);
         self::assertSame('{"page":1}', (string) $after->payload);
         self::assertCount(1, $paymentMethods->calls);
-        $this->assertDatabaseHas('processed_telegram_updates', ['update_id' => 7107, 'state' => 'processed']);
+        self::assertCount(1, $purchaseOrders->openCalls);
+        $this->assertDatabaseHas('processed_telegram_updates', ['update_id' => 7109, 'state' => 'processed']);
     }
 
     public function test_customer_purchase_payment_method_empty_state_uses_english_fallback_without_financial_effect(): void
@@ -2284,10 +2473,12 @@ SQL);
         $catalog = new TelegramNavigationCustomerPurchaseCatalog;
         $quotes = new TelegramNavigationCustomerPurchaseQuote($catalog);
         $paymentMethods = new TelegramNavigationCustomerPurchasePaymentMethods;
+        $purchaseOrders = new TelegramNavigationCustomerPurchaseOrder;
         $paymentMethods->methodCodes = [];
         $this->app->instance(TelegramCustomerPurchaseCatalog::class, $catalog);
         $this->app->instance(TelegramCustomerPurchaseQuote::class, $quotes);
         $this->app->instance(TelegramCustomerPurchasePaymentMethods::class, $paymentMethods);
+        $this->app->instance(TelegramCustomerPurchaseOrder::class, $purchaseOrders);
         $telegramUserId = 9713;
         $processor = $this->app->make(TelegramUpdateProcessor::class);
 
@@ -2314,6 +2505,7 @@ SQL);
         self::assertStringNotContainsString('روش‌های پرداخت', $presentation);
         self::assertSame(0, DB::table('payment_intents')->count());
         self::assertSame(0, DB::table('orders')->count());
+        self::assertSame([], $purchaseOrders->openCalls);
     }
 
     public function test_prebound_purchase_payment_methods_and_back_race_fails_closed_before_pay_001_decision(): void
@@ -2321,9 +2513,11 @@ SQL);
         $catalog = new TelegramNavigationCustomerPurchaseCatalog;
         $quotes = new TelegramNavigationCustomerPurchaseQuote($catalog);
         $paymentMethods = new TelegramNavigationCustomerPurchasePaymentMethods;
+        $purchaseOrders = new TelegramNavigationCustomerPurchaseOrder;
         $this->app->instance(TelegramCustomerPurchaseCatalog::class, $catalog);
         $this->app->instance(TelegramCustomerPurchaseQuote::class, $quotes);
         $this->app->instance(TelegramCustomerPurchasePaymentMethods::class, $paymentMethods);
+        $this->app->instance(TelegramCustomerPurchaseOrder::class, $purchaseOrders);
         $telegramUserId = 9712;
         $processor = $this->app->make(TelegramUpdateProcessor::class);
 
@@ -2360,6 +2554,7 @@ SQL);
         $handler->handle($this->callbackActionFromAcceptance($paymentAcceptance, 7114, $telegramUserId));
 
         self::assertSame([], $paymentMethods->calls);
+        self::assertSame([], $purchaseOrders->openCalls);
         $after = DB::table('telegram_interaction_sessions')->where('id', (int) $session->id)->first(['state', 'version']);
         self::assertNotNull($after);
         self::assertSame('purchase_offering', (string) $after->state);

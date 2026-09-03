@@ -17,10 +17,12 @@ use App\Modules\Payments\Application\Contracts\VerifiedPaymentEvent;
 use App\Modules\Payments\Application\PurchasePaymentIntentService;
 use App\Modules\Payments\Application\PurchaseSettlementService;
 use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
+use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseOrder;
 use App\Shared\Domain\Money;
 use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -120,6 +122,81 @@ final class PurchaseOrderPrePaymentAuthorityTest extends TestCase
 
         self::assertSame(1, DB::table('audit_logs')->where('action', 'order.purchase.opened')->count());
         self::assertSame(1, DB::table('audit_logs')->where('action', 'order.purchase.paid')->count());
+    }
+
+    public function test_telegram_order_projection_opens_and_revalidates_one_current_pre_payment_order_without_intent(): void
+    {
+        [$userId, $quotePublicId] = $this->preparePurchaseQuote('telegram-projection');
+        $quoteConfigurationHash = (string) DB::table('quotes')
+            ->where('public_id', $quotePublicId)
+            ->value('configuration_snapshot_hash');
+        $projection = $this->app->make(TelegramCustomerPurchaseOrder::class);
+
+        $opened = $projection->openForSelf(
+            $userId,
+            $userId,
+            $quotePublicId,
+            $quoteConfigurationHash,
+            $this->purchaseOrderCorrelation('telegram-open'),
+        );
+        self::assertFalse($opened->replayed);
+        self::assertSame($quotePublicId, $opened->sourceQuotePublicId);
+        self::assertSame($quoteConfigurationHash, $opened->sourceQuoteConfigurationHash);
+        self::assertSame('IRR', $opened->currency);
+        self::assertSame(1, DB::table('orders')->count());
+        self::assertSame('awaiting_payment', DB::table('orders')->where('public_id', $opened->orderPublicId)->value('state'));
+        self::assertSame(0, (int) DB::table('orders')->where('public_id', $opened->orderPublicId)->value('state_version'));
+        self::assertSame(0, DB::table('payment_intents')->count());
+        self::assertSame(0, DB::table('purchase_settlements')->count());
+
+        $replay = $projection->openForSelf(
+            $userId,
+            $userId,
+            $quotePublicId,
+            $quoteConfigurationHash,
+            $this->purchaseOrderCorrelation('telegram-open-replay'),
+        );
+        self::assertTrue($replay->replayed);
+        self::assertSame($opened->orderPublicId, $replay->orderPublicId);
+        self::assertSame(1, DB::table('orders')->count());
+
+        $current = $projection->currentForSelf(
+            $userId,
+            $userId,
+            $opened->orderPublicId,
+            $quotePublicId,
+            $quoteConfigurationHash,
+        );
+        self::assertSame($opened->orderPublicId, $current->orderPublicId);
+        self::assertTrue($current->replayed);
+
+        try {
+            $projection->currentForSelf(
+                $userId,
+                $userId,
+                $opened->orderPublicId,
+                $quotePublicId,
+                str_repeat('f', 64),
+            );
+            self::fail('Expected forged Telegram Quote configuration identity to fail closed.');
+        } catch (AuthorizationException) {
+            self::assertSame(1, DB::table('orders')->count());
+        }
+
+        $otherUserId = $this->quoteUser('customer');
+        try {
+            $projection->currentForSelf(
+                $otherUserId,
+                $otherUserId,
+                $opened->orderPublicId,
+                $quotePublicId,
+                $quoteConfigurationHash,
+            );
+            self::fail('Expected cross-user Telegram Order access to fail closed.');
+        } catch (AuthorizationException) {
+            self::assertSame(1, DB::table('orders')->count());
+        }
+        self::assertSame(0, DB::table('payment_intents')->count());
     }
 
     public function test_one_quote_preserves_multiple_authoritative_settlement_facts_but_one_order_binding_wins(): void
