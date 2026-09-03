@@ -10,14 +10,56 @@ use App\Modules\Catalog\Domain\ProductVisibility;
 use App\Modules\Orders\Application\QuoteService;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCatalog;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseQuote;
+use App\Modules\Telegram\Application\TelegramCustomerPurchaseCatalogPage;
+use App\Modules\Telegram\Application\TelegramCustomerPurchaseOffering;
 use DateTimeImmutable;
 use DateTimeZone;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use RuntimeException;
 use Tests\Support\CreatesBenefitCodeFixtures;
 use Tests\TestCase;
+
+final class PurchaseQuoteFreshnessCatalog implements TelegramCustomerPurchaseCatalog
+{
+    public function __construct(
+        private readonly string $selectionToken,
+        private readonly string $offeringCode,
+        private readonly int $basePriceIrr,
+        public int $durationDays,
+    ) {}
+
+    public function pageForSelf(int $actorUserId, int $subjectUserId, int $page, int $pageSize): TelegramCustomerPurchaseCatalogPage
+    {
+        throw new RuntimeException('Purchase Quote freshness verification does not request a catalog page.');
+    }
+
+    public function offeringForSelf(int $actorUserId, int $subjectUserId, string $selectionToken): TelegramCustomerPurchaseOffering
+    {
+        if ($actorUserId !== $subjectUserId || ! hash_equals($this->selectionToken, $selectionToken)) {
+            throw new RuntimeException('Unexpected purchase Quote freshness catalog request.');
+        }
+
+        return new TelegramCustomerPurchaseOffering(
+            $this->selectionToken,
+            $this->offeringCode,
+            'دسته خرید',
+            'Purchase category',
+            'پلن خرید',
+            'Purchase plan',
+            null,
+            null,
+            'استاندارد',
+            'Standard',
+            $this->basePriceIrr,
+            $this->durationDays,
+            null,
+            2,
+        );
+    }
+}
 
 /** @requirement BUY-001 BUY-002 BUY-003 CAT-002 CAT-003 DAT-002 DAT-003 SEC-002 QUA-001 */
 final class TelegramCustomerPurchaseQuoteFreshnessTest extends TestCase
@@ -48,39 +90,21 @@ final class TelegramCustomerPurchaseQuoteFreshnessTest extends TestCase
             ),
         );
 
-        $userId = $this->benefitUser('customer');
-        $tierId = DB::table('customer_tiers')->where('code', 'normal')->value('id');
-        self::assertIsNumeric($tierId);
-        $now = now('UTC');
-        DB::table('customer_profiles')->insert([
-            'user_id' => $userId,
-            'current_tier_id' => (int) $tierId,
-            'tier_locked' => false,
-            'tier_lock_reason_code' => null,
-            'phone_verification_status' => 'verified',
-            'identity_verification_status' => 'verified',
-            'created_at' => $now,
-            'updated_at' => $now,
-        ]);
-        $tagId = DB::table('plan_offering_tags')
-            ->where('plan_offering_id', $offering['id'])
-            ->value('customer_tag_id');
-        self::assertIsNumeric($tagId);
-        DB::table('customer_tag_assignments')->insert([
-            'user_id' => $userId,
-            'tag_id' => (int) $tagId,
-            'assigned_by_administrator_id' => $this->benefitOwner(),
-            'assigned_at' => $now,
-            'removed_at' => null,
-            'created_at' => $now,
-            'updated_at' => $now,
-        ]);
+        /** @var object{code:string,base_price_irr:int|string,duration_days:int|string}|null $configured */
+        $configured = DB::table('plan_offerings')
+            ->where('id', $offering['id'])
+            ->first(['code', 'base_price_irr', 'duration_days']);
+        self::assertNotNull($configured);
+        $selectionToken = str_repeat('c', 40);
+        $catalog = new PurchaseQuoteFreshnessCatalog(
+            $selectionToken,
+            $configured->code,
+            (int) $configured->base_price_irr,
+            (int) $configured->duration_days,
+        );
+        $this->app->instance(TelegramCustomerPurchaseCatalog::class, $catalog);
 
-        $offeringCode = DB::table('plan_offerings')->where('id', $offering['id'])->value('code');
-        self::assertIsString($offeringCode);
-        $selectionToken = substr(hash('sha256', "telegram-purchase-offering-v1:{$userId}:{$offeringCode}"), 0, 40);
-        $catalog = $this->app->make(TelegramCustomerPurchaseCatalog::class);
-        $selected = $catalog->offeringForSelf($userId, $userId, $selectionToken);
+        $userId = $this->benefitUser('customer');
         $quotes = $this->app->make(TelegramCustomerPurchaseQuote::class);
         $callbackPublicId = (string) Str::ulid();
         $acceptedAt = new DateTimeImmutable('now', new DateTimeZone('UTC'));
@@ -93,8 +117,8 @@ final class TelegramCustomerPurchaseQuoteFreshnessTest extends TestCase
             'tg-purchase-quote:'.$callbackPublicId,
         );
         $storedQuote = $this->app->make(QuoteService::class)->current($preview->quotePublicId);
-        self::assertSame($selected->offeringCode, $storedQuote->offeringCode);
-        self::assertSame($selected->basePriceIrr, $storedQuote->basePriceIrr);
+        self::assertSame($configured->code, $storedQuote->offeringCode);
+        self::assertSame((int) $configured->base_price_irr, $storedQuote->basePriceIrr);
 
         /** @var object{version:int|string,duration_days:int|string,base_price_irr:int|string,state:string,visibility:string}|null $row */
         $row = DB::table('plan_offerings')
@@ -107,11 +131,12 @@ final class TelegramCustomerPurchaseQuoteFreshnessTest extends TestCase
             ->value('to_configuration_hash');
         self::assertIsString($fromHash);
         $nextVersion = (int) $row->version + 1;
+        $nextDuration = (int) $row->duration_days + 15;
         $nextHash = hash('sha256', 'telegram-purchase-quote-config-drift:'.$offering['id'].':'.$nextVersion);
         DB::table('plan_offerings')->where('id', $offering['id'])->update([
-            'duration_days' => (int) $row->duration_days + 15,
+            'duration_days' => $nextDuration,
             'version' => $nextVersion,
-            'updated_at' => $now,
+            'updated_at' => now('UTC'),
         ]);
         DB::table('plan_offering_histories')->insert([
             'plan_offering_id' => $offering['id'],
@@ -124,19 +149,19 @@ final class TelegramCustomerPurchaseQuoteFreshnessTest extends TestCase
             'from_configuration_hash' => $fromHash,
             'to_configuration_hash' => $nextHash,
             'before_safe_data' => json_encode(['duration_days' => (int) $row->duration_days], JSON_THROW_ON_ERROR),
-            'after_safe_data' => json_encode(['duration_days' => (int) $row->duration_days + 15], JSON_THROW_ON_ERROR),
+            'after_safe_data' => json_encode(['duration_days' => $nextDuration], JSON_THROW_ON_ERROR),
             'actor_administrator_id' => $this->benefitOwner(),
             'reason_code' => 'telegram_quote_freshness_test',
             'reason' => 'Simulate same-code same-price authoritative Offering configuration drift.',
             'correlation_id' => 'telegram-quote-freshness-drift',
-            'created_at' => $now,
+            'created_at' => now('UTC'),
         ]);
-
+        $catalog->durationDays = $nextDuration;
         $current = $catalog->offeringForSelf($userId, $userId, $selectionToken);
         self::assertSame($selectionToken, $current->selectionToken);
-        self::assertSame($selected->offeringCode, $current->offeringCode);
-        self::assertSame($selected->basePriceIrr, $current->basePriceIrr);
-        self::assertNotSame($selected->durationDays, $current->durationDays);
+        self::assertSame($storedQuote->offeringCode, $current->offeringCode);
+        self::assertSame($storedQuote->basePriceIrr, $current->basePriceIrr);
+        self::assertSame($nextDuration, $current->durationDays);
         self::assertNotSame($storedQuote->offeringVersion, $nextVersion);
         self::assertNotSame($storedQuote->offeringConfigurationHash, $nextHash);
 
