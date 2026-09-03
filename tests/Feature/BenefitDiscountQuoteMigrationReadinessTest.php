@@ -158,6 +158,59 @@ final class BenefitDiscountQuoteMigrationReadinessTest extends TestCase
         self::assertSame(0, DB::table('benefit_code_discount_quote_consumptions')->count());
     }
 
+    public function test_reentry_preserves_backticks_inside_check_and_trigger_string_literals(): void
+    {
+        $migration = $this->migration();
+        $migration->up();
+        $database = DB::connection()->getDatabaseName();
+        $constraintName = 'benefit_discount_quote_consumption_hashes_chk';
+        $canonicalClause = DB::table('information_schema.CHECK_CONSTRAINTS')
+            ->where('CONSTRAINT_SCHEMA', $database)
+            ->where('TABLE_NAME', 'benefit_code_discount_quote_consumptions')
+            ->where('CONSTRAINT_NAME', $constraintName)
+            ->value('CHECK_CLAUSE');
+        self::assertIsString($canonicalClause);
+        $driftedClause = str_replace("'^[0-9a-f]{64}$'", "'^[0-9a-f`]{64}$'", $canonicalClause, $replacementCount);
+        self::assertGreaterThan(0, $replacementCount);
+        self::assertNotSame($canonicalClause, $driftedClause);
+
+        DB::statement('ALTER TABLE benefit_code_discount_quote_consumptions DROP CONSTRAINT '.$constraintName);
+        DB::statement('ALTER TABLE benefit_code_discount_quote_consumptions ADD CONSTRAINT '.$constraintName.' CHECK ('.$driftedClause.')');
+        $installedDrift = DB::table('information_schema.CHECK_CONSTRAINTS')
+            ->where('CONSTRAINT_SCHEMA', $database)
+            ->where('TABLE_NAME', 'benefit_code_discount_quote_consumptions')
+            ->where('CONSTRAINT_NAME', $constraintName)
+            ->value('CHECK_CLAUSE');
+        self::assertIsString($installedDrift);
+        self::assertStringContainsString("'^[0-9a-f`]{64}$'", $installedDrift);
+
+        $migration->up();
+
+        $repairedClause = DB::table('information_schema.CHECK_CONSTRAINTS')
+            ->where('CONSTRAINT_SCHEMA', $database)
+            ->where('TABLE_NAME', 'benefit_code_discount_quote_consumptions')
+            ->where('CONSTRAINT_NAME', $constraintName)
+            ->value('CHECK_CLAUSE');
+        self::assertIsString($repairedClause);
+        self::assertStringContainsString("'^[0-9a-f]{64}$'", $repairedClause);
+        self::assertStringNotContainsString("'^[0-9a-f`]{64}$'", $repairedClause);
+
+        $triggerName = 'benefit_discount_quote_consumptions_insert_guard';
+        $canonicalTrigger = $this->triggerBody($database, $triggerName);
+        $driftedTrigger = str_replace('$.grant_public_id', '$.grant_public_id`', $canonicalTrigger, $triggerReplacementCount);
+        self::assertGreaterThan(0, $triggerReplacementCount);
+        self::assertNotSame($canonicalTrigger, $driftedTrigger);
+        $this->replaceInsertTrigger($triggerName, $driftedTrigger);
+        self::assertStringContainsString('$.grant_public_id`', $this->triggerBody($database, $triggerName));
+
+        $migration->up();
+
+        $repairedTrigger = $this->triggerBody($database, $triggerName);
+        self::assertStringContainsString('$.grant_public_id', $repairedTrigger);
+        self::assertStringNotContainsString('$.grant_public_id`', $repairedTrigger);
+        self::assertSame(0, DB::table('benefit_code_discount_quote_consumptions')->count());
+    }
+
     private function migration(): Migration
     {
         /** @var Migration $migration */

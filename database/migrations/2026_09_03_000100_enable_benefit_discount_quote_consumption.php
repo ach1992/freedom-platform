@@ -345,32 +345,45 @@ return new class extends Migration
 
     private function normalizeSql(string $sql): string
     {
-        $sql = str_replace('`', '', $sql);
         $normalized = '';
         $inSingleQuote = false;
         $pendingSpace = false;
+        $backslashEscapesEnabled = $this->backslashEscapesEnabled();
         $length = strlen($sql);
         for ($index = 0; $index < $length; $index++) {
             $character = $sql[$index];
+            if ($inSingleQuote) {
+                $normalized .= $character;
+                if ($character === '\\' && $backslashEscapesEnabled && $index + 1 < $length) {
+                    $normalized .= $sql[$index + 1];
+                    $index++;
+
+                    continue;
+                }
+                if ($character !== "'") {
+                    continue;
+                }
+                if ($index + 1 < $length && $sql[$index + 1] === "'") {
+                    $normalized .= "'";
+                    $index++;
+
+                    continue;
+                }
+                $inSingleQuote = false;
+
+                continue;
+            }
             if ($character === "'") {
                 if ($pendingSpace && $normalized !== '' && ! str_ends_with($normalized, ' ')) {
                     $normalized .= ' ';
                 }
                 $pendingSpace = false;
                 $normalized .= $character;
-                if ($inSingleQuote && $index + 1 < $length && $sql[$index + 1] === "'") {
-                    $normalized .= "'";
-                    $index++;
-
-                    continue;
-                }
-                $inSingleQuote = ! $inSingleQuote;
+                $inSingleQuote = true;
 
                 continue;
             }
-            if ($inSingleQuote) {
-                $normalized .= $character;
-
+            if ($character === '`') {
                 continue;
             }
             if (ctype_space($character)) {
@@ -389,6 +402,15 @@ return new class extends Migration
         }
 
         return trim($normalized);
+    }
+
+    private function backslashEscapesEnabled(): bool
+    {
+        $row = DB::selectOne('SELECT @@SESSION.sql_mode AS sql_mode');
+        $sqlMode = is_object($row) && property_exists($row, 'sql_mode') ? (string) $row->sql_mode : '';
+        $modes = array_filter(array_map('trim', explode(',', strtoupper($sqlMode))));
+
+        return ! in_array('NO_BACKSLASH_ESCAPES', $modes, true);
     }
 
     /** @return literal-string */

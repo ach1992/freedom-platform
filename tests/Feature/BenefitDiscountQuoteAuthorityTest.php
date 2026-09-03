@@ -526,6 +526,75 @@ final class BenefitDiscountQuoteAuthorityTest extends TestCase
         self::assertSame(1, DB::table('benefit_code_discount_quote_consumptions')->count());
     }
 
+    public function test_migration_reentry_rejects_non_empty_backtick_literal_drift_without_destructive_rebuild(): void
+    {
+        $fixture = $this->discountFixture('migration-non-empty-literal-readiness');
+        $authority = $this->app->make(QuoteDiscountAuthority::class);
+        $authorization = $authority->authorize(new QuoteDiscountAuthorizationRequest(
+            'discount-migration-literal-auth-0001',
+            $fixture['user_id'],
+            $fixture['source_quote']->quotePublicId,
+            $fixture['source_quote']->configurationSnapshotHash,
+            $fixture['code'],
+            'discount-migration-literal-correlation',
+        ));
+        $discountedQuote = $this->discountedQuote(
+            $fixture,
+            $authorization->ruleCode,
+            $authorization->discountIrr,
+            'migration-non-empty-literal-readiness',
+        );
+        $authority->consume(new QuoteDiscountConsumptionRequest(
+            'discount-migration-literal-consume-0001',
+            $fixture['user_id'],
+            $authorization,
+            $discountedQuote->quotePublicId,
+            $discountedQuote->configurationSnapshotHash,
+            'discount-migration-literal-correlation',
+        ));
+        self::assertSame(1, DB::table('benefit_code_discount_quote_consumptions')->count());
+
+        /** @var Migration $migration */
+        $migration = require database_path('migrations/2026_09_03_000100_enable_benefit_discount_quote_consumption.php');
+        $database = DB::connection()->getDatabaseName();
+        $constraintName = 'benefit_discount_quote_consumption_hashes_chk';
+        $canonicalClause = DB::table('information_schema.CHECK_CONSTRAINTS')
+            ->where('CONSTRAINT_SCHEMA', $database)
+            ->where('TABLE_NAME', 'benefit_code_discount_quote_consumptions')
+            ->where('CONSTRAINT_NAME', $constraintName)
+            ->value('CHECK_CLAUSE');
+        self::assertIsString($canonicalClause);
+        $driftedClause = str_replace("'^[0-9a-f]{64}$'", "'^[0-9a-f`]{64}$'", $canonicalClause, $replacementCount);
+        self::assertGreaterThan(0, $replacementCount);
+        self::assertNotSame($canonicalClause, $driftedClause);
+        DB::statement('ALTER TABLE benefit_code_discount_quote_consumptions DROP CONSTRAINT '.$constraintName);
+        DB::statement('ALTER TABLE benefit_code_discount_quote_consumptions ADD CONSTRAINT '.$constraintName.' CHECK ('.$driftedClause.')');
+
+        try {
+            $migration->up();
+            self::fail('Expected non-empty literal drift to fail safe without destructive rebuild.');
+        } catch (RuntimeException $exception) {
+            self::assertSame(
+                'Benefit discount Quote authority cannot repair a non-empty incomplete surface.',
+                $exception->getMessage(),
+            );
+        }
+
+        self::assertSame(1, DB::table('benefit_code_discount_quote_consumptions')->count());
+        $installedDrift = DB::table('information_schema.CHECK_CONSTRAINTS')
+            ->where('CONSTRAINT_SCHEMA', $database)
+            ->where('TABLE_NAME', 'benefit_code_discount_quote_consumptions')
+            ->where('CONSTRAINT_NAME', $constraintName)
+            ->value('CHECK_CLAUSE');
+        self::assertIsString($installedDrift);
+        self::assertStringContainsString("'^[0-9a-f`]{64}$'", $installedDrift);
+
+        DB::statement('ALTER TABLE benefit_code_discount_quote_consumptions DROP CONSTRAINT '.$constraintName);
+        DB::statement('ALTER TABLE benefit_code_discount_quote_consumptions ADD CONSTRAINT '.$constraintName.' CHECK ('.$canonicalClause.')');
+        $migration->up();
+        self::assertSame(1, DB::table('benefit_code_discount_quote_consumptions')->count());
+    }
+
     public function test_same_grant_cannot_authorize_two_committed_discounted_quotes(): void
     {
         $fixture = $this->discountFixture('single-consumption');
