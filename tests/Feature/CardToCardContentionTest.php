@@ -82,6 +82,7 @@ namespace {
                 $c2cContentionMode === '--c2c-create-worker' => str_contains($sql, 'c2c_destination_accounts') && str_contains($sql, 'for update'),
                 $c2cContentionMode === '--c2c-capture-worker' => str_contains($sql, 'c2c_transaction_matches') && str_contains($sql, 'for update'),
                 $c2cContentionMode === '--c2c-maintenance-worker' && $barrier === 'destination_before' => str_contains($sql, 'c2c_destination_accounts') && str_contains($sql, 'for update'),
+                in_array($c2cContentionMode, ['--c2c-bank-worker', '--c2c-manual-worker'], true) && $barrier === 'destination_before' => str_contains($sql, 'c2c_destination_accounts') && str_contains($sql, 'for update'),
                 $c2cContentionMode === '--c2c-maintenance-worker' && $barrier === 'reservation_expire_before' => str_contains($sql, 'c2c_amount_reservations') && str_starts_with(ltrim($sql), 'update'),
                 default => false,
             };
@@ -89,7 +90,8 @@ namespace {
                 return;
             }
             $barrierReached = true;
-            echo $c2cContentionMode === '--c2c-maintenance-worker' ? "AT_REQUEST\n" : "AT_LOCK\n";
+            $requestBarrier = $barrier === 'destination_before' || $barrier === 'reservation_expire_before';
+            echo $requestBarrier ? "AT_REQUEST\n" : "AT_LOCK\n";
             flush();
             $continue = fgets(STDIN);
             if ($continue === false || trim($continue) !== 'CONTINUE') {
@@ -103,7 +105,6 @@ namespace {
             }
             $sql = strtolower($event->sql);
             $marker = match ($barrier) {
-                'mutex_after' => str_contains($sql, 'get_lock(') ? 'AT_MUTEX' : null,
                 'destination_after' => str_contains($sql, 'c2c_destination_accounts') && str_contains($sql, 'for update') ? 'AT_LOCK' : null,
                 default => null,
             };
@@ -251,6 +252,7 @@ namespace Tests\Feature {
     use Illuminate\Database\QueryException;
     use Illuminate\Foundation\Testing\DatabaseTruncation;
     use Illuminate\Support\Facades\DB;
+    use Illuminate\Support\Str;
     use RuntimeException;
     use Tests\Support\CreatesBenefitCodeFixtures;
     use Tests\TestCase;
@@ -422,7 +424,6 @@ namespace Tests\Feature {
             }
         }
 
-        /** @return array{0:int,1:string,2:string} */
         public function test_pending_bank_evidence_first_serializes_before_late_review_expiry(): void
         {
             $this->assertBankEvidenceExpiryRace('pending', false);
@@ -433,12 +434,12 @@ namespace Tests\Feature {
             $this->assertBankEvidenceExpiryRace('settled', false);
         }
 
-        public function test_pending_maintenance_first_recovers_concurrent_bank_evidence_before_promotion_cleanup(): void
+        public function test_pending_maintenance_first_keeps_later_bank_evidence_immutable_without_resurrection(): void
         {
             $this->assertBankEvidenceExpiryRace('pending', true);
         }
 
-        public function test_settled_maintenance_first_recovers_concurrent_bank_evidence_before_promotion_cleanup(): void
+        public function test_settled_maintenance_first_keeps_later_bank_evidence_immutable_without_resurrection(): void
         {
             $this->assertBankEvidenceExpiryRace('settled', true);
         }
@@ -448,108 +449,213 @@ namespace Tests\Feature {
             $this->assertManualEvidenceExpiryRace(false);
         }
 
-        public function test_discounted_maintenance_first_recovers_settled_bank_evidence_before_promotion_release(): void
+        public function test_maintenance_first_rejects_later_manual_submission_without_resurrection(): void
         {
-            $authority = $this->discountedLateReviewPayment('discounted-maintenance-first');
+            $this->assertManualEvidenceExpiryRace(true);
+        }
+
+        public function test_discounted_bank_evidence_first_prevents_terminality_and_promotion_release(): void
+        {
+            $this->assertDiscountedBankEvidencePromotionRace(false);
+        }
+
+        public function test_discounted_maintenance_first_releases_promotion_and_preserves_later_bank_evidence(): void
+        {
+            $this->assertDiscountedBankEvidencePromotionRace(true);
+        }
+
+        private function assertDiscountedBankEvidencePromotionRace(bool $maintenanceFirst): void
+        {
+            $suffix = $maintenanceFirst ? 'discounted-maintenance-first' : 'discounted-bank-first';
+            $authority = $this->discountedLateReviewPayment($suffix);
             self::assertSame(1, DB::table('promotion_usage_reservations')->count());
             self::assertSame(0, DB::table('promotion_usage_releases')->count());
             self::assertSame(0, DB::table('promotion_usage_redemptions')->count());
 
             $bank = $this->startWorker('--c2c-bank-worker', [
-                'barrier' => 'mutex_after',
+                'barrier' => $maintenanceFirst ? 'destination_before' : 'destination_after',
                 'clock_now' => $authority['maintenance_now'],
-                'provider_transaction_id' => 'c2c-race-tx-discounted-maintenance-first',
-                'provider_event_id' => 'c2c-race-event-discounted-maintenance-first',
+                'provider_transaction_id' => 'c2c-race-tx-'.$suffix,
+                'provider_event_id' => 'c2c-race-event-'.$suffix,
                 'amount_irr' => $authority['payable_amount_irr'],
                 'status' => 'settled',
                 'occurred_at' => $authority['occurred_at'],
-                'reference' => 'c2c-race-ref-discounted-maintenance-first',
-                'evidence_seed' => 'c2c-race-evidence-discounted-maintenance-first',
-                'correlation_id' => $this->correlation('bank-discounted-maintenance-first'),
+                'reference' => 'c2c-race-ref-'.$suffix,
+                'evidence_seed' => 'c2c-race-evidence-'.$suffix,
+                'correlation_id' => $this->correlation('bank-'.$suffix),
             ]);
             $maintenance = $this->startWorker('--c2c-maintenance-worker', [
-                'barrier' => 'destination_after',
+                'barrier' => $maintenanceFirst ? 'destination_after' : 'reservation_expire_before',
                 'clock_now' => $authority['maintenance_now'],
             ]);
 
             try {
                 self::assertSame("READY\n", $this->readLine($bank, 'discounted bank readiness'));
                 self::assertSame("READY\n", $this->readLine($maintenance, 'discounted maintenance readiness'));
-                $this->sendCommand($maintenance, 'GO');
-                self::assertSame("AT_LOCK\n", $this->readLine($maintenance, 'discounted maintenance destination lock'));
-                $this->sendCommand($bank, 'GO');
-                self::assertSame("AT_MUTEX\n", $this->readLine($bank, 'discounted bank recovery mutex'));
-                $this->sendCommand($bank, 'CONTINUE');
-                $this->sendCommand($maintenance, 'CONTINUE');
+
+                if ($maintenanceFirst) {
+                    $this->sendCommand($maintenance, 'GO');
+                    self::assertSame("AT_LOCK\n", $this->readLine($maintenance, 'discounted maintenance destination lock'));
+                    $this->sendCommand($bank, 'GO');
+                    self::assertSame("AT_REQUEST\n", $this->readLine($bank, 'discounted bank destination request'));
+                    $this->sendCommand($bank, 'CONTINUE');
+                    $this->sendCommand($maintenance, 'CONTINUE');
+                } else {
+                    $this->sendCommand($bank, 'GO');
+                    self::assertSame("AT_LOCK\n", $this->readLine($bank, 'discounted bank destination lock'));
+                    $this->sendCommand($maintenance, 'GO');
+                    self::assertSame("AT_REQUEST\n", $this->readLine($maintenance, 'discounted maintenance reservation-expiry request'));
+                    $this->sendCommand($maintenance, 'CONTINUE');
+                    $this->sendCommand($bank, 'CONTINUE');
+                }
 
                 $bankResult = $this->readJsonResult($bank, 'discounted bank result');
                 $maintenanceResult = $this->readJsonResult($maintenance, 'discounted maintenance result');
                 self::assertTrue((bool) ($bankResult['ok'] ?? false), json_encode($bankResult, JSON_THROW_ON_ERROR));
                 self::assertSame('settled', $bankResult['status'] ?? null);
                 self::assertTrue((bool) ($maintenanceResult['ok'] ?? false), json_encode($maintenanceResult, JSON_THROW_ON_ERROR));
-                self::assertSame(1, (int) ($maintenanceResult['c2c_expired'] ?? -1));
-                self::assertSame(0, (int) ($maintenanceResult['promotion_released'] ?? -1));
+                self::assertSame($maintenanceFirst ? 1 : 0, (int) ($maintenanceResult['c2c_expired'] ?? -1));
+                self::assertSame($maintenanceFirst ? 1 : 0, (int) ($maintenanceResult['promotion_released'] ?? -1));
                 self::assertSame(0, (int) ($maintenanceResult['failures'] ?? -1));
-                self::assertSame('submitted', DB::table('payment_intents')
+                self::assertSame($maintenanceFirst ? 'expired' : 'awaiting_user_action', DB::table('payment_intents')
                     ->where('public_id', $authority['intent_public_id'])
                     ->value('state'));
                 self::assertSame(1, DB::table('promotion_usage_reservations')->count());
-                self::assertSame(0, DB::table('promotion_usage_releases')->count());
+                self::assertSame($maintenanceFirst ? 1 : 0, DB::table('promotion_usage_releases')->count());
                 self::assertSame(0, DB::table('promotion_usage_redemptions')->count());
+                self::assertSame(1, DB::table('c2c_bank_transactions')
+                    ->where('provider_transaction_id', 'c2c-race-tx-'.$suffix)
+                    ->where('status', 'settled')
+                    ->count());
 
                 $recheck = $this->app->make(PurchasePaymentMaintenanceService::class)->run(10);
                 self::assertSame(0, $recheck->releasedPromotionReservations);
-                self::assertSame(0, DB::table('promotion_usage_releases')->count());
+                self::assertSame($maintenanceFirst ? 1 : 0, DB::table('promotion_usage_releases')->count());
             } finally {
                 $this->closeWorker($bank);
                 $this->closeWorker($maintenance);
             }
         }
 
-        public function test_maintenance_first_recovers_concurrent_manual_submission_before_promotion_cleanup(): void
+        public function test_database_rejects_post_terminal_backdated_bank_and_manual_resurrection(): void
         {
-            $this->assertManualEvidenceExpiryRace(true);
-        }
-
-        public function test_database_rejects_unserialized_c2c_expired_to_submitted_recovery(): void
-        {
-            $authority = $this->lateReviewPayment('guard-reject');
-            $intentId = (int) DB::table('payment_intents')
+            $authority = $this->lateReviewPayment('strict-terminal-guard');
+            $intent = DB::table('payment_intents')
                 ->where('public_id', $authority['intent_public_id'])
-                ->value('id');
+                ->first(['id', 'user_id']);
+            $reservation = DB::table('c2c_amount_reservations')
+                ->where('public_id', $authority['reservation_public_id'])
+                ->first(['id', 'c2c_destination_account_id', 'payable_amount_irr']);
+            self::assertNotNull($intent);
+            self::assertNotNull($reservation);
+
             $expiredAt = now('UTC')->format('Y-m-d H:i:s.u');
             self::assertSame(1, DB::table('payment_intents')
-                ->where('id', $intentId)
+                ->where('id', $intent->id)
                 ->where('state', 'awaiting_user_action')
                 ->update(['state' => 'expired', 'updated_at' => $expiredAt]));
             DB::table('payment_intent_state_histories')->insert([
-                'payment_intent_id' => $intentId,
+                'payment_intent_id' => (int) $intent->id,
                 'from_state' => 'awaiting_user_action',
                 'to_state' => 'expired',
                 'reason_code' => 'c2c_late_review_expired',
-                'correlation_id' => $this->correlation('guard-reject-expire'),
+                'correlation_id' => $this->correlation('strict-terminal-expire'),
+                'created_at' => $expiredAt,
+            ]);
+
+            $occurredAt = (new DateTimeImmutable($authority['occurred_at']))
+                ->setTimezone(new \DateTimeZone('UTC'))
+                ->format('Y-m-d H:i:s.u');
+            $bankTransactionId = (int) DB::table('c2c_bank_transactions')->insertGetId([
+                'public_id' => (string) Str::ulid(),
+                'provider_code' => 'fake',
+                'provider_transaction_id' => 'c2c-direct-post-terminal-bank',
+                'c2c_destination_account_id' => (int) $reservation->c2c_destination_account_id,
+                'amount_irr' => (int) $reservation->payable_amount_irr,
+                'currency' => 'IRR',
+                'status' => 'pending',
+                'occurred_at' => $occurredAt,
+                'sender_card_lookup_hash' => null,
+                'encrypted_sender_name' => null,
+                'reference' => 'c2c-direct-post-terminal-ref',
+                'first_evidence_payload_hash' => hash('sha256', 'c2c-direct-post-terminal-bank'),
+                'first_observed_at' => $expiredAt,
+                'last_observed_at' => $expiredAt,
                 'created_at' => $expiredAt,
             ]);
 
             try {
                 DB::table('payment_intents')
-                    ->where('id', $intentId)
+                    ->where('id', $intent->id)
                     ->where('state', 'expired')
                     ->update(['state' => 'submitted', 'updated_at' => now('UTC')]);
-                self::fail('Expected database guard to reject unserialized C2C recovery.');
+                self::fail('Expected strict database guard to reject post-terminal resurrection with pending bank evidence.');
             } catch (QueryException $exception) {
                 self::assertStringContainsString('Payment intent state transition is invalid.', $exception->getMessage());
             }
 
-            self::assertSame('expired', DB::table('payment_intents')->where('id', $intentId)->value('state'));
+            DB::table('c2c_bank_transaction_events')->insert([
+                'c2c_bank_transaction_id' => $bankTransactionId,
+                'provider_event_id' => 'c2c-direct-post-terminal-settled-event',
+                'status' => 'settled',
+                'evidence_payload_hash' => hash('sha256', 'c2c-direct-post-terminal-settled-event'),
+                'ingestion_method' => 'manual',
+                'observed_at' => $expiredAt,
+                'correlation_id' => $this->correlation('direct-post-terminal-settled'),
+                'created_at' => $expiredAt,
+            ]);
+            self::assertSame(1, DB::table('c2c_bank_transactions')
+                ->where('id', $bankTransactionId)
+                ->where('status', 'pending')
+                ->update(['status' => 'settled', 'last_observed_at' => $expiredAt]));
+
+            try {
+                DB::table('payment_intents')
+                    ->where('id', $intent->id)
+                    ->where('state', 'expired')
+                    ->update(['state' => 'submitted', 'updated_at' => now('UTC')]);
+                self::fail('Expected strict database guard to reject post-terminal resurrection with settled bank evidence.');
+            } catch (QueryException $exception) {
+                self::assertStringContainsString('Payment intent state transition is invalid.', $exception->getMessage());
+            }
+
+            try {
+                DB::table('c2c_manual_submissions')->insert([
+                    'public_id' => (string) Str::ulid(),
+                    'submission_key' => 'c2c.manual.direct.post.terminal',
+                    'payment_intent_id' => (int) $intent->id,
+                    'c2c_amount_reservation_id' => (int) $reservation->id,
+                    'c2c_destination_account_id' => (int) $reservation->c2c_destination_account_id,
+                    'submitted_by_user_id' => (int) $intent->user_id,
+                    'claimed_amount_irr' => (int) $reservation->payable_amount_irr,
+                    'claimed_paid_at' => $occurredAt,
+                    'sender_card_lookup_hash' => null,
+                    'encrypted_sender_name' => null,
+                    'reference' => 'c2c-direct-post-terminal-manual-ref',
+                    'private_receipt_reference' => null,
+                    'evidence_hash' => hash('sha256', 'c2c-direct-post-terminal-manual'),
+                    'created_at' => $expiredAt,
+                ]);
+                self::fail('Expected strict database guard to reject post-terminal manual evidence.');
+            } catch (QueryException $exception) {
+                self::assertStringContainsString('C2C manual submission must match one owned purchase reservation and exact payable amount.', $exception->getMessage());
+            }
+
+            self::assertSame('expired', DB::table('payment_intents')->where('id', $intent->id)->value('state'));
+            self::assertSame(1, DB::table('c2c_bank_transactions')
+                ->where('provider_transaction_id', 'c2c-direct-post-terminal-bank')
+                ->count());
+            self::assertSame(0, DB::table('c2c_manual_submissions')
+                ->where('submission_key', 'c2c.manual.direct.post.terminal')
+                ->count());
         }
 
         private function assertBankEvidenceExpiryRace(string $status, bool $maintenanceFirst): void
         {
             $suffix = $status.'-'.($maintenanceFirst ? 'maintenance-first' : 'bank-first');
             $authority = $this->lateReviewPayment($suffix);
-            $bankPayload = [
-                'barrier' => $maintenanceFirst ? 'mutex_after' : 'destination_after',
+            $bank = $this->startWorker('--c2c-bank-worker', [
+                'barrier' => $maintenanceFirst ? 'destination_before' : 'destination_after',
                 'clock_now' => $authority['maintenance_now'],
                 'provider_transaction_id' => 'c2c-race-tx-'.$suffix,
                 'provider_event_id' => 'c2c-race-event-'.$suffix,
@@ -559,13 +665,11 @@ namespace Tests\Feature {
                 'reference' => 'c2c-race-ref-'.$suffix,
                 'evidence_seed' => 'c2c-race-evidence-'.$suffix,
                 'correlation_id' => $this->correlation('bank-'.$suffix),
-            ];
-            $maintenancePayload = [
+            ]);
+            $maintenance = $this->startWorker('--c2c-maintenance-worker', [
                 'barrier' => $maintenanceFirst ? 'destination_after' : 'reservation_expire_before',
                 'clock_now' => $authority['maintenance_now'],
-            ];
-            $bank = $this->startWorker('--c2c-bank-worker', $bankPayload);
-            $maintenance = $this->startWorker('--c2c-maintenance-worker', $maintenancePayload);
+            ]);
 
             try {
                 self::assertSame("READY\n", $this->readLine($bank, 'bank readiness'));
@@ -575,7 +679,7 @@ namespace Tests\Feature {
                     $this->sendCommand($maintenance, 'GO');
                     self::assertSame("AT_LOCK\n", $this->readLine($maintenance, 'maintenance destination lock'));
                     $this->sendCommand($bank, 'GO');
-                    self::assertSame("AT_MUTEX\n", $this->readLine($bank, 'bank recovery mutex'));
+                    self::assertSame("AT_REQUEST\n", $this->readLine($bank, 'bank destination request'));
                     $this->sendCommand($bank, 'CONTINUE');
                     $this->sendCommand($maintenance, 'CONTINUE');
                 } else {
@@ -593,34 +697,20 @@ namespace Tests\Feature {
                 self::assertSame($status, $bankResult['status'] ?? null);
                 self::assertTrue((bool) ($maintenanceResult['ok'] ?? false), json_encode($maintenanceResult, JSON_THROW_ON_ERROR));
                 self::assertSame(0, (int) ($maintenanceResult['failures'] ?? -1));
-                $expiredCount = (int) ($maintenanceResult['c2c_expired'] ?? -1);
-                if ($maintenanceFirst) {
-                    self::assertSame(1, $expiredCount);
-                } else {
-                    self::assertContains($expiredCount, [0, 1]);
-                }
+                self::assertSame($maintenanceFirst ? 1 : 0, (int) ($maintenanceResult['c2c_expired'] ?? -1));
                 self::assertSame(0, (int) ($maintenanceResult['promotion_released'] ?? -1));
-
-                $intentState = DB::table('payment_intents')
+                self::assertSame($maintenanceFirst ? 'expired' : 'awaiting_user_action', DB::table('payment_intents')
                     ->where('public_id', $authority['intent_public_id'])
-                    ->value('state');
-                self::assertSame($expiredCount === 1 ? 'submitted' : 'awaiting_user_action', $intentState);
+                    ->value('state'));
                 self::assertSame(1, DB::table('c2c_bank_transactions')
                     ->where('provider_transaction_id', 'c2c-race-tx-'.$suffix)
                     ->where('status', $status)
                     ->count());
                 self::assertSame(0, DB::table('promotion_usage_releases')->count());
-                if ($expiredCount === 1) {
-                    $intentId = DB::table('payment_intents')->where('public_id', $authority['intent_public_id'])->value('id');
-                    self::assertSame(1, DB::table('payment_intent_state_histories')
-                        ->where('payment_intent_id', $intentId)
-                        ->where('reason_code', 'c2c_late_review_expired')
-                        ->count());
-                    self::assertSame(1, DB::table('payment_intent_state_histories')
-                        ->where('payment_intent_id', $intentId)
-                        ->where('reason_code', 'c2c_concurrent_bank_evidence_restored')
-                        ->count());
-                }
+                self::assertSame(0, DB::table('payment_intent_state_histories')
+                    ->where('payment_intent_id', DB::table('payment_intents')->where('public_id', $authority['intent_public_id'])->value('id'))
+                    ->whereIn('reason_code', ['c2c_concurrent_bank_evidence_restored', 'c2c_concurrent_manual_evidence_restored'])
+                    ->count());
             } finally {
                 $this->closeWorker($bank);
                 $this->closeWorker($maintenance);
@@ -631,8 +721,8 @@ namespace Tests\Feature {
         {
             $suffix = $maintenanceFirst ? 'manual-maintenance-first' : 'manual-first';
             $authority = $this->lateReviewPayment($suffix);
-            $manualPayload = [
-                'barrier' => $maintenanceFirst ? 'mutex_after' : 'destination_after',
+            $manual = $this->startWorker('--c2c-manual-worker', [
+                'barrier' => $maintenanceFirst ? 'destination_before' : 'destination_after',
                 'clock_now' => $authority['maintenance_now'],
                 'submission_key' => 'c2c.manual.race.'.$suffix,
                 'user_id' => $authority['user_id'],
@@ -642,13 +732,11 @@ namespace Tests\Feature {
                 'reference' => 'c2c-manual-race-ref-'.$suffix,
                 'evidence_seed' => 'c2c-manual-race-evidence-'.$suffix,
                 'correlation_id' => $this->correlation('manual-'.$suffix),
-            ];
-            $maintenancePayload = [
+            ]);
+            $maintenance = $this->startWorker('--c2c-maintenance-worker', [
                 'barrier' => $maintenanceFirst ? 'destination_after' : 'reservation_expire_before',
                 'clock_now' => $authority['maintenance_now'],
-            ];
-            $manual = $this->startWorker('--c2c-manual-worker', $manualPayload);
-            $maintenance = $this->startWorker('--c2c-maintenance-worker', $maintenancePayload);
+            ]);
 
             try {
                 self::assertSame("READY\n", $this->readLine($manual, 'manual readiness'));
@@ -658,7 +746,7 @@ namespace Tests\Feature {
                     $this->sendCommand($maintenance, 'GO');
                     self::assertSame("AT_LOCK\n", $this->readLine($maintenance, 'maintenance destination lock'));
                     $this->sendCommand($manual, 'GO');
-                    self::assertSame("AT_MUTEX\n", $this->readLine($manual, 'manual recovery mutex'));
+                    self::assertSame("AT_REQUEST\n", $this->readLine($manual, 'manual destination request'));
                     $this->sendCommand($manual, 'CONTINUE');
                     $this->sendCommand($maintenance, 'CONTINUE');
                 } else {
@@ -672,34 +760,30 @@ namespace Tests\Feature {
 
                 $manualResult = $this->readJsonResult($manual, 'manual result');
                 $maintenanceResult = $this->readJsonResult($maintenance, 'maintenance result');
-                self::assertTrue((bool) ($manualResult['ok'] ?? false), json_encode($manualResult, JSON_THROW_ON_ERROR));
                 self::assertTrue((bool) ($maintenanceResult['ok'] ?? false), json_encode($maintenanceResult, JSON_THROW_ON_ERROR));
                 self::assertSame(0, (int) ($maintenanceResult['failures'] ?? -1));
-                $expiredCount = (int) ($maintenanceResult['c2c_expired'] ?? -1);
-                if ($maintenanceFirst) {
-                    self::assertSame(1, $expiredCount);
-                } else {
-                    self::assertContains($expiredCount, [0, 1]);
-                }
+                self::assertSame($maintenanceFirst ? 1 : 0, (int) ($maintenanceResult['c2c_expired'] ?? -1));
                 self::assertSame(0, (int) ($maintenanceResult['promotion_released'] ?? -1));
-                self::assertSame('submitted', DB::table('payment_intents')
-                    ->where('public_id', $authority['intent_public_id'])
-                    ->value('state'));
-                self::assertSame(1, DB::table('c2c_manual_submissions')
-                    ->where('submission_key', 'c2c.manual.race.'.$suffix)
-                    ->count());
-                self::assertSame(0, DB::table('promotion_usage_releases')->count());
-                if ($expiredCount === 1) {
-                    $intentId = DB::table('payment_intents')->where('public_id', $authority['intent_public_id'])->value('id');
-                    self::assertSame(1, DB::table('payment_intent_state_histories')
-                        ->where('payment_intent_id', $intentId)
-                        ->where('reason_code', 'c2c_late_review_expired')
+
+                if ($maintenanceFirst) {
+                    self::assertFalse((bool) ($manualResult['ok'] ?? true), json_encode($manualResult, JSON_THROW_ON_ERROR));
+                    self::assertSame('C2C manual submission arrived after terminal payment authority closed.', $manualResult['message'] ?? null);
+                    self::assertSame('expired', DB::table('payment_intents')
+                        ->where('public_id', $authority['intent_public_id'])
+                        ->value('state'));
+                    self::assertSame(0, DB::table('c2c_manual_submissions')
+                        ->where('submission_key', 'c2c.manual.race.'.$suffix)
                         ->count());
-                    self::assertSame(1, DB::table('payment_intent_state_histories')
-                        ->where('payment_intent_id', $intentId)
-                        ->where('reason_code', 'c2c_concurrent_manual_evidence_restored')
+                } else {
+                    self::assertTrue((bool) ($manualResult['ok'] ?? false), json_encode($manualResult, JSON_THROW_ON_ERROR));
+                    self::assertSame('submitted', DB::table('payment_intents')
+                        ->where('public_id', $authority['intent_public_id'])
+                        ->value('state'));
+                    self::assertSame(1, DB::table('c2c_manual_submissions')
+                        ->where('submission_key', 'c2c.manual.race.'.$suffix)
                         ->count());
                 }
+                self::assertSame(0, DB::table('promotion_usage_releases')->count());
             } finally {
                 $this->closeWorker($manual);
                 $this->closeWorker($maintenance);
