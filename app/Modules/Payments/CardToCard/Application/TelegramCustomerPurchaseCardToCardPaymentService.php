@@ -8,6 +8,7 @@ use App\Modules\Orders\Application\PurchaseOrderService;
 use App\Modules\Orders\Application\PurchaseOrderSettlementAvailability;
 use App\Modules\Payments\Domain\PaymentIntentState;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCardToCardPayment;
+use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCardToCardReceiptSubmission;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseOrder;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchasePaymentMethods;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseCardToCardDestination;
@@ -23,7 +24,7 @@ use Illuminate\Contracts\Encryption\StringEncrypter;
 use Illuminate\Database\DatabaseManager;
 use RuntimeException;
 
-final readonly class TelegramCustomerPurchaseCardToCardPaymentService implements TelegramCustomerPurchaseCardToCardPayment
+final readonly class TelegramCustomerPurchaseCardToCardPaymentService implements TelegramCustomerPurchaseCardToCardPayment, TelegramCustomerPurchaseCardToCardReceiptSubmission
 {
     private const METHOD_CODE = 'card_to_card';
 
@@ -206,12 +207,14 @@ final readonly class TelegramCustomerPurchaseCardToCardPaymentService implements
             || preg_match('/\Atelegram-private-media:[0-9A-HJKMNP-TV-Z]{26}\z/i', $privateReceiptReference) !== 1) {
             throw new AuthorizationException('Telegram card-to-card receipt submission is unavailable.');
         }
+        $normalizedReservationPublicId = strtoupper($reservationPublicId);
+        $normalizedPrivateReference = 'telegram-private-media:'.strtoupper(substr($privateReceiptReference, 23));
 
         /** @var object{payment_intent_public_id:string,quote_public_id:string,state:string,user_id:int|string,purpose:string,payment_method_code:string|null,provider_code:string,captured_at:?string,payable_amount_irr:int|string}|null $row */
         $row = $this->database->connection()
             ->table('c2c_amount_reservations as reservation')
             ->join('payment_intents as intent', 'intent.id', '=', 'reservation.payment_intent_id')
-            ->where('reservation.public_id', strtoupper($reservationPublicId))
+            ->where('reservation.public_id', $normalizedReservationPublicId)
             ->first([
                 'intent.public_id as payment_intent_public_id',
                 'intent.source_quote_public_id as quote_public_id',
@@ -248,19 +251,18 @@ final readonly class TelegramCustomerPurchaseCardToCardPaymentService implements
             $submission = $this->manualSubmissions->submit(
                 'telegram-c2c-receipt:'.$operationKey,
                 $subjectUserId,
-                strtoupper($reservationPublicId),
+                $normalizedReservationPublicId,
                 $this->positiveInt($row->payable_amount_irr, 'Card-to-card receipt payable amount'),
                 $submittedAt,
                 $evidenceHash,
-                privateReceiptReference: strtolower(substr($privateReceiptReference, 0, 23))
-                    .strtoupper(substr($privateReceiptReference, 23)),
+                privateReceiptReference: $normalizedPrivateReference,
                 correlationId: 'tg-c2c-receipt:'.substr($operationKey, 0, 40),
             );
         } catch (DomainException $exception) {
             throw new AuthorizationException('Telegram card-to-card receipt submission was rejected by payment authority.', previous: $exception);
         }
 
-        if (! hash_equals(strtoupper($submission->reservationPublicId), strtoupper($reservationPublicId))
+        if (! hash_equals(strtoupper($submission->reservationPublicId), $normalizedReservationPublicId)
             || ! hash_equals(strtoupper($submission->paymentIntentPublicId), strtoupper($row->payment_intent_public_id))
             || $submission->claimedAmountIrr !== (int) $row->payable_amount_irr) {
             throw new RuntimeException('Telegram card-to-card receipt result conflicts with current payment authority.');
