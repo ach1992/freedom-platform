@@ -11,6 +11,8 @@ use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\TelegramInteractionHandler;
 use App\Modules\Telegram\Application\Contracts\TelegramMutationTransport;
 use App\Modules\Telegram\Application\Contracts\TelegramRuntime;
+use App\Modules\Telegram\Application\TelegramCardToCardProtectedDeliveryExecutor;
+use App\Modules\Telegram\Application\TelegramCardToCardProtectedDeliveryOutboxHandler;
 use App\Modules\Telegram\Application\TelegramConfidentialDeliveryOutboxHandler;
 use App\Modules\Telegram\Application\TelegramConfidentialPresentationHasher;
 use App\Modules\Telegram\Application\TelegramDeliveryOperationExecutor;
@@ -127,10 +129,17 @@ final class TelegramServiceProvider extends ServiceProvider
                 fn (): TelegramDeliveryOperationExecutor => $application->make(TelegramDeliveryOperationExecutor::class),
             ),
         );
+        $this->app->singleton(
+            TelegramCardToCardProtectedDeliveryOutboxHandler::class,
+            fn (Application $application): TelegramCardToCardProtectedDeliveryOutboxHandler => new TelegramCardToCardProtectedDeliveryOutboxHandler(
+                fn (): TelegramCardToCardProtectedDeliveryExecutor => $application->make(TelegramCardToCardProtectedDeliveryExecutor::class),
+            ),
+        );
         $this->app->tag([
             TelegramDeliveryOutboxHandler::class,
             TelegramInteractiveDeliveryOutboxHandler::class,
             TelegramConfidentialDeliveryOutboxHandler::class,
+            TelegramCardToCardProtectedDeliveryOutboxHandler::class,
         ], OutboxEventHandler::class);
     }
 }

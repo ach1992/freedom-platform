@@ -510,6 +510,7 @@ return [
         'sessions' => 'Framework',
         'sms_delivery_attempts' => 'Identity',
         'telegram_accounts' => 'Identity',
+        'telegram_c2c_protected_deliveries' => 'Telegram',
         'telegram_delivery_authority_capability' => 'Telegram',
         'telegram_delivery_confidential_presentations' => 'Telegram',
         'telegram_delivery_interactive_presentations' => 'Telegram',

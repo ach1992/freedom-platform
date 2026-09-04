@@ -106,6 +106,12 @@ This is a recorded commercial snapshot only. No payment, capacity reservation, o
                 'item' => ':number. :method',
                 'selected' => "Selected payment method: :method\n\nYour Order remains awaiting payment. No Payment Intent, wallet debit, gateway request, or payment has been created yet.",
                 'empty' => "Payment Methods\n\nNo payment method is currently eligible for this Quote.\n\nNo Order, Payment Intent, or financial effect has been created.",
+                'card_to_card_payment' => [
+                    'continue' => 'Continue with card-to-card',
+                    'instructions' => "Card-to-card payment instructions\n\nExact payable amount: :amount :currency\nDestination card: :masked_card\nPay before: :expires_at (Tehran time)\nLate review window ends: :late_review_until (Tehran time)\n\nTransfer exactly the shown amount. The small amount adjustment is intentional and must not be rounded. The full card number is sent separately through a protected copy button. If payment is made after the payment window, automatic matching is not guaranteed and manual review may be required. Receipt upload is not available in this step yet.",
+                    'copy_message' => 'Use the protected button below to copy the destination card number. Verify the exact amount and masked card shown in the payment instructions before transferring.',
+                    'copy_button' => 'Copy destination card number',
+                ],
                 'wallet_payment' => [
                     'continue' => 'Continue with wallet',
                     'retry' => 'Retry wallet payment',
