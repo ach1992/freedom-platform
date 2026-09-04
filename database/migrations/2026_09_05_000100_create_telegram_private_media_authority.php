@@ -62,10 +62,13 @@ SQL);
 
     public function down(): void
     {
+        if (! Schema::hasTable('telegram_private_media')) {
+            return;
+        }
         if (DB::table('telegram_private_media')->exists()) {
             throw new RuntimeException('Cannot roll back Telegram private-media authority after records exist.');
         }
 
-        Schema::dropIfExists('telegram_private_media');
+        Schema::drop('telegram_private_media');
     }
 };
