@@ -13,6 +13,7 @@ use Illuminate\Contracts\Translation\Translator;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Support\Str;
 use RuntimeException;
+use Throwable;
 
 final readonly class TelegramPrivateMediaInteractionGateway
 {
@@ -63,6 +64,7 @@ final readonly class TelegramPrivateMediaInteractionGateway
                 $state,
                 $media,
                 $operationKey,
+                $locale,
             ): TelegramCustomerPurchaseCardToCardSubmission {
                 $claim = $this->sessions->transition(
                     $interaction->sessionPublicId,
@@ -95,6 +97,7 @@ final readonly class TelegramPrivateMediaInteractionGateway
                     'telegram-c2c-receipt-home:'.$operationKey,
                 );
                 $this->assertActorBinding($interaction, $home->userId);
+                $this->queueStatus($interaction, $locale, 'received');
 
                 return $submission;
             }, 3);
@@ -103,12 +106,15 @@ final readonly class TelegramPrivateMediaInteractionGateway
             $this->queueStatus($interaction, $locale, 'unavailable');
 
             return true;
+        } catch (Throwable $exception) {
+            $this->media->discardIfUnreferenced($media, $interaction->userId);
+
+            throw $exception;
         }
 
         if (! Str::isUlid($submission->submissionPublicId)) {
             throw new RuntimeException('Telegram card-to-card receipt submission identity is invalid.');
         }
-        $this->queueStatus($interaction, $locale, 'received');
 
         return true;
     }
