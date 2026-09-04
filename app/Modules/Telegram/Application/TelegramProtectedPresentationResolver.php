@@ -45,6 +45,10 @@ final readonly class TelegramProtectedPresentationResolver
                 'expires_at' => $destination->expiresAt->setTimezone(new \DateTimeZone('Asia/Tehran'))->format('Y-m-d H:i:s'),
             ],
         );
+        $text .= "\n\n".$this->translation(
+            'telegram_c2c_receipt.upload_prompt',
+            $reference->locale,
+        );
         $copyLabel = $this->translation(
             'telegram.navigation.purchase.payment_methods.card_to_card_payment.copy_card',
             $reference->locale,
