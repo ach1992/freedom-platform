@@ -304,7 +304,12 @@ final readonly class TelegramInteractionDispatcher
                 }
                 $width = $photo['width'] ?? null;
                 $height = $photo['height'] ?? null;
-                if (! is_int($width) || ! is_int($height) || $width < 1 || $height < 1) {
+                if (! is_int($width)
+                    || ! is_int($height)
+                    || $width < 1
+                    || $height < 1
+                    || $width > 100_000
+                    || $height > 100_000) {
                     throw new TelegramPrivateMediaRejected('malformed_photo');
                 }
                 $area = $width * $height;
