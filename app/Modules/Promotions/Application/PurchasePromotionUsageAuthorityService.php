@@ -38,6 +38,7 @@ final readonly class PurchasePromotionUsageAuthorityService implements PurchaseP
             if ($this->isZeroDiscount($quote)) {
                 return null;
             }
+            $this->assertDiscountedPurchaseQuoteShape($quote);
             $resolutionPublicId = $this->benefitResolutionForDiscountedQuote(
                 $connection,
                 (int) $quote->id,
@@ -79,6 +80,7 @@ final readonly class PurchasePromotionUsageAuthorityService implements PurchaseP
             if ($this->isZeroDiscount($quote)) {
                 return null;
             }
+            $this->assertDiscountedPurchaseQuoteShape($quote);
             $reservationPublicId = $this->reservationPublicIdForQuote($connection, $quoteId, true);
             $receipt = $this->finalizations->finalize(
                 $redemptionKey,
@@ -175,7 +177,7 @@ final readonly class PurchasePromotionUsageAuthorityService implements PurchaseP
         if ($quote === null || (int) $quote->user_id !== $actorUserId) {
             throw new AuthorizationException('Purchase promotion Quote access denied.');
         }
-        $this->assertPurchaseQuoteShape($quote);
+        $this->assertQuoteDiscountShape($quote);
 
         return $quote;
     }
@@ -194,19 +196,29 @@ final readonly class PurchasePromotionUsageAuthorityService implements PurchaseP
         if ($quote === null || (int) $quote->user_id !== $actorUserId) {
             throw new AuthorizationException('Purchase promotion Quote access denied.');
         }
-        $this->assertPurchaseQuoteShape($quote);
+        $this->assertQuoteDiscountShape($quote);
 
         return $quote;
     }
 
+    /** @param object{discount_reference_code:string|null,discount_irr:int|string,currency:string} $quote */
+    private function assertQuoteDiscountShape(object $quote): void
+    {
+        if ($quote->currency !== 'IRR'
+            || (int) $quote->discount_irr < 0
+            || ((int) $quote->discount_irr === 0) !== ($quote->discount_reference_code === null)) {
+            throw new DomainException('Purchase promotion Quote identity is invalid.');
+        }
+    }
+
     /** @param object{account_type_snapshot:string,action_snapshot:string,discount_reference_code:string|null,discount_irr:int|string,currency:string} $quote */
-    private function assertPurchaseQuoteShape(object $quote): void
+    private function assertDiscountedPurchaseQuoteShape(object $quote): void
     {
         if ($quote->account_type_snapshot !== 'customer'
             || $quote->action_snapshot !== 'purchase'
             || $quote->currency !== 'IRR'
-            || (int) $quote->discount_irr < 0
-            || ((int) $quote->discount_irr === 0) !== ($quote->discount_reference_code === null)) {
+            || (int) $quote->discount_irr <= 0
+            || $quote->discount_reference_code === null) {
             throw new DomainException('Purchase promotion Quote identity is invalid.');
         }
     }
