@@ -15,6 +15,7 @@ use App\Modules\Payments\Application\Contracts\PurchasePromotionUsageAuthority;
 use App\Modules\Payments\Application\TelegramCustomerPurchaseWalletPaymentService;
 use App\Modules\Payments\CardToCard\Application\Contracts\CardToCardAdjustmentGenerator;
 use App\Modules\Payments\CardToCard\Application\TelegramCustomerPurchaseCardToCardPaymentService;
+use App\Modules\Payments\CardToCard\Application\TelegramCustomerPurchaseCardToCardReceiptSubmissionService;
 use App\Modules\Payments\CardToCard\Infrastructure\SecureCardToCardAdjustmentGenerator;
 use App\Modules\Payments\Eligibility\Application\TelegramCustomerPurchasePaymentMethodsService;
 use App\Modules\Payments\NowPayments\Application\Contracts\NowPaymentsTransport;
@@ -58,7 +59,7 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind(TelegramCustomerPurchaseQuote::class, TelegramCustomerPurchaseQuoteService::class);
         $this->app->bind(TelegramCustomerPurchasePaymentMethods::class, TelegramCustomerPurchasePaymentMethodsService::class);
         $this->app->bind(TelegramCustomerPurchaseCardToCardPayment::class, TelegramCustomerPurchaseCardToCardPaymentService::class);
-        $this->app->bind(TelegramCustomerPurchaseCardToCardReceiptSubmission::class, TelegramCustomerPurchaseCardToCardPaymentService::class);
+        $this->app->bind(TelegramCustomerPurchaseCardToCardReceiptSubmission::class, TelegramCustomerPurchaseCardToCardReceiptSubmissionService::class);
         $this->app->bind(TelegramCustomerPurchaseWalletPayment::class, TelegramCustomerPurchaseWalletPaymentService::class);
         $this->app->bind(TelegramCustomerPurchaseOrder::class, TelegramCustomerPurchaseOrderService::class);
         $this->app->bind(TelegramOwnedServiceProjection::class, TelegramOwnedServiceProjectionService::class);
