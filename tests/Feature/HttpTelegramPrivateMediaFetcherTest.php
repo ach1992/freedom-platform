@@ -71,14 +71,40 @@ final class HttpTelegramPrivateMediaFetcherTest extends TestCase
         Http::assertSentCount(3);
     }
 
-    public function test_provider_identity_mismatch_fails_closed_before_download(): void
+    public function test_provider_file_id_alias_change_with_stable_unique_id_is_accepted(): void
+    {
+        $png = $this->onePixelPng();
+        Http::fake([
+            'https://api.telegram.org/bot123456789:abcdefghijklmnopqrstuvwxyz_ABCDE/getFile' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'file_id' => 'different-valid-file-id-alias',
+                    'file_unique_id' => 'unique-secret-3',
+                    'file_size' => strlen($png),
+                    'file_path' => 'photos/alias.png',
+                ],
+            ], 200),
+            'https://api.telegram.org/file/bot123456789:abcdefghijklmnopqrstuvwxyz_ABCDE/photos/alias.png' => Http::response($png, 200),
+        ]);
+
+        $download = $this->fetcher()->fetch(
+            RestrictedValue::fromString('file-secret-3'),
+            RestrictedValue::fromString('unique-secret-3'),
+            1024,
+        );
+
+        self::assertSame($png, $download->bytes());
+        Http::assertSentCount(2);
+    }
+
+    public function test_provider_unique_identity_mismatch_fails_closed_before_download(): void
     {
         Http::fake([
             'https://api.telegram.org/bot123456789:abcdefghijklmnopqrstuvwxyz_ABCDE/getFile' => Http::response([
                 'ok' => true,
                 'result' => [
-                    'file_id' => 'different-file-id',
-                    'file_unique_id' => 'unique-secret-3',
+                    'file_id' => 'different-valid-file-id-alias',
+                    'file_unique_id' => 'different-unique-secret',
                     'file_path' => 'photos/mismatch.png',
                 ],
             ], 200),
@@ -90,11 +116,70 @@ final class HttpTelegramPrivateMediaFetcherTest extends TestCase
                 RestrictedValue::fromString('unique-secret-3'),
                 1024,
             );
-            self::fail('Provider identity mismatch must fail closed.');
+            self::fail('Provider stable identity mismatch must fail closed.');
         } catch (RuntimeException $exception) {
             self::assertSame('Telegram getFile identity does not match the accepted update.', $exception->getMessage());
         }
         Http::assertSentCount(1);
+    }
+
+    public function test_empty_successful_download_is_retried_and_can_recover(): void
+    {
+        $png = $this->onePixelPng();
+        Http::fake([
+            'https://api.telegram.org/bot123456789:abcdefghijklmnopqrstuvwxyz_ABCDE/getFile' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'file_id' => 'file-secret-empty-retry',
+                    'file_unique_id' => 'unique-secret-empty-retry',
+                    'file_size' => strlen($png),
+                    'file_path' => 'photos/empty-retry.png',
+                ],
+            ], 200),
+        ]);
+        Http::fakeSequence('https://api.telegram.org/file/bot123456789:abcdefghijklmnopqrstuvwxyz_ABCDE/photos/empty-retry.png')
+            ->push('', 200)
+            ->push($png, 200);
+
+        $download = $this->fetcher()->fetch(
+            RestrictedValue::fromString('file-secret-empty-retry'),
+            RestrictedValue::fromString('unique-secret-empty-retry'),
+            1024,
+        );
+
+        self::assertSame($png, $download->bytes());
+        Http::assertSentCount(4);
+    }
+
+    public function test_repeated_empty_successful_downloads_exhaust_as_retryable_provider_failure(): void
+    {
+        $png = $this->onePixelPng();
+        Http::fake([
+            'https://api.telegram.org/bot123456789:abcdefghijklmnopqrstuvwxyz_ABCDE/getFile' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'file_id' => 'file-secret-empty-exhaust',
+                    'file_unique_id' => 'unique-secret-empty-exhaust',
+                    'file_size' => strlen($png),
+                    'file_path' => 'photos/empty-exhaust.png',
+                ],
+            ], 200),
+        ]);
+        Http::fakeSequence('https://api.telegram.org/file/bot123456789:abcdefghijklmnopqrstuvwxyz_ABCDE/photos/empty-exhaust.png')
+            ->push('', 200)
+            ->push('', 200);
+
+        try {
+            $this->fetcher()->fetch(
+                RestrictedValue::fromString('file-secret-empty-exhaust'),
+                RestrictedValue::fromString('unique-secret-empty-exhaust'),
+                1024,
+            );
+            self::fail('Repeated empty provider responses must remain a retryable provider failure.');
+        } catch (RuntimeException $exception) {
+            self::assertSame('Telegram private-media download returned an empty body.', $exception->getMessage());
+        }
+        Http::assertSentCount(4);
     }
 
     public function test_provider_body_overflow_is_bounded_before_acceptance(): void

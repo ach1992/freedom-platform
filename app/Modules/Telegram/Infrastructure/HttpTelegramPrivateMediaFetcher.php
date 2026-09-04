@@ -10,6 +10,7 @@ use App\Modules\Telegram\Application\TelegramPrivateMediaRejected;
 use App\Shared\Application\RestrictedValue;
 use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Client\Response;
+use Psr\Http\Message\StreamInterface;
 use RuntimeException;
 use Throwable;
 
@@ -89,7 +90,11 @@ final readonly class HttpTelegramPrivateMediaFetcher implements TelegramPrivateM
             }
             $length = strlen($content);
             if ($length < 1) {
-                throw new TelegramPrivateMediaRejected('empty_file');
+                if ($attempt < 2) {
+                    continue;
+                }
+
+                throw new RuntimeException('Telegram private-media download returned an empty body.');
             }
             if ($providerSize !== null && $providerSize !== $length) {
                 throw new RuntimeException('Telegram private-media provider size changed during download.');
@@ -114,6 +119,10 @@ final readonly class HttpTelegramPrivateMediaFetcher implements TelegramPrivateM
 
             $chunk = $stream->read(min(8192, $remaining));
             if ($chunk === '') {
+                if ($this->streamReachedEof($stream)) {
+                    break;
+                }
+
                 throw new RuntimeException('Telegram private-media response stream stalled.');
             }
             $content .= $chunk;
@@ -123,6 +132,12 @@ final readonly class HttpTelegramPrivateMediaFetcher implements TelegramPrivateM
         }
 
         return $content;
+    }
+
+    /** @phpstan-impure */
+    private function streamReachedEof(StreamInterface $stream): bool
+    {
+        return $stream->eof();
     }
 
     /** @return array{0:string,1:?int} */
@@ -147,9 +162,11 @@ final readonly class HttpTelegramPrivateMediaFetcher implements TelegramPrivateM
         }
         $returnedFileId = $result['file_id'] ?? null;
         $returnedUniqueId = $result['file_unique_id'] ?? null;
+        // Telegram may return another valid file_id alias for the same file, even
+        // for the same bot. file_unique_id is the provider's stable identity.
         if (! is_string($returnedFileId)
+            || $returnedFileId === ''
             || ! is_string($returnedUniqueId)
-            || ! hash_equals($fileId->reveal(), $returnedFileId)
             || ! hash_equals($expectedFileUniqueId->reveal(), $returnedUniqueId)) {
             throw new RuntimeException('Telegram getFile identity does not match the accepted update.');
         }

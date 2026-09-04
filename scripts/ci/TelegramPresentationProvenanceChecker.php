@@ -44,6 +44,7 @@ final class TelegramPresentationProvenanceChecker
         'app/Modules/Telegram/Application/TelegramDeliveryOperationExecutor.php',
         'app/Modules/Telegram/Application/TelegramDeliveryOutboxHandler.php',
         'app/Modules/Telegram/Application/TelegramDeliveryQueueService.php',
+        'app/Modules/Telegram/Application/TelegramConfidentialDeliveryQueue.php',
         'app/Modules/Telegram/Application/TelegramMutationRequest.php',
         'app/Modules/Telegram/Application/TelegramPresentationProvenanceGuard.php',
     ];

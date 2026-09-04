@@ -22,6 +22,8 @@ final class TelegramPrivateMediaTestFetcher implements TelegramPrivateMediaFetch
 {
     public int $calls = 0;
 
+    public int $retryableFailuresRemaining = 0;
+
     public function __construct(public string $content) {}
 
     public function fetch(
@@ -30,6 +32,11 @@ final class TelegramPrivateMediaTestFetcher implements TelegramPrivateMediaFetch
         int $maximumBytes,
     ): TelegramPrivateMediaDownload {
         $this->calls++;
+        if ($this->retryableFailuresRemaining > 0) {
+            $this->retryableFailuresRemaining--;
+
+            throw new RuntimeException('Simulated retryable Telegram provider failure.');
+        }
 
         return TelegramPrivateMediaDownload::fromBytes($this->content, strlen($this->content));
     }
@@ -100,6 +107,41 @@ final class TelegramPrivateMediaIngestorTest extends TestCase
         self::assertSame('c2c_manual_submission', $associated->association_type);
         self::assertSame($submissionPublicId, $associated->association_public_id);
         Storage::disk('telegram_private_media')->assertExists((string) $associated->storage_path);
+    }
+
+    public function test_retryable_provider_failure_keeps_durable_media_pending_for_same_update_recovery(): void
+    {
+        [$userId, $accountId] = $this->telegramIdentity(9816);
+        $png = $this->onePixelPng();
+        $fetcher = new TelegramPrivateMediaTestFetcher($png);
+        $fetcher->retryableFailuresRemaining = 1;
+        $this->app->instance(TelegramPrivateMediaFetcher::class, $fetcher);
+        $this->app->forgetInstance(TelegramPrivateMediaIngestor::class);
+        $service = $this->app->make(TelegramPrivateMediaIngestor::class);
+        $input = new TelegramPrivateMediaInput(
+            'photo',
+            RestrictedValue::fromString('provider-file-secret-retryable'),
+            RestrictedValue::fromString('provider-unique-secret-retryable'),
+            strlen($png),
+        );
+
+        try {
+            $service->ingest('123456789', 88007, $accountId, $userId, $input);
+            self::fail('Retryable provider failure must propagate without terminal rejection.');
+        } catch (RuntimeException $exception) {
+            self::assertSame('Simulated retryable Telegram provider failure.', $exception->getMessage());
+        }
+
+        self::assertSame('pending', DB::table('telegram_private_media')->where('update_id', 88007)->value('state'));
+        self::assertNull(DB::table('telegram_private_media')->where('update_id', 88007)->value('rejection_code'));
+        self::assertSame([], Storage::disk('telegram_private_media')->allFiles());
+
+        $receipt = $service->ingest('123456789', 88007, $accountId, $userId, $input);
+
+        self::assertTrue($receipt->replayed);
+        self::assertSame(2, $fetcher->calls);
+        self::assertSame(1, DB::table('telegram_private_media')->where('update_id', 88007)->count());
+        self::assertSame('stored', DB::table('telegram_private_media')->where('update_id', 88007)->value('state'));
     }
 
     public function test_unsafe_or_conflicting_media_fails_closed_without_accepted_private_file(): void

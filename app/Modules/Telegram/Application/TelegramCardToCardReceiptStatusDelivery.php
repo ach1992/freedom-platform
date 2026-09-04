@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Application;
 
-use App\Modules\Telegram\Domain\TelegramDeliveryAction;
 use Illuminate\Contracts\Translation\Translator;
 use RuntimeException;
 
@@ -13,7 +12,7 @@ final readonly class TelegramCardToCardReceiptStatusDelivery
     public function __construct(
         private Translator $translator,
         private ConfidentialTelegramPresentationFactory $presentations,
-        private TelegramDeliveryQueueService $delivery,
+        private TelegramConfidentialDeliveryQueue $delivery,
     ) {}
 
     public function queue(int $telegramUserId, string $requestKey, string $locale, string $status): void
@@ -26,10 +25,8 @@ final readonly class TelegramCardToCardReceiptStatusDelivery
         $presentation = $this->presentations->fromSource(
             new TelegramCardToCardReceiptStatusPresentation($text),
         );
-        $this->delivery->queueConfidential(
-            TelegramDeliveryAction::Send,
+        $this->delivery->send(
             $telegramUserId,
-            null,
             $presentation,
             'telegram-c2c-receipt-status:'.$status.':'.$requestKey,
             hash('sha256', 'telegram-c2c-receipt-status:'.$status.':'.$requestKey),
