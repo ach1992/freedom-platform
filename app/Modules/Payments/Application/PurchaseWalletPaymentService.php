@@ -10,6 +10,7 @@ use App\Modules\Payments\Application\Contracts\PaymentEvidence;
 use App\Modules\Payments\Application\Contracts\PaymentEvidenceAuthority;
 use App\Modules\Payments\Application\Contracts\PaymentTransactionStatus;
 use App\Modules\Payments\Application\Contracts\ProviderOperationOutcome;
+use App\Modules\Payments\Application\Contracts\PurchasePromotionUsageAuthority;
 use App\Modules\Payments\Application\Contracts\VerifiedPaymentEvent;
 use App\Modules\Payments\Domain\PaymentIntentState;
 use App\Modules\Wallet\Application\WalletHoldReceipt;
@@ -42,6 +43,7 @@ final readonly class PurchaseWalletPaymentService
         private DatabaseManager $database,
         private Clock $clock,
         private PurchasePaymentIntentService $paymentIntents,
+        private PurchasePromotionUsageAuthority $promotionUsage,
         private WalletHoldService $walletHolds,
         private PurchaseSettlementService $purchaseSettlements,
         private PurchaseOrderService $orders,
@@ -75,6 +77,12 @@ final readonly class PurchaseWalletPaymentService
                 $eligibilityDecisionPublicId,
                 self::METHOD_CODE,
                 $correlationId,
+            );
+
+            $this->promotionUsage->reserveForQuote(
+                $this->promotionReservationKey($sourceQuotePublicId),
+                $userId,
+                $sourceQuotePublicId,
             );
 
             $intentRow = $connection->table('payment_intents')
@@ -157,6 +165,12 @@ final readonly class PurchaseWalletPaymentService
                     throw new RuntimeException('Wallet purchase settlement exists without captured hold authority.');
                 }
 
+                $this->promotionUsage->finalizeForSettlement(
+                    $this->promotionRedemptionKey((string) $existingSettlement->public_id),
+                    (int) $authority->user_id,
+                    (string) $existingSettlement->public_id,
+                );
+
                 return $this->orders->createFromSettlement((string) $existingSettlement->public_id, $correlationId);
             }
 
@@ -227,6 +241,12 @@ final readonly class PurchaseWalletPaymentService
                 self::METHOD_CODE,
                 $verified,
                 $correlationId,
+            );
+
+            $this->promotionUsage->finalizeForSettlement(
+                $this->promotionRedemptionKey($settlement->settlementPublicId),
+                (int) $authority->user_id,
+                $settlement->settlementPublicId,
             );
 
             return $this->orders->createFromSettlement($settlement->settlementPublicId, $correlationId);
@@ -406,6 +426,16 @@ final readonly class PurchaseWalletPaymentService
     private function holdKey(string $paymentIntentPublicId): string
     {
         return self::HOLD_PREFIX.$paymentIntentPublicId;
+    }
+
+    private function promotionReservationKey(string $quotePublicId): string
+    {
+        return 'purchase-promotion-reservation:'.$quotePublicId;
+    }
+
+    private function promotionRedemptionKey(string $settlementPublicId): string
+    {
+        return 'purchase-promotion-redemption:'.$settlementPublicId;
     }
 
     private function storedDateTime(string $value): DateTimeImmutable

@@ -37,6 +37,7 @@ use App\Modules\Payments\Application\Contracts\PaymentEvidence;
 use App\Modules\Payments\Application\Contracts\PaymentEvidenceAuthority;
 use App\Modules\Payments\Application\Contracts\PaymentTransactionStatus;
 use App\Modules\Payments\Application\Contracts\ProviderOperationOutcome;
+use App\Modules\Payments\Application\Contracts\PurchasePromotionUsageAuthority;
 use App\Modules\Payments\Application\Contracts\VerifiedPaymentEvent;
 use App\Modules\Payments\Application\PurchasePaymentIntentService;
 use App\Modules\Payments\Application\PurchaseRefundService;
@@ -859,6 +860,25 @@ SQL);
             self::assertSame($durationDays, $quote->servicePackage->durationDays);
             self::assertSame($dataBytes, $quote->servicePackage->dataBytes);
         }
+    }
+
+    public function test_zero_discount_paid_addon_is_a_promotion_usage_noop(): void
+    {
+        $scenario = $this->scenario('promotion-zero-discount-addon');
+        $quote = $this->paidPackageQuote($scenario, 'aq-extra-10gb', 'promotion-zero-discount-addon');
+        $promotionUsage = $this->app->make(PurchasePromotionUsageAuthority::class);
+
+        $reservation = $promotionUsage->reserveForQuote(
+            'promotion-zero-discount-addon-reservation-0001',
+            $scenario['user_id'],
+            $quote->quotePublicId,
+        );
+
+        self::assertSame(QuoteAction::AddData, $quote->action);
+        self::assertSame(0, $quote->discountIrr);
+        self::assertNull($quote->discountReferenceCode);
+        self::assertNull($reservation);
+        self::assertSame(0, DB::table('promotion_usage_reservations')->count());
     }
 
     public function test_combined_paid_package_requires_explicit_verified_atomic_capability_before_quote(): void

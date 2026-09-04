@@ -151,7 +151,8 @@ final readonly class PromotionUsageFinalizationService
         $this->assertUlid($paymentIntentPublicId, 'Purchase payment intent public ID');
 
         $connection = $this->database->connection();
-        $connection->transaction(function (Connection $connection) use ($reservationPublicId, $paymentIntentPublicId, $context): void {
+
+        return $connection->transaction(function (Connection $connection) use ($releaseKey, $reservationPublicId, $paymentIntentPublicId, $context): PromotionUsageReleaseReceipt {
             $reservation = $this->reservationByPublicId($connection, $reservationPublicId, true);
             if ($reservation === null) {
                 throw new DomainException('Promotion usage reservation does not exist.');
@@ -196,9 +197,9 @@ final readonly class PromotionUsageFinalizationService
             if ($nonTerminalIntent) {
                 throw new DomainException('Promotion usage remains reserved while another purchase payment is active or captured.');
             }
-        });
 
-        return $this->reservationService->release($releaseKey, $reservationPublicId, $context);
+            return $this->reservationService->release($releaseKey, $reservationPublicId, $context);
+        }, 3);
     }
 
     /** @param ReservationRow $reservation */

@@ -13,6 +13,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseDiscountQ
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseOrder;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchasePaymentMethods;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseQuote;
+use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseWalletPayment;
 use App\Modules\Telegram\Application\Contracts\TelegramInteractionHandler;
 use App\Modules\Telegram\Application\Contracts\TelegramManagedUsdtRateSettings;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceDeliveryResender;
@@ -45,6 +46,12 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
     private const STATE_PURCHASE_PAYMENT_METHOD_SELECTED = 'purchase_payment_method_selected';
 
     private const STATE_PURCHASE_PAYMENT_METHOD_SELECTING = 'purchase_payment_method_selecting';
+
+    private const STATE_PURCHASE_WALLET_CONFIRM = 'purchase_wallet_confirm';
+
+    private const STATE_PURCHASE_WALLET_PAID = 'purchase_wallet_paid';
+
+    private const STATE_PURCHASE_WALLET_SUBMITTING = 'purchase_wallet_submitting';
 
     private const STATE_PURCHASE_QUOTE = 'purchase_quote';
 
@@ -79,6 +86,10 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
     private const ACTION_PURCHASE_PAYMENT_METHODS = 'navigation.purchase.payment_methods';
 
     private const ACTION_PURCHASE_PAYMENT_METHOD_SELECT = 'navigation.purchase.payment_method.select';
+
+    private const ACTION_PURCHASE_WALLET_RESERVE = 'navigation.purchase.wallet.reserve';
+
+    private const ACTION_PURCHASE_WALLET_CONFIRM = 'navigation.purchase.wallet.confirm';
 
     private const ACTION_PURCHASE_QUOTE = 'navigation.purchase.quote';
 
@@ -122,6 +133,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         private TelegramCustomerPurchaseDiscountQuote $purchaseDiscountQuotes,
         private TelegramCustomerPurchasePaymentMethods $purchasePaymentMethods,
         private TelegramCustomerPurchaseOrder $purchaseOrders,
+        private TelegramCustomerPurchaseWalletPayment $purchaseWalletPayments,
         private TelegramCustomerPurchaseCatalog $purchaseCatalog,
         private TelegramOwnedServiceProjection $services,
         private TelegramOwnedServiceDeliveryResender $serviceDeliveryResender,
@@ -208,6 +220,18 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
 
         if ($action->sessionState === self::STATE_PURCHASE_PAYMENT_METHOD_SELECTED) {
             $this->handlePurchasePaymentMethodSelected($action);
+
+            return;
+        }
+
+        if ($action->sessionState === self::STATE_PURCHASE_WALLET_CONFIRM) {
+            $this->handlePurchaseWalletConfirm($action);
+
+            return;
+        }
+
+        if ($action->sessionState === self::STATE_PURCHASE_WALLET_PAID) {
+            $this->handlePurchaseWalletPaid($action);
 
             return;
         }
@@ -412,6 +436,11 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
     private function handlePurchasePaymentMethodSelected(TelegramInteractionAction $action): void
     {
         if ($action->kind === TelegramInteractionActionKind::Callback) {
+            if ($action->callbackAction === self::ACTION_PURCHASE_WALLET_RESERVE && $action->callbackPayload === []) {
+                $this->reservePurchaseWalletPayment($action);
+
+                return;
+            }
             if ($action->callbackAction !== self::ACTION_BACK || $action->callbackPayload !== []) {
                 throw new RuntimeException('Telegram selected payment-method callback action is unsupported.');
             }
@@ -427,6 +456,48 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             return;
         }
         if ($this->isEntryCommand($action->messageText)) {
+            $this->returnHome($action);
+        }
+    }
+
+    private function handlePurchaseWalletConfirm(TelegramInteractionAction $action): void
+    {
+        if ($action->kind === TelegramInteractionActionKind::Callback) {
+            if ($action->callbackAction === self::ACTION_PURCHASE_WALLET_CONFIRM && $action->callbackPayload === []) {
+                $this->confirmPurchaseWalletPayment($action);
+
+                return;
+            }
+            if ($action->callbackAction !== self::ACTION_BACK || $action->callbackPayload !== []) {
+                throw new RuntimeException('Telegram wallet confirmation callback action is unsupported.');
+            }
+
+            $this->cancelPurchaseWalletAndReturnPaymentMethods($action);
+
+            return;
+        }
+        if ($action->kind === TelegramInteractionActionKind::Back) {
+            $this->cancelPurchaseWalletAndReturnPaymentMethods($action);
+
+            return;
+        }
+        if ($this->isEntryCommand($action->messageText)) {
+            $this->cancelPurchaseWalletAndReturnHome($action);
+        }
+    }
+
+    private function handlePurchaseWalletPaid(TelegramInteractionAction $action): void
+    {
+        $this->purchaseWalletPaidStateFromPayload($action->sessionPayload);
+        if ($action->kind === TelegramInteractionActionKind::Callback) {
+            if ($action->callbackAction !== self::ACTION_BACK || $action->callbackPayload !== []) {
+                throw new RuntimeException('Telegram paid wallet callback action is unsupported.');
+            }
+            $this->returnHome($action);
+
+            return;
+        }
+        if ($action->kind === TelegramInteractionActionKind::Back || $this->isEntryCommand($action->messageText)) {
             $this->returnHome($action);
         }
     }
@@ -1640,10 +1711,336 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         );
     }
 
-    private function renderPurchasePaymentMethodSelected(
+    private function reservePurchaseWalletPayment(TelegramInteractionAction $action): void
+    {
+        $state = $this->purchasePaymentMethodSelectedStateFromPayload($action->sessionPayload);
+        if ($state['payment_method_code'] !== 'wallet') {
+            throw new AuthorizationException('Telegram wallet payment is unavailable for this selected method.');
+        }
+        $operationKey = hash('sha256', $action->requestKey);
+
+        try {
+            [$session, $reservation] = $this->database->connection()->transaction(function () use ($action, $state, $operationKey): array {
+                $claim = $this->sessions->transition(
+                    $action->sessionPublicId,
+                    $action->sessionVersion,
+                    self::STATE_PURCHASE_WALLET_SUBMITTING,
+                    $state,
+                    'nav-purchase-wallet-reserve-claim:'.$operationKey,
+                );
+                $this->assertActorBinding($action, $claim->userId);
+                $reservation = $this->purchaseWalletPayments->reserveForSelf(
+                    $action->userId,
+                    $action->userId,
+                    $state['order_public_id'],
+                    $state['quote_public_id'],
+                    $state['quote_configuration_hash'],
+                    $state['payment_decision_public_id'],
+                    $state['payment_decision_configuration_hash'],
+                    $operationKey,
+                );
+                $confirmState = $state;
+                $confirmState['payment_intent_public_id'] = $reservation->paymentIntentPublicId;
+                $session = $this->sessions->transition(
+                    $action->sessionPublicId,
+                    $claim->version,
+                    self::STATE_PURCHASE_WALLET_CONFIRM,
+                    $confirmState,
+                    'nav-purchase-wallet-confirm-state:'.$operationKey,
+                );
+                $this->assertActorBinding($action, $session->userId);
+
+                return [$session, $reservation];
+            }, 3);
+        } catch (TelegramCustomerPurchaseWalletUnavailable) {
+            $this->renderPurchaseWalletUnavailable(
+                $action,
+                $action->sessionVersion,
+                $this->localeForActor($action->userId),
+                $action->requestKey,
+            );
+
+            return;
+        } catch (AuthorizationException) {
+            $this->returnPurchasePaymentMethodsFromSelection($action);
+
+            return;
+        } catch (\DomainException $exception) {
+            if ($this->isSessionRace($exception)) {
+                return;
+            }
+            throw $exception;
+        }
+
+        $this->renderPurchaseWalletConfirm(
+            $action,
+            $session->version,
+            $reservation,
+            $this->localeForActor($action->userId),
+            $action->requestKey,
+        );
+    }
+
+    private function confirmPurchaseWalletPayment(TelegramInteractionAction $action): void
+    {
+        $state = $this->purchaseWalletConfirmStateFromPayload($action->sessionPayload);
+        $operationKey = hash('sha256', $action->requestKey);
+
+        try {
+            [$session, $paid] = $this->database->connection()->transaction(function () use ($action, $state, $operationKey): array {
+                $claim = $this->sessions->transition(
+                    $action->sessionPublicId,
+                    $action->sessionVersion,
+                    self::STATE_PURCHASE_WALLET_SUBMITTING,
+                    $state,
+                    'nav-purchase-wallet-capture-claim:'.$operationKey,
+                );
+                $this->assertActorBinding($action, $claim->userId);
+                $paid = $this->purchaseWalletPayments->captureForSelf(
+                    $action->userId,
+                    $action->userId,
+                    $state['order_public_id'],
+                    $state['quote_public_id'],
+                    $state['quote_configuration_hash'],
+                    $state['payment_decision_public_id'],
+                    $state['payment_decision_configuration_hash'],
+                    $state['payment_intent_public_id'],
+                    $operationKey,
+                );
+                $paidState = $state;
+                $paidState['purchase_settlement_public_id'] = $paid->purchaseSettlementPublicId;
+                $session = $this->sessions->transition(
+                    $action->sessionPublicId,
+                    $claim->version,
+                    self::STATE_PURCHASE_WALLET_PAID,
+                    $paidState,
+                    'nav-purchase-wallet-paid-state:'.$operationKey,
+                );
+                $this->assertActorBinding($action, $session->userId);
+
+                return [$session, $paid];
+            }, 3);
+        } catch (TelegramCustomerPurchaseWalletUnavailable) {
+            $this->returnHome($action);
+
+            return;
+        } catch (AuthorizationException) {
+            $this->cancelPurchaseWalletAndReturnHome($action);
+
+            return;
+        } catch (\DomainException $exception) {
+            if ($this->isSessionRace($exception)) {
+                return;
+            }
+            throw $exception;
+        }
+
+        $this->renderPurchaseWalletPaid(
+            $action,
+            $session->version,
+            $paid,
+            $this->localeForActor($action->userId),
+            $action->requestKey,
+        );
+    }
+
+    private function cancelPurchaseWalletAndReturnPaymentMethods(TelegramInteractionAction $action): void
+    {
+        $state = $this->purchaseWalletConfirmStateFromPayload($action->sessionPayload);
+        $operationKey = hash('sha256', $action->requestKey);
+
+        try {
+            [$session, $decision] = $this->database->connection()->transaction(function () use ($action, $state, $operationKey): array {
+                $claim = $this->sessions->transition(
+                    $action->sessionPublicId,
+                    $action->sessionVersion,
+                    self::STATE_PURCHASE_WALLET_SUBMITTING,
+                    $state,
+                    'nav-purchase-wallet-cancel-claim:'.$operationKey,
+                );
+                $this->assertActorBinding($action, $claim->userId);
+                $this->purchaseWalletPayments->cancelForSelf(
+                    $action->userId,
+                    $action->userId,
+                    $state['order_public_id'],
+                    $state['quote_public_id'],
+                    $state['payment_decision_public_id'],
+                    $state['payment_intent_public_id'],
+                    $operationKey,
+                );
+                $decision = $this->purchasePaymentMethods->currentForSelf(
+                    $action->userId,
+                    $action->userId,
+                    $state['quote_public_id'],
+                    $state['quote_configuration_hash'],
+                    $state['payment_decision_public_id'],
+                    $state['payment_decision_configuration_hash'],
+                );
+                $methodsState = $state;
+                unset($methodsState['payment_intent_public_id'], $methodsState['payment_method_code']);
+                $session = $this->sessions->transition(
+                    $action->sessionPublicId,
+                    $claim->version,
+                    self::STATE_PURCHASE_PAYMENT_METHODS,
+                    $methodsState,
+                    'nav-purchase-wallet-cancel-methods:'.$operationKey,
+                );
+                $this->assertActorBinding($action, $session->userId);
+
+                return [$session, $decision];
+            }, 3);
+        } catch (AuthorizationException) {
+            $this->cancelPurchaseWalletAndReturnHome($action);
+
+            return;
+        } catch (\DomainException $exception) {
+            if ($this->isSessionRace($exception)) {
+                return;
+            }
+            throw $exception;
+        }
+
+        $this->renderPurchasePaymentMethods(
+            $action,
+            $session->version,
+            $decision,
+            $this->localeForActor($action->userId),
+            $action->requestKey,
+        );
+    }
+
+    private function cancelPurchaseWalletAndReturnHome(TelegramInteractionAction $action): void
+    {
+        $state = $this->purchaseWalletConfirmStateFromPayload($action->sessionPayload);
+        $operationKey = hash('sha256', $action->requestKey);
+
+        try {
+            $session = $this->database->connection()->transaction(function () use ($action, $state, $operationKey): TelegramInteractionSessionReceipt {
+                $claim = $this->sessions->transition(
+                    $action->sessionPublicId,
+                    $action->sessionVersion,
+                    self::STATE_PURCHASE_WALLET_SUBMITTING,
+                    $state,
+                    'nav-purchase-wallet-cancel-home-claim:'.$operationKey,
+                );
+                $this->assertActorBinding($action, $claim->userId);
+                $this->purchaseWalletPayments->cancelForSelf(
+                    $action->userId,
+                    $action->userId,
+                    $state['order_public_id'],
+                    $state['quote_public_id'],
+                    $state['payment_decision_public_id'],
+                    $state['payment_intent_public_id'],
+                    $operationKey,
+                );
+                $session = $this->sessions->transition(
+                    $action->sessionPublicId,
+                    $claim->version,
+                    TelegramNavigationEntryGateway::STATE,
+                    [],
+                    'nav-purchase-wallet-cancel-home:'.$operationKey,
+                );
+                $this->assertActorBinding($action, $session->userId);
+
+                return $session;
+            }, 3);
+        } catch (\DomainException $exception) {
+            if ($this->isSessionRace($exception)) {
+                return;
+            }
+            throw $exception;
+        }
+
+        $this->renderHome($action, $session->version, $action->requestKey);
+    }
+
+    private function renderPurchaseWalletUnavailable(
         TelegramInteractionAction $action,
         int $sessionVersion,
-        string $methodCode,
+        string $locale,
+        string $requestKey,
+    ): void {
+        $retry = $this->callbacks->issue(
+            $action->sessionPublicId,
+            $sessionVersion,
+            self::ACTION_PURCHASE_WALLET_RESERVE,
+            [],
+            'nav-purchase-wallet-unavailable-retry:'.$requestKey,
+        );
+        $back = $this->callbacks->issue(
+            $action->sessionPublicId,
+            $sessionVersion,
+            self::ACTION_BACK,
+            [],
+            'nav-purchase-wallet-unavailable-back:'.$requestKey,
+        );
+        $this->queueConfidential(
+            $action,
+            $this->translation('telegram.navigation.purchase.payment_methods.wallet_payment.unavailable', $locale),
+            'nav-purchase-wallet-unavailable-delivery:'.$requestKey,
+            'purchase-wallet-unavailable',
+            new TelegramInlineKeyboardSnapshot([
+                [new TelegramInlineCallbackButton(
+                    $this->translation('telegram.navigation.purchase.payment_methods.wallet_payment.retry', $locale),
+                    $retry->publicId,
+                    TelegramInlineButtonStyle::Primary,
+                )],
+                [new TelegramInlineCallbackButton(
+                    $this->translation('telegram.navigation.buttons.back', $locale),
+                    $back->publicId,
+                )],
+            ]),
+        );
+    }
+
+    private function renderPurchaseWalletConfirm(
+        TelegramInteractionAction $action,
+        int $sessionVersion,
+        TelegramCustomerPurchaseWalletReservation $reservation,
+        string $locale,
+        string $requestKey,
+    ): void {
+        $confirm = $this->callbacks->issue(
+            $action->sessionPublicId,
+            $sessionVersion,
+            self::ACTION_PURCHASE_WALLET_CONFIRM,
+            [],
+            'nav-purchase-wallet-confirm:'.$requestKey,
+        );
+        $back = $this->callbacks->issue(
+            $action->sessionPublicId,
+            $sessionVersion,
+            self::ACTION_BACK,
+            [],
+            'nav-purchase-wallet-confirm-back:'.$requestKey,
+        );
+        $this->queueConfidential(
+            $action,
+            $this->translation('telegram.navigation.purchase.payment_methods.wallet_payment.confirm', $locale, [
+                'amount' => $this->formatIrr($reservation->amountIrr),
+                'available' => $this->formatIrr($reservation->availableBalanceAfterHoldIrr),
+                'currency' => 'IRR',
+            ]),
+            'nav-purchase-wallet-confirm-delivery:'.$requestKey,
+            'purchase-wallet-confirm',
+            new TelegramInlineKeyboardSnapshot([
+                [new TelegramInlineCallbackButton(
+                    $this->translation('telegram.navigation.purchase.payment_methods.wallet_payment.confirm_button', $locale),
+                    $confirm->publicId,
+                    TelegramInlineButtonStyle::Primary,
+                )],
+                [new TelegramInlineCallbackButton(
+                    $this->translation('telegram.navigation.buttons.back', $locale),
+                    $back->publicId,
+                )],
+            ]),
+        );
+    }
+
+    private function renderPurchaseWalletPaid(
+        TelegramInteractionAction $action,
+        int $sessionVersion,
+        TelegramCustomerPurchaseWalletPaid $paid,
         string $locale,
         string $requestKey,
     ): void {
@@ -1652,8 +2049,66 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             $sessionVersion,
             self::ACTION_BACK,
             [],
+            'nav-purchase-wallet-paid-back:'.$requestKey,
+        );
+        $this->queueConfidential(
+            $action,
+            $this->translation('telegram.navigation.purchase.payment_methods.wallet_payment.paid', $locale, [
+                'order_id' => $paid->orderPublicId,
+                'amount' => $this->formatIrr($paid->amountIrr),
+                'currency' => 'IRR',
+            ]),
+            'nav-purchase-wallet-paid-delivery:'.$requestKey,
+            'purchase-wallet-paid',
+            new TelegramInlineKeyboardSnapshot([[new TelegramInlineCallbackButton(
+                $this->translation('telegram.navigation.buttons.back', $locale),
+                $back->publicId,
+            )]]),
+        );
+    }
+
+    private function isSessionRace(\DomainException $exception): bool
+    {
+        return in_array($exception->getMessage(), [
+            'Telegram interaction session has expired.',
+            'Telegram interaction session version is stale.',
+            'Telegram interaction request key conflicts with an accepted command.',
+        ], true);
+    }
+
+    private function renderPurchasePaymentMethodSelected(
+        TelegramInteractionAction $action,
+        int $sessionVersion,
+        string $methodCode,
+        string $locale,
+        string $requestKey,
+    ): void {
+        $rows = [];
+        if ($methodCode === 'wallet') {
+            $continue = $this->callbacks->issue(
+                $action->sessionPublicId,
+                $sessionVersion,
+                self::ACTION_PURCHASE_WALLET_RESERVE,
+                [],
+                'nav-purchase-wallet-reserve:'.$requestKey,
+            );
+            $rows[] = [new TelegramInlineCallbackButton(
+                $this->translation('telegram.navigation.purchase.payment_methods.wallet_payment.continue', $locale),
+                $continue->publicId,
+                TelegramInlineButtonStyle::Primary,
+            )];
+        }
+        $back = $this->callbacks->issue(
+            $action->sessionPublicId,
+            $sessionVersion,
+            self::ACTION_BACK,
+            [],
             'nav-purchase-payment-method-selected-back:'.$requestKey,
         );
+        $rows[] = [new TelegramInlineCallbackButton(
+            $this->translation('telegram.navigation.buttons.back', $locale),
+            $back->publicId,
+        )];
         $this->queueConfidential(
             $action,
             $this->translation('telegram.navigation.purchase.payment_methods.selected', $locale, [
@@ -1661,10 +2116,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             ]),
             'nav-purchase-payment-method-selected-delivery:'.$requestKey,
             'purchase-payment-method-selected',
-            new TelegramInlineKeyboardSnapshot([[new TelegramInlineCallbackButton(
-                $this->translation('telegram.navigation.buttons.back', $locale),
-                $back->publicId,
-            )]]),
+            new TelegramInlineKeyboardSnapshot($rows),
         );
     }
 
@@ -2870,6 +3322,49 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         $state['payment_method_code'] = $methodCode;
 
         /** @var array{page:int,offering_selection:string,quote_public_id:string,quote_configuration_hash:string,payment_decision_public_id:string,payment_decision_configuration_hash:string,order_public_id:string,payment_method_code:string,discount_consumption_public_id?:string,discount_consumption_configuration_hash?:string,promotion_resolution_public_id?:string} $state */
+        return $state;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array{page:int,offering_selection:string,quote_public_id:string,quote_configuration_hash:string,payment_decision_public_id:string,payment_decision_configuration_hash:string,order_public_id:string,payment_method_code:string,payment_intent_public_id:string,discount_consumption_public_id?:string,discount_consumption_configuration_hash?:string,promotion_resolution_public_id?:string}
+     */
+    private function purchaseWalletConfirmStateFromPayload(array $payload): array
+    {
+        if (! is_string($payload['payment_intent_public_id'] ?? null)
+            || preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/i', $payload['payment_intent_public_id']) !== 1) {
+            throw new RuntimeException('Telegram wallet confirmation state is invalid.');
+        }
+        $selectedPayload = $payload;
+        $intentPublicId = $selectedPayload['payment_intent_public_id'];
+        unset($selectedPayload['payment_intent_public_id']);
+        $state = $this->purchasePaymentMethodSelectedStateFromPayload($selectedPayload);
+        if ($state['payment_method_code'] !== 'wallet') {
+            throw new RuntimeException('Telegram wallet confirmation method is invalid.');
+        }
+        $state['payment_intent_public_id'] = $intentPublicId;
+
+        /** @var array{page:int,offering_selection:string,quote_public_id:string,quote_configuration_hash:string,payment_decision_public_id:string,payment_decision_configuration_hash:string,order_public_id:string,payment_method_code:string,payment_intent_public_id:string,discount_consumption_public_id?:string,discount_consumption_configuration_hash?:string,promotion_resolution_public_id?:string} $state */
+        return $state;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array{page:int,offering_selection:string,quote_public_id:string,quote_configuration_hash:string,payment_decision_public_id:string,payment_decision_configuration_hash:string,order_public_id:string,payment_method_code:string,payment_intent_public_id:string,purchase_settlement_public_id:string,discount_consumption_public_id?:string,discount_consumption_configuration_hash?:string,promotion_resolution_public_id?:string}
+     */
+    private function purchaseWalletPaidStateFromPayload(array $payload): array
+    {
+        if (! is_string($payload['purchase_settlement_public_id'] ?? null)
+            || preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/i', $payload['purchase_settlement_public_id']) !== 1) {
+            throw new RuntimeException('Telegram wallet paid state is invalid.');
+        }
+        $confirmPayload = $payload;
+        $settlementPublicId = $confirmPayload['purchase_settlement_public_id'];
+        unset($confirmPayload['purchase_settlement_public_id']);
+        $state = $this->purchaseWalletConfirmStateFromPayload($confirmPayload);
+        $state['purchase_settlement_public_id'] = $settlementPublicId;
+
+        /** @var array{page:int,offering_selection:string,quote_public_id:string,quote_configuration_hash:string,payment_decision_public_id:string,payment_decision_configuration_hash:string,order_public_id:string,payment_method_code:string,payment_intent_public_id:string,purchase_settlement_public_id:string,discount_consumption_public_id?:string,discount_consumption_configuration_hash?:string,promotion_resolution_public_id?:string} $state */
         return $state;
     }
 

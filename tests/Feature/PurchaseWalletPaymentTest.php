@@ -89,6 +89,7 @@ final class PurchaseWalletPaymentTest extends TestCase
         self::assertSame('active', DB::table('wallet_holds')->value('status'));
         self::assertSame($receipt->intentPublicId, DB::table('wallet_holds')->value('source_id'));
         self::assertNull(DB::table('payment_intents')->where('public_id', $receipt->intentPublicId)->value('wallet_account_id'));
+        self::assertSame(0, DB::table('promotion_usage_reservations')->count());
 
         $balance = $this->app->make(WalletHoldService::class)->balance($userId, $walletId);
         self::assertSame(1_500_000, $balance->ledgerBalance->amount);
@@ -174,6 +175,9 @@ final class PurchaseWalletPaymentTest extends TestCase
         self::assertSame(1, DB::table('orders')->where('source_quote_id', $quote->quoteId)->count());
         self::assertSame('paid', DB::table('orders')->where('id', $opening->orderId)->value('state'));
         self::assertSame(0, DB::table('wallet_top_up_settlements')->count());
+        self::assertSame(0, DB::table('promotion_usage_reservations')->count());
+        self::assertSame(0, DB::table('promotion_usage_redemptions')->count());
+        self::assertSame(0, DB::table('promotion_usage_releases')->count());
 
         $hold = DB::table('wallet_holds')->where('source_id', $intent->intentPublicId)->first();
         self::assertNotNull($hold);

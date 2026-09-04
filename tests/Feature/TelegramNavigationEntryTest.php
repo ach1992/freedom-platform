@@ -10,6 +10,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseDiscountQ
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseOrder;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchasePaymentMethods;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseQuote;
+use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseWalletPayment;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceDeliveryResender;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceProjection;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseCatalogPage;
@@ -20,6 +21,9 @@ use App\Modules\Telegram\Application\TelegramCustomerPurchasePaymentMethodsDecis
 use App\Modules\Telegram\Application\TelegramCustomerPurchasePaymentMethodSelection;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseQuotePreview;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseQuoteRefreshRequired;
+use App\Modules\Telegram\Application\TelegramCustomerPurchaseWalletPaid;
+use App\Modules\Telegram\Application\TelegramCustomerPurchaseWalletReservation;
+use App\Modules\Telegram\Application\TelegramCustomerPurchaseWalletUnavailable;
 use App\Modules\Telegram\Application\TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1;
 use App\Modules\Telegram\Application\TelegramDeliveryInteractivePresentationDatabaseSurfaceV1;
 use App\Modules\Telegram\Application\TelegramDeliveryQueueService;
@@ -486,6 +490,131 @@ final class TelegramNavigationCustomerPurchaseOrder implements TelegramCustomerP
             910_000,
             'IRR',
             true,
+        );
+    }
+}
+
+final class TelegramNavigationCustomerPurchaseWalletPayment implements TelegramCustomerPurchaseWalletPayment
+{
+    /** @var list<array<string, int|string>> */
+    public array $reserveCalls = [];
+
+    /** @var list<array<string, int|string>> */
+    public array $captureCalls = [];
+
+    /** @var list<array<string, int|string>> */
+    public array $cancelCalls = [];
+
+    public bool $captureUnavailable = false;
+
+    public function reserveForSelf(
+        int $actorUserId,
+        int $subjectUserId,
+        string $orderPublicId,
+        string $quotePublicId,
+        string $quoteConfigurationHash,
+        string $decisionPublicId,
+        string $decisionConfigurationHash,
+        string $operationKey,
+    ): TelegramCustomerPurchaseWalletReservation {
+        if ($actorUserId !== $subjectUserId
+            || $orderPublicId !== str_pad('01N', 26, '0')
+            || $quotePublicId !== str_pad('01K', 26, '0')
+            || $quoteConfigurationHash !== str_repeat('a', 64)
+            || $decisionPublicId !== str_pad('01P', 26, '0')
+            || $decisionConfigurationHash !== str_repeat('b', 64)
+            || preg_match('/\A[0-9a-f]{64}\z/', $operationKey) !== 1) {
+            throw new RuntimeException('Unexpected Telegram wallet reserve request.');
+        }
+        $this->reserveCalls[] = compact(
+            'actorUserId',
+            'subjectUserId',
+            'orderPublicId',
+            'quotePublicId',
+            'decisionPublicId',
+            'operationKey',
+        );
+
+        return new TelegramCustomerPurchaseWalletReservation(
+            str_pad('01W', 26, '0'),
+            $orderPublicId,
+            $quotePublicId,
+            $decisionPublicId,
+            910_000,
+            590_000,
+            count($this->reserveCalls) > 1,
+        );
+    }
+
+    public function captureForSelf(
+        int $actorUserId,
+        int $subjectUserId,
+        string $orderPublicId,
+        string $quotePublicId,
+        string $quoteConfigurationHash,
+        string $decisionPublicId,
+        string $decisionConfigurationHash,
+        string $paymentIntentPublicId,
+        string $operationKey,
+    ): TelegramCustomerPurchaseWalletPaid {
+        if ($actorUserId !== $subjectUserId
+            || $orderPublicId !== str_pad('01N', 26, '0')
+            || $quotePublicId !== str_pad('01K', 26, '0')
+            || $quoteConfigurationHash !== str_repeat('a', 64)
+            || $decisionPublicId !== str_pad('01P', 26, '0')
+            || $decisionConfigurationHash !== str_repeat('b', 64)
+            || $paymentIntentPublicId !== str_pad('01W', 26, '0')
+            || preg_match('/\A[0-9a-f]{64}\z/', $operationKey) !== 1) {
+            throw new RuntimeException('Unexpected Telegram wallet capture request.');
+        }
+        $this->captureCalls[] = compact(
+            'actorUserId',
+            'subjectUserId',
+            'orderPublicId',
+            'quotePublicId',
+            'decisionPublicId',
+            'paymentIntentPublicId',
+            'operationKey',
+        );
+        if ($this->captureUnavailable) {
+            throw new TelegramCustomerPurchaseWalletUnavailable('Telegram wallet payment is no longer confirmable.');
+        }
+
+        return new TelegramCustomerPurchaseWalletPaid(
+            $paymentIntentPublicId,
+            $orderPublicId,
+            str_pad('01S', 26, '0'),
+            $quotePublicId,
+            910_000,
+            count($this->captureCalls) > 1,
+        );
+    }
+
+    public function cancelForSelf(
+        int $actorUserId,
+        int $subjectUserId,
+        string $orderPublicId,
+        string $quotePublicId,
+        string $decisionPublicId,
+        string $paymentIntentPublicId,
+        string $operationKey,
+    ): void {
+        if ($actorUserId !== $subjectUserId
+            || $orderPublicId !== str_pad('01N', 26, '0')
+            || $quotePublicId !== str_pad('01K', 26, '0')
+            || $decisionPublicId !== str_pad('01P', 26, '0')
+            || $paymentIntentPublicId !== str_pad('01W', 26, '0')
+            || preg_match('/\A[0-9a-f]{64}\z/', $operationKey) !== 1) {
+            throw new RuntimeException('Unexpected Telegram wallet cancel request.');
+        }
+        $this->cancelCalls[] = compact(
+            'actorUserId',
+            'subjectUserId',
+            'orderPublicId',
+            'quotePublicId',
+            'decisionPublicId',
+            'paymentIntentPublicId',
+            'operationKey',
         );
     }
 }
@@ -2468,6 +2597,137 @@ SQL);
         $this->assertDatabaseHas('processed_telegram_updates', ['update_id' => 7109, 'state' => 'processed']);
     }
 
+    public function test_customer_wallet_payment_requires_confirm_and_exact_replay_does_not_duplicate_capture(): void
+    {
+        [$processor, $accountId, $sessionId, $walletPayments] = $this->prepareSelectedWalletJourney(
+            9730,
+            7200,
+            'navigation_purchase_wallet_confirm',
+        );
+
+        $reserveToken = $this->callbackToken('navigation.purchase.wallet.reserve', $accountId);
+        $this->accept($this->callbackPayload(7206, 9730, 'navigation_purchase_wallet_confirm', 'fa', $reserveToken));
+        $processor->process('123456789', 7206);
+
+        self::assertCount(1, $walletPayments->reserveCalls);
+        self::assertSame([], $walletPayments->captureCalls);
+        self::assertSame([], $walletPayments->cancelCalls);
+        $confirm = DB::table('telegram_interaction_sessions')->where('id', $sessionId)->first(['state', 'version', 'payload']);
+        self::assertNotNull($confirm);
+        self::assertSame('purchase_wallet_confirm', (string) $confirm->state);
+        self::assertSame(11, (int) $confirm->version);
+        /** @var array<string,mixed> $confirmPayload */
+        $confirmPayload = json_decode((string) $confirm->payload, true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame(str_pad('01W', 26, '0'), $confirmPayload['payment_intent_public_id'] ?? null);
+        self::assertSame('wallet', $confirmPayload['payment_method_code'] ?? null);
+        self::assertArrayNotHasKey('wallet_account_id', $confirmPayload);
+        self::assertArrayNotHasKey('ledger_account_id', $confirmPayload);
+        self::assertArrayNotHasKey('available_balance_irr', $confirmPayload);
+        self::assertStringContainsString('تأیید پرداخت با کیف پول', $this->latestConfidentialPresentation());
+        self::assertStringContainsString('910,000', $this->latestConfidentialPresentation());
+        self::assertStringNotContainsString('ledger_account_id', $this->navigationCommonDurableEvidence($sessionId, 9730));
+        self::assertStringNotContainsString('wallet_account_id', $this->navigationCommonDurableEvidence($sessionId, 9730));
+
+        $operationCount = DB::table('telegram_delivery_operations')->where('recipient_chat_id', 9730)->count();
+        $processor->process('123456789', 7206);
+        self::assertCount(1, $walletPayments->reserveCalls);
+        self::assertSame($operationCount, DB::table('telegram_delivery_operations')->where('recipient_chat_id', 9730)->count());
+
+        $confirmToken = $this->callbackToken('navigation.purchase.wallet.confirm', $accountId);
+        $this->accept($this->callbackPayload(7207, 9730, 'navigation_purchase_wallet_confirm', 'fa', $confirmToken));
+        $processor->process('123456789', 7207);
+
+        self::assertCount(1, $walletPayments->captureCalls);
+        $paid = DB::table('telegram_interaction_sessions')->where('id', $sessionId)->first(['state', 'version', 'payload']);
+        self::assertNotNull($paid);
+        self::assertSame('purchase_wallet_paid', (string) $paid->state);
+        self::assertSame(13, (int) $paid->version);
+        /** @var array<string,mixed> $paidPayload */
+        $paidPayload = json_decode((string) $paid->payload, true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame(str_pad('01S', 26, '0'), $paidPayload['purchase_settlement_public_id'] ?? null);
+        self::assertSame(str_pad('01W', 26, '0'), $paidPayload['payment_intent_public_id'] ?? null);
+        self::assertArrayNotHasKey('wallet_account_id', $paidPayload);
+        self::assertStringContainsString('پرداخت کیف پول انجام شد', $this->latestConfidentialPresentation());
+        self::assertStringContainsString(str_pad('01N', 26, '0'), $this->latestConfidentialPresentation());
+        self::assertStringContainsString('هنوز پروویژنینگ', $this->latestConfidentialPresentation());
+
+        $paidOperationCount = DB::table('telegram_delivery_operations')->where('recipient_chat_id', 9730)->count();
+        $processor->process('123456789', 7207);
+        self::assertCount(1, $walletPayments->captureCalls);
+        self::assertSame($paidOperationCount, DB::table('telegram_delivery_operations')->where('recipient_chat_id', 9730)->count());
+    }
+
+    public function test_terminal_wallet_confirmation_returns_home_without_retry_loop_or_second_cancel(): void
+    {
+        [$processor, $accountId, $sessionId, $walletPayments] = $this->prepareSelectedWalletJourney(
+            9732,
+            7240,
+            'navigation_purchase_wallet_terminal',
+        );
+        $reserveToken = $this->callbackToken('navigation.purchase.wallet.reserve', $accountId);
+        $this->accept($this->callbackPayload(7246, 9732, 'navigation_purchase_wallet_terminal', 'fa', $reserveToken));
+        $processor->process('123456789', 7246);
+        $walletPayments->captureUnavailable = true;
+
+        $confirmToken = $this->callbackToken('navigation.purchase.wallet.confirm', $accountId);
+        $this->accept($this->callbackPayload(7247, 9732, 'navigation_purchase_wallet_terminal', 'fa', $confirmToken));
+        $processor->process('123456789', 7247);
+
+        self::assertCount(1, $walletPayments->captureCalls);
+        self::assertSame([], $walletPayments->cancelCalls);
+        $after = DB::table('telegram_interaction_sessions')->where('id', $sessionId)->first(['state', 'version', 'payload']);
+        self::assertNotNull($after);
+        self::assertSame(TelegramNavigationEntryGateway::STATE, (string) $after->state);
+        self::assertSame(12, (int) $after->version);
+        self::assertSame('{}', (string) $after->payload);
+        $this->assertDatabaseHas('processed_telegram_updates', ['update_id' => 7247, 'state' => 'processed']);
+
+        $operations = DB::table('telegram_delivery_operations')->where('recipient_chat_id', 9732)->count();
+        $processor->process('123456789', 7247);
+        self::assertCount(1, $walletPayments->captureCalls);
+        self::assertSame($operations, DB::table('telegram_delivery_operations')->where('recipient_chat_id', 9732)->count());
+    }
+
+    public function test_prebound_wallet_confirm_and_back_race_cancels_hold_path_before_capture(): void
+    {
+        [$processor, $accountId, $sessionId, $walletPayments] = $this->prepareSelectedWalletJourney(
+            9731,
+            7220,
+            'navigation_purchase_wallet_race',
+        );
+        $reserveToken = $this->callbackToken('navigation.purchase.wallet.reserve', $accountId);
+        $this->accept($this->callbackPayload(7226, 9731, 'navigation_purchase_wallet_race', 'fa', $reserveToken));
+        $processor->process('123456789', 7226);
+        self::assertCount(1, $walletPayments->reserveCalls);
+
+        $confirmToken = $this->callbackToken('navigation.purchase.wallet.confirm', $accountId);
+        $backToken = $this->callbackToken('navigation.back', $accountId);
+        $this->accept($this->callbackPayload(7227, 9731, 'navigation_purchase_wallet_race', 'fa', $confirmToken));
+        $this->accept($this->callbackPayload(7228, 9731, 'navigation_purchase_wallet_race', 'fa', $backToken));
+        $callbacks = $this->app->make(TelegramInteractionCallbackService::class);
+        $confirmAcceptance = $callbacks->accept('123456789', 9731, $confirmToken, 7227);
+        $backAcceptance = $callbacks->accept('123456789', 9731, $backToken, 7228);
+        self::assertSame($confirmAcceptance->sessionVersion, $backAcceptance->sessionVersion);
+        self::assertSame(11, $backAcceptance->sessionVersion);
+
+        $handler = $this->app->make(TelegramNavigationHandler::class);
+        $handler->handle($this->callbackActionFromAcceptance($backAcceptance, 7228, 9731));
+        $handler->handle($this->callbackActionFromAcceptance($confirmAcceptance, 7227, 9731));
+
+        self::assertCount(1, $walletPayments->cancelCalls);
+        self::assertSame([], $walletPayments->captureCalls);
+        $after = DB::table('telegram_interaction_sessions')->where('id', $sessionId)->first(['state', 'version', 'payload']);
+        self::assertNotNull($after);
+        self::assertSame('purchase_payment_methods', (string) $after->state);
+        self::assertSame(13, (int) $after->version);
+        /** @var array<string,mixed> $payload */
+        $payload = json_decode((string) $after->payload, true, 512, JSON_THROW_ON_ERROR);
+        self::assertArrayNotHasKey('payment_intent_public_id', $payload);
+        self::assertArrayNotHasKey('payment_method_code', $payload);
+        self::assertSame(0, DB::table('payment_intents')->count());
+        self::assertSame(0, DB::table('purchase_settlements')->count());
+    }
+
     public function test_customer_purchase_payment_method_empty_state_uses_english_fallback_without_financial_effect(): void
     {
         $catalog = new TelegramNavigationCustomerPurchaseCatalog;
@@ -3254,6 +3514,58 @@ SQL);
         self::assertSame(1, DB::table('telegram_delivery_operations')->count());
         self::assertSame($firstOperationId, (string) DB::table('telegram_delivery_operations')->value('public_id'));
         self::assertSame(1, DB::table('outbox_messages')->where('event_type', TelegramDeliveryQueueService::OUTBOX_EVENT_TYPE)->count());
+    }
+
+    /** @return array{TelegramUpdateProcessor,int,int,TelegramNavigationCustomerPurchaseWalletPayment} */
+    private function prepareSelectedWalletJourney(int $telegramUserId, int $baseUpdateId, string $username): array
+    {
+        $catalog = new TelegramNavigationCustomerPurchaseCatalog;
+        $quotes = new TelegramNavigationCustomerPurchaseQuote($catalog);
+        $paymentMethods = new TelegramNavigationCustomerPurchasePaymentMethods;
+        $purchaseOrders = new TelegramNavigationCustomerPurchaseOrder;
+        $walletPayments = new TelegramNavigationCustomerPurchaseWalletPayment;
+        $this->app->instance(TelegramCustomerPurchaseCatalog::class, $catalog);
+        $this->app->instance(TelegramCustomerPurchaseQuote::class, $quotes);
+        $this->app->instance(TelegramCustomerPurchasePaymentMethods::class, $paymentMethods);
+        $this->app->instance(TelegramCustomerPurchaseOrder::class, $purchaseOrders);
+        $this->app->instance(TelegramCustomerPurchaseWalletPayment::class, $walletPayments);
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+
+        $this->accept($this->payload($baseUpdateId, $telegramUserId, $username, 'fa', '/start'));
+        $processor->process('123456789', $baseUpdateId);
+        $account = DB::table('telegram_accounts')->where('telegram_user_id', $telegramUserId)->first(['id']);
+        self::assertNotNull($account);
+        $accountId = (int) $account->id;
+        foreach ([
+            [$baseUpdateId + 1, 'navigation.purchase'],
+            [$baseUpdateId + 2, 'navigation.purchase.'.str_repeat('c', 40)],
+            [$baseUpdateId + 3, 'navigation.purchase.quote'],
+            [$baseUpdateId + 4, 'navigation.purchase.payment_methods'],
+        ] as [$updateId, $action]) {
+            $token = $this->callbackToken($action, $accountId);
+            $this->accept($this->callbackPayload($updateId, $telegramUserId, $username, 'fa', $token));
+            $processor->process('123456789', $updateId);
+        }
+        $session = DB::table('telegram_interaction_sessions')->where('telegram_account_id', $accountId)->first(['id', 'state', 'version']);
+        self::assertNotNull($session);
+        self::assertSame('purchase_payment_methods', (string) $session->state);
+        self::assertSame(7, (int) $session->version);
+        $walletCallback = DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $session->id)
+            ->where('session_version', 7)
+            ->where('action', 'navigation.purchase.payment_method.select')
+            ->where('action_payload', json_encode(['method_code' => 'wallet'], JSON_THROW_ON_ERROR))
+            ->first(['token_ciphertext']);
+        self::assertNotNull($walletCallback);
+        $walletToken = $this->app->make(StringEncrypter::class)->decryptString((string) $walletCallback->token_ciphertext);
+        $this->accept($this->callbackPayload($baseUpdateId + 5, $telegramUserId, $username, 'fa', $walletToken));
+        $processor->process('123456789', $baseUpdateId + 5);
+        $selected = DB::table('telegram_interaction_sessions')->where('id', (int) $session->id)->first(['state', 'version']);
+        self::assertNotNull($selected);
+        self::assertSame('purchase_payment_method_selected', (string) $selected->state);
+        self::assertSame(9, (int) $selected->version);
+
+        return [$processor, $accountId, (int) $session->id, $walletPayments];
     }
 
     /** @param array<string, mixed> $payload */
