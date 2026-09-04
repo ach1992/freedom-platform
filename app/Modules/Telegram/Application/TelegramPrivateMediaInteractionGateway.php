@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Telegram\Application;
 
 use App\Modules\Customers\Application\CustomerAccountSummaryService;
-use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCardToCardPayment;
+use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCardToCardReceiptSubmission;
 use App\Modules\Telegram\Domain\TelegramDeliveryAction;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
@@ -24,7 +24,7 @@ final readonly class TelegramPrivateMediaInteractionGateway
         private DatabaseManager $database,
         private TelegramInteractionSessionService $sessions,
         private TelegramPrivateMediaIngestor $media,
-        private TelegramCustomerPurchaseCardToCardPayment $cardToCardPayments,
+        private TelegramCustomerPurchaseCardToCardReceiptSubmission $cardToCardSubmissions,
         private CustomerAccountSummaryService $customers,
         private Translator $translator,
         private ConfidentialTelegramPresentationFactory $presentations,
@@ -73,7 +73,7 @@ final readonly class TelegramPrivateMediaInteractionGateway
                 );
                 $this->assertActorBinding($interaction, $claim->userId);
 
-                $submission = $this->cardToCardPayments->submitReceiptForSelf(
+                $submission = $this->cardToCardSubmissions->submitReceiptForSelf(
                     $interaction->userId,
                     $interaction->userId,
                     $state['c2c_reservation_public_id'],
