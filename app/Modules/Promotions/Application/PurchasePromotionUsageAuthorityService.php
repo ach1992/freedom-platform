@@ -6,6 +6,7 @@ namespace App\Modules\Promotions\Application;
 
 use App\Modules\Payments\Application\Contracts\PurchasePromotionUsageAuthority;
 use App\Modules\Payments\Application\PurchasePromotionUsageMaintenanceResult;
+use App\Modules\Promotions\Domain\PromotionUsageReservationState;
 use App\Shared\Application\Clock;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
@@ -51,6 +52,13 @@ final readonly class PurchasePromotionUsageAuthorityService implements PurchaseP
                 $quotePublicId,
                 $context,
             );
+            $released = $connection->table('promotion_usage_releases')
+                ->where('promotion_usage_reservation_id', $receipt->reservationId)
+                ->lockForUpdate()
+                ->exists();
+            if ($receipt->state !== PromotionUsageReservationState::Active || $released) {
+                throw new DomainException('Discounted purchase Quote promotion usage reservation is no longer active.');
+            }
 
             return $receipt->reservationPublicId;
         }, 3);

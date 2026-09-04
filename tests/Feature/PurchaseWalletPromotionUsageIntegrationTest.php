@@ -30,6 +30,7 @@ use App\Shared\Application\Clock;
 use DateTimeImmutable;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
+use Illuminate\Database\Connection;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Tests\Support\CreatesBenefitCodeFixtures;
@@ -345,17 +346,44 @@ final class PurchaseWalletPromotionUsageIntegrationTest extends TestCase
         self::assertSame(0, DB::table('promotion_usage_releases')->count());
 
         $this->clock->value = $this->clock->value->modify('+31 minutes');
+        $releaseTransactionLevel = null;
+        DB::connection()->beforeExecuting(function (string $query, array $bindings, Connection $connection) use (&$releaseTransactionLevel): void {
+            unset($bindings);
+            if (str_contains(strtolower($query), 'insert into `promotion_usage_releases`')) {
+                $releaseTransactionLevel = $connection->transactionLevel();
+            }
+        });
         $afterExpiry = $this->app->make(PurchasePaymentMaintenanceService::class)->run();
         self::assertSame(0, $afterExpiry->walletIntentsExamined);
         self::assertSame(1, $afterExpiry->promotionReservationsExamined);
         self::assertSame(1, $afterExpiry->releasedPromotionReservations);
         self::assertSame(0, $afterExpiry->failures);
+        self::assertNotNull($releaseTransactionLevel);
+        self::assertGreaterThanOrEqual(2, $releaseTransactionLevel);
         self::assertSame(1, DB::table('promotion_usage_reservations')->count());
         self::assertSame(1, DB::table('promotion_usage_releases')->count());
         self::assertSame(0, DB::table('promotion_usage_redemptions')->count());
         $replay = $this->app->make(PurchasePaymentMaintenanceService::class)->run();
         self::assertSame(0, $replay->walletIntentsExamined);
         self::assertSame(0, $replay->promotionReservationsExamined);
+
+        $this->clock->value = $this->clock->value->modify('-31 minutes');
+        try {
+            $service->reserve(
+                'wallet-promo-maintenance-after-release-0002',
+                $checkout['user_id'],
+                $walletId,
+                $checkout['quote']->quotePublicId,
+                $checkout['decision']->publicId,
+                $this->correlation('maintenance-after-release'),
+            );
+            self::fail('Expected released promotion reservation reuse rejection.');
+        } catch (DomainException $exception) {
+            self::assertSame('Discounted purchase Quote promotion usage reservation is no longer active.', $exception->getMessage());
+        }
+        self::assertSame(1, DB::table('payment_intents')->where('purpose', 'purchase')->count());
+        self::assertSame(1, DB::table('promotion_usage_releases')->count());
+        self::assertSame(0, DB::table('wallet_holds')->where('status', 'active')->count());
     }
 
     public function test_reselected_wallet_reuses_quote_promotion_reservation_and_maintenance_avoids_stale_terminal_failure(): void
