@@ -20,6 +20,7 @@ final readonly class TelegramCustomerPurchaseCardToCardReservation
         public int $payableAmountIrr,
         public string $maskedCardNumber,
         public DateTimeImmutable $expiresAt,
+        public DateTimeImmutable $lateReviewUntil,
         public bool $replayed,
     ) {
         foreach ([$paymentIntentPublicId, $reservationPublicId, $orderPublicId, $quotePublicId, $decisionPublicId] as $publicId) {
@@ -31,7 +32,8 @@ final readonly class TelegramCustomerPurchaseCardToCardReservation
             || $adjustmentAmountIrr < 0
             || $payableAmountIrr !== $baseAmountIrr + $adjustmentAmountIrr
             || $maskedCardNumber === ''
-            || mb_strlen($maskedCardNumber) > 32) {
+            || mb_strlen($maskedCardNumber) > 32
+            || $lateReviewUntil < $expiresAt) {
             throw new InvalidArgumentException('Telegram card-to-card reservation identity is invalid.');
         }
     }

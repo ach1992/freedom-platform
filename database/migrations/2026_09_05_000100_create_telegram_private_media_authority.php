@@ -28,14 +28,20 @@ return new class extends Migration
             $table->string('detected_mime', 64)->nullable();
             $table->unsignedBigInteger('byte_size')->nullable();
             $table->char('content_sha256', 64)->nullable();
+            $table->string('association_type', 32)->nullable();
+            $table->char('association_public_id', 26)->nullable();
             $table->string('rejection_code', 64)->nullable();
             $table->dateTime('created_at', 6);
             $table->dateTime('updated_at', 6);
             $table->unique(['bot_id', 'update_id'], 'telegram_private_media_update_unique');
         });
 
+        if (DB::connection()->getDriverName() !== 'mysql') {
+            return;
+        }
         DB::statement("ALTER TABLE telegram_private_media ADD CONSTRAINT telegram_private_media_source_chk CHECK (`source_kind` IN ('photo','document'))");
-        DB::statement("ALTER TABLE telegram_private_media ADD CONSTRAINT telegram_private_media_state_chk CHECK (`state` IN ('pending','stored','rejected','discarded'))");
+        DB::statement("ALTER TABLE telegram_private_media ADD CONSTRAINT telegram_private_media_identity_chk CHECK (`public_id` REGEXP '^[0-9A-HJKMNP-TV-Z]{26}$' AND BINARY `public_id` = BINARY UPPER(`public_id`) AND `bot_id` REGEXP '^[1-9][0-9]{5,19}$' AND (`reported_file_size` IS NULL OR `reported_file_size` > 0) AND `storage_path` REGEXP '^receipts/[0-9a-f]{2}/[0-9A-HJKMNP-TV-Z]{26}\\.media$' AND CHAR_LENGTH(`encrypted_file_id`) BETWEEN 1 AND 16384 AND CHAR_LENGTH(`encrypted_file_unique_id`) BETWEEN 1 AND 16384)");
+        DB::statement("ALTER TABLE telegram_private_media ADD CONSTRAINT telegram_private_media_state_chk CHECK (`state` IN ('pending','stored','associated','rejected','discarded'))");
         DB::statement(<<<'SQL'
 ALTER TABLE telegram_private_media
 ADD CONSTRAINT telegram_private_media_payload_chk CHECK (
@@ -43,19 +49,34 @@ ADD CONSTRAINT telegram_private_media_payload_chk CHECK (
         AND `detected_mime` IS NULL
         AND `byte_size` IS NULL
         AND `content_sha256` IS NULL
+        AND `association_type` IS NULL
+        AND `association_public_id` IS NULL
         AND `rejection_code` IS NULL)
     OR
     (`state` = 'stored'
         AND `detected_mime` IN ('image/jpeg','image/png','image/webp')
         AND `byte_size` > 0
-        AND CHAR_LENGTH(`content_sha256`) = 64
+        AND `content_sha256` REGEXP '^[0-9a-f]{64}$'
+        AND `association_type` IS NULL
+        AND `association_public_id` IS NULL
+        AND `rejection_code` IS NULL)
+    OR
+    (`state` = 'associated'
+        AND `detected_mime` IN ('image/jpeg','image/png','image/webp')
+        AND `byte_size` > 0
+        AND `content_sha256` REGEXP '^[0-9a-f]{64}$'
+        AND `association_type` = 'c2c_manual_submission'
+        AND `association_public_id` REGEXP '^[0-9A-HJKMNP-TV-Z]{26}$'
+        AND BINARY `association_public_id` = BINARY UPPER(`association_public_id`)
         AND `rejection_code` IS NULL)
     OR
     (`state` IN ('rejected','discarded')
         AND `detected_mime` IS NULL
         AND `byte_size` IS NULL
         AND `content_sha256` IS NULL
-        AND `rejection_code` IS NOT NULL)
+        AND `association_type` IS NULL
+        AND `association_public_id` IS NULL
+        AND `rejection_code` REGEXP '^[a-z][a-z0-9_]{2,63}$')
 )
 SQL);
     }

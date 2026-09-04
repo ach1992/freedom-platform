@@ -9,8 +9,8 @@ use App\Shared\Application\Clock;
 use Illuminate\Contracts\Encryption\StringEncrypter;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
-use Illuminate\Filesystem\FilesystemManager;
 use Illuminate\Filesystem\FilesystemAdapter;
+use Illuminate\Filesystem\FilesystemManager;
 use Illuminate\Support\Str;
 use RuntimeException;
 use stdClass;
@@ -41,6 +41,9 @@ final readonly class TelegramPrivateMediaIngestor
     ): TelegramPrivateMediaReceipt {
         $this->assertIdentity($botId, $updateId, $telegramAccountId, $userId);
         $maximumBytes = $this->maximumBytes();
+        if ($input->reportedFileSize !== null && $input->reportedFileSize > $maximumBytes) {
+            throw new TelegramPrivateMediaRejected('file_too_large');
+        }
         [$row, $replayed] = $this->reserve(
             $botId,
             $updateId,
@@ -48,10 +51,16 @@ final readonly class TelegramPrivateMediaIngestor
             $userId,
             $input,
         );
-        if ($row->state === 'stored') {
+        if (in_array($row->state, ['stored', 'associated'], true)) {
             return $this->receipt($row, true);
         }
         if ($row->state === 'rejected' || $row->state === 'discarded') {
+            $disk = $this->disk();
+            $storagePath = (string) $row->storage_path;
+            $disk->delete($storagePath);
+            if ($disk->exists($storagePath)) {
+                throw new RuntimeException('Telegram private-media terminal file cleanup failed.');
+            }
             throw new TelegramPrivateMediaRejected((string) $row->rejection_code);
         }
         if ($row->state !== 'pending') {
@@ -94,31 +103,85 @@ final readonly class TelegramPrivateMediaIngestor
         return $this->finalizeStored($row, $mime, $hash, $size, $replayed);
     }
 
-    public function discardIfUnreferenced(TelegramPrivateMediaReceipt $receipt, int $userId): void
-    {
-        if ($userId < 1) {
-            throw new RuntimeException('Telegram private-media discard actor is invalid.');
+    public function associate(
+        TelegramPrivateMediaReceipt $receipt,
+        int $userId,
+        string $associationType,
+        string $associationPublicId,
+    ): void {
+        if ($userId < 1
+            || $associationType !== 'c2c_manual_submission'
+            || ! Str::isUlid($associationPublicId)) {
+            throw new RuntimeException('Telegram private-media association identity is invalid.');
         }
+        $normalizedAssociationPublicId = strtoupper($associationPublicId);
 
-        $this->database->connection()->transaction(function (Connection $connection) use ($receipt, $userId): void {
+        $this->database->connection()->transaction(function (Connection $connection) use (
+            $receipt,
+            $userId,
+            $associationType,
+            $normalizedAssociationPublicId,
+        ): void {
             /** @var stdClass|null $row */
             $row = $connection->table('telegram_private_media')
                 ->where('public_id', strtoupper($receipt->publicId))
                 ->where('user_id', $userId)
                 ->lockForUpdate()
                 ->first();
-            if ($row === null || $row->state === 'discarded') {
+            if ($row === null) {
+                throw new RuntimeException('Telegram private-media association record is unavailable.');
+            }
+            if ($row->state === 'associated') {
+                if ($row->association_type !== $associationType
+                    || ! is_string($row->association_public_id)
+                    || ! hash_equals(strtoupper($row->association_public_id), $normalizedAssociationPublicId)) {
+                    throw new RuntimeException('Telegram private-media association conflicts with accepted evidence.');
+                }
+
                 return;
             }
-
-            $reference = self::REFERENCE_PREFIX.strtoupper((string) $row->public_id);
-            if ($connection->table('c2c_manual_submissions')
-                ->where('private_receipt_reference', $reference)
-                ->exists()) {
-                return;
+            if ($row->state !== 'stored') {
+                throw new RuntimeException('Telegram private-media cannot be associated from its current state.');
             }
 
-            $this->disk()->delete((string) $row->storage_path);
+            $updated = $connection->table('telegram_private_media')
+                ->where('id', $row->id)
+                ->where('state', 'stored')
+                ->update([
+                    'state' => 'associated',
+                    'association_type' => $associationType,
+                    'association_public_id' => $normalizedAssociationPublicId,
+                    'updated_at' => $this->timestamp(),
+                ]);
+            if ($updated !== 1) {
+                throw new RuntimeException('Telegram private-media association changed concurrently.');
+            }
+        }, 3);
+    }
+
+    public function discardIfUnassociated(TelegramPrivateMediaReceipt $receipt, int $userId): void
+    {
+        if ($userId < 1) {
+            throw new RuntimeException('Telegram private-media discard actor is invalid.');
+        }
+
+        $storagePath = $this->database->connection()->transaction(function (Connection $connection) use ($receipt, $userId): ?string {
+            /** @var stdClass|null $row */
+            $row = $connection->table('telegram_private_media')
+                ->where('public_id', strtoupper($receipt->publicId))
+                ->where('user_id', $userId)
+                ->lockForUpdate()
+                ->first();
+            if ($row === null || $row->state === 'associated') {
+                return null;
+            }
+            if ($row->state === 'discarded') {
+                return (string) $row->storage_path;
+            }
+            if (! in_array($row->state, ['pending', 'stored', 'rejected'], true)) {
+                throw new RuntimeException('Telegram private-media cannot be discarded from its current state.');
+            }
+
             $updated = $connection->table('telegram_private_media')
                 ->where('id', $row->id)
                 ->whereIn('state', ['pending', 'stored', 'rejected'])
@@ -127,13 +190,27 @@ final readonly class TelegramPrivateMediaIngestor
                     'detected_mime' => null,
                     'byte_size' => null,
                     'content_sha256' => null,
+                    'association_type' => null,
+                    'association_public_id' => null,
                     'rejection_code' => 'discarded_unassociated',
                     'updated_at' => $this->timestamp(),
                 ]);
             if ($updated !== 1) {
                 throw new RuntimeException('Telegram private-media discard state changed concurrently.');
             }
+
+            return (string) $row->storage_path;
         }, 3);
+
+        if ($storagePath === null) {
+            return;
+        }
+
+        $disk = $this->disk();
+        $disk->delete($storagePath);
+        if ($disk->exists($storagePath)) {
+            throw new RuntimeException('Telegram private-media discarded file cleanup failed.');
+        }
     }
 
     /** @return array{0:stdClass,1:bool} */
@@ -181,6 +258,8 @@ final readonly class TelegramPrivateMediaIngestor
                 'detected_mime' => null,
                 'byte_size' => null,
                 'content_sha256' => null,
+                'association_type' => null,
+                'association_public_id' => null,
                 'rejection_code' => null,
                 'created_at' => $now,
                 'updated_at' => $now,
@@ -238,7 +317,7 @@ final readonly class TelegramPrivateMediaIngestor
             if ($current === null) {
                 throw new RuntimeException('Telegram private-media persistence disappeared.');
             }
-            if ($current->state === 'stored') {
+            if (in_array($current->state, ['stored', 'associated'], true)) {
                 $stored = $this->receipt($current, true);
                 if (! hash_equals($stored->contentSha256, $hash)
                     || $stored->detectedMime !== $mime
@@ -301,6 +380,8 @@ final readonly class TelegramPrivateMediaIngestor
                     'detected_mime' => null,
                     'byte_size' => null,
                     'content_sha256' => null,
+                    'association_type' => null,
+                    'association_public_id' => null,
                     'rejection_code' => $reasonCode,
                     'updated_at' => $this->timestamp(),
                 ]);
@@ -329,10 +410,6 @@ final readonly class TelegramPrivateMediaIngestor
 
         $image = @getimagesizefromstring($content);
         if (! is_array($image)
-            || ! isset($image[0], $image[1], $image[2])
-            || ! is_int($image[0])
-            || ! is_int($image[1])
-            || ! is_int($image[2])
             || $image[0] < 1
             || $image[1] < 1
             || $image[0] > 50_000
@@ -346,7 +423,7 @@ final readonly class TelegramPrivateMediaIngestor
 
     private function receipt(stdClass $row, bool $replayed): TelegramPrivateMediaReceipt
     {
-        if ($row->state !== 'stored'
+        if (! in_array($row->state, ['stored', 'associated'], true)
             || ! is_string($row->detected_mime)
             || ! is_string($row->content_sha256)
             || $row->byte_size === null) {

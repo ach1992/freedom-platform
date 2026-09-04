@@ -52,6 +52,8 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
 
     private const STATE_PURCHASE_CARD_TO_CARD_SUBMITTING = 'purchase_card_to_card_submitting';
 
+    private const STATE_PURCHASE_CARD_TO_CARD_SUBMITTED = 'purchase_card_to_card_submitted';
+
     private const STATE_PURCHASE_WALLET_CONFIRM = 'purchase_wallet_confirm';
 
     private const STATE_PURCHASE_WALLET_PAID = 'purchase_wallet_paid';
@@ -234,6 +236,12 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
 
         if ($action->sessionState === self::STATE_PURCHASE_CARD_TO_CARD_INSTRUCTIONS) {
             $this->handlePurchaseCardToCardInstructions($action);
+
+            return;
+        }
+
+        if ($action->sessionState === self::STATE_PURCHASE_CARD_TO_CARD_SUBMITTED) {
+            $this->handlePurchaseCardToCardSubmitted($action);
 
             return;
         }
@@ -496,6 +504,17 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             return;
         }
         if ($this->isEntryCommand($action->messageText)) {
+            $this->returnHome($action);
+        }
+    }
+
+    private function handlePurchaseCardToCardSubmitted(TelegramInteractionAction $action): void
+    {
+        $this->purchaseCardToCardSubmittedStateFromPayload($action->sessionPayload);
+        if ($action->kind === TelegramInteractionActionKind::Callback) {
+            throw new RuntimeException('Telegram submitted card-to-card receipt callback action is unsupported.');
+        }
+        if ($action->kind === TelegramInteractionActionKind::Back || $this->isEntryCommand($action->messageText)) {
             $this->returnHome($action);
         }
     }
@@ -1782,12 +1801,13 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
                 $instructionState = $state;
                 $instructionState['payment_intent_public_id'] = $reservation->paymentIntentPublicId;
                 $instructionState['c2c_reservation_public_id'] = $reservation->reservationPublicId;
-                $session = $this->sessions->transition(
+                $session = $this->sessions->transitionUntil(
                     $action->sessionPublicId,
                     $claim->version,
                     self::STATE_PURCHASE_CARD_TO_CARD_INSTRUCTIONS,
                     $instructionState,
                     'nav-purchase-c2c-instructions-state:'.$operationKey,
+                    $reservation->lateReviewUntil,
                 );
                 $this->assertActorBinding($action, $session->userId);
                 $this->queuePurchaseCardToCardInstructions(
@@ -3603,6 +3623,26 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         $state['c2c_reservation_public_id'] = $reservationPublicId;
 
         return $state;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array{payment_intent_public_id:string,c2c_reservation_public_id:string}
+     */
+    private function purchaseCardToCardSubmittedStateFromPayload(array $payload): array
+    {
+        if (count($payload) !== 2
+            || ! is_string($payload['payment_intent_public_id'] ?? null)
+            || preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/i', $payload['payment_intent_public_id']) !== 1
+            || ! is_string($payload['c2c_reservation_public_id'] ?? null)
+            || preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/i', $payload['c2c_reservation_public_id']) !== 1) {
+            throw new RuntimeException('Telegram submitted card-to-card receipt state is invalid.');
+        }
+
+        return [
+            'payment_intent_public_id' => strtoupper($payload['payment_intent_public_id']),
+            'c2c_reservation_public_id' => strtoupper($payload['c2c_reservation_public_id']),
+        ];
     }
 
     /**

@@ -95,9 +95,10 @@ final class ConfidentialTelegramPresentationProvenanceTest extends TestCase
         );
     }
 
-    public function test_reviewed_production_source_set_contains_only_the_bounded_private_navigation_journey(): void
+    public function test_reviewed_production_source_set_contains_only_bounded_private_journeys(): void
     {
         self::assertSame([
+            'app/Modules/Telegram/Application/TelegramCardToCardReceiptStatusDelivery.php',
             'app/Modules/Telegram/Application/TelegramNavigationHandler.php',
         ], TelegramConfidentialPresentationProvenanceGuard::REVIEWED_SOURCE_FILES);
     }

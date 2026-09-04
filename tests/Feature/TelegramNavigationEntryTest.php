@@ -541,7 +541,8 @@ final class TelegramNavigationCustomerPurchaseCardToCardPayment implements Teleg
             1_000,
             911_000,
             '424242******4242',
-            new DateTimeImmutable('2026-09-04T12:30:00+00:00'),
+            now('UTC')->addHour()->toDateTimeImmutable(),
+            now('UTC')->addDay()->toDateTimeImmutable(),
             count($this->reserveCalls) > 1,
         );
     }
@@ -2682,10 +2683,14 @@ SQL);
         $processor->process('123456789', 7266);
 
         self::assertCount(1, $cardToCardPayments->reserveCalls);
-        $instructions = DB::table('telegram_interaction_sessions')->where('id', $sessionId)->first(['state', 'version', 'payload']);
+        $instructions = DB::table('telegram_interaction_sessions')->where('id', $sessionId)->first(['state', 'version', 'payload', 'expires_at']);
         self::assertNotNull($instructions);
         self::assertSame('purchase_card_to_card_instructions', (string) $instructions->state);
         self::assertSame(11, (int) $instructions->version);
+        $instructionExpiry = new DateTimeImmutable((string) $instructions->expires_at, new \DateTimeZone('UTC'));
+        $remainingInstructionLifetime = $instructionExpiry->getTimestamp() - now('UTC')->getTimestamp();
+        self::assertGreaterThan(23 * 3600, $remainingInstructionLifetime, 'C2C receipt input must not inherit the default 30-minute interaction TTL.');
+        self::assertLessThanOrEqual(24 * 3600 + 5, $remainingInstructionLifetime, 'C2C receipt input must stay bounded to the payment late-review deadline.');
         /** @var array<string,mixed> $payload */
         $payload = json_decode((string) $instructions->payload, true, 512, JSON_THROW_ON_ERROR);
         self::assertSame('card_to_card', $payload['payment_method_code'] ?? null);

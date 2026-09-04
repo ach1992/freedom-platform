@@ -104,7 +104,7 @@ final readonly class TelegramCustomerPurchaseCardToCardReceiptSubmissionService 
         }
 
         return new TelegramCustomerPurchaseCardToCardSubmission(
-            strtoupper($submission->submissionPublicId),
+            strtoupper($submission->publicId),
             strtoupper($submission->paymentIntentPublicId),
             strtoupper($submission->reservationPublicId),
             $submission->claimedAmountIrr,

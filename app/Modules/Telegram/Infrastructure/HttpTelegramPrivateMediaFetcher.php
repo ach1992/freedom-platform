@@ -45,6 +45,7 @@ final readonly class HttpTelegramPrivateMediaFetcher implements TelegramPrivateM
                     ->withoutRedirecting()
                     ->timeout($this->configuration->apiTimeoutSeconds)
                     ->connectTimeout(min(5, $this->configuration->apiTimeoutSeconds))
+                    ->withOptions(['stream' => true])
                     ->get(
                         $this->configuration->apiBaseUrl
                         .'/file/bot'.$this->configuration->botToken.'/'.$encodedPath,
@@ -75,13 +76,20 @@ final readonly class HttpTelegramPrivateMediaFetcher implements TelegramPrivateM
                 throw new TelegramPrivateMediaRejected('provider_file_unavailable');
             }
 
-            $content = $response->body();
+            try {
+                $content = $this->boundedBody($response, $maximumBytes);
+            } catch (TelegramPrivateMediaRejected $exception) {
+                throw $exception;
+            } catch (Throwable) {
+                if ($attempt < 2) {
+                    continue;
+                }
+
+                throw new RuntimeException('Telegram private-media response stream failed.');
+            }
             $length = strlen($content);
             if ($length < 1) {
                 throw new TelegramPrivateMediaRejected('empty_file');
-            }
-            if ($length > $maximumBytes) {
-                throw new TelegramPrivateMediaRejected('file_too_large');
             }
             if ($providerSize !== null && $providerSize !== $length) {
                 throw new RuntimeException('Telegram private-media provider size changed during download.');
@@ -91,6 +99,30 @@ final readonly class HttpTelegramPrivateMediaFetcher implements TelegramPrivateM
         }
 
         throw new RuntimeException('Telegram private-media download retry boundary was exhausted.');
+    }
+
+    private function boundedBody(Response $response, int $maximumBytes): string
+    {
+        $stream = $response->toPsrResponse()->getBody();
+        $content = '';
+
+        while (! $stream->eof()) {
+            $remaining = $maximumBytes + 1 - strlen($content);
+            if ($remaining < 1) {
+                throw new TelegramPrivateMediaRejected('file_too_large');
+            }
+
+            $chunk = $stream->read(min(8192, $remaining));
+            if ($chunk === '') {
+                throw new RuntimeException('Telegram private-media response stream stalled.');
+            }
+            $content .= $chunk;
+            if (strlen($content) > $maximumBytes) {
+                throw new TelegramPrivateMediaRejected('file_too_large');
+            }
+        }
+
+        return $content;
     }
 
     /** @return array{0:string,1:?int} */

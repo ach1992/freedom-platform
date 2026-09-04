@@ -6,14 +6,11 @@ namespace App\Modules\Telegram\Application;
 
 use App\Modules\Customers\Application\CustomerAccountSummaryService;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCardToCardReceiptSubmission;
-use App\Modules\Telegram\Domain\TelegramDeliveryAction;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
-use Illuminate\Contracts\Translation\Translator;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Support\Str;
 use RuntimeException;
-use Throwable;
 
 final readonly class TelegramPrivateMediaInteractionGateway
 {
@@ -21,15 +18,15 @@ final readonly class TelegramPrivateMediaInteractionGateway
 
     private const C2C_SUBMITTING_STATE = 'purchase_card_to_card_receipt_submitting';
 
+    private const C2C_SUBMITTED_STATE = 'purchase_card_to_card_submitted';
+
     public function __construct(
         private DatabaseManager $database,
         private TelegramInteractionSessionService $sessions,
         private TelegramPrivateMediaIngestor $media,
         private TelegramCustomerPurchaseCardToCardReceiptSubmission $cardToCardSubmissions,
         private CustomerAccountSummaryService $customers,
-        private Translator $translator,
-        private ConfidentialTelegramPresentationFactory $presentations,
-        private TelegramDeliveryQueueService $delivery,
+        private TelegramCardToCardReceiptStatusDelivery $statusDelivery,
     ) {}
 
     /** @requirement BUY-003 PAY-002 PAY-003 C2C-002 C2C-004 DAT-002 DAT-003 DAT-004 SEC-002 SEC-003 SEC-009 QUA-001 QUA-004 */
@@ -51,8 +48,9 @@ final readonly class TelegramPrivateMediaInteractionGateway
                 $interaction->userId,
                 $interaction->media,
             );
-        } catch (TelegramPrivateMediaRejected) {
-            $this->queueStatus($interaction, $locale, 'invalid');
+        } catch (TelegramPrivateMediaRejected $exception) {
+            $status = $exception->reasonCode === 'discarded_unassociated' ? 'unavailable' : 'invalid';
+            $this->statusDelivery->queue($interaction->telegramUserId, $interaction->requestKey, $locale, $status);
 
             return true;
         }
@@ -89,27 +87,35 @@ final readonly class TelegramPrivateMediaInteractionGateway
                     throw new RuntimeException('Telegram card-to-card receipt submission does not match the active checkout session.');
                 }
 
-                $home = $this->sessions->transition(
+                $this->media->associate(
+                    $media,
+                    $interaction->userId,
+                    'c2c_manual_submission',
+                    $submission->submissionPublicId,
+                );
+
+                $submitted = $this->sessions->transition(
                     $interaction->sessionPublicId,
                     $claim->version,
-                    TelegramNavigationEntryGateway::STATE,
-                    [],
-                    'telegram-c2c-receipt-home:'.$operationKey,
+                    self::C2C_SUBMITTED_STATE,
+                    $state,
+                    'telegram-c2c-receipt-submitted:'.$operationKey,
                 );
-                $this->assertActorBinding($interaction, $home->userId);
-                $this->queueStatus($interaction, $locale, 'received');
+                $this->assertActorBinding($interaction, $submitted->userId);
+                $this->statusDelivery->queue(
+                    $interaction->telegramUserId,
+                    $interaction->requestKey,
+                    $locale,
+                    'received',
+                );
 
                 return $submission;
             }, 3);
         } catch (AuthorizationException|DomainException) {
-            $this->media->discardIfUnreferenced($media, $interaction->userId);
-            $this->queueStatus($interaction, $locale, 'unavailable');
+            $this->media->discardIfUnassociated($media, $interaction->userId);
+            $this->statusDelivery->queue($interaction->telegramUserId, $interaction->requestKey, $locale, 'unavailable');
 
             return true;
-        } catch (Throwable $exception) {
-            $this->media->discardIfUnreferenced($media, $interaction->userId);
-
-            throw $exception;
         }
 
         if (! Str::isUlid($submission->submissionPublicId)) {
@@ -157,40 +163,5 @@ final readonly class TelegramPrivateMediaInteractionGateway
         $customer = $this->customers->forSelf($userId, $userId);
 
         return $customer->locale === 'en' ? 'en' : 'fa';
-    }
-
-    private function queueStatus(
-        TelegramPrivateMediaInteraction $interaction,
-        string $locale,
-        string $status,
-    ): void {
-        if (! in_array($status, ['received', 'invalid', 'unavailable'], true)) {
-            throw new RuntimeException('Telegram card-to-card receipt status is invalid.');
-        }
-        $text = $this->translation('telegram_c2c_receipt.'.$status, $locale);
-        $presentation = $this->presentations->fromSource(
-            new TelegramCardToCardReceiptStatusPresentation($text),
-        );
-        $this->delivery->queueConfidential(
-            TelegramDeliveryAction::Send,
-            $interaction->telegramUserId,
-            null,
-            $presentation,
-            'telegram-c2c-receipt-status:'.$status.':'.$interaction->requestKey,
-            hash('sha256', 'telegram-c2c-receipt-status:'.$status.':'.$interaction->requestKey),
-        );
-    }
-
-    private function translation(string $key, string $locale): string
-    {
-        $text = $this->translator->get($key, [], $locale);
-        if (! is_string($text) || $text === '' || $text === $key) {
-            $text = $this->translator->get($key, [], 'en');
-        }
-        if (! is_string($text) || $text === '' || $text === $key) {
-            throw new RuntimeException('Telegram card-to-card receipt translation is unavailable.');
-        }
-
-        return $text;
     }
 }

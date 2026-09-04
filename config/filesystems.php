@@ -44,6 +44,11 @@ return [
             'driver' => 'local',
             'root' => storage_path('app/private/telegram-private-media'),
             'visibility' => 'private',
+            'directory_visibility' => 'private',
+            'permissions' => [
+                'file' => ['public' => 0600, 'private' => 0600],
+                'dir' => ['public' => 0700, 'private' => 0700],
+            ],
             'serve' => false,
             'throw' => true,
             'report' => false,
