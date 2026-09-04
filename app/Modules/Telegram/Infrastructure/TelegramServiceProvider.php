@@ -10,6 +10,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramBotApi;
 use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\TelegramInteractionHandler;
 use App\Modules\Telegram\Application\Contracts\TelegramMutationTransport;
+use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaFetcher;
 use App\Modules\Telegram\Application\Contracts\TelegramRuntime;
 use App\Modules\Telegram\Application\TelegramConfidentialDeliveryOutboxHandler;
 use App\Modules\Telegram\Application\TelegramConfidentialPresentationHasher;
@@ -93,6 +94,13 @@ final class TelegramServiceProvider extends ServiceProvider
         $this->app->singleton(
             TelegramBotApi::class,
             fn (Application $application): TelegramBotApi => new HttpTelegramBotApi(
+                $application->make(Factory::class),
+                $application->make(TelegramRuntimeConfiguration::class),
+            ),
+        );
+        $this->app->singleton(
+            TelegramPrivateMediaFetcher::class,
+            fn (Application $application): TelegramPrivateMediaFetcher => new HttpTelegramPrivateMediaFetcher(
                 $application->make(Factory::class),
                 $application->make(TelegramRuntimeConfiguration::class),
             ),
