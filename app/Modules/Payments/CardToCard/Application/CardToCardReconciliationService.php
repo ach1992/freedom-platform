@@ -37,13 +37,14 @@ final readonly class CardToCardReconciliationService
                 ->first();
 
             $findings = [];
-            if ($transaction->status === 'settled' && $match === null) {
+            if ($transaction->status === 'settled'
+                && ($match === null || ($match->state === 'matched' && $match->purchase_settlement_id === null))) {
                 $findings[] = $this->finding(
                     $connection,
                     'unlinked_settled',
                     'warning',
                     (int) $transaction->id,
-                    null,
+                    $match === null ? null : (int) $match->id,
                     (string) $transaction->provider_code,
                     hash('sha256', implode('|', [
                         (string) $transaction->public_id,

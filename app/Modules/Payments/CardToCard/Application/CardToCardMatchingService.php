@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Modules\Payments\CardToCard\Application;
 
 use App\Modules\AccessControl\Application\AdministratorPermissionAuthorizer;
+use App\Modules\Orders\Application\PurchaseOrderService;
+use App\Modules\Orders\Application\PurchaseOrderSettlementAvailability;
 use App\Shared\Application\Clock;
 use DomainException;
 use Illuminate\Database\Connection;
@@ -19,6 +21,7 @@ final readonly class CardToCardMatchingService
 
     public function __construct(
         private DatabaseManager $database,
+        private PurchaseOrderService $orders,
         private Clock $clock,
         private AdministratorPermissionAuthorizer $authorizer,
     ) {}
@@ -74,8 +77,13 @@ final readonly class CardToCardMatchingService
                 ->get([
                     'reservation.id', 'reservation.public_id', 'reservation.payment_intent_id',
                     'reservation.expires_at', 'reservation.active_lock', 'reservation.released_at', 'reservation.release_reason',
+                    'intent.source_quote_public_id as source_quote_public_id', 'intent.user_id as intent_user_id',
                 ])
                 ->all();
+            $candidates = array_values(array_filter(
+                $candidates,
+                fn (stdClass $candidate): bool => $this->settlementCandidateAvailable($candidate),
+            ));
 
             $onTime = array_values(array_filter(
                 $candidates,
@@ -150,8 +158,12 @@ final readonly class CardToCardMatchingService
                 ->whereIn('intent.state', ['awaiting_user_action', 'submitted'])
                 ->whereNull('intent.captured_at')
                 ->lockForUpdate()
-                ->first(['reservation.*']);
-            if ($reservation === null) {
+                ->first([
+                    'reservation.*',
+                    'intent.source_quote_public_id as source_quote_public_id',
+                    'intent.user_id as intent_user_id',
+                ]);
+            if ($reservation === null || ! $this->settlementCandidateAvailable($reservation)) {
                 throw new DomainException('Selected C2C reservation is not a valid review candidate.');
             }
 
@@ -214,6 +226,18 @@ final readonly class CardToCardMatchingService
 
             return $this->reviewReceipt($transaction, $fresh, false);
         }, 3);
+    }
+
+    private function settlementCandidateAvailable(stdClass $candidate): bool
+    {
+        if (! is_string($candidate->source_quote_public_id ?? null) || (int) ($candidate->intent_user_id ?? 0) < 1) {
+            throw new RuntimeException('C2C settlement candidate purchase identity is incomplete.');
+        }
+
+        return $this->orders->settlementAvailabilityFromQuote(
+            $candidate->source_quote_public_id,
+            (int) $candidate->intent_user_id,
+        ) !== PurchaseOrderSettlementAvailability::Unavailable;
     }
 
     private function createMatch(Connection $connection, stdClass $transaction, stdClass $reservation, string $mode, string $correlationId): CardToCardMatchReceipt

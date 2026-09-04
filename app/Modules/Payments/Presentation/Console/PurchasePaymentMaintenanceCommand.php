@@ -11,7 +11,7 @@ final class PurchasePaymentMaintenanceCommand extends Command
 {
     protected $signature = 'payments:purchase-maintenance {--limit=100} {--json}';
 
-    protected $description = 'Expire abandoned purchase wallet intents and release eligible promotion usage.';
+    protected $description = 'Expire abandoned purchase wallet/card-to-card intents and release eligible promotion usage.';
 
     public function handle(PurchasePaymentMaintenanceService $maintenance): int
     {
@@ -25,6 +25,8 @@ final class PurchasePaymentMaintenanceCommand extends Command
         $payload = [
             'wallet_intents_examined' => $result->walletIntentsExamined,
             'expired_wallet_intents' => $result->expiredWalletIntents,
+            'c2c_intents_examined' => $result->c2cIntentsExamined,
+            'expired_c2c_intents' => $result->expiredC2cIntents,
             'promotion_reservations_examined' => $result->promotionReservationsExamined,
             'released_promotion_reservations' => $result->releasedPromotionReservations,
             'failures' => $result->failures,

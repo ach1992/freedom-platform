@@ -21,6 +21,7 @@ final readonly class CardToCardManualSubmissionService
     public function __construct(
         private DatabaseManager $database,
         private StringEncrypter $encrypter,
+        private CardToCardEvidenceAssociationAuthority $evidenceAssociation,
         private Clock $clock,
     ) {}
 
@@ -57,6 +58,7 @@ final readonly class CardToCardManualSubmissionService
         $senderHash = $normalizedSenderCard === null
             ? null
             : hash_hmac('sha256', $normalizedSenderCard, $this->lookupKey());
+        $effectiveCorrelationId = $correlationId ?? hash('sha256', 'c2c-manual:'.$submissionKey);
 
         return $this->database->connection()->transaction(function (Connection $connection) use (
             $submissionKey,
@@ -69,8 +71,12 @@ final readonly class CardToCardManualSubmissionService
             $normalizedSenderName,
             $normalizedReference,
             $normalizedReceiptReference,
-            $correlationId,
+            $effectiveCorrelationId,
         ): CardToCardManualSubmissionReceipt {
+            $authority = $this->evidenceAssociation->lockByReservationPublicId($connection, $reservationPublicId);
+            if ($authority === null) {
+                throw new DomainException('C2C manual submission reservation does not exist.');
+            }
             $existing = $connection->table('c2c_manual_submissions')->where('submission_key', $submissionKey)->lockForUpdate()->first();
             if ($existing !== null) {
                 return $this->replayOrConflict(
@@ -88,26 +94,17 @@ final readonly class CardToCardManualSubmissionService
                 );
             }
 
-            $reservation = $connection->table('c2c_amount_reservations as reservation')
-                ->join('payment_intents as intent', 'intent.id', '=', 'reservation.payment_intent_id')
-                ->where('reservation.public_id', $reservationPublicId)
-                ->lockForUpdate()
-                ->first([
-                    'reservation.id', 'reservation.public_id', 'reservation.payment_intent_id',
-                    'reservation.c2c_destination_account_id', 'reservation.payable_amount_irr',
-                    'reservation.reserved_at', 'reservation.late_review_until',
-                    'intent.public_id as intent_public_id', 'intent.user_id', 'intent.purpose',
-                    'intent.payment_method_code', 'intent.provider_code', 'intent.state', 'intent.captured_at',
-                ]);
-            if ($reservation === null) {
-                throw new DomainException('C2C manual submission reservation does not exist.');
+            $reservation = $authority['reservation'];
+            $intent = $authority['intent'];
+            if ($intent->state === PaymentIntentState::Expired->value) {
+                throw new DomainException('C2C manual submission arrived after terminal payment authority closed.');
             }
-            if ((int) $reservation->user_id !== $userId
-                || $reservation->purpose !== 'purchase'
-                || $reservation->payment_method_code !== 'card_to_card'
-                || $reservation->provider_code !== 'card_to_card'
-                || $reservation->state !== PaymentIntentState::AwaitingUserAction->value
-                || $reservation->captured_at !== null
+            if ((int) $intent->user_id !== $userId
+                || $intent->purpose !== 'purchase'
+                || $intent->payment_method_code !== 'card_to_card'
+                || $intent->provider_code !== 'card_to_card'
+                || $intent->state !== PaymentIntentState::AwaitingUserAction->value
+                || $intent->captured_at !== null
                 || (int) $reservation->payable_amount_irr !== $claimedAmountIrr) {
                 throw new DomainException('C2C manual submission does not match the owned payable reservation.');
             }
@@ -150,7 +147,7 @@ final readonly class CardToCardManualSubmissionService
                 'from_state' => PaymentIntentState::AwaitingUserAction->value,
                 'to_state' => PaymentIntentState::Submitted->value,
                 'reason_code' => 'c2c_manual_payment_submitted',
-                'correlation_id' => $correlationId ?? hash('sha256', 'c2c-manual:'.$submissionKey),
+                'correlation_id' => $effectiveCorrelationId,
                 'created_at' => $this->timestamp(),
             ]);
 

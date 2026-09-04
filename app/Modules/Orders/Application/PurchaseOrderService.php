@@ -145,6 +145,47 @@ final readonly class PurchaseOrderService
     }
 
     /** @requirement BUY-001 BUY-002 PAY-002 DAT-002 DAT-003 DAT-004 SEC-002 QUA-001 QUA-004 */
+    public function settlementAvailabilityFromQuote(string $quotePublicId, int $actorUserId): PurchaseOrderSettlementAvailability
+    {
+        $this->assertUlid($quotePublicId, 'Source Quote public ID');
+        if ($actorUserId < 1) {
+            throw new DomainException('Order actor user ID is invalid.');
+        }
+
+        return $this->database->connection()->transaction(function (Connection $connection) use ($quotePublicId, $actorUserId): PurchaseOrderSettlementAvailability {
+            $quote = $this->quoteByPublicId($connection, $quotePublicId, true);
+            if ($quote === null) {
+                throw new DomainException('Purchase Quote does not exist.');
+            }
+            $this->assertOpenQuoteAuthority($quote, $actorUserId);
+
+            $order = $this->orderByQuoteId(
+                $connection,
+                $this->positiveDatabaseInt($quote->id, 'Source Quote ID'),
+                true,
+            );
+            if ($order === null) {
+                return PurchaseOrderSettlementAvailability::Absent;
+            }
+
+            $receipt = $this->openingReplayReceipt($connection, $order, $quote, $actorUserId);
+            if ($receipt->state !== OrderState::AwaitingPayment || $receipt->stateVersion !== 0) {
+                return PurchaseOrderSettlementAvailability::Unavailable;
+            }
+            if ($order->purchase_settlement_id !== null
+                || $order->purchase_settlement_public_id !== null
+                || $order->payment_intent_id !== null
+                || $order->payment_intent_public_id !== null
+                || $order->settled_amount_irr !== null
+                || $order->paid_at !== null) {
+                throw new RuntimeException('Awaiting pre-payment Order has conflicting financial authority.');
+            }
+
+            return PurchaseOrderSettlementAvailability::AwaitingPayment;
+        }, self::DEADLOCK_RETRY_ATTEMPTS);
+    }
+
+    /** @requirement BUY-001 BUY-002 PAY-002 DAT-002 DAT-003 DAT-004 SEC-002 QUA-001 QUA-004 */
     public function createFromSettlement(string $settlementPublicId, string $correlationId): PurchaseOrderReceipt
     {
         $this->assertUlid($settlementPublicId, 'Purchase settlement public ID');

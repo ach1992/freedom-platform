@@ -79,6 +79,7 @@ final readonly class CardToCardBankTransactionService
         ): CardToCardBankTransactionReceipt {
             $destination = $connection->table('c2c_destination_accounts')
                 ->where('card_lookup_hash', $destinationHash)
+                ->lockForUpdate()
                 ->first(['id', 'public_id', 'verification_provider_code']);
             if ($destination === null) {
                 throw new DomainException('C2C bank transaction destination is not registered.');
