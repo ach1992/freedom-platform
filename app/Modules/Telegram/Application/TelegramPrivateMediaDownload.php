@@ -26,7 +26,6 @@ final readonly class TelegramPrivateMediaDownload
         return new self(RestrictedValue::fromString($content), $providerFileSize);
     }
 
-    #[\SensitiveParameter]
     public function bytes(): string
     {
         return $this->content->reveal();
