@@ -27,6 +27,8 @@ return [
         'app/Modules/Promotions/Application/BenefitCodeDiscountQuoteAuthority.php|App\\Modules\\Orders\\Application\\QuoteDiscountConsumptionReceipt',
         'app/Modules/Promotions/Application/BenefitCodeDiscountQuoteAuthority.php|App\\Modules\\Orders\\Application\\QuoteDiscountConsumptionRequest',
         'app/Modules/Promotions/Application/BenefitCodeDiscountQuoteAuthority.php|App\\Modules\\Orders\\Application\\QuoteDiscountSourceQuoteUnavailable',
+        'app/Modules/Promotions/Application/PurchasePromotionUsageAuthorityService.php|App\\Modules\\Payments\\Application\\Contracts\\PurchasePromotionUsageAuthority',
+        'app/Modules/Promotions/Application/PurchasePromotionUsageAuthorityService.php|App\\Modules\\Payments\\Application\\PurchasePromotionUsageMaintenanceResult',
     ],
     'domain_dependency_exceptions' => [
         'app/Modules/Catalog/Domain/CustomPlanPolicyDefinition.php|Customers\\Domain',

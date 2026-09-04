@@ -41,6 +41,15 @@ Schedule::command('wallet:maintenance', [
     ->withoutOverlapping()
     ->onOneServer();
 
+Schedule::command('payments:purchase-maintenance', [
+    '--limit' => 100,
+    '--json' => true,
+])
+    ->name('payments.purchase-maintenance')
+    ->everyFiveMinutes()
+    ->withoutOverlapping()
+    ->onOneServer();
+
 Schedule::command('services:auto-renew', [
     '--limit' => config('auto_renew.batch_limit', 50),
     '--json' => true,

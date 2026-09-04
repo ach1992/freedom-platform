@@ -106,6 +106,14 @@ This is a recorded commercial snapshot only. No payment, capacity reservation, o
                 'item' => ':number. :method',
                 'selected' => "Selected payment method: :method\n\nYour Order remains awaiting payment. No Payment Intent, wallet debit, gateway request, or payment has been created yet.",
                 'empty' => "Payment Methods\n\nNo payment method is currently eligible for this Quote.\n\nNo Order, Payment Intent, or financial effect has been created.",
+                'wallet_payment' => [
+                    'continue' => 'Continue with wallet',
+                    'retry' => 'Retry wallet payment',
+                    'unavailable' => "Wallet payment is not currently available for this Order, or the available wallet balance is insufficient.\n\nNo Payment Intent, hold, settlement, or debit was committed by this failed attempt.",
+                    'confirm' => "Confirm wallet payment\n\nAmount: :amount :currency\nAvailable wallet balance after the temporary hold: :available :currency\n\nThe amount is reserved but has not been debited yet. Confirm to capture the wallet payment. Back releases the wallet hold.",
+                    'confirm_button' => 'Confirm wallet payment',
+                    'paid' => "Wallet payment completed\n\nOrder: :order_id\nPaid amount: :amount :currency\n\nPayment and settlement are complete. Provisioning and Service delivery have not started in this step.",
+                ],
                 'methods' => [
                     'wallet' => 'Wallet',
                     'card_to_card' => 'Card to card',
