@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Payments\CardToCard\Application;
 
 use App\Modules\Payments\CardToCard\Application\Contracts\BankTransactionObservation;
+use App\Modules\Payments\Domain\PaymentIntentState;
 use App\Shared\Application\Clock;
 use DateTimeZone;
 use DomainException;
@@ -25,6 +26,8 @@ final readonly class CardToCardBankTransactionService
     public function __construct(
         private DatabaseManager $database,
         private StringEncrypter $encrypter,
+        private CardToCardEvidenceAssociationAuthority $evidenceAssociation,
+        private CardToCardEvidenceRecoveryMutex $recoveryMutex,
         private Clock $clock,
     ) {}
 
@@ -66,7 +69,7 @@ final readonly class CardToCardBankTransactionService
         }
         $occurredAt = $observation->occurredAt->setTimezone(new DateTimeZone('UTC'));
 
-        return $this->database->connection()->transaction(function (Connection $connection) use (
+        return $this->recoveryMutex->synchronized(function () use (
             $providerCode,
             $observation,
             $ingestionMethod,
@@ -77,111 +80,146 @@ final readonly class CardToCardBankTransactionService
             $reference,
             $occurredAt,
         ): CardToCardBankTransactionReceipt {
-            $destination = $connection->table('c2c_destination_accounts')
-                ->where('card_lookup_hash', $destinationHash)
-                ->first(['id', 'public_id', 'verification_provider_code']);
-            if ($destination === null) {
-                throw new DomainException('C2C bank transaction destination is not registered.');
-            }
-            if ($ingestionMethod !== 'manual'
-                && $destination->verification_provider_code !== $providerCode) {
-                throw new DomainException('C2C bank transaction provider is not assigned to the destination.');
-            }
+            $evidenceAcceptedAt = $this->clock->now()->setTimezone(new DateTimeZone('UTC'));
 
-            $transaction = $connection->table('c2c_bank_transactions')
-                ->where('provider_code', $providerCode)
-                ->where('provider_transaction_id', $observation->providerTransactionId)
-                ->lockForUpdate()
-                ->first();
-            $observedAt = $this->timestamp();
-            if ($transaction === null) {
-                $transactionId = (int) $connection->table('c2c_bank_transactions')->insertGetId([
-                    'public_id' => (string) Str::ulid(),
-                    'provider_code' => $providerCode,
-                    'provider_transaction_id' => $observation->providerTransactionId,
-                    'c2c_destination_account_id' => (int) $destination->id,
-                    'amount_irr' => $observation->amountIrr,
-                    'currency' => 'IRR',
-                    'status' => 'pending',
-                    'occurred_at' => $occurredAt->format('Y-m-d H:i:s.u'),
-                    'sender_card_lookup_hash' => $senderHash,
-                    'encrypted_sender_name' => $senderName === null ? null : $this->encrypter->encryptString($senderName),
-                    'reference' => $reference,
-                    'first_evidence_payload_hash' => strtolower($observation->evidencePayloadHash),
-                    'first_observed_at' => $observedAt,
-                    'last_observed_at' => $observedAt,
-                    'created_at' => $observedAt,
-                ]);
-                $transaction = $connection->table('c2c_bank_transactions')->where('id', $transactionId)->lockForUpdate()->first();
+            return $this->database->connection()->transaction(function (Connection $connection) use (
+                $providerCode,
+                $observation,
+                $ingestionMethod,
+                $correlationId,
+                $destinationHash,
+                $senderHash,
+                $senderName,
+                $reference,
+                $occurredAt,
+                $evidenceAcceptedAt,
+            ): CardToCardBankTransactionReceipt {
+                $destination = $connection->table('c2c_destination_accounts')
+                    ->where('card_lookup_hash', $destinationHash)
+                    ->lockForUpdate()
+                    ->first(['id', 'public_id', 'verification_provider_code']);
+                if ($destination === null) {
+                    throw new DomainException('C2C bank transaction destination is not registered.');
+                }
+                if ($ingestionMethod !== 'manual'
+                    && $destination->verification_provider_code !== $providerCode) {
+                    throw new DomainException('C2C bank transaction provider is not assigned to the destination.');
+                }
+
+                $transaction = $connection->table('c2c_bank_transactions')
+                    ->where('provider_code', $providerCode)
+                    ->where('provider_transaction_id', $observation->providerTransactionId)
+                    ->lockForUpdate()
+                    ->first();
+                $observedAt = $this->timestamp();
                 if ($transaction === null) {
-                    throw new RuntimeException('C2C bank transaction persistence failed.');
+                    $transactionId = (int) $connection->table('c2c_bank_transactions')->insertGetId([
+                        'public_id' => (string) Str::ulid(),
+                        'provider_code' => $providerCode,
+                        'provider_transaction_id' => $observation->providerTransactionId,
+                        'c2c_destination_account_id' => (int) $destination->id,
+                        'amount_irr' => $observation->amountIrr,
+                        'currency' => 'IRR',
+                        'status' => 'pending',
+                        'occurred_at' => $occurredAt->format('Y-m-d H:i:s.u'),
+                        'sender_card_lookup_hash' => $senderHash,
+                        'encrypted_sender_name' => $senderName === null ? null : $this->encrypter->encryptString($senderName),
+                        'reference' => $reference,
+                        'first_evidence_payload_hash' => strtolower($observation->evidencePayloadHash),
+                        'first_observed_at' => $observedAt,
+                        'last_observed_at' => $observedAt,
+                        'created_at' => $observedAt,
+                    ]);
+                    $transaction = $connection->table('c2c_bank_transactions')->where('id', $transactionId)->lockForUpdate()->first();
+                    if ($transaction === null) {
+                        throw new RuntimeException('C2C bank transaction persistence failed.');
+                    }
+                } else {
+                    $this->assertSameIdentity(
+                        $transaction,
+                        (int) $destination->id,
+                        $observation->amountIrr,
+                        $occurredAt->format('Y-m-d H:i:s.u'),
+                        $senderHash,
+                        $reference,
+                    );
                 }
-            } else {
-                $this->assertSameIdentity(
-                    $transaction,
-                    (int) $destination->id,
-                    $observation->amountIrr,
-                    $occurredAt->format('Y-m-d H:i:s.u'),
-                    $senderHash,
-                    $reference,
-                );
-            }
 
-            $event = $connection->table('c2c_bank_transaction_events')
-                ->where('c2c_bank_transaction_id', $transaction->id)
-                ->where('provider_event_id', $observation->providerEventId)
-                ->first();
-            if ($event !== null) {
-                if ($event->status !== $observation->status
-                    || ! hash_equals(strtolower($event->evidence_payload_hash), strtolower($observation->evidencePayloadHash))) {
-                    throw new RuntimeException('C2C provider event replay conflicts with accepted evidence.');
-                }
-
-                return $this->receipt($connection, $transaction, true);
-            }
-
-            try {
-                $connection->table('c2c_bank_transaction_events')->insert([
-                    'c2c_bank_transaction_id' => (int) $transaction->id,
-                    'provider_event_id' => $observation->providerEventId,
-                    'status' => $observation->status,
-                    'evidence_payload_hash' => strtolower($observation->evidencePayloadHash),
-                    'ingestion_method' => $ingestionMethod,
-                    'observed_at' => $observedAt,
-                    'correlation_id' => $correlationId,
-                    'created_at' => $observedAt,
-                ]);
-            } catch (QueryException $exception) {
-                $duplicate = $connection->table('c2c_bank_transaction_events')
+                $event = $connection->table('c2c_bank_transaction_events')
                     ->where('c2c_bank_transaction_id', $transaction->id)
                     ->where('provider_event_id', $observation->providerEventId)
                     ->first();
-                if ($duplicate === null
-                    || $duplicate->status !== $observation->status
-                    || ! hash_equals(strtolower($duplicate->evidence_payload_hash), strtolower($observation->evidencePayloadHash))) {
-                    throw $exception;
+                if ($event !== null) {
+                    if ($event->status !== $observation->status
+                        || ! hash_equals(strtolower($event->evidence_payload_hash), strtolower($observation->evidencePayloadHash))) {
+                        throw new RuntimeException('C2C provider event replay conflicts with accepted evidence.');
+                    }
+
+                    return $this->receipt($connection, $transaction, true);
                 }
 
-                return $this->receipt($connection, $transaction, true);
-            }
+                try {
+                    $connection->table('c2c_bank_transaction_events')->insert([
+                        'c2c_bank_transaction_id' => (int) $transaction->id,
+                        'provider_event_id' => $observation->providerEventId,
+                        'status' => $observation->status,
+                        'evidence_payload_hash' => strtolower($observation->evidencePayloadHash),
+                        'ingestion_method' => $ingestionMethod,
+                        'observed_at' => $observedAt,
+                        'correlation_id' => $correlationId,
+                        'created_at' => $observedAt,
+                    ]);
+                } catch (QueryException $exception) {
+                    $duplicate = $connection->table('c2c_bank_transaction_events')
+                        ->where('c2c_bank_transaction_id', $transaction->id)
+                        ->where('provider_event_id', $observation->providerEventId)
+                        ->first();
+                    if ($duplicate === null
+                        || $duplicate->status !== $observation->status
+                        || ! hash_equals(strtolower($duplicate->evidence_payload_hash), strtolower($observation->evidencePayloadHash))) {
+                        throw $exception;
+                    }
 
-            $currentStatus = (string) $transaction->status;
-            if ($currentStatus !== $observation->status) {
-                $this->assertAllowedTransition($currentStatus, $observation->status);
-            }
-            $connection->table('c2c_bank_transactions')
-                ->where('id', $transaction->id)
-                ->update([
-                    'status' => $observation->status,
-                    'last_observed_at' => $observedAt,
-                ]);
-            $fresh = $connection->table('c2c_bank_transactions')->where('id', $transaction->id)->first();
-            if ($fresh === null) {
-                throw new RuntimeException('C2C bank transaction disappeared after observation.');
-            }
+                    return $this->receipt($connection, $transaction, true);
+                }
 
-            return $this->receipt($connection, $fresh, false);
-        }, 3);
+                $currentStatus = (string) $transaction->status;
+                if ($currentStatus !== $observation->status) {
+                    $this->assertAllowedTransition($currentStatus, $observation->status);
+                }
+                $connection->table('c2c_bank_transactions')
+                    ->where('id', $transaction->id)
+                    ->update([
+                        'status' => $observation->status,
+                        'last_observed_at' => $observedAt,
+                    ]);
+                $fresh = $connection->table('c2c_bank_transactions')->where('id', $transaction->id)->first();
+                if ($fresh === null) {
+                    throw new RuntimeException('C2C bank transaction disappeared after observation.');
+                }
+
+                if (in_array($observation->status, ['pending', 'settled'], true)) {
+                    $authorities = $this->evidenceAssociation->lockMatchingBankEvidenceAuthorities(
+                        $connection,
+                        (int) $destination->id,
+                        $observation->amountIrr,
+                        $occurredAt,
+                    );
+                    foreach ($authorities as $authority) {
+                        $this->evidenceAssociation->restoreConcurrentEvidenceExpiry(
+                            $connection,
+                            $authority,
+                            $evidenceAcceptedAt,
+                            PaymentIntentState::Submitted,
+                            'c2c_concurrent_bank_evidence_restored',
+                            $correlationId,
+                        );
+                    }
+                }
+
+                return $this->receipt($connection, $fresh, false);
+            }, 3);
+        });
     }
 
     private function assertSameIdentity(

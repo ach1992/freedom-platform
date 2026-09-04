@@ -29,6 +29,7 @@ final readonly class CardToCardPaymentService
         private DatabaseManager $database,
         private PurchasePaymentIntentService $purchaseIntents,
         private PurchasePromotionUsageAuthority $promotionUsage,
+        private CardToCardEvidenceAssociationAuthority $evidenceAssociation,
         private CardToCardAdjustmentGenerator $adjustments,
         private Clock $clock,
     ) {}
@@ -165,13 +166,12 @@ final readonly class CardToCardPaymentService
     private function expireAbandonedIntent(string $paymentIntentPublicId): bool
     {
         return $this->database->connection()->transaction(function (Connection $connection) use ($paymentIntentPublicId): bool {
-            $intent = $connection->table('payment_intents')
-                ->where('public_id', $paymentIntentPublicId)
-                ->lockForUpdate()
-                ->first(['id', 'public_id', 'purpose', 'payment_method_code', 'provider_code', 'state', 'captured_at']);
-            if ($intent === null) {
+            $authority = $this->evidenceAssociation->lockByPaymentIntentPublicId($connection, $paymentIntentPublicId);
+            if ($authority === null) {
                 return false;
             }
+            $reservation = $authority['reservation'];
+            $intent = $authority['intent'];
             if ($intent->purpose !== 'purchase'
                 || $intent->payment_method_code !== self::PAYMENT_METHOD_CODE
                 || $intent->provider_code !== self::PAYMENT_METHOD_CODE
@@ -180,19 +180,18 @@ final readonly class CardToCardPaymentService
                 return false;
             }
 
-            $reservation = $connection->table('c2c_amount_reservations')
-                ->where('payment_intent_id', $intent->id)
-                ->lockForUpdate()
-                ->first();
-            if ($reservation === null) {
-                throw new RuntimeException('Card-to-card purchase maintenance reservation is unavailable.');
-            }
             $now = $this->databaseDateTime($this->clock->now());
             if ((string) $reservation->late_review_until > $now) {
                 return false;
             }
-            if ($connection->table('c2c_manual_submissions')->where('payment_intent_id', $intent->id)->exists()
-                || $connection->table('c2c_transaction_matches')->where('payment_intent_id', $intent->id)->exists()) {
+            if ($connection->table('c2c_manual_submissions')
+                ->where('payment_intent_id', $intent->id)
+                ->lockForUpdate()
+                ->first(['id']) !== null
+                || $connection->table('c2c_transaction_matches')
+                    ->where('payment_intent_id', $intent->id)
+                    ->lockForUpdate()
+                    ->first(['id']) !== null) {
                 return false;
             }
             $bankEvidence = $connection->table('c2c_bank_transactions')
@@ -202,8 +201,8 @@ final readonly class CardToCardPaymentService
                 ->where('occurred_at', '>=', $reservation->reserved_at)
                 ->where('occurred_at', '<=', $reservation->late_review_until)
                 ->lockForUpdate()
-                ->exists();
-            if ($bankEvidence) {
+                ->first(['id']);
+            if ($bankEvidence !== null) {
                 return false;
             }
 

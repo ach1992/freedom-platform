@@ -9,6 +9,7 @@ use App\Modules\Orders\Application\QuoteService;
 use App\Modules\Orders\Domain\QuoteOverrideSource;
 use App\Modules\Payments\CardToCard\Application\CardToCardBankTransactionService;
 use App\Modules\Payments\CardToCard\Application\CardToCardDestinationService;
+use App\Modules\Payments\CardToCard\Application\CardToCardManualSubmissionService;
 use App\Modules\Payments\CardToCard\Application\CardToCardPaymentService;
 use App\Modules\Payments\CardToCard\Application\Contracts\BankTransactionObservation;
 use App\Modules\Payments\CardToCard\Application\Contracts\CardToCardAdjustmentGenerator;
@@ -18,6 +19,7 @@ use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
 use DateTimeImmutable;
+use DomainException;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -251,6 +253,79 @@ final class CardToCardAmountReservationTest extends TestCase
         self::assertSame(0, $result->expiredIntents);
         self::assertSame(0, $result->failures);
         self::assertSame('awaiting_user_action', DB::table('payment_intents')->where('public_id', $payment->paymentIntent->intentPublicId)->value('state'));
+    }
+
+    public function test_evidence_accepted_after_terminal_commit_does_not_revive_expired_intent(): void
+    {
+        $this->registerDestination(reservationMinutes: 5, lateReviewMinutes: 60);
+        [$user, $quote] = $this->quote('late-post-terminal');
+        $decision = $this->app->make(PaymentMethodEligibilityService::class)->evaluate('c2c.eligibility.late.post.terminal', $user, $quote);
+        $service = $this->app->make(CardToCardPaymentService::class);
+        $payment = $service->create(
+            'c2c.intent.late.post.terminal',
+            $user,
+            $quote,
+            $decision->publicId,
+            $this->correlation('late-post-terminal-create'),
+        );
+        $reservation = DB::table('c2c_amount_reservations')->where('id', $payment->reservationId)->first(['public_id', 'reserved_at']);
+        self::assertNotNull($reservation);
+        $paidAt = new DateTimeImmutable((string) $reservation->reserved_at, new \DateTimeZone('UTC'));
+        $paidAt = $paidAt->modify('+2 minutes');
+
+        $this->clock->value = $this->clock->value->modify('+61 minutes');
+        $expired = $service->expireAbandonedIntentsDue(10);
+        self::assertSame(1, $expired->expiredIntents);
+        self::assertSame('expired', DB::table('payment_intents')->where('public_id', $payment->paymentIntent->intentPublicId)->value('state'));
+
+        $this->clock->value = $this->clock->value->modify('+1 second');
+        $bank = $this->app->make(CardToCardBankTransactionService::class)->ingest(
+            'manual',
+            new BankTransactionObservation(
+                'c2c-post-terminal-tx',
+                'c2c-post-terminal-event',
+                '4242424242424242',
+                $payment->payableAmountIrr,
+                'settled',
+                $paidAt,
+                null,
+                null,
+                'c2c-post-terminal-reference',
+                hash('sha256', 'c2c-post-terminal-payload'),
+            ),
+            'manual',
+            $this->correlation('late-post-terminal-bank'),
+        );
+        self::assertSame('settled', $bank->status);
+        self::assertSame('expired', DB::table('payment_intents')->where('public_id', $payment->paymentIntent->intentPublicId)->value('state'));
+        self::assertSame(1, DB::table('c2c_bank_transactions')->where('provider_transaction_id', 'c2c-post-terminal-tx')->count());
+
+        try {
+            $this->app->make(CardToCardManualSubmissionService::class)->submit(
+                'c2c.manual.post.terminal',
+                $user,
+                (string) $reservation->public_id,
+                $payment->payableAmountIrr,
+                $paidAt,
+                hash('sha256', 'c2c-post-terminal-manual-evidence'),
+                null,
+                null,
+                'c2c-post-terminal-manual-reference',
+                null,
+                $this->correlation('late-post-terminal-manual'),
+            );
+            self::fail('Expected post-terminal manual evidence to remain non-recovering.');
+        } catch (DomainException $exception) {
+            self::assertSame('C2C manual submission arrived after terminal payment authority closed.', $exception->getMessage());
+        }
+
+        self::assertSame(0, DB::table('c2c_manual_submissions')->where('submission_key', 'c2c.manual.post.terminal')->count());
+        self::assertSame('expired', DB::table('payment_intents')->where('public_id', $payment->paymentIntent->intentPublicId)->value('state'));
+        $intentId = DB::table('payment_intents')->where('public_id', $payment->paymentIntent->intentPublicId)->value('id');
+        self::assertSame(0, DB::table('payment_intent_state_histories')
+            ->where('payment_intent_id', $intentId)
+            ->whereIn('reason_code', ['c2c_concurrent_bank_evidence_restored', 'c2c_concurrent_manual_evidence_restored'])
+            ->count());
     }
 
     public function test_database_rejects_forged_active_payable_collision_and_identity_mutation(): void

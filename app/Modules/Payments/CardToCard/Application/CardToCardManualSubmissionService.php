@@ -21,6 +21,8 @@ final readonly class CardToCardManualSubmissionService
     public function __construct(
         private DatabaseManager $database,
         private StringEncrypter $encrypter,
+        private CardToCardEvidenceAssociationAuthority $evidenceAssociation,
+        private CardToCardEvidenceRecoveryMutex $recoveryMutex,
         private Clock $clock,
     ) {}
 
@@ -57,8 +59,9 @@ final readonly class CardToCardManualSubmissionService
         $senderHash = $normalizedSenderCard === null
             ? null
             : hash_hmac('sha256', $normalizedSenderCard, $this->lookupKey());
+        $effectiveCorrelationId = $correlationId ?? hash('sha256', 'c2c-manual:'.$submissionKey);
 
-        return $this->database->connection()->transaction(function (Connection $connection) use (
+        return $this->recoveryMutex->synchronized(function () use (
             $submissionKey,
             $userId,
             $reservationPublicId,
@@ -69,98 +72,121 @@ final readonly class CardToCardManualSubmissionService
             $normalizedSenderName,
             $normalizedReference,
             $normalizedReceiptReference,
-            $correlationId,
+            $effectiveCorrelationId,
         ): CardToCardManualSubmissionReceipt {
-            $existing = $connection->table('c2c_manual_submissions')->where('submission_key', $submissionKey)->lockForUpdate()->first();
-            if ($existing !== null) {
-                return $this->replayOrConflict(
-                    $connection,
-                    $existing,
-                    $userId,
-                    $reservationPublicId,
-                    $claimedAmountIrr,
-                    $paidAt,
-                    $evidenceHash,
-                    $senderHash,
-                    $normalizedSenderName,
-                    $normalizedReference,
-                    $normalizedReceiptReference,
-                );
-            }
+            $evidenceAcceptedAt = $this->clock->now()->setTimezone(new DateTimeZone('UTC'));
 
-            $reservation = $connection->table('c2c_amount_reservations as reservation')
-                ->join('payment_intents as intent', 'intent.id', '=', 'reservation.payment_intent_id')
-                ->where('reservation.public_id', $reservationPublicId)
-                ->lockForUpdate()
-                ->first([
-                    'reservation.id', 'reservation.public_id', 'reservation.payment_intent_id',
-                    'reservation.c2c_destination_account_id', 'reservation.payable_amount_irr',
-                    'reservation.reserved_at', 'reservation.late_review_until',
-                    'intent.public_id as intent_public_id', 'intent.user_id', 'intent.purpose',
-                    'intent.payment_method_code', 'intent.provider_code', 'intent.state', 'intent.captured_at',
+            return $this->database->connection()->transaction(function (Connection $connection) use (
+                $submissionKey,
+                $userId,
+                $reservationPublicId,
+                $claimedAmountIrr,
+                $paidAt,
+                $evidenceHash,
+                $senderHash,
+                $normalizedSenderName,
+                $normalizedReference,
+                $normalizedReceiptReference,
+                $effectiveCorrelationId,
+                $evidenceAcceptedAt,
+            ): CardToCardManualSubmissionReceipt {
+                $authority = $this->evidenceAssociation->lockByReservationPublicId($connection, $reservationPublicId);
+                if ($authority === null) {
+                    throw new DomainException('C2C manual submission reservation does not exist.');
+                }
+                $existing = $connection->table('c2c_manual_submissions')->where('submission_key', $submissionKey)->lockForUpdate()->first();
+                if ($existing !== null) {
+                    return $this->replayOrConflict(
+                        $connection,
+                        $existing,
+                        $userId,
+                        $reservationPublicId,
+                        $claimedAmountIrr,
+                        $paidAt,
+                        $evidenceHash,
+                        $senderHash,
+                        $normalizedSenderName,
+                        $normalizedReference,
+                        $normalizedReceiptReference,
+                    );
+                }
+
+                $reservation = $authority['reservation'];
+                $intent = $authority['intent'];
+                if ((int) $intent->user_id !== $userId
+                    || $intent->purpose !== 'purchase'
+                    || $intent->payment_method_code !== 'card_to_card'
+                    || $intent->provider_code !== 'card_to_card'
+                    || ! in_array($intent->state, [PaymentIntentState::AwaitingUserAction->value, PaymentIntentState::Expired->value], true)
+                    || $intent->captured_at !== null
+                    || (int) $reservation->payable_amount_irr !== $claimedAmountIrr) {
+                    throw new DomainException('C2C manual submission does not match the owned payable reservation.');
+                }
+                $reservedAt = $this->storedDateTime((string) $reservation->reserved_at);
+                $lateReviewUntil = $this->storedDateTime((string) $reservation->late_review_until);
+                if ($paidAt < $reservedAt || $paidAt > $lateReviewUntil) {
+                    throw new DomainException('C2C claimed payment time is outside the accepted review window.');
+                }
+
+                $submissionId = (int) $connection->table('c2c_manual_submissions')->insertGetId([
+                    'public_id' => (string) Str::ulid(),
+                    'submission_key' => $submissionKey,
+                    'payment_intent_id' => (int) $reservation->payment_intent_id,
+                    'c2c_amount_reservation_id' => (int) $reservation->id,
+                    'c2c_destination_account_id' => (int) $reservation->c2c_destination_account_id,
+                    'submitted_by_user_id' => $userId,
+                    'claimed_amount_irr' => $claimedAmountIrr,
+                    'claimed_paid_at' => $this->databaseDateTime($paidAt),
+                    'sender_card_lookup_hash' => $senderHash,
+                    'encrypted_sender_name' => $normalizedSenderName === null ? null : $this->encrypter->encryptString($normalizedSenderName),
+                    'reference' => $normalizedReference,
+                    'private_receipt_reference' => $normalizedReceiptReference,
+                    'evidence_hash' => strtolower($evidenceHash),
+                    'created_at' => $this->timestamp(),
                 ]);
-            if ($reservation === null) {
-                throw new DomainException('C2C manual submission reservation does not exist.');
-            }
-            if ((int) $reservation->user_id !== $userId
-                || $reservation->purpose !== 'purchase'
-                || $reservation->payment_method_code !== 'card_to_card'
-                || $reservation->provider_code !== 'card_to_card'
-                || $reservation->state !== PaymentIntentState::AwaitingUserAction->value
-                || $reservation->captured_at !== null
-                || (int) $reservation->payable_amount_irr !== $claimedAmountIrr) {
-                throw new DomainException('C2C manual submission does not match the owned payable reservation.');
-            }
-            $reservedAt = $this->storedDateTime((string) $reservation->reserved_at);
-            $lateReviewUntil = $this->storedDateTime((string) $reservation->late_review_until);
-            if ($paidAt < $reservedAt || $paidAt > $lateReviewUntil) {
-                throw new DomainException('C2C claimed payment time is outside the accepted review window.');
-            }
 
-            $submissionId = (int) $connection->table('c2c_manual_submissions')->insertGetId([
-                'public_id' => (string) Str::ulid(),
-                'submission_key' => $submissionKey,
-                'payment_intent_id' => (int) $reservation->payment_intent_id,
-                'c2c_amount_reservation_id' => (int) $reservation->id,
-                'c2c_destination_account_id' => (int) $reservation->c2c_destination_account_id,
-                'submitted_by_user_id' => $userId,
-                'claimed_amount_irr' => $claimedAmountIrr,
-                'claimed_paid_at' => $this->databaseDateTime($paidAt),
-                'sender_card_lookup_hash' => $senderHash,
-                'encrypted_sender_name' => $normalizedSenderName === null ? null : $this->encrypter->encryptString($normalizedSenderName),
-                'reference' => $normalizedReference,
-                'private_receipt_reference' => $normalizedReceiptReference,
-                'evidence_hash' => strtolower($evidenceHash),
-                'created_at' => $this->timestamp(),
-            ]);
+                if ($intent->state === PaymentIntentState::Expired->value) {
+                    $authority = $this->evidenceAssociation->restoreConcurrentEvidenceExpiry(
+                        $connection,
+                        $authority,
+                        $evidenceAcceptedAt,
+                        PaymentIntentState::Submitted,
+                        'c2c_concurrent_manual_evidence_restored',
+                        $effectiveCorrelationId,
+                    );
+                    if (! $authority['restored']) {
+                        throw new DomainException('C2C manual submission arrived after terminal payment authority closed.');
+                    }
+                } else {
+                    $updated = $connection->table('payment_intents')
+                        ->where('id', $reservation->payment_intent_id)
+                        ->where('state', PaymentIntentState::AwaitingUserAction->value)
+                        ->whereNull('captured_at')
+                        ->update([
+                            'state' => PaymentIntentState::Submitted->value,
+                            'updated_at' => $this->timestamp(),
+                        ]);
+                    if ($updated !== 1) {
+                        throw new RuntimeException('C2C manual submission payment state changed concurrently.');
+                    }
+                    $connection->table('payment_intent_state_histories')->insert([
+                        'payment_intent_id' => (int) $reservation->payment_intent_id,
+                        'from_state' => PaymentIntentState::AwaitingUserAction->value,
+                        'to_state' => PaymentIntentState::Submitted->value,
+                        'reason_code' => 'c2c_manual_payment_submitted',
+                        'correlation_id' => $effectiveCorrelationId,
+                        'created_at' => $this->timestamp(),
+                    ]);
+                }
 
-            $updated = $connection->table('payment_intents')
-                ->where('id', $reservation->payment_intent_id)
-                ->where('state', PaymentIntentState::AwaitingUserAction->value)
-                ->whereNull('captured_at')
-                ->update([
-                    'state' => PaymentIntentState::Submitted->value,
-                    'updated_at' => $this->timestamp(),
-                ]);
-            if ($updated !== 1) {
-                throw new RuntimeException('C2C manual submission payment state changed concurrently.');
-            }
-            $connection->table('payment_intent_state_histories')->insert([
-                'payment_intent_id' => (int) $reservation->payment_intent_id,
-                'from_state' => PaymentIntentState::AwaitingUserAction->value,
-                'to_state' => PaymentIntentState::Submitted->value,
-                'reason_code' => 'c2c_manual_payment_submitted',
-                'correlation_id' => $correlationId ?? hash('sha256', 'c2c-manual:'.$submissionKey),
-                'created_at' => $this->timestamp(),
-            ]);
+                $stored = $connection->table('c2c_manual_submissions')->where('id', $submissionId)->first();
+                if ($stored === null) {
+                    throw new RuntimeException('C2C manual submission persistence failed.');
+                }
 
-            $stored = $connection->table('c2c_manual_submissions')->where('id', $submissionId)->first();
-            if ($stored === null) {
-                throw new RuntimeException('C2C manual submission persistence failed.');
-            }
-
-            return $this->receipt($connection, $stored, false);
-        }, 3);
+                return $this->receipt($connection, $stored, false);
+            }, 3);
+        });
     }
 
     private function replayOrConflict(

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Payments\Application;
 
 use App\Modules\Payments\Application\Contracts\PurchasePromotionUsageAuthority;
+use App\Modules\Payments\CardToCard\Application\CardToCardEvidenceRecoveryMutex;
 use App\Modules\Payments\CardToCard\Application\CardToCardPaymentService;
 use App\Modules\Payments\Domain\PaymentIntentState;
 use App\Shared\Application\Clock;
@@ -19,6 +20,7 @@ final readonly class PurchasePaymentMaintenanceService
         private Clock $clock,
         private PurchaseWalletPaymentService $walletPayments,
         private CardToCardPaymentService $cardToCardPayments,
+        private CardToCardEvidenceRecoveryMutex $c2cEvidenceRecoveryMutex,
         private PurchasePromotionUsageAuthority $promotionUsage,
     ) {}
 
@@ -55,7 +57,9 @@ final readonly class PurchasePaymentMaintenanceService
         }
 
         $cardToCard = $this->cardToCardPayments->expireAbandonedIntentsDue($limit);
-        $promotion = $this->promotionUsage->releaseEligibleExpiredTerminalPurchases($limit);
+        $promotion = $this->c2cEvidenceRecoveryMutex->synchronized(
+            fn () => $this->promotionUsage->releaseEligibleExpiredTerminalPurchases($limit),
+        );
 
         return new PurchasePaymentMaintenanceResult(
             count($walletRows),
