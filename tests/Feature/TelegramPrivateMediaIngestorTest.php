@@ -9,10 +9,14 @@ use App\Modules\Telegram\Application\TelegramPrivateMediaDownload;
 use App\Modules\Telegram\Application\TelegramPrivateMediaIngestor;
 use App\Modules\Telegram\Application\TelegramPrivateMediaInput;
 use App\Modules\Telegram\Application\TelegramPrivateMediaRejected;
+use App\Modules\Telegram\Infrastructure\HttpTelegramPrivateMediaFetcher;
+use App\Modules\Telegram\Infrastructure\TelegramRuntimeConfiguration;
 use App\Shared\Application\RestrictedValue;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
+use Illuminate\Http\Client\Factory;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use RuntimeException;
@@ -142,6 +146,64 @@ final class TelegramPrivateMediaIngestorTest extends TestCase
         self::assertSame(2, $fetcher->calls);
         self::assertSame(1, DB::table('telegram_private_media')->where('update_id', 88007)->count());
         self::assertSame('stored', DB::table('telegram_private_media')->where('update_id', 88007)->value('state'));
+    }
+
+    public function test_repeated_empty_http_download_keeps_durable_media_pending_for_recovery(): void
+    {
+        [$userId, $accountId] = $this->telegramIdentity(9817);
+        $png = $this->onePixelPng();
+        Http::fake([
+            'https://api.telegram.org/bot123456789:abcdefghijklmnopqrstuvwxyz_ABCDE/getFile' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'file_id' => 'provider-file-secret-empty-durable',
+                    'file_unique_id' => 'provider-unique-secret-empty-durable',
+                    'file_size' => strlen($png),
+                    'file_path' => 'photos/empty-durable.png',
+                ],
+            ], 200),
+        ]);
+        Http::fakeSequence('https://api.telegram.org/file/bot123456789:abcdefghijklmnopqrstuvwxyz_ABCDE/photos/empty-durable.png')
+            ->push('', 200)
+            ->push('', 200);
+
+        $this->app->instance(
+            TelegramPrivateMediaFetcher::class,
+            new HttpTelegramPrivateMediaFetcher(
+                $this->app->make(Factory::class),
+                new TelegramRuntimeConfiguration(
+                    '123456789:abcdefghijklmnopqrstuvwxyz_ABCDE',
+                    '123456789',
+                    'telegram_webhook_secret_1234567890_safe',
+                    'https://bot.example.test/api/telegram/webhook',
+                    1_048_576,
+                    'critical',
+                    120,
+                    'https://api.telegram.org',
+                    15,
+                ),
+            ),
+        );
+        $this->app->forgetInstance(TelegramPrivateMediaIngestor::class);
+        $service = $this->app->make(TelegramPrivateMediaIngestor::class);
+        $input = new TelegramPrivateMediaInput(
+            'photo',
+            RestrictedValue::fromString('provider-file-secret-empty-durable'),
+            RestrictedValue::fromString('provider-unique-secret-empty-durable'),
+            strlen($png),
+        );
+
+        try {
+            $service->ingest('123456789', 88008, $accountId, $userId, $input);
+            self::fail('Repeated empty provider responses must remain retryable at the durable media boundary.');
+        } catch (RuntimeException $exception) {
+            self::assertSame('Telegram private-media download returned an empty body.', $exception->getMessage());
+        }
+
+        self::assertSame('pending', DB::table('telegram_private_media')->where('update_id', 88008)->value('state'));
+        self::assertNull(DB::table('telegram_private_media')->where('update_id', 88008)->value('rejection_code'));
+        self::assertSame([], Storage::disk('telegram_private_media')->allFiles());
+        Http::assertSentCount(4);
     }
 
     public function test_unsafe_or_conflicting_media_fails_closed_without_accepted_private_file(): void
