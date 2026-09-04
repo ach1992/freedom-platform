@@ -17,6 +17,17 @@ use App\Modules\Orders\Application\QuoteService;
 use App\Modules\Orders\Domain\QuoteOverrideSource;
 use App\Modules\Payments\Application\PurchasePaymentMaintenanceService;
 use App\Modules\Payments\Application\PurchaseWalletPaymentService;
+use App\Modules\Payments\CardToCard\Application\CardToCardBankTransactionService;
+use App\Modules\Payments\CardToCard\Application\CardToCardDestinationService;
+use App\Modules\Payments\CardToCard\Application\CardToCardMatchingService;
+use App\Modules\Payments\CardToCard\Application\CardToCardPaymentService;
+use App\Modules\Payments\CardToCard\Application\CardToCardProviderPollingService;
+use App\Modules\Payments\CardToCard\Application\CardToCardSettlementService;
+use App\Modules\Payments\CardToCard\Application\CardToCardSettlementUnavailable;
+use App\Modules\Payments\CardToCard\Application\Contracts\BankTransactionObservation;
+use App\Modules\Payments\CardToCard\Application\Contracts\BankTransactionPage;
+use App\Modules\Payments\CardToCard\Application\Contracts\CardToCardAdjustmentGenerator;
+use App\Modules\Payments\CardToCard\Infrastructure\FakeBankTransactionVerificationProvider;
 use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
 use App\Modules\Promotions\Application\PromotionRuleVersionReceipt;
 use App\Modules\Promotions\BenefitCodes\Domain\BenefitCodeType;
@@ -47,6 +58,14 @@ final class PurchaseWalletPromotionClock implements Clock
 }
 
 /** @requirement BUY-002 PAY-001 PAY-002 PAY-003 PRO-001 WAL-002 DAT-002 DAT-003 DAT-004 SEC-002 QUA-001 QUA-004 */
+final class PurchaseWalletPromotionC2cAdjustmentGenerator implements CardToCardAdjustmentGenerator
+{
+    public function generate(int $minimumIrr, int $maximumIrr): int
+    {
+        return $minimumIrr;
+    }
+}
+
 final class PurchaseWalletPromotionUsageIntegrationTest extends TestCase
 {
     use CreatesBenefitCodeFixtures;
@@ -60,6 +79,8 @@ final class PurchaseWalletPromotionUsageIntegrationTest extends TestCase
         $this->seed();
         $this->clock = new PurchaseWalletPromotionClock(now('UTC')->toDateTimeImmutable());
         $this->app->instance(Clock::class, $this->clock);
+        $this->app->instance(CardToCardAdjustmentGenerator::class, new PurchaseWalletPromotionC2cAdjustmentGenerator);
+        config()->set('payments.card_to_card.lookup_key', str_repeat('p', 32));
     }
 
     public function test_purchase_payment_maintenance_command_is_json_safe_and_scheduled(): void
@@ -67,6 +88,8 @@ final class PurchaseWalletPromotionUsageIntegrationTest extends TestCase
         $expected = json_encode([
             'wallet_intents_examined' => 0,
             'expired_wallet_intents' => 0,
+            'c2c_intents_examined' => 0,
+            'expired_c2c_intents' => 0,
             'promotion_reservations_examined' => 0,
             'released_promotion_reservations' => 0,
             'failures' => 0,
@@ -466,6 +489,287 @@ final class PurchaseWalletPromotionUsageIntegrationTest extends TestCase
     }
 
     /** @return array{offering:array{id:int,product_id:int,server_id:int},rule:PromotionRuleVersionReceipt,codes:list<string>} */
+    public function test_discounted_card_to_card_capture_finalizes_promotion_and_completes_existing_order(): void
+    {
+        $this->configureCardToCard('c2c-capture');
+        $this->registerCardToCardDestination('c2c-capture');
+        $source = $this->promotionSource('c2c-capture', 1);
+        $checkout = $this->discountedCheckout($source, $source['codes'][0], 'c2c-capture');
+        $payment = $this->app->make(CardToCardPaymentService::class)->create(
+            'wallet-promo-c2c-intent-capture',
+            $checkout['user_id'],
+            $checkout['quote']->quotePublicId,
+            $checkout['decision']->publicId,
+            $this->correlation('c2c-create-capture'),
+        );
+
+        $paymentReplay = $this->app->make(CardToCardPaymentService::class)->create(
+            'wallet-promo-c2c-intent-capture',
+            $checkout['user_id'],
+            $checkout['quote']->quotePublicId,
+            $checkout['decision']->publicId,
+            $this->correlation('c2c-create-capture-replay'),
+        );
+        self::assertTrue($paymentReplay->replayed);
+        self::assertSame($payment->paymentIntent->intentPublicId, $paymentReplay->paymentIntent->intentPublicId);
+        self::assertSame($payment->reservationId, $paymentReplay->reservationId);
+        self::assertSame(1, DB::table('promotion_usage_reservations')->count());
+        self::assertSame(0, DB::table('promotion_usage_redemptions')->count());
+        self::assertSame('awaiting_payment', DB::table('orders')->where('public_id', $checkout['order']->orderPublicId)->value('state'));
+
+        $provider = new FakeBankTransactionVerificationProvider('fake');
+        $provider->put(null, new BankTransactionPage([
+            $this->cardToCardObservation('capture', $payment->payableAmountIrr),
+        ], 'wallet-promo-c2c-cursor-capture'));
+        $poll = $this->app->make(CardToCardProviderPollingService::class)->poll(
+            $provider,
+            $this->correlation('c2c-poll-capture'),
+        );
+
+        self::assertSame(1, $poll['captured']);
+        self::assertSame(1, DB::table('purchase_settlements')->count());
+        self::assertSame(1, DB::table('promotion_usage_redemptions')->count());
+        self::assertSame(1, DB::table('orders')->count());
+        $order = DB::table('orders')->where('public_id', $checkout['order']->orderPublicId)->first();
+        self::assertNotNull($order);
+        self::assertSame('paid', $order->state);
+        self::assertSame($payment->paymentIntent->intentPublicId, $order->payment_intent_public_id);
+        self::assertNotNull($order->purchase_settlement_public_id);
+
+        $matchPublicId = DB::table('c2c_transaction_matches')->value('public_id');
+        self::assertIsString($matchPublicId);
+        $replay = $this->app->make(CardToCardSettlementService::class)->capture(
+            $matchPublicId,
+            $this->correlation('c2c-capture-replay'),
+        );
+        self::assertTrue($replay->replayed);
+        self::assertSame(1, DB::table('purchase_settlements')->count());
+        self::assertSame(1, DB::table('promotion_usage_redemptions')->count());
+        self::assertSame(1, DB::table('orders')->count());
+    }
+
+    public function test_discounted_card_to_card_amount_allocation_failure_rolls_back_intent_and_promotion_reservation(): void
+    {
+        $this->configureCardToCard('c2c-rollback');
+        $source = $this->promotionSource('c2c-rollback', 1);
+        $checkout = $this->discountedCheckout($source, $source['codes'][0], 'c2c-rollback');
+
+        try {
+            $this->app->make(CardToCardPaymentService::class)->create(
+                'wallet-promo-c2c-intent-rollback',
+                $checkout['user_id'],
+                $checkout['quote']->quotePublicId,
+                $checkout['decision']->publicId,
+                $this->correlation('c2c-create-rollback'),
+            );
+            self::fail('Expected C2C destination allocation failure.');
+        } catch (DomainException $exception) {
+            self::assertSame('No active card-to-card destination is available.', $exception->getMessage());
+        }
+
+        self::assertSame(0, DB::table('payment_intents')->where('payment_method_code', 'card_to_card')->count());
+        self::assertSame(0, DB::table('c2c_amount_reservations')->count());
+        self::assertSame(0, DB::table('promotion_usage_reservations')->count());
+        self::assertSame('awaiting_payment', DB::table('orders')->where('public_id', $checkout['order']->orderPublicId)->value('state'));
+    }
+
+    public function test_card_to_card_promotion_capacity_failure_rolls_back_second_intent_and_amount_reservation(): void
+    {
+        $this->configureCardToCard('c2c-capacity');
+        $this->registerCardToCardDestination('c2c-capacity');
+        $source = $this->promotionSource('c2c-capacity', 1, 2);
+        $first = $this->discountedCheckout($source, $source['codes'][0], 'c2c-capacity-a');
+        $second = $this->discountedCheckout($source, $source['codes'][1], 'c2c-capacity-b');
+        $service = $this->app->make(CardToCardPaymentService::class);
+
+        $service->create(
+            'wallet-promo-c2c-capacity-first',
+            $first['user_id'],
+            $first['quote']->quotePublicId,
+            $first['decision']->publicId,
+            $this->correlation('c2c-capacity-first'),
+        );
+        self::assertSame(1, DB::table('payment_intents')->where('payment_method_code', 'card_to_card')->count());
+        self::assertSame(1, DB::table('c2c_amount_reservations')->count());
+        self::assertSame(1, DB::table('promotion_usage_reservations')->count());
+
+        try {
+            $service->create(
+                'wallet-promo-c2c-capacity-second',
+                $second['user_id'],
+                $second['quote']->quotePublicId,
+                $second['decision']->publicId,
+                $this->correlation('c2c-capacity-second'),
+            );
+            self::fail('Expected C2C promotion capacity rejection.');
+        } catch (DomainException $exception) {
+            self::assertSame('Promotion global usage capacity is exhausted.', $exception->getMessage());
+        }
+
+        self::assertSame(1, DB::table('payment_intents')->where('payment_method_code', 'card_to_card')->count());
+        self::assertSame(1, DB::table('c2c_amount_reservations')->count());
+        self::assertSame(1, DB::table('promotion_usage_reservations')->count());
+        self::assertSame(0, DB::table('promotion_usage_redemptions')->count());
+    }
+
+    public function test_card_to_card_matching_excludes_quote_after_wallet_wins_pre_payment_order(): void
+    {
+        $this->configureCardToCard('c2c-match-lost');
+        $this->registerCardToCardDestination('c2c-match-lost');
+        $source = $this->promotionSource('c2c-match-lost', 1);
+        $checkout = $this->discountedCheckout($source, $source['codes'][0], 'c2c-match-lost');
+        $c2c = $this->app->make(CardToCardPaymentService::class)->create(
+            'wallet-promo-c2c-intent-match-lost',
+            $checkout['user_id'],
+            $checkout['quote']->quotePublicId,
+            $checkout['decision']->publicId,
+            $this->correlation('c2c-create-match-lost'),
+        );
+        $walletId = $this->fundedCashWallet($checkout['user_id'], $checkout['quote']->finalPriceIrr, 'c2c-match-lost');
+        $wallet = $this->app->make(PurchaseWalletPaymentService::class);
+        $walletIntent = $wallet->reserve(
+            'wallet-promo-c2c-wallet-match-lost',
+            $checkout['user_id'],
+            $walletId,
+            $checkout['quote']->quotePublicId,
+            $checkout['decision']->publicId,
+            $this->correlation('wallet-reserve-match-lost'),
+        );
+        $wallet->capture($walletIntent->intentPublicId, $this->correlation('wallet-capture-match-lost'));
+
+        $transaction = $this->app->make(CardToCardBankTransactionService::class)->ingest(
+            'fake',
+            $this->cardToCardObservation('match-lost', $c2c->payableAmountIrr),
+            'fake',
+            $this->correlation('c2c-ingest-match-lost'),
+        );
+        $outcome = $this->app->make(CardToCardMatchingService::class)->match(
+            $transaction->publicId,
+            $this->correlation('c2c-match-lost'),
+        );
+
+        self::assertSame('review_pending:no_candidate', $outcome->outcome);
+        self::assertSame(0, $outcome->candidateCount);
+        self::assertNull($outcome->matchPublicId);
+        self::assertNotNull($outcome->reviewPublicId);
+        self::assertSame(1, DB::table('purchase_settlements')->count());
+        self::assertSame(1, DB::table('promotion_usage_redemptions')->count());
+        self::assertSame(0, DB::table('c2c_transaction_matches')->count());
+    }
+
+    public function test_card_to_card_capture_fails_closed_when_wallet_wins_after_match_and_reconciliation_keeps_bank_evidence(): void
+    {
+        $this->configureCardToCard('c2c-capture-lost');
+        $this->registerCardToCardDestination('c2c-capture-lost');
+        $source = $this->promotionSource('c2c-capture-lost', 1);
+        $checkout = $this->discountedCheckout($source, $source['codes'][0], 'c2c-capture-lost');
+        $c2c = $this->app->make(CardToCardPaymentService::class)->create(
+            'wallet-promo-c2c-intent-capture-lost',
+            $checkout['user_id'],
+            $checkout['quote']->quotePublicId,
+            $checkout['decision']->publicId,
+            $this->correlation('c2c-create-capture-lost'),
+        );
+        $transaction = $this->app->make(CardToCardBankTransactionService::class)->ingest(
+            'fake',
+            $this->cardToCardObservation('capture-lost', $c2c->payableAmountIrr),
+            'fake',
+            $this->correlation('c2c-ingest-capture-lost'),
+        );
+        $match = $this->app->make(CardToCardMatchingService::class)->match(
+            $transaction->publicId,
+            $this->correlation('c2c-match-capture-lost'),
+        );
+        self::assertSame('matched', $match->outcome);
+        self::assertNotNull($match->matchPublicId);
+
+        $walletId = $this->fundedCashWallet($checkout['user_id'], $checkout['quote']->finalPriceIrr, 'c2c-capture-lost');
+        $wallet = $this->app->make(PurchaseWalletPaymentService::class);
+        $walletIntent = $wallet->reserve(
+            'wallet-promo-c2c-wallet-capture-lost',
+            $checkout['user_id'],
+            $walletId,
+            $checkout['quote']->quotePublicId,
+            $checkout['decision']->publicId,
+            $this->correlation('wallet-reserve-capture-lost'),
+        );
+        $wallet->capture($walletIntent->intentPublicId, $this->correlation('wallet-capture-capture-lost'));
+
+        try {
+            $this->app->make(CardToCardSettlementService::class)->capture(
+                $match->matchPublicId,
+                $this->correlation('c2c-settle-capture-lost'),
+            );
+            self::fail('Expected C2C settlement single-winner rejection.');
+        } catch (CardToCardSettlementUnavailable $exception) {
+            self::assertSame('Pre-payment purchase Order was already won by another payment outcome.', $exception->getMessage());
+        }
+
+        self::assertSame(1, DB::table('purchase_settlements')->count());
+        self::assertSame(1, DB::table('promotion_usage_redemptions')->count());
+        self::assertSame('matched', DB::table('c2c_transaction_matches')->where('public_id', $match->matchPublicId)->value('state'));
+        self::assertSame('settled', DB::table('c2c_bank_transactions')->where('public_id', $transaction->publicId)->value('status'));
+        $provider = new FakeBankTransactionVerificationProvider('fake');
+        $provider->put(null, new BankTransactionPage([
+            $this->cardToCardObservation('capture-lost', $c2c->payableAmountIrr),
+        ], 'wallet-promo-c2c-cursor-capture-lost'));
+        $poll = $this->app->make(CardToCardProviderPollingService::class)->poll(
+            $provider,
+            $this->correlation('c2c-poll-capture-lost'),
+        );
+        self::assertSame(1, $poll['ingested']);
+        self::assertSame(1, $poll['matched']);
+        self::assertSame(0, $poll['captured']);
+        self::assertSame('wallet-promo-c2c-cursor-capture-lost', $poll['next_cursor']);
+        self::assertSame('wallet-promo-c2c-cursor-capture-lost', DB::table('c2c_provider_cursors')->where('provider_code', 'fake')->value('cursor'));
+        self::assertNull(DB::table('c2c_provider_cursors')->where('provider_code', 'fake')->value('last_failure_code'));
+        $finding = DB::table('c2c_reconciliation_findings')
+            ->where('c2c_bank_transaction_id', $transaction->transactionId)
+            ->where('finding_type', 'unlinked_settled')
+            ->first();
+        self::assertNotNull($finding);
+        self::assertSame($match->matchId, (int) $finding->c2c_transaction_match_id);
+    }
+
+    public function test_abandoned_discounted_card_to_card_intent_releases_promotion_after_late_review_window(): void
+    {
+        $this->configureCardToCard('c2c-abandoned-release');
+        $this->registerCardToCardDestination('c2c-abandoned-release');
+        $source = $this->promotionSource('c2c-abandoned-release', 1);
+        $checkout = $this->discountedCheckout($source, $source['codes'][0], 'c2c-abandoned-release');
+        $payment = $this->app->make(CardToCardPaymentService::class)->create(
+            'wallet-promo-c2c-intent-abandoned-release',
+            $checkout['user_id'],
+            $checkout['quote']->quotePublicId,
+            $checkout['decision']->publicId,
+            $this->correlation('c2c-create-abandoned-release'),
+        );
+
+        self::assertSame(1, DB::table('promotion_usage_reservations')->count());
+        self::assertSame(0, DB::table('promotion_usage_releases')->count());
+        self::assertSame('awaiting_user_action', DB::table('payment_intents')->where('public_id', $payment->paymentIntent->intentPublicId)->value('state'));
+
+        $this->clock->value = $this->clock->value->modify('+61 minutes');
+        $maintenance = $this->app->make(PurchasePaymentMaintenanceService::class)->run();
+
+        self::assertSame(0, $maintenance->walletIntentsExamined);
+        self::assertSame(1, $maintenance->c2cIntentsExamined);
+        self::assertSame(1, $maintenance->expiredC2cIntents);
+        self::assertSame(1, $maintenance->promotionReservationsExamined);
+        self::assertSame(1, $maintenance->releasedPromotionReservations);
+        self::assertSame(0, $maintenance->failures);
+        self::assertSame('expired', DB::table('payment_intents')->where('public_id', $payment->paymentIntent->intentPublicId)->value('state'));
+        self::assertSame(1, DB::table('promotion_usage_releases')->count());
+        self::assertSame(0, DB::table('promotion_usage_redemptions')->count());
+        self::assertSame('awaiting_payment', DB::table('orders')->where('public_id', $checkout['order']->orderPublicId)->value('state'));
+
+        $replay = $this->app->make(PurchasePaymentMaintenanceService::class)->run();
+        self::assertSame(0, $replay->c2cIntentsExamined);
+        self::assertSame(0, $replay->expiredC2cIntents);
+        self::assertSame(0, $replay->releasedPromotionReservations);
+        self::assertSame(1, DB::table('promotion_usage_releases')->count());
+    }
+
     private function promotionSource(string $suffix, int $totalUseLimit, int $quantity = 1): array
     {
         $offering = $this->activeBenefitOffering('wallet-'.$suffix);
@@ -596,6 +900,66 @@ final class PurchaseWalletPromotionUsageIntegrationTest extends TestCase
             $this->clock->value->modify('+20 minutes'),
             'Healthy Wallet promotion test observation.',
             $this->correlation('health-'.$suffix),
+        );
+    }
+
+    private function configureCardToCard(string $suffix): void
+    {
+        $administratorId = $this->benefitOwner();
+        $service = $this->app->make(PaymentMethodEligibilityService::class);
+        $service->configureMethod(
+            'wallet-promo-c2c-method-'.substr(hash('sha256', $suffix), 0, 24),
+            $administratorId,
+            'card_to_card',
+            true,
+            false,
+            2,
+            'C2C promotion payment test configuration.',
+            $this->correlation('c2c-method-'.$suffix),
+        );
+        $service->recordHealth(
+            'wallet-promo-c2c-health-'.substr(hash('sha256', $suffix), 0, 24),
+            $administratorId,
+            'card_to_card',
+            true,
+            $this->clock->value->modify('+20 minutes'),
+            'Healthy C2C promotion test observation.',
+            $this->correlation('c2c-health-'.$suffix),
+        );
+    }
+
+    private function registerCardToCardDestination(string $suffix): void
+    {
+        $this->app->make(CardToCardDestinationService::class)->register(
+            'wallet-promo-c2c-'.$suffix,
+            '4242424242424242',
+            'Promotion C2C Account',
+            true,
+            1000,
+            1000,
+            30,
+            60,
+            null,
+            10,
+            'fake',
+            'Promotion-safe C2C test destination.',
+            $this->correlation('c2c-destination-'.$suffix),
+        );
+    }
+
+    private function cardToCardObservation(string $suffix, int $amountIrr): BankTransactionObservation
+    {
+        return new BankTransactionObservation(
+            'wallet-promo-c2c-tx-'.$suffix,
+            'wallet-promo-c2c-event-'.$suffix,
+            '4242424242424242',
+            $amountIrr,
+            'settled',
+            $this->clock->value->modify('+2 minutes'),
+            null,
+            null,
+            'wallet-promo-c2c-reference-'.$suffix,
+            hash('sha256', 'wallet-promo-c2c-evidence-'.$suffix),
         );
     }
 

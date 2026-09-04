@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Payments\Application;
 
 use App\Modules\Payments\Application\Contracts\PurchasePromotionUsageAuthority;
+use App\Modules\Payments\CardToCard\Application\CardToCardPaymentService;
 use App\Modules\Payments\Domain\PaymentIntentState;
 use App\Shared\Application\Clock;
 use DomainException;
@@ -17,6 +18,7 @@ final readonly class PurchasePaymentMaintenanceService
         private DatabaseManager $database,
         private Clock $clock,
         private PurchaseWalletPaymentService $walletPayments,
+        private CardToCardPaymentService $cardToCardPayments,
         private PurchasePromotionUsageAuthority $promotionUsage,
     ) {}
 
@@ -52,14 +54,17 @@ final readonly class PurchasePaymentMaintenanceService
             }
         }
 
+        $cardToCard = $this->cardToCardPayments->expireAbandonedIntentsDue($limit);
         $promotion = $this->promotionUsage->releaseEligibleExpiredTerminalPurchases($limit);
 
         return new PurchasePaymentMaintenanceResult(
             count($walletRows),
             $expired,
+            $cardToCard->intentsExamined,
+            $cardToCard->expiredIntents,
             $promotion->examined,
             $promotion->released,
-            $failures + $promotion->failures,
+            $failures + $cardToCard->failures + $promotion->failures,
         );
     }
 }

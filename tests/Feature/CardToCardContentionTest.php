@@ -113,6 +113,7 @@ namespace {
 }
 
 namespace Tests\Feature {
+    use App\Modules\Orders\Application\PurchaseOrderService;
     use App\Modules\Orders\Application\QuotePricingInput;
     use App\Modules\Orders\Application\QuoteService;
     use App\Modules\Orders\Domain\QuoteOverrideSource;
@@ -225,6 +226,11 @@ namespace Tests\Feature {
         public function test_duplicate_concurrent_capture_creates_one_purchase_settlement_and_one_replay(): void
         {
             [$user, $quote, $decision] = $this->preparedPayment('capture');
+            $opening = $this->app->make(PurchaseOrderService::class)->openFromQuote(
+                $quote,
+                $user,
+                $this->correlation('capture-order'),
+            );
             $payment = $this->app->make(CardToCardPaymentService::class)->create(
                 'c2c.contention.capture.intent',
                 $user,
@@ -283,6 +289,12 @@ namespace Tests\Feature {
                 self::assertSame(1, DB::table('purchase_settlements')->where('provider_code', 'card_to_card')->count());
                 self::assertSame(1, DB::table('payment_provider_transactions')->where('provider_code', 'card_to_card')->count());
                 self::assertSame(1, DB::table('c2c_transaction_matches')->where('state', 'captured')->count());
+                self::assertSame(1, DB::table('orders')->count());
+                $order = DB::table('orders')->where('public_id', $opening->orderPublicId)->first();
+                self::assertNotNull($order);
+                self::assertSame('paid', $order->state);
+                self::assertSame((int) $resultA['settlement_id'], (int) $order->purchase_settlement_id);
+                self::assertSame($payment->paymentIntent->intentPublicId, $order->payment_intent_public_id);
             } finally {
                 $this->closeWorker($workerA);
                 $this->closeWorker($workerB);

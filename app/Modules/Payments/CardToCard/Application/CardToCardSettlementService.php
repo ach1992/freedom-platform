@@ -4,10 +4,13 @@ declare(strict_types=1);
 
 namespace App\Modules\Payments\CardToCard\Application;
 
+use App\Modules\Orders\Application\PurchaseOrderService;
+use App\Modules\Orders\Application\PurchaseOrderSettlementAvailability;
 use App\Modules\Payments\Application\Contracts\PaymentEvidence;
 use App\Modules\Payments\Application\Contracts\PaymentEvidenceAuthority;
 use App\Modules\Payments\Application\Contracts\PaymentTransactionStatus;
 use App\Modules\Payments\Application\Contracts\ProviderOperationOutcome;
+use App\Modules\Payments\Application\Contracts\PurchasePromotionUsageAuthority;
 use App\Modules\Payments\Application\Contracts\VerifiedPaymentEvent;
 use App\Modules\Payments\Application\PurchaseSettlementService;
 use App\Modules\Payments\Domain\PaymentIntentState;
@@ -29,6 +32,8 @@ final readonly class CardToCardSettlementService
     public function __construct(
         private DatabaseManager $database,
         private PurchaseSettlementService $settlements,
+        private PurchasePromotionUsageAuthority $promotionUsage,
+        private PurchaseOrderService $orders,
         private Clock $clock,
     ) {}
 
@@ -82,6 +87,16 @@ final readonly class CardToCardSettlementService
                 || $intent->currency !== 'IRR'
                 || (int) $intent->amount_irr !== (int) $reservation->base_amount_irr) {
                 throw new RuntimeException('C2C match financial identity is inconsistent.');
+            }
+            if (! is_string($intent->source_quote_public_id) || (int) $intent->user_id < 1) {
+                throw new RuntimeException('C2C payment intent purchase identity is incomplete.');
+            }
+            $orderAvailability = $this->orders->settlementAvailabilityFromQuote(
+                $intent->source_quote_public_id,
+                (int) $intent->user_id,
+            );
+            if ($orderAvailability === PurchaseOrderSettlementAvailability::Unavailable) {
+                throw new CardToCardSettlementUnavailable('Pre-payment purchase Order was already won by another payment outcome.');
             }
 
             $settledEvent = $connection->table('c2c_bank_transaction_events')
@@ -158,6 +173,14 @@ final readonly class CardToCardSettlementService
                 $event,
                 $correlationId,
             );
+            $this->promotionUsage->finalizeForSettlement(
+                $this->promotionRedemptionKey($settlement->settlementPublicId),
+                (int) $intent->user_id,
+                $settlement->settlementPublicId,
+            );
+            if ($orderAvailability === PurchaseOrderSettlementAvailability::AwaitingPayment) {
+                $this->orders->createFromSettlement($settlement->settlementPublicId, $correlationId);
+            }
 
             $capturedAt = $this->timestamp();
             $updated = $connection->table('c2c_transaction_matches')
@@ -271,6 +294,11 @@ final readonly class CardToCardSettlementService
             'correlation_id' => $correlationId,
             'created_at' => $this->timestamp(),
         ]);
+    }
+
+    private function promotionRedemptionKey(string $settlementPublicId): string
+    {
+        return 'purchase-promotion-redemption:'.$settlementPublicId;
     }
 
     private function storedDateTime(string $value, string $label): DateTimeImmutable

@@ -7,8 +7,10 @@ namespace Tests\Feature;
 use App\Modules\Orders\Application\QuotePricingInput;
 use App\Modules\Orders\Application\QuoteService;
 use App\Modules\Orders\Domain\QuoteOverrideSource;
+use App\Modules\Payments\CardToCard\Application\CardToCardBankTransactionService;
 use App\Modules\Payments\CardToCard\Application\CardToCardDestinationService;
 use App\Modules\Payments\CardToCard\Application\CardToCardPaymentService;
+use App\Modules\Payments\CardToCard\Application\Contracts\BankTransactionObservation;
 use App\Modules\Payments\CardToCard\Application\Contracts\CardToCardAdjustmentGenerator;
 use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
 use App\Shared\Application\Clock;
@@ -138,6 +140,8 @@ final class CardToCardAmountReservationTest extends TestCase
         self::assertNotSame($first->payableAmountIrr, $second->payableAmountIrr);
         self::assertSame(2, DB::table('c2c_amount_reservations')->where('active_lock', 1)->count());
         self::assertSame('awaiting_user_action', DB::table('payment_intents')->where('public_id', $first->paymentIntent->intentPublicId)->value('state'));
+        self::assertSame(0, DB::table('promotion_usage_reservations')->count());
+        self::assertSame(0, DB::table('promotion_usage_redemptions')->count());
     }
 
     public function test_creation_replay_returns_same_intent_and_reservation_without_new_amount(): void
@@ -175,7 +179,78 @@ final class CardToCardAmountReservationTest extends TestCase
         self::assertSame(2, DB::table('c2c_amount_reservations')->count());
         self::assertNull(DB::table('c2c_amount_reservations')->where('id', $first->reservationId)->value('active_lock'));
         self::assertSame('expired', DB::table('c2c_amount_reservations')->where('id', $first->reservationId)->value('release_reason'));
+        self::assertSame('awaiting_user_action', DB::table('payment_intents')->where('public_id', $first->paymentIntent->intentPublicId)->value('state'));
         self::assertSame(1, DB::table('c2c_amount_reservations')->where('active_lock', 1)->count());
+    }
+
+    public function test_late_review_maintenance_expires_only_evidence_free_abandoned_intent(): void
+    {
+        $this->registerDestination(reservationMinutes: 5, lateReviewMinutes: 60);
+        [$user, $quote] = $this->quote('late-expire');
+        $decision = $this->app->make(PaymentMethodEligibilityService::class)->evaluate('c2c.eligibility.late.expire', $user, $quote);
+        $service = $this->app->make(CardToCardPaymentService::class);
+        $payment = $service->create(
+            'c2c.intent.late.expire',
+            $user,
+            $quote,
+            $decision->publicId,
+            $this->correlation('late-expire-create'),
+        );
+
+        $this->clock->value = $this->clock->value->modify('+6 minutes');
+        self::assertSame(1, $service->expireDue());
+        self::assertSame('awaiting_user_action', DB::table('payment_intents')->where('public_id', $payment->paymentIntent->intentPublicId)->value('state'));
+
+        $this->clock->value = $this->clock->value->modify('+55 minutes');
+        $result = $service->expireAbandonedIntentsDue(10);
+        self::assertSame(1, $result->intentsExamined);
+        self::assertSame(1, $result->expiredIntents);
+        self::assertSame(0, $result->failures);
+        self::assertSame('expired', DB::table('payment_intents')->where('public_id', $payment->paymentIntent->intentPublicId)->value('state'));
+        $intentId = DB::table('payment_intents')->where('public_id', $payment->paymentIntent->intentPublicId)->value('id');
+        self::assertSame(1, DB::table('payment_intent_state_histories')
+            ->where('payment_intent_id', $intentId)
+            ->where('reason_code', 'c2c_late_review_expired')
+            ->count());
+    }
+
+    public function test_late_review_maintenance_preserves_intent_when_matching_bank_evidence_exists(): void
+    {
+        $this->registerDestination(reservationMinutes: 5, lateReviewMinutes: 60);
+        [$user, $quote] = $this->quote('late-evidence');
+        $decision = $this->app->make(PaymentMethodEligibilityService::class)->evaluate('c2c.eligibility.late.evidence', $user, $quote);
+        $service = $this->app->make(CardToCardPaymentService::class);
+        $payment = $service->create(
+            'c2c.intent.late.evidence',
+            $user,
+            $quote,
+            $decision->publicId,
+            $this->correlation('late-evidence-create'),
+        );
+        $this->app->make(CardToCardBankTransactionService::class)->ingest(
+            'manual',
+            new BankTransactionObservation(
+                'c2c-late-evidence-tx',
+                'c2c-late-evidence-event',
+                '4242424242424242',
+                $payment->payableAmountIrr,
+                'pending',
+                $this->clock->value->modify('+2 minutes'),
+                null,
+                null,
+                'c2c-late-evidence-reference',
+                hash('sha256', 'c2c-late-evidence-payload'),
+            ),
+            'manual',
+            $this->correlation('late-evidence-ingest'),
+        );
+
+        $this->clock->value = $this->clock->value->modify('+61 minutes');
+        $result = $service->expireAbandonedIntentsDue(10);
+        self::assertSame(1, $result->intentsExamined);
+        self::assertSame(0, $result->expiredIntents);
+        self::assertSame(0, $result->failures);
+        self::assertSame('awaiting_user_action', DB::table('payment_intents')->where('public_id', $payment->paymentIntent->intentPublicId)->value('state'));
     }
 
     public function test_database_rejects_forged_active_payable_collision_and_identity_mutation(): void

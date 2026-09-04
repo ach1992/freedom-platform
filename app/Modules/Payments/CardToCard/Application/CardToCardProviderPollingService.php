@@ -51,8 +51,12 @@ final readonly class CardToCardProviderPollingService
                     $outcome = $this->matching->match($receipt->publicId, $correlationId);
                     if ($outcome->matchPublicId !== null) {
                         $matched++;
-                        $this->settlements->capture($outcome->matchPublicId, $correlationId);
-                        $captured++;
+                        try {
+                            $this->settlements->capture($outcome->matchPublicId, $correlationId);
+                            $captured++;
+                        } catch (CardToCardSettlementUnavailable) {
+                            // Another payment method already won the pre-payment Order. Preserve bank evidence and reconcile it below.
+                        }
                     } elseif ($outcome->reviewId !== null) {
                         $reviewed++;
                     }
