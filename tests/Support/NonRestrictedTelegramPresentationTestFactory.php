@@ -11,6 +11,7 @@ use App\Modules\Telegram\Application\TelegramDeliveryQueueService;
 use App\Modules\Telegram\Application\TelegramDeliveryRequestFingerprint;
 use App\Modules\Telegram\Application\TelegramInlineKeyboardSnapshot;
 use App\Modules\Telegram\Application\TelegramMutationRequest;
+use App\Modules\Telegram\Application\TelegramProtectedPresentationReference;
 use App\Modules\Telegram\Domain\TelegramDeliveryAction;
 use App\Modules\Telegram\Domain\TelegramDeliveryOperationState;
 use App\Shared\Application\Clock;
@@ -49,6 +50,23 @@ final class NonRestrictedTelegramPresentationTestFactory
             $recipientChatId,
             $targetMessageId,
             $presentation,
+            $requestKey,
+            $correlationId,
+        );
+    }
+
+    public static function queueProtectedReference(
+        TelegramDeliveryQueueService $queue,
+        TelegramDeliveryAction $action,
+        int $recipientChatId,
+        TelegramProtectedPresentationReference $reference,
+        string $requestKey,
+        string $correlationId,
+    ): TelegramDeliveryOperationReceipt {
+        return $queue->queueProtectedReference(
+            $action,
+            $recipientChatId,
+            $reference,
             $requestKey,
             $correlationId,
         );

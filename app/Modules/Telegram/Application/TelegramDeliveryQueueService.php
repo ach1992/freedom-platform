@@ -32,6 +32,8 @@ final readonly class TelegramDeliveryQueueService
 
     public const OUTBOX_CONTRACT_VERSION_CONFIDENTIAL = 3;
 
+    public const OUTBOX_CONTRACT_VERSION_PROTECTED_REFERENCE = 4;
+
     public const OUTBOX_AGGREGATE_TYPE = 'telegram_delivery_operation';
 
     public const OUTBOX_EVENT_KEY_PREFIX = 'telegram-delivery-requested:';
@@ -71,6 +73,30 @@ final readonly class TelegramDeliveryQueueService
             $correlationId,
             $inlineKeyboard,
             $contractVersion,
+        );
+    }
+
+    /** @requirement ARCH-003 ARCH-004 DAT-003 SEC-002 SEC-008 OPS-003 QUA-001 QUA-004 QUA-007 */
+    public function queueProtectedReference(
+        TelegramDeliveryAction $action,
+        int $recipientChatId,
+        TelegramProtectedPresentationReference $reference,
+        string $requestKey,
+        string $correlationId,
+    ): TelegramDeliveryOperationReceipt {
+        TelegramPresentationProvenanceGuard::assertQueueSource($this->database->connection());
+        if ($action !== TelegramDeliveryAction::Send) {
+            throw new DomainException('Protected-reference Telegram delivery supports send mutations only.');
+        }
+
+        return $this->queueRequest(
+            new TelegramMutationRequest($action, $recipientChatId, null, $reference),
+            $reference->durableText(),
+            null,
+            $requestKey,
+            $correlationId,
+            null,
+            self::OUTBOX_CONTRACT_VERSION_PROTECTED_REFERENCE,
         );
     }
 
@@ -119,8 +145,17 @@ final readonly class TelegramDeliveryQueueService
             ) {
                 throw new RuntimeException('Telegram confidential queue contract is internally inconsistent.');
             }
+        } elseif ($contractVersion === self::OUTBOX_CONTRACT_VERSION_PROTECTED_REFERENCE) {
+            if (! $request->presentation instanceof TelegramProtectedPresentationReference
+                || $confidentialPresentation !== null
+                || $inlineKeyboard !== null
+                || $durablePresentationText !== $request->presentation->durableText()
+            ) {
+                throw new RuntimeException('Telegram protected-reference queue contract is internally inconsistent.');
+            }
         } elseif ($confidentialPresentation !== null
             || $request->presentation instanceof ConfidentialTelegramPresentation
+            || $request->presentation instanceof TelegramProtectedPresentationReference
             || $durablePresentationText !== ($request->presentation instanceof NonRestrictedTelegramPresentation
                 ? $request->presentation->text()
                 : null)

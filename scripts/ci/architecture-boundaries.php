@@ -49,6 +49,7 @@ return [
     ],
     'telegram_non_restricted_presentation_sources' => [
         'app/Modules/Telegram/Application/TelegramInteractiveDeliveryOutboxHandler.php',
+        'app/Modules/Telegram/Application/TelegramProtectedReferenceDeliveryOutboxHandler.php',
         'app/Modules/Telegram/Application/TelegramNavigationHandler.php',
     ],
 

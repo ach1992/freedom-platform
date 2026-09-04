@@ -10,7 +10,7 @@ use Stringable;
 
 /**
  * Restricted payload held only until the one provider-boundary attempt.
- * Its string/debug representations cannot expose link or QR material.
+ * Its string/debug representations cannot expose link, QR, or copy material.
  */
 final readonly class ProtectedTelegramPresentation implements Stringable
 {
@@ -19,6 +19,8 @@ final readonly class ProtectedTelegramPresentation implements Stringable
         private ?string $documentContents,
         private ?string $documentFilename,
         private ?string $caption,
+        private ?string $copyButtonText = null,
+        private ?string $copyText = null,
     ) {}
 
     public static function plainText(string $text): self
@@ -28,6 +30,23 @@ final readonly class ProtectedTelegramPresentation implements Stringable
         }
 
         return new self($text, null, null, null);
+    }
+
+    public static function plainTextWithCopyButton(string $text, string $buttonText, string $copyText): self
+    {
+        if ($text === ''
+            || $buttonText === ''
+            || mb_strlen($buttonText) > 64
+            || $copyText === ''
+            || mb_strlen($copyText) > 256
+            || ! mb_check_encoding($buttonText, 'UTF-8')
+            || ! mb_check_encoding($copyText, 'UTF-8')
+            || str_contains($buttonText, "\0")
+            || str_contains($copyText, "\0")) {
+            throw new InvalidArgumentException('Protected Telegram copy presentation is invalid.');
+        }
+
+        return new self($text, null, null, null, $buttonText, $copyText);
     }
 
     public static function svgDocument(string $contents, string $caption): self
@@ -47,6 +66,21 @@ final readonly class ProtectedTelegramPresentation implements Stringable
     public function text(): string
     {
         return $this->text ?? throw new LogicException('Protected Telegram text is unavailable.');
+    }
+
+    public function hasCopyButton(): bool
+    {
+        return $this->copyButtonText !== null && $this->copyText !== null;
+    }
+
+    public function copyButtonText(): string
+    {
+        return $this->copyButtonText ?? throw new LogicException('Protected Telegram copy button is unavailable.');
+    }
+
+    public function copyText(): string
+    {
+        return $this->copyText ?? throw new LogicException('Protected Telegram copy text is unavailable.');
     }
 
     public function documentContents(): string

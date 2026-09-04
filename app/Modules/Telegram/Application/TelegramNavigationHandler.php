@@ -8,6 +8,7 @@ use App\Modules\Customers\Application\CustomerAccountSummary;
 use App\Modules\Customers\Application\CustomerAccountSummaryService;
 use App\Modules\Promotions\Application\ReferralSelfSummary;
 use App\Modules\Promotions\Application\ReferralSelfSummaryService;
+use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCardToCardPayment;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCatalog;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseDiscountQuote;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseOrder;
@@ -46,6 +47,10 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
     private const STATE_PURCHASE_PAYMENT_METHOD_SELECTED = 'purchase_payment_method_selected';
 
     private const STATE_PURCHASE_PAYMENT_METHOD_SELECTING = 'purchase_payment_method_selecting';
+
+    private const STATE_PURCHASE_CARD_TO_CARD_INSTRUCTIONS = 'purchase_card_to_card_instructions';
+
+    private const STATE_PURCHASE_CARD_TO_CARD_SUBMITTING = 'purchase_card_to_card_submitting';
 
     private const STATE_PURCHASE_WALLET_CONFIRM = 'purchase_wallet_confirm';
 
@@ -86,6 +91,8 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
     private const ACTION_PURCHASE_PAYMENT_METHODS = 'navigation.purchase.payment_methods';
 
     private const ACTION_PURCHASE_PAYMENT_METHOD_SELECT = 'navigation.purchase.payment_method.select';
+
+    private const ACTION_PURCHASE_CARD_TO_CARD_RESERVE = 'navigation.purchase.card_to_card.reserve';
 
     private const ACTION_PURCHASE_WALLET_RESERVE = 'navigation.purchase.wallet.reserve';
 
@@ -133,6 +140,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         private TelegramCustomerPurchaseDiscountQuote $purchaseDiscountQuotes,
         private TelegramCustomerPurchasePaymentMethods $purchasePaymentMethods,
         private TelegramCustomerPurchaseOrder $purchaseOrders,
+        private TelegramCustomerPurchaseCardToCardPayment $purchaseCardToCardPayments,
         private TelegramCustomerPurchaseWalletPayment $purchaseWalletPayments,
         private TelegramCustomerPurchaseCatalog $purchaseCatalog,
         private TelegramOwnedServiceProjection $services,
@@ -220,6 +228,12 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
 
         if ($action->sessionState === self::STATE_PURCHASE_PAYMENT_METHOD_SELECTED) {
             $this->handlePurchasePaymentMethodSelected($action);
+
+            return;
+        }
+
+        if ($action->sessionState === self::STATE_PURCHASE_CARD_TO_CARD_INSTRUCTIONS) {
+            $this->handlePurchaseCardToCardInstructions($action);
 
             return;
         }
@@ -436,6 +450,11 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
     private function handlePurchasePaymentMethodSelected(TelegramInteractionAction $action): void
     {
         if ($action->kind === TelegramInteractionActionKind::Callback) {
+            if ($action->callbackAction === self::ACTION_PURCHASE_CARD_TO_CARD_RESERVE && $action->callbackPayload === []) {
+                $this->reservePurchaseCardToCardPayment($action);
+
+                return;
+            }
             if ($action->callbackAction === self::ACTION_PURCHASE_WALLET_RESERVE && $action->callbackPayload === []) {
                 $this->reservePurchaseWalletPayment($action);
 
@@ -452,6 +471,27 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
 
         if ($action->kind === TelegramInteractionActionKind::Back) {
             $this->returnPurchasePaymentMethodsFromSelection($action);
+
+            return;
+        }
+        if ($this->isEntryCommand($action->messageText)) {
+            $this->returnHome($action);
+        }
+    }
+
+    private function handlePurchaseCardToCardInstructions(TelegramInteractionAction $action): void
+    {
+        $this->purchaseCardToCardInstructionsStateFromPayload($action->sessionPayload);
+        if ($action->kind === TelegramInteractionActionKind::Callback) {
+            if ($action->callbackAction !== self::ACTION_BACK || $action->callbackPayload !== []) {
+                throw new RuntimeException('Telegram card-to-card instruction callback action is unsupported.');
+            }
+            $this->returnPurchasePaymentMethodsFromCardToCard($action);
+
+            return;
+        }
+        if ($action->kind === TelegramInteractionActionKind::Back) {
+            $this->returnPurchasePaymentMethodsFromCardToCard($action);
 
             return;
         }
@@ -1711,6 +1751,68 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         );
     }
 
+    private function reservePurchaseCardToCardPayment(TelegramInteractionAction $action): void
+    {
+        $state = $this->purchasePaymentMethodSelectedStateFromPayload($action->sessionPayload);
+        if ($state['payment_method_code'] !== 'card_to_card') {
+            throw new AuthorizationException('Telegram card-to-card payment is unavailable for this selected method.');
+        }
+        $operationKey = hash('sha256', $action->requestKey);
+
+        try {
+            $this->database->connection()->transaction(function () use ($action, $state, $operationKey): void {
+                $claim = $this->sessions->transition(
+                    $action->sessionPublicId,
+                    $action->sessionVersion,
+                    self::STATE_PURCHASE_CARD_TO_CARD_SUBMITTING,
+                    $state,
+                    'nav-purchase-c2c-reserve-claim:'.$operationKey,
+                );
+                $this->assertActorBinding($action, $claim->userId);
+                $reservation = $this->purchaseCardToCardPayments->reserveForSelf(
+                    $action->userId,
+                    $action->userId,
+                    $state['order_public_id'],
+                    $state['quote_public_id'],
+                    $state['quote_configuration_hash'],
+                    $state['payment_decision_public_id'],
+                    $state['payment_decision_configuration_hash'],
+                    $operationKey,
+                );
+                $instructionState = $state;
+                $instructionState['payment_intent_public_id'] = $reservation->paymentIntentPublicId;
+                $instructionState['c2c_reservation_public_id'] = $reservation->reservationPublicId;
+                $session = $this->sessions->transition(
+                    $action->sessionPublicId,
+                    $claim->version,
+                    self::STATE_PURCHASE_CARD_TO_CARD_INSTRUCTIONS,
+                    $instructionState,
+                    'nav-purchase-c2c-instructions-state:'.$operationKey,
+                );
+                $this->assertActorBinding($action, $session->userId);
+                $this->queuePurchaseCardToCardInstructions(
+                    $action,
+                    $session->version,
+                    $reservation,
+                    $this->localeForActor($action->userId),
+                    $action->requestKey,
+                );
+            }, 3);
+        } catch (AuthorizationException) {
+            $this->returnPurchasePaymentMethodsFromSelection($action);
+        } catch (\DomainException $exception) {
+            if ($this->isSessionRace($exception)) {
+                return;
+            }
+            $this->renderPurchaseCardToCardUnavailable(
+                $action,
+                $action->sessionVersion,
+                $this->localeForActor($action->userId),
+                $action->requestKey,
+            );
+        }
+    }
+
     private function reservePurchaseWalletPayment(TelegramInteractionAction $action): void
     {
         $state = $this->purchasePaymentMethodSelectedStateFromPayload($action->sessionPayload);
@@ -1954,6 +2056,87 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         $this->renderHome($action, $session->version, $action->requestKey);
     }
 
+    private function renderPurchaseCardToCardUnavailable(
+        TelegramInteractionAction $action,
+        int $sessionVersion,
+        string $locale,
+        string $requestKey,
+    ): void {
+        $retry = $this->callbacks->issue(
+            $action->sessionPublicId,
+            $sessionVersion,
+            self::ACTION_PURCHASE_CARD_TO_CARD_RESERVE,
+            [],
+            'nav-purchase-c2c-unavailable-retry:'.$requestKey,
+        );
+        $back = $this->callbacks->issue(
+            $action->sessionPublicId,
+            $sessionVersion,
+            self::ACTION_BACK,
+            [],
+            'nav-purchase-c2c-unavailable-back:'.$requestKey,
+        );
+        $this->queueConfidential(
+            $action,
+            $this->translation('telegram.navigation.purchase.payment_methods.card_to_card_payment.unavailable', $locale),
+            'nav-purchase-c2c-unavailable-delivery:'.$requestKey,
+            'purchase-c2c-unavailable',
+            new TelegramInlineKeyboardSnapshot([
+                [new TelegramInlineCallbackButton(
+                    $this->translation('telegram.navigation.purchase.payment_methods.card_to_card_payment.retry', $locale),
+                    $retry->publicId,
+                    TelegramInlineButtonStyle::Primary,
+                )],
+                [new TelegramInlineCallbackButton(
+                    $this->translation('telegram.navigation.buttons.back', $locale),
+                    $back->publicId,
+                )],
+            ]),
+        );
+    }
+
+    private function queuePurchaseCardToCardInstructions(
+        TelegramInteractionAction $action,
+        int $sessionVersion,
+        TelegramCustomerPurchaseCardToCardReservation $reservation,
+        string $locale,
+        string $requestKey,
+    ): void {
+        $back = $this->callbacks->issue(
+            $action->sessionPublicId,
+            $sessionVersion,
+            self::ACTION_BACK,
+            [],
+            'nav-purchase-c2c-instructions-back:'.$requestKey,
+        );
+        $reference = TelegramProtectedPresentationReference::cardToCardDestination(
+            $reservation->reservationPublicId,
+            $locale,
+        );
+        $this->delivery->queueProtectedReference(
+            TelegramDeliveryAction::Send,
+            $action->telegramUserId,
+            $reference,
+            'nav-purchase-c2c-protected-delivery:'.$requestKey,
+            $this->correlationId($action, 'purchase-c2c-protected'),
+        );
+        $this->queueConfidential(
+            $action,
+            $this->translation('telegram.navigation.purchase.payment_methods.card_to_card_payment.instructions', $locale, [
+                'amount' => $this->formatIrr($reservation->payableAmountIrr),
+                'currency' => 'IRR',
+                'card' => $reservation->maskedCardNumber,
+                'expires_at' => $this->formatBusinessDateTime($reservation->expiresAt),
+            ]),
+            'nav-purchase-c2c-instructions-delivery:'.$requestKey,
+            'purchase-c2c-instructions',
+            new TelegramInlineKeyboardSnapshot([[new TelegramInlineCallbackButton(
+                $this->translation('telegram.navigation.buttons.back', $locale),
+                $back->publicId,
+            )]]),
+        );
+    }
+
     private function renderPurchaseWalletUnavailable(
         TelegramInteractionAction $action,
         int $sessionVersion,
@@ -2084,6 +2267,20 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         string $requestKey,
     ): void {
         $rows = [];
+        if ($methodCode === 'card_to_card') {
+            $continue = $this->callbacks->issue(
+                $action->sessionPublicId,
+                $sessionVersion,
+                self::ACTION_PURCHASE_CARD_TO_CARD_RESERVE,
+                [],
+                'nav-purchase-c2c-reserve:'.$requestKey,
+            );
+            $rows[] = [new TelegramInlineCallbackButton(
+                $this->translation('telegram.navigation.purchase.payment_methods.card_to_card_payment.continue', $locale),
+                $continue->publicId,
+                TelegramInlineButtonStyle::Primary,
+            )];
+        }
         if ($methodCode === 'wallet') {
             $continue = $this->callbacks->issue(
                 $action->sessionPublicId,
@@ -2454,6 +2651,63 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         );
         $this->assertActorBinding($action, $session->userId);
         $this->renderPurchaseOffering($action, $session->version, $offering, $locale, $action->requestKey);
+    }
+
+    private function returnPurchasePaymentMethodsFromCardToCard(TelegramInteractionAction $action): void
+    {
+        $state = $this->purchaseCardToCardInstructionsStateFromPayload($action->sessionPayload);
+        try {
+            [$session, $decision] = $this->database->connection()->transaction(function () use ($action, $state): array {
+                $this->purchaseOrders->currentForSelf(
+                    $action->userId,
+                    $action->userId,
+                    $state['order_public_id'],
+                    $state['quote_public_id'],
+                    $state['quote_configuration_hash'],
+                );
+                $decision = $this->purchasePaymentMethods->currentForSelf(
+                    $action->userId,
+                    $action->userId,
+                    $state['quote_public_id'],
+                    $state['quote_configuration_hash'],
+                    $state['payment_decision_public_id'],
+                    $state['payment_decision_configuration_hash'],
+                );
+                $methodsState = $state;
+                unset(
+                    $methodsState['payment_method_code'],
+                    $methodsState['payment_intent_public_id'],
+                    $methodsState['c2c_reservation_public_id'],
+                );
+                $session = $this->sessions->transition(
+                    $action->sessionPublicId,
+                    $action->sessionVersion,
+                    self::STATE_PURCHASE_PAYMENT_METHODS,
+                    $methodsState,
+                    'nav-purchase-c2c-back-methods:'.$action->requestKey,
+                );
+                $this->assertActorBinding($action, $session->userId);
+
+                return [$session, $decision];
+            }, 3);
+        } catch (AuthorizationException) {
+            $this->returnHome($action);
+
+            return;
+        } catch (\DomainException $exception) {
+            if ($this->isSessionRace($exception)) {
+                return;
+            }
+            throw $exception;
+        }
+
+        $this->renderPurchasePaymentMethods(
+            $action,
+            $session->version,
+            $decision,
+            $this->localeForActor($action->userId),
+            $action->requestKey,
+        );
     }
 
     private function returnPurchasePaymentMethodsFromSelection(TelegramInteractionAction $action): void
@@ -3322,6 +3576,32 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         $state['payment_method_code'] = $methodCode;
 
         /** @var array{page:int,offering_selection:string,quote_public_id:string,quote_configuration_hash:string,payment_decision_public_id:string,payment_decision_configuration_hash:string,order_public_id:string,payment_method_code:string,discount_consumption_public_id?:string,discount_consumption_configuration_hash?:string,promotion_resolution_public_id?:string} $state */
+        return $state;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array{page:int,offering_selection:string,quote_public_id:string,quote_configuration_hash:string,payment_decision_public_id:string,payment_decision_configuration_hash:string,order_public_id:string,payment_method_code:string,payment_intent_public_id:string,c2c_reservation_public_id:string,discount_consumption_public_id?:string,discount_consumption_configuration_hash?:string,promotion_resolution_public_id?:string}
+     */
+    private function purchaseCardToCardInstructionsStateFromPayload(array $payload): array
+    {
+        if (! is_string($payload['payment_intent_public_id'] ?? null)
+            || preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/i', $payload['payment_intent_public_id']) !== 1
+            || ! is_string($payload['c2c_reservation_public_id'] ?? null)
+            || preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/i', $payload['c2c_reservation_public_id']) !== 1) {
+            throw new RuntimeException('Telegram card-to-card instruction state is invalid.');
+        }
+        $selectedPayload = $payload;
+        $intentPublicId = $selectedPayload['payment_intent_public_id'];
+        $reservationPublicId = $selectedPayload['c2c_reservation_public_id'];
+        unset($selectedPayload['payment_intent_public_id'], $selectedPayload['c2c_reservation_public_id']);
+        $state = $this->purchasePaymentMethodSelectedStateFromPayload($selectedPayload);
+        if ($state['payment_method_code'] !== 'card_to_card') {
+            throw new RuntimeException('Telegram card-to-card instruction method is invalid.');
+        }
+        $state['payment_intent_public_id'] = $intentPublicId;
+        $state['c2c_reservation_public_id'] = $reservationPublicId;
+
         return $state;
     }
 

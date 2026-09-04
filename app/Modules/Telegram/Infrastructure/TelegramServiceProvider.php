@@ -20,6 +20,8 @@ use App\Modules\Telegram\Application\TelegramInteractionPolicy;
 use App\Modules\Telegram\Application\TelegramInteractiveDeliveryOutboxHandler;
 use App\Modules\Telegram\Application\TelegramNavigationEntryGateway;
 use App\Modules\Telegram\Application\TelegramNavigationHandler;
+use App\Modules\Telegram\Application\TelegramProtectedPresentationResolver;
+use App\Modules\Telegram\Application\TelegramProtectedReferenceDeliveryOutboxHandler;
 use App\Shared\Application\OutboxEventHandler;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Contracts\Foundation\Application;
@@ -102,6 +104,7 @@ final class TelegramServiceProvider extends ServiceProvider
                 $application->make(TelegramRuntimeConfiguration::class),
             ),
         );
+        $this->app->singleton(TelegramProtectedPresentationResolver::class);
         $this->app->singleton(
             TelegramMutationTransport::class,
             fn (Application $application): TelegramMutationTransport => new HttpTelegramMutationTransport(
@@ -127,10 +130,17 @@ final class TelegramServiceProvider extends ServiceProvider
                 fn (): TelegramDeliveryOperationExecutor => $application->make(TelegramDeliveryOperationExecutor::class),
             ),
         );
+        $this->app->singleton(
+            TelegramProtectedReferenceDeliveryOutboxHandler::class,
+            fn (Application $application): TelegramProtectedReferenceDeliveryOutboxHandler => new TelegramProtectedReferenceDeliveryOutboxHandler(
+                fn (): TelegramDeliveryOperationExecutor => $application->make(TelegramDeliveryOperationExecutor::class),
+            ),
+        );
         $this->app->tag([
             TelegramDeliveryOutboxHandler::class,
             TelegramInteractiveDeliveryOutboxHandler::class,
             TelegramConfidentialDeliveryOutboxHandler::class,
+            TelegramProtectedReferenceDeliveryOutboxHandler::class,
         ], OutboxEventHandler::class);
     }
 }
