@@ -55,9 +55,11 @@ final readonly class TelegramDeliveryRequestFingerprint
             throw new DomainException('Telegram interactive presentation snapshot hash is invalid.');
         }
 
-        $presentationText = $request->presentation instanceof NonRestrictedTelegramPresentation
-            ? $request->presentation->text()
-            : null;
+        $presentationText = match (true) {
+            $request->presentation instanceof NonRestrictedTelegramPresentation => $request->presentation->text(),
+            $request->presentation instanceof TelegramProtectedPresentationReference => $request->presentation->durableText(),
+            default => null,
+        };
         $hashes = $confidentialPresentationHashes ?? [null];
         $fingerprints = [];
         foreach ($hashes as $confidentialHash) {

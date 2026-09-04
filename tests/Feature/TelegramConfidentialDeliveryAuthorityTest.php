@@ -459,7 +459,7 @@ final class TelegramConfidentialDeliveryAuthorityTest extends TestCase
         ]);
     }
 
-    public function test_container_registers_exact_telegram_delivery_contract_handlers_v1_v2_v3(): void
+    public function test_container_registers_exact_telegram_delivery_contract_handlers_v1_v2_v3_v4(): void
     {
         $versions = [];
         foreach ($this->app->tagged(OutboxEventHandler::class) as $handler) {
@@ -470,7 +470,7 @@ final class TelegramConfidentialDeliveryAuthorityTest extends TestCase
         }
         sort($versions, SORT_NUMERIC);
 
-        self::assertSame([1, 2, 3], $versions);
+        self::assertSame([1, 2, 3, 4], $versions);
     }
 
     public function test_confidential_plaintext_is_absent_from_common_durable_and_debug_surfaces(): void

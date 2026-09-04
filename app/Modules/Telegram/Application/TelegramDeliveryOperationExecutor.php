@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Application;
 
+use App\Modules\Telegram\Application\Contracts\ProtectedTelegramMessageSender;
 use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\TelegramMutationTransport;
 use App\Modules\Telegram\Domain\TelegramDeliveryAction;
@@ -30,6 +31,8 @@ final readonly class TelegramDeliveryOperationExecutor
         private TelegramDeliveryDatabaseCapability $databaseCapability,
         private TelegramDeliveryInteractivePresentationService $interactivePresentations,
         private TelegramDeliveryConfidentialPresentationService $confidentialPresentations,
+        private ?ProtectedTelegramMessageSender $protectedSender = null,
+        private ?TelegramProtectedPresentationResolver $protectedPresentations = null,
     ) {}
 
     /** @requirement ARCH-004 DAT-003 SEC-002 SEC-008 OPS-003 QUA-001 QUA-004 QUA-007 */
@@ -69,7 +72,7 @@ final readonly class TelegramDeliveryOperationExecutor
         string $expectedCorrelationId,
         int $contractVersion = TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION,
     ): TelegramDeliveryOperationReceipt {
-        /** @var array{row: DeliveryOperationRow, boundary_entered: bool, request:?TelegramMutationRequest} $boundary */
+        /** @var array{row: DeliveryOperationRow, boundary_entered: bool, request:?TelegramMutationRequest, protected_presentation:?ProtectedTelegramPresentation} $boundary */
         $boundary = $this->database->connection()->transaction(function (Connection $connection) use ($publicId, $expectedOutboxEventId, $expectedCorrelationId, $contractVersion): array {
             $this->databaseCapability->acquireRuntimeLifecycleFence($connection);
             $row = $this->operation($connection, $publicId, true);
@@ -89,11 +92,12 @@ final readonly class TelegramDeliveryOperationExecutor
                     ),
                     'boundary_entered' => false,
                     'request' => null,
+                    'protected_presentation' => null,
                 ];
             }
 
             if (! in_array($state, [TelegramDeliveryOperationState::Prepared, TelegramDeliveryOperationState::Retryable], true)) {
-                return ['row' => $row, 'boundary_entered' => false, 'request' => null];
+                return ['row' => $row, 'boundary_entered' => false, 'request' => null, 'protected_presentation' => null];
             }
 
             // Interactive resolution and durable fingerprint verification must
@@ -103,6 +107,8 @@ final readonly class TelegramDeliveryOperationExecutor
             $recipientChatId = $this->nonZeroInt($row->recipient_chat_id, 'Telegram recipient chat identity');
             $interactive = null;
             $confidential = null;
+            $protectedReference = null;
+            $protectedPresentation = null;
             if ($contractVersion === TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION) {
                 // Historical v1: exact non-restricted text only.
             } elseif ($contractVersion === TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_INTERACTIVE) {
@@ -127,6 +133,36 @@ final readonly class TelegramDeliveryOperationExecutor
                     (string) $row->public_id,
                     $recipientChatId,
                 );
+            } elseif ($contractVersion === TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_PROTECTED_REFERENCE) {
+                if ($this->protectedSender === null || $this->protectedPresentations === null) {
+                    throw new RuntimeException('Protected Telegram delivery dependencies are unavailable.');
+                }
+                $protectedReference = TelegramProtectedPresentationReference::restore(
+                    (string) ($row->presentation_text ?? ''),
+                );
+                $userId = $this->protectedRecipientUserId(
+                    $connection,
+                    (string) $row->bot_id,
+                    $recipientChatId,
+                );
+                try {
+                    $protectedPresentations = $this->protectedPresentations ?? throw new RuntimeException('Protected Telegram presentation resolver is unavailable.');
+                    $protectedPresentation = $protectedPresentations->resolveForSelf($userId, $protectedReference);
+                } catch (DomainException) {
+                    return [
+                        'row' => $this->transition(
+                            $connection,
+                            $row,
+                            TelegramDeliveryOperationState::FailedFinal,
+                            'telegram_protected_reference_unavailable',
+                            null,
+                            null,
+                        ),
+                        'boundary_entered' => false,
+                        'request' => null,
+                        'protected_presentation' => null,
+                    ];
+                }
             } else {
                 throw new DomainException('Telegram delivery Outbox contract version is unsupported.');
             }
@@ -134,6 +170,7 @@ final readonly class TelegramDeliveryOperationExecutor
                 $row,
                 $interactive?->keyboard,
                 $confidential?->presentation,
+                $protectedReference,
             );
             $confidentialHashCandidates = $confidential === null
                 ? null
@@ -156,6 +193,7 @@ final readonly class TelegramDeliveryOperationExecutor
                 'row' => $this->enterProviderBoundary($connection, $row),
                 'boundary_entered' => true,
                 'request' => $request,
+                'protected_presentation' => $protectedPresentation,
             ];
         }, 3);
 
@@ -167,7 +205,13 @@ final readonly class TelegramDeliveryOperationExecutor
         $request = $boundary['request']
             ?? throw new RuntimeException('Telegram delivery provider boundary is missing its prepared mutation request.');
         try {
-            $result = $this->transport->mutate($request);
+            $protectedPresentation = $boundary['protected_presentation'];
+            $result = $protectedPresentation === null
+                ? $this->transport->mutate($request)
+                : $this->protectedMutationResult(($this->protectedSender ?? throw new RuntimeException('Protected Telegram sender is unavailable.'))->send(
+                    $request->recipientChatId,
+                    $protectedPresentation,
+                ));
         } catch (Throwable) {
             $result = new TelegramMutationResult(
                 TelegramMutationOutcome::UncertainResult,
@@ -297,10 +341,14 @@ final readonly class TelegramDeliveryOperationExecutor
         object $row,
         ?TelegramResolvedInlineKeyboardMarkup $inlineKeyboard,
         ?ConfidentialTelegramPresentation $confidentialPresentation = null,
+        ?TelegramProtectedPresentationReference $protectedReference = null,
     ): TelegramMutationRequest {
         $action = TelegramDeliveryAction::tryFrom((string) $row->action)
             ?? throw new RuntimeException('Stored Telegram delivery action is invalid.');
-        $presentation = $confidentialPresentation;
+        if ($confidentialPresentation !== null && $protectedReference !== null) {
+            throw new RuntimeException('Telegram delivery cannot be confidential and protected-reference simultaneously.');
+        }
+        $presentation = $confidentialPresentation ?? $protectedReference;
         if ($presentation === null && $row->presentation_text !== null) {
             $presentation = NonRestrictedTelegramPresentation::restorePersisted((string) $row->presentation_text);
         }
@@ -312,6 +360,48 @@ final readonly class TelegramDeliveryOperationExecutor
             $presentation,
             $inlineKeyboard,
         );
+    }
+
+    private function protectedRecipientUserId(Connection $connection, string $botId, int $telegramUserId): int
+    {
+        if (preg_match('/\A[1-9][0-9]{5,19}\z/', $botId) !== 1 || $telegramUserId < 1) {
+            throw new DomainException('Protected Telegram recipient identity is invalid.');
+        }
+        $userId = $connection->table('telegram_accounts')
+            ->where('bot_id', $botId)
+            ->where('telegram_user_id', $telegramUserId)
+            ->where('is_bot', false)
+            ->value('user_id');
+        $userId = filter_var($userId, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+        if ($userId === false) {
+            throw new DomainException('Protected Telegram recipient account is unavailable.');
+        }
+
+        return $userId;
+    }
+
+    private function protectedMutationResult(ProtectedTelegramSendResult $result): TelegramMutationResult
+    {
+        return match ($result->outcome) {
+            ProtectedTelegramSendOutcome::Success => new TelegramMutationResult(
+                TelegramMutationOutcome::Success,
+                $result->resultCode,
+                $result->messageId,
+            ),
+            ProtectedTelegramSendOutcome::RetryAfter => new TelegramMutationResult(
+                TelegramMutationOutcome::RetryAfter,
+                $result->resultCode,
+                retryAfterSeconds: $result->retryAfterSeconds,
+            ),
+            ProtectedTelegramSendOutcome::DefinitiveFailure => new TelegramMutationResult(
+                TelegramMutationOutcome::DefinitiveFailure,
+                $result->resultCode,
+            ),
+            ProtectedTelegramSendOutcome::UncertainResult => new TelegramMutationResult(
+                TelegramMutationOutcome::UncertainResult,
+                $result->resultCode,
+            ),
+        };
     }
 
     private function normalizeResult(TelegramMutationRequest $request, TelegramMutationResult $result): TelegramMutationResult

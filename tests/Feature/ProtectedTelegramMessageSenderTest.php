@@ -254,6 +254,39 @@ final class ProtectedTelegramMessageSenderTest extends TestCase
         Http::assertSentCount(1);
     }
 
+    public function test_protected_copy_button_is_sent_once_without_weakening_content_protection(): void
+    {
+        Http::fake([
+            '*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 779899],
+            ], 200),
+        ]);
+
+        $presentation = ProtectedTelegramPresentation::plainTextWithCopyButton(
+            'Protected transfer details',
+            'Copy card number',
+            '4242424242424242',
+        );
+        $result = $this->sender()->send(self::TELEGRAM_USER_ID, $presentation);
+
+        self::assertSame(ProtectedTelegramSendOutcome::Success, $result->outcome);
+        self::assertSame(779899, $result->messageId);
+        self::assertSame('[PROTECTED_TELEGRAM_PRESENTATION]', (string) $presentation);
+        self::assertSame(['redacted' => true, 'type' => 'text'], $presentation->__debugInfo());
+        Http::assertSentCount(1);
+        Http::assertSent(function (Request $request): bool {
+            $data = $request->data();
+
+            return str_ends_with($request->url(), '/sendMessage')
+                && ($data['chat_id'] ?? null) === self::TELEGRAM_USER_ID
+                && ($data['protect_content'] ?? null) === true
+                && ($data['link_preview_options']['is_disabled'] ?? null) === true
+                && ($data['reply_markup']['inline_keyboard'][0][0]['text'] ?? null) === 'Copy card number'
+                && ($data['reply_markup']['inline_keyboard'][0][0]['copy_text']['text'] ?? null) === '4242424242424242';
+        });
+    }
+
     public function test_svg_document_is_sent_once_as_a_protected_document(): void
     {
         Http::fake([

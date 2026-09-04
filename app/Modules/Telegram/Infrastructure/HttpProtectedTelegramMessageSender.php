@@ -48,6 +48,21 @@ final readonly class HttpProtectedTelegramMessageSender implements ProtectedTele
             throw new InvalidArgumentException('Protected Telegram message must contain 1-4096 characters.');
         }
 
+        $payload = [
+            'chat_id' => $telegramUserId,
+            'text' => $text,
+            'protect_content' => true,
+            'link_preview_options' => ['is_disabled' => true],
+        ];
+        if ($presentation->hasCopyButton()) {
+            $payload['reply_markup'] = [
+                'inline_keyboard' => [[[
+                    'text' => $presentation->copyButtonText(),
+                    'copy_text' => ['text' => $presentation->copyText()],
+                ]]],
+            ];
+        }
+
         return $this->http
             ->asJson()
             ->acceptJson()
@@ -56,12 +71,7 @@ final readonly class HttpProtectedTelegramMessageSender implements ProtectedTele
             ->connectTimeout(min(5, $this->configuration->apiTimeoutSeconds))
             ->post(
                 $this->configuration->apiBaseUrl.'/bot'.$this->configuration->botToken.'/sendMessage',
-                [
-                    'chat_id' => $telegramUserId,
-                    'text' => $text,
-                    'protect_content' => true,
-                    'link_preview_options' => ['is_disabled' => true],
-                ],
+                $payload,
             );
     }
 

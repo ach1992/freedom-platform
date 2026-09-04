@@ -114,6 +114,14 @@ This is a recorded commercial snapshot only. No payment, capacity reservation, o
                     'confirm_button' => 'Confirm wallet payment',
                     'paid' => "Wallet payment completed\n\nOrder: :order_id\nPaid amount: :amount :currency\n\nPayment and settlement are complete. Provisioning and Service delivery have not started in this step.",
                 ],
+                'card_to_card_payment' => [
+                    'continue' => 'Continue with card to card',
+                    'retry' => 'Retry card-to-card payment',
+                    'unavailable' => 'Card-to-card payment is not currently available for this Order. No new Payment Intent or payable reservation was committed by this failed attempt.',
+                    'instructions' => "Card-to-card payment reserved\n\nExact amount: :amount :currency\nDestination: :card\nTransfer window ends: :expires_at (Tehran time)\n\nA separate protected message contains the full destination card number and a copy button. Transfer exactly the reserved amount. This screen does not confirm payment; settlement requires authoritative bank/review evidence.",
+                    'protected_instructions' => "Protected card-to-card transfer details\n\nCard number: :card_number\nExact amount: :amount :currency\nTransfer window ends: :expires_at (Tehran time)\n\nTransfer exactly this amount to this card. Sending the transfer or pressing buttons does not by itself mark the Order paid; authoritative bank/review evidence is required.",
+                    'copy_card' => 'Copy card number',
+                ],
                 'methods' => [
                     'wallet' => 'Wallet',
                     'card_to_card' => 'Card to card',
