@@ -6,6 +6,8 @@ namespace App\Modules\Telegram\Application\Contracts;
 
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseCardToCardDestination;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseCardToCardReservation;
+use App\Modules\Telegram\Application\TelegramCustomerPurchaseCardToCardSubmission;
+use DateTimeImmutable;
 
 interface TelegramCustomerPurchaseCardToCardPayment
 {
@@ -25,4 +27,14 @@ interface TelegramCustomerPurchaseCardToCardPayment
         int $subjectUserId,
         string $reservationPublicId,
     ): TelegramCustomerPurchaseCardToCardDestination;
+
+    public function submitReceiptForSelf(
+        int $actorUserId,
+        int $subjectUserId,
+        string $reservationPublicId,
+        DateTimeImmutable $submittedAt,
+        string $evidenceHash,
+        string $privateReceiptReference,
+        string $operationKey,
+    ): TelegramCustomerPurchaseCardToCardSubmission;
 }
