@@ -12,10 +12,12 @@ use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseOrder;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchasePaymentMethods;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseCardToCardDestination;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseCardToCardReservation;
+use App\Modules\Telegram\Application\TelegramCustomerPurchaseCardToCardSubmission;
 use App\Shared\Application\Clock;
 use App\Shared\Application\RestrictedValue;
 use DateTimeImmutable;
 use DateTimeZone;
+use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Contracts\Encryption\StringEncrypter;
 use Illuminate\Database\DatabaseManager;
@@ -31,6 +33,7 @@ final readonly class TelegramCustomerPurchaseCardToCardPaymentService implements
         private TelegramCustomerPurchasePaymentMethods $paymentMethods,
         private PurchaseOrderService $purchaseOrders,
         private CardToCardPaymentService $cardToCardPayments,
+        private CardToCardManualSubmissionService $manualSubmissions,
         private StringEncrypter $encrypter,
         private Clock $clock,
     ) {}
@@ -183,6 +186,92 @@ final readonly class TelegramCustomerPurchaseCardToCardPaymentService implements
             $row->masked_card_number,
             $this->positiveInt($row->payable_amount_irr, 'Card-to-card payable amount'),
             $expiresAt,
+        );
+    }
+
+    /** @requirement BUY-003 PAY-002 PAY-003 C2C-002 C2C-004 DAT-002 DAT-003 DAT-004 SEC-002 QUA-001 QUA-004 */
+    public function submitReceiptForSelf(
+        int $actorUserId,
+        int $subjectUserId,
+        string $reservationPublicId,
+        DateTimeImmutable $submittedAt,
+        string $evidenceHash,
+        string $privateReceiptReference,
+        string $operationKey,
+    ): TelegramCustomerPurchaseCardToCardSubmission {
+        $this->assertSelf($actorUserId, $subjectUserId);
+        $this->assertOperationKey($operationKey);
+        if (preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/i', $reservationPublicId) !== 1
+            || preg_match('/\A[0-9a-f]{64}\z/', $evidenceHash) !== 1
+            || preg_match('/\Atelegram-private-media:[0-9A-HJKMNP-TV-Z]{26}\z/i', $privateReceiptReference) !== 1) {
+            throw new AuthorizationException('Telegram card-to-card receipt submission is unavailable.');
+        }
+
+        /** @var object{payment_intent_public_id:string,quote_public_id:string,state:string,user_id:int|string,purpose:string,payment_method_code:string|null,provider_code:string,captured_at:?string,payable_amount_irr:int|string}|null $row */
+        $row = $this->database->connection()
+            ->table('c2c_amount_reservations as reservation')
+            ->join('payment_intents as intent', 'intent.id', '=', 'reservation.payment_intent_id')
+            ->where('reservation.public_id', strtoupper($reservationPublicId))
+            ->first([
+                'intent.public_id as payment_intent_public_id',
+                'intent.source_quote_public_id as quote_public_id',
+                'intent.state',
+                'intent.user_id',
+                'intent.purpose',
+                'intent.payment_method_code',
+                'intent.provider_code',
+                'intent.captured_at',
+                'reservation.payable_amount_irr',
+            ]);
+        if ($row === null
+            || (int) $row->user_id !== $subjectUserId
+            || $row->purpose !== 'purchase'
+            || $row->payment_method_code !== self::METHOD_CODE
+            || $row->provider_code !== self::METHOD_CODE
+            || $row->captured_at !== null
+            || ! in_array($row->state, [
+                PaymentIntentState::AwaitingUserAction->value,
+                PaymentIntentState::Submitted->value,
+            ], true)
+            || preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/i', $row->payment_intent_public_id) !== 1
+            || preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/i', $row->quote_public_id) !== 1) {
+            throw new AuthorizationException('Telegram card-to-card receipt submission is unavailable.');
+        }
+
+        if ($row->state === PaymentIntentState::AwaitingUserAction->value
+            && $this->purchaseOrders->settlementAvailabilityFromQuote($row->quote_public_id, $subjectUserId)
+                !== PurchaseOrderSettlementAvailability::AwaitingPayment) {
+            throw new AuthorizationException('Telegram card-to-card receipt submission is no longer payable.');
+        }
+
+        try {
+            $submission = $this->manualSubmissions->submit(
+                'telegram-c2c-receipt:'.$operationKey,
+                $subjectUserId,
+                strtoupper($reservationPublicId),
+                $this->positiveInt($row->payable_amount_irr, 'Card-to-card receipt payable amount'),
+                $submittedAt,
+                $evidenceHash,
+                privateReceiptReference: strtolower(substr($privateReceiptReference, 0, 23))
+                    .strtoupper(substr($privateReceiptReference, 23)),
+                correlationId: 'tg-c2c-receipt:'.substr($operationKey, 0, 40),
+            );
+        } catch (DomainException $exception) {
+            throw new AuthorizationException('Telegram card-to-card receipt submission was rejected by payment authority.', previous: $exception);
+        }
+
+        if (! hash_equals(strtoupper($submission->reservationPublicId), strtoupper($reservationPublicId))
+            || ! hash_equals(strtoupper($submission->paymentIntentPublicId), strtoupper($row->payment_intent_public_id))
+            || $submission->claimedAmountIrr !== (int) $row->payable_amount_irr) {
+            throw new RuntimeException('Telegram card-to-card receipt result conflicts with current payment authority.');
+        }
+
+        return new TelegramCustomerPurchaseCardToCardSubmission(
+            strtoupper($submission->submissionPublicId),
+            strtoupper($submission->paymentIntentPublicId),
+            strtoupper($submission->reservationPublicId),
+            $submission->claimedAmountIrr,
+            $submission->replayed,
         );
     }
 
