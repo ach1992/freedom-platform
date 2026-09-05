@@ -13,6 +13,17 @@ use RuntimeException;
 
 final readonly class TelegramInteractionDispatcher
 {
+    /**
+     * Telegram sets these supported-looking compatibility fields for distinct
+     * media classes. They must be rejected before photo/document parsing.
+     *
+     * @var list<string>
+     */
+    private const UNSUPPORTED_COMPATIBILITY_MEDIA_FIELDS = [
+        'animation',
+        'live_photo',
+    ];
+
     /** @requirement ARCH-003 DAT-003 SEC-002 SEC-003 QUA-001 */
     public function __construct(
         private DatabaseManager $database,
@@ -284,6 +295,12 @@ final readonly class TelegramInteractionDispatcher
     /** @param array<string,mixed> $message */
     private function privateMediaFromMessage(array $message): ?TelegramPrivateMediaInput
     {
+        foreach (self::UNSUPPORTED_COMPATIBILITY_MEDIA_FIELDS as $field) {
+            if (array_key_exists($field, $message)) {
+                throw new TelegramPrivateMediaRejected('unsupported_media');
+            }
+        }
+
         $photoPresent = array_key_exists('photo', $message);
         $documentPresent = array_key_exists('document', $message);
         if ($photoPresent && $documentPresent) {

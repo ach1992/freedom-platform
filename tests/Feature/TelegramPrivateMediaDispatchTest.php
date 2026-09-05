@@ -394,6 +394,97 @@ SQL);
         self::assertSame('purchase_card_to_card_instructions', DB::table('telegram_interaction_sessions')->where('telegram_account_id', $accountId)->where('status', 'active')->value('state'));
     }
 
+    public function test_direct_image_document_is_accepted_as_receipt_media(): void
+    {
+        $telegramUserId = 9825;
+        [, $accountId, $sessionPublicId] = $this->startActor($telegramUserId);
+        $paymentIntentPublicId = strtoupper((string) Str::ulid());
+        $reservationPublicId = strtoupper((string) Str::ulid());
+        $this->moveToC2cInstructions($accountId, $sessionPublicId, $paymentIntentPublicId, $reservationPublicId);
+
+        $png = $this->onePixelPng();
+        $fetcher = new TelegramPrivateMediaDispatchFetcher($png);
+        $submission = new TelegramPrivateMediaDispatchSubmission($paymentIntentPublicId, $reservationPublicId);
+        $this->bindMediaDependencies($fetcher, $submission);
+
+        $this->accept($this->documentPayload(
+            89005,
+            $telegramUserId,
+            'direct-image-document-file-id',
+            'direct-image-document-unique-id',
+            strlen($png),
+        ));
+        $this->app->make(TelegramUpdateProcessor::class)->process('123456789', 89005);
+
+        self::assertSame(1, $fetcher->calls);
+        self::assertCount(1, $submission->calls);
+        self::assertSame(1, DB::table('telegram_private_media')->where('update_id', 89005)->count());
+        self::assertSame('document', DB::table('telegram_private_media')->where('update_id', 89005)->value('source_kind'));
+        self::assertSame('associated', DB::table('telegram_private_media')->where('update_id', 89005)->value('state'));
+    }
+
+    public function test_live_photo_compatibility_photo_is_rejected_before_private_media_effect(): void
+    {
+        $telegramUserId = 9826;
+        [, $accountId, $sessionPublicId] = $this->startActor($telegramUserId);
+        $paymentIntentPublicId = strtoupper((string) Str::ulid());
+        $reservationPublicId = strtoupper((string) Str::ulid());
+        $this->moveToC2cInstructions($accountId, $sessionPublicId, $paymentIntentPublicId, $reservationPublicId);
+
+        $fetcher = new TelegramPrivateMediaDispatchFetcher($this->onePixelPng());
+        $submission = new TelegramPrivateMediaDispatchSubmission($paymentIntentPublicId, $reservationPublicId);
+        $this->bindMediaDependencies($fetcher, $submission);
+
+        $payload = $this->photoPayload(89006, $telegramUserId, 'live-photo-static-file-id', 'live-photo-static-unique-id', 68);
+        $payload['message']['live_photo'] = [
+            'file_id' => 'live-photo-video-file-id',
+            'file_unique_id' => 'live-photo-video-unique-id',
+            'width' => 1,
+            'height' => 1,
+            'duration' => 1,
+            'file_size' => 68,
+        ];
+        $this->accept($payload);
+        $this->app->make(TelegramUpdateProcessor::class)->process('123456789', 89006);
+
+        self::assertSame(0, $fetcher->calls);
+        self::assertSame([], $submission->calls);
+        self::assertSame(0, DB::table('telegram_private_media')->count());
+        self::assertSame(0, DB::table('telegram_interaction_update_bindings')->where('update_id', 89006)->count());
+        self::assertSame('purchase_card_to_card_instructions', DB::table('telegram_interaction_sessions')->where('telegram_account_id', $accountId)->where('status', 'active')->value('state'));
+    }
+
+    public function test_animation_compatibility_document_is_rejected_before_private_media_effect(): void
+    {
+        $telegramUserId = 9827;
+        [, $accountId, $sessionPublicId] = $this->startActor($telegramUserId);
+        $paymentIntentPublicId = strtoupper((string) Str::ulid());
+        $reservationPublicId = strtoupper((string) Str::ulid());
+        $this->moveToC2cInstructions($accountId, $sessionPublicId, $paymentIntentPublicId, $reservationPublicId);
+
+        $fetcher = new TelegramPrivateMediaDispatchFetcher($this->onePixelPng());
+        $submission = new TelegramPrivateMediaDispatchSubmission($paymentIntentPublicId, $reservationPublicId);
+        $this->bindMediaDependencies($fetcher, $submission);
+
+        $payload = $this->documentPayload(89007, $telegramUserId, 'animation-document-file-id', 'animation-document-unique-id', 68);
+        $payload['message']['animation'] = [
+            'file_id' => 'animation-file-id',
+            'file_unique_id' => 'animation-unique-id',
+            'width' => 1,
+            'height' => 1,
+            'duration' => 1,
+            'file_size' => 68,
+        ];
+        $this->accept($payload);
+        $this->app->make(TelegramUpdateProcessor::class)->process('123456789', 89007);
+
+        self::assertSame(0, $fetcher->calls);
+        self::assertSame([], $submission->calls);
+        self::assertSame(0, DB::table('telegram_private_media')->count());
+        self::assertSame(0, DB::table('telegram_interaction_update_bindings')->where('update_id', 89007)->count());
+        self::assertSame('purchase_card_to_card_instructions', DB::table('telegram_interaction_sessions')->where('telegram_account_id', $accountId)->where('status', 'active')->value('state'));
+    }
+
     /** @return array{0:int,1:int,2:string} */
     private function startActor(int $telegramUserId): array
     {
@@ -490,6 +581,27 @@ SQL);
             'height' => 1,
             'file_size' => $fileSize,
         ]];
+
+        return $payload;
+    }
+
+    /** @return array<string,mixed> */
+    private function documentPayload(
+        int $updateId,
+        int $telegramUserId,
+        string $fileId,
+        string $fileUniqueId,
+        int $fileSize,
+    ): array {
+        $payload = $this->textPayload($updateId, $telegramUserId, 'unused');
+        unset($payload['message']['text']);
+        $payload['message']['document'] = [
+            'file_id' => $fileId,
+            'file_unique_id' => $fileUniqueId,
+            'file_name' => 'receipt.png',
+            'mime_type' => 'image/png',
+            'file_size' => $fileSize,
+        ];
 
         return $payload;
     }
