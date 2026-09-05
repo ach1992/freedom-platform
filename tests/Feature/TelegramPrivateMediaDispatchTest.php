@@ -14,10 +14,14 @@ use App\Modules\Telegram\Application\TelegramPrivateMediaDownload;
 use App\Modules\Telegram\Application\TelegramPrivateMediaIngestor;
 use App\Modules\Telegram\Application\TelegramPrivateMediaInteractionGateway;
 use App\Modules\Telegram\Application\TelegramUpdateProcessor;
+use App\Modules\Telegram\Infrastructure\HttpTelegramPrivateMediaFetcher;
+use App\Modules\Telegram\Infrastructure\TelegramRuntimeConfiguration;
 use App\Shared\Application\RestrictedValue;
 use DateTimeImmutable;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
+use Illuminate\Http\Client\Factory;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -370,6 +374,80 @@ SQL);
         ], $active->payload);
     }
 
+    public function test_repeated_truncated_provider_image_without_sizes_stays_pending_and_recovers_without_submission_leak(): void
+    {
+        $telegramUserId = 9828;
+        [, $accountId, $sessionPublicId] = $this->startActor($telegramUserId);
+        $paymentIntentPublicId = strtoupper((string) Str::ulid());
+        $reservationPublicId = strtoupper((string) Str::ulid());
+        $this->moveToC2cInstructions($accountId, $sessionPublicId, $paymentIntentPublicId, $reservationPublicId);
+
+        $png = $this->onePixelPng();
+        $truncated = substr($png, 0, -12);
+        $fileId = 'private-provider-file-dispatch-truncated';
+        $fileUniqueId = 'private-provider-unique-dispatch-truncated';
+        Http::fake([
+            'https://api.telegram.org/bot123456789:abcdefghijklmnopqrstuvwxyz_ABCDE/getFile' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'file_id' => $fileId,
+                    'file_unique_id' => $fileUniqueId,
+                    'file_path' => 'photos/truncated-dispatch.png',
+                ],
+            ], 200),
+        ]);
+        Http::fakeSequence('https://api.telegram.org/file/bot123456789:abcdefghijklmnopqrstuvwxyz_ABCDE/photos/truncated-dispatch.png')
+            ->push($truncated, 200)
+            ->push($truncated, 200)
+            ->push($png, 200);
+
+        $fetcher = new HttpTelegramPrivateMediaFetcher(
+            $this->app->make(Factory::class),
+            new TelegramRuntimeConfiguration(
+                '123456789:abcdefghijklmnopqrstuvwxyz_ABCDE',
+                '123456789',
+                self::SECRET,
+                'https://bot.example.test/api/telegram/webhook',
+                1_048_576,
+                'critical',
+                120,
+                'https://api.telegram.org',
+                15,
+            ),
+        );
+        $submission = new TelegramPrivateMediaDispatchSubmission($paymentIntentPublicId, $reservationPublicId);
+        $this->bindMediaDependencies($fetcher, $submission);
+
+        $this->accept($this->photoPayload(89008, $telegramUserId, $fileId, $fileUniqueId, null));
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        try {
+            $processor->process('123456789', 89008);
+            self::fail('Repeated truncated provider bodies must keep receipt processing retryable.');
+        } catch (RuntimeException $exception) {
+            self::assertSame('Telegram update processing failed.', $exception->getMessage());
+        }
+
+        self::assertSame([], $submission->calls);
+        self::assertSame('pending', DB::table('telegram_private_media')->where('update_id', 89008)->value('state'));
+        self::assertNull(DB::table('telegram_private_media')->where('update_id', 89008)->value('rejection_code'));
+        self::assertSame([], Storage::disk('telegram_private_media')->allFiles());
+        self::assertSame(
+            'purchase_card_to_card_instructions',
+            DB::table('telegram_interaction_sessions')
+                ->where('telegram_account_id', $accountId)
+                ->where('status', 'active')
+                ->value('state'),
+        );
+
+        $processor->process('123456789', 89008);
+
+        self::assertCount(1, $submission->calls);
+        self::assertSame('associated', DB::table('telegram_private_media')->where('update_id', 89008)->value('state'));
+        $active = $this->app->make(TelegramInteractionSessionService::class)->activeForAccount($accountId);
+        self::assertNotNull($active);
+        self::assertSame('purchase_card_to_card_submitted', $active->state);
+    }
+
     public function test_group_or_non_owner_media_is_rejected_before_private_file_or_submission_effect(): void
     {
         $telegramUserId = 9822;
@@ -521,7 +599,7 @@ SQL);
     }
 
     private function bindMediaDependencies(
-        TelegramPrivateMediaDispatchFetcher $fetcher,
+        TelegramPrivateMediaFetcher $fetcher,
         TelegramPrivateMediaDispatchSubmission $submission,
     ): void {
         $this->app->instance(TelegramPrivateMediaFetcher::class, $fetcher);
@@ -570,17 +648,20 @@ SQL);
         int $telegramUserId,
         string $fileId,
         string $fileUniqueId,
-        int $fileSize,
+        ?int $fileSize,
     ): array {
         $payload = $this->textPayload($updateId, $telegramUserId, 'unused');
         unset($payload['message']['text']);
-        $payload['message']['photo'] = [[
+        $photo = [
             'file_id' => $fileId,
             'file_unique_id' => $fileUniqueId,
             'width' => 1,
             'height' => 1,
-            'file_size' => $fileSize,
-        ]];
+        ];
+        if ($fileSize !== null) {
+            $photo['file_size'] = $fileSize;
+        }
+        $payload['message']['photo'] = [$photo];
 
         return $payload;
     }
@@ -628,7 +709,7 @@ SQL);
     private function onePixelPng(): string
     {
         $decoded = base64_decode(
-            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=',
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9RYVFHYAAAAASUVORK5CYII=',
             true,
         );
         if (! is_string($decoded)) {

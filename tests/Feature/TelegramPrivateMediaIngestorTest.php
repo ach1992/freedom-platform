@@ -113,6 +113,46 @@ final class TelegramPrivateMediaIngestorTest extends TestCase
         Storage::disk('telegram_private_media')->assertExists((string) $associated->storage_path);
     }
 
+    public function test_all_supported_complete_image_formats_are_accepted_by_content_validation(): void
+    {
+        [$userId, $accountId] = $this->telegramIdentity(9818);
+        $fetcher = new TelegramPrivateMediaTestFetcher($this->onePixelPng());
+        $this->app->instance(TelegramPrivateMediaFetcher::class, $fetcher);
+        $this->app->forgetInstance(TelegramPrivateMediaIngestor::class);
+        $service = $this->app->make(TelegramPrivateMediaIngestor::class);
+        $fixtures = [
+            88020 => ['mime' => 'image/png', 'bytes' => $this->onePixelPng()],
+            88021 => ['mime' => 'image/jpeg', 'bytes' => $this->onePixelJpeg()],
+            88022 => ['mime' => 'image/webp', 'bytes' => $this->onePixelWebp()],
+            88023 => ['mime' => 'image/webp', 'bytes' => $this->animatedOnePixelWebp()],
+        ];
+
+        foreach ($fixtures as $updateId => $fixture) {
+            $fetcher->content = $fixture['bytes'];
+            $receipt = $service->ingest(
+                '123456789',
+                $updateId,
+                $accountId,
+                $userId,
+                new TelegramPrivateMediaInput(
+                    'document',
+                    RestrictedValue::fromString('provider-file-secret-'.$updateId),
+                    RestrictedValue::fromString('provider-unique-secret-'.$updateId),
+                    null,
+                ),
+            );
+
+            self::assertSame($fixture['mime'], $receipt->detectedMime);
+            self::assertSame(hash('sha256', $fixture['bytes']), $receipt->contentSha256);
+            self::assertSame(
+                'stored',
+                DB::table('telegram_private_media')->where('update_id', $updateId)->value('state'),
+            );
+            $path = (string) DB::table('telegram_private_media')->where('update_id', $updateId)->value('storage_path');
+            Storage::disk('telegram_private_media')->assertExists($path);
+        }
+    }
+
     public function test_retryable_provider_failure_keeps_durable_media_pending_for_same_update_recovery(): void
     {
         [$userId, $accountId] = $this->telegramIdentity(9816);
@@ -392,14 +432,39 @@ final class TelegramPrivateMediaIngestorTest extends TestCase
         return [$userId, $accountId];
     }
 
+    private function onePixelJpeg(): string
+    {
+        return $this->decodeImageFixture(
+            '/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAP/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFAEBAAAAAAAAAAAAAAAAAAAAAP/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/AJgA/9k=',
+        );
+    }
+
+    private function animatedOnePixelWebp(): string
+    {
+        return $this->decodeImageFixture(
+            'UklGRlIAAABXRUJQVlA4WAoAAAASAAAAAAAAAAAAQU5JTQYAAAD/////AABBTk1GJgAAAAAAAAAAAAAAAAAAAGQAAABWUDhMDQAAAC8AAAAQBxAREYiI/gcA',
+        );
+    }
+
+    private function onePixelWebp(): string
+    {
+        return $this->decodeImageFixture(
+            'UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEADsD+JaQAA3AAAAAA',
+        );
+    }
+
     private function onePixelPng(): string
     {
-        $decoded = base64_decode(
-            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=',
-            true,
+        return $this->decodeImageFixture(
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9RYVFHYAAAAASUVORK5CYII=',
         );
+    }
+
+    private function decodeImageFixture(string $encoded): string
+    {
+        $decoded = base64_decode($encoded, true);
         if (! is_string($decoded)) {
-            throw new RuntimeException('PNG test fixture could not be decoded.');
+            throw new RuntimeException('Image test fixture could not be decoded.');
         }
 
         return $decoded;

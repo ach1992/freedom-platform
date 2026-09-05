@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Telegram\Infrastructure;
 
 use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaFetcher;
+use App\Modules\Telegram\Application\TelegramImagePayloadIntegrity;
 use App\Modules\Telegram\Application\TelegramPrivateMediaDownload;
 use App\Modules\Telegram\Application\TelegramPrivateMediaRejected;
 use App\Shared\Application\RestrictedValue;
@@ -98,6 +99,13 @@ final readonly class HttpTelegramPrivateMediaFetcher implements TelegramPrivateM
             }
             if ($providerSize !== null && $providerSize !== $length) {
                 throw new RuntimeException('Telegram private-media provider size changed during download.');
+            }
+            if (TelegramImagePayloadIntegrity::inspect($content) === TelegramImagePayloadIntegrity::INCOMPLETE) {
+                if ($attempt < 2) {
+                    continue;
+                }
+
+                throw new RuntimeException('Telegram private-media download remained incomplete after bounded retry.');
             }
 
             return TelegramPrivateMediaDownload::fromBytes($content, $providerSize);

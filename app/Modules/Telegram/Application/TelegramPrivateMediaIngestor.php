@@ -414,7 +414,8 @@ final readonly class TelegramPrivateMediaIngestor
             || $image[1] < 1
             || $image[0] > 50_000
             || $image[1] > 50_000
-            || image_type_to_mime_type($image[2]) !== $mime) {
+            || image_type_to_mime_type($image[2]) !== $mime
+            || TelegramImagePayloadIntegrity::inspect($content) !== TelegramImagePayloadIntegrity::COMPLETE) {
             throw new TelegramPrivateMediaRejected('malformed_image');
         }
 

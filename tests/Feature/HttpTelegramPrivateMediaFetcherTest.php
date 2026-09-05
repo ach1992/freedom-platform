@@ -208,6 +208,105 @@ final class HttpTelegramPrivateMediaFetcherTest extends TestCase
         }
     }
 
+    public function test_missing_provider_size_truncated_download_retries_and_recovers(): void
+    {
+        $png = $this->onePixelPng();
+        $truncated = substr($png, 0, -12);
+        Http::fakeSequence('https://api.telegram.org/bot123456789:abcdefghijklmnopqrstuvwxyz_ABCDE/getFile')
+            ->push([
+                'ok' => true,
+                'result' => [
+                    'file_id' => 'file-secret-truncated-retry',
+                    'file_unique_id' => 'unique-secret-truncated-retry',
+                    'file_path' => 'photos/truncated-retry.png',
+                ],
+            ], 200)
+            ->push([
+                'ok' => true,
+                'result' => [
+                    'file_id' => 'file-secret-truncated-retry-alias',
+                    'file_unique_id' => 'unique-secret-truncated-retry',
+                    'file_path' => 'photos/truncated-retry.png',
+                ],
+            ], 200);
+        Http::fakeSequence('https://api.telegram.org/file/bot123456789:abcdefghijklmnopqrstuvwxyz_ABCDE/photos/truncated-retry.png')
+            ->push($truncated, 200)
+            ->push($png, 200);
+
+        $download = $this->fetcher()->fetch(
+            RestrictedValue::fromString('file-secret-truncated-retry'),
+            RestrictedValue::fromString('unique-secret-truncated-retry'),
+            1024,
+        );
+
+        self::assertSame($png, $download->bytes());
+        self::assertNull($download->providerFileSize);
+        Http::assertSentCount(4);
+    }
+
+    public function test_missing_provider_size_repeated_truncation_for_all_supported_formats_exhausts_as_retryable_provider_failure(): void
+    {
+        $getFile = Http::fakeSequence('https://api.telegram.org/bot123456789:abcdefghijklmnopqrstuvwxyz_ABCDE/getFile');
+        $fixtures = [
+            'png' => ['mime' => 'image/png', 'bytes' => $this->onePixelPng()],
+            'jpg' => ['mime' => 'image/jpeg', 'bytes' => $this->onePixelJpeg()],
+            'webp' => ['mime' => 'image/webp', 'bytes' => $this->onePixelWebp()],
+        ];
+
+        foreach ($fixtures as $format => $fixture) {
+            $fileId = 'file-secret-truncated-'.$format;
+            $uniqueId = 'unique-secret-truncated-'.$format;
+            $filePath = 'photos/truncated-exhaust.'.$format;
+            $truncated = substr($fixture['bytes'], 0, -1);
+
+            self::assertSame($fixture['mime'], (new \finfo(FILEINFO_MIME_TYPE))->buffer($truncated));
+            $legacyInspection = @getimagesizefromstring($truncated);
+            self::assertIsArray($legacyInspection);
+            self::assertSame($fixture['mime'], image_type_to_mime_type($legacyInspection[2]));
+
+            $getFile
+                ->push([
+                    'ok' => true,
+                    'result' => [
+                        'file_id' => $fileId,
+                        'file_unique_id' => $uniqueId,
+                        'file_path' => $filePath,
+                    ],
+                ], 200)
+                ->push([
+                    'ok' => true,
+                    'result' => [
+                        'file_id' => $fileId.'-alias',
+                        'file_unique_id' => $uniqueId,
+                        'file_path' => $filePath,
+                    ],
+                ], 200);
+            Http::fakeSequence(
+                'https://api.telegram.org/file/bot123456789:abcdefghijklmnopqrstuvwxyz_ABCDE/'.$filePath,
+            )
+                ->push($truncated, 200)
+                ->push($truncated, 200);
+        }
+
+        foreach (array_keys($fixtures) as $format) {
+            try {
+                $this->fetcher()->fetch(
+                    RestrictedValue::fromString('file-secret-truncated-'.$format),
+                    RestrictedValue::fromString('unique-secret-truncated-'.$format),
+                    1024,
+                );
+                self::fail('Repeated incomplete '.$format.' responses must not be accepted as image evidence.');
+            } catch (RuntimeException $exception) {
+                self::assertSame(
+                    'Telegram private-media download remained incomplete after bounded retry.',
+                    $exception->getMessage(),
+                );
+            }
+        }
+
+        Http::assertSentCount(12);
+    }
+
     private function fetcher(): HttpTelegramPrivateMediaFetcher
     {
         return new HttpTelegramPrivateMediaFetcher(
@@ -226,14 +325,32 @@ final class HttpTelegramPrivateMediaFetcherTest extends TestCase
         );
     }
 
+    private function onePixelJpeg(): string
+    {
+        return $this->decodeImageFixture(
+            '/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAP/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFAEBAAAAAAAAAAAAAAAAAAAAAP/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/AJgA/9k=',
+        );
+    }
+
+    private function onePixelWebp(): string
+    {
+        return $this->decodeImageFixture(
+            'UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEADsD+JaQAA3AAAAAA',
+        );
+    }
+
     private function onePixelPng(): string
     {
-        $decoded = base64_decode(
-            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=',
-            true,
+        return $this->decodeImageFixture(
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9RYVFHYAAAAASUVORK5CYII=',
         );
+    }
+
+    private function decodeImageFixture(string $encoded): string
+    {
+        $decoded = base64_decode($encoded, true);
         if (! is_string($decoded)) {
-            throw new RuntimeException('PNG test fixture could not be decoded.');
+            throw new RuntimeException('Image test fixture could not be decoded.');
         }
 
         return $decoded;
