@@ -77,6 +77,25 @@ final class TelegramImagePayloadIntegrityTest extends TestCase
         self::assertNotSame([], $content->getAttributes(SensitiveParameter::class));
     }
 
+    public function test_partial_supported_signatures_are_incomplete_not_unsupported(): void
+    {
+        $fixtures = [
+            $this->onePixelPng(),
+            $this->onePixelJpeg(),
+            $this->onePixelWebp(),
+        ];
+
+        foreach ($fixtures as $content) {
+            $signatureLength = str_starts_with($content, "\x89PNG") ? 8 : (str_starts_with($content, "\xff\xd8") ? 2 : 4);
+            for ($length = 1; $length < $signatureLength; $length++) {
+                self::assertSame(
+                    TelegramImagePayloadIntegrity::INCOMPLETE,
+                    TelegramImagePayloadIntegrity::inspect(substr($content, 0, $length)),
+                );
+            }
+        }
+    }
+
     public function test_png_crc_corruption_is_malformed(): void
     {
         $png = $this->onePixelPng();

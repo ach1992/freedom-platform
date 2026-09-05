@@ -19,14 +19,27 @@ final class TelegramImagePayloadIntegrity
     /** @return 'complete'|'incomplete'|'malformed'|'unsupported' */
     public static function inspect(#[SensitiveParameter] string $content): string
     {
-        if (str_starts_with($content, "\x89PNG\r\n\x1a\n")) {
+        $pngSignature = "\x89PNG\r\n\x1a\n";
+        if (str_starts_with($content, $pngSignature)) {
             return self::inspectPng($content);
         }
-        if (str_starts_with($content, "\xff\xd8")) {
+        if ($content !== '' && strlen($content) < strlen($pngSignature) && str_starts_with($pngSignature, $content)) {
+            return self::INCOMPLETE;
+        }
+
+        $jpegSignature = "\xff\xd8";
+        if (str_starts_with($content, $jpegSignature)) {
             return self::inspectJpeg($content);
         }
+        if ($content !== '' && strlen($content) < strlen($jpegSignature) && str_starts_with($jpegSignature, $content)) {
+            return self::INCOMPLETE;
+        }
+
         if (str_starts_with($content, 'RIFF')) {
             return self::inspectWebp($content);
+        }
+        if ($content !== '' && strlen($content) < 4 && str_starts_with('RIFF', $content)) {
+            return self::INCOMPLETE;
         }
 
         return self::UNSUPPORTED;

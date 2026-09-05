@@ -244,6 +244,41 @@ final class HttpTelegramPrivateMediaFetcherTest extends TestCase
         Http::assertSentCount(4);
     }
 
+    public function test_partial_magic_truncation_retries_and_recovers_when_provider_size_is_missing(): void
+    {
+        $png = $this->onePixelPng();
+        Http::fakeSequence('https://api.telegram.org/bot123456789:abcdefghijklmnopqrstuvwxyz_ABCDE/getFile')
+            ->push([
+                'ok' => true,
+                'result' => [
+                    'file_id' => 'file-secret-partial-magic',
+                    'file_unique_id' => 'unique-secret-partial-magic',
+                    'file_path' => 'photos/partial-magic.png',
+                ],
+            ], 200)
+            ->push([
+                'ok' => true,
+                'result' => [
+                    'file_id' => 'file-secret-partial-magic-alias',
+                    'file_unique_id' => 'unique-secret-partial-magic',
+                    'file_path' => 'photos/partial-magic.png',
+                ],
+            ], 200);
+        Http::fakeSequence('https://api.telegram.org/file/bot123456789:abcdefghijklmnopqrstuvwxyz_ABCDE/photos/partial-magic.png')
+            ->push(substr($png, 0, 7), 200)
+            ->push($png, 200);
+
+        $download = $this->fetcher()->fetch(
+            RestrictedValue::fromString('file-secret-partial-magic'),
+            RestrictedValue::fromString('unique-secret-partial-magic'),
+            1024,
+        );
+
+        self::assertSame($png, $download->bytes());
+        self::assertNull($download->providerFileSize);
+        Http::assertSentCount(4);
+    }
+
     public function test_missing_provider_size_repeated_truncation_for_all_supported_formats_exhausts_as_retryable_provider_failure(): void
     {
         $getFile = Http::fakeSequence('https://api.telegram.org/bot123456789:abcdefghijklmnopqrstuvwxyz_ABCDE/getFile');
