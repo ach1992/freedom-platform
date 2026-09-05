@@ -149,6 +149,7 @@ final class TelegramImagePayloadIntegrity
         $position = 2;
         $seenStartOfFrame = false;
         $seenScan = false;
+        $frameComponents = [];
         while ($position < $length) {
             if (ord($content[$position]) !== 0xFF) {
                 return self::MALFORMED;
@@ -189,7 +190,12 @@ final class TelegramImagePayloadIntegrity
             }
 
             if (self::isStartOfFrameMarker($marker)) {
+                $components = self::jpegFrameComponents($content, $position, $segmentLength);
+                if ($components === null) {
+                    return self::MALFORMED;
+                }
                 $seenStartOfFrame = true;
+                $frameComponents = $components;
             }
             if ($marker !== 0xDA) {
                 $position += $segmentLength;
@@ -197,6 +203,10 @@ final class TelegramImagePayloadIntegrity
                 continue;
             }
 
+            if (! $seenStartOfFrame
+                || ! self::jpegScanHeaderIsValid($content, $position, $segmentLength, $frameComponents)) {
+                return self::MALFORMED;
+            }
             $seenScan = true;
             $position += $segmentLength;
             while ($position < $length) {
@@ -367,7 +377,9 @@ final class TelegramImagePayloadIntegrity
         int $length,
     ): bool {
         if ($chunkType === 'VP8L') {
-            return $length >= 5 && ord($content[$offset]) === 0x2F;
+            return $length >= 5
+                && ord($content[$offset]) === 0x2F
+                && (ord($content[$offset + 4]) & 0xE0) === 0;
         }
         if ($length < 10) {
             return false;
@@ -376,7 +388,13 @@ final class TelegramImagePayloadIntegrity
         $frameTag = ord($content[$offset])
             | (ord($content[$offset + 1]) << 8)
             | (ord($content[$offset + 2]) << 16);
-        if (($frameTag & 0x01) !== 0 || substr($content, $offset + 3, 3) !== "\x9d\x01\x2a") {
+        $version = ($frameTag >> 1) & 0x07;
+        $firstPartitionSize = ($frameTag >> 5) & 0x7FFFF;
+        if (($frameTag & 0x01) !== 0
+            || $version > 3
+            || $firstPartitionSize < 1
+            || $firstPartitionSize > $length - 10
+            || substr($content, $offset + 3, 3) !== "\x9d\x01\x2a") {
             return false;
         }
 
@@ -411,6 +429,82 @@ final class TelegramImagePayloadIntegrity
             && ord($data[10]) === 0
             && ord($data[11]) === 0
             && in_array(ord($data[12]), [0, 1], true);
+    }
+
+    /** @return list<int>|null */
+    private static function jpegFrameComponents(
+        #[SensitiveParameter] string $content,
+        int $position,
+        int $segmentLength,
+    ): ?array {
+        if ($segmentLength < 8) {
+            return null;
+        }
+
+        $precision = ord($content[$position + 2]);
+        $width = self::uint16BigEndian($content, $position + 5);
+        $components = ord($content[$position + 7]);
+        if ($precision < 2
+            || $precision > 16
+            || $width < 1
+            || $components < 1
+            || $segmentLength !== 8 + (3 * $components)) {
+            return null;
+        }
+
+        $componentIds = [];
+        for ($index = 0; $index < $components; $index++) {
+            $componentId = ord($content[$position + 8 + (3 * $index)]);
+            $sampling = ord($content[$position + 9 + (3 * $index)]);
+            $horizontalSampling = $sampling >> 4;
+            $verticalSampling = $sampling & 0x0F;
+            $quantizationTable = ord($content[$position + 10 + (3 * $index)]);
+            if (in_array($componentId, $componentIds, true)
+                || $horizontalSampling < 1
+                || $horizontalSampling > 4
+                || $verticalSampling < 1
+                || $verticalSampling > 4
+                || $quantizationTable > 3) {
+                return null;
+            }
+            $componentIds[] = $componentId;
+        }
+
+        return $componentIds;
+    }
+
+    /** @param list<int> $frameComponents */
+    private static function jpegScanHeaderIsValid(
+        #[SensitiveParameter] string $content,
+        int $position,
+        int $segmentLength,
+        array $frameComponents,
+    ): bool {
+        if ($segmentLength < 8 || $frameComponents === []) {
+            return false;
+        }
+
+        $scanComponents = ord($content[$position + 2]);
+        if ($scanComponents < 1
+            || $scanComponents > count($frameComponents)
+            || $segmentLength !== 6 + (2 * $scanComponents)) {
+            return false;
+        }
+
+        $selectors = [];
+        for ($index = 0; $index < $scanComponents; $index++) {
+            $selector = ord($content[$position + 3 + (2 * $index)]);
+            $tables = ord($content[$position + 4 + (2 * $index)]);
+            if (! in_array($selector, $frameComponents, true)
+                || isset($selectors[$selector])
+                || ($tables >> 4) > 3
+                || ($tables & 0x0F) > 3) {
+                return false;
+            }
+            $selectors[$selector] = true;
+        }
+
+        return true;
     }
 
     private static function isStartOfFrameMarker(int $marker): bool

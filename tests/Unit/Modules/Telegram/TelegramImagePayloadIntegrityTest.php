@@ -55,6 +55,48 @@ final class TelegramImagePayloadIntegrityTest extends TestCase
         );
     }
 
+    public function test_webp_bitstream_header_semantics_are_enforced_when_legacy_inspection_accepts_them(): void
+    {
+        $lossy = $this->onePixelWebp();
+        $lossyChunk = strpos($lossy, 'VP8 ');
+        self::assertNotFalse($lossyChunk);
+        $lossyData = $lossyChunk + 8;
+
+        $reservedVersion = $lossy;
+        $reservedVersion[$lossyData] = chr((ord($reservedVersion[$lossyData]) & ~0x0E) | (4 << 1));
+        self::assertIsArray(@getimagesizefromstring($reservedVersion));
+        self::assertSame(
+            TelegramImagePayloadIntegrity::MALFORMED,
+            TelegramImagePayloadIntegrity::inspect($reservedVersion),
+        );
+
+        $oversizedPartition = $lossy;
+        $frameTag = ord($oversizedPartition[$lossyData])
+            | (ord($oversizedPartition[$lossyData + 1]) << 8)
+            | (ord($oversizedPartition[$lossyData + 2]) << 16);
+        $frameTag = ($frameTag & 0x1F) | (0x7FFFF << 5);
+        $oversizedPartition[$lossyData] = chr($frameTag & 0xFF);
+        $oversizedPartition[$lossyData + 1] = chr(($frameTag >> 8) & 0xFF);
+        $oversizedPartition[$lossyData + 2] = chr(($frameTag >> 16) & 0xFF);
+        self::assertIsArray(@getimagesizefromstring($oversizedPartition));
+        self::assertSame(
+            TelegramImagePayloadIntegrity::MALFORMED,
+            TelegramImagePayloadIntegrity::inspect($oversizedPartition),
+        );
+
+        $lossless = $this->animatedOnePixelWebp();
+        $losslessChunk = strpos($lossless, 'VP8L');
+        self::assertNotFalse($losslessChunk);
+        $losslessData = $losslessChunk + 8;
+        $reservedLosslessVersion = $lossless;
+        $reservedLosslessVersion[$losslessData + 4] = chr(ord($reservedLosslessVersion[$losslessData + 4]) | 0x20);
+        self::assertIsArray(@getimagesizefromstring($reservedLosslessVersion));
+        self::assertSame(
+            TelegramImagePayloadIntegrity::MALFORMED,
+            TelegramImagePayloadIntegrity::inspect($reservedLosslessVersion),
+        );
+    }
+
     public function test_restricted_content_parameters_are_marked_sensitive(): void
     {
         $integrity = new ReflectionClass(TelegramImagePayloadIntegrity::class);
@@ -93,6 +135,32 @@ final class TelegramImagePayloadIntegrityTest extends TestCase
                     TelegramImagePayloadIntegrity::inspect(substr($content, 0, $length)),
                 );
             }
+        }
+    }
+
+    public function test_jpeg_frame_and_scan_header_semantics_are_enforced_when_legacy_inspection_accepts_them(): void
+    {
+        $jpeg = $this->onePixelJpeg();
+        $sof = strpos($jpeg, "\xff\xc0");
+        $sos = strpos($jpeg, "\xff\xda");
+        self::assertNotFalse($sof);
+        self::assertNotFalse($sos);
+
+        foreach ([
+            'precision' => [$sof + 4, 0],
+            'frame_components' => [$sof + 9, 1],
+            'scan_components' => [$sos + 4, 1],
+            'scan_selector' => [$sos + 5, 99],
+        ] as $name => [$offset, $value]) {
+            $mutated = $jpeg;
+            $mutated[$offset] = chr($value);
+
+            self::assertIsArray(@getimagesizefromstring($mutated), $name.' mutation must reproduce legacy acceptance.');
+            self::assertSame(
+                TelegramImagePayloadIntegrity::MALFORMED,
+                TelegramImagePayloadIntegrity::inspect($mutated),
+                $name.' mutation must fail structural validation.',
+            );
         }
     }
 
