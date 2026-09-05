@@ -164,6 +164,38 @@ final class TelegramImagePayloadIntegrityTest extends TestCase
         }
     }
 
+    public function test_jpeg_scan_requires_entropy_data_even_when_legacy_inspection_accepts_empty_scan(): void
+    {
+        $jpeg = $this->entropyEmptyJpeg();
+
+        self::assertSame('image/jpeg', (new \finfo(FILEINFO_MIME_TYPE))->buffer($jpeg));
+        $legacyInspection = @getimagesizefromstring($jpeg);
+        self::assertIsArray($legacyInspection);
+        self::assertSame([1, 1], [$legacyInspection[0], $legacyInspection[1]]);
+        self::assertSame('image/jpeg', image_type_to_mime_type($legacyInspection[2]));
+        self::assertSame(
+            TelegramImagePayloadIntegrity::MALFORMED,
+            TelegramImagePayloadIntegrity::inspect($jpeg),
+        );
+    }
+
+    public function test_valid_progressive_and_multi_scan_jpegs_remain_complete(): void
+    {
+        foreach ([
+            'progressive-restart' => $this->progressiveRestartJpeg(),
+            'multi-scan' => $this->multiScanJpeg(),
+        ] as $name => $jpeg) {
+            $legacyInspection = @getimagesizefromstring($jpeg);
+            self::assertIsArray($legacyInspection, $name.' fixture must remain a valid JPEG.');
+            self::assertSame('image/jpeg', image_type_to_mime_type($legacyInspection[2]));
+            self::assertSame(
+                TelegramImagePayloadIntegrity::COMPLETE,
+                TelegramImagePayloadIntegrity::inspect($jpeg),
+                $name.' fixture must remain structurally complete.',
+            );
+        }
+    }
+
     public function test_png_invalid_ihdr_semantics_are_malformed_even_when_legacy_inspection_accepts_them(): void
     {
         $png = $this->onePixelPng();
@@ -284,6 +316,30 @@ final class TelegramImagePayloadIntegrityTest extends TestCase
     {
         return $this->decodeFixture(
             'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9RYVFHYAAAAASUVORK5CYII=',
+        );
+    }
+
+    private function entropyEmptyJpeg(): string
+    {
+        return "\xff\xd8"
+            ."\xff\xc0\x00\x0b\x08\x00\x01\x00\x01\x01\x01\x11\x00"
+            ."\xff\xda\x00\x08\x01\x01\x00\x00\x3f\x00"
+            ."\xff\xd9";
+    }
+
+    private function progressiveRestartJpeg(): string
+    {
+        // CC0 fixture: imazen/codec-corpus jpeg-conformance/valid/progressive_rst_420.jpg.
+        return $this->decodeFixture(
+            '/9j/2wDFAAMEBAYEBgYGBgYHBgYGBwcHBwcHBwgHCAcIBwgICQgJCQgJCAkICgoKCAkJCgoKCgkKDAwMCgwLCwwNDA0LCwkBAgQEBwYHCAcHCAcICAgHCgsNDQsKDQsLDAsLDRUYEwwMExgVEEkSDRJJEBIVCwsVEh0LFQsdKiAgKgoKCgoKUAIDAwMFBAUFBQUFBgQFBAYFBQUFBQUGBQUEBQUGBwYFBgYFBgcGBgYEBgYGBgYHBwYGBwUGBQcHBwcHCgsKCgpS/8IAEQgAEAAQAwEiAAIRAQMRAv/EABcAAQADAAAAAAAAAAAAAAAAAAcCBQj/3QAEAAT/2gAIAQEAAAAAyqzMTN//2gAIAQIAAAAAsP/aAAgBAwAAAACP/8QAHxAAAQQCAgMAAAAAAAAAAAAAAAUGITEH8SBhocHh/9oACAEBAAECAElqJLUSWoktT//aAAgBAgABAgBZeH//2gAIAQMAAQIAw9lH/9oACAEBAAM/AuH/2gAIAQIAAz8CP//aAAgBAwADPwKpP//aAAgBAQADPyGoOioKg//aAAgBAgADPyHs/9oACAEDAAM/IfEf/9oACAEBAAM/ENJXqaTSf//aAAgBAgADPxCz/9oACAEDAAM/EPqP/9k=',
+        );
+    }
+
+    private function multiScanJpeg(): string
+    {
+        // MIT fixture: imazen/codec-corpus jpeg-conformance/valid/non-interleaved-mcu.jpg.
+        return $this->decodeFixture(
+            '/9j/4AAQSkZJRgABAQEBLAEsAAD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoMDAsKCwsNDhIQDQ4RDgsLEBYQERMUFRUVDA8XGBYUGBIUFRT/2wBDAQMEBAUEBQkFBQkUDQsNFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBT/wgARCAAQAEADASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAj/xAAUAQEAAAAAAAAAAAAAAAAAAAAA/90ABAAE/9oADAMBAAIQAxAAAAGVwAAAf//EABQQAQAAAAAAAAAAAAAAAAAAADD/3QAEAAj/2gAIAQEAAQUCD//QD//EABQRAQAAAAAAAAAAAAAAAAAAACD/3QAEAAT/2gAIAQMBAT8BH//EABQRAQAAAAAAAAAAAAAAAAAAACD/2gAIAQIBAT8BH//EABQQAQAAAAAAAAAAAAAAAAAAADD/3QAEAAj/2gAIAQEABj8CD//QD//EABQQAQAAAAAAAAAAAAAAAAAAADD/2gAIAQEAAT8hD//QD//dAAQABP/aAAwDAQACAAMAAAAQAAAA/8QAFBEBAAAAAAAAAAAAAAAAAAAAIP/aAAgBAwEBPxAf/8QAFBEBAAAAAAAAAAAAAAAAAAAAIP/aAAgBAgEBPxAf/8QAFBABAAAAAAAAAAAAAAAAAAAAMP/dAAQACP/aAAgBAQABPxAP/9AP/9k=',
         );
     }
 

@@ -448,6 +448,71 @@ SQL);
         self::assertSame('purchase_card_to_card_submitted', $active->state);
     }
 
+    public function test_entropy_empty_jpeg_without_provider_size_is_rejected_before_submission_or_session_transition(): void
+    {
+        $telegramUserId = 9830;
+        [, $accountId, $sessionPublicId] = $this->startActor($telegramUserId);
+        $paymentIntentPublicId = strtoupper((string) Str::ulid());
+        $reservationPublicId = strtoupper((string) Str::ulid());
+        $this->moveToC2cInstructions($accountId, $sessionPublicId, $paymentIntentPublicId, $reservationPublicId);
+
+        $jpeg = $this->entropyEmptyJpeg();
+        $fileId = 'private-provider-file-entropy-empty-jpeg';
+        $fileUniqueId = 'private-provider-unique-entropy-empty-jpeg';
+        Http::fake([
+            'https://api.telegram.org/bot123456789:abcdefghijklmnopqrstuvwxyz_ABCDE/getFile' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'file_id' => $fileId,
+                    'file_unique_id' => $fileUniqueId,
+                    'file_path' => 'photos/entropy-empty.jpg',
+                ],
+            ], 200),
+            'https://api.telegram.org/file/bot123456789:abcdefghijklmnopqrstuvwxyz_ABCDE/photos/entropy-empty.jpg' => Http::response($jpeg, 200),
+        ]);
+
+        $fetcher = new HttpTelegramPrivateMediaFetcher(
+            $this->app->make(Factory::class),
+            new TelegramRuntimeConfiguration(
+                '123456789:abcdefghijklmnopqrstuvwxyz_ABCDE',
+                '123456789',
+                self::SECRET,
+                'https://bot.example.test/api/telegram/webhook',
+                1_048_576,
+                'critical',
+                120,
+                'https://api.telegram.org',
+                15,
+            ),
+        );
+        $submission = new TelegramPrivateMediaDispatchSubmission($paymentIntentPublicId, $reservationPublicId);
+        $this->bindMediaDependencies($fetcher, $submission);
+
+        $this->accept($this->photoPayload(89010, $telegramUserId, $fileId, $fileUniqueId, null));
+        $this->app->make(TelegramUpdateProcessor::class)->process('123456789', 89010);
+
+        self::assertSame([], $submission->calls);
+        self::assertSame(0, DB::table('c2c_manual_submissions')->count());
+        self::assertSame(
+            'rejected',
+            DB::table('telegram_private_media')->where('update_id', 89010)->value('state'),
+        );
+        self::assertSame(
+            'malformed_image',
+            DB::table('telegram_private_media')->where('update_id', 89010)->value('rejection_code'),
+        );
+        self::assertNull(DB::table('telegram_private_media')->where('update_id', 89010)->value('association_type'));
+        self::assertSame([], Storage::disk('telegram_private_media')->allFiles());
+        self::assertSame(
+            'purchase_card_to_card_instructions',
+            DB::table('telegram_interaction_sessions')
+                ->where('telegram_account_id', $accountId)
+                ->where('status', 'active')
+                ->value('state'),
+        );
+        Http::assertSentCount(2);
+    }
+
     public function test_group_or_non_owner_media_is_rejected_before_private_file_or_submission_effect(): void
     {
         $telegramUserId = 9822;
@@ -704,6 +769,14 @@ SQL);
         }
 
         return implode("\n", $parts);
+    }
+
+    private function entropyEmptyJpeg(): string
+    {
+        return "\xff\xd8"
+            ."\xff\xc0\x00\x0b\x08\x00\x01\x00\x01\x01\x01\x11\x00"
+            ."\xff\xda\x00\x08\x01\x01\x00\x00\x3f\x00"
+            ."\xff\xd9";
     }
 
     private function onePixelPng(): string

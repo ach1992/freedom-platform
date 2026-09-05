@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Modules\Telegram\Application\TelegramImagePayloadIntegrity;
 use App\Modules\Telegram\Application\TelegramPrivateMediaRejected;
 use App\Modules\Telegram\Infrastructure\HttpTelegramPrivateMediaFetcher;
 use App\Modules\Telegram\Infrastructure\TelegramRuntimeConfiguration;
@@ -279,6 +280,39 @@ final class HttpTelegramPrivateMediaFetcherTest extends TestCase
         Http::assertSentCount(4);
     }
 
+    public function test_missing_provider_size_complete_but_entropy_empty_jpeg_is_not_retried_as_incomplete(): void
+    {
+        $jpeg = $this->entropyEmptyJpeg();
+        self::assertSame('image/jpeg', (new \finfo(FILEINFO_MIME_TYPE))->buffer($jpeg));
+        self::assertIsArray(@getimagesizefromstring($jpeg));
+        self::assertSame(
+            TelegramImagePayloadIntegrity::MALFORMED,
+            TelegramImagePayloadIntegrity::inspect($jpeg),
+        );
+
+        Http::fake([
+            'https://api.telegram.org/bot123456789:abcdefghijklmnopqrstuvwxyz_ABCDE/getFile' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'file_id' => 'file-secret-malformed-jpeg',
+                    'file_unique_id' => 'unique-secret-malformed-jpeg',
+                    'file_path' => 'photos/malformed.jpg',
+                ],
+            ], 200),
+            'https://api.telegram.org/file/bot123456789:abcdefghijklmnopqrstuvwxyz_ABCDE/photos/malformed.jpg' => Http::response($jpeg, 200),
+        ]);
+
+        $download = $this->fetcher()->fetch(
+            RestrictedValue::fromString('file-secret-malformed-jpeg'),
+            RestrictedValue::fromString('unique-secret-malformed-jpeg'),
+            1024,
+        );
+
+        self::assertSame($jpeg, $download->bytes());
+        self::assertNull($download->providerFileSize);
+        Http::assertSentCount(2);
+    }
+
     public function test_missing_provider_size_repeated_truncation_for_all_supported_formats_exhausts_as_retryable_provider_failure(): void
     {
         $getFile = Http::fakeSequence('https://api.telegram.org/bot123456789:abcdefghijklmnopqrstuvwxyz_ABCDE/getFile');
@@ -358,6 +392,14 @@ final class HttpTelegramPrivateMediaFetcherTest extends TestCase
                 15,
             ),
         );
+    }
+
+    private function entropyEmptyJpeg(): string
+    {
+        return "\xff\xd8"
+            ."\xff\xc0\x00\x0b\x08\x00\x01\x00\x01\x01\x01\x11\x00"
+            ."\xff\xda\x00\x08\x01\x01\x00\x00\x3f\x00"
+            ."\xff\xd9";
     }
 
     private function onePixelJpeg(): string

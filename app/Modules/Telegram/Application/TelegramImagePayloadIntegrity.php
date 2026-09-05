@@ -209,10 +209,14 @@ final class TelegramImagePayloadIntegrity
             }
             $seenScan = true;
             $position += $segmentLength;
+            $scanHasEntropyData = false;
             while ($position < $length) {
                 $markerStart = strpos($content, "\xff", $position);
                 if ($markerStart === false) {
                     return self::INCOMPLETE;
+                }
+                if ($markerStart > $position) {
+                    $scanHasEntropyData = true;
                 }
 
                 $position = $markerStart;
@@ -224,10 +228,19 @@ final class TelegramImagePayloadIntegrity
                 }
 
                 $scanMarker = ord($content[$position]);
-                if ($scanMarker === 0x00 || ($scanMarker >= 0xD0 && $scanMarker <= 0xD7)) {
+                if ($scanMarker === 0x00) {
+                    $scanHasEntropyData = true;
                     $position++;
 
                     continue;
+                }
+                if ($scanMarker >= 0xD0 && $scanMarker <= 0xD7) {
+                    $position++;
+
+                    continue;
+                }
+                if (! $scanHasEntropyData) {
+                    return self::MALFORMED;
                 }
 
                 $position = $markerStart;

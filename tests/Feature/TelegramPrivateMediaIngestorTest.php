@@ -246,6 +246,72 @@ final class TelegramPrivateMediaIngestorTest extends TestCase
         Http::assertSentCount(4);
     }
 
+    public function test_entropy_empty_jpeg_without_provider_size_is_rejected_without_retry_or_private_storage(): void
+    {
+        [$userId, $accountId] = $this->telegramIdentity(9820);
+        $jpeg = $this->entropyEmptyJpeg();
+        self::assertSame('image/jpeg', (new \finfo(FILEINFO_MIME_TYPE))->buffer($jpeg));
+        self::assertIsArray(@getimagesizefromstring($jpeg));
+
+        Http::fake([
+            'https://api.telegram.org/bot123456789:abcdefghijklmnopqrstuvwxyz_ABCDE/getFile' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'file_id' => 'provider-file-secret-malformed-jpeg',
+                    'file_unique_id' => 'provider-unique-secret-malformed-jpeg',
+                    'file_path' => 'photos/malformed.jpg',
+                ],
+            ], 200),
+            'https://api.telegram.org/file/bot123456789:abcdefghijklmnopqrstuvwxyz_ABCDE/photos/malformed.jpg' => Http::response($jpeg, 200),
+        ]);
+
+        $this->app->instance(
+            TelegramPrivateMediaFetcher::class,
+            new HttpTelegramPrivateMediaFetcher(
+                $this->app->make(Factory::class),
+                new TelegramRuntimeConfiguration(
+                    '123456789:abcdefghijklmnopqrstuvwxyz_ABCDE',
+                    '123456789',
+                    'telegram_webhook_secret_1234567890_safe',
+                    'https://bot.example.test/api/telegram/webhook',
+                    1_048_576,
+                    'critical',
+                    120,
+                    'https://api.telegram.org',
+                    15,
+                ),
+            ),
+        );
+        $this->app->forgetInstance(TelegramPrivateMediaIngestor::class);
+        $service = $this->app->make(TelegramPrivateMediaIngestor::class);
+        $input = new TelegramPrivateMediaInput(
+            'document',
+            RestrictedValue::fromString('provider-file-secret-malformed-jpeg'),
+            RestrictedValue::fromString('provider-unique-secret-malformed-jpeg'),
+            null,
+        );
+
+        try {
+            $service->ingest('123456789', 88024, $accountId, $userId, $input);
+            self::fail('Entropy-empty JPEG must not become accepted private evidence.');
+        } catch (TelegramPrivateMediaRejected $exception) {
+            self::assertSame('malformed_image', $exception->reasonCode);
+        }
+
+        self::assertSame(
+            'rejected',
+            DB::table('telegram_private_media')->where('update_id', 88024)->value('state'),
+        );
+        self::assertSame(
+            'malformed_image',
+            DB::table('telegram_private_media')->where('update_id', 88024)->value('rejection_code'),
+        );
+        self::assertNull(DB::table('telegram_private_media')->where('update_id', 88024)->value('content_sha256'));
+        self::assertNull(DB::table('telegram_private_media')->where('update_id', 88024)->value('association_type'));
+        self::assertSame([], Storage::disk('telegram_private_media')->allFiles());
+        Http::assertSentCount(2);
+    }
+
     public function test_unsafe_or_conflicting_media_fails_closed_without_accepted_private_file(): void
     {
         [$userId, $accountId] = $this->telegramIdentity(9812);
@@ -451,6 +517,14 @@ final class TelegramPrivateMediaIngestorTest extends TestCase
         ]);
 
         return [$userId, $accountId];
+    }
+
+    private function entropyEmptyJpeg(): string
+    {
+        return "\xff\xd8"
+            ."\xff\xc0\x00\x0b\x08\x00\x01\x00\x01\x01\x01\x11\x00"
+            ."\xff\xda\x00\x08\x01\x01\x00\x00\x3f\x00"
+            ."\xff\xd9";
     }
 
     private function onePixelJpeg(): string
