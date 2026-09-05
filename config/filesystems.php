@@ -34,8 +34,9 @@ return [
 
         'local' => [
             'driver' => 'local',
-            'root' => storage_path('app/private/local'),
-            'serve' => true,
+            // Preserve legacy local-disk paths, but never HTTP-serve this parent of RESTRICTED Telegram media.
+            'root' => storage_path('app/private'),
+            'serve' => false,
             'throw' => false,
             'report' => false,
         ],
