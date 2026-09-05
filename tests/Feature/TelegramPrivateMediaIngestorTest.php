@@ -269,6 +269,27 @@ final class TelegramPrivateMediaIngestorTest extends TestCase
         self::assertSame('rejected', DB::table('telegram_private_media')->where('update_id', 88002)->value('state'));
         self::assertSame([], Storage::disk('telegram_private_media')->allFiles());
 
+        $malformedPng = $this->onePixelPng();
+        $malformedPng[26] = chr(1);
+        $malformedCrc = hash('crc32b', substr($malformedPng, 12, 4).substr($malformedPng, 16, 13), true);
+        $malformedPng = substr_replace($malformedPng, $malformedCrc, 29, 4);
+        $fetcher->content = $malformedPng;
+        $malformedInput = new TelegramPrivateMediaInput(
+            'photo',
+            RestrictedValue::fromString('provider-file-secret-malformed'),
+            RestrictedValue::fromString('provider-unique-secret-malformed'),
+            strlen($malformedPng),
+        );
+
+        try {
+            $service->ingest('123456789', 88009, $accountId, $userId, $malformedInput);
+            self::fail('Structurally malformed image media must be rejected.');
+        } catch (TelegramPrivateMediaRejected $exception) {
+            self::assertSame('malformed_image', $exception->reasonCode);
+        }
+        self::assertSame('rejected', DB::table('telegram_private_media')->where('update_id', 88009)->value('state'));
+        self::assertSame([], Storage::disk('telegram_private_media')->allFiles());
+
         $png = $this->onePixelPng();
         $fetcher->content = $png;
         $acceptedInput = new TelegramPrivateMediaInput(

@@ -96,6 +96,98 @@ final class TelegramImagePayloadIntegrityTest extends TestCase
         }
     }
 
+    public function test_png_invalid_ihdr_semantics_are_malformed_even_when_legacy_inspection_accepts_them(): void
+    {
+        $png = $this->onePixelPng();
+        foreach ([
+            24 => 3,
+            25 => 1,
+            26 => 1,
+            27 => 1,
+            28 => 2,
+        ] as $offset => $value) {
+            $mutated = $png;
+            $mutated[$offset] = chr($value);
+            $crc = hash('crc32b', substr($mutated, 12, 4).substr($mutated, 16, 13), true);
+            $mutated = substr_replace($mutated, $crc, 29, 4);
+
+            self::assertIsArray(@getimagesizefromstring($mutated));
+            self::assertSame(
+                TelegramImagePayloadIntegrity::MALFORMED,
+                TelegramImagePayloadIntegrity::inspect($mutated),
+            );
+        }
+    }
+
+    public function test_png_unknown_critical_or_reserved_bit_chunk_is_malformed(): void
+    {
+        $png = $this->onePixelPng();
+        foreach (['ABCD', 'abca'] as $chunkType) {
+            $mutated = substr($png, 0, 33).$this->pngChunk($chunkType, '').substr($png, 33);
+
+            self::assertIsArray(@getimagesizefromstring($mutated));
+            self::assertSame(
+                TelegramImagePayloadIntegrity::MALFORMED,
+                TelegramImagePayloadIntegrity::inspect($mutated),
+            );
+        }
+    }
+
+    public function test_png_idat_chunks_must_remain_consecutive(): void
+    {
+        $png = $this->onePixelPng();
+        $idat = substr($png, 41, 11);
+        $mutated = substr($png, 0, 33)
+            .$this->pngChunk('IDAT', substr($idat, 0, 5))
+            .$this->pngChunk('vpAg', '')
+            .$this->pngChunk('IDAT', substr($idat, 5))
+            .substr($png, 56);
+
+        self::assertIsArray(@getimagesizefromstring($mutated));
+        self::assertSame(
+            TelegramImagePayloadIntegrity::MALFORMED,
+            TelegramImagePayloadIntegrity::inspect($mutated),
+        );
+    }
+
+    public function test_png_palette_rules_are_structurally_enforced(): void
+    {
+        $signature = "\x89PNG\r\n\x1a\n";
+        $ihdr = pack('NNCCCCC', 1, 1, 8, 3, 0, 0, 0);
+        $idat = gzcompress("\x00\x00");
+        self::assertIsString($idat);
+
+        $indexedWithoutPalette = $signature
+            .$this->pngChunk('IHDR', $ihdr)
+            .$this->pngChunk('IDAT', $idat)
+            .$this->pngChunk('IEND', '');
+        self::assertIsArray(@getimagesizefromstring($indexedWithoutPalette));
+        self::assertSame(
+            TelegramImagePayloadIntegrity::MALFORMED,
+            TelegramImagePayloadIntegrity::inspect($indexedWithoutPalette),
+        );
+
+        $validIndexed = $signature
+            .$this->pngChunk('IHDR', $ihdr)
+            .$this->pngChunk('PLTE', "\x00\x00\x00")
+            .$this->pngChunk('IDAT', $idat)
+            .$this->pngChunk('IEND', '');
+        self::assertIsArray(@getimagesizefromstring($validIndexed));
+        self::assertSame(
+            TelegramImagePayloadIntegrity::COMPLETE,
+            TelegramImagePayloadIntegrity::inspect($validIndexed),
+        );
+
+        $grayscaleAlphaWithPalette = substr($this->onePixelPng(), 0, 33)
+            .$this->pngChunk('PLTE', "\x00\x00\x00")
+            .substr($this->onePixelPng(), 33);
+        self::assertIsArray(@getimagesizefromstring($grayscaleAlphaWithPalette));
+        self::assertSame(
+            TelegramImagePayloadIntegrity::MALFORMED,
+            TelegramImagePayloadIntegrity::inspect($grayscaleAlphaWithPalette),
+        );
+    }
+
     public function test_png_crc_corruption_is_malformed(): void
     {
         $png = $this->onePixelPng();
@@ -113,6 +205,11 @@ final class TelegramImagePayloadIntegrityTest extends TestCase
             TelegramImagePayloadIntegrity::UNSUPPORTED,
             TelegramImagePayloadIntegrity::inspect('not-an-image'),
         );
+    }
+
+    private function pngChunk(string $type, string $data): string
+    {
+        return pack('N', strlen($data)).$type.$data.hash('crc32b', $type.$data, true);
     }
 
     private function onePixelPng(): string

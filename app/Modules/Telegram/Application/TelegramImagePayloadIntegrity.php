@@ -55,7 +55,12 @@ final class TelegramImagePayloadIntegrity
 
         $position = 8;
         $seenHeader = false;
+        $seenPalette = false;
         $seenImageData = false;
+        $imageDataEnded = false;
+        $imageDataBytes = 0;
+        $bitDepth = null;
+        $colorType = null;
         while ($position < $length) {
             if ($length - $position < 12) {
                 return self::INCOMPLETE;
@@ -63,7 +68,10 @@ final class TelegramImagePayloadIntegrity
 
             $chunkLength = self::uint32BigEndian($content, $position);
             $chunkType = substr($content, $position + 4, 4);
-            if (preg_match('/\A[A-Za-z]{4}\z/', $chunkType) !== 1) {
+            if (preg_match('/\A[A-Za-z]{4}\z/', $chunkType) !== 1
+                || (ord($chunkType[2]) >= 0x61 && ord($chunkType[2]) <= 0x7A)
+                || ((ord($chunkType[0]) >= 0x41 && ord($chunkType[0]) <= 0x5A)
+                    && ! in_array($chunkType, ['IHDR', 'PLTE', 'IDAT', 'IEND'], true))) {
                 return self::MALFORMED;
             }
             if ($chunkLength > $length - $position - 12) {
@@ -78,21 +86,48 @@ final class TelegramImagePayloadIntegrity
             }
 
             if (! $seenHeader) {
-                if ($chunkType !== 'IHDR' || $chunkLength !== 13) {
+                if ($chunkType !== 'IHDR' || $chunkLength !== 13 || ! self::pngHeaderIsValid($chunkData)) {
                     return self::MALFORMED;
                 }
                 $seenHeader = true;
+                $bitDepth = ord($chunkData[8]);
+                $colorType = ord($chunkData[9]);
             } elseif ($chunkType === 'IHDR') {
                 return self::MALFORMED;
             }
 
+            if ($chunkType === 'PLTE') {
+                if ($seenPalette
+                    || $seenImageData
+                    || $bitDepth === null
+                    || $colorType === null
+                    || in_array($colorType, [0, 4], true)
+                    || $chunkLength < 3
+                    || $chunkLength > 768
+                    || $chunkLength % 3 !== 0
+                    || ($colorType === 3 && intdiv($chunkLength, 3) > (1 << $bitDepth))) {
+                    return self::MALFORMED;
+                }
+                $seenPalette = true;
+            }
+
+            if ($seenImageData && $chunkType !== 'IDAT' && $chunkType !== 'IEND') {
+                $imageDataEnded = true;
+            }
             if ($chunkType === 'IDAT') {
+                if ($imageDataEnded || ($colorType === 3 && ! $seenPalette)) {
+                    return self::MALFORMED;
+                }
                 $seenImageData = true;
+                $imageDataBytes += $chunkLength;
             }
 
             $position += 12 + $chunkLength;
             if ($chunkType === 'IEND') {
-                if ($chunkLength !== 0 || ! $seenImageData || $position !== $length) {
+                if ($chunkLength !== 0
+                    || ! $seenImageData
+                    || $imageDataBytes < 1
+                    || $position !== $length) {
                     return self::MALFORMED;
                 }
 
@@ -349,6 +384,33 @@ final class TelegramImagePayloadIntegrity
         $height = self::uint16LittleEndian($content, $offset + 8) & 0x3FFF;
 
         return $width > 0 && $height > 0;
+    }
+
+    private static function pngHeaderIsValid(#[SensitiveParameter] string $data): bool
+    {
+        if (strlen($data) !== 13) {
+            return false;
+        }
+
+        $width = self::uint32BigEndian($data, 0);
+        $height = self::uint32BigEndian($data, 4);
+        $bitDepth = ord($data[8]);
+        $colorType = ord($data[9]);
+        $allowedDepths = match ($colorType) {
+            0 => [1, 2, 4, 8, 16],
+            2, 4, 6 => [8, 16],
+            3 => [1, 2, 4, 8],
+            default => [],
+        };
+
+        return $width >= 1
+            && $height >= 1
+            && $width <= 0x7FFFFFFF
+            && $height <= 0x7FFFFFFF
+            && in_array($bitDepth, $allowedDepths, true)
+            && ord($data[10]) === 0
+            && ord($data[11]) === 0
+            && in_array(ord($data[12]), [0, 1], true);
     }
 
     private static function isStartOfFrameMarker(int $marker): bool
