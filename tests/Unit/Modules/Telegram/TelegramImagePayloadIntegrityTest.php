@@ -5,8 +5,11 @@ declare(strict_types=1);
 namespace Tests\Unit\Modules\Telegram;
 
 use App\Modules\Telegram\Application\TelegramImagePayloadIntegrity;
+use App\Modules\Telegram\Application\TelegramPrivateMediaIngestor;
 use PHPUnit\Framework\TestCase;
+use ReflectionClass;
 use RuntimeException;
+use SensitiveParameter;
 
 final class TelegramImagePayloadIntegrityTest extends TestCase
 {
@@ -50,6 +53,28 @@ final class TelegramImagePayloadIntegrityTest extends TestCase
             TelegramImagePayloadIntegrity::MALFORMED,
             TelegramImagePayloadIntegrity::inspect($content),
         );
+    }
+
+    public function test_restricted_content_parameters_are_marked_sensitive(): void
+    {
+        $integrity = new ReflectionClass(TelegramImagePayloadIntegrity::class);
+        foreach ($integrity->getMethods() as $method) {
+            foreach ($method->getParameters() as $parameter) {
+                if ($parameter->getName() !== 'content') {
+                    continue;
+                }
+
+                self::assertNotSame(
+                    [],
+                    $parameter->getAttributes(SensitiveParameter::class),
+                    $method->getName().' must redact restricted image bytes from exception traces.',
+                );
+            }
+        }
+
+        $ingestor = new ReflectionClass(TelegramPrivateMediaIngestor::class);
+        $content = $ingestor->getMethod('validatedContent')->getParameters()[0];
+        self::assertNotSame([], $content->getAttributes(SensitiveParameter::class));
     }
 
     public function test_png_crc_corruption_is_malformed(): void

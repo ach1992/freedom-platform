@@ -13,6 +13,7 @@ use Illuminate\Filesystem\FilesystemAdapter;
 use Illuminate\Filesystem\FilesystemManager;
 use Illuminate\Support\Str;
 use RuntimeException;
+use SensitiveParameter;
 use stdClass;
 
 final readonly class TelegramPrivateMediaIngestor
@@ -392,7 +393,7 @@ final readonly class TelegramPrivateMediaIngestor
     }
 
     /** @return array{0:string,1:string,2:int} */
-    private function validatedContent(string $content, int $maximumBytes): array
+    private function validatedContent(#[SensitiveParameter] string $content, int $maximumBytes): array
     {
         $size = strlen($content);
         if ($size < 1) {

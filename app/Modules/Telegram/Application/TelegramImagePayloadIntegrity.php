@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Application;
 
+use SensitiveParameter;
+
 final class TelegramImagePayloadIntegrity
 {
     public const COMPLETE = 'complete';
@@ -15,7 +17,7 @@ final class TelegramImagePayloadIntegrity
     public const UNSUPPORTED = 'unsupported';
 
     /** @return 'complete'|'incomplete'|'malformed'|'unsupported' */
-    public static function inspect(string $content): string
+    public static function inspect(#[SensitiveParameter] string $content): string
     {
         if (str_starts_with($content, "\x89PNG\r\n\x1a\n")) {
             return self::inspectPng($content);
@@ -31,7 +33,7 @@ final class TelegramImagePayloadIntegrity
     }
 
     /** @return 'complete'|'incomplete'|'malformed' */
-    private static function inspectPng(string $content): string
+    private static function inspectPng(#[SensitiveParameter] string $content): string
     {
         $length = strlen($content);
         if ($length < 8) {
@@ -89,7 +91,7 @@ final class TelegramImagePayloadIntegrity
     }
 
     /** @return 'complete'|'incomplete'|'malformed' */
-    private static function inspectJpeg(string $content): string
+    private static function inspectJpeg(#[SensitiveParameter] string $content): string
     {
         $length = strlen($content);
         if ($length < 2) {
@@ -179,7 +181,7 @@ final class TelegramImagePayloadIntegrity
     }
 
     /** @return 'complete'|'incomplete'|'malformed' */
-    private static function inspectWebp(string $content): string
+    private static function inspectWebp(#[SensitiveParameter] string $content): string
     {
         $length = strlen($content);
         if ($length < 12) {
@@ -278,7 +280,7 @@ final class TelegramImagePayloadIntegrity
             : self::MALFORMED;
     }
 
-    private static function webpFrameHasCompleteBitstream(string $content, int $position, int $length): bool
+    private static function webpFrameHasCompleteBitstream(#[SensitiveParameter] string $content, int $position, int $length): bool
     {
         $end = $position + $length;
         $seenBitstream = false;
@@ -312,7 +314,7 @@ final class TelegramImagePayloadIntegrity
 
     private static function webpBitstreamHeaderIsValid(
         string $chunkType,
-        string $content,
+        #[SensitiveParameter] string $content,
         int $offset,
         int $length,
     ): bool {
@@ -346,13 +348,13 @@ final class TelegramImagePayloadIntegrity
         ], true);
     }
 
-    private static function uint16BigEndian(string $content, int $offset): int
+    private static function uint16BigEndian(#[SensitiveParameter] string $content, int $offset): int
     {
         return (ord($content[$offset]) << 8)
             | ord($content[$offset + 1]);
     }
 
-    private static function uint32BigEndian(string $content, int $offset): int
+    private static function uint32BigEndian(#[SensitiveParameter] string $content, int $offset): int
     {
         return (ord($content[$offset]) << 24)
             | (ord($content[$offset + 1]) << 16)
@@ -360,20 +362,20 @@ final class TelegramImagePayloadIntegrity
             | ord($content[$offset + 3]);
     }
 
-    private static function uint16LittleEndian(string $content, int $offset): int
+    private static function uint16LittleEndian(#[SensitiveParameter] string $content, int $offset): int
     {
         return ord($content[$offset])
             | (ord($content[$offset + 1]) << 8);
     }
 
-    private static function uint24LittleEndian(string $content, int $offset): int
+    private static function uint24LittleEndian(#[SensitiveParameter] string $content, int $offset): int
     {
         return ord($content[$offset])
             | (ord($content[$offset + 1]) << 8)
             | (ord($content[$offset + 2]) << 16);
     }
 
-    private static function uint32LittleEndian(string $content, int $offset): int
+    private static function uint32LittleEndian(#[SensitiveParameter] string $content, int $offset): int
     {
         return ord($content[$offset])
             | (ord($content[$offset + 1]) << 8)
