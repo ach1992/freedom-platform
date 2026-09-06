@@ -29,6 +29,7 @@ final readonly class TelegramCustomerPurchaseGiftCardPaymentService implements T
 
     /**
      * @return list<TelegramCustomerPurchaseGiftCardType>
+     *
      * @requirement BUY-001 BUY-003 PAY-001 PAY-002 PRO-001 GFT-001 GFT-003 DAT-002 DAT-003 SEC-002 QUA-001
      */
     public function availableTypesForSelf(
