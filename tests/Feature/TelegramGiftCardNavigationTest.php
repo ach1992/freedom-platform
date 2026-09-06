@@ -10,12 +10,9 @@ use App\Modules\Telegram\Application\TelegramCustomerPurchaseGiftCardType;
 use App\Modules\Telegram\Application\TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1;
 use App\Modules\Telegram\Application\TelegramDeliveryInteractivePresentationDatabaseSurfaceV1;
 use App\Modules\Telegram\Application\TelegramDeliveryQueueService;
-use App\Modules\Telegram\Application\TelegramInteractionAction;
+use App\Modules\Telegram\Application\TelegramInteractionCallbackService;
 use App\Modules\Telegram\Application\TelegramInteractionSessionService;
-use App\Modules\Telegram\Application\TelegramNavigationEntryGateway;
-use App\Modules\Telegram\Application\TelegramNavigationHandler;
 use App\Modules\Telegram\Application\TelegramUpdateProcessor;
-use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
 use DateTimeImmutable;
 use Illuminate\Contracts\Encryption\StringEncrypter;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
@@ -26,9 +23,6 @@ use Tests\TestCase;
 
 final class TelegramGiftCardNavigationPayment implements TelegramCustomerPurchaseGiftCardPayment
 {
-    /** @var list<array<string,int|string>> */
-    public array $typeCalls = [];
-
     /** @var list<array<string,int|string>> */
     public array $submitCalls = [];
 
@@ -62,7 +56,6 @@ final class TelegramGiftCardNavigationPayment implements TelegramCustomerPurchas
             $decisionPublicId,
             $decisionConfigurationHash,
         );
-        $this->typeCalls[] = compact('actorUserId', 'subjectUserId', 'orderPublicId', 'quotePublicId');
 
         return [new TelegramCustomerPurchaseGiftCardType(
             'steam-manual',
@@ -207,7 +200,7 @@ final class TelegramGiftCardNavigationTest extends TestCase
         }
     }
 
-    public function test_code_message_is_confined_to_encrypted_ingress_and_gift_card_authority_while_exact_update_replay_has_one_effect(): void
+    public function test_code_message_is_confined_to_encrypted_ingress_and_safe_gift_card_authority_while_exact_update_replay_has_one_effect(): void
     {
         [$processor, $accountId, $sessionId, $telegramUserId, $payment] = $this->prepareCodeInput(9810, 8100, 'gift_card_secret');
         $rawCode = 'STEAM-TG-SECRET-9081726354';
@@ -227,16 +220,17 @@ final class TelegramGiftCardNavigationTest extends TestCase
         $storedUpdate = DB::table('processed_telegram_updates')
             ->where('bot_id', '123456789')
             ->where('update_id', 8110)
-            ->first(['payload_ciphertext', 'payload_hash', 'state', 'attempt_count']);
+            ->first(['payload_ciphertext', 'state', 'attempt_count']);
         self::assertNotNull($storedUpdate);
         self::assertSame('processed', (string) $storedUpdate->state);
         self::assertSame(1, (int) $storedUpdate->attempt_count);
         self::assertStringNotContainsString($rawCode, (string) $storedUpdate->payload_ciphertext);
-        $inboundPlaintext = $this->app->make(StringEncrypter::class)->decryptString((string) $storedUpdate->payload_ciphertext);
-        self::assertStringContainsString($rawCode, $inboundPlaintext);
+        self::assertStringContainsString(
+            $rawCode,
+            $this->app->make(StringEncrypter::class)->decryptString((string) $storedUpdate->payload_ciphertext),
+        );
 
-        $commonEvidence = $this->navigationCommonDurableEvidence($sessionId, $telegramUserId);
-        self::assertStringNotContainsString($rawCode, $commonEvidence);
+        self::assertStringNotContainsString($rawCode, $this->navigationCommonDurableEvidence($sessionId, $telegramUserId));
         $presentation = $this->latestConfidentialPresentation();
         self::assertStringContainsString('STEA********6354', $presentation);
         self::assertStringContainsString('در انتظار بررسی دستی', $presentation);
@@ -287,6 +281,7 @@ final class TelegramGiftCardNavigationTest extends TestCase
             ->where('telegram_account_id', $accountId)
             ->first(['id', 'public_id', 'version']);
         self::assertNotNull($home);
+
         $selectedPayload = [
             'page' => 1,
             'offering_selection' => str_repeat('c', 40),
@@ -297,45 +292,35 @@ final class TelegramGiftCardNavigationTest extends TestCase
             'order_public_id' => str_pad('01N', 26, '0'),
             'payment_method_code' => 'gift_card',
         ];
-        $selected = $this->app->make(TelegramInteractionSessionService::class)->transition(
+        $giftTypeSession = $this->app->make(TelegramInteractionSessionService::class)->transition(
             (string) $home->public_id,
             (int) $home->version,
-            'purchase_payment_method_selected',
+            'purchase_gift_card_type',
             $selectedPayload,
-            'telegram-gift-card-test-selected:'.hash('sha256', $username),
+            'telegram-gift-card-test-type:'.hash('sha256', $username),
         );
-        $handler = $this->app->make(TelegramNavigationHandler::class);
-        $handler->handle(new TelegramInteractionAction(
-            TelegramInteractionActionKind::Callback,
-            'telegram-gift-card-test-start:'.hash('sha256', $username),
-            '123456789',
-            $baseUpdateId + 1,
-            $accountId,
-            $userId,
-            $telegramUserId,
-            $selected->publicId,
-            TelegramNavigationEntryGateway::FLOW,
-            $selected->state,
-            $selected->version,
-            $selected->payload,
-            null,
-            null,
-            'navigation.purchase.gift_card.start',
-            [],
-            false,
-            new DateTimeImmutable('2026-09-06T20:01:00+00:00'),
-        ));
-
-        $typeToken = $this->callbackToken('navigation.purchase.gift_card.type.select', $accountId);
-        $this->accept($this->callbackPayload($baseUpdateId + 2, $telegramUserId, $username, 'fa', $typeToken));
-        $processor->process('123456789', $baseUpdateId + 2);
+        $typeCallback = $this->app->make(TelegramInteractionCallbackService::class)->issue(
+            $giftTypeSession->publicId,
+            $giftTypeSession->version,
+            'navigation.purchase.gift_card.type.select',
+            [
+                'type_code' => 'steam-manual',
+                'type_configuration_hash' => $payment->typeConfigurationHash,
+            ],
+            'telegram-gift-card-test-type-callback:'.hash('sha256', $username),
+        );
+        $typeToken = $this->app->make(StringEncrypter::class)->decryptString((string) DB::table('telegram_interaction_callbacks')
+            ->where('public_id', $typeCallback->publicId)
+            ->value('token_ciphertext'));
+        $this->accept($this->callbackPayload($baseUpdateId + 1, $telegramUserId, $username, 'fa', $typeToken));
+        $processor->process('123456789', $baseUpdateId + 1);
         $this->assertDatabaseHas('telegram_interaction_sessions', [
             'id' => (int) $home->id,
             'state' => 'purchase_gift_card_face_value',
         ]);
 
-        $this->accept($this->payload($baseUpdateId + 3, $telegramUserId, $username, 'fa', '1250000'));
-        $processor->process('123456789', $baseUpdateId + 3);
+        $this->accept($this->payload($baseUpdateId + 2, $telegramUserId, $username, 'fa', '1250000'));
+        $processor->process('123456789', $baseUpdateId + 2);
         $codeInput = DB::table('telegram_interaction_sessions')
             ->where('id', (int) $home->id)
             ->first(['state', 'payload']);
@@ -343,6 +328,7 @@ final class TelegramGiftCardNavigationTest extends TestCase
         self::assertSame('purchase_gift_card_code_input', (string) $codeInput->state);
         self::assertStringContainsString('1250000', (string) $codeInput->payload);
         self::assertSame(0, $payment->submitEffects);
+        self::assertSame($userId, (int) DB::table('telegram_interaction_sessions')->where('id', (int) $home->id)->value('user_id'));
 
         return [$processor, $accountId, (int) $home->id, $telegramUserId, $payment];
     }
@@ -363,12 +349,7 @@ final class TelegramGiftCardNavigationTest extends TestCase
             'message' => [
                 'message_id' => $updateId,
                 'date' => 1_700_000_000,
-                'from' => [
-                    'id' => $telegramUserId,
-                    'is_bot' => false,
-                    'username' => $username,
-                    'language_code' => $languageCode,
-                ],
+                'from' => ['id' => $telegramUserId, 'is_bot' => false, 'username' => $username, 'language_code' => $languageCode],
                 'chat' => ['id' => $telegramUserId, 'type' => 'private'],
                 'text' => $text,
             ],
@@ -382,12 +363,7 @@ final class TelegramGiftCardNavigationTest extends TestCase
             'update_id' => $updateId,
             'callback_query' => [
                 'id' => 'callback-'.$updateId,
-                'from' => [
-                    'id' => $telegramUserId,
-                    'is_bot' => false,
-                    'username' => $username,
-                    'language_code' => $languageCode,
-                ],
+                'from' => ['id' => $telegramUserId, 'is_bot' => false, 'username' => $username, 'language_code' => $languageCode],
                 'message' => [
                     'message_id' => $updateId,
                     'date' => 1_700_000_000,
