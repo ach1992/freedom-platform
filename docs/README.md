@@ -15,7 +15,7 @@ The repository intentionally keeps a small documentation set. Git history and Gi
 - [`07-security-threat-model.md`](07-security-threat-model.md) — security boundaries and required controls.
 - [`08-data-classification.md`](08-data-classification.md) — sensitive-data handling and retention constraints.
 - [`03-risk-register.md`](03-risk-register.md) — durable cross-project risks/decisions that remain relevant beyond one task.
-- [`development/execution-infrastructure.md`](development/execution-infrastructure.md) — GitHub/MCP/Actions execution boundaries, toolchain ownership, and self-hosted runner lifecycle/qualification.
+- [`development/execution-infrastructure.md`](development/execution-infrastructure.md) — GitHub/MCP/Actions execution boundaries, hosted-CI toolchain ownership, and optional self-hosted runner lifecycle/qualification.
 - [`development/repository-map.md`](development/repository-map.md) — source/module navigation.
 - [`adr/`](adr/) — durable architecture decisions only.
 

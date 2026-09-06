@@ -5,3 +5,13 @@ da7c4eb15c8967cd7caa8c144b82a2e6e47739f8:.env.example:generic-api-key:109
 # Exact PR-history false positive: AgentBulkOrderServiceTest uses a non-secret child_key fixture value.
 # Keep this fingerprint commit-scoped; the production generic-api-key rule remains unchanged.
 ffbc78150d1ccfd36f92dfa91f86832001ed4054:tests/Feature/AgentBulkOrderServiceTest.php:generic-api-key:155
+
+# Historical public-readiness false positives: empty example configuration and deterministic test-only idempotency keys.
+# Keep every fingerprint commit-scoped; do not broaden the generic-api-key rule or path scope.
+2c1a99717cba02fed50e15988ac8475a2e631591:.env.example:generic-api-key:121
+2c04ad5fd3b0d624d4ae132718c580f4eb9fbbbc:tests/Feature/PaymentMethodEligibilitySubjectFactConcurrencyTest.php:generic-api-key:217
+d93d105eb087ce3a3077be9503752df74a3d1b22:tests/Feature/TrialPolicyReservationTest.php:generic-api-key:138
+8e16907a530db395c6f49bd3e0842ed879671a5e:tests/Feature/TrialPolicyReservationTest.php:generic-api-key:143
+
+# Historical requirements-table prose matched generic-api-key heuristics; the line contains no credential value.
+4b24ece04dd17d0440e985b4416db74a7b5b4a2d:docs/01-authoritative-requirements.md:generic-api-key:121

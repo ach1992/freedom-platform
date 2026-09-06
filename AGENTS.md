@@ -35,7 +35,7 @@ Never push product work directly to `main` or `develop/v1.0.0-completion`, rewri
 
 GitHub is the project's source location and current-state authority. Execution capability does not change that authority.
 
-The canonical map for the connected GitHub integration, `AI_Server_Agent` workspace, GitHub Actions self-hosted runners, external Workers, staging/deployment targets, toolchain ownership, and runner add/replace/quarantine/remove/qualification is [`docs/development/execution-infrastructure.md`](docs/development/execution-infrastructure.md).
+The canonical map for the connected GitHub integration, `AI_Server_Agent` workspace, standard GitHub-hosted CI, optional private/trusted self-hosted runners, external Workers, staging/deployment targets, toolchain ownership, and runner lifecycle is [`docs/development/execution-infrastructure.md`](docs/development/execution-infrastructure.md).
 
 Agents must follow these boundaries regardless of which execution path is available:
 
@@ -128,7 +128,7 @@ For every change:
 
 ## CI
 
-Every executing GitHub Actions job runs on an owner-controlled self-hosted runner. The exact workflow `runs-on` selector is the routing authority; runner capability/lifecycle rules live in `docs/development/execution-infrastructure.md` and test/CI semantics live in `docs/06-test-strategy.md`.
+Ordinary repository CI runs on standard GitHub-hosted Linux runners. Manual staging/provider workflows may retain explicit self-hosted selectors only as trusted operational contracts and must not have a connected public-repository runner unless that boundary is deliberately re-authorized. The exact workflow `runs-on` selector is the routing authority; execution boundaries live in `docs/development/execution-infrastructure.md` and test/CI semantics live in `docs/06-test-strategy.md`.
 
 CI is risk-based and signal-driven. `.github/workflows/ci.yml` computes independent validation needs from the complete diff instead of treating every non-doc change as one all-or-nothing suite.
 
