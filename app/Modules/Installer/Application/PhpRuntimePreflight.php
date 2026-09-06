@@ -19,6 +19,7 @@ final class PhpRuntimePreflight
         'curl',
         'dom',
         'fileinfo',
+        'gd',
         'intl',
         'json',
         'mbstring',

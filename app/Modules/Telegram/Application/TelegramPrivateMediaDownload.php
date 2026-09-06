@@ -23,6 +23,8 @@ final readonly class TelegramPrivateMediaDownload
             throw new InvalidArgumentException('Telegram private-media download is invalid.');
         }
 
+        TelegramImagePayloadDecoder::assertDecodable($content);
+
         return new self(RestrictedValue::fromString($content), $providerFileSize);
     }
 

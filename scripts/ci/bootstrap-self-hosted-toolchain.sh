@@ -115,6 +115,7 @@ required_extensions=(
     dom
     fileinfo
     filter
+    gd
     hash
     intl
     json
