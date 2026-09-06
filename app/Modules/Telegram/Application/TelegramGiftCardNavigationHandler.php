@@ -301,7 +301,7 @@ final readonly class TelegramGiftCardNavigationHandler
     }
 
     /**
-     * @param array{page:int,offering_selection:string,quote_public_id:string,quote_configuration_hash:string,payment_decision_public_id:string,payment_decision_configuration_hash:string,order_public_id:string,payment_method_code:string,discount_consumption_public_id?:string,discount_consumption_configuration_hash?:string,promotion_resolution_public_id?:string} $state
+     * @param  array{page:int,offering_selection:string,quote_public_id:string,quote_configuration_hash:string,payment_decision_public_id:string,payment_decision_configuration_hash:string,order_public_id:string,payment_method_code:string,discount_consumption_public_id?:string,discount_consumption_configuration_hash?:string,promotion_resolution_public_id?:string}  $state
      */
     private function selectType(TelegramInteractionAction $action, array $state, string $typeCode, string $configurationHash): void
     {
@@ -367,7 +367,7 @@ final readonly class TelegramGiftCardNavigationHandler
     }
 
     /**
-     * @param array{page:int,offering_selection:string,quote_public_id:string,quote_configuration_hash:string,payment_decision_public_id:string,payment_decision_configuration_hash:string,order_public_id:string,payment_method_code:string,gift_card_type_code:string,gift_card_type_configuration_hash:string,gift_card_face_currency:string,gift_card_claimed_face_value:int,discount_consumption_public_id?:string,discount_consumption_configuration_hash?:string,promotion_resolution_public_id?:string} $state
+     * @param  array{page:int,offering_selection:string,quote_public_id:string,quote_configuration_hash:string,payment_decision_public_id:string,payment_decision_configuration_hash:string,order_public_id:string,payment_method_code:string,gift_card_type_code:string,gift_card_type_configuration_hash:string,gift_card_face_currency:string,gift_card_claimed_face_value:int,discount_consumption_public_id?:string,discount_consumption_configuration_hash?:string,promotion_resolution_public_id?:string}  $state
      */
     private function submitCode(TelegramInteractionAction $action, array $state, string $code): void
     {
@@ -427,7 +427,7 @@ final readonly class TelegramGiftCardNavigationHandler
     }
 
     /**
-     * @param array{page:int,offering_selection:string,quote_public_id:string,quote_configuration_hash:string,payment_decision_public_id:string,payment_decision_configuration_hash:string,order_public_id:string,payment_method_code:string,discount_consumption_public_id?:string,discount_consumption_configuration_hash?:string,promotion_resolution_public_id?:string} $state
+     * @param  array{page:int,offering_selection:string,quote_public_id:string,quote_configuration_hash:string,payment_decision_public_id:string,payment_decision_configuration_hash:string,order_public_id:string,payment_method_code:string,discount_consumption_public_id?:string,discount_consumption_configuration_hash?:string,promotion_resolution_public_id?:string}  $state
      */
     private function returnPaymentMethods(TelegramInteractionAction $action, array $state): void
     {
@@ -465,7 +465,7 @@ final readonly class TelegramGiftCardNavigationHandler
     }
 
     /**
-     * @param array{page:int,offering_selection:string,quote_public_id:string,quote_configuration_hash:string,payment_decision_public_id:string,payment_decision_configuration_hash:string,order_public_id:string,payment_method_code:string,gift_card_type_code:string,gift_card_type_configuration_hash:string,gift_card_face_currency:string,discount_consumption_public_id?:string,discount_consumption_configuration_hash?:string,promotion_resolution_public_id?:string} $state
+     * @param  array{page:int,offering_selection:string,quote_public_id:string,quote_configuration_hash:string,payment_decision_public_id:string,payment_decision_configuration_hash:string,order_public_id:string,payment_method_code:string,gift_card_type_code:string,gift_card_type_configuration_hash:string,gift_card_face_currency:string,discount_consumption_public_id?:string,discount_consumption_configuration_hash?:string,promotion_resolution_public_id?:string}  $state
      */
     private function returnTypes(TelegramInteractionAction $action, array $state): void
     {
@@ -504,7 +504,7 @@ final readonly class TelegramGiftCardNavigationHandler
     }
 
     /**
-     * @param array{page:int,offering_selection:string,quote_public_id:string,quote_configuration_hash:string,payment_decision_public_id:string,payment_decision_configuration_hash:string,order_public_id:string,payment_method_code:string,gift_card_type_code:string,gift_card_type_configuration_hash:string,gift_card_face_currency:string,gift_card_claimed_face_value:int,discount_consumption_public_id?:string,discount_consumption_configuration_hash?:string,promotion_resolution_public_id?:string} $state
+     * @param  array{page:int,offering_selection:string,quote_public_id:string,quote_configuration_hash:string,payment_decision_public_id:string,payment_decision_configuration_hash:string,order_public_id:string,payment_method_code:string,gift_card_type_code:string,gift_card_type_configuration_hash:string,gift_card_face_currency:string,gift_card_claimed_face_value:int,discount_consumption_public_id?:string,discount_consumption_configuration_hash?:string,promotion_resolution_public_id?:string}  $state
      */
     private function returnFaceValue(TelegramInteractionAction $action, array $state): void
     {
@@ -600,7 +600,7 @@ final readonly class TelegramGiftCardNavigationHandler
     }
 
     /**
-     * @param array{gift_card_type_code:string,gift_card_face_currency:string} $state
+     * @param  array{gift_card_type_code:string,gift_card_face_currency:string}  $state
      */
     private function renderFaceValue(TelegramInteractionAction $action, int $sessionVersion, array $state, bool $invalid): void
     {
@@ -620,7 +620,7 @@ final readonly class TelegramGiftCardNavigationHandler
     }
 
     /**
-     * @param array{gift_card_type_code:string,gift_card_face_currency:string,gift_card_claimed_face_value:int} $state
+     * @param  array{gift_card_type_code:string,gift_card_face_currency:string,gift_card_claimed_face_value:int}  $state
      */
     private function renderCode(TelegramInteractionAction $action, int $sessionVersion, array $state, bool $invalid): void
     {
