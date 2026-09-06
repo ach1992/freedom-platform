@@ -730,7 +730,7 @@ final readonly class TelegramGiftCardNavigationHandler
     }
 
     /**
-     * @param array<string,mixed> $payload
+     * @param  array<string,mixed>  $payload
      * @return array{page:int,offering_selection:string,quote_public_id:string,quote_configuration_hash:string,payment_decision_public_id:string,payment_decision_configuration_hash:string,order_public_id?:string,discount_consumption_public_id?:string,discount_consumption_configuration_hash?:string,promotion_resolution_public_id?:string}
      */
     private function paymentMethodsStateFromPayload(array $payload): array
@@ -758,7 +758,7 @@ final readonly class TelegramGiftCardNavigationHandler
     }
 
     /**
-     * @param array<string,mixed> $payload
+     * @param  array<string,mixed>  $payload
      * @return array{page:int,offering_selection:string,quote_public_id:string,quote_configuration_hash:string,payment_decision_public_id:string,payment_decision_configuration_hash:string,order_public_id:string,payment_method_code:string,discount_consumption_public_id?:string,discount_consumption_configuration_hash?:string,promotion_resolution_public_id?:string}
      */
     private function selectedStateFromPayload(array $payload): array
@@ -778,7 +778,7 @@ final readonly class TelegramGiftCardNavigationHandler
     }
 
     /**
-     * @param array<string,mixed> $payload
+     * @param  array<string,mixed>  $payload
      * @return array{page:int,offering_selection:string,quote_public_id:string,quote_configuration_hash:string,payment_decision_public_id:string,payment_decision_configuration_hash:string,order_public_id:string,payment_method_code:string,gift_card_type_code:string,gift_card_type_configuration_hash:string,gift_card_face_currency:string,discount_consumption_public_id?:string,discount_consumption_configuration_hash?:string,promotion_resolution_public_id?:string}
      */
     private function typeStateFromPayload(array $payload): array
@@ -805,7 +805,7 @@ final readonly class TelegramGiftCardNavigationHandler
     }
 
     /**
-     * @param array<string,mixed> $payload
+     * @param  array<string,mixed>  $payload
      * @return array{page:int,offering_selection:string,quote_public_id:string,quote_configuration_hash:string,payment_decision_public_id:string,payment_decision_configuration_hash:string,order_public_id:string,payment_method_code:string,gift_card_type_code:string,gift_card_type_configuration_hash:string,gift_card_face_currency:string,gift_card_claimed_face_value:int,discount_consumption_public_id?:string,discount_consumption_configuration_hash?:string,promotion_resolution_public_id?:string}
      */
     private function codeStateFromPayload(array $payload): array
@@ -823,7 +823,7 @@ final readonly class TelegramGiftCardNavigationHandler
     }
 
     /**
-     * @param array<string,mixed> $payload
+     * @param  array<string,mixed>  $payload
      * @return array{submission_public_id:string,payment_intent_public_id:string,review_public_id:string,gift_card_type_code:string,masked_code:string,claimed_face_value:int,claimed_currency:string}
      */
     private function submittedStateFromPayload(array $payload): array
@@ -852,7 +852,7 @@ final readonly class TelegramGiftCardNavigationHandler
     }
 
     /**
-     * @param array<string,mixed> $payload
+     * @param  array<string,mixed>  $payload
      * @return array{page:int,offering_selection:string,quote_public_id:string,quote_configuration_hash:string,discount_consumption_public_id?:string,discount_consumption_configuration_hash?:string,promotion_resolution_public_id?:string}
      */
     private function quoteStateFromPayload(array $payload): array
@@ -894,7 +894,7 @@ final readonly class TelegramGiftCardNavigationHandler
     }
 
     /**
-     * @param array<string,mixed> $payload
+     * @param  array<string,mixed>  $payload
      * @return array{0:string,1:string}
      */
     private function giftCardTypeFromPayload(array $payload): array
