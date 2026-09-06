@@ -57,6 +57,8 @@ final class PhpRuntimePreflight
      *     ini_file: ?string,
      *     timezone: ?string,
      *     timezone_utc: bool,
+     *     image_decoder_capabilities: array{jpeg: bool, png: bool, webp: bool},
+     *     image_decoders_supported: bool,
      *     disabled_functions: list<string>,
      *     limits: array{memory_limit: ?string, max_execution_time: ?string, post_max_size: ?string, upload_max_filesize: ?string},
      *     opcache_enabled: ?bool,
@@ -113,6 +115,18 @@ final class PhpRuntimePreflight
         $missingExtensions = array_values(array_diff($requiredExtensions, $extensions));
         sort($missingExtensions);
 
+        $imageDecoderPayload = is_array($payload['image_decoder_capabilities'] ?? null)
+            ? $payload['image_decoder_capabilities']
+            : [];
+        $imageDecoderCapabilities = [
+            'jpeg' => ($imageDecoderPayload['jpeg'] ?? false) === true,
+            'png' => ($imageDecoderPayload['png'] ?? false) === true,
+            'webp' => ($imageDecoderPayload['webp'] ?? false) === true,
+        ];
+        $imageDecodersSupported = ! in_array('gd', $requiredExtensions, true)
+            || (! in_array('gd', $missingExtensions, true)
+                && ! in_array(false, $imageDecoderCapabilities, true));
+
         $limitsPayload = is_array($payload['limits'] ?? null) ? $payload['limits'] : [];
         $limits = [
             'memory_limit' => $this->nullableString($limitsPayload['memory_limit'] ?? null),
@@ -123,7 +137,11 @@ final class PhpRuntimePreflight
         $opcacheEnabled = is_bool($payload['opcache_enabled'] ?? null) ? $payload['opcache_enabled'] : null;
         $versionSupported = $version !== null && version_compare($version, self::MINIMUM_VERSION, '>=');
         $timezoneUtc = $timezone === 'UTC';
-        $passed = $versionSupported && $missingExtensions === [] && $iniFile !== null && $timezoneUtc;
+        $passed = $versionSupported
+            && $missingExtensions === []
+            && $iniFile !== null
+            && $timezoneUtc
+            && $imageDecodersSupported;
 
         return [
             'name' => $name,
@@ -137,6 +155,8 @@ final class PhpRuntimePreflight
             'ini_file' => $iniFile,
             'timezone' => $timezone,
             'timezone_utc' => $timezoneUtc,
+            'image_decoder_capabilities' => $imageDecoderCapabilities,
+            'image_decoders_supported' => $imageDecodersSupported,
             'disabled_functions' => $disabledFunctions,
             'limits' => $limits,
             'opcache_enabled' => $opcacheEnabled,
@@ -200,6 +220,8 @@ final class PhpRuntimePreflight
      *     ini_file: null,
      *     timezone: null,
      *     timezone_utc: false,
+     *     image_decoder_capabilities: array{jpeg: false, png: false, webp: false},
+     *     image_decoders_supported: false,
      *     disabled_functions: list<string>,
      *     limits: array{memory_limit: null, max_execution_time: null, post_max_size: null, upload_max_filesize: null},
      *     opcache_enabled: null,
@@ -220,6 +242,12 @@ final class PhpRuntimePreflight
             'ini_file' => null,
             'timezone' => null,
             'timezone_utc' => false,
+            'image_decoder_capabilities' => [
+                'jpeg' => false,
+                'png' => false,
+                'webp' => false,
+            ],
+            'image_decoders_supported' => false,
             'disabled_functions' => [],
             'limits' => [
                 'memory_limit' => null,
@@ -236,12 +264,24 @@ final class PhpRuntimePreflight
     {
         return <<<'PHP'
 $disabledFunctions = array_values(array_filter(array_map('trim', explode(',', (string) ini_get('disable_functions')))));
+$gdImageTypes = extension_loaded('gd') && function_exists('imagetypes') ? imagetypes() : 0;
 $payload = [
     'php_version' => PHP_VERSION,
     'sapi' => PHP_SAPI,
     'loaded_extensions' => array_values(get_loaded_extensions()),
     'ini_file' => php_ini_loaded_file() ?: null,
     'timezone' => date_default_timezone_get(),
+    'image_decoder_capabilities' => [
+        'jpeg' => function_exists('imagecreatefromjpeg')
+            && defined('IMG_JPG')
+            && (($gdImageTypes & constant('IMG_JPG')) !== 0),
+        'png' => function_exists('imagecreatefrompng')
+            && defined('IMG_PNG')
+            && (($gdImageTypes & constant('IMG_PNG')) !== 0),
+        'webp' => function_exists('imagecreatefromwebp')
+            && defined('IMG_WEBP')
+            && (($gdImageTypes & constant('IMG_WEBP')) !== 0),
+    ],
     'disabled_functions' => $disabledFunctions,
     'limits' => [
         'memory_limit' => (string) ini_get('memory_limit'),
