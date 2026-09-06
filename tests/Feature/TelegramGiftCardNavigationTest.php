@@ -13,7 +13,6 @@ use App\Modules\Telegram\Application\TelegramDeliveryQueueService;
 use App\Modules\Telegram\Application\TelegramInteractionCallbackService;
 use App\Modules\Telegram\Application\TelegramInteractionSessionService;
 use App\Modules\Telegram\Application\TelegramUpdateProcessor;
-use DateTimeImmutable;
 use Illuminate\Contracts\Encryption\StringEncrypter;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\DB;
