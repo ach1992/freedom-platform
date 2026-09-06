@@ -48,7 +48,9 @@ final class TelegramGiftCardManualPaymentTest extends TestCase
         $this->seed(IdentityAccessFoundationSeeder::class);
         $this->seed(CatalogAccessFoundationSeeder::class);
         $this->seed(PaymentEligibilityAccessFoundationSeeder::class);
-        $this->clock = new TelegramGiftCardManualClock(new DateTimeImmutable('2026-09-06T20:00:00+00:00'));
+        $databaseNow = DB::selectOne('SELECT UTC_TIMESTAMP(6) AS current_utc');
+        self::assertNotNull($databaseNow);
+        $this->clock = new TelegramGiftCardManualClock(new DateTimeImmutable((string) $databaseNow->current_utc, new \DateTimeZone('UTC')));
         $this->app->instance(Clock::class, $this->clock);
         config()->set('payments.gift_card.code_lookup_key', str_repeat('m', 32));
         config()->set('payments.gift_card.code_lookup_key_version', 11);
