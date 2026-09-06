@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 return [
     'navigation' => [
-        'home' => "Welcome to Freedom Platform.\n\nMain menu\nChoose an option below.\n/cancel — Close the current session",
+        'home' => "Main Menu\n\nChoose one of the available options.",
         'buttons' => [
             'my_account' => 'My Account',
             'buy_service' => 'Buy Service',
@@ -13,114 +13,117 @@ return [
             'back' => 'Back',
         ],
         'account' => [
-            'view' => "My Account\n\nAccount ID: :public_id\nType: :account_type\nStatus: :account_status\nTier: :tier\nPhone verification: :phone_verification\nIdentity verification: :identity_verification\nIdentity items:\n:identity_items\nJoined: :joined_at\nLast seen: :last_seen_at\n\nWallet\nCash available: :cash_available IRR\nCash on hold: :cash_holds IRR\nPromotional available: :promotional_available IRR\n\nReferral\nYour referral code: :referral_token\nInviter set: :has_inviter\nReferral locked: :referral_locked",
+            'view' => "My Account\n\nID: :public_id\nAccount: :account_type\nStatus: :account_status\nTier: :tier\nPhone verification: :phone_verification\nIdentity verification: :identity_verification\n\nVerified identities:\n:identity_items\n\nJoined: :joined_at\nLast seen: :last_seen_at\n\nCash wallet available: :cash_available IRR\nCash wallet active holds: :cash_holds IRR\nPromotional wallet available: :promotional_available IRR\n\nReferral token: :referral_token\nHas inviter: :has_inviter\nReferral locked: :referral_locked",
             'identity_item' => '• :type — :masked (:state)',
-            'identity_none' => '• None',
+            'identity_none' => 'No verified identity is recorded.',
             'not_available' => 'Not available',
             'yes' => 'Yes',
             'no' => 'No',
             'values' => [
-                'account_type' => ['customer' => 'Customer', 'agent' => 'Agent'],
-                'account_status' => [
-                    'active' => 'Active', 'limited' => 'Limited', 'suspended' => 'Suspended', 'blocked' => 'Blocked',
+                'account_type' => [
+                    'customer' => 'Customer',
+                    'agent' => 'Agent',
+                    'administrator' => 'Administrator',
                 ],
-                'tier' => ['new' => 'New', 'normal' => 'Normal', 'loyal' => 'Loyal', 'vip' => 'VIP'],
+                'account_status' => [
+                    'active' => 'Active',
+                    'suspended' => 'Suspended',
+                    'blocked' => 'Blocked',
+                ],
                 'verification' => [
-                    'unverified' => 'Unverified', 'pending' => 'Pending', 'verified' => 'Verified', 'rejected' => 'Rejected',
+                    'unverified' => 'Unverified',
+                    'pending' => 'Pending',
+                    'verified' => 'Verified',
+                    'rejected' => 'Rejected',
+                    'expired' => 'Expired',
                 ],
                 'identity_type' => [
-                    'national_id' => 'National ID', 'bank_card' => 'Bank card', 'full_name' => 'Full name',
+                    'email' => 'Email',
+                    'phone' => 'Phone',
+                    'telegram' => 'Telegram',
+                    'national_id' => 'National ID',
+                ],
+                'tier' => [
+                    'standard' => 'Standard',
+                    'silver' => 'Silver',
+                    'gold' => 'Gold',
+                    'vip' => 'VIP',
                 ],
             ],
         ],
         'admin' => [
-            'control' => "Administrator Control Center\n\nAdministrative settings and tools are shown only when your current permission allows them and are re-authorized when executed.",
+            'control' => "Administration\n\nChoose an available protected setting.",
             'buttons' => [
-                'usdt_rate' => 'USDT / NOWPayments rate',
+                'usdt_rate' => 'Manual USDT rate',
             ],
             'usdt_rate' => [
-                'view' => "Manual USDT Rate\n\nCurrent rate: :rate IRR per USDT\nSource: :source\nManaged version: :version\n\nThe same rate is used for direct USDT and, under the current Owner policy, as the USD pricing proxy for NOWPayments.",
-                'unset' => "Manual USDT Rate\n\nNo managed rate or bootstrap fallback is currently available.\n\nThis setting is the shared direct-USDT rate and the USD pricing proxy for NOWPayments.",
-                'edit_button' => 'Change rate',
-                'prompt' => "Change Manual USDT Rate\n\nSend the new IRR amount per USDT as a number only.\nExample: 900000\n\nPersian and Arabic digits are also accepted.",
-                'confirm' => "Confirm Manual USDT Rate Change\n\nNew rate: :rate IRR per USDT\n\nThis rate affects future direct-USDT pricing and the NOWPayments USD pricing proxy. Existing payment snapshots are not rewritten.\n\nNo change is saved until you press “Confirm rate change”.",
-                'confirm_button' => 'Confirm rate change',
-                'invalid' => "The rate is invalid or outside the configured allowed bounds.\n\nSend a valid IRR amount per USDT.",
-                'updated_notice' => 'The managed rate was saved successfully.',
-                'not_managed' => 'None',
+                'view' => "Manual USDT rate\n\nCurrent effective rate: :rate IRR per USDT\nSource: :source\nManaged version: :version\n\nUse Edit to change the managed manual rate. The change takes effect only after confirmation.",
+                'unset' => "Manual USDT rate\n\nNo valid effective USDT rate is currently available.\n\nUse Edit to set the managed manual rate. The change takes effect only after confirmation.",
+                'updated_notice' => 'Manual USDT rate updated successfully.',
+                'edit_button' => 'Edit rate',
+                'prompt' => "Send the new IRR-per-USDT rate as a positive number.\n\nExamples: 650000 or 650000.25\n\nNo financial setting changes until you review and confirm the normalized value.",
+                'invalid' => "That rate is invalid or outside the configured policy.\n\nSend a positive IRR-per-USDT number, such as 650000 or 650000.25.",
+                'confirm' => "Confirm manual USDT rate\n\nNew rate: :rate IRR per USDT\n\nThis will create a new append-only managed setting version. Existing audit/history remains unchanged.",
+                'confirm_button' => 'Confirm rate',
+                'not_managed' => 'Not managed',
                 'sources' => [
-                    'managed' => 'Managed',
-                    'bootstrap' => 'Bootstrap fallback',
+                    'manual_setting' => 'Managed manual setting',
+                    'manual_fallback' => 'Configured fallback',
+                    'provider' => 'Provider rate',
                 ],
             ],
         ],
         'purchase' => [
-            'list' => 'Buy Service
-
-:items
-
-Page :page of :total_pages — :total_items available option(s)',
-            'list_item' => '#:number — :plan
-Category: :category
-Mode: :mode
-Base price: :price IRR
-Duration: :duration days',
-            'empty' => 'Buy Service
-
-No currently eligible service offering is available for your account.',
-            'offering_button' => 'Option #:number',
+            'list' => "Buy Service\n\n:items\n\nPage :page of :total_pages — :total_items available offerings",
+            'list_item' => ":number. :plan\nCategory: :category\nMode: :mode\nPrice: :price IRR\nDuration: :duration days",
+            'empty' => "Buy Service\n\nNo purchasable Plan Offering is currently available.",
+            'offering_button' => 'View offering :number',
             'previous' => 'Previous',
             'next' => 'Next',
-            'not_available' => 'Not available',
-            'detail' => 'Service Option
-
-Category: :category
-Plan: :plan
-Mode: :mode
-Base price: :price IRR
-Duration: :duration days
-Data: :data
-Device limit: :devices
-
-This is catalog discovery only. No quote, payment, capacity reservation, order, or provisioning has been created yet.',
-            'quote_button' => 'View quote',
-            'quote' => 'Service Purchase Quote
-
-Quote ID: :quote_id
-Plan: :plan
-Base price: :base_price :currency
-Effective price: :effective_price :currency
-Discount: :discount :currency
-Final amount: :final_price :currency
-Valid until: :expires_at (Tehran time)
-
-This is a recorded commercial snapshot only. No payment, capacity reservation, order, or provisioning has been created yet.',
+            'quote_button' => 'Continue to Quote',
+            'payment_methods_button' => 'Continue to payment methods',
+            'detail' => "Purchase Offering\n\nPlan: :plan\nCategory: :category\nMode: :mode\nBase price: :price IRR\nDuration: :duration days\nData allowance: :data\nDevice limit: :devices",
+            'quote' => "Purchase Quote\n\nQuote: :quote_id\nPlan: :plan\nBase price: :base_price :currency\nEffective price: :effective_price :currency\nDiscount: :discount :currency\nFinal price: :final_price :currency\nExpires: :expires_at\n\nThis is a price preview only. No payment has been created or executed.",
             'discount' => [
-                'button' => 'Apply discount code',
-                'prompt' => 'Send the discount code in one message. The code is not copied into conversation state, callbacks, or reply text. Use Back to continue without a discount.',
-                'rejected' => 'The discount code or current Quote cannot be applied. No discount, payment reservation, Order, or Payment Intent was committed. You can send another code or go Back.',
+                'button' => 'Apply Benefit Code',
+                'prompt' => "Send your Benefit Code in the next message.\n\nThe code is used only to create a new Quote preview. No payment or Payment Intent is created at this step.",
+                'rejected' => "That Benefit Code could not be applied to this Quote.\n\nCheck the code and try again, or go Back to continue with the current Quote.",
             ],
-            'payment_methods_button' => 'Payment methods',
             'payment_methods' => [
-                'list' => "Eligible Payment Methods\n\n:items\n\nThis list comes from the current persisted PAY-001 decision. A stable Order is now awaiting payment, but no Payment Intent, wallet debit, gateway request, or payment has been created yet.",
+                'list' => "Available payment methods\n\n:items\n\nChoose a method to continue. Selection does not create a payment.",
                 'item' => ':number. :method',
-                'selected' => "Selected payment method: :method\n\nYour Order remains awaiting payment. No Payment Intent, wallet debit, gateway request, or payment has been created yet.",
-                'empty' => "Payment Methods\n\nNo payment method is currently eligible for this Quote.\n\nNo Order, Payment Intent, or financial effect has been created.",
-                'wallet_payment' => [
-                    'continue' => 'Continue with wallet',
-                    'retry' => 'Retry wallet payment',
-                    'unavailable' => "Wallet payment is not currently available for this Order, or the available wallet balance is insufficient.\n\nNo Payment Intent, hold, settlement, or debit was committed by this failed attempt.",
-                    'confirm' => "Confirm wallet payment\n\nAmount: :amount :currency\nAvailable wallet balance after the temporary hold: :available :currency\n\nThe amount is reserved but has not been debited yet. Confirm to capture the wallet payment. Back releases the wallet hold.",
-                    'confirm_button' => 'Confirm wallet payment',
-                    'paid' => "Wallet payment completed\n\nOrder: :order_id\nPaid amount: :amount :currency\n\nPayment and settlement are complete. Provisioning and Service delivery have not started in this step.",
+                'empty' => "No payment method is currently eligible for this Quote.\n\nNo Order or Payment Intent was created.",
+                'selected' => "Selected payment method: :method\n\nThe pre-payment Order is now stable for this Quote. No Payment Intent or payment execution has occurred yet.",
+                'gift_card_payment' => [
+                    'continue' => 'Continue with Gift Card',
+                    'retry' => 'Refresh Gift Card types',
+                    'no_types' => "No manual-review Gift Card type that accepts code evidence is currently available.\n\nNo payment or Gift Card submission was created.",
+                    'types' => "Choose the Gift Card type you want to submit for manual review.\n\n:items\n\nOnly the listed active code-capable types can be submitted here. Choosing a type does not create a payment yet.",
+                    'type_button' => ':name — :currency',
+                    'type_item' => ':number. :name | Brand: :brand | Region: :region | Face currency: :currency',
+                    'region_any' => 'Any',
+                    'face_value_prompt' => "Selected type: :type\n\nSend the Gift Card face value as a positive whole number in :currency.\n\nNo Gift Card/payment state is created until you submit the code.",
+                    'face_value_invalid' => "That face value is invalid. Send a positive whole number in :currency for :type.",
+                    'code_prompt' => "Gift Card type: :type\nClaimed face value: :face_value :currency\n\nSend the Gift Card code in your next message to submit it immediately for manual review.\n\nThe full code will not be echoed back or placed in the Telegram interaction session. Submitting it creates a pending review only; it is not payment confirmation, settlement, or service provisioning.",
+                    'code_invalid' => "The Gift Card code could not be accepted. Check the code and send it again.\n\nThe full code will not be echoed back. No second provider/payment effect is created by this retry.",
+                    'pending_manual_review' => "Gift Card submitted for manual review.\n\nSubmission: :submission_id\nType: :type\nCode: :masked_code\nClaimed face value: :face_value :currency\nStatus: Pending manual review\n\nThis is not payment confirmation, settlement, or service provisioning. The full Gift Card code is not shown here.",
                 ],
                 'card_to_card_payment' => [
-                    'continue' => 'Continue with card to card',
-                    'retry' => 'Retry card-to-card payment',
-                    'unavailable' => 'Card-to-card payment is not currently available for this Order. No new Payment Intent or payable reservation was committed by this failed attempt.',
-                    'instructions' => "Card-to-card payment reserved\n\nExact amount: :amount :currency\nDestination: :card\nTransfer window ends: :expires_at (Tehran time)\n\nA separate protected message contains the full destination card number and a copy button. Transfer exactly the reserved amount. This screen does not confirm payment; settlement requires authoritative bank/review evidence.",
-                    'protected_instructions' => "Protected card-to-card transfer details\n\nCard number: :card_number\nExact amount: :amount :currency\nTransfer window ends: :expires_at (Tehran time)\n\nTransfer exactly this amount to this card. Sending the transfer or pressing buttons does not by itself mark the Order paid; authoritative bank/review evidence is required.",
-                    'copy_card' => 'Copy card number',
+                    'continue' => 'Show transfer instructions',
+                    'retry' => 'Retry',
+                    'unavailable' => "Card-to-card instructions cannot be created right now.\n\nNo transfer has been submitted and no purchase has been settled.",
+                    'instructions' => "Card-to-card payment\n\nTransfer exactly: :amount :currency\nDestination card: :card\nReservation expires: :expires_at\n\nThe full destination PAN is sent separately as a protected copyable value. After you transfer the exact amount, send the receipt image in this chat before the reservation/review window closes. The receipt image is stored privately and submitted for review. This does not by itself settle the purchase.",
+                    'receipt_submitted' => "Receipt submitted for review.\n\nReservation: :reservation_id\nPayment Intent: :payment_intent_id\nReview: :review_id\nStatus: Pending manual review\n\nThe receipt remains protected; this message does not contain the image bytes or destination PAN. Submission is not payment confirmation, settlement, or service provisioning.",
+                    'receipt_rejected' => "That receipt message could not be accepted.\n\nSend a single Telegram photo or image/document receipt in the same private chat before the reservation/review window closes. Do not send text captions as evidence.\n\nNo payment settlement occurred.",
+                    'late_review_closed' => "The card-to-card receipt review window has closed.\n\nThis Telegram flow cannot accept a new receipt for that reservation. No settlement was created by this attempt.",
+                ],
+                'wallet_payment' => [
+                    'continue' => 'Continue with wallet',
+                    'retry' => 'Retry wallet check',
+                    'unavailable' => "Wallet payment cannot be reserved right now.\n\nNo wallet debit or purchase settlement occurred.",
+                    'confirm' => "Wallet payment confirmation\n\nAmount to pay: :amount :currency\nAvailable after hold: :available :currency\n\nA reversible wallet hold is active. Confirm to capture payment, or go Back to cancel and release the hold. No service is provisioned at this step.",
+                    'confirm_button' => 'Confirm wallet payment',
+                    'paid' => "Wallet payment completed.\n\nOrder: :order_id\nPaid amount: :amount :currency\nStatus: Paid\n\nPayment and the pre-payment Order are settled. Service provisioning/delivery is a separate later step.",
                 ],
                 'methods' => [
                     'wallet' => 'Wallet',
@@ -129,59 +132,72 @@ This is a recorded commercial snapshot only. No payment, capacity reservation, o
                     'usdt_bep20' => 'USDT (BEP20)',
                     'zarinpal' => 'Zarinpal',
                     'nowpayments' => 'NOWPayments',
-                    'other' => 'Payment method #:number',
-                    'other_selected' => 'Selected payment method',
+                    'other' => 'Payment method :number',
+                    'other_selected' => 'Selected method',
                 ],
             ],
+            'not_available' => 'Not available',
         ],
         'services' => [
-            'list' => "My Services\n\n:items\n\nPage :page of :total_pages — :total_items service(s)",
-            'list_item' => "#:number — :public_id\n:plan · :server\nState: :state",
-            'empty' => "My Services\n\nYou do not have any services yet.",
-            'service_button' => 'Service #:number',
+            'list' => "My Services\n\n:items\n\nPage :page of :total_pages — :total_items services",
+            'list_item' => ":number. :public_id\nStatus: :state\nPlan: :plan\nServer: :server",
+            'empty' => "My Services\n\nYou do not have an owned service yet.",
+            'service_button' => 'View service :number',
             'previous' => 'Previous',
             'next' => 'Next',
             'not_available' => 'Not available',
-            'allowed_actions_none' => 'None currently available',
+            'allowed_actions_none' => 'None',
             'allowed_actions_separator' => ', ',
-            'resend' => [
-                'button' => 'Resend secure details',
-                'queued' => "Secure Service details were queued for protected delivery.\n\nNo credential, link, or QR data is shown in this confirmation.",
-                'temporarily_blocked' => "Secure Service details cannot be resent right now because another Service operation or delivery is still in progress.\n\nPlease try again later.",
-                'unavailable' => 'This Service is no longer available for secure resend.',
-            ],
+            'detail' => "Service :public_id\n\nStatus: :state\nPlan: :plan\nServer: :server\nProvisioned: :provisioned_at\nAllowed actions: :allowed_actions\nSync: :sync_state\nRemote disposition: :remote_disposition\nRemote status: :remote_status\nData limit: :data_limit\nUsed: :used\nRemaining: :remaining\nExpires: :expires_at\nObserved: :observed_at",
             'search' => [
-                'button' => 'Search',
-                'prompt' => "Search My Services\n\nSend the exact Service ID, Order ID, or service username.\nSearch is private and exact.",
-                'not_found' => "No matching service was found in your account.\n\nTry the exact Service ID, Order ID, or service username.",
-                'ambiguous' => "More than one of your services uses that username.\n\nSearch by exact Service ID or Order ID to choose one safely.",
+                'button' => 'Search Service',
+                'prompt' => "Send the full Service ID or configured label in the next message.\nCredentials and panel usernames are not searchable here.",
+                'not_found' => "No owned Service matches that exact ID or label.\n\nTry again or go Back to the Service list.",
+                'ambiguous' => "That label matches more than one Service.\n\nUse the full Service ID, or a unique configured label.",
             ],
-            'detail' => "Service Details\n\nService ID: :public_id\nPlan: :plan\nServer: :server\nLifecycle: :state\nProvisioned: :provisioned_at\nAllowed actions: :allowed_actions\n\nSynchronization\nEvidence state: :sync_state\nRemote evidence: :remote_disposition\nRemote status: :remote_status\nData limit: :data_limit\nUsed: :used\nRemaining: :remaining\nExpires: :expires_at\nObserved: :observed_at",
+            'resend' => [
+                'button' => 'Resend access details',
+                'queued' => "Access details were queued for protected Telegram delivery.\n\nThe credential is delivered separately and is not shown in this message.",
+                'already_queued' => "Access details were already queued for protected Telegram delivery.\n\nNo duplicate credential payload was created.",
+                'unavailable' => "Protected access-detail resend is not available for this Service.\n\nNothing sensitive was displayed.",
+            ],
             'values' => [
                 'lifecycle' => [
-                    'active' => 'Active', 'suspended' => 'Suspended', 'retired' => 'Retired',
+                    'pending_provisioning' => 'Pending provisioning',
+                    'active' => 'Active',
+                    'suspended' => 'Suspended',
+                    'terminated' => 'Terminated',
+                    'expired' => 'Expired',
+                    'failed_provisioning' => 'Provisioning failed',
                 ],
                 'sync_state' => [
-                    'none' => 'No synchronization evidence',
-                    'current' => 'Current',
-                    'cached' => 'Cached — current synchronization unavailable; showing last confirmed facts',
-                    'stale' => 'Stale — remote facts hidden',
+                    'disabled' => 'Disabled',
+                    'pending' => 'Pending',
+                    'active' => 'Active',
+                    'backoff' => 'Backoff',
+                    'blocked' => 'Blocked',
+                    'drifted' => 'Drifted',
+                    'terminal' => 'Terminal',
                 ],
                 'remote_disposition' => [
-                    'present' => 'Present',
+                    'matched' => 'Matched',
                     'missing' => 'Missing',
-                    'unavailable' => 'Temporarily unavailable',
-                    'identity_mismatch' => 'Identity mismatch',
+                    'ambiguous' => 'Ambiguous',
+                    'error' => 'Error',
                 ],
                 'remote_status' => [
-                    'active' => 'Active', 'suspended' => 'Suspended', 'expired' => 'Expired', 'disabled' => 'Disabled', 'unknown' => 'Unknown',
+                    'active' => 'Active',
+                    'disabled' => 'Disabled',
+                    'expired' => 'Expired',
+                    'limited' => 'Limited',
+                    'unknown' => 'Unknown',
                 ],
                 'action' => [
+                    'modify' => 'Modify',
                     'renew' => 'Renew',
-                    'add_data' => 'Add data',
-                    'add_days' => 'Add days',
-                    'add_data_days' => 'Add data and days',
-                    'reset_usage' => 'Reset usage',
+                    'send_credentials' => 'Send credentials',
+                    'disable' => 'Disable',
+                    'enable' => 'Enable',
                 ],
             ],
         ],
