@@ -62,7 +62,7 @@ final readonly class TelegramCustomerPurchaseGiftCardPaymentService implements T
                 $decisionConfigurationHash,
             );
 
-            return $connection->table('gift_card_types')
+            return array_values($connection->table('gift_card_types')
                 ->where('active', true)
                 ->where('verification_mode', 'manual_only')
                 ->whereIn('submission_mode', ['code_only', 'either'])
@@ -78,8 +78,7 @@ final readonly class TelegramCustomerPurchaseGiftCardPaymentService implements T
                     (string) $row->face_currency,
                     strtolower((string) $row->configuration_hash),
                 ))
-                ->values()
-                ->all();
+                ->all());
         }, 3);
     }
 
