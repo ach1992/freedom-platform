@@ -17,8 +17,8 @@ use App\Modules\Payments\CardToCard\Application\Contracts\CardToCardAdjustmentGe
 use App\Modules\Payments\CardToCard\Application\TelegramCustomerPurchaseCardToCardPaymentService;
 use App\Modules\Payments\CardToCard\Application\TelegramCustomerPurchaseCardToCardReceiptSubmissionService;
 use App\Modules\Payments\CardToCard\Infrastructure\SecureCardToCardAdjustmentGenerator;
-use App\Modules\Payments\GiftCard\Application\TelegramCustomerPurchaseGiftCardPaymentService;
 use App\Modules\Payments\Eligibility\Application\TelegramCustomerPurchasePaymentMethodsService;
+use App\Modules\Payments\GiftCard\Application\TelegramCustomerPurchaseGiftCardPaymentService;
 use App\Modules\Payments\NowPayments\Application\Contracts\NowPaymentsTransport;
 use App\Modules\Payments\NowPayments\Infrastructure\HttpNowPaymentsTransport;
 use App\Modules\Payments\Usdt\Application\TelegramManagedUsdtRateSettingsService;
