@@ -11,10 +11,10 @@ GitHub remains the project source of truth. Machine state, runner availability, 
 | Project/source state | GitHub repository, Issues, PRs, refs, checks | code, current work, integration/review/CI truth |
 | Agent behavior and repository safety | [`../../AGENTS.md`](../../AGENTS.md) | durable rules for humans/AI agents |
 | Development workflow | [`../../CONTRIBUTING.md`](../../CONTRIBUTING.md) | branches, PRs, validation workflow, review/merge conventions |
-| Execution infrastructure | **this document** | execution tools, access boundaries, self-hosted runner lifecycle/qualification |
+| Execution infrastructure | **this document** | execution tools, hosted-CI boundary, access boundaries, self-hosted runner lifecycle/qualification |
 | Test/CI semantics | [`../06-test-strategy.md`](../06-test-strategy.md) | which checks are required and what evidence they prove |
 | Deployment/runtime operations | [`../09-deployment-runbook.md`](../09-deployment-runbook.md) | deployment, backup/restore, update/rollback and privileged runtime operations |
-| Exact PHP/Composer runner contract | [`../../scripts/ci/bootstrap-self-hosted-toolchain.sh`](../../scripts/ci/bootstrap-self-hosted-toolchain.sh) | executable PHP version/extensions/PCOV/Composer/JIT checks |
+| Exact PHP/Composer runner contract | [`../../scripts/ci/bootstrap-ci-toolchain.sh`](../../scripts/ci/bootstrap-ci-toolchain.sh) | runner-neutral executable PHP version/extensions/PCOV/Composer/JIT checks |
 | Exact runner routing | the `runs-on` selector in each workflow revision | labels required for that job at that revision |
 
 When information of one kind appears in more than one place, keep the rule only in its canonical owner and replace the duplicate with a link.
@@ -40,13 +40,17 @@ Use the repository's currently configured Git remote after verifying it. Remote 
 
 Ordinary unprivileged Git/edit/diagnostic commands may use this workspace. Host-wide package/service/firewall/user changes, production/deployment mutation, credential changes, or other privileged operations retain their normal authorization and safety gates.
 
-### GitHub Actions self-hosted runners
+### GitHub-hosted generic CI
 
-GitHub Actions is the authoritative reviewed runtime/CI path for repository jobs that need real PHP/Composer/Docker/MariaDB/Redis execution.
+GitHub Actions is the authoritative reviewed runtime/CI path for repository jobs that need real PHP/Composer/Docker/MariaDB/Redis execution. Ordinary repository CI uses the exact standard GitHub-hosted Linux image pinned by `.github/workflows/ci.yml`. Each generic job must provision only the toolchain it needs, and `scripts/ci/bootstrap-ci-toolchain.sh` verifies the effective PHP/Composer/PCOV/JIT contract after provisioning. Host-specific aaPanel paths are compatibility inputs for a future private self-hosted route, not assumptions of generic CI.
 
-Runner **display names are inventory**, never a workflow contract. Jobs route by labels. The exact `runs-on` selector in the workflow revision is authoritative; do not copy its custom label strings into multiple documents. Do not use runner display names as routing dependencies.
+Public fork pull requests may execute generic CI only on GitHub-hosted runners. Their head revision/freshness and secret-scan range must be resolved against the actual PR head repository; generic CI must not depend on a same-repository-only guard that existed solely to protect self-hosted hosts.
 
-A label is a capability claim, not proof. A runner receives a workload capability label only after qualification for that workload. A runner does not need to support every workload.
+### Optional self-hosted runners
+
+Self-hosted runners remain a supported capability for a future private repository or for a separately trusted private operational boundary. Self-hosted runner display names are inventory only, never a workflow contract. Jobs route by labels. The exact `runs-on` selector in the workflow revision is authoritative; do not copy custom label strings into multiple documents or use display names as routing dependencies.
+
+A label is a capability claim, not proof. A runner receives a workload capability label only after qualification for that workload. A runner does not need to support every workload. When this source repository is public, repository-level self-hosted runners must remain disconnected; retaining host installations for later private re-registration is allowed, but a dormant installation is not an active workflow capability.
 
 ### External coding/review workers
 
@@ -62,12 +66,12 @@ Deployment/staging hosts are runtime targets, not developer checkouts or project
 
 Avoid maintaining a handwritten copy of executable tool requirements when the repository already verifies them. A runner needs only the tools/runtime required by the workload capabilities it claims; do not install a database daemon, Docker daemon, PHP runtime, or other privileged capability merely to make all runners identical.
 
-Common expectations for current self-hosted jobs are supported 64-bit Linux/x64, Git, Bash, `jq`, outbound access required by the pinned Actions/dependency sources, and sufficient filesystem capacity for the intended workload.
+Common generic-CI expectations are provided by the pinned GitHub-hosted Ubuntu image plus the setup steps in the workflow. For any future self-hosted job, minimum expectations remain supported 64-bit Linux/x64, Git, Bash, `jq`, outbound access required by pinned Actions/dependency sources, and sufficient filesystem capacity for the intended workload.
 
 Additional requirements are capability-scoped:
 
 - **Repository-control / secret-scan work:** use the exact current workflow as authority. Current repository preflight can validate a changed Docker Compose contract with `docker compose ... config`, so a compatible Docker CLI/Compose parser is required when that path can route to the host; that check alone does not require access to a Docker daemon or permission to start containers. Pinned Actions may also bring their own executable tooling.
-- **PHP/static/dependency/operational work:** requires the PHP/Composer environment accepted by `scripts/ci/bootstrap-self-hosted-toolchain.sh` plus only the commands used by the current job definitions.
+- **PHP/static/dependency/operational work:** requires the PHP/Composer environment accepted by `scripts/ci/bootstrap-ci-toolchain.sh` plus only the commands used by the current job definitions.
 - **Database integration work:** requires the accepted PHP/Composer contract plus Docker Engine/daemon access and Compose sufficient to create and remove the repository's disposable MariaDB/Redis dependencies safely.
 - **Staging-runtime / provider-acceptance work:** the exact workflow revision owns any additional host topology, network, trust, secret, approval, or tool requirements. Do not infer those capabilities from ordinary CI eligibility.
 
@@ -75,7 +79,7 @@ The bootstrap script is authoritative for exact PHP 8.4 extensions, PCOV mode, C
 
 ## Runner security boundary
 
-A self-hosted runner executes repository workflow code on the host. Treat runner eligibility as a security and operations boundary:
+A self-hosted runner executes repository workflow code on the host and is not an ephemeral clean VM. Treat runner eligibility as a security and operations boundary. In particular, do not keep a repository-level self-hosted runner connected while this repository is public; public pull requests must use GitHub-hosted generic CI. For a future private-repository self-hosted route:
 
 - use a dedicated unprivileged runner service account;
 - do not store production/customer secrets or private backups in the runner workspace;
@@ -101,6 +105,12 @@ For the current database-integration workload:
 The unchanged representative workload is the definitive integration-qualification gate. Synthetic benchmarks and nominal hardware thresholds are diagnostic evidence only. A machine that does not meet integration qualification may still receive lighter workload capability labels if it separately satisfies those jobs.
 
 Do not weaken tests, durability, or timeouts to make a host appear qualified.
+
+## Public/private visibility boundary
+
+Before changing this repository from private to public, verify that generic CI is already GitHub-hosted, full public refs/history pass secret policy, retained Actions logs/artifacts have no unacceptable sensitive exposure, and every repository-level self-hosted runner is disconnected. Public visibility is not a confidentiality-reversible operation: switching back to private later does not erase clones or already-public forks.
+
+If the repository becomes private again, the Owner may re-register retained self-hosted hosts and restore explicit self-hosted `runs-on` selectors through the normal reviewed CI-control change. Re-registration must requalify current toolchain/runtime/security assumptions; old labels or prior success are not proof after a long disconnected period.
 
 ## Add or replace a runner
 

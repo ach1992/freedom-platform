@@ -2,15 +2,15 @@
 
 This document defines durable verification requirements: which checks are required, what they prove, and when evidence must be refreshed. Live run IDs, test counts, current failures, runner inventory, and repository setting state belong in GitHub.
 
-Execution tools and self-hosted runner provisioning/qualification/lifecycle are owned by [`development/execution-infrastructure.md`](development/execution-infrastructure.md).
+Execution tools, standard GitHub-hosted CI routing, and optional self-hosted runner provisioning/qualification/lifecycle are owned by [`development/execution-infrastructure.md`](development/execution-infrastructure.md).
 
 ## Execution model
 
 GitHub is the project source of truth. No Owner-maintained local or server checkout is assumed.
 
-Runtime commands execute through reviewed GitHub Actions on owner-controlled self-hosted runners. An Actions checkout is transient execution state for an exact GitHub revision, not a second source repository.
+Ordinary runtime/CI commands execute through reviewed GitHub Actions on standard GitHub-hosted Linux runners. An Actions checkout is transient execution state for an exact GitHub revision, not a second source repository.
 
-The exact `runs-on` selector in each workflow revision is authoritative for runner routing. The runner selected for a job must satisfy the execution-infrastructure qualification contract, and the workflow/toolchain checks must validate its effective environment. GitHub-hosted runners are not a fallback.
+The exact `runs-on` selector in each workflow revision is authoritative for runner routing. Generic CI must use the pinned standard GitHub-hosted runner defined by `.github/workflows/ci.yml`; manual staging/provider workflows may retain explicit self-hosted selectors only as dormant/trusted operational contracts. Workflow/toolchain checks must validate the effective environment rather than assuming host-specific paths.
 
 ## Using CI
 
@@ -21,7 +21,7 @@ The exact `runs-on` selector in each workflow revision is authoritative for runn
 - Historical Actions registry entries or old successful runs do not prove that a workflow is currently callable. Verify the current default-branch workflow tree/registration before depending on an invocation path.
 - Runtime/readiness/provider workflow definitions remain narrow operational capabilities and are not substitutes for normal CI.
 
-If the Master cannot execute MariaDB/Docker/shell work directly, that is not itself a blocker. Persist reversible work on GitHub and use the self-hosted Actions path for authoritative runtime evidence when the current GitHub capability can invoke it. If the current Chat connector cannot invoke a required validation run, continue independent reversible implementation/review work and surface that invocation boundary before the decision that actually consumes exact-head evidence. Do not weaken Draft/merge/release policy merely to work around a tool limitation.
+If the Master cannot execute MariaDB/Docker/shell work directly, that is not itself a blocker. Persist reversible work on GitHub and use the standard GitHub-hosted Actions path for authoritative generic runtime evidence when the current GitHub capability can invoke it. If the current Chat connector cannot invoke a required validation run, continue independent reversible implementation/review work and surface that invocation boundary before the decision that actually consumes exact-head evidence. Do not weaken Draft/merge/release policy merely to work around a tool limitation.
 
 Delegate to an external Worker only when that materially improves execution or review.
 
@@ -92,7 +92,7 @@ MARIADB_VERSION=11.4 composer test:integration
 
 `composer test:quick` is fast feedback only. MariaDB is required for migrations, constraints, triggers, locking, and concurrency acceptance.
 
-The executable PHP/Composer runner contract is enforced by `scripts/ci/bootstrap-self-hosted-toolchain.sh`; do not duplicate its exact extension/version checks here.
+The executable PHP/Composer runner contract is enforced by `scripts/ci/bootstrap-ci-toolchain.sh`; do not duplicate its exact extension/version checks here.
 
 ## Test design rules
 

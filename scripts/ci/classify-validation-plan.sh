@@ -83,7 +83,7 @@ else
                 runtime=true
                 ;;
 
-            scripts/ci/bootstrap-self-hosted-toolchain.sh)
+            scripts/ci/bootstrap-ci-toolchain.sh)
                 project_control=true
                 control_plane=true
                 style=true

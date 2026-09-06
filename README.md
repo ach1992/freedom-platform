@@ -24,7 +24,7 @@ The project is maintained from GitHub. No Owner-managed local checkout or server
 - Every repository mutation is verified against live GitHub state after the write.
 - Branch cleanup remains Owner-operated.
 
-The canonical map for GitHub integration, `AI_Server_Agent`, GitHub Actions self-hosted runners, external Workers, toolchain ownership, and runner lifecycle is [`docs/development/execution-infrastructure.md`](docs/development/execution-infrastructure.md). Required test/CI semantics are in [`docs/06-test-strategy.md`](docs/06-test-strategy.md); deployment/live operations are in [`docs/09-deployment-runbook.md`](docs/09-deployment-runbook.md).
+The canonical map for GitHub integration, `AI_Server_Agent`, standard GitHub-hosted CI, optional private/trusted self-hosted runners, external Workers, toolchain ownership, and runner lifecycle is [`docs/development/execution-infrastructure.md`](docs/development/execution-infrastructure.md). Required test/CI semantics are in [`docs/06-test-strategy.md`](docs/06-test-strategy.md); deployment/live operations are in [`docs/09-deployment-runbook.md`](docs/09-deployment-runbook.md).
 
 ## Product authority
 

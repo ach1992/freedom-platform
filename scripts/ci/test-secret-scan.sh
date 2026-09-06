@@ -114,6 +114,7 @@ run_pr_case() {
     local candidate_helper=$1
     local output=$2
     local call_file="$tmpdir/$(basename "$candidate_helper").called"
+    local head_remote=${3:-$remote}
     local status=0
     rm -f "$call_file"
     env \
@@ -122,6 +123,7 @@ run_pr_case() {
         PR_HEAD_SHA="$head_sha" \
         PR_BASE_REF=base \
         PR_HEAD_REF=feature \
+        PR_HEAD_REPO_URL="$head_remote" \
         PATH="$tmpdir:$PATH" \
         EXPECTED_LOG_OPTS="$expected_log_opts" \
         EXPECTED_LATE_SECRET="$late_secret" \
@@ -144,12 +146,21 @@ grep -F "Secret-scan head SHA: $head_sha" "$output" >/dev/null \
 grep -F "Secret-scan candidate commits: $expected_count" "$output" >/dev/null \
     || fail 'canonical helper did not report the complete candidate commit count'
 
+fork_remote="$tmpdir/fork.git"
+git init --bare -q "$fork_remote"
+git push -q "$fork_remote" feature
+run_pr_case "$helper" "$tmpdir/fork-pr.out" "$fork_remote" || {
+    cat "$tmpdir/fork-pr.out" >&2
+    fail 'canonical helper rejected a fork-hosted PR head ref'
+}
+
 if env \
     GITHUB_EVENT_NAME=pull_request \
     PR_BASE_SHA="$base_sha" \
     PR_HEAD_SHA="$(git rev-parse HEAD~1)" \
     PR_BASE_REF=base \
     PR_HEAD_REF=feature \
+    PR_HEAD_REPO_URL="$remote" \
     PATH="$tmpdir:$PATH" \
     bash "$helper" >/dev/null 2>&1; then
     fail 'canonical helper accepted a stale event head SHA'
@@ -178,6 +189,7 @@ env \
     PR_HEAD_SHA="$head_sha" \
     PR_BASE_REF=base \
     PR_HEAD_REF=feature \
+    PR_HEAD_REPO_URL="$remote" \
     PATH="$tmpdir:$PATH" \
     EXPECTED_LOG_OPTS="$expected_log_opts" \
     EXPECTED_LATE_SECRET="$late_secret" \

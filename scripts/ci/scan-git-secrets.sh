@@ -51,8 +51,10 @@ case "${GITHUB_EVENT_NAME:-}" in
             [[ -n "${!value:-}" ]] || fail "Missing pull-request secret-scan input: $value"
         done
 
-        current_base=$(git ls-remote --refs "$remote" "refs/heads/$PR_BASE_REF" | awk 'NR == 1 {print $1}')
-        current_head=$(git ls-remote --refs "$remote" "refs/heads/$PR_HEAD_REF" | awk 'NR == 1 {print $1}')
+        base_remote="${PR_BASE_REPO_URL:-$remote}"
+        head_remote="${PR_HEAD_REPO_URL:-$remote}"
+        current_base=$(git ls-remote --refs "$base_remote" "refs/heads/$PR_BASE_REF" | awk 'NR == 1 {print $1}')
+        current_head=$(git ls-remote --refs "$head_remote" "refs/heads/$PR_HEAD_REF" | awk 'NR == 1 {print $1}')
         [[ "$current_base" == "$PR_BASE_SHA" ]] \
             || fail "Secret-scan base drifted: expected $PR_BASE_SHA, got ${current_base:-missing}"
         [[ "$current_head" == "$PR_HEAD_SHA" ]] \
