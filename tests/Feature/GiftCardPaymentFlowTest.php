@@ -460,6 +460,115 @@ final class GiftCardPaymentFlowTest extends TestCase
         self::assertSame(1, DB::table('purchase_settlements')->where('source_quote_public_id', $purchase['quote_public_id'])->count());
     }
 
+    public function test_reserve_race_persists_successful_release_before_local_finalization_and_replays_without_second_provider_call(): void
+    {
+        $this->clock->value = now('UTC')->toDateTimeImmutable();
+        $this->refreshGiftCardHealth('order-release-finalize-failure');
+        $this->registerType('gift-order-release-finalize-failure', 'automatic_only');
+        $purchase = $this->purchase('order-release-finalize-failure');
+        $this->app->make(PurchaseOrderService::class)->openFromQuote(
+            $purchase['quote_public_id'],
+            $purchase['user_id'],
+            $this->correlation('order-release-finalize-failure-open'),
+        );
+        $racing = $this->submit(
+            $purchase,
+            'order-release-finalize-failure-first',
+            'gift-order-release-finalize-failure',
+            'ORDER-RELEASE-FINALIZE-FIRST-0001',
+        );
+        $winner = $this->submit(
+            $purchase,
+            'order-release-finalize-failure-winner',
+            'gift-order-release-finalize-failure',
+            'ORDER-RELEASE-FINALIZE-WINNER-0002',
+        );
+
+        $winnerProvider = new FakeGiftCardVerificationProvider(
+            'fake_gift_card',
+            new GiftCardProviderCapabilities(true, false, true, false, true),
+        );
+        $winnerProvider->put('validate', $this->operationKey($winner->publicId, 'validate'), $this->evidence(
+            'validate', 'valid', 'order-release-finalize-winner-validate', null, $purchase['amount'],
+        ));
+        $winnerProvider->put('redeem', $this->operationKey($winner->publicId, 'redeem'), $this->evidence(
+            'redeem', 'redeemed', 'order-release-finalize-winner-redeem', 'order-release-finalize-winner-tx', $purchase['amount'],
+        ));
+        $service = $this->app->make(GiftCardPaymentService::class);
+        $raceProvider = new GiftCardReserveRaceVerificationProvider(
+            $this->evidence('validate', 'valid', 'order-release-finalize-first-validate', null, $purchase['amount']),
+            $this->evidence('reserve', 'reserved', 'order-release-finalize-first-reserve', 'order-release-finalize-hold', $purchase['amount']),
+            $this->evidence('release', 'released', 'order-release-finalize-first-release', 'order-release-finalize-release', $purchase['amount']),
+            function () use ($service, $winner, $winnerProvider): void {
+                $captured = $service->process(
+                    $winner->publicId,
+                    $winnerProvider,
+                    $this->correlation('order-release-finalize-winner-process'),
+                );
+                self::assertSame('captured', $captured->state);
+            },
+        );
+
+        $failLocalReleaseFinalization = true;
+        DB::connection()->beforeExecuting(function (string $query, array $bindings) use (&$failLocalReleaseFinalization): void {
+            if ($failLocalReleaseFinalization
+                && str_contains($query, 'update `gift_card_submissions`')
+                && in_array('released', $bindings, true)) {
+                $failLocalReleaseFinalization = false;
+                throw new RuntimeException('Injected gift-card release local finalization failure.');
+            }
+        });
+
+        try {
+            $service->process(
+                $racing->publicId,
+                $raceProvider,
+                $this->correlation('order-release-finalize-first-process'),
+            );
+            self::fail('Expected injected gift-card release local finalization failure.');
+        } catch (RuntimeException $exception) {
+            self::assertSame('Injected gift-card release local finalization failure.', $exception->getMessage());
+        }
+
+        self::assertTrue($raceProvider->reserveCalled());
+        self::assertTrue($raceProvider->releaseCalled());
+        self::assertFalse($raceProvider->redeemCalled());
+        self::assertSame('reserved', DB::table('gift_card_submissions')->where('id', $racing->submissionId)->value('state'));
+        self::assertSame(1, DB::table('gift_card_provider_events')
+            ->where('gift_card_submission_id', $racing->submissionId)
+            ->where('operation', 'release')
+            ->where('outcome', 'success')
+            ->where('provider_status', 'released')
+            ->count());
+        self::assertSame(1, DB::table('gift_card_reconciliation_findings')
+            ->where('gift_card_submission_id', $racing->submissionId)
+            ->where('finding_type', 'provider_released_local_not_released')
+            ->count());
+        self::assertSame(0, DB::table('gift_card_provider_events')
+            ->where('gift_card_submission_id', $racing->submissionId)
+            ->where('operation', 'redeem')
+            ->count());
+        self::assertSame(1, DB::table('purchase_settlements')->where('source_quote_public_id', $purchase['quote_public_id'])->count());
+
+        $replay = $service->process(
+            $racing->publicId,
+            $raceProvider,
+            $this->correlation('order-release-finalize-first-replay'),
+        );
+        self::assertTrue($replay->replayed);
+        self::assertSame('released', $replay->state);
+        self::assertSame('failed', DB::table('payment_intents')->where('public_id', $racing->paymentIntentPublicId)->value('state'));
+        self::assertFalse($raceProvider->redeemCalled());
+        self::assertSame(1, DB::table('gift_card_provider_events')
+            ->where('gift_card_submission_id', $racing->submissionId)
+            ->where('operation', 'release')
+            ->count());
+        self::assertSame(1, DB::table('purchase_settlements')->where('source_quote_public_id', $purchase['quote_public_id'])->count());
+        self::assertSame($winner->paymentIntentPublicId, DB::table('orders')
+            ->where('source_quote_public_id', $purchase['quote_public_id'])
+            ->value('payment_intent_public_id'));
+    }
+
     public function test_redeem_race_retains_authoritative_redemption_but_never_creates_second_purchase_settlement(): void
     {
         $this->clock->value = now('UTC')->toDateTimeImmutable();

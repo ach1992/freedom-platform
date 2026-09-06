@@ -46,6 +46,10 @@ final readonly class GiftCardPaymentService
         if ($this->hasPersistedRedemption($submissionPublicId)) {
             return $this->redemptions->settlePersistedRedemption($submissionPublicId, $correlationId);
         }
+        $persistedRelease = $this->releases->settlePersistedRelease($submissionPublicId, $provider->code(), $correlationId);
+        if ($persistedRelease !== null) {
+            return $persistedRelease;
+        }
 
         $prepared = $this->beginValidation($submissionPublicId, $provider->code(), $correlationId);
         if ($prepared instanceof GiftCardProcessingReceipt) {
