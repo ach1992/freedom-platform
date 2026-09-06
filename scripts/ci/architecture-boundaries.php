@@ -45,6 +45,8 @@ return [
     // data-classification review boundary; RESTRICTED owners must keep using
     // their protected/reference delivery authority instead.
     'telegram_confidential_presentation_sources' => [
+        'app/Modules/Telegram/Application/TelegramCardToCardReceiptStatusDelivery.php',
+        'app/Modules/Telegram/Application/TelegramCardToCardReceiptStatusPresentation.php',
         'app/Modules/Telegram/Application/TelegramNavigationHandler.php',
     ],
     'telegram_non_restricted_presentation_sources' => [
@@ -520,6 +522,7 @@ return [
         'telegram_interaction_sessions' => 'Telegram',
         'telegram_interaction_transitions' => 'Telegram',
         'telegram_interaction_update_bindings' => 'Telegram',
+        'telegram_private_media' => 'Telegram',
         'telegram_start_attributions' => 'Telegram',
         'trial_daily_capacity_counters' => 'Catalog',
         'trial_policies' => 'Catalog',

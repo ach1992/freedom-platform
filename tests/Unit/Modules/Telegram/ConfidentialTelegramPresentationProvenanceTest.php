@@ -11,6 +11,7 @@ use App\Modules\Telegram\Application\TelegramConfidentialPresentationHasher;
 use App\Modules\Telegram\Application\TelegramConfidentialPresentationProvenanceGuard;
 use App\Modules\Telegram\Application\TelegramDeliveryConfidentialPresentationDatabaseCapability;
 use App\Modules\Telegram\Application\TelegramDeliveryConfidentialPresentationService;
+use App\Modules\Telegram\Application\TelegramPresentationProvenanceGuard;
 use App\Shared\Application\Clock;
 use Illuminate\Contracts\Encryption\StringEncrypter;
 use Illuminate\Database\Connection;
@@ -95,11 +96,20 @@ final class ConfidentialTelegramPresentationProvenanceTest extends TestCase
         );
     }
 
-    public function test_reviewed_production_source_set_contains_only_the_bounded_private_navigation_journey(): void
+    public function test_reviewed_production_source_set_contains_only_bounded_private_journeys(): void
     {
         self::assertSame([
+            'app/Modules/Telegram/Application/TelegramCardToCardReceiptStatusDelivery.php',
             'app/Modules/Telegram/Application/TelegramNavigationHandler.php',
         ], TelegramConfidentialPresentationProvenanceGuard::REVIEWED_SOURCE_FILES);
+    }
+
+    public function test_receipt_status_source_has_confidential_but_not_generic_delivery_provenance(): void
+    {
+        $receiptStatusSource = 'app/Modules/Telegram/Application/TelegramCardToCardReceiptStatusDelivery.php';
+
+        self::assertContains($receiptStatusSource, TelegramConfidentialPresentationProvenanceGuard::REVIEWED_SOURCE_FILES);
+        self::assertNotContains($receiptStatusSource, TelegramPresentationProvenanceGuard::REVIEWED_SOURCE_FILES);
     }
 
     public function test_confidential_object_is_redacted_and_not_serializable(): void

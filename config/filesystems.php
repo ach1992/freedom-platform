@@ -11,7 +11,7 @@ return [
     |
     | Here you may specify the default filesystem disk that should be used
     | by the framework. The "local" disk, as well as a variety of cloud
-    | based disks are available to your application for file storage.
+    | based disks are available for your application.
     |
     */
 
@@ -34,9 +34,24 @@ return [
 
         'local' => [
             'driver' => 'local',
+            // Preserve legacy local-disk paths, but never HTTP-serve this parent of RESTRICTED Telegram media.
             'root' => storage_path('app/private'),
-            'serve' => true,
+            'serve' => false,
             'throw' => false,
+            'report' => false,
+        ],
+
+        'telegram_private_media' => [
+            'driver' => 'local',
+            'root' => storage_path('app/private/telegram-private-media'),
+            'visibility' => 'private',
+            'directory_visibility' => 'private',
+            'permissions' => [
+                'file' => ['public' => 0600, 'private' => 0600],
+                'dir' => ['public' => 0700, 'private' => 0700],
+            ],
+            'serve' => false,
+            'throw' => true,
             'report' => false,
         ],
 

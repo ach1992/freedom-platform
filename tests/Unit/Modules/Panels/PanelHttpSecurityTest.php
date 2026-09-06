@@ -281,6 +281,45 @@ final class PanelHttpSecurityTest extends TestCase
         self::assertSame(PanelHttpFailureType::Timeout, $exchange->failure);
     }
 
+    public function test_custom_ca_on_local_disk_keeps_baseline_path_compatible(): void
+    {
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://panel.example.test/api/system' => Http::response(['ok' => true], 200),
+        ]);
+
+        $relativePath = 'panel-cas/f006-transport-'.bin2hex(random_bytes(6)).'.pem';
+        $baselinePath = storage_path('app/private/'.$relativePath);
+
+        try {
+            if (! is_dir(dirname($baselinePath)) && ! mkdir(dirname($baselinePath), 0700, true) && ! is_dir(dirname($baselinePath))) {
+                self::fail('Unable to create the custom CA compatibility fixture directory.');
+            }
+            self::assertNotFalse(file_put_contents($baselinePath, 'fixture-ca'));
+
+            $session = new PanelAdapterSession(
+                PanelEndpoint::fromInput('https://panel.example.test'),
+                PanelCredentials::fromInput(['token' => 'fixture']),
+                new TlsConfiguration(TlsPolicy::CustomCa, 'local', $relativePath, null),
+            );
+            $transport = new PanelHttpTransport(
+                $this->app->make(Factory::class),
+                $this->app->make(FilesystemManager::class),
+                $session,
+                new FixedPanelDnsResolver(['93.184.216.34']),
+            );
+
+            $exchange = $transport->request('GET', '/api/system');
+
+            self::assertSame(200, $exchange->status);
+            self::assertFalse($exchange->transportFailure);
+            Http::assertSentCount(1);
+        } finally {
+            @unlink($baselinePath);
+            @rmdir(dirname($baselinePath));
+        }
+    }
+
     public function test_configuration_failure_is_not_swallowed_as_transport_failure(): void
     {
         Http::preventStrayRequests();

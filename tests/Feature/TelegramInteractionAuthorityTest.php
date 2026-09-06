@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\TelegramInteractionHandler;
+use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaFetcher;
 use App\Modules\Telegram\Application\TelegramIdentitySynchronizer;
 use App\Modules\Telegram\Application\TelegramInteractionAction;
 use App\Modules\Telegram\Application\TelegramInteractionCallbackService;
@@ -45,6 +47,14 @@ final class TelegramInteractionAuthorityTest extends TestCase
 
         $this->clock = new TelegramInteractionTestClock(new DateTimeImmutable('2026-08-25T00:00:00+00:00'));
         $this->app->instance(Clock::class, $this->clock);
+        $this->app->instance(TelegramPrivateMediaFetcher::class, $this->createStub(TelegramPrivateMediaFetcher::class));
+        $this->app->instance(TelegramDeliveryRuntime::class, new readonly class implements TelegramDeliveryRuntime
+        {
+            public function botId(): string
+            {
+                return '123456';
+            }
+        });
         $this->forgetInteractionServices();
     }
 
@@ -146,6 +156,59 @@ final class TelegramInteractionAuthorityTest extends TestCase
         self::assertSame(3, DB::table('telegram_interaction_transitions')->count());
 
         $this->assertInteractionCapabilityCleared();
+    }
+
+    public function test_absolute_evidence_deadline_transition_replays_exactly_without_relative_ttl_drift(): void
+    {
+        $account = $this->account('evidence-deadline');
+        $sessions = $this->sessions();
+        $started = $sessions->start(
+            $account['telegram_account_id'],
+            'customer.purchase',
+            'card_to_card',
+            [],
+            'session-evidence-start',
+        );
+        $deadline = $this->clock->value->modify('+24 hours');
+
+        $first = $sessions->transitionUntil(
+            $started->publicId,
+            $started->version,
+            'card_to_card_receipt',
+            ['reservation_public_id' => str_pad('01R', 26, '0')],
+            'session-evidence-transition',
+            $deadline,
+        );
+        self::assertFalse($first->replayed);
+        self::assertSame($deadline->format('Y-m-d H:i:s.u'), $first->expiresAt->format('Y-m-d H:i:s.u'));
+
+        $this->clock->advance('+2 hours');
+        $replay = $sessions->transitionUntil(
+            $started->publicId,
+            $started->version,
+            'card_to_card_receipt',
+            ['reservation_public_id' => str_pad('01R', 26, '0')],
+            'session-evidence-transition',
+            $deadline,
+        );
+        self::assertTrue($replay->replayed);
+        self::assertSame($first->version, $replay->version);
+        self::assertEquals($first->expiresAt, $replay->expiresAt);
+        self::assertSame(2, DB::table('telegram_interaction_transitions')->count());
+
+        try {
+            $sessions->transitionUntil(
+                $started->publicId,
+                $started->version,
+                'card_to_card_receipt',
+                ['reservation_public_id' => str_pad('01R', 26, '0')],
+                'session-evidence-transition',
+                $deadline->modify('+1 second'),
+            );
+            self::fail('The same evidence transition request key must not accept a different absolute deadline.');
+        } catch (\DomainException) {
+            // Expected command-identity conflict.
+        }
     }
 
     public function test_callback_tokens_are_opaque_actor_bound_stale_safe_and_direct_dml_protected(): void

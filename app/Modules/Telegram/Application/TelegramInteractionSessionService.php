@@ -265,6 +265,129 @@ final readonly class TelegramInteractionSessionService
         }, 3);
     }
 
+    /**
+     * Transition a session to one exact externally-owned evidence deadline.
+     *
+     * The absolute deadline is part of the replay command identity so a later
+     * retry cannot shorten or extend the owning domain's accepted evidence window.
+     *
+     * @param  array<string, mixed>  $payload
+     */
+    public function transitionUntil(
+        string $sessionPublicId,
+        int $expectedVersion,
+        string $nextState,
+        array $payload,
+        string $requestKey,
+        DateTimeImmutable $expiresAt,
+    ): TelegramInteractionSessionReceipt {
+        $this->assertPublicId($sessionPublicId);
+        if ($expectedVersion < 1) {
+            throw new InvalidArgumentException('Telegram interaction expected version must be positive.');
+        }
+        $this->assertName($nextState, 'state');
+        $safePayload = new TelegramInteractionPayload($payload);
+        $requestHash = $this->requestHash($requestKey);
+        $absoluteExpiry = $expiresAt->setTimezone(new DateTimeZone('UTC'));
+        $commandHash = $this->commandHash([
+            'transition_until',
+            $sessionPublicId,
+            (string) $expectedVersion,
+            $nextState,
+            $safePayload->hash(),
+            $this->format($absoluteExpiry),
+        ]);
+        $connection = $this->database->connection();
+
+        return $connection->transaction(function () use (
+            $connection,
+            $sessionPublicId,
+            $expectedVersion,
+            $nextState,
+            $safePayload,
+            $requestHash,
+            $commandHash,
+            $absoluteExpiry,
+        ): TelegramInteractionSessionReceipt {
+            $replay = $this->replay($connection, $requestHash, $commandHash);
+            if ($replay !== null) {
+                return $replay;
+            }
+
+            $session = $this->lockSession($connection, $sessionPublicId);
+            $this->assertActiveSession($session);
+            if ($this->expireLockedSessionIfNeeded($connection, $session)) {
+                throw new DomainException('Telegram interaction session has expired.');
+            }
+            if ((int) $session->version !== $expectedVersion) {
+                throw new DomainException('Telegram interaction session version is stale.');
+            }
+
+            $now = $this->clock->now()->setTimezone(new DateTimeZone('UTC'));
+            $maximumExpiry = $now->add(new DateInterval('P7D'));
+            if ($absoluteExpiry <= $now || $absoluteExpiry > $maximumExpiry) {
+                throw new InvalidArgumentException('Telegram interaction evidence deadline is outside the supported seven-day window.');
+            }
+
+            $nextVersion = $expectedVersion + 1;
+            $updated = $this->databaseCapability->run(
+                $connection,
+                'session_transition_v1',
+                (int) $session->telegram_account_id,
+                (int) $session->id,
+                $expectedVersion,
+                $requestHash,
+                null,
+                null,
+                null,
+                fn (): int => $connection->table('telegram_interaction_sessions')
+                    ->where('id', $session->id)
+                    ->where('version', $expectedVersion)
+                    ->update([
+                        'state' => $nextState,
+                        'payload' => $safePayload->json(),
+                        'payload_hash' => $safePayload->hash(),
+                        'version' => $nextVersion,
+                        'expires_at' => $this->format($absoluteExpiry),
+                        'updated_at' => $this->format($now),
+                    ]),
+            );
+            if ($updated !== 1) {
+                throw new RuntimeException('Telegram interaction transition lost its version fence.');
+            }
+
+            $this->recordTransition(
+                $connection,
+                (int) $session->id,
+                (int) $session->telegram_account_id,
+                $requestHash,
+                $commandHash,
+                'transition',
+                $expectedVersion,
+                $nextVersion,
+                (string) $session->state,
+                $nextState,
+                TelegramInteractionSessionStatus::Active,
+                $safePayload,
+                $absoluteExpiry,
+                $now,
+            );
+
+            return new TelegramInteractionSessionReceipt(
+                (string) $session->public_id,
+                (int) $session->telegram_account_id,
+                (int) $session->user_id,
+                (string) $session->flow,
+                $nextState,
+                TelegramInteractionSessionStatus::Active,
+                $nextVersion,
+                $safePayload->values(),
+                $absoluteExpiry,
+                false,
+            );
+        }, 3);
+    }
+
     public function cancelActive(int $telegramAccountId, string $requestKey): ?TelegramInteractionSessionReceipt
     {
         $this->assertAccountId($telegramAccountId);

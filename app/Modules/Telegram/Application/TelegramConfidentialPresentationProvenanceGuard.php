@@ -18,6 +18,7 @@ final class TelegramConfidentialPresentationProvenanceGuard
 {
     /** @var list<string> */
     public const REVIEWED_SOURCE_FILES = [
+        'app/Modules/Telegram/Application/TelegramCardToCardReceiptStatusDelivery.php',
         'app/Modules/Telegram/Application/TelegramNavigationHandler.php',
     ];
 
@@ -40,6 +41,7 @@ final class TelegramConfidentialPresentationProvenanceGuard
         'app/Modules/Telegram/Application/TelegramDeliveryQueueService.php',
         'app/Modules/Telegram/Application/TelegramMutationRequest.php',
         'app/Modules/Telegram/Application/TelegramConfidentialDeliveryOutboxHandler.php',
+        'app/Modules/Telegram/Application/TelegramConfidentialDeliveryQueue.php',
     ];
 
     public static function assertReviewedSourceCaller(): void

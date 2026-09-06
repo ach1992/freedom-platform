@@ -11,6 +11,7 @@ return [
     'processing_lease_seconds' => (int) env('TELEGRAM_PROCESSING_LEASE_SECONDS', 120),
     'interaction_session_ttl_seconds' => (int) env('TELEGRAM_INTERACTION_SESSION_TTL_SECONDS', 1800),
     'interaction_callback_ttl_seconds' => (int) env('TELEGRAM_INTERACTION_CALLBACK_TTL_SECONDS', 900),
+    'private_media_max_bytes' => (int) env('TELEGRAM_PRIVATE_MEDIA_MAX_BYTES', 10_000_000),
     'api_base_url' => 'https://api.telegram.org',
     'api_timeout_seconds' => (int) env('TELEGRAM_API_TIMEOUT_SECONDS', 15),
 ];

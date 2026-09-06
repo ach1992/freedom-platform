@@ -22,6 +22,7 @@ return [
                 'curl',
                 'dom',
                 'fileinfo',
+                'gd',
                 'intl',
                 'json',
                 'mbstring',

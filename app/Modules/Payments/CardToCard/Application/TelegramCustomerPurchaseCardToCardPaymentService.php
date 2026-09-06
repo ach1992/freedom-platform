@@ -112,6 +112,7 @@ final readonly class TelegramCustomerPurchaseCardToCardPaymentService implements
                 $receipt->payableAmountIrr,
                 $receipt->maskedCardNumber,
                 $receipt->expiresAt,
+                $receipt->lateReviewUntil,
                 $receipt->replayed || $intent->replayed,
             );
         }, 3);

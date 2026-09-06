@@ -13,6 +13,7 @@ use App\Modules\Orders\Domain\QuoteOverrideSource;
 use App\Modules\Payments\CardToCard\Application\CardToCardDestinationService;
 use App\Modules\Payments\CardToCard\Application\Contracts\CardToCardAdjustmentGenerator;
 use App\Modules\Payments\CardToCard\Application\TelegramCustomerPurchaseCardToCardPaymentService;
+use App\Modules\Payments\CardToCard\Application\TelegramCustomerPurchaseCardToCardReceiptSubmissionService;
 use App\Modules\Payments\Eligibility\Application\PaymentEligibilityDecisionReceipt;
 use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
 use App\Shared\Application\Clock;
@@ -24,6 +25,7 @@ use DateTimeImmutable;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use Tests\TestCase;
 
 final class TelegramCardToCardPurchaseClock implements Clock
@@ -115,6 +117,9 @@ final class TelegramCardToCardPurchaseTest extends TestCase
         self::assertSame(1000, $first->adjustmentAmountIrr);
         self::assertSame($quote->finalPriceIrr + 1000, $first->payableAmountIrr);
         self::assertSame('424242******4242', $first->maskedCardNumber);
+        self::assertSame('2026-09-04 12:30:00', $first->expiresAt->format('Y-m-d H:i:s'));
+        self::assertSame('2026-09-05 12:00:00', $first->lateReviewUntil->format('Y-m-d H:i:s'));
+        self::assertEquals($first->lateReviewUntil, $replay->lateReviewUntil);
         self::assertSame(1, DB::table('payment_intents')->where('payment_method_code', 'card_to_card')->count());
         self::assertSame(1, DB::table('c2c_amount_reservations')->count());
         self::assertSame(0, DB::table('purchase_settlements')->count());
@@ -167,6 +172,117 @@ final class TelegramCardToCardPurchaseTest extends TestCase
 
         $this->expectException(AuthorizationException::class);
         $service->destinationForSelf($otherUserId, $otherUserId, $reservation->reservationPublicId);
+    }
+
+    public function test_receipt_submission_delegates_to_manual_authority_and_never_captures_payment(): void
+    {
+        [$userId, $quote, $decision, $order] = $this->purchaseContext('receipt-submit');
+        $reservation = $this->app->make(TelegramCustomerPurchaseCardToCardPaymentService::class)->reserveForSelf(
+            $userId,
+            $userId,
+            $order->orderPublicId,
+            $quote->quotePublicId,
+            $quote->configurationSnapshotHash,
+            $decision->publicId,
+            $decision->configurationSnapshotHash,
+            hash('sha256', 'telegram-c2c-receipt-reserve'),
+        );
+        $submittedAt = $this->clock->value->modify('+2 minutes');
+        $mediaReference = 'telegram-private-media:'.strtoupper((string) Str::ulid());
+        $operationKey = hash('sha256', 'telegram-c2c-receipt-submit');
+        $evidenceHash = hash('sha256', 'telegram-c2c-receipt-image');
+        $service = $this->app->make(TelegramCustomerPurchaseCardToCardReceiptSubmissionService::class);
+
+        $first = $service->submitReceiptForSelf(
+            $userId,
+            $userId,
+            $reservation->reservationPublicId,
+            $submittedAt,
+            $evidenceHash,
+            $mediaReference,
+            $operationKey,
+        );
+        $replay = $service->submitReceiptForSelf(
+            $userId,
+            $userId,
+            $reservation->reservationPublicId,
+            $submittedAt,
+            $evidenceHash,
+            $mediaReference,
+            $operationKey,
+        );
+
+        self::assertFalse($first->replayed);
+        self::assertTrue($replay->replayed);
+        self::assertSame($first->submissionPublicId, $replay->submissionPublicId);
+        self::assertSame($reservation->paymentIntentPublicId, $first->paymentIntentPublicId);
+        self::assertSame($reservation->reservationPublicId, $first->reservationPublicId);
+        self::assertSame($reservation->payableAmountIrr, $first->claimedAmountIrr);
+        self::assertSame('submitted', DB::table('payment_intents')->where('public_id', $reservation->paymentIntentPublicId)->value('state'));
+        self::assertSame(1, DB::table('c2c_manual_submissions')->count());
+        self::assertSame($mediaReference, DB::table('c2c_manual_submissions')->value('private_receipt_reference'));
+        self::assertSame($evidenceHash, DB::table('c2c_manual_submissions')->value('evidence_hash'));
+        self::assertSame(0, DB::table('purchase_settlements')->count(), 'Receipt assertion is evidence only and must not capture.');
+        self::assertSame('awaiting_payment', DB::table('orders')->where('public_id', $order->orderPublicId)->value('state'));
+    }
+
+    public function test_receipt_submission_rejects_cross_user_and_out_of_late_review_window(): void
+    {
+        [$userId, $quote, $decision, $order] = $this->purchaseContext('receipt-window');
+        $reservation = $this->app->make(TelegramCustomerPurchaseCardToCardPaymentService::class)->reserveForSelf(
+            $userId,
+            $userId,
+            $order->orderPublicId,
+            $quote->quotePublicId,
+            $quote->configurationSnapshotHash,
+            $decision->publicId,
+            $decision->configurationSnapshotHash,
+            hash('sha256', 'telegram-c2c-receipt-window-reserve'),
+        );
+        $service = $this->app->make(TelegramCustomerPurchaseCardToCardReceiptSubmissionService::class);
+        $mediaReference = 'telegram-private-media:'.strtoupper((string) Str::ulid());
+        $evidenceHash = hash('sha256', 'telegram-c2c-receipt-window-image');
+        $otherUserId = $this->quoteUser('customer');
+
+        try {
+            $service->submitReceiptForSelf(
+                $otherUserId,
+                $otherUserId,
+                $reservation->reservationPublicId,
+                $this->clock->value->modify('+2 minutes'),
+                $evidenceHash,
+                $mediaReference,
+                hash('sha256', 'telegram-c2c-receipt-cross-user'),
+            );
+            self::fail('Cross-user receipt submission must fail closed.');
+        } catch (AuthorizationException) {
+            self::assertSame(0, DB::table('c2c_manual_submissions')->count());
+        }
+
+        $lateReviewUntil = DB::table('c2c_amount_reservations')
+            ->where('public_id', $reservation->reservationPublicId)
+            ->value('late_review_until');
+        self::assertIsString($lateReviewUntil);
+        $outsideWindow = new DateTimeImmutable($lateReviewUntil, new \DateTimeZone('UTC'));
+        $outsideWindow = $outsideWindow->modify('+1 second');
+
+        try {
+            $service->submitReceiptForSelf(
+                $userId,
+                $userId,
+                $reservation->reservationPublicId,
+                $outsideWindow,
+                $evidenceHash,
+                $mediaReference,
+                hash('sha256', 'telegram-c2c-receipt-outside-window'),
+            );
+            self::fail('Receipt after late-review authority must fail closed.');
+        } catch (AuthorizationException) {
+            self::assertSame(0, DB::table('c2c_manual_submissions')->count());
+        }
+
+        self::assertSame('awaiting_user_action', DB::table('payment_intents')->where('public_id', $reservation->paymentIntentPublicId)->value('state'));
+        self::assertSame(0, DB::table('purchase_settlements')->count());
     }
 
     /** @return array{0:int,1:QuoteReceipt,2:PaymentEligibilityDecisionReceipt,3:PurchaseOrderOpeningReceipt} */

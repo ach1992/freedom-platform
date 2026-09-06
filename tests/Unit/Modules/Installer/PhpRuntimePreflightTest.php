@@ -73,6 +73,77 @@ final class PhpRuntimePreflightTest extends TestCase
         self::assertNull($result['error']);
     }
 
+    /** @requirement INS-001 QUA-011 */
+    public function test_it_accepts_gd_when_all_supported_image_decoder_capabilities_are_available(): void
+    {
+        $preflight = new PhpRuntimePreflight(
+            static fn (string $binary, string $script): array => [
+                'exit_code' => 0,
+                'stdout' => json_encode([
+                    'php_version' => '8.4.16',
+                    'sapi' => 'cli',
+                    'loaded_extensions' => ['gd'],
+                    'ini_file' => '/etc/php/8.4/cli/php.ini',
+                    'timezone' => 'UTC',
+                    'image_decoder_capabilities' => [
+                        'jpeg' => true,
+                        'png' => true,
+                        'webp' => true,
+                    ],
+                    'disabled_functions' => [],
+                    'limits' => [],
+                    'opcache_enabled' => false,
+                ], JSON_THROW_ON_ERROR),
+            ],
+        );
+
+        $result = $preflight->inspect('cli', PHP_BINARY, ['gd']);
+
+        self::assertTrue($result['reachable']);
+        self::assertTrue($result['passed']);
+        self::assertTrue($result['image_decoders_supported']);
+        self::assertSame([], $result['missing_extensions']);
+        self::assertNull($result['error']);
+    }
+
+    /** @requirement INS-001 QUA-011 */
+    public function test_it_requires_all_supported_image_decoder_capabilities_when_gd_is_required(): void
+    {
+        $preflight = new PhpRuntimePreflight(
+            static fn (string $binary, string $script): array => [
+                'exit_code' => 0,
+                'stdout' => json_encode([
+                    'php_version' => '8.4.16',
+                    'sapi' => 'cli',
+                    'loaded_extensions' => ['gd'],
+                    'ini_file' => '/etc/php/8.4/cli/php.ini',
+                    'timezone' => 'UTC',
+                    'image_decoder_capabilities' => [
+                        'jpeg' => true,
+                        'png' => true,
+                        'webp' => false,
+                    ],
+                    'disabled_functions' => [],
+                    'limits' => [],
+                    'opcache_enabled' => false,
+                ], JSON_THROW_ON_ERROR),
+            ],
+        );
+
+        $result = $preflight->inspect('cli', PHP_BINARY, ['gd']);
+
+        self::assertTrue($result['reachable']);
+        self::assertFalse($result['passed']);
+        self::assertSame([], $result['missing_extensions']);
+        self::assertSame([
+            'jpeg' => true,
+            'png' => true,
+            'webp' => false,
+        ], $result['image_decoder_capabilities']);
+        self::assertFalse($result['image_decoders_supported']);
+        self::assertNull($result['error']);
+    }
+
     public function test_it_rejects_a_non_absolute_or_non_executable_binary_before_running_a_process(): void
     {
         $runs = 0;
