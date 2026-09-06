@@ -21,6 +21,7 @@ use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Contracts\Encryption\StringEncrypter;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use RuntimeException;
 use Tests\TestCase;
 
 final class TelegramGiftCardManualClock implements Clock
@@ -139,6 +140,26 @@ final class TelegramGiftCardManualPaymentTest extends TestCase
         self::assertTrue($replay->replayed);
         self::assertStringNotContainsString($code, $first->maskedCode);
 
+        try {
+            $service->submitCodeForSelf(
+                $purchase['user_id'],
+                $purchase['user_id'],
+                $purchase['order_public_id'],
+                $purchase['quote_public_id'],
+                $purchase['quote_configuration_hash'],
+                $purchase['decision_public_id'],
+                $purchase['decision_configuration_hash'],
+                $type->typeCode,
+                $type->configurationHash,
+                $purchase['amount'],
+                'STEAM-TG-CONFLICT-1827364554',
+                $operationKey,
+            );
+            self::fail('Expected conflicting Gift Card replay to fail closed.');
+        } catch (RuntimeException $exception) {
+            self::assertSame('Gift-card submission key conflicts with accepted evidence.', $exception->getMessage());
+        }
+
         $submission = DB::table('gift_card_submissions')->where('public_id', $first->submissionPublicId)->first();
         self::assertNotNull($submission);
         self::assertSame('pending_manual_review', $submission->state);
@@ -158,7 +179,85 @@ final class TelegramGiftCardManualPaymentTest extends TestCase
         self::assertSame(0, DB::table('gift_card_provider_events')->count());
         self::assertSame(0, DB::table('gift_card_redemptions')->count());
         self::assertSame(0, DB::table('purchase_settlements')->count());
-        self::assertSame('awaiting_payment', DB::table('purchase_orders')->where('public_id', $purchase['order_public_id'])->value('state'));
+        self::assertSame('awaiting_payment', DB::table('orders')->where('public_id', $purchase['order_public_id'])->value('state'));
+    }
+
+    public function test_changed_quote_or_decision_fails_closed_before_gift_card_state_is_created(): void
+    {
+        $type = $this->registerType('tg-stale-checkout', 'code_only', 'manual_only');
+        $purchase = $this->purchase('stale-checkout');
+        $service = $this->app->make(TelegramCustomerPurchaseGiftCardPaymentService::class);
+        $cases = [
+            'quote' => [$this->changedHash($purchase['quote_configuration_hash']), $purchase['decision_configuration_hash']],
+            'decision' => [$purchase['quote_configuration_hash'], $this->changedHash($purchase['decision_configuration_hash'])],
+        ];
+
+        foreach ($cases as $case => [$quoteHash, $decisionHash]) {
+            try {
+                $service->submitCodeForSelf(
+                    $purchase['user_id'],
+                    $purchase['user_id'],
+                    $purchase['order_public_id'],
+                    $purchase['quote_public_id'],
+                    $quoteHash,
+                    $purchase['decision_public_id'],
+                    $decisionHash,
+                    $type->typeCode,
+                    $type->configurationHash,
+                    $purchase['amount'],
+                    'STALE-CHECKOUT-GIFT-CODE-'.$case,
+                    hash('sha256', 'telegram-gift-card-stale-checkout:'.$case),
+                );
+                self::fail('Expected changed '.$case.' authority to fail closed.');
+            } catch (AuthorizationException) {
+                self::assertTrue(true);
+            }
+        }
+
+        self::assertSame(0, DB::table('gift_card_submissions')->count());
+        self::assertSame(0, DB::table('payment_intents')->count());
+        self::assertSame(0, DB::table('gift_card_reviews')->count());
+        self::assertSame(0, DB::table('gift_card_provider_events')->count());
+        self::assertSame(0, DB::table('purchase_settlements')->count());
+        self::assertSame(0, DB::table('promotion_usage_reservations')->count());
+    }
+
+    public function test_unavailable_pre_payment_order_fails_closed_before_gift_card_state_is_created(): void
+    {
+        $type = $this->registerType('tg-unavailable-order', 'code_only', 'manual_only');
+        $purchase = $this->purchase('unavailable-order');
+        DB::table('orders')->where('public_id', $purchase['order_public_id'])->update([
+            'state' => 'canceled',
+            'state_version' => 1,
+            'updated_at' => $this->clock->value->format('Y-m-d H:i:s.u'),
+        ]);
+
+        try {
+            $this->app->make(TelegramCustomerPurchaseGiftCardPaymentService::class)->submitCodeForSelf(
+                $purchase['user_id'],
+                $purchase['user_id'],
+                $purchase['order_public_id'],
+                $purchase['quote_public_id'],
+                $purchase['quote_configuration_hash'],
+                $purchase['decision_public_id'],
+                $purchase['decision_configuration_hash'],
+                $type->typeCode,
+                $type->configurationHash,
+                $purchase['amount'],
+                'UNAVAILABLE-ORDER-GIFT-CODE-123456',
+                hash('sha256', 'telegram-gift-card-unavailable-order'),
+            );
+            self::fail('Expected unavailable pre-payment Order to fail closed.');
+        } catch (AuthorizationException) {
+            self::assertTrue(true);
+        }
+
+        self::assertSame(0, DB::table('gift_card_submissions')->count());
+        self::assertSame(0, DB::table('payment_intents')->count());
+        self::assertSame(0, DB::table('gift_card_reviews')->count());
+        self::assertSame(0, DB::table('gift_card_provider_events')->count());
+        self::assertSame(0, DB::table('purchase_settlements')->count());
+        self::assertSame(0, DB::table('promotion_usage_reservations')->count());
     }
 
     public function test_stale_inactive_type_fails_closed_before_gift_card_or_payment_state_is_created(): void
@@ -276,6 +375,11 @@ final class TelegramGiftCardManualPaymentTest extends TestCase
             'Healthy Telegram Gift Card manual-review test observation.',
             $this->correlation('health'),
         );
+    }
+
+    private function changedHash(string $hash): string
+    {
+        return ($hash[0] === '0' ? '1' : '0').substr($hash, 1);
     }
 
     private function correlation(string $suffix): string
