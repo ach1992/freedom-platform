@@ -16,7 +16,7 @@ Do not implement a normal product task from `main` and do not infer current feat
 
 A PR targeting `main` is reserved for explicit release work or bounded default-branch/control-plane maintenance. Draft PR #6 is the normal cumulative Version 1 release path and requires explicit Owner release acceptance before merge.
 
-Every executing GitHub Actions job uses the owner-controlled self-hosted runner; GitHub-hosted runners are not a fallback.
+Default-branch CI uses ephemeral standard GitHub-hosted Linux runners. Any future self-hosted route is a separate trusted/private execution decision and must be introduced through reviewed control-plane maintenance.
 
 For current setup, tests, static checks, MariaDB 10.11 integration validation, architecture rules, and merge/review requirements, use the current `CONTRIBUTING.md` on `develop/v1.0.0-completion` rather than copying those evolving commands into this release-branch guard.
 

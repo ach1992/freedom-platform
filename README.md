@@ -27,7 +27,7 @@ Draft PR #6 remains the cumulative release path and must not be merged to `main`
 
 ## Default-branch controls
 
-- GitHub Actions execution is owner-controlled self-hosted-only; GitHub-hosted runners are not a fallback.
+- Default-branch CI uses ephemeral standard GitHub-hosted Linux runners; any future self-hosted route is a separate trusted/private operational decision and is not an automatic fallback.
 - Dependabot version-update PRs target `develop/v1.0.0-completion` during Version 1 development.
 - GitHub Issue/PR templates on this default branch define the lean risk-based task/review contract used by the repository.
 - `AGENTS.md` and `CONTRIBUTING.md` on this branch are guards/routers for zero-context entry; current implementation rules live on the active integration branch linked above.

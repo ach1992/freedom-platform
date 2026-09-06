@@ -31,13 +31,13 @@ Historical process instructions on an older release snapshot must not recreate r
 
 Normal product work must not be pushed directly to `main`.
 
-A main-target change is limited to an explicitly authorized release or bounded default-branch/control-plane maintenance task. Use a PR, review the exact diff, and preserve the release/integration model. The #75 direct self-hosted bootstrap was a one-time Owner-authorized exception required because the previous main workflow itself used GitHub-hosted runners.
+A main-target change is limited to an explicitly authorized release or bounded default-branch/control-plane maintenance task. Use a PR, review the exact diff, and preserve the release/integration model. Historical bootstrap exceptions do not authorize direct main changes.
 
 Never merge Draft PR #6 without explicit Owner release acceptance.
 
 ## GitHub Actions
 
-Every executing workflow job must use the owner-controlled self-hosted runner. GitHub-hosted runners are not a fallback.
+Default-branch CI uses ephemeral standard GitHub-hosted Linux runners. Do not connect repository-level self-hosted runners while this repository is public; any future private self-hosted route requires an explicit reviewed control-plane change.
 
 Do not weaken security, financial integrity, idempotency, migration, provider, or release validation merely to reduce CI work. Remove only validation/artifacts that do not improve a real implementation, review, or release decision.
 

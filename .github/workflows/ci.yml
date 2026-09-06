@@ -1,7 +1,7 @@
 name: CI
 
 # Default-branch bootstrap control. The active integration branch owns the full
-# Version 1 validation pipeline; main must never fall back to GitHub-hosted runners.
+# Version 1 validation pipeline. Main uses only ephemeral GitHub-hosted CI.
 on:
   push:
     branches:
@@ -17,38 +17,40 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   repository-control:
     name: Default branch repository control
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    runs-on: [self-hosted, Linux, X64, freedom-staging, php84]
+    runs-on: ubuntu-24.04
     steps:
       - name: Check out source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           clean: true
 
-      - name: Verify owner-controlled runner and repository contract
+      - name: Set up PHP 8.4
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: '8.4'
+          extensions: bcmath, curl, dom, fileinfo, intl, json, mbstring, openssl, pcntl, pdo, pdo_mysql, redis, sodium, tokenizer, xml
+          coverage: none
+          tools: composer:2.10.2
+
+      - name: Verify default-branch repository contract
         shell: bash
         run: |
           set -euo pipefail
 
-          php_bin=/www/server/php/84/bin/php
-          composer_bin=/usr/local/bin/composer
-
           test "$RUNNER_OS" = Linux
           test "$RUNNER_ARCH" = X64
-          test -x "$php_bin"
-          test -f "$composer_bin"
-
-          "$php_bin" -r 'if (PHP_MAJOR_VERSION !== 8 || PHP_MINOR_VERSION !== 4) { fwrite(STDERR, "PHP 8.4 is required.\n"); exit(1); }'
-          "$php_bin" "$composer_bin" --version --no-ansi
+          php -r 'if (PHP_MAJOR_VERSION !== 8 || PHP_MINOR_VERSION !== 4) { fwrite(STDERR, "PHP 8.4 is required.\n"); exit(1); }'
+          composer --version --no-ansi | grep -F 'Composer version 2.10.2 '
 
           test -s composer.lock
           test -s artisan
           docker compose -f docker-compose.ci.yml config --quiet
-          "$php_bin" "$composer_bin" validate --strict --no-check-publish
+          composer validate --strict --no-check-publish
           bash scripts/ci/verify-planning.sh
