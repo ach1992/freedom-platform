@@ -420,6 +420,8 @@ final readonly class TelegramPrivateMediaIngestor
             throw new TelegramPrivateMediaRejected('malformed_image');
         }
 
+        TelegramImagePayloadDecoder::assertDecodable($content);
+
         return [$mime, hash('sha256', $content), $size];
     }
 
