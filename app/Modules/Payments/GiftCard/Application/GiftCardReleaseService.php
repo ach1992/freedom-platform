@@ -37,6 +37,11 @@ final readonly class GiftCardReleaseService
         }
         $this->assertToken($provider->code(), 'Gift-card release provider code', 2, 64);
         $this->assertToken($correlationId, 'Gift-card release correlation ID', 8, 64);
+
+        $persisted = $this->settlePersistedRelease($submissionPublicId, $provider->code(), $correlationId);
+        if ($persisted !== null) {
+            return $persisted;
+        }
         if (! $provider->capabilities()->release) {
             throw new DomainException('Gift-card provider does not support reservation release.');
         }
@@ -60,7 +65,67 @@ final readonly class GiftCardReleaseService
             throw new RuntimeException('Gift-card reservation release outcome is uncertain; reconcile before retry.', 0, $exception);
         }
 
-        return $this->finalize($submissionPublicId, $provider->code(), $evidence, $correlationId);
+        try {
+            $notConfirmed = $this->persistEvidence(
+                $submissionPublicId,
+                $provider->code(),
+                $evidence,
+                $correlationId,
+            );
+        } catch (Throwable $exception) {
+            $this->recordFindingSafely(
+                $submissionPublicId,
+                $evidence->outcome === 'success' && in_array($evidence->status, ['released', 'canceled', 'cancelled'], true)
+                    ? 'provider_released_evidence_persist_failed'
+                    : 'release_evidence_persist_failed',
+                'critical',
+                $provider->code(),
+                $evidence,
+                $correlationId,
+            );
+            throw $exception;
+        }
+        if ($notConfirmed !== null) {
+            return $notConfirmed;
+        }
+
+        try {
+            $settled = $this->settlePersistedReleaseInternal(
+                $submissionPublicId,
+                $provider->code(),
+                $correlationId,
+                false,
+            );
+            if ($settled === null) {
+                throw new RuntimeException('Gift-card release evidence disappeared before local finalization.');
+            }
+
+            return $settled;
+        } catch (Throwable $exception) {
+            $this->recordFindingSafely(
+                $submissionPublicId,
+                'provider_released_local_not_released',
+                'critical',
+                $provider->code(),
+                $evidence,
+                $correlationId,
+            );
+            throw $exception;
+        }
+    }
+
+    public function settlePersistedRelease(
+        string $submissionPublicId,
+        string $providerCode,
+        string $correlationId,
+    ): ?GiftCardProcessingReceipt {
+        if (! Str::isUlid($submissionPublicId)) {
+            throw new DomainException('Gift-card release submission public ID is invalid.');
+        }
+        $this->assertToken($providerCode, 'Gift-card release provider code', 2, 64);
+        $this->assertToken($correlationId, 'Gift-card release correlation ID', 8, 64);
+
+        return $this->settlePersistedReleaseInternal($submissionPublicId, $providerCode, $correlationId, true);
     }
 
     private function prepare(string $submissionPublicId, string $providerCode): GiftCardProviderRequest|GiftCardProcessingReceipt
@@ -97,18 +162,18 @@ final readonly class GiftCardReleaseService
         }, 3);
     }
 
-    private function finalize(
+    private function persistEvidence(
         string $submissionPublicId,
         string $providerCode,
         GiftCardProviderEvidence $evidence,
         string $correlationId,
-    ): GiftCardProcessingReceipt {
+    ): ?GiftCardProcessingReceipt {
         return $this->database->connection()->transaction(function (Connection $connection) use (
             $submissionPublicId,
             $providerCode,
             $evidence,
             $correlationId,
-        ): GiftCardProcessingReceipt {
+        ): ?GiftCardProcessingReceipt {
             $authority = $this->authority($connection, $submissionPublicId, true);
             if ($authority === null) {
                 throw new DomainException('Gift-card release submission does not exist.');
@@ -122,19 +187,70 @@ final readonly class GiftCardReleaseService
             $this->validateEvidence($authority, $providerCode, $evidence);
             $this->recordProviderEvent($connection, $authority, $providerCode, $evidence);
 
-            if ($evidence->outcome !== 'success'
-                || ! in_array($evidence->status, ['released', 'canceled', 'cancelled'], true)) {
-                $this->recordFindingInConnection(
-                    $connection,
-                    $authority,
-                    'release_not_confirmed',
-                    'critical',
-                    $providerCode,
-                    $evidence,
-                    $correlationId,
-                );
+            if ($evidence->outcome === 'success'
+                && in_array($evidence->status, ['released', 'canceled', 'cancelled'], true)) {
+                return null;
+            }
 
-                return $this->receipt($connection, $authority, false);
+            $this->recordFindingInConnection(
+                $connection,
+                $authority,
+                'release_not_confirmed',
+                'critical',
+                $providerCode,
+                $evidence,
+                $correlationId,
+            );
+
+            return $this->receipt($connection, $authority, false);
+        }, 3);
+    }
+
+    private function settlePersistedReleaseInternal(
+        string $submissionPublicId,
+        string $providerCode,
+        string $correlationId,
+        bool $replayed,
+    ): ?GiftCardProcessingReceipt {
+        return $this->database->connection()->transaction(function (Connection $connection) use (
+            $submissionPublicId,
+            $providerCode,
+            $correlationId,
+            $replayed,
+        ): ?GiftCardProcessingReceipt {
+            $authority = $this->authority($connection, $submissionPublicId, true);
+            if ($authority === null) {
+                throw new DomainException('Gift-card release submission does not exist.');
+            }
+            if ($authority->provider_code !== $providerCode) {
+                throw new DomainException('Gift-card release provider does not match immutable type authority.');
+            }
+
+            $releaseEvents = $connection->table('gift_card_provider_events')
+                ->where('gift_card_submission_id', $authority->submission_id)
+                ->where('provider_code', $providerCode)
+                ->where('operation', 'release')
+                ->where('outcome', 'success')
+                ->whereIn('provider_status', ['released', 'canceled', 'cancelled'])
+                ->get(['provider_event_id', 'provider_transaction_id', 'evidence_hash']);
+            if ($releaseEvents->isEmpty()) {
+                if ($authority->state === 'released') {
+                    throw new RuntimeException('Gift-card released state is missing authoritative provider release evidence.');
+                }
+
+                return null;
+            }
+            if ($releaseEvents->count() !== 1) {
+                throw new RuntimeException('Gift-card release requires exactly one authoritative provider release event.');
+            }
+            if ($connection->table('gift_card_redemptions')->where('gift_card_submission_id', $authority->submission_id)->exists()) {
+                throw new RuntimeException('Redeemed gift-card submission cannot be released.');
+            }
+            if ($authority->state === 'released') {
+                return $this->receipt($connection, $authority, true);
+            }
+            if (! in_array($authority->state, ['reserved', 'rejected'], true)) {
+                throw new RuntimeException('Gift-card persisted release is not in a locally finalizable state.');
             }
 
             $updated = $connection->table('gift_card_submissions')
@@ -163,7 +279,7 @@ final readonly class GiftCardReleaseService
                 throw new RuntimeException('Gift-card submission disappeared after release.');
             }
 
-            return $this->receipt($connection, $fresh, false);
+            return $this->receipt($connection, $fresh, $replayed);
         }, 3);
     }
 
@@ -181,6 +297,7 @@ final readonly class GiftCardReleaseService
             'submission.id as submission_id', 'submission.public_id as submission_public_id',
             'submission.encrypted_code', 'submission.private_image_reference', 'submission.state',
             'submission.claimed_face_value', 'submission.claimed_currency', 'submission.claimed_brand', 'submission.claimed_region',
+            'submission.submitted_at',
             'type.type_code', 'type.provider_code',
             'intent.id as payment_intent_id', 'intent.state as intent_state',
         ]);
@@ -227,6 +344,9 @@ final readonly class GiftCardReleaseService
         if ($evidence->region !== null && $evidence->region !== $authority->claimed_region) {
             throw new DomainException('Gift-card release region conflicts with submitted authority.');
         }
+        if ($this->databaseDateTime($evidence->occurredAt) < (string) $authority->submitted_at) {
+            throw new DomainException('Gift-card release evidence predates the accepted submission.');
+        }
     }
 
     private function recordProviderEvent(Connection $connection, stdClass $authority, string $providerCode, GiftCardProviderEvidence $evidence): void
@@ -266,6 +386,28 @@ final readonly class GiftCardReleaseService
             'occurred_at' => $this->databaseDateTime($evidence->occurredAt),
             'created_at' => $this->timestamp(),
         ]);
+    }
+
+    private function recordFindingSafely(
+        string $submissionPublicId,
+        string $findingType,
+        string $severity,
+        string $providerCode,
+        ?GiftCardProviderEvidence $evidence,
+        string $correlationId,
+    ): void {
+        try {
+            $this->recordFinding(
+                $submissionPublicId,
+                $findingType,
+                $severity,
+                $providerCode,
+                $evidence,
+                $correlationId,
+            );
+        } catch (Throwable) {
+            // Preserve the original provider/local failure; durable provider evidence may still drive reconciliation.
+        }
     }
 
     private function recordFinding(

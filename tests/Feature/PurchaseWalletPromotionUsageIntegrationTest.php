@@ -15,7 +15,9 @@ use App\Modules\Orders\Application\QuotePricingInput;
 use App\Modules\Orders\Application\QuoteReceipt;
 use App\Modules\Orders\Application\QuoteService;
 use App\Modules\Orders\Domain\QuoteOverrideSource;
+use App\Modules\Payments\Application\Contracts\PurchasePromotionUsageAuthority;
 use App\Modules\Payments\Application\PurchasePaymentMaintenanceService;
+use App\Modules\Payments\Application\PurchasePromotionUsageMaintenanceResult;
 use App\Modules\Payments\Application\PurchaseWalletPaymentService;
 use App\Modules\Payments\CardToCard\Application\CardToCardBankTransactionService;
 use App\Modules\Payments\CardToCard\Application\CardToCardDestinationService;
@@ -29,6 +31,12 @@ use App\Modules\Payments\CardToCard\Application\Contracts\BankTransactionPage;
 use App\Modules\Payments\CardToCard\Application\Contracts\CardToCardAdjustmentGenerator;
 use App\Modules\Payments\CardToCard\Infrastructure\FakeBankTransactionVerificationProvider;
 use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
+use App\Modules\Payments\GiftCard\Application\Contracts\GiftCardProviderCapabilities;
+use App\Modules\Payments\GiftCard\Application\Contracts\GiftCardProviderEvidence;
+use App\Modules\Payments\GiftCard\Application\GiftCardPaymentService;
+use App\Modules\Payments\GiftCard\Application\GiftCardSubmissionService;
+use App\Modules\Payments\GiftCard\Application\GiftCardTypeService;
+use App\Modules\Payments\GiftCard\Infrastructure\FakeGiftCardVerificationProvider;
 use App\Modules\Promotions\Application\PromotionRuleVersionReceipt;
 use App\Modules\Promotions\BenefitCodes\Domain\BenefitCodeType;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseWalletPayment;
@@ -44,6 +52,7 @@ use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Connection;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use RuntimeException;
 use Tests\Support\CreatesBenefitCodeFixtures;
 use Tests\TestCase;
 
@@ -66,6 +75,27 @@ final class PurchaseWalletPromotionC2cAdjustmentGenerator implements CardToCardA
     }
 }
 
+final readonly class FailOnFinalizePurchasePromotionUsageAuthority implements PurchasePromotionUsageAuthority
+{
+    public function __construct(private PurchasePromotionUsageAuthority $inner) {}
+
+    public function reserveForQuote(string $reservationKey, int $actorUserId, string $quotePublicId): ?string
+    {
+        return $this->inner->reserveForQuote($reservationKey, $actorUserId, $quotePublicId);
+    }
+
+    public function finalizeForSettlement(string $redemptionKey, int $actorUserId, string $purchaseSettlementPublicId): ?string
+    {
+        unset($redemptionKey, $actorUserId, $purchaseSettlementPublicId);
+        throw new RuntimeException('Injected promotion finalization failure.');
+    }
+
+    public function releaseEligibleExpiredTerminalPurchases(int $limit = 100): PurchasePromotionUsageMaintenanceResult
+    {
+        return $this->inner->releaseEligibleExpiredTerminalPurchases($limit);
+    }
+}
+
 final class PurchaseWalletPromotionUsageIntegrationTest extends TestCase
 {
     use CreatesBenefitCodeFixtures;
@@ -81,6 +111,8 @@ final class PurchaseWalletPromotionUsageIntegrationTest extends TestCase
         $this->app->instance(Clock::class, $this->clock);
         $this->app->instance(CardToCardAdjustmentGenerator::class, new PurchaseWalletPromotionC2cAdjustmentGenerator);
         config()->set('payments.card_to_card.lookup_key', str_repeat('p', 32));
+        config()->set('payments.gift_card.code_lookup_key', str_repeat('g', 32));
+        config()->set('payments.gift_card.code_lookup_key_version', 7);
     }
 
     public function test_purchase_payment_maintenance_command_is_json_safe_and_scheduled(): void
@@ -770,6 +802,154 @@ final class PurchaseWalletPromotionUsageIntegrationTest extends TestCase
         self::assertSame(1, DB::table('promotion_usage_releases')->count());
     }
 
+    public function test_discounted_gift_card_reserves_and_finalizes_promotion_and_completes_pre_payment_order(): void
+    {
+        $suffix = 'gift-card-finalize';
+        $this->configureGiftCard($suffix);
+        $source = $this->promotionSource($suffix, 1);
+        $checkout = $this->discountedCheckout($source, $source['codes'][0], $suffix);
+        $typeCode = 'gift-promo-finalize';
+        $this->registerGiftCardType($typeCode);
+        $submission = $this->submitGiftCard($checkout, $suffix, $typeCode, 'PROMO-GIFT-CARD-0001');
+        $submissionReplay = $this->submitGiftCard($checkout, $suffix, $typeCode, 'PROMO-GIFT-CARD-0001');
+
+        self::assertTrue($submissionReplay->replayed);
+        self::assertSame($submission->publicId, $submissionReplay->publicId);
+        self::assertSame($submission->paymentIntentPublicId, $submissionReplay->paymentIntentPublicId);
+        self::assertSame(1, DB::table('promotion_usage_reservations')->count());
+        self::assertSame(0, DB::table('promotion_usage_redemptions')->count());
+        self::assertSame('awaiting_payment', DB::table('orders')->where('public_id', $checkout['order']->orderPublicId)->value('state'));
+
+        $provider = new FakeGiftCardVerificationProvider(
+            'fake_gift_card',
+            new GiftCardProviderCapabilities(true, false, true, false, true),
+        );
+        $provider->put('validate', $this->giftCardOperationKey($submission->publicId, 'validate'), $this->giftCardEvidence(
+            'validate', 'success', 'valid', 'promo-finalize-validate', null, $checkout['quote']->finalPriceIrr,
+        ));
+        $provider->put('redeem', $this->giftCardOperationKey($submission->publicId, 'redeem'), $this->giftCardEvidence(
+            'redeem', 'success', 'redeemed', 'promo-finalize-redeem', 'promo-finalize-tx', $checkout['quote']->finalPriceIrr,
+        ));
+
+        $captured = $this->app->make(GiftCardPaymentService::class)->process(
+            $submission->publicId,
+            $provider,
+            $this->correlation('gift-card-finalize-process'),
+        );
+
+        self::assertSame('captured', $captured->state);
+        self::assertSame(1, DB::table('promotion_usage_reservations')->count());
+        self::assertSame(1, DB::table('promotion_usage_redemptions')->count());
+        self::assertSame(0, DB::table('promotion_usage_releases')->count());
+        self::assertSame('paid', DB::table('orders')->where('public_id', $checkout['order']->orderPublicId)->value('state'));
+        self::assertSame($submission->paymentIntentPublicId, DB::table('orders')->where('public_id', $checkout['order']->orderPublicId)->value('payment_intent_public_id'));
+
+        $replay = $this->app->make(GiftCardPaymentService::class)->process(
+            $submission->publicId,
+            $provider,
+            $this->correlation('gift-card-finalize-replay'),
+        );
+        self::assertTrue($replay->replayed);
+        self::assertSame($captured->purchaseSettlementPublicId, $replay->purchaseSettlementPublicId);
+        self::assertSame(1, DB::table('promotion_usage_redemptions')->count());
+        self::assertSame(1, DB::table('purchase_settlements')->where('source_quote_public_id', $checkout['quote']->quotePublicId)->count());
+    }
+
+    public function test_gift_card_post_redeem_promotion_failure_rolls_back_local_capture_but_retains_reconciliation_evidence(): void
+    {
+        $suffix = 'gift-card-finalize-failure';
+        $this->configureGiftCard($suffix);
+        $source = $this->promotionSource($suffix, 1);
+        $checkout = $this->discountedCheckout($source, $source['codes'][0], $suffix);
+        $typeCode = 'gift-promo-fail-finalize';
+        $this->registerGiftCardType($typeCode);
+        $submission = $this->submitGiftCard($checkout, $suffix, $typeCode, 'PROMO-GIFT-CARD-FAIL-0001');
+
+        $realPromotionAuthority = $this->app->make(PurchasePromotionUsageAuthority::class);
+        $this->app->instance(
+            PurchasePromotionUsageAuthority::class,
+            new FailOnFinalizePurchasePromotionUsageAuthority($realPromotionAuthority),
+        );
+
+        $provider = new FakeGiftCardVerificationProvider(
+            'fake_gift_card',
+            new GiftCardProviderCapabilities(true, false, true, false, true),
+        );
+        $provider->put('validate', $this->giftCardOperationKey($submission->publicId, 'validate'), $this->giftCardEvidence(
+            'validate', 'success', 'valid', 'promo-fail-finalize-validate', null, $checkout['quote']->finalPriceIrr,
+        ));
+        $provider->put('redeem', $this->giftCardOperationKey($submission->publicId, 'redeem'), $this->giftCardEvidence(
+            'redeem', 'success', 'redeemed', 'promo-fail-finalize-redeem', 'promo-fail-finalize-tx', $checkout['quote']->finalPriceIrr,
+        ));
+
+        try {
+            $this->app->make(GiftCardPaymentService::class)->process(
+                $submission->publicId,
+                $provider,
+                $this->correlation('gift-card-finalize-failure-process'),
+            );
+            self::fail('Expected injected promotion finalization failure after authoritative provider redemption.');
+        } catch (RuntimeException $exception) {
+            self::assertSame('Injected promotion finalization failure.', $exception->getMessage());
+        } finally {
+            $this->app->instance(PurchasePromotionUsageAuthority::class, $realPromotionAuthority);
+        }
+
+        $redemption = DB::table('gift_card_redemptions')
+            ->where('gift_card_submission_id', $submission->submissionId)
+            ->first(['public_id', 'purchase_settlement_id']);
+        self::assertNotNull($redemption);
+        self::assertNotNull($redemption->public_id);
+        self::assertNull($redemption->purchase_settlement_id);
+        self::assertSame('redeeming', DB::table('gift_card_submissions')->where('id', $submission->submissionId)->value('state'));
+        self::assertSame('verifying', DB::table('payment_intents')->where('public_id', $submission->paymentIntentPublicId)->value('state'));
+        self::assertSame(0, DB::table('purchase_settlements')->where('source_quote_public_id', $checkout['quote']->quotePublicId)->count());
+        self::assertSame('awaiting_payment', DB::table('orders')->where('public_id', $checkout['order']->orderPublicId)->value('state'));
+        self::assertSame(1, DB::table('promotion_usage_reservations')->count());
+        self::assertSame(0, DB::table('promotion_usage_redemptions')->count());
+        self::assertSame(1, DB::table('gift_card_reconciliation_findings')
+            ->where('gift_card_submission_id', $submission->submissionId)
+            ->where('finding_type', 'provider_captured_local_not_captured')
+            ->count());
+    }
+
+    public function test_failed_discounted_gift_card_releases_promotion_capacity_after_quote_expiry(): void
+    {
+        $suffix = 'gift-card-release';
+        $this->configureGiftCard($suffix);
+        $source = $this->promotionSource($suffix, 1);
+        $checkout = $this->discountedCheckout($source, $source['codes'][0], $suffix);
+        $typeCode = 'gift-promo-release';
+        $this->registerGiftCardType($typeCode);
+        $submission = $this->submitGiftCard($checkout, $suffix, $typeCode, 'PROMO-GIFT-CARD-INVALID');
+        self::assertSame(1, DB::table('promotion_usage_reservations')->count());
+
+        $provider = new FakeGiftCardVerificationProvider(
+            'fake_gift_card',
+            new GiftCardProviderCapabilities(true, false, true, false, true),
+        );
+        $provider->put('validate', $this->giftCardOperationKey($submission->publicId, 'validate'), $this->giftCardEvidence(
+            'validate', 'rejected', 'invalid', 'promo-release-invalid', null, $checkout['quote']->finalPriceIrr,
+        ));
+        $invalid = $this->app->make(GiftCardPaymentService::class)->process(
+            $submission->publicId,
+            $provider,
+            $this->correlation('gift-card-release-process'),
+        );
+        self::assertSame('invalid', $invalid->state);
+        self::assertSame('failed', DB::table('payment_intents')->where('public_id', $submission->paymentIntentPublicId)->value('state'));
+        self::assertSame(0, DB::table('promotion_usage_releases')->count());
+
+        $this->clock->value = $this->clock->value->modify('+31 minutes');
+        $maintenance = $this->app->make(PurchasePaymentMaintenanceService::class)->run();
+        self::assertSame(1, $maintenance->promotionReservationsExamined);
+        self::assertSame(1, $maintenance->releasedPromotionReservations);
+        self::assertSame(0, $maintenance->failures);
+        self::assertSame(1, DB::table('promotion_usage_releases')->count());
+        self::assertSame(0, DB::table('promotion_usage_redemptions')->count());
+        self::assertSame('awaiting_payment', DB::table('orders')->where('public_id', $checkout['order']->orderPublicId)->value('state'));
+    }
+
     private function promotionSource(string $suffix, int $totalUseLimit, int $quantity = 1): array
     {
         $offering = $this->activeBenefitOffering('wallet-'.$suffix);
@@ -877,6 +1057,98 @@ final class PurchaseWalletPromotionUsageIntegrationTest extends TestCase
         );
 
         return ['user_id' => $userId, 'quote' => $discounted, 'decision' => $decision, 'order' => $order];
+    }
+
+    private function configureGiftCard(string $suffix): void
+    {
+        $administratorId = $this->benefitOwner();
+        $service = $this->app->make(PaymentMethodEligibilityService::class);
+        $service->configureMethod(
+            'gift-promo-method-'.substr(hash('sha256', $suffix), 0, 24),
+            $administratorId,
+            'gift_card',
+            true,
+            false,
+            1,
+            'Gift-card promotion payment test configuration.',
+            $this->correlation('gift-method-'.$suffix),
+        );
+        $service->recordHealth(
+            'gift-promo-health-'.substr(hash('sha256', $suffix), 0, 24),
+            $administratorId,
+            'gift_card',
+            true,
+            $this->clock->value->modify('+20 minutes'),
+            'Healthy gift-card promotion provider observation.',
+            $this->correlation('gift-health-'.$suffix),
+        );
+    }
+
+    private function registerGiftCardType(string $typeCode): void
+    {
+        $this->app->make(GiftCardTypeService::class)->register(
+            $typeCode,
+            'Steam Gift Card',
+            'Steam',
+            'GLOBAL',
+            'IRR',
+            'code_only',
+            'automatic_only',
+            null,
+            'fake_gift_card',
+        );
+    }
+
+    /** @param array{user_id:int,quote:QuoteReceipt,decision:object,order:object} $checkout */
+    private function submitGiftCard(array $checkout, string $suffix, string $typeCode, string $code): object
+    {
+        return $this->app->make(GiftCardSubmissionService::class)->submit(
+            'gift-promo-submission-'.substr(hash('sha256', $suffix), 0, 24),
+            'gift-promo-intent-'.substr(hash('sha256', $suffix), 0, 24),
+            $checkout['user_id'],
+            $checkout['quote']->quotePublicId,
+            $checkout['decision']->publicId,
+            $typeCode,
+            $checkout['quote']->finalPriceIrr,
+            'IRR',
+            'Steam',
+            'GLOBAL',
+            $code,
+            null,
+            null,
+            null,
+            null,
+            $this->correlation('gift-submit-'.$suffix),
+        );
+    }
+
+    private function giftCardEvidence(
+        string $operation,
+        string $outcome,
+        string $status,
+        string $suffix,
+        ?string $transactionId,
+        int $amountIrr,
+    ): GiftCardProviderEvidence {
+        return new GiftCardProviderEvidence(
+            $operation,
+            $outcome,
+            $status,
+            'gift-promo-event-'.$suffix,
+            $transactionId,
+            $amountIrr,
+            'IRR',
+            'Steam',
+            'GLOBAL',
+            $this->clock->value->modify('+2 minutes'),
+            hash('sha256', 'gift-promo-evidence:'.$suffix),
+            ['source' => 'fake_test'],
+        );
+    }
+
+    private function giftCardOperationKey(string $submissionPublicId, string $operation): string
+    {
+        return hash('sha256', 'gift-card:'.$submissionPublicId.':'.$operation);
     }
 
     private function configureWallet(PaymentMethodEligibilityService $service, string $suffix): void
