@@ -8,6 +8,7 @@ use App\Modules\Orders\Application\QuotePricingInput;
 use App\Modules\Orders\Application\QuoteService;
 use App\Modules\Orders\Domain\QuoteOverrideSource;
 use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
+use App\Modules\Payments\GiftCard\Application\GiftCardTypeReceipt;
 use App\Modules\Payments\GiftCard\Application\GiftCardTypeService;
 use App\Modules\Payments\GiftCard\Application\TelegramCustomerPurchaseGiftCardPaymentService;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseOrder;
@@ -237,7 +238,7 @@ final class TelegramGiftCardManualPaymentTest extends TestCase
         ];
     }
 
-    private function registerType(string $typeCode, string $submissionMode, string $verificationMode): \App\Modules\Payments\GiftCard\Application\GiftCardTypeReceipt
+    private function registerType(string $typeCode, string $submissionMode, string $verificationMode): GiftCardTypeReceipt
     {
         return $this->app->make(GiftCardTypeService::class)->register(
             $typeCode,
