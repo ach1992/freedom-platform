@@ -811,7 +811,11 @@ final class PurchaseWalletPromotionUsageIntegrationTest extends TestCase
         $typeCode = 'gift-promo-finalize';
         $this->registerGiftCardType($typeCode);
         $submission = $this->submitGiftCard($checkout, $suffix, $typeCode, 'PROMO-GIFT-CARD-0001');
+        $submissionReplay = $this->submitGiftCard($checkout, $suffix, $typeCode, 'PROMO-GIFT-CARD-0001');
 
+        self::assertTrue($submissionReplay->replayed);
+        self::assertSame($submission->publicId, $submissionReplay->publicId);
+        self::assertSame($submission->paymentIntentPublicId, $submissionReplay->paymentIntentPublicId);
         self::assertSame(1, DB::table('promotion_usage_reservations')->count());
         self::assertSame(0, DB::table('promotion_usage_redemptions')->count());
         self::assertSame('awaiting_payment', DB::table('orders')->where('public_id', $checkout['order']->orderPublicId)->value('state'));
