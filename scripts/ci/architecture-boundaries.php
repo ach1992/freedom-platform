@@ -269,8 +269,7 @@ return [
                     ]],
                 ],
             ],
-        ],
-        'service_operational_authority_v1' => [
+        ],        'service_operational_authority_v1' => [
             'migration' => 'database/migrations/2026_08_19_000140_enable_service_operational_authority.php',
             'rules' => [
                 'metadata_evidence' => [
