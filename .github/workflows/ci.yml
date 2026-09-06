@@ -48,14 +48,12 @@ env:
   REDIS_PASSWORD: ci-only-redis-password
   CACHE_STORE: redis
   QUEUE_CONNECTION: redis
-  PHP_ROOT: /www/server/php/84
-  COMPOSER_BIN: /usr/local/bin/composer
 
 jobs:
   preflight:
     name: Repository preflight
-    if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.draft == false) }}
-    runs-on: [self-hosted, Linux, X64, freedom-ci-core]
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
+    runs-on: ubuntu-24.04
     outputs:
       profile: ${{ steps.plan.outputs.profile }}
       project_control: ${{ steps.plan.outputs.project_control }}
@@ -80,10 +78,11 @@ jobs:
           EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           EXPECTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPO_URL: ${{ github.event.pull_request.head.repo.clone_url }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           set -euo pipefail
-          current_head=$(git ls-remote origin "refs/heads/$HEAD_REF" | awk 'NR == 1 {print $1}')
+          current_head=$(git ls-remote --refs "$HEAD_REPO_URL" "refs/heads/$HEAD_REF" | awk 'NR == 1 {print $1}')
           current_base=$(git ls-remote origin "refs/heads/$BASE_REF" | awk 'NR == 1 {print $1}')
           test -n "$current_head" || { echo "Current PR head ref is unavailable: $HEAD_REF" >&2; exit 1; }
           test -n "$current_base" || { echo "Current PR base ref is unavailable: $BASE_REF" >&2; exit 1; }
@@ -254,13 +253,21 @@ jobs:
     name: PHP style and static architecture
     needs: preflight
     if: ${{ needs.preflight.outputs.static_analysis == 'true' || (needs.preflight.outputs.style == 'true' && needs.preflight.outputs.integration != 'true') }}
-    runs-on: [self-hosted, Linux, X64, freedom-ci-php]
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Use runner PHP toolchain
+      - name: Set up PHP 8.4
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: '8.4'
+          extensions: bcmath, ctype, curl, dom, fileinfo, filter, hash, intl, json, libxml, mbstring, openssl, pcntl, pdo, pdo_mysql, redis, session, sodium, tokenizer, xml, xmlwriter
+          coverage: none
+          tools: composer:2.10.2
+
+      - name: Validate CI PHP toolchain
         timeout-minutes: 2
-        run: bash scripts/ci/bootstrap-self-hosted-toolchain.sh no-coverage
+        run: bash scripts/ci/bootstrap-ci-toolchain.sh no-coverage
 
       - name: Install locked dependencies
         timeout-minutes: 10
@@ -305,13 +312,21 @@ jobs:
     name: Dependency and license policy
     needs: preflight
     if: ${{ needs.preflight.outputs.dependencies == 'true' }}
-    runs-on: [self-hosted, Linux, X64, freedom-ci-php]
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Use runner PHP toolchain
+      - name: Set up PHP 8.4
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: '8.4'
+          extensions: bcmath, ctype, curl, dom, fileinfo, filter, hash, intl, json, libxml, mbstring, openssl, pcntl, pdo, pdo_mysql, redis, session, sodium, tokenizer, xml, xmlwriter
+          coverage: none
+          tools: composer:2.10.2
+
+      - name: Validate CI PHP toolchain
         timeout-minutes: 2
-        run: bash scripts/ci/bootstrap-self-hosted-toolchain.sh no-coverage
+        run: bash scripts/ci/bootstrap-ci-toolchain.sh no-coverage
 
       - name: Install locked dependencies
         timeout-minutes: 10
@@ -341,7 +356,7 @@ jobs:
     name: MariaDB 10.11 and Redis tests
     needs: preflight
     if: ${{ needs.preflight.outputs.integration == 'true' }}
-    runs-on: [self-hosted, Linux, X64, freedom-ci-integration]
+    runs-on: ubuntu-24.04
     env:
       MARIADB_VERSION: '10.11'
       COMPOSE_PROJECT_NAME: freedom-platform-ci-${{ github.run_id }}
@@ -349,14 +364,22 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Use runner PHP toolchain
+      - name: Set up PHP 8.4 with PCOV
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: '8.4'
+          extensions: bcmath, ctype, curl, dom, fileinfo, filter, hash, intl, json, libxml, mbstring, openssl, pcntl, pdo, pdo_mysql, redis, session, sodium, tokenizer, xml, xmlwriter
+          coverage: pcov
+          tools: composer:2.10.2
+
+      - name: Validate CI PHP toolchain
         timeout-minutes: 2
         shell: bash
         run: |
           set -euo pipefail
           mode=no-coverage
           [[ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' && -z "$PHPUNIT_FILTER" ]] && mode=coverage
-          bash scripts/ci/bootstrap-self-hosted-toolchain.sh "$mode"
+          bash scripts/ci/bootstrap-ci-toolchain.sh "$mode"
 
       - name: Install locked dependencies
         timeout-minutes: 10
@@ -437,11 +460,19 @@ jobs:
     name: Operational syntax and entrypoints
     needs: preflight
     if: ${{ needs.preflight.outputs.operations == 'true' }}
-    runs-on: [self-hosted, Linux, X64, freedom-ci-php]
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
+
+      - name: Set up PHP 8.4
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: '8.4'
+          extensions: bcmath, ctype, curl, dom, fileinfo, filter, hash, intl, json, libxml, mbstring, openssl, pcntl, pdo, pdo_mysql, redis, session, sodium, tokenizer, xml, xmlwriter
+          coverage: none
+          tools: composer:2.10.2
 
       - name: Validate affected operational entrypoints
         shell: bash
@@ -464,7 +495,7 @@ jobs:
                 bash -n "$file"
                 ;;
               *.php)
-                "$PHP_ROOT/bin/php" -l "$file" >/dev/null
+                php -l "$file" >/dev/null
                 ;;
               *.conf)
                 awk '''
@@ -491,8 +522,8 @@ jobs:
   secrets:
     name: Secret scan
     # A filtered workflow_dispatch is diagnostic-only; every pull-request run scans the exact event base-to-head history.
-    if: ${{ (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.draft == false)) && !(github.event_name == 'workflow_dispatch' && inputs.phpunit_filter != '') }}
-    runs-on: [self-hosted, Linux, X64, freedom-ci-core]
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && !(github.event_name == 'workflow_dispatch' && inputs.phpunit_filter != '') }}
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -531,5 +562,6 @@ jobs:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
           PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_REPO_URL: ${{ github.event.pull_request.head.repo.clone_url }}
           PUSH_BEFORE_SHA: ${{ github.event.before }}
         run: bash scripts/ci/scan-git-secrets.sh

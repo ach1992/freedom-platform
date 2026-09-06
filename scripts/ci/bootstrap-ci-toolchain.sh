@@ -17,34 +17,61 @@ case "$mode" in
         ;;
 esac
 
-php_root="${PHP_ROOT:-/www/server/php/84}"
-composer_bin="${COMPOSER_BIN:-/usr/local/bin/composer}"
-php_bin="$php_root/bin/php"
-php_config="$php_root/bin/php-config"
-php_ini="${PHP_CLI_INI:-$php_root/etc/php-cli.ini}"
-
 : "${RUNNER_TEMP:?RUNNER_TEMP is required}"
 : "${GITHUB_JOB:?GITHUB_JOB is required}"
 : "${GITHUB_PATH:?GITHUB_PATH is required}"
 
-test -x "$php_bin" || {
-    echo "Required PHP CLI binary is unavailable: $php_bin" >&2
+php_bin="${PHP_BIN:-}"
+php_config="${PHP_CONFIG:-}"
+php_ini="${PHP_CLI_INI:-}"
+composer_bin="${COMPOSER_BIN:-}"
+
+if [[ -n "${PHP_ROOT:-}" ]]; then
+    [[ -n "$php_bin" ]] || php_bin="$PHP_ROOT/bin/php"
+    [[ -n "$php_config" ]] || php_config="$PHP_ROOT/bin/php-config"
+    [[ -n "$php_ini" ]] || php_ini="$PHP_ROOT/etc/php-cli.ini"
+fi
+
+if [[ -z "$php_bin" ]]; then
+    php_bin="$(command -v php || true)"
+fi
+if [[ -z "$php_config" ]]; then
+    php_config="$(command -v php-config || true)"
+fi
+if [[ -z "$composer_bin" ]]; then
+    composer_bin="$(command -v composer || true)"
+fi
+
+# Preserve the existing aaPanel-compatible fallback for a future private/self-hosted route.
+if [[ -z "$php_bin" && -x /www/server/php/84/bin/php ]]; then
+    php_bin=/www/server/php/84/bin/php
+    php_config=/www/server/php/84/bin/php-config
+    [[ -n "$php_ini" ]] || php_ini=/www/server/php/84/etc/php-cli.ini
+fi
+if [[ -z "$composer_bin" && -f /usr/local/bin/composer ]]; then
+    composer_bin=/usr/local/bin/composer
+fi
+
+test -n "$php_bin" && test -x "$php_bin" || {
+    echo "Required PHP CLI binary is unavailable: ${php_bin:-not found}" >&2
     exit 1
 }
-
-test -f "$php_ini" || {
-    echo "Required PHP CLI configuration is unavailable: $php_ini" >&2
+test -n "$composer_bin" && test -f "$composer_bin" || {
+    echo "Required Composer binary is unavailable: ${composer_bin:-not found}" >&2
     exit 1
 }
+if [[ -n "$php_ini" ]]; then
+    test -f "$php_ini" || {
+        echo "Configured PHP CLI configuration is unavailable: $php_ini" >&2
+        exit 1
+    }
+fi
 
-test -f "$composer_bin" || {
-    echo "Required Composer binary is unavailable: $composer_bin" >&2
-    exit 1
-}
-
-base_php_args=(
-    "$php_bin"
-    -c "$php_ini"
+base_php_args=("$php_bin")
+if [[ -n "$php_ini" ]]; then
+    base_php_args+=(-c "$php_ini")
+fi
+base_php_args+=(
     -d opcache.jit=0
     -d opcache.jit_buffer_size=0
 )
@@ -55,7 +82,7 @@ pcov_module=''
 if "${base_php_args[@]}" -r 'exit(extension_loaded("pcov") ? 0 : 1);'; then
     pcov_source=ini
 elif [[ "$mode" == 'coverage' ]]; then
-    if [[ -x "$php_config" ]]; then
+    if [[ -n "$php_config" && -x "$php_config" ]]; then
         extension_dir="$($php_config --extension-dir)"
     else
         extension_dir="$("${base_php_args[@]}" -r 'echo ini_get("extension_dir");')"
@@ -85,7 +112,9 @@ mkdir -p "$tool_bin"
     echo 'set -euo pipefail'
     echo 'php_args=('
     printf '    %q\n' "$php_bin"
-    printf '    -c\n    %q\n' "$php_ini"
+    if [[ -n "$php_ini" ]]; then
+        printf '    -c\n    %q\n' "$php_ini"
+    fi
     printf '    -d\n    %q\n' 'opcache.jit=0'
     printf '    -d\n    %q\n' 'opcache.jit_buffer_size=0'
     if [[ -n "$pcov_module" ]]; then

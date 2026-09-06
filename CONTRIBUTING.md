@@ -19,7 +19,7 @@ Do not insert a human checkpoint between ordinary reversible steps. When the cur
 
 ## Execution and validation routing
 
-Use [`docs/development/execution-infrastructure.md`](docs/development/execution-infrastructure.md) for the canonical boundaries and lifecycle of the connected GitHub integration, `AI_Server_Agent` workspace, GitHub Actions self-hosted runners, external Workers, and staging/deployment targets.
+Use [`docs/development/execution-infrastructure.md`](docs/development/execution-infrastructure.md) for the canonical boundaries and lifecycle of the connected GitHub integration, `AI_Server_Agent` workspace, standard GitHub-hosted CI, optional trusted self-hosted runners, external Workers, and staging/deployment targets.
 
 Use [`docs/06-test-strategy.md`](docs/06-test-strategy.md) for the canonical validation plan, evidence freshness, reproducible verification commands, MariaDB/Redis requirements, and CI failure policy.
 

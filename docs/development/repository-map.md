@@ -54,11 +54,11 @@ Use deterministic fixtures/fakes for unavailable external systems. Real provider
 
 | Path | Purpose |
 |---|---|
-| `docs/development/execution-infrastructure.md` | where/how development work runs; self-hosted runner lifecycle and capability qualification |
+| `docs/development/execution-infrastructure.md` | where/how development work runs; hosted-CI boundary plus optional self-hosted runner lifecycle and capability qualification |
 | `docs/06-test-strategy.md` | validation semantics, evidence freshness and CI failure policy |
-| `.github/workflows/ci.yml` | risk-based repository CI on owner-controlled self-hosted runners |
+| `.github/workflows/ci.yml` | risk-based repository CI on standard GitHub-hosted Linux runners |
 | `.github/workflows/` | controlled workflow definitions; verify current default-branch registration and live GitHub state before treating one as callable |
-| `scripts/ci/bootstrap-self-hosted-toolchain.sh` | executable PHP/Composer runner toolchain contract |
+| `scripts/ci/bootstrap-ci-toolchain.sh` | runner-neutral executable PHP/Composer toolchain contract |
 | `scripts/ci/` | CI classification, static/security/project-control checks |
 | `docker-compose.ci.yml` | disposable MariaDB/Redis test dependencies |
 | `deploy/bin/` | guarded runtime/deployment primitives |

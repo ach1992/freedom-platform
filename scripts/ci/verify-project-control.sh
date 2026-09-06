@@ -175,8 +175,8 @@ if grep -RIE --include='*.md' \
     fail 'canonical documentation references retired status/planning/traceability/evidence material'
 fi
 
-# Every executing workflow is self-hosted Linux/x64. Custom capability labels are owned by each workflow's
-# runs-on selector and may differ by workload; the verifier must not couple all jobs to one custom-label set.
+# Generic CI is intentionally GitHub-hosted. Manual staging/provider workflows remain self-hosted
+# operational contracts and are dormant unless an explicitly trusted runner is connected.
 shopt -s nullglob
 workflow_files=(.github/workflows/*.yml .github/workflows/*.yaml)
 shopt -u nullglob
@@ -187,23 +187,39 @@ for workflow in "${workflow_files[@]}"; do
         fail "historical disabled workflow stub remains in active tree: $workflow"
     fi
 
-    found_runner=false
-    while IFS= read -r runner_line; do
-        trimmed="${runner_line#"${runner_line%%[![:space:]]*}"}"
-        [[ "$trimmed" == runs-on:\ \[*\] ]] \
-            || fail "workflow runner selector must be an explicit label list: $workflow: $trimmed"
-        for required_label in self-hosted Linux X64; do
-            selector_has_label "$trimmed" "$required_label" \
-                || fail "workflow runner selector must retain exact label $required_label: $workflow: $trimmed"
-        done
-        found_runner=true
-    done < <(grep -E '^[[:space:]]*runs-on:' "$workflow" || true)
+    runner_lines=$(grep -E '^[[:space:]]*runs-on:' "$workflow" || true)
+    [[ -n "$runner_lines" ]] || fail "workflow has no explicit runs-on selector: $workflow"
 
-    [[ "$found_runner" == true ]] || fail "workflow has no explicit self-hosted runs-on selector: $workflow"
+    case "$workflow" in
+        .github/workflows/ci.yml)
+            while IFS= read -r runner_line; do
+                trimmed="${runner_line#"${runner_line%%[![:space:]]*}"}"
+                [[ "$trimmed" == 'runs-on: ubuntu-24.04' ]] \
+                    || fail "generic CI must use the pinned standard GitHub-hosted Ubuntu runner: $workflow: $trimmed"
+            done <<< "$runner_lines"
+            if grep -F 'self-hosted' "$workflow" >/dev/null; then
+                fail 'generic CI must not retain a self-hosted runner route while the repository is public-ready'
+            fi
+            ;;
+        .github/workflows/staging-readiness.yml|.github/workflows/provider-readiness.yml|.github/workflows/provider-live-acceptance.yml)
+            while IFS= read -r runner_line; do
+                trimmed="${runner_line#"${runner_line%%[![:space:]]*}"}"
+                [[ "$trimmed" == runs-on:\ \[*\] ]] \
+                    || fail "operational workflow runner selector must remain an explicit label list: $workflow: $trimmed"
+                for required_label in self-hosted Linux X64; do
+                    selector_has_label "$trimmed" "$required_label" \
+                        || fail "operational workflow runner selector must retain exact label $required_label: $workflow: $trimmed"
+                done
+            done <<< "$runner_lines"
+            ;;
+        *)
+            fail "workflow runner policy is unclassified: $workflow"
+            ;;
+    esac
 done
 
-# Generic CI protects the self-hosted runner, keeps Drafts quiet, computes a fail-safe validation plan,
-# cancels superseded PR work, and uses MariaDB 10.11 only when application/database integration applies.
+# Generic CI uses ephemeral GitHub-hosted runners, keeps Drafts quiet, validates same-repository and fork PRs,
+# computes a fail-safe validation plan, cancels superseded PR work, and uses MariaDB 10.11 only when applicable.
 ci=.github/workflows/ci.yml
 grep -A16 -F 'pull_request:' "$ci" | grep -F 'develop/v1.0.0-completion' >/dev/null \
     || fail 'generic CI does not validate Worker PRs targeting the integration branch'
@@ -211,10 +227,11 @@ grep -A16 -F 'pull_request:' "$ci" | grep -F 'ready_for_review' >/dev/null \
     || fail 'generic CI does not trigger validation when a Draft becomes review-ready'
 grep -A16 -F 'pull_request:' "$ci" | grep -F 'converted_to_draft' >/dev/null \
     || fail 'generic CI cannot cancel active validation when a PR returns to Draft'
-grep -F 'github.event.pull_request.head.repo.full_name == github.repository' "$ci" >/dev/null \
-    || fail 'generic CI lacks same-repository protection for the self-hosted runner'
+if grep -F 'github.event.pull_request.head.repo.full_name == github.repository' "$ci" >/dev/null; then
+    fail 'generic GitHub-hosted CI must not suppress fork pull requests with the legacy self-hosted guard'
+fi
 grep -F 'github.event.pull_request.draft == false' "$ci" >/dev/null \
-    || fail 'generic CI does not suppress automatic self-hosted jobs for Draft PRs'
+    || fail 'generic CI does not suppress automatic jobs for Draft PRs'
 grep -F 'scripts/ci/classify-validation-plan.sh' "$ci" >/dev/null \
     || fail 'generic CI must use the shared validation-plan classifier'
 grep -F 'github.event.pull_request.number || github.ref' "$ci" >/dev/null \
@@ -223,6 +240,10 @@ grep -A3 -F 'concurrency:' "$ci" | grep -F 'cancel-in-progress: true' >/dev/null
     || fail 'generic CI must cancel superseded runs'
 grep -F 'EXPECTED_HEAD_SHA' "$ci" >/dev/null \
     || fail 'generic CI lacks exact PR head/base freshness validation'
+grep -F 'HEAD_REPO_URL: ${{ github.event.pull_request.head.repo.clone_url }}' "$ci" >/dev/null \
+    || fail 'generic CI does not bind PR freshness checks to the actual head repository'
+grep -F 'PR_HEAD_REPO_URL: ${{ github.event.pull_request.head.repo.clone_url }}' "$ci" >/dev/null \
+    || fail 'generic secret scan does not bind fork PR heads to the actual head repository'
 grep -F 'fetch-depth: 0' "$ci" >/dev/null \
     || fail 'generic CI secret scan must fetch complete Git history'
 grep -F 'bash scripts/ci/scan-git-secrets.sh' "$ci" >/dev/null \
@@ -239,6 +260,14 @@ grep -Eq "GITLEAKS_SHA256: '[0-9a-f]{64}'" "$ci" >/dev/null \
     || fail 'generic CI secret scan must checksum-pin the standalone Gitleaks binary'
 grep -F 'sha256sum -c -' "$ci" >/dev/null \
     || fail 'generic CI secret scan must verify the pinned Gitleaks archive checksum'
+grep -F 'scripts/ci/bootstrap-ci-toolchain.sh' "$ci" >/dev/null \
+    || fail 'generic CI must validate the runner-neutral PHP/Composer toolchain contract'
+if grep -F 'bootstrap-self-hosted-toolchain.sh' "$ci" >/dev/null; then
+    fail 'generic CI retains the retired self-hosted-only toolchain entrypoint'
+fi
+setup_php_ref=$(grep -Eo 'shivammathur/setup-php@[0-9a-f]+' "$ci" | head -n 1 || true)
+[[ "$setup_php_ref" =~ ^shivammathur/setup-php@[0-9a-f]{40}$ ]] \
+    || fail 'generic CI must pin setup-php to an immutable full commit SHA'
 if grep -F 'gitleaks/gitleaks-action@' "$ci" >/dev/null; then
     fail 'generic CI must not rely on the PR-commit-list pagination behavior of gitleaks-action'
 fi
