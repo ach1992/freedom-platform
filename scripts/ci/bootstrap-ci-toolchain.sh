@@ -191,6 +191,30 @@ if ! php_summary="$(
             exit(1);
         }
 
+        if (in_array("gd", $required, true)) {
+            $gdImageTypes = function_exists("imagetypes") ? imagetypes() : 0;
+            $decoderSupport = [
+                "jpeg" => function_exists("imagecreatefromjpeg")
+                    && defined("IMG_JPG")
+                    && (($gdImageTypes & constant("IMG_JPG")) !== 0),
+                "png" => function_exists("imagecreatefrompng")
+                    && defined("IMG_PNG")
+                    && (($gdImageTypes & constant("IMG_PNG")) !== 0),
+                "webp" => function_exists("imagecreatefromwebp")
+                    && defined("IMG_WEBP")
+                    && (($gdImageTypes & constant("IMG_WEBP")) !== 0),
+            ];
+            $missingDecoders = array_keys(array_filter(
+                $decoderSupport,
+                static fn (bool $supported): bool => ! $supported,
+            ));
+
+            if ($missingDecoders !== []) {
+                fwrite(STDERR, "Missing GD image decoder capabilities: ".implode(", ", $missingDecoders).PHP_EOL);
+                exit(1);
+            }
+        }
+
         if ((int) ini_get("opcache.jit_buffer_size") !== 0) {
             fwrite(STDERR, "PHP JIT must be disabled for the CI wrapper.".PHP_EOL);
             exit(1);

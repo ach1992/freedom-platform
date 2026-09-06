@@ -268,6 +268,12 @@ fi
 setup_php_ref=$(grep -Eo 'shivammathur/setup-php@[0-9a-f]+' "$ci" | head -n 1 || true)
 [[ "$setup_php_ref" =~ ^shivammathur/setup-php@[0-9a-f]{40}$ ]] \
     || fail 'generic CI must pin setup-php to an immutable full commit SHA'
+setup_php_steps=$(grep -c 'uses: shivammathur/setup-php@' "$ci" || true)
+setup_php_gd_steps=$(grep -Ec 'extensions: .*([, ]gd[, ])' "$ci" || true)
+[[ "$setup_php_steps" -gt 0 && "$setup_php_gd_steps" -eq "$setup_php_steps" ]] \
+    || fail 'every generic setup-php step must provision the required GD runtime extension'
+grep -F 'Missing GD image decoder capabilities:' scripts/ci/bootstrap-ci-toolchain.sh >/dev/null \
+    || fail 'generic CI toolchain must fail closed when JPEG/PNG/WebP GD decoder support is unavailable'
 if grep -F 'gitleaks/gitleaks-action@' "$ci" >/dev/null; then
     fail 'generic CI must not rely on the PR-commit-list pagination behavior of gitleaks-action'
 fi
