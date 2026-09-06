@@ -419,7 +419,7 @@ final class HttpTelegramPrivateMediaFetcherTest extends TestCase
     private function onePixelPng(): string
     {
         return $this->decodeImageFixture(
-            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9RYVFHYAAAAASUVORK5CYII=',
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNg+A8AAQIBANEay48AAAAASUVORK5CYII=',
         );
     }
 

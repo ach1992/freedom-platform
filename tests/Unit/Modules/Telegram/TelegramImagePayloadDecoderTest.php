@@ -18,13 +18,17 @@ final class TelegramImagePayloadDecoderTest extends TestCase
         $this->assertDecoderRuntime();
 
         foreach ([
-            $this->onePixelPng(),
-            $this->onePixelJpeg(),
-            $this->onePixelWebp(),
-            $this->animatedOnePixelWebp(),
-        ] as $content) {
+            'png' => $this->onePixelPng(),
+            'jpeg' => $this->onePixelJpeg(),
+            'webp' => $this->onePixelWebp(),
+            'animated-webp' => $this->animatedOnePixelWebp(),
+        ] as $format => $content) {
             self::assertSame(TelegramImagePayloadIntegrity::COMPLETE, TelegramImagePayloadIntegrity::inspect($content));
-            TelegramImagePayloadDecoder::assertDecodable($content);
+            try {
+                TelegramImagePayloadDecoder::assertDecodable($content);
+            } catch (TelegramPrivateMediaRejected $exception) {
+                self::fail(sprintf('Valid %s fixture was rejected: %s', $format, $exception->reasonCode));
+            }
         }
 
         self::assertTrue(true);
@@ -94,7 +98,7 @@ final class TelegramImagePayloadDecoderTest extends TestCase
     private function onePixelPng(): string
     {
         return $this->decodeFixture(
-            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9RYVFHYAAAAASUVORK5CYII=',
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNg+A8AAQIBANEay48AAAAASUVORK5CYII=',
         );
     }
 
