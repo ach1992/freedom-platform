@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Payments\GiftCard\Application;
 
+use App\Modules\Payments\Application\Contracts\PurchasePromotionUsageAuthority;
 use App\Modules\Payments\Application\PurchasePaymentIntentService;
 use App\Modules\Payments\Domain\PaymentIntentState;
 use App\Shared\Application\Clock;
@@ -24,6 +25,7 @@ final readonly class GiftCardSubmissionService
     public function __construct(
         private DatabaseManager $database,
         private PurchasePaymentIntentService $purchaseIntents,
+        private PurchasePromotionUsageAuthority $promotionUsage,
         private StringEncrypter $encrypter,
         private Clock $clock,
     ) {}
@@ -125,6 +127,11 @@ final readonly class GiftCardSubmissionService
                     $eligibilityDecisionPublicId,
                     self::METHOD_CODE,
                     $correlationId,
+                );
+                $this->promotionUsage->reserveForQuote(
+                    $this->promotionReservationKey($quotePublicId),
+                    $userId,
+                    $quotePublicId,
                 );
                 $intent = $connection->table('payment_intents')
                     ->where('public_id', $intentReceipt->intentPublicId)
@@ -423,6 +430,11 @@ final readonly class GiftCardSubmissionService
             (string) $row->state,
             $replayed,
         );
+    }
+
+    private function promotionReservationKey(string $quotePublicId): string
+    {
+        return 'purchase-promotion-reservation:'.$quotePublicId;
     }
 
     private function normalizeCode(?string $value): ?string

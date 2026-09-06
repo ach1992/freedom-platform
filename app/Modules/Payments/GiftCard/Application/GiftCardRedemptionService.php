@@ -4,10 +4,13 @@ declare(strict_types=1);
 
 namespace App\Modules\Payments\GiftCard\Application;
 
+use App\Modules\Orders\Application\PurchaseOrderService;
+use App\Modules\Orders\Application\PurchaseOrderSettlementAvailability;
 use App\Modules\Payments\Application\Contracts\PaymentEvidence;
 use App\Modules\Payments\Application\Contracts\PaymentEvidenceAuthority;
 use App\Modules\Payments\Application\Contracts\PaymentTransactionStatus;
 use App\Modules\Payments\Application\Contracts\ProviderOperationOutcome;
+use App\Modules\Payments\Application\Contracts\PurchasePromotionUsageAuthority;
 use App\Modules\Payments\Application\Contracts\VerifiedPaymentEvent;
 use App\Modules\Payments\Application\PurchaseSettlementService;
 use App\Modules\Payments\GiftCard\Application\Contracts\GiftCardProviderEvidence;
@@ -29,6 +32,8 @@ final readonly class GiftCardRedemptionService
     public function __construct(
         private DatabaseManager $database,
         private PurchaseSettlementService $purchaseSettlements,
+        private PurchasePromotionUsageAuthority $promotionUsage,
+        private PurchaseOrderService $purchaseOrders,
         private Clock $clock,
     ) {}
 
@@ -80,7 +85,7 @@ final readonly class GiftCardRedemptionService
         }
 
         try {
-            return $this->settlePersistedRedemption($submissionPublicId, $correlationId);
+            return $this->settlePersistedRedemptionInternal($submissionPublicId, $correlationId, false);
         } catch (Throwable $exception) {
             $this->recordFindingSafely(
                 $submissionPublicId,
@@ -103,78 +108,128 @@ final readonly class GiftCardRedemptionService
         }
         $this->assertToken($correlationId, 'Gift-card settlement correlation ID', 8, 64);
 
-        $connection = $this->database->connection();
-        $authority = $connection->table('gift_card_redemptions as redemption')
-            ->join('gift_card_submissions as submission', 'submission.id', '=', 'redemption.gift_card_submission_id')
-            ->join('gift_card_provider_events as provider_event', 'provider_event.id', '=', 'redemption.provider_event_row_id')
-            ->join('payment_intents as intent', 'intent.id', '=', 'redemption.payment_intent_id')
-            ->where('submission.public_id', $submissionPublicId)
-            ->first([
-                'redemption.id as redemption_id', 'redemption.public_id as redemption_public_id',
-                'redemption.provider_code as external_provider_code', 'redemption.provider_redemption_id',
-                'redemption.amount_irr', 'redemption.currency', 'redemption.evidence_hash',
-                'redemption.purchase_settlement_id', 'redemption.redeemed_at',
-                'submission.id as submission_id', 'submission.state as submission_state',
-                'provider_event.provider_event_id as external_provider_event_id',
-                'intent.id as intent_id', 'intent.public_id as intent_public_id', 'intent.state as intent_state',
-            ]);
-        if ($authority === null) {
-            throw new DomainException('Gift-card authoritative redemption does not exist.');
-        }
+        return $this->settlePersistedRedemptionInternal($submissionPublicId, $correlationId, true);
+    }
 
-        if ($authority->purchase_settlement_id !== null) {
-            $settlement = $connection->table('purchase_settlements')
-                ->where('id', $authority->purchase_settlement_id)
-                ->first(['public_id']);
-            if ($settlement === null || $authority->submission_state !== 'captured' || $authority->intent_state !== 'captured') {
-                throw new RuntimeException('Gift-card redemption settlement linkage is inconsistent.');
+    private function settlePersistedRedemptionInternal(
+        string $submissionPublicId,
+        string $correlationId,
+        bool $replayed,
+    ): GiftCardProcessingReceipt {
+        return $this->database->connection()->transaction(function (Connection $connection) use (
+            $submissionPublicId,
+            $correlationId,
+            $replayed,
+        ): GiftCardProcessingReceipt {
+            $authority = $connection->table('gift_card_redemptions as redemption')
+                ->join('gift_card_submissions as submission', 'submission.id', '=', 'redemption.gift_card_submission_id')
+                ->join('gift_card_provider_events as provider_event', 'provider_event.id', '=', 'redemption.provider_event_row_id')
+                ->join('payment_intents as intent', 'intent.id', '=', 'redemption.payment_intent_id')
+                ->where('submission.public_id', $submissionPublicId)
+                ->lockForUpdate()
+                ->first([
+                    'redemption.id as redemption_id', 'redemption.public_id as redemption_public_id',
+                    'redemption.provider_code as external_provider_code', 'redemption.provider_redemption_id',
+                    'redemption.amount_irr', 'redemption.currency', 'redemption.evidence_hash',
+                    'redemption.purchase_settlement_id', 'redemption.redeemed_at',
+                    'submission.id as submission_id', 'submission.state as submission_state',
+                    'provider_event.provider_event_id as external_provider_event_id',
+                    'intent.id as intent_id', 'intent.public_id as intent_public_id', 'intent.state as intent_state',
+                    'intent.user_id', 'intent.source_quote_public_id',
+                ]);
+            if ($authority === null) {
+                throw new DomainException('Gift-card authoritative redemption does not exist.');
             }
 
-            return new GiftCardProcessingReceipt(
-                $submissionPublicId,
-                'captured',
-                null,
-                (string) $authority->redemption_public_id,
-                (string) $settlement->public_id,
-                true,
+            if ($authority->purchase_settlement_id !== null) {
+                $settlement = $connection->table('purchase_settlements')
+                    ->where('id', $authority->purchase_settlement_id)
+                    ->first(['public_id']);
+                if ($settlement === null || $authority->submission_state !== 'captured' || $authority->intent_state !== 'captured') {
+                    throw new RuntimeException('Gift-card redemption settlement linkage is inconsistent.');
+                }
+
+                return new GiftCardProcessingReceipt(
+                    $submissionPublicId,
+                    'captured',
+                    null,
+                    (string) $authority->redemption_public_id,
+                    (string) $settlement->public_id,
+                    true,
+                );
+            }
+
+            if ($authority->submission_state !== 'redeeming') {
+                throw new RuntimeException('Gift-card redemption is not in a settleable local state.');
+            }
+            if (! is_string($authority->source_quote_public_id) || (int) $authority->user_id < 1) {
+                throw new RuntimeException('Gift-card redemption purchase identity is incomplete.');
+            }
+
+            $orderAvailability = $this->purchaseOrders->settlementAvailabilityFromQuote(
+                $authority->source_quote_public_id,
+                (int) $authority->user_id,
             );
-        }
+            if ($orderAvailability === PurchaseOrderSettlementAvailability::Unavailable) {
+                $this->recordFinding(
+                    $submissionPublicId,
+                    'provider_redeemed_purchase_order_unavailable',
+                    'critical',
+                    (string) $authority->external_provider_code,
+                    (string) $authority->external_provider_event_id,
+                    (string) $authority->provider_redemption_id,
+                    strtolower((string) $authority->evidence_hash),
+                    $correlationId,
+                );
 
-        if ($authority->submission_state !== 'redeeming') {
-            throw new RuntimeException('Gift-card redemption is not in a settleable local state.');
-        }
+                return new GiftCardProcessingReceipt(
+                    $submissionPublicId,
+                    'redeeming',
+                    null,
+                    (string) $authority->redemption_public_id,
+                    null,
+                    $replayed,
+                );
+            }
 
-        $redeemedAt = $this->storedDateTime((string) $authority->redeemed_at);
-        $commonProviderEventId = hash('sha256', (string) $authority->external_provider_code."\0".(string) $authority->external_provider_event_id);
-        $commonProviderTransactionId = hash('sha256', (string) $authority->external_provider_code."\0".(string) $authority->provider_redemption_id);
-        $verifiedEvent = new VerifiedPaymentEvent(
-            $commonProviderEventId,
-            strtolower((string) $authority->evidence_hash),
-            new PaymentEvidence(
-                ProviderOperationOutcome::Success,
-                PaymentEvidenceAuthority::Authoritative,
-                PaymentTransactionStatus::Settled,
-                $commonProviderTransactionId,
+            $redeemedAt = $this->storedDateTime((string) $authority->redeemed_at);
+            $commonProviderEventId = hash('sha256', (string) $authority->external_provider_code."\0".(string) $authority->external_provider_event_id);
+            $commonProviderTransactionId = hash('sha256', (string) $authority->external_provider_code."\0".(string) $authority->provider_redemption_id);
+            $verifiedEvent = new VerifiedPaymentEvent(
                 $commonProviderEventId,
-                Money::irr((int) $authority->amount_irr),
-                $redeemedAt,
-                $redeemedAt,
                 strtolower((string) $authority->evidence_hash),
-                [
-                    'gift_card_provider' => (string) $authority->external_provider_code,
-                    'gift_card_submission' => $submissionPublicId,
-                ],
-            ),
-        );
+                new PaymentEvidence(
+                    ProviderOperationOutcome::Success,
+                    PaymentEvidenceAuthority::Authoritative,
+                    PaymentTransactionStatus::Settled,
+                    $commonProviderTransactionId,
+                    $commonProviderEventId,
+                    Money::irr((int) $authority->amount_irr),
+                    $redeemedAt,
+                    $redeemedAt,
+                    strtolower((string) $authority->evidence_hash),
+                    [
+                        'gift_card_provider' => (string) $authority->external_provider_code,
+                        'gift_card_submission' => $submissionPublicId,
+                    ],
+                ),
+            );
 
-        $settlement = $this->purchaseSettlements->capture(
-            (string) $authority->intent_public_id,
-            'gift_card',
-            $verifiedEvent,
-            $correlationId,
-        );
+            $settlement = $this->purchaseSettlements->capture(
+                (string) $authority->intent_public_id,
+                'gift_card',
+                $verifiedEvent,
+                $correlationId,
+            );
+            $this->promotionUsage->finalizeForSettlement(
+                $this->promotionRedemptionKey($settlement->settlementPublicId),
+                (int) $authority->user_id,
+                $settlement->settlementPublicId,
+            );
+            if ($orderAvailability === PurchaseOrderSettlementAvailability::AwaitingPayment) {
+                $this->purchaseOrders->createFromSettlement($settlement->settlementPublicId, $correlationId);
+            }
 
-        $this->database->connection()->transaction(function (Connection $connection) use ($authority, $settlement): void {
             $redemption = $connection->table('gift_card_redemptions')->where('id', $authority->redemption_id)->lockForUpdate()->first();
             $submission = $connection->table('gift_card_submissions')->where('id', $authority->submission_id)->lockForUpdate()->first();
             if ($redemption === null || $submission === null) {
@@ -184,29 +239,35 @@ final readonly class GiftCardRedemptionService
                 if ((int) $redemption->purchase_settlement_id !== $settlement->settlementId) {
                     throw new RuntimeException('Gift-card redemption is linked to another settlement.');
                 }
+            } else {
+                $connection->table('gift_card_redemptions')->where('id', $redemption->id)->update([
+                    'purchase_settlement_id' => $settlement->settlementId,
+                ]);
+            }
+            if ($submission->state !== 'captured') {
+                $updated = $connection->table('gift_card_submissions')
+                    ->where('id', $submission->id)
+                    ->where('state', 'redeeming')
+                    ->update(['state' => 'captured']);
+                if ($updated !== 1) {
+                    throw new RuntimeException('Gift-card submission capture state changed concurrently.');
+                }
+            }
 
-                return;
-            }
-            $connection->table('gift_card_redemptions')->where('id', $redemption->id)->update([
-                'purchase_settlement_id' => $settlement->settlementId,
-            ]);
-            $updated = $connection->table('gift_card_submissions')
-                ->where('id', $submission->id)
-                ->where('state', 'redeeming')
-                ->update(['state' => 'captured']);
-            if ($updated !== 1) {
-                throw new RuntimeException('Gift-card submission capture state changed concurrently.');
-            }
+            return new GiftCardProcessingReceipt(
+                $submissionPublicId,
+                'captured',
+                null,
+                (string) $authority->redemption_public_id,
+                $settlement->settlementPublicId,
+                $replayed || $settlement->replayed,
+            );
         }, 3);
+    }
 
-        return new GiftCardProcessingReceipt(
-            $submissionPublicId,
-            'captured',
-            null,
-            (string) $authority->redemption_public_id,
-            $settlement->settlementPublicId,
-            $settlement->replayed,
-        );
+    private function promotionRedemptionKey(string $settlementPublicId): string
+    {
+        return 'purchase-promotion-redemption:'.$settlementPublicId;
     }
 
     private function persistRedemption(string $submissionPublicId, string $externalProviderCode, GiftCardProviderEvidence $evidence): void

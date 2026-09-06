@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Modules\Payments\GiftCard\Application;
 
+use App\Modules\Orders\Application\PurchaseOrderService;
+use App\Modules\Orders\Application\PurchaseOrderSettlementAvailability;
 use App\Modules\Payments\Domain\PaymentIntentState;
 use App\Modules\Payments\GiftCard\Application\Contracts\GiftCardProviderEvidence;
 use App\Modules\Payments\GiftCard\Application\Contracts\GiftCardProviderRequest;
@@ -24,6 +26,8 @@ final readonly class GiftCardPaymentService
         private DatabaseManager $database,
         private StringEncrypter $encrypter,
         private GiftCardRedemptionService $redemptions,
+        private GiftCardReleaseService $releases,
+        private PurchaseOrderService $orders,
         private Clock $clock,
     ) {}
 
@@ -68,6 +72,14 @@ final readonly class GiftCardPaymentService
         }
 
         if ($capabilities->reserve) {
+            $orderUnavailable = $this->guardProviderValueMutation(
+                $submissionPublicId,
+                $provider,
+                $correlationId,
+            );
+            if ($orderUnavailable !== null) {
+                return $orderUnavailable;
+            }
             $reserveRequest = $this->beginProviderMutation($submissionPublicId, 'reserve', ['valid_unreserved'], 'reserving');
             try {
                 $reserve = $provider->reserve($reserveRequest);
@@ -80,6 +92,14 @@ final readonly class GiftCardPaymentService
             }
         }
 
+        $orderUnavailable = $this->guardProviderValueMutation(
+            $submissionPublicId,
+            $provider,
+            $correlationId,
+        );
+        if ($orderUnavailable !== null) {
+            return $orderUnavailable;
+        }
         $redeemRequest = $this->beginProviderMutation($submissionPublicId, 'redeem', ['valid_unreserved', 'reserved'], 'redeeming');
         try {
             $redeem = $provider->redeem($redeemRequest);
@@ -96,6 +116,108 @@ final readonly class GiftCardPaymentService
         }
 
         return $this->redemptions->recordAndSettle($submissionPublicId, $provider->code(), $redeem, $correlationId);
+    }
+
+    private function guardProviderValueMutation(
+        string $submissionPublicId,
+        GiftCardVerificationProvider $provider,
+        string $correlationId,
+    ): ?GiftCardProcessingReceipt {
+        $connection = $this->database->connection();
+        $authority = $this->submissionAuthority($connection, $submissionPublicId);
+        if ($authority === null) {
+            throw new DomainException('Gift-card submission does not exist.');
+        }
+        $availability = $this->orders->settlementAvailabilityFromQuote(
+            (string) $authority->source_quote_public_id,
+            (int) $authority->user_id,
+        );
+        if ($availability !== PurchaseOrderSettlementAvailability::Unavailable) {
+            return null;
+        }
+
+        $this->recordFinding(
+            $submissionPublicId,
+            'purchase_order_unavailable_before_provider_mutation',
+            $authority->state === 'reserved' ? 'critical' : 'high',
+            $provider->code(),
+            null,
+            null,
+            null,
+            $correlationId,
+        );
+
+        if ($authority->state === 'reserved') {
+            if ($provider->capabilities()->release) {
+                return $this->releases->release($submissionPublicId, $provider, $correlationId);
+            }
+
+            return $this->database->connection()->transaction(function (Connection $connection) use (
+                $submissionPublicId,
+                $provider,
+                $correlationId,
+            ): GiftCardProcessingReceipt {
+                $locked = $this->submissionAuthority($connection, $submissionPublicId, true);
+                if ($locked === null || $locked->state !== 'reserved') {
+                    throw new RuntimeException('Gift-card reserved Order-loss state changed concurrently.');
+                }
+                $this->recordFindingInConnection(
+                    $connection,
+                    $locked,
+                    'purchase_order_unavailable_reservation_release_unsupported',
+                    'critical',
+                    $provider->code(),
+                    null,
+                    $correlationId,
+                );
+                $this->createReview($connection, $locked, 'purchase_order_unavailable', $correlationId);
+
+                return $this->receipt(
+                    $connection,
+                    $this->submissionAuthority($connection, $submissionPublicId) ?? $locked,
+                    false,
+                );
+            }, 3);
+        }
+
+        return $this->database->connection()->transaction(function (Connection $connection) use (
+            $submissionPublicId,
+            $provider,
+            $correlationId,
+        ): GiftCardProcessingReceipt {
+            $locked = $this->submissionAuthority($connection, $submissionPublicId, true);
+            if ($locked === null || $locked->state !== 'valid_unreserved') {
+                throw new RuntimeException('Gift-card Order-loss state changed concurrently.');
+            }
+            $this->recordFindingInConnection(
+                $connection,
+                $locked,
+                'purchase_order_unavailable_before_provider_mutation',
+                'high',
+                $provider->code(),
+                null,
+                $correlationId,
+            );
+            $updated = $connection->table('gift_card_submissions')
+                ->where('id', $locked->submission_id)
+                ->where('state', 'valid_unreserved')
+                ->update(['state' => 'rejected']);
+            if ($updated !== 1) {
+                throw new RuntimeException('Gift-card Order-loss state changed concurrently.');
+            }
+            $this->failIntent(
+                $connection,
+                $locked,
+                $correlationId,
+                'gift_card_purchase_order_unavailable',
+            );
+
+            return $this->receipt(
+                $connection,
+                $this->submissionAuthority($connection, $submissionPublicId) ?? $locked,
+                false,
+            );
+        }, 3);
     }
 
     private function beginValidation(string $submissionPublicId, string $providerCode, string $correlationId): GiftCardProviderRequest|GiftCardProcessingReceipt
@@ -559,6 +681,7 @@ final readonly class GiftCardPaymentService
             'submission.claimed_region', 'submission.state',
             'type.type_code', 'type.verification_mode', 'type.manual_approval_limit_face_value', 'type.provider_code',
             'intent.public_id as intent_public_id', 'intent.amount_irr', 'intent.currency', 'intent.state as intent_state',
+            'intent.user_id', 'intent.source_quote_public_id',
         ]);
     }
 
