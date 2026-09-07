@@ -584,7 +584,7 @@ return [
         [
             'file' => 'database/migrations/2026_08_31_000100_enable_telegram_interactive_delivery_presentations.php',
             'from' => 'telegram_delivery_interactive_presentations_rollback',
-            'to' => 'telegram_delivery_interactive_delivery_presentations',
+            'to' => 'telegram_delivery_interactive_presentations',
             'owner' => 'Telegram',
         ],
     ],
