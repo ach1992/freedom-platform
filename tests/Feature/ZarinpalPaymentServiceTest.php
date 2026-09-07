@@ -21,6 +21,7 @@ use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
 use DateTimeImmutable;
+use DomainException;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -162,6 +163,53 @@ final class ZarinpalPaymentServiceTest extends TestCase
         self::assertSame(0, $this->transport->verifyCalls);
         self::assertSame(0, DB::table('purchase_settlements')->count());
         self::assertSame(1, DB::table('zarinpal_payment_observations')->where('event_type', 'callback_nok')->count());
+    }
+
+    public function test_callback_configuration_drift_fails_closed_without_server_verification(): void
+    {
+        $intentPublicId = $this->purchaseIntent('configuration-drift');
+        $service = $this->app->make(ZarinpalPaymentService::class);
+        $service->initiate(
+            'zarinpal.request.configuration-drift.000001',
+            $intentPublicId,
+            $this->correlation('initiate-configuration-drift'),
+        );
+        config()->set('services.zarinpal.merchant_id', '11111111-1111-1111-1111-111111111111');
+
+        $review = $service->handleCallback(
+            'A'.str_repeat('1', 35),
+            'OK',
+            $this->correlation('callback-configuration-drift'),
+        );
+
+        self::assertSame(ZarinpalRequestState::ManualReview, $review->state);
+        self::assertTrue($review->manualReviewRequired);
+        self::assertSame(0, $this->transport->verifyCalls);
+        self::assertSame(0, DB::table('purchase_settlements')->count());
+        self::assertSame(
+            'awaiting_user_action',
+            DB::table('payment_intents')->where('public_id', $intentPublicId)->value('state'),
+        );
+    }
+
+    public function test_unknown_callback_authority_fails_closed_without_provider_or_settlement_effect(): void
+    {
+        $service = $this->app->make(ZarinpalPaymentService::class);
+
+        try {
+            $service->handleCallback(
+                'A'.str_repeat('9', 35),
+                'OK',
+                $this->correlation('callback-unknown-authority'),
+            );
+            self::fail('Unknown Zarinpal callback authority must be rejected.');
+        } catch (DomainException $exception) {
+            self::assertSame('Zarinpal callback authority is not bound to a payment intent.', $exception->getMessage());
+        }
+
+        self::assertSame(0, $this->transport->verifyCalls);
+        self::assertSame(0, DB::table('purchase_settlements')->count());
+        self::assertSame(0, DB::table('zarinpal_payment_verifications')->count());
     }
 
     public function test_uncertain_request_is_never_retried_and_discovery_never_auto_adopts_authority(): void
