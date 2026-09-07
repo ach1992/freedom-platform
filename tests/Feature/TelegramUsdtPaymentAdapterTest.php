@@ -30,6 +30,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchasePaymentMe
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseUsdtPayment;
 use App\Shared\Application\Clock;
 use App\Shared\Domain\Money;
+use Closure;
 use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
@@ -40,12 +41,13 @@ use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Cache\ArrayStore;
 use Illuminate\Cache\Repository;
 use Illuminate\Database\DatabaseManager;
-use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
 use RuntimeException;
 use Tests\TestCase;
+use Throwable;
 
 final class TelegramUsdtAdapterClock implements Clock
 {
@@ -57,8 +59,14 @@ final class TelegramUsdtAdapterClock implements Clock
     }
 }
 
-final readonly class TelegramUsdtAdapterRateProvider implements UsdtRateProvider
+final class TelegramUsdtAdapterRateProvider implements UsdtRateProvider
 {
+    public ?Closure $onFetch = null;
+
+    public ?Throwable $callbackFailure = null;
+
+    public ?int $observedTransactionLevel = null;
+
     public function __construct(
         private string $providerCode,
         private string $rateIrr,
@@ -72,6 +80,16 @@ final readonly class TelegramUsdtAdapterRateProvider implements UsdtRateProvider
 
     public function fetch(UsdtRateSide $side): UsdtRate
     {
+        if ($this->onFetch !== null) {
+            $callback = $this->onFetch;
+            $this->onFetch = null;
+            try {
+                $callback();
+            } catch (Throwable $exception) {
+                $this->callbackFailure = $exception;
+            }
+        }
+
         return new UsdtRate(
             $this->providerCode,
             $this->rateIrr,
@@ -85,9 +103,11 @@ final readonly class TelegramUsdtAdapterRateProvider implements UsdtRateProvider
 final class TelegramUsdtPaymentAdapterTest extends TestCase
 {
     use AgentPricingQuoteIntegrationTestSupport;
-    use RefreshDatabase;
+    use DatabaseTruncation;
 
     private TelegramUsdtAdapterClock $clock;
+
+    private TelegramUsdtAdapterRateProvider $primaryRateProvider;
 
     protected function setUp(): void
     {
@@ -107,7 +127,7 @@ final class TelegramUsdtPaymentAdapterTest extends TestCase
         config()->set('payments.usdt_bep20.token_contract', UsdtBep20Asset::TOKEN_CONTRACT);
         config()->set('payments.usdt_bep20.minimum_confirmations', 15);
 
-        $primary = new TelegramUsdtAdapterRateProvider('nobitex', '1000000', $this->clock->value);
+        $primary = $this->primaryRateProvider = new TelegramUsdtAdapterRateProvider('nobitex', '1000000', $this->clock->value);
         $secondary = new TelegramUsdtAdapterRateProvider('secondary', '1005000', $this->clock->value);
         $policy = new UsdtRatePolicy(['nobitex', 'secondary'], UsdtRateSide::Buy, 120, '100000', '10000000', 500, false, 3, 60);
         $rates = new UsdtRateResolver(
@@ -155,6 +175,16 @@ final class TelegramUsdtPaymentAdapterTest extends TestCase
             'Telegram USDT adapter test destination.',
             $this->correlation('wallet'),
         );
+    }
+
+    protected function tearDown(): void
+    {
+        try {
+            DB::statement('SET timestamp = DEFAULT');
+            $this->truncateDatabaseTables();
+        } finally {
+            parent::tearDown();
+        }
     }
 
     public function test_initiation_and_txid_submission_replay_create_one_pending_payment_effect_and_no_settlement_or_provisioning(): void
@@ -264,6 +294,111 @@ final class TelegramUsdtPaymentAdapterTest extends TestCase
         self::assertSame(0, DB::table('purchase_settlements')->count());
         self::assertSame(0, DB::table('service_subscriptions')->count());
         self::assertSame(0, DB::table('provisioning_operations')->count());
+    }
+
+    public function test_amount_quote_resolution_is_non_persisting_and_persistence_is_replay_safe(): void
+    {
+        $checkout = $this->checkout('two-phase-amount-quote');
+        $service = $this->app->make(UsdtAmountQuoteService::class);
+        $quoteKey = 'telegram-usdt-amount:'.$checkout['order_public_id'];
+
+        $preparation = $service->resolve($quoteKey, $checkout['quote_public_id']);
+
+        self::assertSame(0, DB::table('usdt_amount_quotes')->count());
+        self::assertSame($checkout['quote_public_id'], $preparation->sourceQuotePublicId);
+        self::assertSame($checkout['user_id'], $preparation->userId);
+        self::assertSame('BEP20', $preparation->network);
+        self::assertSame('1.250000', $preparation->exactUsdt);
+
+        $stored = $service->persist($preparation);
+        $replayPreparation = $service->resolve($quoteKey, $checkout['quote_public_id']);
+        $replay = $service->persist($replayPreparation);
+
+        self::assertSame(1, DB::table('usdt_amount_quotes')->count());
+        self::assertSame($stored->publicId, $replay->publicId);
+        self::assertSame($stored->configurationSnapshotHash, $replay->configurationSnapshotHash);
+        self::assertTrue($replay->replayed);
+    }
+
+    public function test_order_winning_during_rate_resolution_leaves_zero_usdt_preparation_mutation(): void
+    {
+        $this->configureWinningMethod();
+        $checkout = $this->checkout('rate-race-order-winner');
+        $adapter = $this->app->make(TelegramCustomerPurchaseUsdtPayment::class);
+        $baselineTransactionLevel = DB::connection()->transactionLevel();
+        self::assertSame(0, $baselineTransactionLevel, 'Race coverage requires no outer test transaction.');
+        $this->primaryRateProvider->onFetch = function () use ($checkout): void {
+            $this->primaryRateProvider->observedTransactionLevel = DB::connection()->transactionLevel();
+            $this->winOrder($checkout, 'rate-race-order-winner');
+        };
+
+        try {
+            $adapter->prepareForSelf(
+                $checkout['user_id'],
+                $checkout['user_id'],
+                $checkout['order_public_id'],
+                $checkout['quote_public_id'],
+                $checkout['quote_hash'],
+                $checkout['decision_public_id'],
+                $checkout['decision_hash'],
+                hash('sha256', 'telegram-usdt-adapter-rate-race-order-winner'),
+            );
+            self::fail('Expected Order winner during rate resolution to reject Telegram USDT preparation.');
+        } catch (AuthorizationException) {
+        }
+
+        self::assertNull($this->primaryRateProvider->callbackFailure, $this->primaryRateProvider->callbackFailure?->getMessage() ?? '');
+        self::assertSame($baselineTransactionLevel, $this->primaryRateProvider->observedTransactionLevel, 'USDT rate resolution must not add an application checkout transaction around the external rate lookup.');
+        self::assertSame('paid', DB::table('orders')->where('public_id', $checkout['order_public_id'])->value('state'));
+        $this->assertNoUsdtPreparationMutation();
+    }
+
+    public function test_subject_eligibility_changing_during_rate_resolution_leaves_zero_usdt_preparation_mutation(): void
+    {
+        $checkout = $this->checkout('rate-race-eligibility');
+        $adapter = $this->app->make(TelegramCustomerPurchaseUsdtPayment::class);
+        $baselineTransactionLevel = DB::connection()->transactionLevel();
+        self::assertSame(0, $baselineTransactionLevel, 'Race coverage requires no outer test transaction.');
+        $this->primaryRateProvider->onFetch = function () use ($checkout): void {
+            $this->primaryRateProvider->observedTransactionLevel = DB::connection()->transactionLevel();
+            $updated = DB::table('users')
+                ->where('id', $checkout['user_id'])
+                ->where('account_status', 'active')
+                ->update([
+                    'account_status' => 'suspended',
+                    'updated_at' => $this->clock->value->format('Y-m-d H:i:s.u'),
+                ]);
+            if ($updated !== 1) {
+                throw new RuntimeException('PAY-001 race fixture did not suspend the current subject.');
+            }
+        };
+
+        $rejection = null;
+        try {
+            $adapter->prepareForSelf(
+                $checkout['user_id'],
+                $checkout['user_id'],
+                $checkout['order_public_id'],
+                $checkout['quote_public_id'],
+                $checkout['quote_hash'],
+                $checkout['decision_public_id'],
+                $checkout['decision_hash'],
+                hash('sha256', 'telegram-usdt-adapter-rate-race-eligibility'),
+            );
+        } catch (AuthorizationException $exception) {
+            $rejection = $exception;
+        }
+
+        self::assertNull($this->primaryRateProvider->callbackFailure, $this->primaryRateProvider->callbackFailure?->getMessage() ?? '');
+        self::assertSame($baselineTransactionLevel, $this->primaryRateProvider->observedTransactionLevel, 'USDT rate resolution must not add an application checkout transaction around the external rate lookup.');
+        self::assertNotNull($rejection, 'Expected current subject eligibility loss during rate resolution to reject Telegram USDT preparation.');
+        self::assertSame('suspended', DB::table('users')->where('id', $checkout['user_id'])->value('account_status'));
+        self::assertSame(
+            $checkout['decision_hash'],
+            DB::table('payment_method_eligibility_decisions')->where('public_id', $checkout['decision_public_id'])->value('configuration_snapshot_hash'),
+            'The accepted PAY-001 decision identity is immutable; revalidation must fail because current subject authority changed.',
+        );
+        $this->assertNoUsdtPreparationMutation();
     }
 
     public function test_cross_actor_stale_identity_expired_quote_and_invalid_txid_fail_closed_without_second_payment_effect(): void
@@ -446,6 +581,59 @@ final class TelegramUsdtPaymentAdapterTest extends TestCase
             'settlements' => DB::table('purchase_settlements')->count(),
         ]);
         self::assertSame('paid', DB::table('orders')->where('public_id', $checkout['order_public_id'])->value('state'));
+    }
+
+    /**
+     * @param  array{user_id:int,order_public_id:string,quote_public_id:string,quote_hash:string,decision_public_id:string,decision_hash:string}  $checkout
+     */
+    private function winOrder(array $checkout, string $suffix): void
+    {
+        $winner = $this->app->make(PurchasePaymentIntentService::class)->create(
+            'telegram.usdt.adapter.winner.intent.'.$suffix,
+            $checkout['user_id'],
+            $checkout['quote_public_id'],
+            $checkout['decision_public_id'],
+            'winner_gateway',
+            $this->correlation('winner-intent-'.$suffix),
+        );
+        DB::table('payment_intents')->where('public_id', $winner->intentPublicId)->update([
+            'state' => 'submitted',
+            'updated_at' => $this->clock->value->format('Y-m-d H:i:s.u'),
+        ]);
+        $eventId = 'evt-telegram-usdt-winner-'.$suffix;
+        $settlement = $this->app->make(PurchaseSettlementService::class)->capture(
+            $winner->intentPublicId,
+            'winner_gateway',
+            new VerifiedPaymentEvent(
+                $eventId,
+                hash('sha256', $eventId),
+                new PaymentEvidence(
+                    ProviderOperationOutcome::Success,
+                    PaymentEvidenceAuthority::Authoritative,
+                    PaymentTransactionStatus::Settled,
+                    'txn-telegram-usdt-winner-'.$suffix,
+                    $eventId,
+                    Money::irr($winner->amount->amount()),
+                    $this->clock->value,
+                    $this->clock->value,
+                    hash('sha256', 'telegram-usdt-winner-evidence-'.$suffix),
+                    ['provider_reference' => 'txn-telegram-usdt-winner-'.$suffix],
+                ),
+            ),
+            $this->correlation('winner-settlement-'.$suffix),
+        );
+        $this->app->make(PurchaseOrderService::class)->createFromSettlement(
+            $settlement->settlementPublicId,
+            $this->correlation('winner-order-'.$suffix),
+        );
+    }
+
+    private function assertNoUsdtPreparationMutation(): void
+    {
+        self::assertSame(0, DB::table('usdt_amount_quotes')->count());
+        self::assertSame(0, DB::table('payment_intents')->where('provider_code', 'usdt_bep20')->count());
+        self::assertSame(0, DB::table('usdt_payment_authorities')->count());
+        self::assertSame(0, DB::table('usdt_txid_submissions')->count());
     }
 
     private function configureWinningMethod(): void

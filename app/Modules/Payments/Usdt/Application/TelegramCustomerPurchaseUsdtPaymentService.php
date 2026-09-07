@@ -58,7 +58,7 @@ final readonly class TelegramCustomerPurchaseUsdtPaymentService implements Teleg
             $decisionPublicId,
             $decisionConfigurationHash,
         );
-        $amountQuote = $this->amountQuotes->create(
+        $amountQuotePreparation = $this->amountQuotes->resolve(
             'telegram-usdt-amount:'.$orderPublicId,
             $quotePublicId,
         );
@@ -72,7 +72,7 @@ final readonly class TelegramCustomerPurchaseUsdtPaymentService implements Teleg
             $decisionPublicId,
             $decisionConfigurationHash,
             $operationKey,
-            $amountQuote,
+            $amountQuotePreparation,
         ): TelegramCustomerPurchaseUsdtInstructions {
             $order = $this->authorizeCheckout(
                 $actorUserId,
@@ -83,6 +83,7 @@ final readonly class TelegramCustomerPurchaseUsdtPaymentService implements Teleg
                 $decisionPublicId,
                 $decisionConfigurationHash,
             );
+            $amountQuote = $this->amountQuotes->persist($amountQuotePreparation);
             if ($amountQuote->expiresAt <= $this->clock->now()) {
                 throw new AuthorizationException('Telegram USDT amount quote has expired.');
             }
