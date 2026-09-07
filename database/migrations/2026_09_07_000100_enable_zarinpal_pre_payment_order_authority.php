@@ -53,6 +53,7 @@ return new class extends Migration
             $table->string('correlation_id', 64);
             $table->dateTime('created_at', 6);
             $table->index(['zarinpal_payment_request_id', 'created_at'], 'zrf_request_created_idx');
+            $table->index(['finding_type', 'severity', 'created_at'], 'zrf_type_severity_created_idx');
         });
         DB::statement("ALTER TABLE zarinpal_reconciliation_findings ADD CONSTRAINT zrf_type_chk CHECK (`finding_type` = 'verified_purchase_order_unavailable')");
         DB::statement("ALTER TABLE zarinpal_reconciliation_findings ADD CONSTRAINT zrf_severity_chk CHECK (`severity` = 'critical')");
