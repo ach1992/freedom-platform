@@ -223,6 +223,10 @@ namespace Tests\Feature {
                 self::assertSame(1, DB::table('zarinpal_reconciliation_findings')->where('severity', 'critical')->count());
                 self::assertSame(0, DB::table('zarinpal_payment_verifications')->count());
                 self::assertSame('pending_manual_review', DB::table('payment_intents')->where('provider_code', 'zarinpal')->value('state'));
+                self::assertSame(
+                    'captured',
+                    DB::table('wallet_holds')->where('source_id', $walletIntent->intentPublicId)->value('status'),
+                );
             } else {
                 self::assertTrue($zarinpalResult['ok'], json_encode($zarinpalResult, JSON_THROW_ON_ERROR));
                 self::assertSame('verified', $zarinpalResult['result']['state']);
@@ -232,6 +236,12 @@ namespace Tests\Feature {
                 self::assertSame(0, DB::table('zarinpal_verified_unsettled_evidence')->count());
                 self::assertSame(0, DB::table('zarinpal_reconciliation_findings')->count());
                 self::assertSame('awaiting_user_action', DB::table('payment_intents')->where('provider_code', 'wallet')->value('state'));
+                $walletHold = DB::table('wallet_holds')
+                    ->where('source_id', $walletIntent->intentPublicId)
+                    ->first(['status', 'captured_ledger_transaction_id']);
+                self::assertNotNull($walletHold);
+                self::assertSame('active', $walletHold->status);
+                self::assertNull($walletHold->captured_ledger_transaction_id);
             }
         }
 
