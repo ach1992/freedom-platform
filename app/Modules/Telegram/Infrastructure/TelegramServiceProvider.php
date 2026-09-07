@@ -25,6 +25,7 @@ use App\Modules\Telegram\Application\TelegramNavigationEntryGateway;
 use App\Modules\Telegram\Application\TelegramNavigationHandler;
 use App\Modules\Telegram\Application\TelegramProtectedPresentationResolver;
 use App\Modules\Telegram\Application\TelegramProtectedReferenceDeliveryOutboxHandler;
+use App\Modules\Telegram\Application\TelegramUsdtNavigationHandler;
 use App\Shared\Application\OutboxEventHandler;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Contracts\Foundation\Application;
@@ -79,6 +80,7 @@ final class TelegramServiceProvider extends ServiceProvider
         $this->app->singleton(TelegramNavigationEntryGateway::class);
         $this->app->singleton(TelegramNavigationHandler::class);
         $this->app->singleton(TelegramGiftCardNavigationHandler::class);
+        $this->app->singleton(TelegramUsdtNavigationHandler::class);
         $this->app->singleton(TelegramNavigationCompositeHandler::class);
         $this->app->tag([TelegramNavigationCompositeHandler::class], TelegramInteractionHandler::class);
         $this->app->singleton(
