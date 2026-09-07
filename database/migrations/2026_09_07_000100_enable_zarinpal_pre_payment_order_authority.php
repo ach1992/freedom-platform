@@ -31,7 +31,7 @@ return new class extends Migration
             $table->string('reason_code', 64);
             $table->dateTime('created_at', 6);
         });
-        DB::statement("ALTER TABLE zarinpal_verified_unsettled_evidence ADD CONSTRAINT zvue_verify_code_chk CHECK (`provider_verify_code` IN (100,101))");
+        DB::statement('ALTER TABLE zarinpal_verified_unsettled_evidence ADD CONSTRAINT zvue_verify_code_chk CHECK (`provider_verify_code` IN (100,101))');
         DB::statement("ALTER TABLE zarinpal_verified_unsettled_evidence ADD CONSTRAINT zvue_money_chk CHECK (`amount_irr` > 0 AND `currency` = 'IRR')");
         DB::statement('ALTER TABLE zarinpal_verified_unsettled_evidence ADD CONSTRAINT zvue_hash_chk CHECK (CHAR_LENGTH(`evidence_payload_hash`) = 64)');
         DB::statement('ALTER TABLE zarinpal_verified_unsettled_evidence ADD CONSTRAINT zvue_reverse_window_chk CHECK (`provider_reverse_eligible_until` >= `verified_at`)');
@@ -60,6 +60,7 @@ return new class extends Migration
         DB::statement('ALTER TABLE zarinpal_reconciliation_findings ADD CONSTRAINT zrf_hash_chk CHECK (CHAR_LENGTH(`finding_key`) = 64 AND (`evidence_hash` IS NULL OR CHAR_LENGTH(`evidence_hash`) = 64))');
 
         $this->createEvidenceGuards();
+        $this->createVerificationConflictGuard();
         $this->createFindingGuards();
     }
 
@@ -70,6 +71,7 @@ return new class extends Migration
             throw new RuntimeException('Cannot roll back Zarinpal pre-payment Order authority while reconciliation evidence exists.');
         }
 
+        DB::unprepared('DROP TRIGGER IF EXISTS zarinpal_payment_verifications_unsettled_conflict_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS zarinpal_reconciliation_findings_delete_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS zarinpal_reconciliation_findings_update_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS zarinpal_reconciliation_findings_insert_guard');
@@ -108,10 +110,16 @@ BEGIN
           SELECT 1
           FROM purchase_settlements settlement_row
           WHERE settlement_row.payment_intent_id = intent_row.id
+      )
+      AND NOT EXISTS (
+          SELECT 1
+          FROM zarinpal_payment_verifications verification_row
+          WHERE verification_row.authority = NEW.authority
+             OR verification_row.provider_ref_id = NEW.provider_ref_id
       );
 
     IF valid_authority_count <> 1 THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Unsettled Zarinpal verification requires one matching uncaptured provider authority.';
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Unsettled Zarinpal verification requires one unique matching uncaptured provider authority.';
     END IF;
 END
 SQL);
@@ -131,6 +139,27 @@ BEFORE DELETE ON zarinpal_verified_unsettled_evidence
 FOR EACH ROW
 BEGIN
     SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Unsettled Zarinpal verification evidence is non-deletable.';
+END
+SQL);
+    }
+
+    private function createVerificationConflictGuard(): void
+    {
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER zarinpal_payment_verifications_unsettled_conflict_guard
+BEFORE INSERT ON zarinpal_payment_verifications
+FOR EACH ROW
+BEGIN
+    DECLARE conflicting_evidence_count INT DEFAULT 0;
+
+    SELECT COUNT(*) INTO conflicting_evidence_count
+    FROM zarinpal_verified_unsettled_evidence evidence_row
+    WHERE evidence_row.authority = NEW.authority
+       OR evidence_row.provider_ref_id = NEW.provider_ref_id;
+
+    IF conflicting_evidence_count <> 0 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Settled Zarinpal verification conflicts with immutable unsettled provider evidence.';
+    END IF;
 END
 SQL);
     }
