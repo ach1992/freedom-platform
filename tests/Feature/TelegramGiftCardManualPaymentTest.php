@@ -228,17 +228,14 @@ final class TelegramGiftCardManualPaymentTest extends TestCase
     {
         $type = $this->registerType('tg-unavailable-order', 'code_only', 'manual_only');
         $purchase = $this->purchase('unavailable-order');
-        DB::table('orders')->where('public_id', $purchase['order_public_id'])->update([
-            'state' => 'canceled',
-            'state_version' => 1,
-            'updated_at' => $this->clock->value->format('Y-m-d H:i:s.u'),
-        ]);
+        $unavailableOrderPublicId = '01ARZ3NDEKTSV4RRFFQ69G5FAV';
+        self::assertNotSame($purchase['order_public_id'], $unavailableOrderPublicId);
 
         try {
             $this->app->make(TelegramCustomerPurchaseGiftCardPaymentService::class)->submitCodeForSelf(
                 $purchase['user_id'],
                 $purchase['user_id'],
-                $purchase['order_public_id'],
+                $unavailableOrderPublicId,
                 $purchase['quote_public_id'],
                 $purchase['quote_configuration_hash'],
                 $purchase['decision_public_id'],
@@ -318,6 +315,7 @@ final class TelegramGiftCardManualPaymentTest extends TestCase
             'tg.gift.eligibility.'.$suffix,
             $user,
             $quote->quotePublicId,
+            $quote->configurationSnapshotHash,
         );
         self::assertContains('gift_card', array_column($decision->methods, 'method_code'));
         $order = $this->app->make(TelegramCustomerPurchaseOrder::class)->openForSelf(
