@@ -20,6 +20,7 @@ final class TelegramConfidentialPresentationProvenanceGuard
     public const REVIEWED_SOURCE_FILES = [
         'app/Modules/Telegram/Application/TelegramCardToCardReceiptStatusDelivery.php',
         'app/Modules/Telegram/Application/TelegramGiftCardNavigationHandler.php',
+        'app/Modules/Telegram/Application/TelegramUsdtNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramNavigationHandler.php',
     ];
 
