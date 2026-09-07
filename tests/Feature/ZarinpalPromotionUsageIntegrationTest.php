@@ -1,0 +1,339 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Tests\Feature;
+
+use App\Modules\Catalog\Application\CatalogChangeContext;
+use App\Modules\Catalog\Application\PlanOfferingService;
+use App\Modules\Catalog\Domain\ProductVisibility;
+use App\Modules\Orders\Application\Contracts\QuoteDiscountAuthority;
+use App\Modules\Orders\Application\PurchaseOrderService;
+use App\Modules\Orders\Application\QuoteDiscountAuthorizationRequest;
+use App\Modules\Orders\Application\QuoteDiscountConsumptionRequest;
+use App\Modules\Orders\Application\QuotePricingInput;
+use App\Modules\Orders\Application\QuoteReceipt;
+use App\Modules\Orders\Application\QuoteService;
+use App\Modules\Orders\Domain\QuoteOverrideSource;
+use App\Modules\Payments\Application\PurchasePaymentMaintenanceService;
+use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
+use App\Modules\Payments\Zarinpal\Application\Contracts\ZarinpalInquiryResult;
+use App\Modules\Payments\Zarinpal\Application\Contracts\ZarinpalRequestResult;
+use App\Modules\Payments\Zarinpal\Application\Contracts\ZarinpalTransport;
+use App\Modules\Payments\Zarinpal\Application\Contracts\ZarinpalUnverifiedCandidate;
+use App\Modules\Payments\Zarinpal\Application\Contracts\ZarinpalVerifyResult;
+use App\Modules\Payments\Zarinpal\Application\ZarinpalPaymentService;
+use App\Modules\Payments\Zarinpal\Domain\ZarinpalRequestState;
+use App\Modules\Promotions\Application\PromotionRuleVersionReceipt;
+use App\Modules\Promotions\BenefitCodes\Domain\BenefitCodeType;
+use App\Shared\Application\Clock;
+use DateTimeImmutable;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
+use Tests\Support\CreatesBenefitCodeFixtures;
+use Tests\TestCase;
+
+final class ZarinpalPromotionFakeTransport implements ZarinpalTransport
+{
+    public int $requestCalls = 0;
+
+    public int $verifyCalls = 0;
+
+    public ZarinpalRequestResult $requestResult;
+
+    public ZarinpalVerifyResult $verifyResult;
+
+    public function __construct()
+    {
+        $this->requestResult = ZarinpalRequestResult::accepted('A'.str_repeat('8', 35));
+        $this->verifyResult = ZarinpalVerifyResult::verified('260000002', 100);
+    }
+
+    public function request(string $merchantId, int $amountIrr, string $callbackUrl, string $description, string $orderId): ZarinpalRequestResult
+    {
+        $this->requestCalls++;
+
+        return $this->requestResult;
+    }
+
+    public function verify(string $merchantId, int $amountIrr, string $authority): ZarinpalVerifyResult
+    {
+        $this->verifyCalls++;
+
+        return $this->verifyResult;
+    }
+
+    public function inquiry(string $merchantId, string $authority): ZarinpalInquiryResult
+    {
+        return ZarinpalInquiryResult::available('PAID');
+    }
+
+    public function unverified(string $merchantId): array
+    {
+        /** @var list<ZarinpalUnverifiedCandidate> */
+        return [];
+    }
+}
+
+final class ZarinpalPromotionClock implements Clock
+{
+    public function __construct(public DateTimeImmutable $value) {}
+
+    public function now(): DateTimeImmutable
+    {
+        return $this->value;
+    }
+}
+
+/** @requirement PAY-001 PAY-002 PAY-003 PRO-001 IPG-001 DAT-002 DAT-003 DAT-004 SEC-002 INT-001 INT-002 QUA-001 QUA-004 */
+final class ZarinpalPromotionUsageIntegrationTest extends TestCase
+{
+    use CreatesBenefitCodeFixtures;
+    use RefreshDatabase;
+
+    private ZarinpalPromotionClock $clock;
+
+    private ZarinpalPromotionFakeTransport $transport;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        $this->seed();
+        $this->clock = new ZarinpalPromotionClock(now('UTC')->toDateTimeImmutable());
+        $this->app->instance(Clock::class, $this->clock);
+        $this->transport = new ZarinpalPromotionFakeTransport;
+        $this->app->instance(ZarinpalTransport::class, $this->transport);
+        config()->set('app.url', 'http://localhost');
+        config()->set('services.zarinpal.enabled', true);
+        config()->set('services.zarinpal.merchant_id', '00000000-0000-0000-0000-000000000000');
+        config()->set('services.zarinpal.callback_url', 'http://localhost/payments/zarinpal/callback');
+    }
+
+    public function test_discounted_zarinpal_purchase_reserves_replays_and_finalizes_exact_promotion_usage(): void
+    {
+        $source = $this->promotionSource('success', 1);
+        $checkout = $this->discountedCheckout($source, $source['codes'][0], 'success');
+        $service = $this->app->make(ZarinpalPaymentService::class);
+
+        $initiated = $service->initiatePurchase(
+            $checkout['user_id'],
+            $checkout['quote']->quotePublicId,
+            $checkout['decision']->publicId,
+            $this->correlation('success-initiate'),
+        );
+        self::assertSame(ZarinpalRequestState::Redirectable, $initiated->state);
+        self::assertSame(1, $this->transport->requestCalls);
+        self::assertSame(1, DB::table('promotion_usage_reservations')->count());
+        self::assertSame(0, DB::table('promotion_usage_redemptions')->count());
+        self::assertSame(0, DB::table('promotion_usage_releases')->count());
+
+        $initiateReplay = $service->initiatePurchase(
+            $checkout['user_id'],
+            $checkout['quote']->quotePublicId,
+            $checkout['decision']->publicId,
+            $this->correlation('success-initiate-replay'),
+        );
+        self::assertTrue($initiateReplay->replayed);
+        self::assertSame($initiated->publicId, $initiateReplay->publicId);
+        self::assertSame(1, $this->transport->requestCalls);
+        self::assertSame(1, DB::table('promotion_usage_reservations')->count());
+
+        $verified = $service->handleCallback(
+            'A'.str_repeat('8', 35),
+            'OK',
+            $this->correlation('success-callback'),
+        );
+        self::assertSame(ZarinpalRequestState::Verified, $verified->state);
+        self::assertNotNull($verified->purchaseSettlementPublicId);
+        self::assertSame(1, $this->transport->verifyCalls);
+        self::assertSame(1, DB::table('promotion_usage_reservations')->count());
+        self::assertSame(1, DB::table('promotion_usage_redemptions')->count());
+        self::assertSame(0, DB::table('promotion_usage_releases')->count());
+        self::assertSame(
+            DB::table('purchase_settlements')->where('public_id', $verified->purchaseSettlementPublicId)->value('id'),
+            DB::table('promotion_usage_redemptions')->value('purchase_settlement_id'),
+        );
+        self::assertSame('paid', DB::table('orders')->where('public_id', $checkout['order']->orderPublicId)->value('state'));
+
+        $postSettlementReplay = $service->initiatePurchase(
+            $checkout['user_id'],
+            $checkout['quote']->quotePublicId,
+            $checkout['decision']->publicId,
+            $this->correlation('success-post-settlement-replay'),
+        );
+        self::assertTrue($postSettlementReplay->replayed);
+        self::assertSame($verified->purchaseSettlementPublicId, $postSettlementReplay->purchaseSettlementPublicId);
+        self::assertSame(1, $this->transport->requestCalls);
+        self::assertSame(1, $this->transport->verifyCalls);
+        self::assertSame(1, DB::table('promotion_usage_reservations')->count());
+        self::assertSame(1, DB::table('promotion_usage_redemptions')->count());
+    }
+
+    public function test_terminal_rejected_discounted_zarinpal_purchase_releases_reserved_promotion_after_quote_expiry(): void
+    {
+        $source = $this->promotionSource('release', 1);
+        $checkout = $this->discountedCheckout($source, $source['codes'][0], 'release');
+        $this->transport->requestResult = ZarinpalRequestResult::rejected(-9);
+        $service = $this->app->make(ZarinpalPaymentService::class);
+
+        $failed = $service->initiatePurchase(
+            $checkout['user_id'],
+            $checkout['quote']->quotePublicId,
+            $checkout['decision']->publicId,
+            $this->correlation('release-initiate'),
+        );
+        self::assertSame(ZarinpalRequestState::Failed, $failed->state);
+        self::assertSame(1, $this->transport->requestCalls);
+        self::assertSame('canceled', DB::table('payment_intents')->where('public_id', $failed->paymentIntentPublicId)->value('state'));
+        self::assertSame(1, DB::table('promotion_usage_reservations')->count());
+        self::assertSame(0, DB::table('promotion_usage_redemptions')->count());
+        self::assertSame(0, DB::table('promotion_usage_releases')->count());
+
+        $this->clock->value = $this->clock->value->modify('+31 minutes');
+        $maintenance = $this->app->make(PurchasePaymentMaintenanceService::class)->run();
+        self::assertSame(1, $maintenance->promotionReservationsExamined);
+        self::assertSame(1, $maintenance->releasedPromotionReservations);
+        self::assertSame(0, $maintenance->failures);
+        self::assertSame(1, DB::table('promotion_usage_releases')->count());
+        self::assertSame(0, DB::table('promotion_usage_redemptions')->count());
+        self::assertSame('awaiting_payment', DB::table('orders')->where('public_id', $checkout['order']->orderPublicId)->value('state'));
+    }
+
+    private function promotionSource(string $suffix, int $totalUseLimit, int $quantity = 1): array
+    {
+        $offering = $this->activeBenefitOffering('zarinpal-'.$suffix);
+        $version = (int) DB::table('plan_offerings')->where('id', $offering['id'])->value('version');
+        $this->app->make(PlanOfferingService::class)->setVisibility(
+            $offering['id'],
+            $version,
+            ProductVisibility::Visible,
+            new CatalogChangeContext(
+                'zarinpal-promo-visible-'.substr(hash('sha256', $suffix), 0, 24),
+                'zarinpal-promo-visible-correlation-'.substr(hash('sha256', $suffix), 0, 20),
+                'zarinpal_promotion_payment_test',
+                'Expose Zarinpal promotion test Offering.',
+                $this->benefitOwner(),
+            ),
+        );
+        $rule = $this->usageRule(
+            $offering['id'],
+            'zarinpal.promo.'.substr(hash('sha256', $suffix), 0, 16),
+            90_000,
+            $totalUseLimit,
+            null,
+        );
+        $campaignCode = 'zarinpal.discount.'.substr(hash('sha256', $suffix), 0, 12);
+        $this->benefitCampaign(
+            $campaignCode,
+            BenefitCodeType::DiscountGrant,
+            $this->discountDefinition($rule->ruleCode, $offering['id'], $offering['product_id'], $offering['server_id']),
+            'zarinpal-'.$suffix,
+        );
+        $issue = $this->benefitIssue($campaignCode, 'zarinpal-'.$suffix, $quantity);
+        $codes = [];
+        foreach ($issue->items as $item) {
+            $codes[] = (string) $item->fullCode;
+        }
+
+        return compact('offering', 'rule', 'codes');
+    }
+
+    /** @param array{offering:array{id:int,product_id:int,server_id:int},rule:PromotionRuleVersionReceipt,codes:list<string>} $source
+     * @return array{user_id:int,quote:QuoteReceipt,decision:object,order:object}
+     */
+    private function discountedCheckout(array $source, string $code, string $suffix): array
+    {
+        $userId = $this->benefitUser('customer');
+        $quoteService = $this->app->make(QuoteService::class);
+        $sourceQuote = $quoteService->create(
+            'zarinpal-promo-source-'.substr(hash('sha256', $suffix), 0, 24),
+            $userId,
+            $source['offering']['id'],
+            new QuotePricingInput(
+                QuoteOverrideSource::None,
+                null,
+                null,
+                null,
+                0,
+                $this->clock->value->modify('+30 minutes'),
+            ),
+            $this->correlation('source-'.$suffix),
+        );
+        $discounts = $this->app->make(QuoteDiscountAuthority::class);
+        $authorization = $discounts->authorize(new QuoteDiscountAuthorizationRequest(
+            'zarinpal-promo-auth-'.substr(hash('sha256', $suffix), 0, 24),
+            $userId,
+            $sourceQuote->quotePublicId,
+            $sourceQuote->configurationSnapshotHash,
+            $code,
+            $this->correlation('auth-'.$suffix),
+        ));
+        $discounted = $quoteService->create(
+            'zarinpal-promo-quote-'.substr(hash('sha256', $suffix), 0, 24),
+            $userId,
+            $source['offering']['id'],
+            new QuotePricingInput(
+                QuoteOverrideSource::None,
+                null,
+                null,
+                $authorization->ruleCode,
+                $authorization->discountIrr,
+                $this->clock->value->modify('+30 minutes'),
+            ),
+            $this->correlation('discounted-'.$suffix),
+        );
+        $discounts->consume(new QuoteDiscountConsumptionRequest(
+            'zarinpal-promo-consume-'.substr(hash('sha256', $suffix), 0, 24),
+            $userId,
+            $authorization,
+            $discounted->quotePublicId,
+            $discounted->configurationSnapshotHash,
+            $this->correlation('consume-'.$suffix),
+        ));
+
+        $eligibility = $this->app->make(PaymentMethodEligibilityService::class);
+        $this->configureZarinpal($eligibility, $suffix);
+        $decision = $eligibility->evaluate(
+            'zarinpal-promo-decision-'.substr(hash('sha256', $suffix), 0, 24),
+            $userId,
+            $discounted->quotePublicId,
+            $discounted->configurationSnapshotHash,
+        );
+        $order = $this->app->make(PurchaseOrderService::class)->openFromQuote(
+            $discounted->quotePublicId,
+            $userId,
+            $this->correlation('order-'.$suffix),
+        );
+
+        return ['user_id' => $userId, 'quote' => $discounted, 'decision' => $decision, 'order' => $order];
+    }
+
+    private function configureZarinpal(PaymentMethodEligibilityService $service, string $suffix): void
+    {
+        $administratorId = $this->benefitOwner();
+        $service->configureMethod(
+            'zarinpal-promo-method-'.substr(hash('sha256', $suffix), 0, 24),
+            $administratorId,
+            'zarinpal',
+            true,
+            false,
+            1,
+            'Zarinpal promotion payment test configuration.',
+            $this->correlation('method-'.$suffix),
+        );
+        $service->recordHealth(
+            'zarinpal-promo-health-'.substr(hash('sha256', $suffix), 0, 24),
+            $administratorId,
+            'zarinpal',
+            true,
+            $this->clock->value->modify('+10 minutes'),
+            'Healthy Zarinpal promotion payment observation.',
+            $this->correlation('health-'.$suffix),
+        );
+    }
+
+    private function correlation(string $suffix): string
+    {
+        return hash('sha256', 'zarinpal-promotion:'.$suffix);
+    }
+}
