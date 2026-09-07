@@ -152,6 +152,18 @@ final class ZarinpalPrePaymentOrderSafetyTest extends TestCase
         self::assertSame('paid', DB::table('orders')->where('id', $opening->orderId)->value('state'));
         self::assertSame($verified->purchaseSettlementPublicId, DB::table('orders')->where('id', $opening->orderId)->value('purchase_settlement_public_id'));
 
+        $postSettlementReplay = $service->initiatePurchase(
+            $userId,
+            $quote->quotePublicId,
+            $decision->publicId,
+            $this->correlation('winner-initiate-after-settlement'),
+        );
+        self::assertTrue($postSettlementReplay->replayed);
+        self::assertSame($initiated->publicId, $postSettlementReplay->publicId);
+        self::assertSame($verified->purchaseSettlementPublicId, $postSettlementReplay->purchaseSettlementPublicId);
+        self::assertSame(1, $this->transport->requestCalls);
+        self::assertSame(1, $this->transport->verifyCalls);
+
         $callbackReplay = $service->handleCallback(
             'A'.str_repeat('7', 35),
             'OK',
@@ -189,6 +201,16 @@ final class ZarinpalPrePaymentOrderSafetyTest extends TestCase
         $walletPaid = $wallet->capture($walletIntent->intentPublicId, $this->correlation('loser-wallet-capture'));
         self::assertSame($opening->orderPublicId, $walletPaid->orderPublicId);
         self::assertSame('paid', $walletPaid->state->value);
+
+        $postWinnerReplay = $service->initiatePurchase(
+            $userId,
+            $quote->quotePublicId,
+            $decision->publicId,
+            $this->correlation('loser-initiate-after-wallet-winner'),
+        );
+        self::assertTrue($postWinnerReplay->replayed);
+        self::assertSame($initiated->publicId, $postWinnerReplay->publicId);
+        self::assertSame(1, $this->transport->requestCalls);
 
         $verified = $service->handleCallback(
             'A'.str_repeat('7', 35),
