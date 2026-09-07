@@ -81,16 +81,20 @@ final readonly class ZarinpalPaymentService
                 $actorUserId,
                 $quotePublicId,
             );
+            [$request, $claimed] = $this->claimRequest(
+                $this->purchaseRequestKey($quotePublicId),
+                $intent->intentPublicId,
+                $configuration,
+            );
+            if (! $claimed) {
+                return [$request, false];
+            }
             if ($this->purchaseOrders->settlementAvailabilityFromQuote($quotePublicId, $actorUserId)
                 !== PurchaseOrderSettlementAvailability::AwaitingPayment) {
                 throw new DomainException('Zarinpal purchase requires a payable pre-payment Order.');
             }
 
-            return $this->claimRequest(
-                $this->purchaseRequestKey($quotePublicId),
-                $intent->intentPublicId,
-                $configuration,
-            );
+            return [$request, true];
         }, 3);
 
         if (! $claimed) {
@@ -122,7 +126,7 @@ final readonly class ZarinpalPaymentService
     }
 
     /** @param array{merchant_id:string,callback_url:string,hash:string} $configuration
-     *  @return array{0:stdClass,1:bool}
+     * @return array{0:stdClass,1:bool}
      */
     private function claimRequest(string $requestKey, string $paymentIntentPublicId, array $configuration): array
     {
