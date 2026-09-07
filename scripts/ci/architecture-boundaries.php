@@ -555,6 +555,8 @@ return [
         'zarinpal_payment_observations' => 'Payments',
         'zarinpal_payment_requests' => 'Payments',
         'zarinpal_payment_verifications' => 'Payments',
+        'zarinpal_reconciliation_findings' => 'Payments',
+        'zarinpal_verified_unsettled_evidence' => 'Payments',
     ],
 
     // Exact migration-local durable rename lifecycle only. Temporary identities are not general
@@ -582,7 +584,7 @@ return [
         [
             'file' => 'database/migrations/2026_08_31_000100_enable_telegram_interactive_delivery_presentations.php',
             'from' => 'telegram_delivery_interactive_presentations_rollback',
-            'to' => 'telegram_delivery_interactive_presentations',
+            'to' => 'telegram_delivery_interactive_delivery_presentations',
             'owner' => 'Telegram',
         ],
     ],
