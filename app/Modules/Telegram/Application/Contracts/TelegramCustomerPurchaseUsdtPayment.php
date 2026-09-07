@@ -9,7 +9,7 @@ use App\Modules\Telegram\Application\TelegramCustomerPurchaseUsdtSubmission;
 
 interface TelegramCustomerPurchaseUsdtPayment
 {
-    public function initiateForSelf(
+    public function prepareForSelf(
         int $actorUserId,
         int $subjectUserId,
         string $orderPublicId,
@@ -29,8 +29,6 @@ interface TelegramCustomerPurchaseUsdtPayment
         string $decisionPublicId,
         string $decisionConfigurationHash,
         string $authorityPublicId,
-        string $paymentIntentPublicId,
-        string $amountQuotePublicId,
         string $txid,
         string $operationKey,
     ): TelegramCustomerPurchaseUsdtSubmission;

@@ -23,6 +23,7 @@ use App\Modules\Payments\NowPayments\Application\Contracts\NowPaymentsTransport;
 use App\Modules\Payments\NowPayments\Infrastructure\HttpNowPaymentsTransport;
 use App\Modules\Payments\Usdt\Application\TelegramCustomerPurchaseUsdtPaymentService;
 use App\Modules\Payments\Usdt\Application\TelegramManagedUsdtRateSettingsService;
+use App\Modules\Payments\Usdt\Application\UsdtAmountQuoteService;
 use App\Modules\Payments\Usdt\Application\UsdtRateResolver;
 use App\Modules\Payments\Usdt\Infrastructure\UsdtRuntimeFactory;
 use App\Modules\Payments\Zarinpal\Application\Contracts\ZarinpalTransport;
@@ -76,6 +77,10 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind(
             UsdtRateResolver::class,
             fn ($app): UsdtRateResolver => $app->make(UsdtRuntimeFactory::class)->rateResolver(),
+        );
+        $this->app->bind(
+            UsdtAmountQuoteService::class,
+            fn ($app): UsdtAmountQuoteService => $app->make(UsdtRuntimeFactory::class)->amountQuotes(),
         );
         $this->app->bind(NowPaymentsTransport::class, function ($app): NowPaymentsTransport {
             $config = $app['config'];

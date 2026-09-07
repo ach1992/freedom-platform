@@ -19,7 +19,7 @@ use RuntimeException;
 
 final readonly class TelegramCustomerPurchaseUsdtPaymentService implements TelegramCustomerPurchaseUsdtPayment
 {
-    private const METHOD_CODE = UsdtPaymentAuthorityService::METHOD_CODE;
+    private const METHOD_CODE = 'usdt_bep20';
 
     public function __construct(
         private DatabaseManager $database,
@@ -32,7 +32,7 @@ final readonly class TelegramCustomerPurchaseUsdtPaymentService implements Teleg
     ) {}
 
     /** @requirement BUY-001 BUY-003 PAY-001 PAY-002 PRO-001 USDT-001 USDT-002 USDT-003 DAT-002 DAT-003 DAT-004 SEC-002 QUA-001 QUA-004 */
-    public function initiateForSelf(
+    public function prepareForSelf(
         int $actorUserId,
         int $subjectUserId,
         string $orderPublicId,
@@ -45,6 +45,24 @@ final readonly class TelegramCustomerPurchaseUsdtPaymentService implements Teleg
         $this->assertSelf($actorUserId, $subjectUserId);
         $this->assertOperationKey($operationKey);
 
+        // Rate resolution may perform HTTP. Validate the checkout before the
+        // lookup, but deliberately do not hold the pre-payment Order lock
+        // across that external read. The authoritative lock/revalidation is
+        // repeated immediately before Payment Intent/authority creation.
+        $this->authorizeCheckout(
+            $actorUserId,
+            $subjectUserId,
+            $orderPublicId,
+            $quotePublicId,
+            $quoteConfigurationHash,
+            $decisionPublicId,
+            $decisionConfigurationHash,
+        );
+        $amountQuote = $this->amountQuotes->create(
+            'telegram-usdt-amount:'.$orderPublicId,
+            $quotePublicId,
+        );
+
         return $this->database->connection()->transaction(function (Connection $connection) use (
             $actorUserId,
             $subjectUserId,
@@ -54,6 +72,7 @@ final readonly class TelegramCustomerPurchaseUsdtPaymentService implements Teleg
             $decisionPublicId,
             $decisionConfigurationHash,
             $operationKey,
+            $amountQuote,
         ): TelegramCustomerPurchaseUsdtInstructions {
             $order = $this->authorizeCheckout(
                 $actorUserId,
@@ -64,15 +83,15 @@ final readonly class TelegramCustomerPurchaseUsdtPaymentService implements Teleg
                 $decisionPublicId,
                 $decisionConfigurationHash,
             );
-
-            $amountQuote = $this->amountQuotes->create('telegram-usdt-amount:'.$orderPublicId, $quotePublicId);
+            if ($amountQuote->expiresAt <= $this->clock->now()) {
+                throw new AuthorizationException('Telegram USDT amount quote has expired.');
+            }
             if ($amountQuote->userId !== $subjectUserId
                 || ! hash_equals($amountQuote->sourceQuotePublicId, $quotePublicId)
-                || $amountQuote->network !== UsdtBep20Asset::NETWORK
                 || $amountQuote->orderAmountIrr !== $order->amountIrr
-                || preg_match('/\A0x[a-f0-9]{40}\z/', $amountQuote->destinationAddress) !== 1
-                || $amountQuote->expiresAt <= $this->clock->now()) {
-                throw new AuthorizationException('Telegram USDT amount quote is unavailable.');
+                || $amountQuote->network !== UsdtBep20Asset::NETWORK
+                || preg_match('/\A0x[a-f0-9]{40}\z/', $amountQuote->destinationAddress) !== 1) {
+                throw new RuntimeException('Telegram USDT amount quote does not match current checkout authority.');
             }
 
             $authority = $this->authorities->prepare(
@@ -82,49 +101,50 @@ final readonly class TelegramCustomerPurchaseUsdtPaymentService implements Teleg
                 $quotePublicId,
                 $decisionPublicId,
                 $amountQuote->publicId,
-                $this->correlationId('initiate', $operationKey),
+                $this->correlationId('prepare', $operationKey),
             );
+            $expectedBaseUnits = UsdtTokenAmount::toBaseUnits($amountQuote->exactUsdt, UsdtBep20Asset::TOKEN_DECIMALS);
             if ($authority->userId !== $subjectUserId
-                || ! hash_equals($authority->amountQuotePublicId, $amountQuote->publicId)
                 || $authority->amountIrr !== $order->amountIrr
+                || ! hash_equals($authority->amountQuotePublicId, $amountQuote->publicId)
                 || $authority->network !== UsdtBep20Asset::NETWORK
+                || $authority->chainId !== UsdtBep20Asset::CHAIN_ID
+                || ! hash_equals($authority->tokenContract, UsdtBep20Asset::TOKEN_CONTRACT)
+                || $authority->tokenDecimals !== UsdtBep20Asset::TOKEN_DECIMALS
                 || ! hash_equals($authority->destinationAddress, $amountQuote->destinationAddress)
+                || ! hash_equals($authority->expectedAmountBaseUnits, $expectedBaseUnits)
                 || $authority->quoteExpiresAt != $amountQuote->expiresAt) {
-                throw new RuntimeException('Telegram USDT payment authority does not match the current checkout.');
+                throw new RuntimeException('Telegram USDT authority does not match the immutable amount quote.');
             }
 
-            $this->storedAuthority(
+            $stored = $this->storedAuthority(
                 $connection,
                 $authority->publicId,
-                $authority->paymentIntentPublicId,
-                $amountQuote->publicId,
                 $subjectUserId,
                 $quotePublicId,
                 $quoteConfigurationHash,
                 $decisionPublicId,
                 $decisionConfigurationHash,
-                $orderPublicId,
                 [PaymentIntentState::AwaitingUserAction->value],
-                false,
             );
+            if (! hash_equals((string) $stored->intent_public_id, $authority->paymentIntentPublicId)) {
+                throw new RuntimeException('Telegram USDT authority Payment Intent linkage is inconsistent.');
+            }
 
             return new TelegramCustomerPurchaseUsdtInstructions(
                 $authority->publicId,
                 $authority->paymentIntentPublicId,
-                $amountQuote->publicId,
-                $orderPublicId,
-                $quotePublicId,
-                $decisionPublicId,
-                $amountQuote->network,
-                $amountQuote->destinationAddress,
+                $authority->amountQuotePublicId,
+                $authority->network,
                 $amountQuote->exactUsdt,
-                $amountQuote->expiresAt,
+                $authority->destinationAddress,
+                $authority->quoteExpiresAt,
                 $amountQuote->replayed || $authority->replayed,
             );
         }, 3);
     }
 
-    /** @requirement BUY-001 BUY-003 PAY-001 PAY-002 PRO-001 USDT-003 DAT-002 DAT-003 DAT-004 SEC-002 QUA-001 QUA-004 */
+    /** @requirement BUY-001 BUY-003 PAY-001 PAY-002 PAY-003 PRO-001 USDT-003 DAT-002 DAT-003 DAT-004 SEC-002 QUA-001 QUA-004 */
     public function submitTxidForSelf(
         int $actorUserId,
         int $subjectUserId,
@@ -134,13 +154,14 @@ final readonly class TelegramCustomerPurchaseUsdtPaymentService implements Teleg
         string $decisionPublicId,
         string $decisionConfigurationHash,
         string $authorityPublicId,
-        string $paymentIntentPublicId,
-        string $amountQuotePublicId,
         string $txid,
         string $operationKey,
     ): TelegramCustomerPurchaseUsdtSubmission {
         $this->assertSelf($actorUserId, $subjectUserId);
         $this->assertOperationKey($operationKey);
+        if (preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/i', $authorityPublicId) !== 1) {
+            throw new AuthorizationException('Telegram USDT payment authority is unavailable.');
+        }
 
         return $this->database->connection()->transaction(function (Connection $connection) use (
             $actorUserId,
@@ -151,12 +172,10 @@ final readonly class TelegramCustomerPurchaseUsdtPaymentService implements Teleg
             $decisionPublicId,
             $decisionConfigurationHash,
             $authorityPublicId,
-            $paymentIntentPublicId,
-            $amountQuotePublicId,
             $txid,
             $operationKey,
         ): TelegramCustomerPurchaseUsdtSubmission {
-            $order = $this->authorizeCheckout(
+            $this->authorizeCheckout(
                 $actorUserId,
                 $subjectUserId,
                 $orderPublicId,
@@ -168,34 +187,41 @@ final readonly class TelegramCustomerPurchaseUsdtPaymentService implements Teleg
             $stored = $this->storedAuthority(
                 $connection,
                 $authorityPublicId,
-                $paymentIntentPublicId,
-                $amountQuotePublicId,
                 $subjectUserId,
                 $quotePublicId,
                 $quoteConfigurationHash,
                 $decisionPublicId,
                 $decisionConfigurationHash,
-                $orderPublicId,
-                [PaymentIntentState::AwaitingUserAction->value, PaymentIntentState::Submitted->value],
-                true,
+                [
+                    PaymentIntentState::AwaitingUserAction->value,
+                    PaymentIntentState::Submitted->value,
+                ],
             );
-            if ((int) $stored->amount_irr !== $order->amountIrr) {
-                throw new AuthorizationException('Telegram USDT payment amount is unavailable.');
-            }
 
             $submission = $this->submissions->submit(
                 'telegram-usdt-txid:'.$orderPublicId,
-                $authorityPublicId,
+                strtoupper($authorityPublicId),
                 $subjectUserId,
                 $txid,
                 null,
                 null,
                 $this->correlationId('txid', $operationKey),
             );
-            if (! hash_equals($submission->authorityPublicId, $authorityPublicId)
-                || ! hash_equals($submission->paymentIntentPublicId, $paymentIntentPublicId)
+            if (! hash_equals($submission->authorityPublicId, strtoupper($authorityPublicId))
+                || ! hash_equals($submission->paymentIntentPublicId, (string) $stored->intent_public_id)
                 || $submission->state !== PaymentIntentState::Submitted->value) {
-                throw new RuntimeException('Telegram USDT TXID submission result is inconsistent.');
+                throw new RuntimeException('Telegram USDT TXID submission does not match current checkout authority.');
+            }
+
+            $intent = $connection->table('payment_intents')
+                ->where('public_id', $submission->paymentIntentPublicId)
+                ->lockForUpdate()
+                ->first(['state', 'captured_at']);
+            if ($intent === null
+                || $intent->state !== PaymentIntentState::Submitted->value
+                || $intent->captured_at !== null
+                || $connection->table('purchase_settlements')->where('payment_intent_id', $stored->intent_id)->exists()) {
+                throw new RuntimeException('Telegram USDT submission unexpectedly produced settlement authority.');
             }
 
             return new TelegramCustomerPurchaseUsdtSubmission(
@@ -247,81 +273,58 @@ final readonly class TelegramCustomerPurchaseUsdtPaymentService implements Teleg
 
     /**
      * @param  list<string>  $allowedIntentStates
-     * @return object{state:string,captured_at:string|null,amount_irr:int|string}
+     * @return object{intent_id:int|string,intent_public_id:string,intent_state:string,captured_at:string|null}
      */
     private function storedAuthority(
         Connection $connection,
         string $authorityPublicId,
-        string $paymentIntentPublicId,
-        string $amountQuotePublicId,
         int $subjectUserId,
         string $quotePublicId,
         string $quoteConfigurationHash,
         string $decisionPublicId,
         string $decisionConfigurationHash,
-        string $orderPublicId,
         array $allowedIntentStates,
-        bool $lock,
     ): object {
-        foreach ([$authorityPublicId, $paymentIntentPublicId, $amountQuotePublicId, $orderPublicId] as $publicId) {
-            if (preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/i', $publicId) !== 1) {
-                throw new AuthorizationException('Telegram USDT payment authority is unavailable.');
-            }
-        }
-        $query = $connection->table('usdt_payment_authorities as authority')
+        /** @var object{intent_id:int|string,intent_public_id:string,intent_state:string,captured_at:string|null,user_id:int|string,source_quote_public_id:string|null,source_quote_configuration_hash:string|null,payment_eligibility_decision_public_id:string|null,payment_eligibility_configuration_hash:string|null,payment_method_code:string|null,provider_code:string,purpose:string,authority_user_id:int|string,authority_quote_public_id:string}|null $row */
+        $row = $connection->table('usdt_payment_authorities as authority')
             ->join('payment_intents as intent', 'intent.id', '=', 'authority.payment_intent_id')
-            ->join('usdt_amount_quotes as amount_quote', 'amount_quote.id', '=', 'authority.usdt_amount_quote_id')
-            ->join('quotes as quote', 'quote.id', '=', 'intent.source_quote_id')
-            ->where('authority.public_id', strtoupper($authorityPublicId));
-        if ($lock) {
-            $query->lockForUpdate();
-        }
-        /** @var object{authority_public_id:string,amount_quote_public_id:string,payment_intent_public_id:string,state:string,captured_at:string|null,amount_irr:int|string,user_id:int|string,source_quote_public_id:string|null,source_quote_configuration_hash:string|null,payment_eligibility_decision_public_id:string|null,payment_eligibility_configuration_hash:string|null,payment_method_code:string|null,provider_code:string,purpose:string,quote_id:int|string}|null $row */
-        $row = $query->first([
-            'authority.public_id as authority_public_id',
-            'amount_quote.public_id as amount_quote_public_id',
-            'intent.public_id as payment_intent_public_id',
-            'intent.state',
-            'intent.captured_at',
-            'intent.amount_irr',
-            'intent.user_id',
-            'intent.source_quote_public_id',
-            'intent.source_quote_configuration_hash',
-            'intent.payment_eligibility_decision_public_id',
-            'intent.payment_eligibility_configuration_hash',
-            'intent.payment_method_code',
-            'intent.provider_code',
-            'intent.purpose',
-            'quote.id as quote_id',
-        ]);
+            ->where('authority.public_id', strtoupper($authorityPublicId))
+            ->lockForUpdate()
+            ->first([
+                'intent.id as intent_id',
+                'intent.public_id as intent_public_id',
+                'intent.state as intent_state',
+                'intent.captured_at',
+                'intent.user_id',
+                'intent.source_quote_public_id',
+                'intent.source_quote_configuration_hash',
+                'intent.payment_eligibility_decision_public_id',
+                'intent.payment_eligibility_configuration_hash',
+                'intent.payment_method_code',
+                'intent.provider_code',
+                'intent.purpose',
+                'authority.user_id as authority_user_id',
+                'authority.source_quote_public_id as authority_quote_public_id',
+            ]);
         if ($row === null
-            || ! hash_equals((string) $row->authority_public_id, strtoupper($authorityPublicId))
-            || ! hash_equals((string) $row->amount_quote_public_id, strtoupper($amountQuotePublicId))
-            || ! hash_equals((string) $row->payment_intent_public_id, strtoupper($paymentIntentPublicId))
-            || ! in_array($row->state, $allowedIntentStates, true)
+            || ! in_array((string) $row->intent_state, $allowedIntentStates, true)
             || $row->captured_at !== null
-            || $row->purpose !== 'purchase'
             || (int) $row->user_id !== $subjectUserId
+            || (int) $row->authority_user_id !== $subjectUserId
+            || $row->purpose !== 'purchase'
             || $row->source_quote_public_id === null
             || ! hash_equals($row->source_quote_public_id, $quotePublicId)
+            || ! hash_equals($row->authority_quote_public_id, $quotePublicId)
             || $row->source_quote_configuration_hash === null
-            || ! hash_equals($row->source_quote_configuration_hash, $quoteConfigurationHash)
+            || ! hash_equals(strtolower($row->source_quote_configuration_hash), $quoteConfigurationHash)
             || $row->payment_eligibility_decision_public_id === null
             || ! hash_equals($row->payment_eligibility_decision_public_id, $decisionPublicId)
             || $row->payment_eligibility_configuration_hash === null
-            || ! hash_equals($row->payment_eligibility_configuration_hash, $decisionConfigurationHash)
+            || ! hash_equals(strtolower($row->payment_eligibility_configuration_hash), $decisionConfigurationHash)
             || $row->payment_method_code !== self::METHOD_CODE
-            || $row->provider_code !== self::METHOD_CODE) {
+            || $row->provider_code !== self::METHOD_CODE
+            || $connection->table('purchase_settlements')->where('payment_intent_id', $row->intent_id)->exists()) {
             throw new AuthorizationException('Telegram USDT payment authority is unavailable.');
-        }
-        $storedOrder = $connection->table('orders')
-            ->where('public_id', strtoupper($orderPublicId))
-            ->where('user_id', $subjectUserId)
-            ->where('source_quote_id', (int) $row->quote_id)
-            ->lockForUpdate()
-            ->value('public_id');
-        if (! is_string($storedOrder) || ! hash_equals($storedOrder, strtoupper($orderPublicId))) {
-            throw new AuthorizationException('Telegram USDT payment Order is unavailable.');
         }
 
         return $row;
@@ -337,7 +340,7 @@ final readonly class TelegramCustomerPurchaseUsdtPaymentService implements Teleg
     private function assertOperationKey(string $operationKey): void
     {
         if (preg_match('/\A[0-9a-f]{64}\z/', $operationKey) !== 1) {
-            throw new RuntimeException('Telegram USDT payment operation identity is invalid.');
+            throw new RuntimeException('Telegram USDT operation identity is invalid.');
         }
     }
 

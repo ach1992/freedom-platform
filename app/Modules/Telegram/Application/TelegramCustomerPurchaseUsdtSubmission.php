@@ -18,7 +18,7 @@ final readonly class TelegramCustomerPurchaseUsdtSubmission
     ) {
         foreach ([$submissionPublicId, $authorityPublicId, $paymentIntentPublicId] as $publicId) {
             if (preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/i', $publicId) !== 1) {
-                throw new InvalidArgumentException('Telegram USDT submission public identity is invalid.');
+                throw new InvalidArgumentException('Telegram USDT submission identity is invalid.');
             }
         }
         if (preg_match('/\A0x[a-f0-9]{64}\z/', $txid) !== 1 || $state !== 'submitted') {

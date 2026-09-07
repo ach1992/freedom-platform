@@ -16,6 +16,7 @@ use App\Modules\Payments\Application\Contracts\VerifiedPaymentEvent;
 use App\Modules\Payments\Application\PurchasePaymentIntentService;
 use App\Modules\Payments\Application\PurchaseSettlementService;
 use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
+use App\Modules\Payments\Usdt\Application\UsdtAmountQuoteService;
 use App\Modules\Payments\Usdt\Application\UsdtBep20Asset;
 use App\Modules\Payments\Usdt\Application\UsdtCircuitBreaker;
 use App\Modules\Payments\Usdt\Application\UsdtDestinationWalletService;
@@ -38,6 +39,7 @@ use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Cache\ArrayStore;
 use Illuminate\Cache\Repository;
+use Illuminate\Database\DatabaseManager;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -108,10 +110,18 @@ final class TelegramUsdtPaymentAdapterTest extends TestCase
         $primary = new TelegramUsdtAdapterRateProvider('nobitex', '1000000', $this->clock->value);
         $secondary = new TelegramUsdtAdapterRateProvider('secondary', '1005000', $this->clock->value);
         $policy = new UsdtRatePolicy(['nobitex', 'secondary'], UsdtRateSide::Buy, 120, '100000', '10000000', 500, false, 3, 60);
-        $this->app->instance(UsdtRateResolver::class, new UsdtRateResolver(
+        $rates = new UsdtRateResolver(
             [$primary, $secondary],
             $policy,
             new UsdtCircuitBreaker(new Repository(new ArrayStore), $this->clock, 3, 60),
+            $this->clock,
+        );
+        $this->app->instance(UsdtRateResolver::class, $rates);
+        $this->app->instance(UsdtAmountQuoteService::class, new UsdtAmountQuoteService(
+            $this->app->make(DatabaseManager::class),
+            $this->app->make(QuoteService::class),
+            $this->app->make(UsdtDestinationWalletService::class),
+            $rates,
             $this->clock,
         ));
 
@@ -153,7 +163,7 @@ final class TelegramUsdtPaymentAdapterTest extends TestCase
         $adapter = $this->app->make(TelegramCustomerPurchaseUsdtPayment::class);
         $initOperation = hash('sha256', 'telegram-usdt-adapter-init');
 
-        $first = $adapter->initiateForSelf(
+        $first = $adapter->prepareForSelf(
             $checkout['user_id'],
             $checkout['user_id'],
             $checkout['order_public_id'],
@@ -163,7 +173,7 @@ final class TelegramUsdtPaymentAdapterTest extends TestCase
             $checkout['decision_hash'],
             $initOperation,
         );
-        $replay = $adapter->initiateForSelf(
+        $replay = $adapter->prepareForSelf(
             $checkout['user_id'],
             $checkout['user_id'],
             $checkout['order_public_id'],
@@ -195,8 +205,6 @@ final class TelegramUsdtPaymentAdapterTest extends TestCase
             $checkout['decision_public_id'],
             $checkout['decision_hash'],
             $first->authorityPublicId,
-            $first->paymentIntentPublicId,
-            $first->amountQuotePublicId,
             strtoupper($txid),
             $submitOperation,
         );
@@ -209,8 +217,6 @@ final class TelegramUsdtPaymentAdapterTest extends TestCase
             $checkout['decision_public_id'],
             $checkout['decision_hash'],
             $first->authorityPublicId,
-            $first->paymentIntentPublicId,
-            $first->amountQuotePublicId,
             $txid,
             $submitOperation,
         );
@@ -230,8 +236,6 @@ final class TelegramUsdtPaymentAdapterTest extends TestCase
                 $checkout['decision_public_id'],
                 $checkout['decision_hash'],
                 $first->authorityPublicId,
-                $first->paymentIntentPublicId,
-                $first->amountQuotePublicId,
                 '0x'.str_repeat('7a', 32),
                 hash('sha256', 'telegram-usdt-adapter-competing-txid'),
             );
@@ -240,7 +244,7 @@ final class TelegramUsdtPaymentAdapterTest extends TestCase
         }
 
         try {
-            $adapter->initiateForSelf(
+            $adapter->prepareForSelf(
                 $checkout['user_id'],
                 $checkout['user_id'],
                 $checkout['order_public_id'],
@@ -267,7 +271,7 @@ final class TelegramUsdtPaymentAdapterTest extends TestCase
         $checkout = $this->checkout('guards');
         $adapter = $this->app->make(TelegramCustomerPurchaseUsdtPayment::class);
         $initOperation = hash('sha256', 'telegram-usdt-adapter-guards-init');
-        $instructions = $adapter->initiateForSelf(
+        $instructions = $adapter->prepareForSelf(
             $checkout['user_id'],
             $checkout['user_id'],
             $checkout['order_public_id'],
@@ -288,8 +292,6 @@ final class TelegramUsdtPaymentAdapterTest extends TestCase
                 $checkout['decision_public_id'],
                 $checkout['decision_hash'],
                 $instructions->authorityPublicId,
-                $instructions->paymentIntentPublicId,
-                $instructions->amountQuotePublicId,
                 '0x'.str_repeat('4d', 32),
                 hash('sha256', 'cross-actor'),
             );
@@ -307,8 +309,6 @@ final class TelegramUsdtPaymentAdapterTest extends TestCase
                 $checkout['decision_public_id'],
                 str_repeat('f', 64),
                 $instructions->authorityPublicId,
-                $instructions->paymentIntentPublicId,
-                $instructions->amountQuotePublicId,
                 '0x'.str_repeat('5e', 32),
                 hash('sha256', 'stale-decision'),
             );
@@ -326,8 +326,6 @@ final class TelegramUsdtPaymentAdapterTest extends TestCase
                 $checkout['decision_public_id'],
                 $checkout['decision_hash'],
                 $instructions->authorityPublicId,
-                $instructions->paymentIntentPublicId,
-                $instructions->amountQuotePublicId,
                 'not-a-txid',
                 hash('sha256', 'invalid-txid'),
             );
@@ -346,8 +344,6 @@ final class TelegramUsdtPaymentAdapterTest extends TestCase
                 $checkout['decision_public_id'],
                 $checkout['decision_hash'],
                 $instructions->authorityPublicId,
-                $instructions->paymentIntentPublicId,
-                $instructions->amountQuotePublicId,
                 '0x'.str_repeat('6f', 32),
                 hash('sha256', 'expired-quote'),
             );
@@ -368,7 +364,7 @@ final class TelegramUsdtPaymentAdapterTest extends TestCase
         $this->configureWinningMethod();
         $checkout = $this->checkout('won-order');
         $adapter = $this->app->make(TelegramCustomerPurchaseUsdtPayment::class);
-        $instructions = $adapter->initiateForSelf(
+        $instructions = $adapter->prepareForSelf(
             $checkout['user_id'],
             $checkout['user_id'],
             $checkout['order_public_id'],
@@ -436,8 +432,6 @@ final class TelegramUsdtPaymentAdapterTest extends TestCase
                 $checkout['decision_public_id'],
                 $checkout['decision_hash'],
                 $instructions->authorityPublicId,
-                $instructions->paymentIntentPublicId,
-                $instructions->amountQuotePublicId,
                 '0x'.str_repeat('8b', 32),
                 hash('sha256', 'telegram-usdt-adapter-won-submit'),
             );

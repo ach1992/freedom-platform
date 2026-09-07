@@ -43,7 +43,7 @@ final class TelegramUsdtNavigationPayment implements TelegramCustomerPurchaseUsd
     /** @var array<string,TelegramCustomerPurchaseUsdtSubmission> */
     private array $submissions = [];
 
-    public function initiateForSelf(
+    public function prepareForSelf(
         int $actorUserId,
         int $subjectUserId,
         string $orderPublicId,
@@ -55,7 +55,7 @@ final class TelegramUsdtNavigationPayment implements TelegramCustomerPurchaseUsd
     ): TelegramCustomerPurchaseUsdtInstructions {
         $this->assertAuthority($actorUserId, $subjectUserId, $orderPublicId, $quotePublicId, $quoteConfigurationHash, $decisionPublicId, $decisionConfigurationHash);
         if (preg_match('/\A[0-9a-f]{64}\z/', $operationKey) !== 1) {
-            throw new RuntimeException('Unexpected Telegram USDT initiation operation.');
+            throw new RuntimeException('Unexpected Telegram USDT preparation operation.');
         }
         $this->initiateCalls[] = ['operationKey' => $operationKey];
         if (isset($this->initiations[$operationKey])) {
@@ -65,12 +65,9 @@ final class TelegramUsdtNavigationPayment implements TelegramCustomerPurchaseUsd
                 $accepted->authorityPublicId,
                 $accepted->paymentIntentPublicId,
                 $accepted->amountQuotePublicId,
-                $accepted->orderPublicId,
-                $accepted->quotePublicId,
-                $accepted->decisionPublicId,
                 $accepted->network,
-                $accepted->destinationAddress,
                 $accepted->exactUsdt,
+                $accepted->destinationAddress,
                 $accepted->expiresAt,
                 true,
             );
@@ -80,12 +77,9 @@ final class TelegramUsdtNavigationPayment implements TelegramCustomerPurchaseUsd
             str_pad('01J', 26, '0'),
             str_pad('01H', 26, '0'),
             str_pad('01M', 26, '0'),
-            $orderPublicId,
-            $quotePublicId,
-            $decisionPublicId,
             'BEP20',
-            '0x'.str_repeat('b', 40),
             '1.250000',
+            '0x'.str_repeat('b', 40),
             (new DateTimeImmutable('now', new DateTimeZone('UTC')))->modify('+5 minutes'),
             false,
         );
@@ -103,15 +97,11 @@ final class TelegramUsdtNavigationPayment implements TelegramCustomerPurchaseUsd
         string $decisionPublicId,
         string $decisionConfigurationHash,
         string $authorityPublicId,
-        string $paymentIntentPublicId,
-        string $amountQuotePublicId,
         string $txid,
         string $operationKey,
     ): TelegramCustomerPurchaseUsdtSubmission {
         $this->assertAuthority($actorUserId, $subjectUserId, $orderPublicId, $quotePublicId, $quoteConfigurationHash, $decisionPublicId, $decisionConfigurationHash);
         if ($authorityPublicId !== str_pad('01J', 26, '0')
-            || $paymentIntentPublicId !== str_pad('01H', 26, '0')
-            || $amountQuotePublicId !== str_pad('01M', 26, '0')
             || preg_match('/\A[0-9a-f]{64}\z/', $operationKey) !== 1) {
             throw new RuntimeException('Unexpected Telegram USDT submission identity.');
         }
@@ -136,7 +126,7 @@ final class TelegramUsdtNavigationPayment implements TelegramCustomerPurchaseUsd
         $accepted = new TelegramCustomerPurchaseUsdtSubmission(
             str_pad('01Q', 26, '0'),
             $authorityPublicId,
-            $paymentIntentPublicId,
+            str_pad('01H', 26, '0'),
             $txid,
             'submitted',
             false,
@@ -165,7 +155,6 @@ final class TelegramUsdtNavigationPayment implements TelegramCustomerPurchaseUsd
         }
     }
 }
-
 final readonly class TelegramUsdtNavigationOrder implements TelegramCustomerPurchaseOrder
 {
     public function openForSelf(int $actorUserId, int $subjectUserId, string $quotePublicId, string $quoteConfigurationHash, string $correlationId): TelegramCustomerPurchaseOrderReceipt
@@ -297,7 +286,10 @@ final class TelegramUsdtNavigationTest extends TestCase
         $session = DB::table('telegram_interaction_sessions')->where('id', $sessionId)->first(['state', 'payload']);
         self::assertNotNull($session);
         self::assertSame('purchase_usdt_submitted', (string) $session->state);
-        self::assertStringContainsString(strtolower($txid), (string) $session->payload);
+        self::assertStringNotContainsString(strtolower($txid), (string) $session->payload);
+        $submittedPayload = json_decode((string) $session->payload, true, flags: JSON_THROW_ON_ERROR);
+        self::assertIsArray($submittedPayload);
+        self::assertSame('0xabababab…abababab', $submittedPayload['masked_txid'] ?? null);
         self::assertStringContainsString('در انتظار بررسی بلاکچین', $this->latestConfidentialPresentation());
         self::assertSame(0, DB::table('purchase_settlements')->count());
         self::assertSame(0, DB::table('service_subscriptions')->count());
