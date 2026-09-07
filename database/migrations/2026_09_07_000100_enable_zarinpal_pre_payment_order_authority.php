@@ -15,7 +15,8 @@ return new class extends Migration
         Schema::create('zarinpal_verified_unsettled_evidence', function (Blueprint $table): void {
             $table->bigIncrements('id');
             $table->ulid('public_id')->unique();
-            $table->foreignId('zarinpal_payment_request_id')->unique();
+            $table->foreignId('zarinpal_payment_request_id');
+            $table->unique('zarinpal_payment_request_id', 'zvue_request_unique');
             $table->foreign('zarinpal_payment_request_id', 'zvue_request_fk')
                 ->references('id')
                 ->on('zarinpal_payment_requests')

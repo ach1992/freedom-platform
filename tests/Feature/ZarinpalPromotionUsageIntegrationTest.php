@@ -184,7 +184,7 @@ final class ZarinpalPromotionUsageIntegrationTest extends TestCase
         );
         self::assertSame(ZarinpalRequestState::Failed, $failed->state);
         self::assertSame(1, $this->transport->requestCalls);
-        self::assertSame('canceled', DB::table('payment_intents')->where('public_id', $failed->paymentIntentPublicId)->value('state'));
+        self::assertSame('failed', DB::table('payment_intents')->where('public_id', $failed->paymentIntentPublicId)->value('state'));
         self::assertSame(1, DB::table('promotion_usage_reservations')->count());
         self::assertSame(0, DB::table('promotion_usage_redemptions')->count());
         self::assertSame(0, DB::table('promotion_usage_releases')->count());

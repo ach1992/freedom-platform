@@ -96,6 +96,12 @@ final class ZarinpalPrePaymentProviderBoundaryTest extends TestCase
         $this->seed(WalletFinancialFoundationSeeder::class);
         $this->clock = new ZarinpalProviderBoundaryClock(new DateTimeImmutable('2026-09-07T10:00:00+00:00'));
         $this->app->instance(Clock::class, $this->clock);
+        if (DB::connection()->getDriverName() === 'mysql') {
+            DB::statement('SET timestamp = '.$this->clock->value->getTimestamp());
+            $this->beforeApplicationDestroyed(static function (): void {
+                DB::statement('SET timestamp = DEFAULT');
+            });
+        }
         $this->transport = new ZarinpalProviderBoundaryFakeTransport;
         $this->app->instance(ZarinpalTransport::class, $this->transport);
         config()->set('app.url', 'http://localhost');

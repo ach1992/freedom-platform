@@ -11,7 +11,6 @@ namespace {
     use App\Modules\Payments\Zarinpal\Application\Contracts\ZarinpalVerifyResult;
     use App\Modules\Payments\Zarinpal\Application\ZarinpalPaymentService;
     use Illuminate\Contracts\Console\Kernel;
-    use Throwable;
 
     require_once dirname(__DIR__, 2).'/vendor/autoload.php';
 

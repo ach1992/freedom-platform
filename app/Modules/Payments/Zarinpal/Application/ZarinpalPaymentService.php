@@ -106,7 +106,7 @@ final readonly class ZarinpalPaymentService
             return $this->abortFreshRequestBeforeProvider($request, $correlationId);
         }
 
-        return $this->executeFreshRequest($request, $configuration, $correlationId);
+        return $this->executeFreshRequest($request, $configuration, $correlationId, true);
     }
 
     /** @requirement IPG-001 PAY-002 PAY-003 DAT-002 DAT-003 DAT-004 SEC-002 INT-001 INT-002 QUA-001 QUA-004 */
@@ -122,7 +122,7 @@ final readonly class ZarinpalPaymentService
             return $this->receipt($request, true);
         }
 
-        return $this->executeFreshRequest($request, $configuration, $correlationId);
+        return $this->executeFreshRequest($request, $configuration, $correlationId, false);
     }
 
     /** @param array{merchant_id:string,callback_url:string,hash:string} $configuration
@@ -180,7 +180,7 @@ final readonly class ZarinpalPaymentService
     }
 
     /** @param array{merchant_id:string,callback_url:string,hash:string} $configuration */
-    private function executeFreshRequest(stdClass $request, array $configuration, string $correlationId): ZarinpalPaymentReceipt
+    private function executeFreshRequest(stdClass $request, array $configuration, string $correlationId, bool $prePaymentOrderAware): ZarinpalPaymentReceipt
     {
         $intent = $this->intentById($this->database->connection(), $this->positiveInt($request->payment_intent_id, 'Payment intent ID'));
         if ($intent === null) {
@@ -198,6 +198,7 @@ final readonly class ZarinpalPaymentService
             $request,
             $result,
             $correlationId,
+            $prePaymentOrderAware,
         ): ZarinpalPaymentReceipt {
             $current = $this->requestById($connection, $this->positiveInt($request->id, 'Zarinpal request ID'), true);
             if ($current === null) {
@@ -221,12 +222,14 @@ final readonly class ZarinpalPaymentService
                     ZarinpalRequestState::Failed,
                     ['request_provider_code' => $result->providerCode],
                 );
-                $this->terminalizeIntentBeforeProvider(
-                    $connection,
-                    $this->positiveInt($current->payment_intent_id, 'Payment intent ID'),
-                    $correlationId,
-                    'zarinpal_request_rejected',
-                );
+                if ($prePaymentOrderAware) {
+                    $this->terminalizeIntentFailure(
+                        $connection,
+                        $this->positiveInt($current->payment_intent_id, 'Payment intent ID'),
+                        $correlationId,
+                        'zarinpal_request_rejected',
+                    );
+                }
                 $fresh = $this->requiredRequest($connection, (int) $current->id);
                 $this->observe($connection, $fresh, 'request_rejected', null, $result->providerCode, null, $correlationId);
 
@@ -268,7 +271,7 @@ final readonly class ZarinpalPaymentService
                 return $this->receipt($current, true);
             }
             $this->updateRequestState($connection, $current, ZarinpalRequestState::Failed);
-            $this->terminalizeIntentBeforeProvider(
+            $this->terminalizeIntentFailure(
                 $connection,
                 $this->positiveInt($current->payment_intent_id, 'Payment intent ID'),
                 $correlationId,
@@ -741,25 +744,6 @@ final readonly class ZarinpalPaymentService
         });
     }
 
-    private function terminalizeIntentBeforeProvider(
-        Connection $connection,
-        int $intentId,
-        string $correlationId,
-        string $reasonCode,
-    ): void {
-        $intent = $this->intentById($connection, $intentId, true);
-        if ($intent === null) {
-            throw new RuntimeException('Zarinpal payment intent is unavailable for cancellation.');
-        }
-        $state = PaymentIntentState::tryFrom($intent->state)
-            ?? throw new RuntimeException('Stored payment intent state is invalid.');
-        if ($state === PaymentIntentState::Created) {
-            $this->transitionIntent($connection, $intentId, $state, PaymentIntentState::Canceled, $reasonCode, $correlationId);
-        } elseif ($state === PaymentIntentState::AwaitingUserAction) {
-            $this->transitionIntent($connection, $intentId, $state, PaymentIntentState::Canceled, $reasonCode, $correlationId);
-        }
-    }
-
     private function terminalizeIntentFailure(
         Connection $connection,
         int $intentId,
@@ -772,9 +756,16 @@ final readonly class ZarinpalPaymentService
         }
         $state = PaymentIntentState::tryFrom($intent->state)
             ?? throw new RuntimeException('Stored payment intent state is invalid.');
-        if (in_array($state, [PaymentIntentState::Created, PaymentIntentState::AwaitingUserAction], true)) {
+        if ($state === PaymentIntentState::Created) {
             $this->transitionIntent($connection, $intentId, $state, PaymentIntentState::Canceled, $reasonCode, $correlationId);
-        } elseif (in_array($state, [PaymentIntentState::Submitted, PaymentIntentState::Verifying, PaymentIntentState::PendingManualReview], true)) {
+
+            return;
+        }
+        if ($state === PaymentIntentState::AwaitingUserAction) {
+            $this->transitionIntent($connection, $intentId, $state, PaymentIntentState::Submitted, $reasonCode, $correlationId);
+            $state = PaymentIntentState::Submitted;
+        }
+        if (in_array($state, [PaymentIntentState::Submitted, PaymentIntentState::Verifying, PaymentIntentState::PendingManualReview], true)) {
             $this->transitionIntent($connection, $intentId, $state, PaymentIntentState::Failed, $reasonCode, $correlationId);
         }
     }
