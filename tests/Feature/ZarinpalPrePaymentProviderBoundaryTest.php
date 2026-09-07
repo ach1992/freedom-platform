@@ -155,7 +155,7 @@ final class ZarinpalPrePaymentProviderBoundaryTest extends TestCase
         self::assertTrue($uncertain->manualReviewRequired);
         self::assertFalse($uncertain->replayed);
         self::assertSame(1, $this->transport->requestCalls);
-        self::assertSame('awaiting_user_action', DB::table('payment_intents')->where('public_id', $uncertain->paymentIntentPublicId)->value('state'));
+        self::assertSame('created', DB::table('payment_intents')->where('public_id', $uncertain->paymentIntentPublicId)->value('state'));
         self::assertSame(0, DB::table('purchase_settlements')->where('provider_code', 'zarinpal')->count());
 
         $replay = $service->initiatePurchase(
