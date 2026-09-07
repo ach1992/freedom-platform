@@ -27,6 +27,7 @@ use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
 use Database\Seeders\WalletFinancialFoundationSeeder;
 use DateTimeImmutable;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
@@ -241,6 +242,17 @@ final class ZarinpalPrePaymentOrderSafetyTest extends TestCase
         self::assertSame(1, $this->transport->verifyCalls);
         self::assertSame(1, DB::table('zarinpal_verified_unsettled_evidence')->count());
         self::assertSame(1, DB::table('zarinpal_reconciliation_findings')->count());
+
+        $this->assertQueryRejected(static fn (): int => DB::table('zarinpal_verified_unsettled_evidence')->update([
+            'reason_code' => 'tampered',
+        ]));
+        $this->assertQueryRejected(static fn (): int => DB::table('zarinpal_verified_unsettled_evidence')->delete());
+        $this->assertQueryRejected(static fn (): int => DB::table('zarinpal_reconciliation_findings')->update([
+            'severity' => 'warning',
+        ]));
+        $this->assertQueryRejected(static fn (): int => DB::table('zarinpal_reconciliation_findings')->delete());
+        self::assertSame(1, DB::table('zarinpal_verified_unsettled_evidence')->count());
+        self::assertSame(1, DB::table('zarinpal_reconciliation_findings')->count());
     }
 
     private function purchaseContext(string $suffix, bool $includeWallet): array
@@ -350,5 +362,15 @@ final class ZarinpalPrePaymentOrderSafetyTest extends TestCase
     private function correlation(string $suffix): string
     {
         return hash('sha256', 'zarinpal-prepayment:'.$suffix);
+    }
+
+    private function assertQueryRejected(callable $callback): void
+    {
+        try {
+            $callback();
+            self::fail('Expected database authority rejection.');
+        } catch (QueryException) {
+            self::assertTrue(true);
+        }
     }
 }
