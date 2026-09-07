@@ -169,12 +169,25 @@ final class ZarinpalPaymentServiceTest extends TestCase
     {
         $intentPublicId = $this->purchaseIntent('configuration-drift');
         $service = $this->app->make(ZarinpalPaymentService::class);
+        $requestKey = 'zarinpal.request.configuration-drift.000001';
         $service->initiate(
-            'zarinpal.request.configuration-drift.000001',
+            $requestKey,
             $intentPublicId,
             $this->correlation('initiate-configuration-drift'),
         );
         config()->set('services.zarinpal.merchant_id', '11111111-1111-1111-1111-111111111111');
+
+        try {
+            $service->initiate(
+                $requestKey,
+                $intentPublicId,
+                $this->correlation('replay-configuration-drift'),
+            );
+            self::fail('Changed Zarinpal request identity must fail closed on replay.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('Zarinpal payment intent is already bound to a different request identity.', $exception->getMessage());
+        }
+        self::assertSame(1, $this->transport->requestCalls);
 
         $review = $service->handleCallback(
             'A'.str_repeat('1', 35),
