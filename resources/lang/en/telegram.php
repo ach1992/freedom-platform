@@ -120,6 +120,11 @@ This is a recorded commercial snapshot only. No payment, capacity reservation, o
                     'code_invalid' => "The Gift Card code could not be accepted. Check the code and send it again.\n\nThe full code will not be echoed back. No second provider/payment effect is created by this retry.",
                     'pending_manual_review' => "Gift Card submitted for manual review.\n\nSubmission: :submission_id\nType: :type\nCode: :masked_code\nClaimed face value: :face_value :currency\nStatus: Pending manual review\n\nThis is not payment confirmation, settlement, or service provisioning. The full Gift Card code is not shown here.",
                 ],
+                'usdt_payment' => [
+                    'instructions' => "USDT payment prepared\n\nNetwork: :network\nExact amount: :amount USDT\nDestination: :address\nQuote expires: :expires_at (Tehran time)\n\nSend the blockchain transaction hash (TXID) in your next message after transferring the exact amount on BEP20. This screen does not confirm payment. Settlement requires authoritative blockchain verification; no Service provisioning starts here.",
+                    'txid_invalid' => "That TXID is invalid. Send one EVM transaction hash in the form 0x followed by 64 hexadecimal characters.\n\nNetwork: :network\nExact amount: :amount USDT\nDestination: :address\nQuote expires: :expires_at (Tehran time)\n\nNo second payment or settlement effect was created by this invalid input.",
+                    'pending_verification' => "USDT transaction submitted\n\nSubmission: :submission_id\nTXID: :txid\nStatus: Pending blockchain verification\n\nThis is not payment confirmation or settlement. Service provisioning has not started and will require authoritative verification/capture through the existing payment authority.",
+                ],
                 'wallet_payment' => [
                     'continue' => 'Continue with wallet',
                     'retry' => 'Retry wallet payment',

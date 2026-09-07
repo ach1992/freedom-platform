@@ -7,14 +7,15 @@ namespace App\Modules\Telegram\Application;
 use App\Modules\Telegram\Application\Contracts\TelegramInteractionHandler;
 
 /**
- * Keeps the established navigation handler unchanged while routing the bounded
- * Gift Card journey to its dedicated reviewed gateway.
+ * Keeps the established navigation handler unchanged while routing bounded
+ * payment journeys to their dedicated reviewed gateways.
  */
 final readonly class TelegramNavigationCompositeHandler implements TelegramInteractionHandler
 {
     public function __construct(
         private TelegramNavigationHandler $navigation,
         private TelegramGiftCardNavigationHandler $giftCards,
+        private TelegramUsdtNavigationHandler $usdt,
     ) {}
 
     public function flow(): string
@@ -26,6 +27,11 @@ final readonly class TelegramNavigationCompositeHandler implements TelegramInter
     {
         if ($this->giftCards->supports($action)) {
             $this->giftCards->handle($action);
+
+            return;
+        }
+        if ($this->usdt->supports($action)) {
+            $this->usdt->handle($action);
 
             return;
         }
