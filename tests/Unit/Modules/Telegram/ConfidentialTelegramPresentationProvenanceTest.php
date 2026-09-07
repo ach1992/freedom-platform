@@ -100,6 +100,7 @@ final class ConfidentialTelegramPresentationProvenanceTest extends TestCase
     {
         self::assertSame([
             'app/Modules/Telegram/Application/TelegramCardToCardReceiptStatusDelivery.php',
+            'app/Modules/Telegram/Application/TelegramGiftCardNavigationHandler.php',
             'app/Modules/Telegram/Application/TelegramNavigationHandler.php',
         ], TelegramConfidentialPresentationProvenanceGuard::REVIEWED_SOURCE_FILES);
     }

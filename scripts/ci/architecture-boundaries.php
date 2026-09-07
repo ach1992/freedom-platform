@@ -47,9 +47,11 @@ return [
     'telegram_confidential_presentation_sources' => [
         'app/Modules/Telegram/Application/TelegramCardToCardReceiptStatusDelivery.php',
         'app/Modules/Telegram/Application/TelegramCardToCardReceiptStatusPresentation.php',
+        'app/Modules/Telegram/Application/TelegramGiftCardNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramNavigationHandler.php',
     ],
     'telegram_non_restricted_presentation_sources' => [
+        'app/Modules/Telegram/Application/TelegramGiftCardNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramInteractiveDeliveryOutboxHandler.php',
         'app/Modules/Telegram/Application/TelegramProtectedReferenceDeliveryOutboxHandler.php',
         'app/Modules/Telegram/Application/TelegramNavigationHandler.php',

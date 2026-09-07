@@ -16,9 +16,11 @@ use App\Modules\Telegram\Application\TelegramConfidentialDeliveryOutboxHandler;
 use App\Modules\Telegram\Application\TelegramConfidentialPresentationHasher;
 use App\Modules\Telegram\Application\TelegramDeliveryOperationExecutor;
 use App\Modules\Telegram\Application\TelegramDeliveryOutboxHandler;
+use App\Modules\Telegram\Application\TelegramGiftCardNavigationHandler;
 use App\Modules\Telegram\Application\TelegramInteractionHandlerRegistry;
 use App\Modules\Telegram\Application\TelegramInteractionPolicy;
 use App\Modules\Telegram\Application\TelegramInteractiveDeliveryOutboxHandler;
+use App\Modules\Telegram\Application\TelegramNavigationCompositeHandler;
 use App\Modules\Telegram\Application\TelegramNavigationEntryGateway;
 use App\Modules\Telegram\Application\TelegramNavigationHandler;
 use App\Modules\Telegram\Application\TelegramProtectedPresentationResolver;
@@ -76,7 +78,9 @@ final class TelegramServiceProvider extends ServiceProvider
         );
         $this->app->singleton(TelegramNavigationEntryGateway::class);
         $this->app->singleton(TelegramNavigationHandler::class);
-        $this->app->tag([TelegramNavigationHandler::class], TelegramInteractionHandler::class);
+        $this->app->singleton(TelegramGiftCardNavigationHandler::class);
+        $this->app->singleton(TelegramNavigationCompositeHandler::class);
+        $this->app->tag([TelegramNavigationCompositeHandler::class], TelegramInteractionHandler::class);
         $this->app->singleton(
             TelegramInteractionHandlerRegistry::class,
             fn (Application $application): TelegramInteractionHandlerRegistry => new TelegramInteractionHandlerRegistry(
