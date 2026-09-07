@@ -82,11 +82,21 @@ namespace {
         }
 
         try {
-            $receipt = $app->make(ZarinpalPaymentService::class)->initiate(
-                $payload['request_key'],
-                $payload['intent_public_id'],
-                $payload['correlation_id'],
-            );
+            $service = $app->make(ZarinpalPaymentService::class);
+            if (($payload['mode'] ?? 'legacy') === 'purchase') {
+                $receipt = $service->initiatePurchase(
+                    (int) $payload['user_id'],
+                    $payload['quote_public_id'],
+                    $payload['decision_public_id'],
+                    $payload['correlation_id'],
+                );
+            } else {
+                $receipt = $service->initiate(
+                    $payload['request_key'],
+                    $payload['intent_public_id'],
+                    $payload['correlation_id'],
+                );
+            }
             echo json_encode([
                 'ok' => true,
                 'result' => [
@@ -107,6 +117,7 @@ namespace {
 }
 
 namespace Tests\Feature {
+    use App\Modules\Orders\Application\PurchaseOrderService;
     use App\Modules\Orders\Application\QuotePricingInput;
     use App\Modules\Orders\Application\QuoteService;
     use App\Modules\Orders\Domain\QuoteOverrideSource;
@@ -176,6 +187,40 @@ namespace Tests\Feature {
             }
         }
 
+        public function test_concurrent_purchase_initiation_claims_one_external_request_mutation(): void
+        {
+            [$userId, $quotePublicId, $decisionPublicId] = $this->purchaseCheckoutContext();
+            $counterPath = storage_path('framework/testing/zarinpal-purchase-request-counter-'.bin2hex(random_bytes(8)));
+            if (! is_dir(dirname($counterPath))) {
+                mkdir(dirname($counterPath), 0777, true);
+            }
+            file_put_contents($counterPath, '0');
+            $payload = [
+                'mode' => 'purchase',
+                'user_id' => (string) $userId,
+                'quote_public_id' => $quotePublicId,
+                'decision_public_id' => $decisionPublicId,
+                'correlation_id' => hash('sha256', 'zarinpal-purchase-request-contention'),
+                'counter_path' => $counterPath,
+            ];
+
+            try {
+                $results = $this->runConcurrent([$payload, $payload]);
+                self::assertTrue($results[0]['ok'], json_encode($results[0], JSON_THROW_ON_ERROR));
+                self::assertTrue($results[1]['ok'], json_encode($results[1], JSON_THROW_ON_ERROR));
+                self::assertSame($results[0]['result']['request_id'], $results[1]['result']['request_id']);
+                self::assertSame(1, (int) trim((string) file_get_contents($counterPath)));
+                self::assertSame(1, DB::table('zarinpal_payment_requests')->count());
+                self::assertSame('redirectable', DB::table('zarinpal_payment_requests')->value('state'));
+                self::assertSame(1, DB::table('payment_intents')->where('provider_code', 'zarinpal')->count());
+                self::assertSame('awaiting_user_action', DB::table('payment_intents')->where('provider_code', 'zarinpal')->value('state'));
+                self::assertSame(0, DB::table('promotion_usage_reservations')->count());
+                self::assertSame('awaiting_payment', DB::table('orders')->value('state'));
+            } finally {
+                @unlink($counterPath);
+            }
+        }
+
         private function purchaseIntent(): string
         {
             $userId = $this->quoteUser('customer');
@@ -219,6 +264,53 @@ namespace Tests\Feature {
             );
 
             return $intent->intentPublicId;
+        }
+
+        /** @return array{0:int,1:string,2:string} */
+        private function purchaseCheckoutContext(): array
+        {
+            $userId = $this->quoteUser('customer');
+            $administratorId = $this->ownerAdministrator();
+            $offering = $this->quoteOffering();
+            $quote = $this->app->make(QuoteService::class)->create(
+                'zarinpal.purchase.contention.quote',
+                $userId,
+                $offering['id'],
+                new QuotePricingInput(QuoteOverrideSource::None, null, null, null, 0, now('UTC')->addMinutes(30)->toDateTimeImmutable()),
+                hash('sha256', 'zarinpal-purchase-contention-quote'),
+            );
+            $eligibility = $this->app->make(PaymentMethodEligibilityService::class);
+            $eligibility->configureMethod(
+                'zarinpal.purchase.contention.method',
+                $administratorId,
+                'zarinpal',
+                true,
+                false,
+                1,
+                'Zarinpal purchase contention test configuration.',
+                hash('sha256', 'zarinpal-purchase-contention-method'),
+            );
+            $eligibility->recordHealth(
+                'zarinpal.purchase.contention.health',
+                $administratorId,
+                'zarinpal',
+                true,
+                now('UTC')->addMinutes(10)->toDateTimeImmutable(),
+                'Healthy Zarinpal purchase contention observation.',
+                hash('sha256', 'zarinpal-purchase-contention-health'),
+            );
+            $decision = $eligibility->evaluate(
+                'zarinpal.purchase.contention.eligibility',
+                $userId,
+                $quote->quotePublicId,
+            );
+            $this->app->make(PurchaseOrderService::class)->openFromQuote(
+                $quote->quotePublicId,
+                $userId,
+                hash('sha256', 'zarinpal-purchase-contention-order'),
+            );
+
+            return [$userId, $quote->quotePublicId, $decision->publicId];
         }
 
         /**
