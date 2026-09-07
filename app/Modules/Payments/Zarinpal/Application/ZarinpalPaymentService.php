@@ -420,37 +420,29 @@ final readonly class ZarinpalPaymentService
                 $correlationId,
             );
         }
+        $observationWatermark = (int) $connection->table('zarinpal_payment_observations')
+            ->where('zarinpal_payment_request_id', $requestId)
+            ->max('id');
         $result = $this->transport->verify(
             $configuration['merchant_id'],
             $this->positiveInt($request->amount_irr, 'Zarinpal request amount'),
             $request->authority,
         );
         if ($result->uncertain) {
-            $this->observe($connection, $request, 'verify_uncertain', null, null, null, $correlationId);
-            if ($prePaymentOrderAware) {
-                $this->moveIntentToManualReview(
-                    $this->positiveInt($request->payment_intent_id, 'Payment intent ID'),
-                    $correlationId,
-                    'zarinpal_verify_uncertain',
-                );
-            }
-
-            return $this->moveToManualReview($request, 'manual_review', null, null, null, $correlationId);
-        }
-        if (! $result->verified || $result->refId === null || ! in_array($result->providerCode, [100, 101], true)) {
-            $this->observe($connection, $request, 'verify_rejected', null, $result->providerCode, null, $correlationId);
-
-            return $this->failRequestAndIntent(
-                $request,
-                $correlationId,
-                'zarinpal_verify_rejected',
+            return $this->convergeNonVerifiedResult(
+                $requestId,
+                'uncertain',
+                null,
                 $prePaymentOrderAware,
+                $correlationId,
             );
         }
-
-        if (! $prePaymentOrderAware) {
-            $this->prepareLegacyIntentForCapture(
-                $this->positiveInt($request->payment_intent_id, 'Payment intent ID'),
+        if (! $result->verified || $result->refId === null || ! in_array($result->providerCode, [100, 101], true)) {
+            return $this->convergeNonVerifiedResult(
+                $requestId,
+                'rejected',
+                $result->providerCode,
+                $prePaymentOrderAware,
                 $correlationId,
             );
         }
@@ -493,8 +485,85 @@ final readonly class ZarinpalPaymentService
             $normalizedHash,
             $verifiedAt,
             $verifiedEvent,
+            $prePaymentOrderAware,
+            $observationWatermark,
             $correlationId,
         );
+    }
+
+    private function convergeNonVerifiedResult(
+        int $requestId,
+        string $observedResult,
+        ?int $providerCode,
+        bool $prePaymentOrderAware,
+        string $correlationId,
+    ): ZarinpalPaymentReceipt {
+        if (! in_array($observedResult, ['rejected', 'uncertain'], true)) {
+            throw new RuntimeException('Unsupported Zarinpal non-verified provider result.');
+        }
+
+        return $this->database->connection()->transaction(function (Connection $connection) use (
+            $requestId,
+            $observedResult,
+            $providerCode,
+            $prePaymentOrderAware,
+            $correlationId,
+        ): ZarinpalPaymentReceipt {
+            $current = $this->requiredRequest($connection, $requestId, true);
+            $eventType = $observedResult === 'uncertain' ? 'verify_uncertain' : 'verify_rejected';
+            $this->observe($connection, $current, $eventType, null, $providerCode, null, $correlationId);
+
+            $existing = $this->verificationByRequestId($connection, $requestId, true);
+            $unsettled = $this->unsettledVerificationByRequestId($connection, $requestId, true);
+            if ($existing !== null || $unsettled !== null) {
+                $this->persistVerificationConflictFinding(
+                    $connection,
+                    $current,
+                    $observedResult,
+                    null,
+                    $providerCode,
+                    $this->nonVerifiedResultHash($current, $observedResult, $providerCode),
+                    $correlationId,
+                );
+                if ($this->state($current->state) === ZarinpalRequestState::Verified) {
+                    $this->updateRequestState($connection, $current, ZarinpalRequestState::ManualReview);
+                }
+
+                return $this->receipt($this->requiredRequest($connection, $requestId), true);
+            }
+
+            if ($observedResult === 'uncertain') {
+                if ($prePaymentOrderAware) {
+                    $this->moveIntentToManualReviewInConnection(
+                        $connection,
+                        $this->positiveInt($current->payment_intent_id, 'Payment intent ID'),
+                        $correlationId,
+                        'zarinpal_verify_uncertain',
+                    );
+                }
+                if ($this->state($current->state) === ZarinpalRequestState::Redirectable) {
+                    $this->updateRequestState($connection, $current, ZarinpalRequestState::ManualReview);
+                }
+                $fresh = $this->requiredRequest($connection, $requestId);
+                $this->observe($connection, $fresh, 'manual_review', null, null, null, $correlationId);
+
+                return $this->receipt($fresh, false);
+            }
+
+            if (in_array($this->state($current->state), [ZarinpalRequestState::Redirectable, ZarinpalRequestState::ManualReview], true)) {
+                $this->updateRequestState($connection, $current, ZarinpalRequestState::Failed);
+            }
+            if ($prePaymentOrderAware) {
+                $this->terminalizeIntentFailure(
+                    $connection,
+                    $this->positiveInt($current->payment_intent_id, 'Payment intent ID'),
+                    $correlationId,
+                    'zarinpal_verify_rejected',
+                );
+            }
+
+            return $this->receipt($this->requiredRequest($connection, $requestId), false);
+        }, 3);
     }
 
     private function convergeVerifiedPayment(
@@ -504,6 +573,8 @@ final readonly class ZarinpalPaymentService
         string $normalizedHash,
         DateTimeImmutable $verifiedAt,
         VerifiedPaymentEvent $verifiedEvent,
+        bool $prePaymentOrderAware,
+        int $observationWatermark,
         string $correlationId,
     ): ZarinpalPaymentReceipt {
         return $this->database->connection()->transaction(function (Connection $connection) use (
@@ -513,13 +584,33 @@ final readonly class ZarinpalPaymentService
             $normalizedHash,
             $verifiedAt,
             $verifiedEvent,
+            $prePaymentOrderAware,
+            $observationWatermark,
             $correlationId,
         ): ZarinpalPaymentReceipt {
             $current = $this->requiredRequest($connection, $requestId, true);
             $existing = $this->verificationByRequestId($connection, $requestId, true);
             $unsettled = $this->unsettledVerificationByRequestId($connection, $requestId, true);
             if ($existing !== null || $unsettled !== null) {
-                return $this->receipt($current, true);
+                $accepted = $existing ?? $unsettled;
+                if ($this->verifiedResultMatchesAcceptedEvidence($current, $accepted, $providerRefId, $normalizedHash)) {
+                    return $this->receipt($current, true);
+                }
+
+                $this->persistVerificationConflictFinding(
+                    $connection,
+                    $current,
+                    'verified',
+                    $providerRefId,
+                    $providerCode,
+                    $normalizedHash,
+                    $correlationId,
+                );
+                if ($this->state($current->state) === ZarinpalRequestState::Verified) {
+                    $this->updateRequestState($connection, $current, ZarinpalRequestState::ManualReview);
+                }
+
+                return $this->receipt($this->requiredRequest($connection, $requestId), true);
             }
 
             $intent = $this->intentById($connection, $this->positiveInt($current->payment_intent_id, 'Payment intent ID'), true);
@@ -529,6 +620,49 @@ final readonly class ZarinpalPaymentService
             $this->assertZarinpalIntentIdentity($intent);
             if (! is_string($intent->source_quote_public_id) || (int) $intent->user_id < 1) {
                 throw new RuntimeException('Zarinpal purchase identity is incomplete.');
+            }
+
+            $concurrentObservations = $this->concurrentNonVerifiedObservations($connection, $requestId, $observationWatermark);
+            $hasConcurrentRejection = false;
+            foreach ($concurrentObservations as $observation) {
+                if ($observation->event_type === 'verify_rejected') {
+                    $hasConcurrentRejection = true;
+                    break;
+                }
+            }
+            if ($hasConcurrentRejection) {
+                $this->persistUnsettledVerification(
+                    $connection,
+                    $current,
+                    $providerRefId,
+                    $providerCode,
+                    $normalizedHash,
+                    $verifiedAt,
+                    'provider_result_conflict',
+                );
+                foreach ($concurrentObservations as $observation) {
+                    $this->persistVerificationConflictFinding(
+                        $connection,
+                        $current,
+                        $observation->event_type === 'verify_uncertain' ? 'uncertain' : 'rejected',
+                        null,
+                        $observation->provider_code === null ? null : (int) $observation->provider_code,
+                        $this->observationResultHash($current, $observation),
+                        (string) $observation->correlation_id,
+                    );
+                }
+
+                return $this->receipt($this->requiredRequest($connection, $requestId), false);
+            }
+
+            if (! $prePaymentOrderAware) {
+                $this->prepareLegacyIntentForCaptureInConnection(
+                    $connection,
+                    $this->positiveInt($current->payment_intent_id, 'Payment intent ID'),
+                    $correlationId,
+                );
+                $intent = $this->intentById($connection, $this->positiveInt($current->payment_intent_id, 'Payment intent ID'), true)
+                    ?? throw new RuntimeException('Zarinpal legacy payment intent disappeared before capture.');
             }
 
             $orderAvailability = $this->purchaseOrders->settlementAvailabilityFromQuote(
@@ -543,6 +677,14 @@ final readonly class ZarinpalPaymentService
                     $providerCode,
                     $normalizedHash,
                     $verifiedAt,
+                    'purchase_order_unavailable',
+                );
+                $this->persistPurchaseOrderUnavailableFinding(
+                    $connection,
+                    $current,
+                    $providerRefId,
+                    $providerCode,
+                    $normalizedHash,
                     $correlationId,
                 );
                 $this->moveIntentToManualReviewInConnection(
@@ -590,12 +732,31 @@ final readonly class ZarinpalPaymentService
                     'created_at' => $this->timestamp(),
                 ]);
             } elseif (! hash_equals($existing->provider_ref_id, $providerRefId)
+                || ! hash_equals(strtolower((string) $existing->evidence_payload_hash), $normalizedHash)
                 || (int) $existing->purchase_settlement_id !== $settlement->settlementId) {
                 throw new RuntimeException('Zarinpal verification replay conflicts with accepted settlement authority.');
             }
 
             if ($this->state($current->state) !== ZarinpalRequestState::Verified) {
                 $this->updateRequestState($connection, $current, ZarinpalRequestState::Verified);
+            }
+
+            if ($concurrentObservations !== []) {
+                $fresh = $this->requiredRequest($connection, $requestId, true);
+                foreach ($concurrentObservations as $observation) {
+                    $this->persistVerificationConflictFinding(
+                        $connection,
+                        $fresh,
+                        $observation->event_type === 'verify_uncertain' ? 'uncertain' : 'rejected',
+                        null,
+                        $observation->provider_code === null ? null : (int) $observation->provider_code,
+                        $this->observationResultHash($fresh, $observation),
+                        (string) $observation->correlation_id,
+                    );
+                }
+                if ($this->state($fresh->state) === ZarinpalRequestState::Verified) {
+                    $this->updateRequestState($connection, $fresh, ZarinpalRequestState::ManualReview);
+                }
             }
 
             return $this->receipt(
@@ -612,13 +773,18 @@ final readonly class ZarinpalPaymentService
         int $providerCode,
         string $normalizedHash,
         DateTimeImmutable $verifiedAt,
-        string $correlationId,
+        string $reasonCode,
     ): void {
+        if (! in_array($reasonCode, ['purchase_order_unavailable', 'provider_result_conflict'], true)) {
+            throw new RuntimeException('Unsupported Zarinpal unsettled verification reason.');
+        }
+
         $requestId = $this->positiveInt($request->id, 'Zarinpal request ID');
         $existing = $this->unsettledVerificationByRequestId($connection, $requestId, true);
         if ($existing !== null) {
             if (! hash_equals((string) $existing->provider_ref_id, $providerRefId)
-                || ! hash_equals(strtolower((string) $existing->evidence_payload_hash), $normalizedHash)) {
+                || ! hash_equals(strtolower((string) $existing->evidence_payload_hash), $normalizedHash)
+                || ! hash_equals((string) $existing->reason_code, $reasonCode)) {
                 throw new RuntimeException('Zarinpal unsettled verification replay conflicts with accepted provider evidence.');
             }
 
@@ -636,10 +802,19 @@ final readonly class ZarinpalPaymentService
             'currency' => $request->currency,
             'verified_at' => $this->databaseDateTime($verifiedAt),
             'provider_reverse_eligible_until' => $this->databaseDateTime($verifiedAt->add(new DateInterval('PT30M'))),
-            'reason_code' => 'purchase_order_unavailable',
+            'reason_code' => $reasonCode,
             'created_at' => $this->timestamp(),
         ]);
+    }
 
+    private function persistPurchaseOrderUnavailableFinding(
+        Connection $connection,
+        stdClass $request,
+        string $providerRefId,
+        int $providerCode,
+        string $normalizedHash,
+        string $correlationId,
+    ): void {
         $findingKey = hash('sha256', implode("\0", [
             (string) $request->public_id,
             'verified_purchase_order_unavailable',
@@ -648,15 +823,101 @@ final readonly class ZarinpalPaymentService
         ]));
         $connection->table('zarinpal_reconciliation_findings')->insertOrIgnore([
             'public_id' => (string) Str::ulid(),
-            'zarinpal_payment_request_id' => $requestId,
+            'zarinpal_payment_request_id' => $this->positiveInt($request->id, 'Zarinpal request ID'),
             'finding_key' => $findingKey,
             'finding_type' => 'verified_purchase_order_unavailable',
             'severity' => 'critical',
+            'observed_result' => 'verified',
             'provider_ref_id' => $providerRefId,
+            'provider_code' => $providerCode,
             'evidence_hash' => $normalizedHash,
             'correlation_id' => $correlationId,
             'created_at' => $this->timestamp(),
         ]);
+    }
+
+    private function persistVerificationConflictFinding(
+        Connection $connection,
+        stdClass $request,
+        string $observedResult,
+        ?string $providerRefId,
+        ?int $providerCode,
+        string $evidenceHash,
+        string $correlationId,
+    ): void {
+        if (! in_array($observedResult, ['verified', 'rejected', 'uncertain'], true)) {
+            throw new RuntimeException('Unsupported Zarinpal verification conflict result.');
+        }
+
+        $findingKey = hash('sha256', implode("\0", [
+            (string) $request->public_id,
+            'provider_verification_conflict',
+            $observedResult,
+            $providerRefId ?? '-',
+            $providerCode === null ? '-' : (string) $providerCode,
+            $evidenceHash,
+        ]));
+        $connection->table('zarinpal_reconciliation_findings')->insertOrIgnore([
+            'public_id' => (string) Str::ulid(),
+            'zarinpal_payment_request_id' => $this->positiveInt($request->id, 'Zarinpal request ID'),
+            'finding_key' => $findingKey,
+            'finding_type' => 'provider_verification_conflict',
+            'severity' => 'critical',
+            'observed_result' => $observedResult,
+            'provider_ref_id' => $providerRefId,
+            'provider_code' => $providerCode,
+            'evidence_hash' => $evidenceHash,
+            'correlation_id' => $correlationId,
+            'created_at' => $this->timestamp(),
+        ]);
+    }
+
+    private function verifiedResultMatchesAcceptedEvidence(
+        stdClass $request,
+        stdClass $accepted,
+        string $providerRefId,
+        string $normalizedHash,
+    ): bool {
+        return is_string($request->authority)
+            && is_string($accepted->authority)
+            && hash_equals($accepted->authority, $request->authority)
+            && hash_equals((string) $accepted->provider_ref_id, $providerRefId)
+            && hash_equals(strtolower((string) $accepted->evidence_payload_hash), $normalizedHash)
+            && (int) $accepted->amount_irr === $this->positiveInt($request->amount_irr, 'Zarinpal request amount')
+            && hash_equals((string) $accepted->currency, (string) $request->currency);
+    }
+
+    /** @return list<stdClass> */
+    private function concurrentNonVerifiedObservations(Connection $connection, int $requestId, int $observationWatermark): array
+    {
+        return $connection->table('zarinpal_payment_observations')
+            ->where('zarinpal_payment_request_id', $requestId)
+            ->where('id', '>', $observationWatermark)
+            ->whereIn('event_type', ['verify_rejected', 'verify_uncertain'])
+            ->orderBy('id')
+            ->get(['id', 'event_type', 'provider_code', 'correlation_id'])
+            ->all();
+    }
+
+    private function nonVerifiedResultHash(stdClass $request, string $observedResult, ?int $providerCode): string
+    {
+        return hash('sha256', json_encode([
+            'provider' => self::PROVIDER_CODE,
+            'authority' => $request->authority,
+            'amount_irr' => $this->positiveInt($request->amount_irr, 'Zarinpal request amount'),
+            'currency' => $request->currency,
+            'result' => $observedResult,
+            'provider_code' => $providerCode,
+        ], JSON_THROW_ON_ERROR));
+    }
+
+    private function observationResultHash(stdClass $request, stdClass $observation): string
+    {
+        return $this->nonVerifiedResultHash(
+            $request,
+            $observation->event_type === 'verify_uncertain' ? 'uncertain' : 'rejected',
+            $observation->provider_code === null ? null : (int) $observation->provider_code,
+        );
     }
 
     private function prepareIntentForVerification(int $intentId, string $correlationId): void
@@ -713,13 +974,6 @@ final readonly class ZarinpalPaymentService
         });
     }
 
-    private function moveIntentToManualReview(int $intentId, string $correlationId, string $reasonCode): void
-    {
-        $this->database->connection()->transaction(function (Connection $connection) use ($intentId, $correlationId, $reasonCode): void {
-            $this->moveIntentToManualReviewInConnection($connection, $intentId, $correlationId, $reasonCode);
-        });
-    }
-
     private function moveIntentToManualReviewInConnection(
         Connection $connection,
         int $intentId,
@@ -764,37 +1018,35 @@ final readonly class ZarinpalPaymentService
         ) !== PurchaseOrderSettlementAvailability::Absent;
     }
 
-    private function prepareLegacyIntentForCapture(int $intentId, string $correlationId): void
+    private function prepareLegacyIntentForCaptureInConnection(Connection $connection, int $intentId, string $correlationId): void
     {
-        $this->database->connection()->transaction(function (Connection $connection) use ($intentId, $correlationId): void {
-            $intent = $this->intentById($connection, $intentId, true);
-            if ($intent === null) {
-                throw new RuntimeException('Zarinpal legacy payment intent is unavailable for capture.');
-            }
-            $state = PaymentIntentState::tryFrom($intent->state)
-                ?? throw new RuntimeException('Stored payment intent state is invalid.');
-            if ($state === PaymentIntentState::AwaitingUserAction) {
-                $this->transitionIntent(
-                    $connection,
-                    $intentId,
-                    PaymentIntentState::AwaitingUserAction,
-                    PaymentIntentState::Submitted,
-                    'zarinpal_server_verification_started',
-                    $correlationId,
-                );
-
-                return;
-            }
-            if (! in_array($state, [
+        $intent = $this->intentById($connection, $intentId, true);
+        if ($intent === null) {
+            throw new RuntimeException('Zarinpal legacy payment intent is unavailable for capture.');
+        }
+        $state = PaymentIntentState::tryFrom($intent->state)
+            ?? throw new RuntimeException('Stored payment intent state is invalid.');
+        if ($state === PaymentIntentState::AwaitingUserAction) {
+            $this->transitionIntent(
+                $connection,
+                $intentId,
+                PaymentIntentState::AwaitingUserAction,
                 PaymentIntentState::Submitted,
-                PaymentIntentState::Verifying,
-                PaymentIntentState::PendingManualReview,
-                PaymentIntentState::Authorized,
-                PaymentIntentState::Captured,
-            ], true)) {
-                throw new RuntimeException('Zarinpal legacy payment intent is not ready for server verification capture.');
-            }
-        });
+                'zarinpal_server_verification_started',
+                $correlationId,
+            );
+
+            return;
+        }
+        if (! in_array($state, [
+            PaymentIntentState::Submitted,
+            PaymentIntentState::Verifying,
+            PaymentIntentState::PendingManualReview,
+            PaymentIntentState::Authorized,
+            PaymentIntentState::Captured,
+        ], true)) {
+            throw new RuntimeException('Zarinpal legacy payment intent is not ready for server verification capture.');
+        }
     }
 
     private function failRequestAndIntent(
@@ -991,14 +1243,12 @@ final readonly class ZarinpalPaymentService
     private function receipt(stdClass $request, bool $replayed): ZarinpalPaymentReceipt
     {
         $state = $this->state($request->state);
-        $verification = $this->verificationByRequestId(
-            $this->database->connection(),
-            $this->positiveInt($request->id, 'Zarinpal request ID'),
-        );
-        $unsettled = $this->unsettledVerificationByRequestId(
-            $this->database->connection(),
-            $this->positiveInt($request->id, 'Zarinpal request ID'),
-        );
+        $requestId = $this->positiveInt($request->id, 'Zarinpal request ID');
+        $verification = $this->verificationByRequestId($this->database->connection(), $requestId);
+        $unsettled = $this->unsettledVerificationByRequestId($this->database->connection(), $requestId);
+        $hasReconciliationFinding = $this->database->connection()->table('zarinpal_reconciliation_findings')
+            ->where('zarinpal_payment_request_id', $requestId)
+            ->exists();
         $settlementPublicId = null;
         $providerRefId = null;
         $reverseWindowOpen = false;
@@ -1020,7 +1270,7 @@ final readonly class ZarinpalPaymentService
         }
 
         return new ZarinpalPaymentReceipt(
-            $this->positiveInt($request->id, 'Zarinpal request ID'),
+            $requestId,
             $request->public_id,
             $intentPublicId,
             $state,
@@ -1031,7 +1281,7 @@ final readonly class ZarinpalPaymentService
             is_string($providerRefId) ? $providerRefId : null,
             $reverseWindowOpen,
             $replayed,
-            in_array($state, [ZarinpalRequestState::Uncertain, ZarinpalRequestState::ManualReview], true),
+            $hasReconciliationFinding || in_array($state, [ZarinpalRequestState::Uncertain, ZarinpalRequestState::ManualReview], true),
         );
     }
 
