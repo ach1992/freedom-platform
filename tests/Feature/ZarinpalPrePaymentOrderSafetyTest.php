@@ -182,6 +182,60 @@ final class ZarinpalPrePaymentOrderSafetyTest extends TestCase
         self::assertSame(1, DB::table('purchase_settlements')->where('provider_code', 'zarinpal')->count());
     }
 
+    public function test_pre_payment_verify_rejection_terminalizes_intent_without_settlement(): void
+    {
+        [$userId, $quote, $decision, $opening] = $this->purchaseContext('verify-rejected', false);
+        $service = $this->app->make(ZarinpalPaymentService::class);
+        $initiated = $service->initiatePurchase(
+            $userId,
+            $quote->quotePublicId,
+            $decision->publicId,
+            $this->correlation('verify-rejected-initiate'),
+        );
+        $this->transport->verifyResult = ZarinpalVerifyResult::rejected(-51);
+
+        $failed = $service->handleCallback(
+            'A'.str_repeat('7', 35),
+            'OK',
+            $this->correlation('verify-rejected-callback'),
+        );
+
+        self::assertSame(ZarinpalRequestState::Failed, $failed->state);
+        self::assertSame(1, $this->transport->verifyCalls);
+        self::assertSame('failed', DB::table('payment_intents')->where('public_id', $initiated->paymentIntentPublicId)->value('state'));
+        self::assertSame(0, DB::table('purchase_settlements')->where('provider_code', 'zarinpal')->count());
+        self::assertSame('awaiting_payment', DB::table('orders')->where('public_id', $opening->orderPublicId)->value('state'));
+    }
+
+    public function test_pre_payment_verify_uncertainty_enters_manual_review_without_settlement(): void
+    {
+        [$userId, $quote, $decision, $opening] = $this->purchaseContext('verify-uncertain', false);
+        $service = $this->app->make(ZarinpalPaymentService::class);
+        $initiated = $service->initiatePurchase(
+            $userId,
+            $quote->quotePublicId,
+            $decision->publicId,
+            $this->correlation('verify-uncertain-initiate'),
+        );
+        $this->transport->verifyResult = ZarinpalVerifyResult::uncertain();
+
+        $review = $service->handleCallback(
+            'A'.str_repeat('7', 35),
+            'OK',
+            $this->correlation('verify-uncertain-callback'),
+        );
+
+        self::assertSame(ZarinpalRequestState::ManualReview, $review->state);
+        self::assertTrue($review->manualReviewRequired);
+        self::assertSame(1, $this->transport->verifyCalls);
+        self::assertSame(
+            'pending_manual_review',
+            DB::table('payment_intents')->where('public_id', $initiated->paymentIntentPublicId)->value('state'),
+        );
+        self::assertSame(0, DB::table('purchase_settlements')->where('provider_code', 'zarinpal')->count());
+        self::assertSame('awaiting_payment', DB::table('orders')->where('public_id', $opening->orderPublicId)->value('state'));
+    }
+
     public function test_verified_zarinpal_payment_loses_safely_after_wallet_wins_the_order(): void
     {
         [$userId, $quote, $decision, $opening] = $this->purchaseContext('loser', true);

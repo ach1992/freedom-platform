@@ -194,6 +194,85 @@ final class ZarinpalPaymentServiceTest extends TestCase
         self::assertSame(0, DB::table('purchase_settlements')->count());
     }
 
+    public function test_legacy_no_pre_payment_verify_rejection_preserves_existing_intent_semantics(): void
+    {
+        $intentPublicId = $this->purchaseIntent('legacy-verify-rejected');
+        $service = $this->app->make(ZarinpalPaymentService::class);
+        $service->initiate(
+            'zarinpal.request.legacy.verify.rejected.000001',
+            $intentPublicId,
+            $this->correlation('legacy-verify-rejected-initiate'),
+        );
+        $this->transport->verifyResult = ZarinpalVerifyResult::rejected(-51);
+
+        $failed = $service->handleCallback(
+            'A'.str_repeat('1', 35),
+            'OK',
+            $this->correlation('legacy-verify-rejected-callback'),
+        );
+
+        self::assertSame(ZarinpalRequestState::Failed, $failed->state);
+        self::assertSame(1, $this->transport->verifyCalls);
+        self::assertSame(0, DB::table('purchase_settlements')->count());
+        self::assertSame(
+            'awaiting_user_action',
+            DB::table('payment_intents')->where('public_id', $intentPublicId)->value('state'),
+        );
+    }
+
+    public function test_legacy_no_pre_payment_verify_uncertainty_preserves_existing_intent_semantics(): void
+    {
+        $intentPublicId = $this->purchaseIntent('legacy-verify-uncertain');
+        $service = $this->app->make(ZarinpalPaymentService::class);
+        $service->initiate(
+            'zarinpal.request.legacy.verify.uncertain.000001',
+            $intentPublicId,
+            $this->correlation('legacy-verify-uncertain-initiate'),
+        );
+        $this->transport->verifyResult = ZarinpalVerifyResult::uncertain();
+
+        $review = $service->handleCallback(
+            'A'.str_repeat('1', 35),
+            'OK',
+            $this->correlation('legacy-verify-uncertain-callback'),
+        );
+
+        self::assertSame(ZarinpalRequestState::ManualReview, $review->state);
+        self::assertTrue($review->manualReviewRequired);
+        self::assertSame(1, $this->transport->verifyCalls);
+        self::assertSame(0, DB::table('purchase_settlements')->count());
+        self::assertSame(
+            'awaiting_user_action',
+            DB::table('payment_intents')->where('public_id', $intentPublicId)->value('state'),
+        );
+    }
+
+    public function test_legacy_no_pre_payment_failed_inquiry_preserves_existing_intent_semantics(): void
+    {
+        $intentPublicId = $this->purchaseIntent('legacy-inquiry-failed');
+        $service = $this->app->make(ZarinpalPaymentService::class);
+        $initiated = $service->initiate(
+            'zarinpal.request.legacy.inquiry.failed.000001',
+            $intentPublicId,
+            $this->correlation('legacy-inquiry-failed-initiate'),
+        );
+        $this->transport->inquiryResult = ZarinpalInquiryResult::available('FAILED', -51);
+
+        $failed = $service->reconcile(
+            $initiated->publicId,
+            $this->correlation('legacy-inquiry-failed-reconcile'),
+        );
+
+        self::assertSame(ZarinpalRequestState::Failed, $failed->state);
+        self::assertSame(1, $this->transport->inquiryCalls);
+        self::assertSame(0, $this->transport->verifyCalls);
+        self::assertSame(0, DB::table('purchase_settlements')->count());
+        self::assertSame(
+            'awaiting_user_action',
+            DB::table('payment_intents')->where('public_id', $intentPublicId)->value('state'),
+        );
+    }
+
     public function test_reconciliation_uses_inquiry_as_status_only_then_server_verify_for_paid(): void
     {
         $intentPublicId = $this->purchaseIntent('reconcile');

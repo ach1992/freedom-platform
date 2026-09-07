@@ -379,7 +379,12 @@ final readonly class ZarinpalPaymentService
                 return $this->moveToManualReview($request, 'manual_review', 'FAILED', $inquiry->providerCode, null, $correlationId);
             }
             if (in_array($this->state($request->state), [ZarinpalRequestState::Redirectable, ZarinpalRequestState::ManualReview], true)) {
-                return $this->failRequestAndIntent($request, $correlationId, 'zarinpal_inquiry_failed');
+                return $this->failRequestAndIntent(
+                    $request,
+                    $correlationId,
+                    'zarinpal_inquiry_failed',
+                    $this->prePaymentOrderAware($request),
+                );
             }
         }
 
@@ -408,10 +413,13 @@ final readonly class ZarinpalPaymentService
             return $this->receipt($request, true);
         }
 
-        $this->prepareIntentForVerification(
-            $this->positiveInt($request->payment_intent_id, 'Payment intent ID'),
-            $correlationId,
-        );
+        $prePaymentOrderAware = $this->prePaymentOrderAware($request);
+        if ($prePaymentOrderAware) {
+            $this->prepareIntentForVerification(
+                $this->positiveInt($request->payment_intent_id, 'Payment intent ID'),
+                $correlationId,
+            );
+        }
         $result = $this->transport->verify(
             $configuration['merchant_id'],
             $this->positiveInt($request->amount_irr, 'Zarinpal request amount'),
@@ -419,18 +427,32 @@ final readonly class ZarinpalPaymentService
         );
         if ($result->uncertain) {
             $this->observe($connection, $request, 'verify_uncertain', null, null, null, $correlationId);
-            $this->moveIntentToManualReview(
-                $this->positiveInt($request->payment_intent_id, 'Payment intent ID'),
-                $correlationId,
-                'zarinpal_verify_uncertain',
-            );
+            if ($prePaymentOrderAware) {
+                $this->moveIntentToManualReview(
+                    $this->positiveInt($request->payment_intent_id, 'Payment intent ID'),
+                    $correlationId,
+                    'zarinpal_verify_uncertain',
+                );
+            }
 
             return $this->moveToManualReview($request, 'manual_review', null, null, null, $correlationId);
         }
         if (! $result->verified || $result->refId === null || ! in_array($result->providerCode, [100, 101], true)) {
             $this->observe($connection, $request, 'verify_rejected', null, $result->providerCode, null, $correlationId);
 
-            return $this->failRequestAndIntent($request, $correlationId, 'zarinpal_verify_rejected');
+            return $this->failRequestAndIntent(
+                $request,
+                $correlationId,
+                'zarinpal_verify_rejected',
+                $prePaymentOrderAware,
+            );
+        }
+
+        if (! $prePaymentOrderAware) {
+            $this->prepareLegacyIntentForCapture(
+                $this->positiveInt($request->payment_intent_id, 'Payment intent ID'),
+                $correlationId,
+            );
         }
 
         $verifiedAt = $this->clock->now()->setTimezone(new DateTimeZone('UTC'));
@@ -722,23 +744,83 @@ final readonly class ZarinpalPaymentService
         }
     }
 
-    private function failRequestAndIntent(stdClass $request, string $correlationId, string $reasonCode): ZarinpalPaymentReceipt
+    private function prePaymentOrderAware(stdClass $request): bool
     {
+        $intent = $this->intentById(
+            $this->database->connection(),
+            $this->positiveInt($request->payment_intent_id, 'Payment intent ID'),
+        );
+        if ($intent === null) {
+            throw new RuntimeException('Zarinpal payment intent is unavailable for Order authority detection.');
+        }
+        $this->assertZarinpalIntentIdentity($intent);
+        if (! is_string($intent->source_quote_public_id) || (int) $intent->user_id < 1) {
+            throw new RuntimeException('Zarinpal purchase identity is incomplete.');
+        }
+
+        return $this->purchaseOrders->settlementAvailabilityFromQuote(
+            $intent->source_quote_public_id,
+            (int) $intent->user_id,
+        ) !== PurchaseOrderSettlementAvailability::Absent;
+    }
+
+    private function prepareLegacyIntentForCapture(int $intentId, string $correlationId): void
+    {
+        $this->database->connection()->transaction(function (Connection $connection) use ($intentId, $correlationId): void {
+            $intent = $this->intentById($connection, $intentId, true);
+            if ($intent === null) {
+                throw new RuntimeException('Zarinpal legacy payment intent is unavailable for capture.');
+            }
+            $state = PaymentIntentState::tryFrom($intent->state)
+                ?? throw new RuntimeException('Stored payment intent state is invalid.');
+            if ($state === PaymentIntentState::AwaitingUserAction) {
+                $this->transitionIntent(
+                    $connection,
+                    $intentId,
+                    PaymentIntentState::AwaitingUserAction,
+                    PaymentIntentState::Submitted,
+                    'zarinpal_server_verification_started',
+                    $correlationId,
+                );
+
+                return;
+            }
+            if (! in_array($state, [
+                PaymentIntentState::Submitted,
+                PaymentIntentState::Verifying,
+                PaymentIntentState::PendingManualReview,
+                PaymentIntentState::Authorized,
+                PaymentIntentState::Captured,
+            ], true)) {
+                throw new RuntimeException('Zarinpal legacy payment intent is not ready for server verification capture.');
+            }
+        });
+    }
+
+    private function failRequestAndIntent(
+        stdClass $request,
+        string $correlationId,
+        string $reasonCode,
+        bool $terminalizeIntent,
+    ): ZarinpalPaymentReceipt {
         return $this->database->connection()->transaction(function (Connection $connection) use (
             $request,
             $correlationId,
             $reasonCode,
+            $terminalizeIntent,
         ): ZarinpalPaymentReceipt {
             $current = $this->requiredRequest($connection, $this->positiveInt($request->id, 'Zarinpal request ID'), true);
             if ($this->state($current->state) !== ZarinpalRequestState::Failed) {
                 $this->updateRequestState($connection, $current, ZarinpalRequestState::Failed);
             }
-            $this->terminalizeIntentFailure(
-                $connection,
-                $this->positiveInt($current->payment_intent_id, 'Payment intent ID'),
-                $correlationId,
-                $reasonCode,
-            );
+            if ($terminalizeIntent) {
+                $this->terminalizeIntentFailure(
+                    $connection,
+                    $this->positiveInt($current->payment_intent_id, 'Payment intent ID'),
+                    $correlationId,
+                    $reasonCode,
+                );
+            }
 
             return $this->receipt($this->requiredRequest($connection, (int) $current->id), false);
         });
