@@ -76,7 +76,7 @@ final readonly class ZarinpalPaymentService
                 self::PROVIDER_CODE,
                 $correlationId,
             );
-            $this->promotionUsage->reserveForQuote(
+            $promotionReservationPublicId = $this->promotionUsage->reserveForQuote(
                 $this->promotionReservationKey($quotePublicId),
                 $actorUserId,
                 $quotePublicId,
@@ -85,6 +85,7 @@ final readonly class ZarinpalPaymentService
                 $this->purchaseRequestKey($quotePublicId),
                 $intent->intentPublicId,
                 $configuration,
+                $promotionReservationPublicId,
             );
             if (! $claimed) {
                 return [$request, false];
@@ -133,12 +134,17 @@ final readonly class ZarinpalPaymentService
     /** @param array{merchant_id:string,callback_url:string,hash:string} $configuration
      * @return array{0:stdClass,1:bool}
      */
-    private function claimRequest(string $requestKey, string $paymentIntentPublicId, array $configuration): array
-    {
+    private function claimRequest(
+        string $requestKey,
+        string $paymentIntentPublicId,
+        array $configuration,
+        ?string $promotionReservationPublicId = null,
+    ): array {
         return $this->database->connection()->transaction(function (Connection $connection) use (
             $requestKey,
             $paymentIntentPublicId,
             $configuration,
+            $promotionReservationPublicId,
         ): array {
             $intent = $this->intentByPublicId($connection, $paymentIntentPublicId, true);
             if ($intent === null) {
@@ -146,11 +152,29 @@ final readonly class ZarinpalPaymentService
             }
             $this->assertZarinpalIntentIdentity($intent);
             $payloadHash = $this->requestPayloadHash($intent, $configuration['hash']);
+            $promotionReservationId = null;
+            if ($promotionReservationPublicId !== null) {
+                $this->assertUlid($promotionReservationPublicId, 'Promotion usage reservation public ID');
+                $reservation = $connection->table('promotion_usage_reservations')
+                    ->where('public_id', $promotionReservationPublicId)
+                    ->where('quote_id', $this->positiveInt($intent->source_quote_id, 'Payment intent source Quote ID'))
+                    ->where('user_id', $this->positiveInt($intent->user_id, 'Payment intent user ID'))
+                    ->lockForUpdate()
+                    ->first(['id']);
+                if ($reservation === null) {
+                    throw new RuntimeException('Zarinpal purchase promotion reservation authority is unavailable.');
+                }
+                $promotionReservationId = $this->positiveInt($reservation->id, 'Promotion usage reservation ID');
+            }
 
             $existing = $this->requestByIntentId($connection, $this->positiveInt($intent->id, 'Payment intent ID'), true);
             if ($existing !== null) {
+                $existingPromotionReservationId = $existing->promotion_usage_reservation_id === null
+                    ? null
+                    : $this->positiveInt($existing->promotion_usage_reservation_id, 'Zarinpal request promotion reservation ID');
                 if (! hash_equals($existing->request_key, $requestKey)
-                    || ! hash_equals(strtolower($existing->payload_hash), $payloadHash)) {
+                    || ! hash_equals(strtolower($existing->payload_hash), $payloadHash)
+                    || $existingPromotionReservationId !== $promotionReservationId) {
                     throw new RuntimeException('Zarinpal payment intent is already bound to a different request identity.');
                 }
 
@@ -162,6 +186,7 @@ final readonly class ZarinpalPaymentService
                 'request_key' => $requestKey,
                 'payload_hash' => $payloadHash,
                 'payment_intent_id' => $this->positiveInt($intent->id, 'Payment intent ID'),
+                'promotion_usage_reservation_id' => $promotionReservationId,
                 'merchant_configuration_hash' => $configuration['hash'],
                 'authority' => null,
                 'state' => ZarinpalRequestState::Initiating->value,
@@ -743,6 +768,66 @@ final readonly class ZarinpalPaymentService
                 return $this->receipt($this->requiredRequest($connection, $requestId), false);
             }
 
+            $promotionFinalizationRequired = $orderAvailability === PurchaseOrderSettlementAvailability::AwaitingPayment
+                && $this->promotionUsage->requiresFinalizationForQuote(
+                    (int) $intent->user_id,
+                    $intent->source_quote_public_id,
+                );
+            $promotionReservationLinkedBeforeProvider = $current->promotion_usage_reservation_id !== null;
+            if ($promotionFinalizationRequired
+                && (! $promotionReservationLinkedBeforeProvider || ! $this->promotionUsage->isFinalizationAuthorityAvailableForQuote(
+                    (int) $intent->user_id,
+                    $intent->source_quote_public_id,
+                ))) {
+                if (! $this->claimVerifiedProviderEvidence(
+                    $connection,
+                    $current,
+                    $providerRefId,
+                    $normalizedHash,
+                    'unsettled',
+                    $verifiedAt,
+                )) {
+                    return $this->providerIdentityConflictReceipt(
+                        $connection,
+                        $current,
+                        $intent,
+                        $providerRefId,
+                        $providerCode,
+                        $normalizedHash,
+                        $prePaymentOrderAware,
+                        $correlationId,
+                    );
+                }
+                $this->persistUnsettledVerification(
+                    $connection,
+                    $current,
+                    $providerRefId,
+                    $providerCode,
+                    $normalizedHash,
+                    $verifiedAt,
+                    'promotion_authority_unavailable',
+                );
+                $this->persistPromotionAuthorityUnavailableFinding(
+                    $connection,
+                    $current,
+                    $providerRefId,
+                    $providerCode,
+                    $normalizedHash,
+                    $correlationId,
+                );
+                $this->moveIntentToManualReviewInConnection(
+                    $connection,
+                    $this->positiveInt($intent->id, 'Payment intent ID'),
+                    $correlationId,
+                    'zarinpal_verified_promotion_authority_unavailable',
+                );
+                if ($this->state($current->state) !== ZarinpalRequestState::ManualReview) {
+                    $this->updateRequestState($connection, $current, ZarinpalRequestState::ManualReview);
+                }
+
+                return $this->receipt($this->requiredRequest($connection, $requestId), false);
+            }
+
             if (! $this->claimVerifiedProviderEvidence(
                 $connection,
                 $current,
@@ -838,7 +923,7 @@ final readonly class ZarinpalPaymentService
         DateTimeImmutable $verifiedAt,
         string $reasonCode,
     ): void {
-        if (! in_array($reasonCode, ['purchase_order_unavailable', 'provider_result_conflict'], true)) {
+        if (! in_array($reasonCode, ['purchase_order_unavailable', 'provider_result_conflict', 'promotion_authority_unavailable'], true)) {
             throw new RuntimeException('Unsupported Zarinpal unsettled verification reason.');
         }
 
@@ -889,6 +974,35 @@ final readonly class ZarinpalPaymentService
             'zarinpal_payment_request_id' => $this->positiveInt($request->id, 'Zarinpal request ID'),
             'finding_key' => $findingKey,
             'finding_type' => 'verified_purchase_order_unavailable',
+            'severity' => 'critical',
+            'observed_result' => 'verified',
+            'provider_ref_id' => $providerRefId,
+            'provider_code' => $providerCode,
+            'evidence_hash' => $normalizedHash,
+            'correlation_id' => $correlationId,
+            'created_at' => $this->timestamp(),
+        ]);
+    }
+
+    private function persistPromotionAuthorityUnavailableFinding(
+        Connection $connection,
+        stdClass $request,
+        string $providerRefId,
+        int $providerCode,
+        string $normalizedHash,
+        string $correlationId,
+    ): void {
+        $findingKey = hash('sha256', implode("\0", [
+            (string) $request->public_id,
+            'verified_promotion_authority_unavailable',
+            $providerRefId,
+            $normalizedHash,
+        ]));
+        $connection->table('zarinpal_reconciliation_findings')->insertOrIgnore([
+            'public_id' => (string) Str::ulid(),
+            'zarinpal_payment_request_id' => $this->positiveInt($request->id, 'Zarinpal request ID'),
+            'finding_key' => $findingKey,
+            'finding_type' => 'verified_promotion_authority_unavailable',
             'severity' => 'critical',
             'observed_result' => 'verified',
             'provider_ref_id' => $providerRefId,
@@ -1595,7 +1709,7 @@ final readonly class ZarinpalPaymentService
         }
 
         return $query->first([
-            'id', 'public_id', 'purpose', 'user_id', 'source_quote_public_id', 'payment_method_code', 'provider_code',
+            'id', 'public_id', 'purpose', 'user_id', 'source_quote_id', 'source_quote_public_id', 'payment_method_code', 'provider_code',
             'amount_irr', 'currency', 'state', 'captured_at',
         ]);
     }
@@ -1608,7 +1722,7 @@ final readonly class ZarinpalPaymentService
         }
 
         return $query->first([
-            'id', 'public_id', 'purpose', 'user_id', 'source_quote_public_id', 'payment_method_code', 'provider_code',
+            'id', 'public_id', 'purpose', 'user_id', 'source_quote_id', 'source_quote_public_id', 'payment_method_code', 'provider_code',
             'amount_irr', 'currency', 'state', 'captured_at',
         ]);
     }
@@ -1682,7 +1796,7 @@ final readonly class ZarinpalPaymentService
     private function requestColumns(): array
     {
         return [
-            'id', 'public_id', 'request_key', 'payload_hash', 'payment_intent_id', 'merchant_configuration_hash',
+            'id', 'public_id', 'request_key', 'payload_hash', 'payment_intent_id', 'promotion_usage_reservation_id', 'merchant_configuration_hash',
             'authority', 'state', 'amount_irr', 'currency', 'callback_url', 'request_provider_code',
             'request_attempted_at', 'authority_received_at', 'created_at', 'updated_at',
         ];

@@ -12,6 +12,15 @@ return new class extends Migration
     /** @requirement IPG-001 PAY-002 PAY-003 PRO-001 DAT-002 DAT-003 DAT-004 SEC-002 QUA-004 */
     public function up(): void
     {
+        Schema::table('zarinpal_payment_requests', function (Blueprint $table): void {
+            $table->foreignId('promotion_usage_reservation_id')
+                ->nullable()
+                ->after('payment_intent_id')
+                ->constrained('promotion_usage_reservations', indexName: 'zpr_promotion_reservation_fk')
+                ->restrictOnDelete();
+        });
+        $this->createRequestPromotionAuthorityGuards();
+
         Schema::create('zarinpal_provider_evidence_claims', function (Blueprint $table): void {
             $table->bigIncrements('id');
             $table->foreignId('zarinpal_payment_request_id')->unique('zpec_request_unique');
@@ -77,7 +86,7 @@ SQL);
         DB::statement("ALTER TABLE zarinpal_verified_unsettled_evidence ADD CONSTRAINT zvue_money_chk CHECK (`amount_irr` > 0 AND `currency` = 'IRR')");
         DB::statement('ALTER TABLE zarinpal_verified_unsettled_evidence ADD CONSTRAINT zvue_hash_chk CHECK (CHAR_LENGTH(`evidence_payload_hash`) = 64)');
         DB::statement('ALTER TABLE zarinpal_verified_unsettled_evidence ADD CONSTRAINT zvue_reverse_window_chk CHECK (`provider_reverse_eligible_until` >= `verified_at`)');
-        DB::statement("ALTER TABLE zarinpal_verified_unsettled_evidence ADD CONSTRAINT zvue_reason_chk CHECK (`reason_code` IN ('purchase_order_unavailable','provider_result_conflict'))");
+        DB::statement("ALTER TABLE zarinpal_verified_unsettled_evidence ADD CONSTRAINT zvue_reason_chk CHECK (`reason_code` IN ('purchase_order_unavailable','provider_result_conflict','promotion_authority_unavailable'))");
 
         Schema::create('zarinpal_reconciliation_findings', function (Blueprint $table): void {
             $table->bigIncrements('id');
@@ -99,7 +108,7 @@ SQL);
             $table->index(['zarinpal_payment_request_id', 'created_at'], 'zrf_request_created_idx');
             $table->index(['finding_type', 'severity', 'created_at'], 'zrf_type_severity_created_idx');
         });
-        DB::statement("ALTER TABLE zarinpal_reconciliation_findings ADD CONSTRAINT zrf_type_chk CHECK (`finding_type` IN ('verified_purchase_order_unavailable','provider_verification_conflict'))");
+        DB::statement("ALTER TABLE zarinpal_reconciliation_findings ADD CONSTRAINT zrf_type_chk CHECK (`finding_type` IN ('verified_purchase_order_unavailable','provider_verification_conflict','verified_promotion_authority_unavailable'))");
         DB::statement("ALTER TABLE zarinpal_reconciliation_findings ADD CONSTRAINT zrf_severity_chk CHECK (`severity` = 'critical')");
         DB::statement("ALTER TABLE zarinpal_reconciliation_findings ADD CONSTRAINT zrf_result_chk CHECK (`observed_result` IN ('verified','rejected','uncertain'))");
         DB::statement('ALTER TABLE zarinpal_reconciliation_findings ADD CONSTRAINT zrf_hash_chk CHECK (CHAR_LENGTH(`finding_key`) = 64 AND CHAR_LENGTH(`evidence_hash`) = 64)');
@@ -126,12 +135,15 @@ SQL);
             ->exists();
 
         if ($hasPrePaymentAuthority
+            || DB::table('zarinpal_payment_requests')->whereNotNull('promotion_usage_reservation_id')->exists()
             || DB::table('zarinpal_reconciliation_findings')->exists()
             || DB::table('zarinpal_verified_unsettled_evidence')->exists()) {
             throw new RuntimeException('Cannot roll back Zarinpal pre-payment Order authority while durable pre-payment or reconciliation authority exists.');
         }
 
         DB::unprepared('DROP TRIGGER IF EXISTS zarinpal_payment_verifications_unsettled_conflict_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS zarinpal_payment_requests_promotion_update_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS zarinpal_payment_requests_promotion_insert_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS zarinpal_reconciliation_findings_delete_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS zarinpal_reconciliation_findings_update_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS zarinpal_reconciliation_findings_insert_guard');
@@ -146,6 +158,55 @@ SQL);
         Schema::dropIfExists('zarinpal_verified_unsettled_evidence');
         Schema::dropIfExists('zarinpal_provider_evidence_claims');
 
+        Schema::table('zarinpal_payment_requests', function (Blueprint $table): void {
+            $table->dropForeign('zpr_promotion_reservation_fk');
+            $table->dropColumn('promotion_usage_reservation_id');
+        });
+    }
+
+    private function createRequestPromotionAuthorityGuards(): void
+    {
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER zarinpal_payment_requests_promotion_insert_guard
+BEFORE INSERT ON zarinpal_payment_requests
+FOR EACH ROW
+BEGIN
+    DECLARE matching_reservation_count INT DEFAULT 0;
+
+    IF NEW.promotion_usage_reservation_id IS NOT NULL THEN
+        SELECT COUNT(*) INTO matching_reservation_count
+        FROM payment_intents intent_row
+        INNER JOIN promotion_usage_reservations reservation_row
+            ON reservation_row.id = NEW.promotion_usage_reservation_id
+           AND reservation_row.quote_id = intent_row.source_quote_id
+           AND reservation_row.user_id = intent_row.user_id
+        LEFT JOIN promotion_usage_releases release_row
+            ON release_row.promotion_usage_reservation_id = reservation_row.id
+        LEFT JOIN promotion_usage_redemptions redemption_row
+            ON redemption_row.promotion_usage_reservation_id = reservation_row.id
+        WHERE intent_row.id = NEW.payment_intent_id
+          AND intent_row.purpose = 'purchase'
+          AND intent_row.provider_code = 'zarinpal'
+          AND release_row.id IS NULL
+          AND redemption_row.id IS NULL;
+
+        IF matching_reservation_count <> 1 THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Zarinpal pre-provider promotion reservation linkage requires one active matching purchase authority.';
+        END IF;
+    END IF;
+END
+SQL);
+
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER zarinpal_payment_requests_promotion_update_guard
+BEFORE UPDATE ON zarinpal_payment_requests
+FOR EACH ROW
+BEGIN
+    IF NOT (NEW.promotion_usage_reservation_id <=> OLD.promotion_usage_reservation_id) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Zarinpal pre-provider promotion reservation linkage is immutable.';
+    END IF;
+END
+SQL);
     }
 
     private function createProviderEvidenceClaimGuards(): void
@@ -230,6 +291,70 @@ BEGIN
           AND NOT (order_row.state = 'awaiting_payment' AND order_row.state_version = 0)
           AND order_row.total_amount_irr = NEW.amount_irr
           AND order_row.currency = NEW.currency
+          AND NOT EXISTS (
+              SELECT 1
+              FROM purchase_settlements settlement_row
+              WHERE settlement_row.payment_intent_id = intent_row.id
+          )
+          AND NOT EXISTS (
+              SELECT 1
+              FROM zarinpal_payment_verifications verification_row
+              WHERE verification_row.zarinpal_payment_request_id = request_row.id
+          );
+    ELSEIF NEW.reason_code = 'promotion_authority_unavailable' THEN
+        SELECT COUNT(*) INTO valid_authority_count
+        FROM zarinpal_payment_requests request_row
+        INNER JOIN payment_intents intent_row ON intent_row.id = request_row.payment_intent_id
+        INNER JOIN quotes quote_row ON quote_row.id = intent_row.source_quote_id
+        INNER JOIN orders order_row
+            ON order_row.source_type = 'purchase'
+           AND order_row.source_quote_id = intent_row.source_quote_id
+           AND order_row.source_quote_public_id = intent_row.source_quote_public_id
+           AND order_row.user_id = intent_row.user_id
+        WHERE request_row.id = NEW.zarinpal_payment_request_id
+          AND request_row.state IN ('redirectable','manual_review')
+          AND request_row.authority = NEW.authority
+          AND request_row.amount_irr = NEW.amount_irr
+          AND request_row.currency = NEW.currency
+          AND request_row.merchant_configuration_hash IS NOT NULL
+          AND intent_row.purpose = 'purchase'
+          AND intent_row.provider_code = 'zarinpal'
+          AND intent_row.amount_irr = NEW.amount_irr
+          AND intent_row.currency = NEW.currency
+          AND intent_row.state IN ('submitted','verifying','pending_manual_review')
+          AND intent_row.captured_at IS NULL
+          AND quote_row.public_id = intent_row.source_quote_public_id
+          AND quote_row.user_id = intent_row.user_id
+          AND quote_row.final_price_irr = NEW.amount_irr
+          AND quote_row.currency = NEW.currency
+          AND quote_row.discount_irr > 0
+          AND quote_row.discount_reference_code IS NOT NULL
+          AND order_row.state = 'awaiting_payment'
+          AND order_row.state_version = 0
+          AND order_row.total_amount_irr = NEW.amount_irr
+          AND order_row.currency = NEW.currency
+          AND order_row.purchase_settlement_id IS NULL
+          AND order_row.purchase_settlement_public_id IS NULL
+          AND order_row.payment_intent_id IS NULL
+          AND order_row.payment_intent_public_id IS NULL
+          AND order_row.settled_amount_irr IS NULL
+          AND order_row.paid_at IS NULL
+          AND (
+              request_row.promotion_usage_reservation_id IS NULL
+              OR NOT EXISTS (
+                  SELECT 1
+                  FROM promotion_usage_reservations reservation_row
+                  LEFT JOIN promotion_usage_releases release_row
+                    ON release_row.promotion_usage_reservation_id = reservation_row.id
+                  LEFT JOIN promotion_usage_redemptions redemption_row
+                    ON redemption_row.promotion_usage_reservation_id = reservation_row.id
+                  WHERE reservation_row.id = request_row.promotion_usage_reservation_id
+                    AND reservation_row.quote_id = intent_row.source_quote_id
+                    AND reservation_row.user_id = intent_row.user_id
+                    AND release_row.id IS NULL
+                    AND redemption_row.id IS NULL
+              )
+          )
           AND NOT EXISTS (
               SELECT 1
               FROM purchase_settlements settlement_row
@@ -403,6 +528,18 @@ BEGIN
 
         IF NEW.observed_result <> 'verified' OR matching_evidence_count <> 1 THEN
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Zarinpal purchase-Order reconciliation finding requires matching immutable unsettled evidence.';
+        END IF;
+    ELSEIF NEW.finding_type = 'verified_promotion_authority_unavailable' THEN
+        SELECT COUNT(*) INTO matching_evidence_count
+        FROM zarinpal_verified_unsettled_evidence evidence_row
+        WHERE evidence_row.zarinpal_payment_request_id = NEW.zarinpal_payment_request_id
+          AND evidence_row.provider_ref_id = NEW.provider_ref_id
+          AND evidence_row.provider_verify_code = NEW.provider_code
+          AND evidence_row.evidence_payload_hash = NEW.evidence_hash
+          AND evidence_row.reason_code = 'promotion_authority_unavailable';
+
+        IF NEW.observed_result <> 'verified' OR matching_evidence_count <> 1 THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Zarinpal promotion-authority reconciliation finding requires matching immutable unsettled evidence.';
         END IF;
     ELSEIF NEW.finding_type = 'provider_verification_conflict' THEN
         SELECT COUNT(*) INTO accepted_evidence_count

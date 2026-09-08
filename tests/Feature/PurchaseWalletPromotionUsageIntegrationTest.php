@@ -84,6 +84,16 @@ final readonly class FailOnFinalizePurchasePromotionUsageAuthority implements Pu
         return $this->inner->reserveForQuote($reservationKey, $actorUserId, $quotePublicId);
     }
 
+    public function requiresFinalizationForQuote(int $actorUserId, string $quotePublicId): bool
+    {
+        return $this->inner->requiresFinalizationForQuote($actorUserId, $quotePublicId);
+    }
+
+    public function isFinalizationAuthorityAvailableForQuote(int $actorUserId, string $quotePublicId): bool
+    {
+        return $this->inner->isFinalizationAuthorityAvailableForQuote($actorUserId, $quotePublicId);
+    }
+
     public function finalizeForSettlement(string $redemptionKey, int $actorUserId, string $purchaseSettlementPublicId): ?string
     {
         unset($redemptionKey, $actorUserId, $purchaseSettlementPublicId);
