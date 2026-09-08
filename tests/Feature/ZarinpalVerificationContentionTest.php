@@ -317,8 +317,8 @@ namespace Tests\Feature {
         }
 
         /**
-         * @param list<array{verify_result:string,provider_ref_id:string,provider_code:string}> $providerResults
-         * @param list<int> $releaseOrder
+         * @param  list<array{verify_result:string,provider_ref_id:string,provider_code:string}>  $providerResults
+         * @param  list<int>  $releaseOrder
          * @return list<array<string,mixed>>
          */
         private function runScenario(array $providerResults, array $releaseOrder, bool $waitAfterEachRelease): array
@@ -444,6 +444,7 @@ namespace Tests\Feature {
                 foreach ($read as $stream) {
                     if ($stream === $worker['pipes'][2]) {
                         $stderr .= stream_get_contents($stream);
+
                         continue;
                     }
                     $line = fgets($stream);
