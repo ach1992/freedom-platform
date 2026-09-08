@@ -890,13 +890,13 @@ final readonly class ZarinpalPaymentService
     /** @return list<stdClass> */
     private function concurrentNonVerifiedObservations(Connection $connection, int $requestId, int $observationWatermark): array
     {
-        return $connection->table('zarinpal_payment_observations')
+        return array_values($connection->table('zarinpal_payment_observations')
             ->where('zarinpal_payment_request_id', $requestId)
             ->where('id', '>', $observationWatermark)
             ->whereIn('event_type', ['verify_rejected', 'verify_uncertain'])
             ->orderBy('id')
             ->get(['id', 'event_type', 'provider_code', 'correlation_id'])
-            ->all();
+            ->all());
     }
 
     private function nonVerifiedResultHash(stdClass $request, string $observedResult, ?int $providerCode): string
