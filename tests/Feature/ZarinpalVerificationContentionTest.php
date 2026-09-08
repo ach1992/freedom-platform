@@ -109,6 +109,9 @@ namespace {
         }
 
         try {
+            if (isset($payload['callback_started_path'])) {
+                file_put_contents($payload['callback_started_path'], 'CALLBACK_STARTED');
+            }
             $receipt = $app->make(ZarinpalPaymentService::class)->handleCallback(
                 $payload['authority'],
                 'OK',
@@ -140,6 +143,7 @@ namespace Tests\Feature {
     use App\Modules\Orders\Application\QuotePricingInput;
     use App\Modules\Orders\Application\QuoteService;
     use App\Modules\Orders\Domain\QuoteOverrideSource;
+    use App\Modules\Payments\Application\PurchasePaymentIntentService;
     use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
     use App\Modules\Payments\Zarinpal\Application\Contracts\ZarinpalTransport;
     use App\Modules\Payments\Zarinpal\Application\ZarinpalPaymentService;
@@ -257,6 +261,161 @@ namespace Tests\Feature {
             self::assertTrue($results[0]['result']['manual_review_required']);
         }
 
+        public function test_legacy_concurrent_compatible_100_and_101_verification_replays_one_settlement(): void
+        {
+            $this->initiateLegacy('legacy-compatible');
+            $results = $this->runScenario([
+                ['verify_result' => 'verified', 'provider_ref_id' => '260001401', 'provider_code' => '100'],
+                ['verify_result' => 'verified', 'provider_ref_id' => '260001401', 'provider_code' => '101'],
+            ], [0, 1], false);
+
+            self::assertTrue($results[0]['ok'], json_encode($results[0], JSON_THROW_ON_ERROR));
+            self::assertTrue($results[1]['ok'], json_encode($results[1], JSON_THROW_ON_ERROR));
+            self::assertSame(1, DB::table('purchase_settlements')->where('provider_code', 'zarinpal')->count());
+            self::assertSame(1, DB::table('zarinpal_payment_verifications')->where('provider_ref_id', '260001401')->count());
+            self::assertSame(0, DB::table('zarinpal_verified_unsettled_evidence')->count());
+            self::assertSame(0, DB::table('zarinpal_reconciliation_findings')->count());
+            self::assertSame(0, DB::table('orders')->count());
+            self::assertSame('verified', DB::table('zarinpal_payment_requests')->value('state'));
+            self::assertSame('captured', DB::table('payment_intents')->where('provider_code', 'zarinpal')->value('state'));
+        }
+
+        public function test_legacy_concurrent_rejection_first_preserves_later_verified_evidence_without_auto_settlement(): void
+        {
+            $this->initiateLegacy('legacy-rejected-first');
+            $results = $this->runScenario([
+                ['verify_result' => 'verified', 'provider_ref_id' => '260001501', 'provider_code' => '100'],
+                ['verify_result' => 'rejected', 'provider_ref_id' => '-', 'provider_code' => '-51'],
+            ], [1, 0], true);
+
+            self::assertTrue($results[0]['ok'], json_encode($results[0], JSON_THROW_ON_ERROR));
+            self::assertTrue($results[1]['ok'], json_encode($results[1], JSON_THROW_ON_ERROR));
+            self::assertSame(0, DB::table('purchase_settlements')->where('provider_code', 'zarinpal')->count());
+            self::assertSame(0, DB::table('zarinpal_payment_verifications')->count());
+            self::assertSame(1, DB::table('zarinpal_verified_unsettled_evidence')
+                ->where('reason_code', 'provider_result_conflict')
+                ->where('provider_ref_id', '260001501')
+                ->count());
+            self::assertSame(1, DB::table('zarinpal_reconciliation_findings')
+                ->where('finding_type', 'provider_verification_conflict')
+                ->where('observed_result', 'rejected')
+                ->where('severity', 'critical')
+                ->count());
+            self::assertSame(0, DB::table('orders')->count());
+            self::assertSame('failed', DB::table('zarinpal_payment_requests')->value('state'));
+            self::assertSame('awaiting_user_action', DB::table('payment_intents')->where('provider_code', 'zarinpal')->value('state'));
+            self::assertTrue($results[0]['result']['manual_review_required']);
+            self::assertSame('260001501', $results[0]['result']['provider_ref_id']);
+        }
+
+        public function test_legacy_rejection_committed_before_attempt_fence_prevents_late_provider_verify(): void
+        {
+            $this->initiateLegacy('legacy-fence-rejection');
+            $workers = [];
+            $paths = [];
+            $connection = DB::connection();
+            try {
+                $rejectedMarker = storage_path('framework/testing/zarinpal-verify-marker-'.bin2hex(random_bytes(8)));
+                $rejectedRelease = storage_path('framework/testing/zarinpal-verify-release-'.bin2hex(random_bytes(8)));
+                $verifiedMarker = storage_path('framework/testing/zarinpal-verify-marker-'.bin2hex(random_bytes(8)));
+                $verifiedRelease = storage_path('framework/testing/zarinpal-verify-release-'.bin2hex(random_bytes(8)));
+                $callbackStarted = storage_path('framework/testing/zarinpal-callback-started-'.bin2hex(random_bytes(8)));
+                $paths = [$rejectedMarker, $rejectedRelease, $verifiedMarker, $verifiedRelease, $callbackStarted];
+                if (! is_dir(dirname($rejectedMarker))) {
+                    mkdir(dirname($rejectedMarker), 0777, true);
+                }
+
+                $workers[1] = $this->startWorker([
+                    'verify_result' => 'rejected',
+                    'provider_ref_id' => '-',
+                    'provider_code' => '-51',
+                    'authority' => 'A'.str_repeat('9', 35),
+                    'correlation_id' => $this->correlation('legacy-fence-rejected-worker'),
+                    'marker_path' => $rejectedMarker,
+                    'release_path' => $rejectedRelease,
+                ]);
+                self::assertSame("READY\n", $this->readLine($workers[1], 'readiness', 1));
+                fwrite($workers[1]['pipes'][0], "GO\n");
+                fflush($workers[1]['pipes'][0]);
+                fclose($workers[1]['pipes'][0]);
+                $this->waitForFile($rejectedMarker, 'legacy rejected provider verify marker');
+
+                $quoteId = (int) DB::table('payment_intents')->where('provider_code', 'zarinpal')->value('source_quote_id');
+                self::assertGreaterThan(0, $quoteId);
+                $connection->beginTransaction();
+                self::assertNotNull($connection->table('quotes')->where('id', $quoteId)->lockForUpdate()->first());
+
+                $workers[0] = $this->startWorker([
+                    'verify_result' => 'verified',
+                    'provider_ref_id' => '260001551',
+                    'provider_code' => '100',
+                    'authority' => 'A'.str_repeat('9', 35),
+                    'correlation_id' => $this->correlation('legacy-fence-verified-worker'),
+                    'marker_path' => $verifiedMarker,
+                    'release_path' => $verifiedRelease,
+                    'callback_started_path' => $callbackStarted,
+                ]);
+                self::assertSame("READY\n", $this->readLine($workers[0], 'readiness', 0));
+                fwrite($workers[0]['pipes'][0], "GO\n");
+                fflush($workers[0]['pipes'][0]);
+                fclose($workers[0]['pipes'][0]);
+                $this->waitForFile($callbackStarted, 'legacy verified callback-start marker');
+
+                file_put_contents($rejectedRelease, 'RELEASE');
+                $rejected = $this->finishWorker($workers[1], 1);
+                $workers[1]['closed'] = true;
+                self::assertTrue($rejected['ok'], json_encode($rejected, JSON_THROW_ON_ERROR));
+                self::assertSame('failed', $rejected['result']['state']);
+
+                $connection->commit();
+
+                $late = $this->finishWorker($workers[0], 0);
+                $workers[0]['closed'] = true;
+                self::assertTrue($late['ok'], json_encode($late, JSON_THROW_ON_ERROR));
+                self::assertSame('failed', $late['result']['state']);
+                self::assertFalse(is_file($verifiedMarker), 'A legacy verify attempt must recheck failed request authority before provider HTTP.');
+                self::assertSame(1, DB::table('zarinpal_payment_observations')->where('event_type', 'verify_rejected')->count());
+                self::assertSame(0, DB::table('purchase_settlements')->where('provider_code', 'zarinpal')->count());
+                self::assertSame(0, DB::table('zarinpal_payment_verifications')->count());
+                self::assertSame(0, DB::table('zarinpal_verified_unsettled_evidence')->count());
+                self::assertSame(0, DB::table('zarinpal_reconciliation_findings')->count());
+                self::assertSame('awaiting_user_action', DB::table('payment_intents')->where('provider_code', 'zarinpal')->value('state'));
+            } finally {
+                while ($connection->transactionLevel() > 0) {
+                    $connection->rollBack();
+                }
+                $this->terminateWorkers($workers);
+                foreach ($paths as $path) {
+                    @unlink($path);
+                }
+            }
+        }
+
+        public function test_legacy_concurrent_uncertainty_first_keeps_verified_settlement_under_manual_review(): void
+        {
+            $this->initiateLegacy('legacy-uncertain-first');
+            $results = $this->runScenario([
+                ['verify_result' => 'verified', 'provider_ref_id' => '260001601', 'provider_code' => '100'],
+                ['verify_result' => 'uncertain', 'provider_ref_id' => '-', 'provider_code' => '0'],
+            ], [1, 0], true);
+
+            self::assertTrue($results[0]['ok'], json_encode($results[0], JSON_THROW_ON_ERROR));
+            self::assertTrue($results[1]['ok'], json_encode($results[1], JSON_THROW_ON_ERROR));
+            self::assertSame(1, DB::table('purchase_settlements')->where('provider_code', 'zarinpal')->count());
+            self::assertSame(1, DB::table('zarinpal_payment_verifications')->where('provider_ref_id', '260001601')->count());
+            self::assertSame(0, DB::table('zarinpal_verified_unsettled_evidence')->count());
+            self::assertSame(1, DB::table('zarinpal_reconciliation_findings')
+                ->where('finding_type', 'provider_verification_conflict')
+                ->where('observed_result', 'uncertain')
+                ->where('severity', 'critical')
+                ->count());
+            self::assertSame(0, DB::table('orders')->count());
+            self::assertSame('manual_review', DB::table('zarinpal_payment_requests')->value('state'));
+            self::assertSame('captured', DB::table('payment_intents')->where('provider_code', 'zarinpal')->value('state'));
+            self::assertTrue($results[0]['result']['manual_review_required']);
+            self::assertSame('260001601', $results[0]['result']['provider_ref_id']);
+        }
+
         public function test_concurrent_rejected_attempts_preserve_distinct_provider_observations(): void
         {
             $this->initiatePurchase('duplicate-rejected-observations');
@@ -294,8 +453,30 @@ namespace Tests\Feature {
             self::assertSame('redirectable', $receipt->state->value);
         }
 
+        private function initiateLegacy(string $suffix): void
+        {
+            [$userId, $quotePublicId, $decisionPublicId] = $this->purchaseContext($suffix, false);
+            $intent = $this->app->make(PurchasePaymentIntentService::class)->create(
+                'zarinpal.verification-contention.legacy.intent.'.$suffix,
+                $userId,
+                $quotePublicId,
+                $decisionPublicId,
+                'zarinpal',
+                $this->correlation($suffix.'-legacy-intent'),
+            );
+            $receipt = $this->app->make(ZarinpalPaymentService::class)->initiate(
+                'zarinpal.verification-contention.legacy.request.'.$suffix,
+                $intent->intentPublicId,
+                $this->correlation($suffix.'-legacy-initiate'),
+            );
+
+            self::assertSame('redirectable', $receipt->state->value);
+            self::assertSame(0, DB::table('orders')->count());
+            self::assertSame('awaiting_user_action', DB::table('payment_intents')->where('public_id', $intent->intentPublicId)->value('state'));
+        }
+
         /** @return array{0:int,1:string,2:string} */
-        private function purchaseContext(string $suffix): array
+        private function purchaseContext(string $suffix, bool $openOrder = true): array
         {
             $administratorId = $this->ownerAdministrator();
             $userId = $this->quoteUser('customer');
@@ -332,11 +513,13 @@ namespace Tests\Feature {
                 $userId,
                 $quote->quotePublicId,
             );
-            $this->app->make(PurchaseOrderService::class)->openFromQuote(
-                $quote->quotePublicId,
-                $userId,
-                $this->correlation($suffix.'-order'),
-            );
+            if ($openOrder) {
+                $this->app->make(PurchaseOrderService::class)->openFromQuote(
+                    $quote->quotePublicId,
+                    $userId,
+                    $this->correlation($suffix.'-order'),
+                );
+            }
 
             return [$userId, $quote->quotePublicId, $decision->publicId];
         }

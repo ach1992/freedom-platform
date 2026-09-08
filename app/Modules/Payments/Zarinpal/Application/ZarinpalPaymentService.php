@@ -419,19 +419,14 @@ final readonly class ZarinpalPaymentService
         }
 
         $prePaymentOrderAware = $this->prePaymentOrderAware($request);
-        if ($prePaymentOrderAware) {
-            $observationWatermark = $this->prepareIntentForVerification(
-                $requestId,
-                $this->positiveInt($request->payment_intent_id, 'Payment intent ID'),
-                $correlationId,
-            );
-            if ($observationWatermark === null) {
-                return $this->receipt($this->requiredRequest($connection, $requestId), true);
-            }
-        } else {
-            $observationWatermark = (int) $connection->table('zarinpal_payment_observations')
-                ->where('zarinpal_payment_request_id', $requestId)
-                ->max('id');
+        $observationWatermark = $this->prepareVerificationAttempt(
+            $requestId,
+            $this->positiveInt($request->payment_intent_id, 'Payment intent ID'),
+            $prePaymentOrderAware,
+            $correlationId,
+        );
+        if ($observationWatermark === null) {
+            return $this->receipt($this->requiredRequest($connection, $requestId), true);
         }
         $result = $this->transport->verify(
             $configuration['merchant_id'],
@@ -1084,11 +1079,16 @@ final readonly class ZarinpalPaymentService
         );
     }
 
-    private function prepareIntentForVerification(int $requestId, int $intentId, string $correlationId): ?int
-    {
+    private function prepareVerificationAttempt(
+        int $requestId,
+        int $intentId,
+        bool $prePaymentOrderAware,
+        string $correlationId,
+    ): ?int {
         return $this->database->connection()->transaction(function (Connection $connection) use (
             $requestId,
             $intentId,
+            $prePaymentOrderAware,
             $correlationId,
         ): ?int {
             $request = $this->requiredRequest($connection, $requestId, true);
@@ -1101,6 +1101,10 @@ final readonly class ZarinpalPaymentService
             $observationWatermark = (int) $connection->table('zarinpal_payment_observations')
                 ->where('zarinpal_payment_request_id', $requestId)
                 ->max('id');
+            if (! $prePaymentOrderAware) {
+                return $observationWatermark;
+            }
+
             $intent = $this->intentById($connection, $intentId, true);
             if ($intent === null) {
                 throw new RuntimeException('Zarinpal payment intent is unavailable for verification.');
