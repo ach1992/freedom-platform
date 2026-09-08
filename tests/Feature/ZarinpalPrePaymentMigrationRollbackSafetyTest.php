@@ -112,6 +112,7 @@ final class ZarinpalPrePaymentMigrationRollbackSafetyTest extends TestCase
         $migration->down();
         self::assertFalse(Schema::hasTable('zarinpal_verified_unsettled_evidence'));
         self::assertFalse(Schema::hasTable('zarinpal_reconciliation_findings'));
+        self::assertFalse(Schema::hasTable('zarinpal_provider_evidence_claims'));
         $migration->up();
 
         [$userId, $quotePublicId, $decisionPublicId] = $this->plainContext('legacy-only', false, false);
@@ -134,8 +135,38 @@ final class ZarinpalPrePaymentMigrationRollbackSafetyTest extends TestCase
         $migration->down();
         self::assertFalse(Schema::hasTable('zarinpal_verified_unsettled_evidence'));
         self::assertFalse(Schema::hasTable('zarinpal_reconciliation_findings'));
+        self::assertFalse(Schema::hasTable('zarinpal_provider_evidence_claims'));
         self::assertSame(1, DB::table('zarinpal_payment_requests')->count());
         $migration->up();
+    }
+
+    public function test_legacy_request_that_later_acquires_pre_payment_order_blocks_semantic_rollback(): void
+    {
+        [$userId, $quotePublicId, $decisionPublicId] = $this->plainContext('legacy-then-order', false, false);
+        $intent = $this->app->make(PurchasePaymentIntentService::class)->create(
+            'zpal.rollback.legacy.then.order.intent.000001',
+            $userId,
+            $quotePublicId,
+            $decisionPublicId,
+            'zarinpal',
+            $this->correlation('legacy-then-order-intent'),
+        );
+        $legacy = $this->app->make(ZarinpalPaymentService::class)->initiate(
+            'zpal.rollback.noncanonical.request.000001',
+            $intent->intentPublicId,
+            $this->correlation('legacy-then-order-initiate'),
+        );
+        self::assertSame('redirectable', $legacy->state->value);
+        self::assertSame(0, DB::table('orders')->count());
+
+        $this->app->make(PurchaseOrderService::class)->openFromQuote(
+            $quotePublicId,
+            $userId,
+            $this->correlation('legacy-then-order-open'),
+        );
+        self::assertSame(1, DB::table('orders')->where('source_quote_public_id', $quotePublicId)->count());
+
+        $this->assertRollbackRejected();
     }
 
     public function test_active_redirectable_pre_payment_authority_blocks_rollback(): void

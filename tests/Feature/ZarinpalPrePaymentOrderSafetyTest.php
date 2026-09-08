@@ -8,6 +8,7 @@ use App\Modules\Orders\Application\PurchaseOrderService;
 use App\Modules\Orders\Application\QuotePricingInput;
 use App\Modules\Orders\Application\QuoteService;
 use App\Modules\Orders\Domain\QuoteOverrideSource;
+use App\Modules\Payments\Application\PurchasePaymentIntentService;
 use App\Modules\Payments\Application\PurchaseWalletPaymentService;
 use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
 use App\Modules\Payments\Zarinpal\Application\Contracts\ZarinpalInquiryResult;
@@ -27,6 +28,7 @@ use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
 use Database\Seeders\WalletFinancialFoundationSeeder;
 use DateTimeImmutable;
+use DomainException;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -115,6 +117,141 @@ final class ZarinpalPrePaymentOrderSafetyTest extends TestCase
         config()->set('services.zarinpal.enabled', true);
         config()->set('services.zarinpal.merchant_id', '00000000-0000-0000-0000-000000000000');
         config()->set('services.zarinpal.callback_url', 'http://localhost/payments/zarinpal/callback');
+    }
+
+    public function test_legacy_initiate_is_fenced_from_existing_pre_payment_order_before_provider_http(): void
+    {
+        [$userId, $quote, $decision, $opening] = $this->purchaseContext('legacy-entrypoint-fence', false);
+        $intent = $this->app->make(PurchasePaymentIntentService::class)->create(
+            'zarinpal.legacy.prepayment.intent.000001',
+            $userId,
+            $quote->quotePublicId,
+            $decision->publicId,
+            'zarinpal',
+            $this->correlation('legacy-entrypoint-intent'),
+        );
+        $intentId = (int) DB::table('payment_intents')->where('public_id', $intent->intentPublicId)->value('id');
+        $service = $this->app->make(ZarinpalPaymentService::class);
+
+        try {
+            $service->initiate(
+                'zarinpal.legacy.prepayment.request.000001',
+                $intent->intentPublicId,
+                $this->correlation('legacy-entrypoint-initiate'),
+            );
+            self::fail('Legacy Zarinpal initiation must not bypass pre-payment Order authority.');
+        } catch (DomainException $exception) {
+            self::assertSame(
+                'Legacy Zarinpal initiation cannot be used for a pre-payment Order.',
+                $exception->getMessage(),
+            );
+        }
+
+        self::assertSame(0, $this->transport->requestCalls);
+        self::assertSame(
+            0,
+            DB::table('zarinpal_payment_requests')->where('payment_intent_id', $intentId)->count(),
+        );
+        self::assertSame('created', DB::table('payment_intents')->where('id', $intentId)->value('state'));
+        self::assertSame('awaiting_payment', DB::table('orders')->where('id', $opening->orderId)->value('state'));
+    }
+
+    public function test_database_rejects_purchase_order_unavailable_evidence_while_order_is_still_payable(): void
+    {
+        [$userId, $quote, $decision, $opening] = $this->purchaseContext('unavailable-guard', false);
+        $service = $this->app->make(ZarinpalPaymentService::class);
+        $initiated = $service->initiatePurchase(
+            $userId,
+            $quote->quotePublicId,
+            $decision->publicId,
+            $this->correlation('unavailable-guard-initiate'),
+        );
+        $this->transport->verifyResult = ZarinpalVerifyResult::uncertain();
+        $review = $service->handleCallback(
+            'A'.str_repeat('7', 35),
+            'OK',
+            $this->correlation('unavailable-guard-callback'),
+        );
+        self::assertSame(ZarinpalRequestState::ManualReview, $review->state);
+        self::assertSame('awaiting_payment', DB::table('orders')->where('id', $opening->orderId)->value('state'));
+
+        $request = DB::table('zarinpal_payment_requests')->where('id', $review->requestId)->first();
+        self::assertNotNull($request);
+        $verifiedAt = $this->clock->value->format('Y-m-d H:i:s.u');
+        $reverseUntil = $this->clock->value->modify('+30 minutes')->format('Y-m-d H:i:s.u');
+        $this->assertQueryRejected(static fn (): bool => DB::table('zarinpal_verified_unsettled_evidence')->insert([
+            'public_id' => (string) \Illuminate\Support\Str::ulid(),
+            'zarinpal_payment_request_id' => (int) $request->id,
+            'authority' => (string) $request->authority,
+            'provider_ref_id' => '260009701',
+            'provider_verify_code' => 100,
+            'evidence_payload_hash' => hash('sha256', 'forged-awaiting-order-evidence'),
+            'amount_irr' => (int) $request->amount_irr,
+            'currency' => (string) $request->currency,
+            'verified_at' => $verifiedAt,
+            'provider_reverse_eligible_until' => $reverseUntil,
+            'reason_code' => 'purchase_order_unavailable',
+            'created_at' => $verifiedAt,
+        ]));
+
+        self::assertSame(0, DB::table('zarinpal_verified_unsettled_evidence')->count());
+        self::assertSame(0, DB::table('zarinpal_provider_evidence_claims')->count());
+        self::assertSame('pending_manual_review', DB::table('payment_intents')->where('public_id', $initiated->paymentIntentPublicId)->value('state'));
+    }
+
+    public function test_provider_evidence_disposition_claim_allows_only_one_cross_table_winner(): void
+    {
+        [$userId, $quote, $decision] = $this->purchaseContext('disposition-race', false);
+        $service = $this->app->make(ZarinpalPaymentService::class);
+        $initiated = $service->initiatePurchase(
+            $userId,
+            $quote->quotePublicId,
+            $decision->publicId,
+            $this->correlation('disposition-race-initiate'),
+        );
+        $this->transport->verifyResult = ZarinpalVerifyResult::rejected(-51);
+        $failed = $service->handleCallback(
+            'A'.str_repeat('7', 35),
+            'OK',
+            $this->correlation('disposition-race-rejected'),
+        );
+        self::assertSame(ZarinpalRequestState::Failed, $failed->state);
+        self::assertSame('failed', DB::table('payment_intents')->where('public_id', $initiated->paymentIntentPublicId)->value('state'));
+
+        $request = DB::table('zarinpal_payment_requests')->where('id', $failed->requestId)->first();
+        self::assertNotNull($request);
+        $hash = hash('sha256', 'cross-table-disposition-race');
+        $createdAt = $this->clock->value->format('Y-m-d H:i:s.u');
+        $reverseUntil = $this->clock->value->modify('+30 minutes')->format('Y-m-d H:i:s.u');
+        DB::table('zarinpal_provider_evidence_claims')->insert([
+            'zarinpal_payment_request_id' => (int) $request->id,
+            'authority' => (string) $request->authority,
+            'provider_ref_id' => '260009702',
+            'evidence_payload_hash' => $hash,
+            'evidence_disposition' => 'settled',
+            'amount_irr' => (int) $request->amount_irr,
+            'currency' => (string) $request->currency,
+            'created_at' => $createdAt,
+        ]);
+
+        $this->assertQueryRejected(static fn (): bool => DB::table('zarinpal_verified_unsettled_evidence')->insert([
+            'public_id' => (string) \Illuminate\Support\Str::ulid(),
+            'zarinpal_payment_request_id' => (int) $request->id,
+            'authority' => (string) $request->authority,
+            'provider_ref_id' => '260009702',
+            'provider_verify_code' => 100,
+            'evidence_payload_hash' => $hash,
+            'amount_irr' => (int) $request->amount_irr,
+            'currency' => (string) $request->currency,
+            'verified_at' => $createdAt,
+            'provider_reverse_eligible_until' => $reverseUntil,
+            'reason_code' => 'provider_result_conflict',
+            'created_at' => $createdAt,
+        ]));
+
+        self::assertSame(1, DB::table('zarinpal_provider_evidence_claims')->where('evidence_disposition', 'settled')->count());
+        self::assertSame(0, DB::table('zarinpal_verified_unsettled_evidence')->count());
+        self::assertSame(0, DB::table('purchase_settlements')->where('provider_code', 'zarinpal')->count());
     }
 
     public function test_zarinpal_purchase_replays_and_converges_into_the_existing_pre_payment_order(): void

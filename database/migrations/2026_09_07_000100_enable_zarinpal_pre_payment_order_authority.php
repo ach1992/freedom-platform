@@ -22,18 +22,21 @@ return new class extends Migration
             $table->string('authority', 64)->unique('zpec_authority_unique');
             $table->string('provider_ref_id', 64)->unique('zpec_provider_ref_unique');
             $table->char('evidence_payload_hash', 64);
+            $table->string('evidence_disposition', 16);
             $table->bigInteger('amount_irr');
             $table->char('currency', 3);
             $table->dateTime('created_at', 6);
         });
         DB::statement("ALTER TABLE zarinpal_provider_evidence_claims ADD CONSTRAINT zpec_money_chk CHECK (`amount_irr` > 0 AND `currency` = 'IRR')");
         DB::statement('ALTER TABLE zarinpal_provider_evidence_claims ADD CONSTRAINT zpec_hash_chk CHECK (CHAR_LENGTH(`evidence_payload_hash`) = 64)');
+        DB::statement("ALTER TABLE zarinpal_provider_evidence_claims ADD CONSTRAINT zpec_disposition_chk CHECK (`evidence_disposition` IN ('settled','unsettled'))");
         DB::statement(<<<'SQL'
 INSERT INTO zarinpal_provider_evidence_claims (
     zarinpal_payment_request_id,
     authority,
     provider_ref_id,
     evidence_payload_hash,
+    evidence_disposition,
     amount_irr,
     currency,
     created_at
@@ -43,6 +46,7 @@ SELECT
     verification_row.authority,
     verification_row.provider_ref_id,
     verification_row.evidence_payload_hash,
+    'settled',
     verification_row.amount_irr,
     verification_row.currency,
     verification_row.created_at
@@ -101,9 +105,6 @@ SQL);
         DB::statement('ALTER TABLE zarinpal_reconciliation_findings ADD CONSTRAINT zrf_hash_chk CHECK (CHAR_LENGTH(`finding_key`) = 64 AND CHAR_LENGTH(`evidence_hash`) = 64)');
         DB::statement("ALTER TABLE zarinpal_reconciliation_findings ADD CONSTRAINT zrf_observed_shape_chk CHECK ((`observed_result` = 'verified' AND `provider_ref_id` IS NOT NULL AND `provider_code` IN (100,101)) OR (`observed_result` = 'rejected' AND `provider_ref_id` IS NULL AND (`provider_code` IS NULL OR `provider_code` NOT IN (100,101))) OR (`observed_result` = 'uncertain' AND `provider_ref_id` IS NULL AND `provider_code` IS NULL))");
 
-        DB::statement('ALTER TABLE zarinpal_payment_observations DROP CONSTRAINT zarinpal_observation_type_chk');
-        DB::statement("ALTER TABLE zarinpal_payment_observations ADD CONSTRAINT zarinpal_observation_type_chk CHECK (`event_type` IN ('request_accepted','request_rejected','request_uncertain','callback_ok','callback_nok','verify_started','verify_rejected','verify_uncertain','inquiry_verified','inquiry_paid','inquiry_in_bank','inquiry_failed','inquiry_reversed','inquiry_unavailable','unverified_discovery','manual_review'))");
-
         $this->createProviderEvidenceClaimGuards();
         $this->createEvidenceGuards();
         $this->createVerificationConflictGuard();
@@ -139,17 +140,43 @@ SQL);
         DB::unprepared('DROP TRIGGER IF EXISTS zarinpal_verified_unsettled_evidence_insert_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS zarinpal_provider_evidence_claims_delete_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS zarinpal_provider_evidence_claims_update_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS zarinpal_provider_evidence_claims_insert_guard');
 
         Schema::dropIfExists('zarinpal_reconciliation_findings');
         Schema::dropIfExists('zarinpal_verified_unsettled_evidence');
         Schema::dropIfExists('zarinpal_provider_evidence_claims');
 
-        DB::statement('ALTER TABLE zarinpal_payment_observations DROP CONSTRAINT zarinpal_observation_type_chk');
-        DB::statement("ALTER TABLE zarinpal_payment_observations ADD CONSTRAINT zarinpal_observation_type_chk CHECK (`event_type` IN ('request_accepted','request_rejected','request_uncertain','callback_ok','callback_nok','verify_rejected','verify_uncertain','inquiry_verified','inquiry_paid','inquiry_in_bank','inquiry_failed','inquiry_reversed','inquiry_unavailable','unverified_discovery','manual_review'))");
     }
 
     private function createProviderEvidenceClaimGuards(): void
     {
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER zarinpal_provider_evidence_claims_insert_guard
+BEFORE INSERT ON zarinpal_provider_evidence_claims
+FOR EACH ROW
+BEGIN
+    DECLARE matching_request_count INT DEFAULT 0;
+
+    SELECT COUNT(*) INTO matching_request_count
+    FROM zarinpal_payment_requests request_row
+    INNER JOIN payment_intents intent_row ON intent_row.id = request_row.payment_intent_id
+    WHERE request_row.id = NEW.zarinpal_payment_request_id
+      AND request_row.authority = NEW.authority
+      AND request_row.amount_irr = NEW.amount_irr
+      AND request_row.currency = NEW.currency
+      AND request_row.merchant_configuration_hash IS NOT NULL
+      AND request_row.state IN ('redirectable','manual_review','verified','failed')
+      AND intent_row.purpose = 'purchase'
+      AND intent_row.provider_code = 'zarinpal'
+      AND intent_row.amount_irr = NEW.amount_irr
+      AND intent_row.currency = NEW.currency;
+
+    IF matching_request_count <> 1 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Zarinpal provider evidence claim requires one matching durable provider request authority.';
+    END IF;
+END
+SQL);
+
         DB::unprepared(<<<'SQL'
 CREATE TRIGGER zarinpal_provider_evidence_claims_update_guard
 BEFORE UPDATE ON zarinpal_provider_evidence_claims
@@ -188,16 +215,6 @@ BEGIN
            AND order_row.source_quote_id = intent_row.source_quote_id
            AND order_row.source_quote_public_id = intent_row.source_quote_public_id
            AND order_row.user_id = intent_row.user_id
-        INNER JOIN purchase_settlements winning_settlement
-            ON winning_settlement.id = order_row.purchase_settlement_id
-           AND winning_settlement.public_id = order_row.purchase_settlement_public_id
-           AND winning_settlement.payment_intent_id = order_row.payment_intent_id
-           AND winning_settlement.user_id = order_row.user_id
-           AND winning_settlement.source_quote_id = order_row.source_quote_id
-           AND winning_settlement.source_quote_public_id = order_row.source_quote_public_id
-           AND winning_settlement.amount_irr = order_row.settled_amount_irr
-           AND winning_settlement.currency = order_row.currency
-           AND winning_settlement.settled_at = order_row.paid_at
         WHERE request_row.id = NEW.zarinpal_payment_request_id
           AND request_row.state IN ('redirectable','manual_review')
           AND request_row.authority = NEW.authority
@@ -210,12 +227,8 @@ BEGIN
           AND intent_row.currency = NEW.currency
           AND intent_row.state IN ('submitted','verifying','pending_manual_review')
           AND intent_row.captured_at IS NULL
-          AND order_row.state IN ('paid','provisioning_queued','provisioning','completed','needs_review','refund_pending','refunded','partially_refunded')
-          AND order_row.state_version >= 1
-          AND order_row.payment_intent_id IS NOT NULL
-          AND order_row.payment_intent_id <> intent_row.id
+          AND NOT (order_row.state = 'awaiting_payment' AND order_row.state_version = 0)
           AND order_row.total_amount_irr = NEW.amount_irr
-          AND order_row.settled_amount_irr = NEW.amount_irr
           AND order_row.currency = NEW.currency
           AND NOT EXISTS (
               SELECT 1
@@ -270,6 +283,7 @@ BEGIN
         authority,
         provider_ref_id,
         evidence_payload_hash,
+        evidence_disposition,
         amount_irr,
         currency,
         created_at
@@ -278,6 +292,7 @@ BEGIN
         NEW.authority,
         NEW.provider_ref_id,
         NEW.evidence_payload_hash,
+        'unsettled',
         NEW.amount_irr,
         NEW.currency,
         NEW.created_at
@@ -289,6 +304,7 @@ BEGIN
       AND claim_row.authority = NEW.authority
       AND claim_row.provider_ref_id = NEW.provider_ref_id
       AND claim_row.evidence_payload_hash = NEW.evidence_payload_hash
+      AND claim_row.evidence_disposition = 'unsettled'
       AND claim_row.amount_irr = NEW.amount_irr
       AND claim_row.currency = NEW.currency;
 
@@ -331,6 +347,7 @@ BEGIN
         authority,
         provider_ref_id,
         evidence_payload_hash,
+        evidence_disposition,
         amount_irr,
         currency,
         created_at
@@ -339,6 +356,7 @@ BEGIN
         NEW.authority,
         NEW.provider_ref_id,
         NEW.evidence_payload_hash,
+        'settled',
         NEW.amount_irr,
         NEW.currency,
         NEW.created_at
@@ -350,6 +368,7 @@ BEGIN
       AND claim_row.authority = NEW.authority
       AND claim_row.provider_ref_id = NEW.provider_ref_id
       AND claim_row.evidence_payload_hash = NEW.evidence_payload_hash
+      AND claim_row.evidence_disposition = 'settled'
       AND claim_row.amount_irr = NEW.amount_irr
       AND claim_row.currency = NEW.currency;
 
@@ -419,13 +438,7 @@ BEGIN
                 claim_row.zarinpal_payment_request_id = NEW.zarinpal_payment_request_id
                 OR claim_row.authority = request_row.authority
                 OR claim_row.provider_ref_id = NEW.provider_ref_id
-            )
-              AND NOT (
-                  claim_row.zarinpal_payment_request_id = NEW.zarinpal_payment_request_id
-                  AND claim_row.authority = request_row.authority
-                  AND claim_row.provider_ref_id = NEW.provider_ref_id
-                  AND claim_row.evidence_payload_hash = NEW.evidence_hash
-              );
+            );
 
             IF NOT ((accepted_evidence_count = 1 AND compatible_evidence_count = 0) OR conflicting_claim_count > 0) THEN
                 SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Verified Zarinpal conflict requires incompatible accepted evidence or a conflicting shared provider identity claim.';

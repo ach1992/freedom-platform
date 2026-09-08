@@ -257,6 +257,31 @@ namespace Tests\Feature {
             self::assertTrue($results[0]['result']['manual_review_required']);
         }
 
+        public function test_concurrent_rejected_attempts_preserve_distinct_provider_observations(): void
+        {
+            $this->initiatePurchase('duplicate-rejected-observations');
+            $results = $this->runScenario([
+                ['verify_result' => 'rejected', 'provider_ref_id' => '-', 'provider_code' => '-51'],
+                ['verify_result' => 'rejected', 'provider_ref_id' => '-', 'provider_code' => '-51'],
+            ], [0, 1], false);
+
+            self::assertTrue($results[0]['ok'], json_encode($results[0], JSON_THROW_ON_ERROR));
+            self::assertTrue($results[1]['ok'], json_encode($results[1], JSON_THROW_ON_ERROR));
+            self::assertSame(2, DB::table('zarinpal_payment_observations')->where('event_type', 'verify_rejected')->count());
+            self::assertSame(
+                2,
+                DB::table('zarinpal_payment_observations')
+                    ->where('event_type', 'verify_rejected')
+                    ->distinct()
+                    ->count('correlation_id'),
+            );
+            self::assertSame(0, DB::table('purchase_settlements')->where('provider_code', 'zarinpal')->count());
+            self::assertSame(0, DB::table('zarinpal_payment_verifications')->count());
+            self::assertSame(0, DB::table('zarinpal_verified_unsettled_evidence')->count());
+            self::assertSame('failed', DB::table('zarinpal_payment_requests')->value('state'));
+            self::assertSame('failed', DB::table('payment_intents')->where('provider_code', 'zarinpal')->value('state'));
+        }
+
         private function initiatePurchase(string $suffix): void
         {
             [$userId, $quotePublicId, $decisionPublicId] = $this->purchaseContext($suffix);

@@ -152,6 +152,57 @@ final class ZarinpalPaymentServiceTest extends TestCase
         self::assertSame(1, DB::table('purchase_settlements')->count());
     }
 
+    public function test_provider_ref_reuse_across_distinct_requests_enters_manual_review_without_second_settlement(): void
+    {
+        $service = $this->app->make(ZarinpalPaymentService::class);
+        $firstIntent = $this->purchaseIntent('provider-ref-first');
+        $service->initiate(
+            'zarinpal.request.provider-ref.first.000001',
+            $firstIntent,
+            $this->correlation('provider-ref-first-initiate'),
+        );
+        $first = $service->handleCallback(
+            'A'.str_repeat('1', 35),
+            'OK',
+            $this->correlation('provider-ref-first-callback'),
+        );
+        self::assertSame(ZarinpalRequestState::Verified, $first->state);
+        self::assertSame(1, DB::table('zarinpal_provider_evidence_claims')->where('evidence_disposition', 'settled')->count());
+
+        $secondIntent = $this->purchaseIntent('provider-ref-second');
+        $this->transport->requestResult = ZarinpalRequestResult::accepted('A'.str_repeat('2', 35));
+        $this->transport->verifyResult = ZarinpalVerifyResult::verified('123456789', 100);
+        $second = $service->initiate(
+            'zarinpal.request.provider-ref.second.000001',
+            $secondIntent,
+            $this->correlation('provider-ref-second-initiate'),
+        );
+        self::assertSame(ZarinpalRequestState::Redirectable, $second->state);
+
+        $review = $service->handleCallback(
+            'A'.str_repeat('2', 35),
+            'OK',
+            $this->correlation('provider-ref-second-callback'),
+        );
+
+        self::assertSame(ZarinpalRequestState::ManualReview, $review->state);
+        self::assertTrue($review->manualReviewRequired);
+        self::assertNull($review->purchaseSettlementPublicId);
+        self::assertSame(1, DB::table('purchase_settlements')->where('provider_code', 'zarinpal')->count());
+        self::assertSame(1, DB::table('zarinpal_payment_verifications')->count());
+        self::assertSame(1, DB::table('zarinpal_provider_evidence_claims')->count());
+        self::assertSame(
+            1,
+            DB::table('zarinpal_reconciliation_findings')
+                ->where('zarinpal_payment_request_id', $review->requestId)
+                ->where('finding_type', 'provider_verification_conflict')
+                ->where('observed_result', 'verified')
+                ->where('severity', 'critical')
+                ->count(),
+        );
+        self::assertSame('pending_manual_review', DB::table('payment_intents')->where('public_id', $secondIntent)->value('state'));
+    }
+
     public function test_callback_nok_is_only_an_observation_and_never_captures(): void
     {
         $intentPublicId = $this->purchaseIntent('nok');
