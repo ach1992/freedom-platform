@@ -555,6 +555,7 @@ return [
         'zarinpal_payment_observations' => 'Payments',
         'zarinpal_payment_requests' => 'Payments',
         'zarinpal_payment_verifications' => 'Payments',
+        'zarinpal_provider_evidence_claims' => 'Payments',
         'zarinpal_reconciliation_findings' => 'Payments',
         'zarinpal_verified_unsettled_evidence' => 'Payments',
     ],
