@@ -32,6 +32,7 @@ use DomainException;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use Tests\TestCase;
 
 final class ZarinpalPrePaymentFakeTransport implements ZarinpalTransport
@@ -180,7 +181,7 @@ final class ZarinpalPrePaymentOrderSafetyTest extends TestCase
         $verifiedAt = $this->clock->value->format('Y-m-d H:i:s.u');
         $reverseUntil = $this->clock->value->modify('+30 minutes')->format('Y-m-d H:i:s.u');
         $this->assertQueryRejected(static fn (): bool => DB::table('zarinpal_verified_unsettled_evidence')->insert([
-            'public_id' => (string) \Illuminate\Support\Str::ulid(),
+            'public_id' => (string) Str::ulid(),
             'zarinpal_payment_request_id' => (int) $request->id,
             'authority' => (string) $request->authority,
             'provider_ref_id' => '260009701',
@@ -235,7 +236,7 @@ final class ZarinpalPrePaymentOrderSafetyTest extends TestCase
         ]);
 
         $this->assertQueryRejected(static fn (): bool => DB::table('zarinpal_verified_unsettled_evidence')->insert([
-            'public_id' => (string) \Illuminate\Support\Str::ulid(),
+            'public_id' => (string) Str::ulid(),
             'zarinpal_payment_request_id' => (int) $request->id,
             'authority' => (string) $request->authority,
             'provider_ref_id' => '260009702',

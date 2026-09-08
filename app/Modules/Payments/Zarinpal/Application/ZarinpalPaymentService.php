@@ -1218,7 +1218,6 @@ final readonly class ZarinpalPaymentService
         }
     }
 
-
     private function prePaymentOrderAware(stdClass $request): bool
     {
         $intent = $this->intentById(
