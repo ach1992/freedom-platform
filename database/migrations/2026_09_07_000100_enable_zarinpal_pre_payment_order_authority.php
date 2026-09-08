@@ -134,8 +134,24 @@ SQL);
             ->where('order_row.source_type', 'purchase')
             ->exists();
 
+        $hasNonBaselineProviderEvidenceClaim = DB::table('zarinpal_provider_evidence_claims as claim_row')
+            ->leftJoin('zarinpal_payment_verifications as verification_row', function ($join): void {
+                $join->on('verification_row.zarinpal_payment_request_id', '=', 'claim_row.zarinpal_payment_request_id')
+                    ->on('verification_row.authority', '=', 'claim_row.authority')
+                    ->on('verification_row.provider_ref_id', '=', 'claim_row.provider_ref_id')
+                    ->on('verification_row.evidence_payload_hash', '=', 'claim_row.evidence_payload_hash')
+                    ->on('verification_row.amount_irr', '=', 'claim_row.amount_irr')
+                    ->on('verification_row.currency', '=', 'claim_row.currency');
+            })
+            ->where(function ($query): void {
+                $query->where('claim_row.evidence_disposition', '<>', 'settled')
+                    ->orWhereNull('verification_row.id');
+            })
+            ->exists();
+
         if ($hasPrePaymentAuthority
             || DB::table('zarinpal_payment_requests')->whereNotNull('promotion_usage_reservation_id')->exists()
+            || $hasNonBaselineProviderEvidenceClaim
             || DB::table('zarinpal_reconciliation_findings')->exists()
             || DB::table('zarinpal_verified_unsettled_evidence')->exists()) {
             throw new RuntimeException('Cannot roll back Zarinpal pre-payment Order authority while durable pre-payment or reconciliation authority exists.');
