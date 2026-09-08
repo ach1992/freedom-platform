@@ -153,7 +153,7 @@ final class ZarinpalPrePaymentOrderSafetyTest extends TestCase
             0,
             DB::table('zarinpal_payment_requests')->where('payment_intent_id', $intentId)->count(),
         );
-        self::assertSame('created', DB::table('payment_intents')->where('id', $intentId)->value('state'));
+        self::assertSame('awaiting_user_action', DB::table('payment_intents')->where('id', $intentId)->value('state'));
         self::assertSame('awaiting_payment', DB::table('orders')->where('id', $opening->orderId)->value('state'));
     }
 
