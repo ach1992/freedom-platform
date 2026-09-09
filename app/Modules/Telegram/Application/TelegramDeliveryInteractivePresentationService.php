@@ -153,6 +153,10 @@ final readonly class TelegramDeliveryInteractivePresentationService
         bool $decrypt,
     ): array {
         $callbackPublicIds = $keyboard->callbackPublicIds();
+        if ($callbackPublicIds === []) {
+            return [];
+        }
+
         $lockOrder = $callbackPublicIds;
         sort($lockOrder, SORT_STRING);
 

@@ -45,10 +45,19 @@ final class TelegramResolvedInlineKeyboardMarkup implements Stringable
         foreach ($this->snapshot->rows() as $row) {
             $providerRow = [];
             foreach ($row as $button) {
-                $providerButton = [
-                    'text' => $button->text,
-                    'callback_data' => $this->callbackDataByPublicId[$button->callbackPublicId],
-                ];
+                if ($button instanceof TelegramInlineCallbackButton) {
+                    $providerButton = [
+                        'text' => $button->text,
+                        'callback_data' => $this->callbackDataByPublicId[$button->callbackPublicId],
+                    ];
+                } elseif ($button instanceof TelegramInlineHttpsUrlButton) {
+                    $providerButton = [
+                        'text' => $button->text,
+                        'url' => $button->url,
+                    ];
+                } else {
+                    throw new LogicException('Telegram inline keyboard contains an unsupported resolved button type.');
+                }
                 if ($button->style !== null) {
                     $providerButton['style'] = $button->style->value;
                 }
