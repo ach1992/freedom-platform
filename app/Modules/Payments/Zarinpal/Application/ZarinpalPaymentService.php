@@ -1080,17 +1080,23 @@ final readonly class ZarinpalPaymentService
 
             return true;
         } catch (QueryException $exception) {
-            $matching = $connection->table('zarinpal_provider_evidence_claims')
+            $existingForRequest = $connection->table('zarinpal_provider_evidence_claims')
                 ->where('zarinpal_payment_request_id', $requestId)
-                ->where('authority', $request->authority)
-                ->where('provider_ref_id', $providerRefId)
-                ->where('evidence_payload_hash', $normalizedHash)
-                ->where('evidence_disposition', $evidenceDisposition)
-                ->where('amount_irr', $attributes['amount_irr'])
-                ->where('currency', $attributes['currency'])
-                ->first(['id']);
-            if ($matching !== null) {
-                return true;
+                ->first([
+                    'authority',
+                    'provider_ref_id',
+                    'evidence_payload_hash',
+                    'evidence_disposition',
+                    'amount_irr',
+                    'currency',
+                ]);
+            if ($existingForRequest !== null) {
+                return (string) $existingForRequest->authority === $attributes['authority']
+                    && (string) $existingForRequest->provider_ref_id === $attributes['provider_ref_id']
+                    && (string) $existingForRequest->evidence_payload_hash === $attributes['evidence_payload_hash']
+                    && (string) $existingForRequest->evidence_disposition === $attributes['evidence_disposition']
+                    && (int) $existingForRequest->amount_irr === $attributes['amount_irr']
+                    && (string) $existingForRequest->currency === $attributes['currency'];
             }
 
             $conflicting = $connection->table('zarinpal_provider_evidence_claims')

@@ -38,7 +38,7 @@ return new class extends Migration
         });
         DB::statement("ALTER TABLE zarinpal_provider_evidence_claims ADD CONSTRAINT zpec_money_chk CHECK (`amount_irr` > 0 AND `currency` = 'IRR')");
         DB::statement('ALTER TABLE zarinpal_provider_evidence_claims ADD CONSTRAINT zpec_hash_chk CHECK (CHAR_LENGTH(`evidence_payload_hash`) = 64)');
-        DB::statement("ALTER TABLE zarinpal_provider_evidence_claims ADD CONSTRAINT zpec_disposition_chk CHECK (`evidence_disposition` IN ('settled','unsettled'))");
+        DB::statement("ALTER TABLE zarinpal_provider_evidence_claims ADD CONSTRAINT zpec_disposition_chk CHECK (BINARY `evidence_disposition` = BINARY 'settled' OR BINARY `evidence_disposition` = BINARY 'unsettled')");
         DB::statement(<<<'SQL'
 INSERT INTO zarinpal_provider_evidence_claims (
     zarinpal_payment_request_id,

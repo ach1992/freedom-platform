@@ -14,6 +14,7 @@ use App\Modules\Payments\Zarinpal\Application\Contracts\ZarinpalRequestResult;
 use App\Modules\Payments\Zarinpal\Application\Contracts\ZarinpalTransport;
 use App\Modules\Payments\Zarinpal\Application\Contracts\ZarinpalVerifyResult;
 use App\Modules\Payments\Zarinpal\Application\ZarinpalPaymentService;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
@@ -139,6 +140,146 @@ final class ZarinpalProviderEvidenceExactRuntimeTest extends TestCase
         self::assertSame('critical', (string) $finding->severity);
         self::assertSame('verified', (string) $finding->observed_result);
         self::assertSame('260003099', (string) $finding->provider_ref_id);
+        self::assertSame($canonicalHash, (string) $finding->evidence_hash);
+    }
+
+    public function test_padded_provider_claim_disposition_is_rejected_by_exact_database_constraint(): void
+    {
+        [$userId, $quotePublicId, $decisionPublicId] = $this->plainContext('runtime-padded-disposition');
+        $intent = $this->app->make(PurchasePaymentIntentService::class)->create(
+            'zpal.runtime.exact.intent.000002',
+            $userId,
+            $quotePublicId,
+            $decisionPublicId,
+            'zarinpal',
+            $this->correlation('intent-padded-disposition'),
+        );
+        $service = $this->app->make(ZarinpalPaymentService::class);
+        $started = $service->initiate(
+            'zpal.runtime.exact.request.000002',
+            $intent->intentPublicId,
+            $this->correlation('initiate-padded-disposition'),
+        );
+        self::assertSame('redirectable', $started->state->value);
+
+        $intentId = (int) DB::table('payment_intents')->where('public_id', $intent->intentPublicId)->value('id');
+        $request = DB::table('zarinpal_payment_requests')->where('payment_intent_id', $intentId)->first();
+        self::assertNotNull($request);
+        $authority = (string) $request->authority;
+        $amountIrr = (int) $request->amount_irr;
+        $canonicalHash = hash('sha256', json_encode([
+            'provider' => 'zarinpal',
+            'authority' => $authority,
+            'provider_ref_id' => '260003099',
+            'amount_irr' => $amountIrr,
+            'currency' => 'IRR',
+            'result' => 'verified',
+        ], JSON_THROW_ON_ERROR));
+
+        try {
+            DB::table('zarinpal_provider_evidence_claims')->insert([
+                'zarinpal_payment_request_id' => (int) $request->id,
+                'authority' => $authority,
+                'provider_ref_id' => '260003099',
+                'evidence_payload_hash' => $canonicalHash,
+                'evidence_disposition' => 'settled ',
+                'amount_irr' => $amountIrr,
+                'currency' => 'IRR',
+                'created_at' => now('UTC'),
+            ]);
+            self::fail('Padded provider evidence disposition must not satisfy the exact claim constraint.');
+        } catch (QueryException) {
+            self::assertSame(0, DB::table('zarinpal_provider_evidence_claims')->count());
+        }
+    }
+
+    public function test_trailing_space_provider_ref_is_not_treated_as_exact_runtime_replay(): void
+    {
+        [$userId, $quotePublicId, $decisionPublicId] = $this->plainContext('runtime-provider-ref-pad');
+        $intent = $this->app->make(PurchasePaymentIntentService::class)->create(
+            'zpal.runtime.exact.intent.000003',
+            $userId,
+            $quotePublicId,
+            $decisionPublicId,
+            'zarinpal',
+            $this->correlation('intent-provider-ref-pad'),
+        );
+        $service = $this->app->make(ZarinpalPaymentService::class);
+        $started = $service->initiate(
+            'zpal.runtime.exact.request.000003',
+            $intent->intentPublicId,
+            $this->correlation('initiate-provider-ref-pad'),
+        );
+        self::assertSame('redirectable', $started->state->value);
+        self::assertSame(0, DB::table('orders')->count());
+
+        $intentId = (int) DB::table('payment_intents')->where('public_id', $intent->intentPublicId)->value('id');
+        $request = DB::table('zarinpal_payment_requests')->where('payment_intent_id', $intentId)->first();
+        self::assertNotNull($request);
+        $authority = (string) $request->authority;
+        $amountIrr = (int) $request->amount_irr;
+        $canonicalProviderRef = '260003099';
+        $paddedProviderRef = $canonicalProviderRef.' ';
+        self::assertNotSame($canonicalProviderRef, $paddedProviderRef);
+        $canonicalHash = hash('sha256', json_encode([
+            'provider' => 'zarinpal',
+            'authority' => $authority,
+            'provider_ref_id' => $canonicalProviderRef,
+            'amount_irr' => $amountIrr,
+            'currency' => 'IRR',
+            'result' => 'verified',
+        ], JSON_THROW_ON_ERROR));
+
+        DB::table('zarinpal_provider_evidence_claims')->insert([
+            'zarinpal_payment_request_id' => (int) $request->id,
+            'authority' => $authority,
+            'provider_ref_id' => $paddedProviderRef,
+            'evidence_payload_hash' => $canonicalHash,
+            'evidence_disposition' => 'settled',
+            'amount_irr' => $amountIrr,
+            'currency' => 'IRR',
+            'created_at' => now('UTC'),
+        ]);
+
+        self::assertSame(
+            1,
+            DB::table('zarinpal_provider_evidence_claims')
+                ->where('zarinpal_payment_request_id', (int) $request->id)
+                ->where('provider_ref_id', $canonicalProviderRef)
+                ->count(),
+            'The fixture must demonstrate MariaDB PAD SPACE equality before application verification.',
+        );
+        self::assertSame(
+            0,
+            DB::table('zarinpal_provider_evidence_claims')
+                ->where('zarinpal_payment_request_id', (int) $request->id)
+                ->whereRaw('BINARY `provider_ref_id` = BINARY ?', [$canonicalProviderRef])
+                ->count(),
+            'Byte-exact comparison must distinguish the padded provider ref from the canonical provider result.',
+        );
+
+        $receipt = $service->handleCallback(
+            $authority,
+            'OK',
+            $this->correlation('callback-provider-ref-pad'),
+        );
+
+        self::assertSame('manual_review', $receipt->state->value);
+        self::assertTrue($receipt->manualReviewRequired);
+        self::assertSame(1, DB::table('zarinpal_provider_evidence_claims')->count());
+        self::assertSame($paddedProviderRef, (string) DB::table('zarinpal_provider_evidence_claims')->value('provider_ref_id'));
+        self::assertSame(0, DB::table('zarinpal_payment_verifications')->count());
+        self::assertSame(0, DB::table('zarinpal_verified_unsettled_evidence')->count());
+        self::assertSame(0, DB::table('purchase_settlements')->count());
+        self::assertSame(0, DB::table('orders')->count());
+        self::assertSame('pending_manual_review', (string) DB::table('payment_intents')->where('id', $intentId)->value('state'));
+
+        $finding = DB::table('zarinpal_reconciliation_findings')->first();
+        self::assertNotNull($finding);
+        self::assertSame('provider_verification_conflict', (string) $finding->finding_type);
+        self::assertSame('critical', (string) $finding->severity);
+        self::assertSame('verified', (string) $finding->observed_result);
+        self::assertSame($canonicalProviderRef, (string) $finding->provider_ref_id);
         self::assertSame($canonicalHash, (string) $finding->evidence_hash);
     }
 
