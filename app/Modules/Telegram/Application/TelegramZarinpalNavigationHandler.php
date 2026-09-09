@@ -503,7 +503,7 @@ final readonly class TelegramZarinpalNavigationHandler
     }
 
     /**
-     * @param array<string,mixed> $payload
+     * @param  array<string,mixed>  $payload
      * @return array<string,mixed>
      */
     private function paymentMethodsStateFromPayload(array $payload): array
@@ -533,7 +533,7 @@ final readonly class TelegramZarinpalNavigationHandler
     }
 
     /**
-     * @param array<string,mixed> $payload
+     * @param  array<string,mixed>  $payload
      * @return array<string,mixed>
      */
     private function selectedStateFromPayload(array $payload): array
@@ -550,7 +550,7 @@ final readonly class TelegramZarinpalNavigationHandler
     }
 
     /**
-     * @param array<string,mixed> $payload
+     * @param  array<string,mixed>  $payload
      * @return array<string,mixed>
      */
     private function activeStateFromPayload(array $payload): array
