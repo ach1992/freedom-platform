@@ -327,13 +327,13 @@ final class ZarinpalProviderEvidenceClaimRollbackSafetyTest extends TestCase
         return DB::table('zarinpal_provider_evidence_claims as claim_row')
             ->join('zarinpal_payment_verifications as verification_row', function ($join): void {
                 $join->on('verification_row.zarinpal_payment_request_id', '=', 'claim_row.zarinpal_payment_request_id')
-                    ->on('verification_row.authority', '=', 'claim_row.authority')
-                    ->on('verification_row.provider_ref_id', '=', 'claim_row.provider_ref_id')
-                    ->on('verification_row.evidence_payload_hash', '=', 'claim_row.evidence_payload_hash')
+                    ->whereRaw('verification_row.authority COLLATE utf8mb4_unicode_ci = claim_row.authority COLLATE utf8mb4_unicode_ci')
+                    ->whereRaw('BINARY verification_row.provider_ref_id = BINARY claim_row.provider_ref_id')
+                    ->whereRaw('BINARY verification_row.evidence_payload_hash = BINARY claim_row.evidence_payload_hash')
                     ->on('verification_row.amount_irr', '=', 'claim_row.amount_irr')
-                    ->on('verification_row.currency', '=', 'claim_row.currency');
+                    ->whereRaw('BINARY verification_row.currency = BINARY claim_row.currency');
             })
-            ->where('claim_row.evidence_disposition', 'settled')
+            ->whereRaw("BINARY claim_row.evidence_disposition = BINARY 'settled'")
             ->count();
     }
 
