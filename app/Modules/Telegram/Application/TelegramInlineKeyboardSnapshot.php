@@ -17,34 +17,36 @@ final readonly class TelegramInlineKeyboardSnapshot
 
     private const MAXIMUM_BYTES = 16_384;
 
-    /** @var list<list<TelegramInlineCallbackButton>> */
+    /** @var list<list<TelegramInlineCallbackButton|TelegramInlineHttpsUrlButton>> */
     private array $rows;
 
     private string $json;
 
     private string $hash;
 
-    /** @param list<list<TelegramInlineCallbackButton>> $rows */
+    /** @param list<list<TelegramInlineCallbackButton|TelegramInlineHttpsUrlButton>> $rows */
     public function __construct(array $rows)
     {
         if ($rows === [] || count($rows) > self::MAXIMUM_ROWS) {
             throw new InvalidArgumentException('Telegram inline keyboard must contain 1-10 rows.');
         }
 
-        $seen = [];
+        $seenCallbacks = [];
         $buttonCount = 0;
         foreach ($rows as $row) {
             if (! is_array($row) || ! array_is_list($row) || $row === [] || count($row) > self::MAXIMUM_BUTTONS_PER_ROW) {
                 throw new InvalidArgumentException('Telegram inline keyboard rows must contain 1-8 buttons.');
             }
             foreach ($row as $button) {
-                if (! $button instanceof TelegramInlineCallbackButton) {
+                if (! $button instanceof TelegramInlineCallbackButton && ! $button instanceof TelegramInlineHttpsUrlButton) {
                     throw new InvalidArgumentException('Telegram inline keyboard contains an invalid button.');
                 }
-                if (isset($seen[$button->callbackPublicId])) {
-                    throw new InvalidArgumentException('Telegram inline keyboard callback identities must be unique.');
+                if ($button instanceof TelegramInlineCallbackButton) {
+                    if (isset($seenCallbacks[$button->callbackPublicId])) {
+                        throw new InvalidArgumentException('Telegram inline keyboard callback identities must be unique.');
+                    }
+                    $seenCallbacks[$button->callbackPublicId] = true;
                 }
-                $seen[$button->callbackPublicId] = true;
                 $buttonCount++;
             }
         }
@@ -55,7 +57,7 @@ final readonly class TelegramInlineKeyboardSnapshot
         $values = [
             'rows' => array_map(
                 static fn (array $row): array => array_map(
-                    static fn (TelegramInlineCallbackButton $button): array => $button->snapshot(),
+                    static fn (TelegramInlineCallbackButton|TelegramInlineHttpsUrlButton $button): array => $button->snapshot(),
                     $row,
                 ),
                 $rows,
@@ -101,25 +103,57 @@ final readonly class TelegramInlineKeyboardSnapshot
             }
             $row = [];
             foreach ($decodedRow as $decodedButton) {
-                if (! is_array($decodedButton)
-                    || array_is_list($decodedButton)
-                    || array_keys($decodedButton) !== ['text', 'callback_public_id', 'style']
-                    || ! is_string($decodedButton['text'] ?? null)
-                    || ! is_string($decodedButton['callback_public_id'] ?? null)
-                    || (! is_string($decodedButton['style'] ?? null) && ($decodedButton['style'] ?? null) !== null)) {
+                if (! is_array($decodedButton) || array_is_list($decodedButton)) {
                     throw new InvalidArgumentException('Stored Telegram inline keyboard button is invalid.');
                 }
-                $style = $decodedButton['style'] === null
-                    ? null
-                    : TelegramInlineButtonStyle::tryFrom($decodedButton['style']);
-                if ($decodedButton['style'] !== null && $style === null) {
-                    throw new InvalidArgumentException('Stored Telegram inline keyboard button style is invalid.');
+
+                $keys = array_keys($decodedButton);
+                if ($keys === ['text', 'callback_public_id', 'style']) {
+                    if (! is_string($decodedButton['text'] ?? null)
+                        || ! is_string($decodedButton['callback_public_id'] ?? null)
+                        || (! is_string($decodedButton['style'] ?? null) && ($decodedButton['style'] ?? null) !== null)) {
+                        throw new InvalidArgumentException('Stored Telegram inline keyboard button is invalid.');
+                    }
+                    $style = $decodedButton['style'] === null
+                        ? null
+                        : TelegramInlineButtonStyle::tryFrom($decodedButton['style']);
+                    if ($decodedButton['style'] !== null && $style === null) {
+                        throw new InvalidArgumentException('Stored Telegram inline keyboard button style is invalid.');
+                    }
+                    $row[] = new TelegramInlineCallbackButton(
+                        $decodedButton['text'],
+                        $decodedButton['callback_public_id'],
+                        $style,
+                    );
+
+                    continue;
                 }
-                $row[] = new TelegramInlineCallbackButton(
-                    $decodedButton['text'],
-                    $decodedButton['callback_public_id'],
-                    $style,
-                );
+
+                if ($keys === ['text', 'https_url', 'https_url_purpose', 'style']) {
+                    if (! is_string($decodedButton['text'] ?? null)
+                        || ! is_string($decodedButton['https_url'] ?? null)
+                        || ! is_string($decodedButton['https_url_purpose'] ?? null)
+                        || (! is_string($decodedButton['style'] ?? null) && ($decodedButton['style'] ?? null) !== null)) {
+                        throw new InvalidArgumentException('Stored Telegram inline keyboard URL button is invalid.');
+                    }
+                    $purpose = TelegramInlineHttpsUrlPurpose::tryFrom($decodedButton['https_url_purpose']);
+                    $style = $decodedButton['style'] === null
+                        ? null
+                        : TelegramInlineButtonStyle::tryFrom($decodedButton['style']);
+                    if ($purpose === null || ($decodedButton['style'] !== null && $style === null)) {
+                        throw new InvalidArgumentException('Stored Telegram inline keyboard URL button authority is invalid.');
+                    }
+                    $row[] = new TelegramInlineHttpsUrlButton(
+                        $decodedButton['text'],
+                        $decodedButton['https_url'],
+                        $purpose,
+                        $style,
+                    );
+
+                    continue;
+                }
+
+                throw new InvalidArgumentException('Stored Telegram inline keyboard button has an invalid action shape.');
             }
             $rows[] = $row;
         }
@@ -132,7 +166,7 @@ final readonly class TelegramInlineKeyboardSnapshot
         return $snapshot;
     }
 
-    /** @return list<list<TelegramInlineCallbackButton>> */
+    /** @return list<list<TelegramInlineCallbackButton|TelegramInlineHttpsUrlButton>> */
     public function rows(): array
     {
         return $this->rows;
@@ -144,7 +178,9 @@ final readonly class TelegramInlineKeyboardSnapshot
         $ids = [];
         foreach ($this->rows as $row) {
             foreach ($row as $button) {
-                $ids[] = $button->callbackPublicId;
+                if ($button instanceof TelegramInlineCallbackButton) {
+                    $ids[] = $button->callbackPublicId;
+                }
             }
         }
 
@@ -164,10 +200,15 @@ final readonly class TelegramInlineKeyboardSnapshot
     /** @return array{redacted:true,type:string,buttons:int} */
     public function __debugInfo(): array
     {
+        $buttons = 0;
+        foreach ($this->rows as $row) {
+            $buttons += count($row);
+        }
+
         return [
             'redacted' => true,
             'type' => 'inline_keyboard_snapshot',
-            'buttons' => count($this->callbackPublicIds()),
+            'buttons' => $buttons,
         ];
     }
 }
