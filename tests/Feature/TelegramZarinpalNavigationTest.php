@@ -18,6 +18,7 @@ use App\Modules\Telegram\Application\TelegramInteractionCallbackService;
 use App\Modules\Telegram\Application\TelegramInteractionSessionService;
 use App\Modules\Telegram\Application\TelegramResolvedInlineKeyboardMarkup;
 use App\Modules\Telegram\Application\TelegramUpdateProcessor;
+use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Contracts\Encryption\StringEncrypter;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
@@ -39,6 +40,7 @@ final class TelegramZarinpalNavigationPayment implements TelegramCustomerPurchas
         private readonly string $state = 'redirectable',
         private readonly ?string $redirectUrl = null,
         private readonly bool $deny = false,
+        private readonly bool $domainFailure = false,
     ) {}
 
     public function prepareForSelf(
@@ -63,6 +65,9 @@ final class TelegramZarinpalNavigationPayment implements TelegramCustomerPurchas
         $this->prepareCalls[] = ['operationKey' => $operationKey];
         if ($this->deny) {
             throw new AuthorizationException('Telegram Zarinpal authority denied.');
+        }
+        if ($this->domainFailure) {
+            throw new DomainException('Telegram Zarinpal preparation failed.');
         }
         if (isset($this->accepted[$operationKey])) {
             $accepted = $this->accepted[$operationKey];
@@ -338,6 +343,46 @@ final class TelegramZarinpalNavigationTest extends TestCase
         self::assertSame(0, DB::table('provisioning_operations')->count());
     }
 
+    public function test_failed_zarinpal_request_returns_safe_unavailable_payment_methods_without_exception(): void
+    {
+        $payment = new TelegramZarinpalNavigationPayment('failed');
+        [, $sessionId] = $this->prepareSelection(
+            $payment,
+            9950,
+            9500,
+            'zarinpal_failed',
+            'en',
+        );
+
+        self::assertSame('purchase_payment_methods', DB::table('telegram_interaction_sessions')->where('id', $sessionId)->value('state'));
+        self::assertSame(1, $payment->prepareEffects);
+        self::assertCount(1, $payment->prepareCalls);
+        self::assertStringContainsString('Zarinpal checkout is not available', $this->allConfidentialPresentations());
+        self::assertSame(0, DB::table('purchase_settlements')->count());
+        self::assertSame(0, DB::table('service_subscriptions')->count());
+        self::assertSame(0, DB::table('provisioning_operations')->count());
+    }
+
+    public function test_zarinpal_preparation_domain_failure_returns_safe_unavailable_payment_methods_without_provider_effect(): void
+    {
+        $payment = new TelegramZarinpalNavigationPayment(domainFailure: true);
+        [, $sessionId] = $this->prepareSelection(
+            $payment,
+            9960,
+            9600,
+            'zarinpal_domain_failure',
+            'en',
+        );
+
+        self::assertSame('purchase_payment_methods', DB::table('telegram_interaction_sessions')->where('id', $sessionId)->value('state'));
+        self::assertSame(0, $payment->prepareEffects);
+        self::assertCount(1, $payment->prepareCalls);
+        self::assertStringContainsString('Zarinpal checkout is not available', $this->allConfidentialPresentations());
+        self::assertSame(0, DB::table('purchase_settlements')->count());
+        self::assertSame(0, DB::table('service_subscriptions')->count());
+        self::assertSame(0, DB::table('provisioning_operations')->count());
+    }
+
     /**
      * @return array{TelegramUpdateProcessor,int,int,int,string,int}
      */
@@ -457,6 +502,14 @@ final class TelegramZarinpalNavigationTest extends TestCase
         self::assertIsString($ciphertext);
 
         return $this->app->make(StringEncrypter::class)->decryptString($ciphertext);
+    }
+
+    private function allConfidentialPresentations(): string
+    {
+        return DB::table(TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1::TABLE)
+            ->pluck('presentation_ciphertext')
+            ->map(fn (mixed $ciphertext): string => $this->app->make(StringEncrypter::class)->decryptString((string) $ciphertext))
+            ->implode("\n");
     }
 
     private function latestKeyboardSnapshot(): TelegramInlineKeyboardSnapshot

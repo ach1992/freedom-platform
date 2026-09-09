@@ -345,7 +345,6 @@ final readonly class TelegramZarinpalNavigationHandler
                     $action,
                     $this->translation('telegram_zarinpal.unavailable', $this->locale($action->userId)),
                     'unavailable',
-                    new TelegramInlineKeyboardSnapshot([]),
                 );
             }
             $this->renderPaymentMethods($action, $session->version, $decision);
@@ -478,7 +477,7 @@ final readonly class TelegramZarinpalNavigationHandler
         TelegramInteractionAction $action,
         string $text,
         string $surface,
-        TelegramInlineKeyboardSnapshot $keyboard,
+        ?TelegramInlineKeyboardSnapshot $keyboard = null,
     ): void {
         $source = new readonly class($text) implements ConfidentialTelegramPresentationSource
         {
