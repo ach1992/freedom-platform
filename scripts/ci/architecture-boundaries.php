@@ -50,6 +50,7 @@ return [
         'app/Modules/Telegram/Application/TelegramGiftCardNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramUsdtNavigationHandler.php',
+        'app/Modules/Telegram/Application/TelegramZarinpalNavigationHandler.php',
     ],
     'telegram_non_restricted_presentation_sources' => [
         'app/Modules/Telegram/Application/TelegramGiftCardNavigationHandler.php',
@@ -57,6 +58,7 @@ return [
         'app/Modules/Telegram/Application/TelegramProtectedReferenceDeliveryOutboxHandler.php',
         'app/Modules/Telegram/Application/TelegramNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramUsdtNavigationHandler.php',
+        'app/Modules/Telegram/Application/TelegramZarinpalNavigationHandler.php',
     ],
 
     // Critical MariaDB authority-surface lifecycle contracts. Every registered surface
