@@ -22,6 +22,7 @@ final readonly class TelegramConfidentialDeliveryQueue
         ConfidentialTelegramPresentation $presentation,
         string $requestKey,
         string $correlationId,
+        ?TelegramInlineKeyboardSnapshot $inlineKeyboard = null,
     ): TelegramDeliveryOperationReceipt {
         return $this->delivery->queueConfidential(
             TelegramDeliveryAction::Send,
@@ -30,6 +31,7 @@ final readonly class TelegramConfidentialDeliveryQueue
             $presentation,
             $requestKey,
             $correlationId,
+            $inlineKeyboard,
         );
     }
 }
