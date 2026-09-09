@@ -23,7 +23,6 @@ use Illuminate\Contracts\Encryption\StringEncrypter;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
-use RuntimeException;
 use Tests\TestCase;
 
 final class TelegramZarinpalNavigationPayment implements TelegramCustomerPurchaseZarinpalPayment
@@ -241,10 +240,20 @@ final class TelegramZarinpalNavigationTest extends TestCase
         self::assertSame(0, DB::table('service_subscriptions')->count());
         self::assertSame(0, DB::table('provisioning_operations')->count());
 
+        // A later update while the durable redirect session is active may need
+        // to reconstruct presentation after a process crash. It must replay the
+        // accepted application identity without producing another provider effect.
+        $this->accept($this->payload(9110, $telegramUserId, 'zarinpal_redirect', 'fa', 'نمایش دوباره'));
+        $processor->process('123456789', 9110);
+        self::assertSame(1, $payment->prepareEffects);
+        self::assertCount(2, $payment->prepareCalls);
+        self::assertSame('purchase_zarinpal_redirect', DB::table('telegram_interaction_sessions')->where('id', $sessionId)->value('state'));
+        self::assertSame($expectedUrl, $this->latestProviderKeyboardPayload()['inline_keyboard'][0][0]['url'] ?? null);
+
         $this->accept($this->callbackPayload($selectionUpdateId, $telegramUserId, 'zarinpal_redirect', 'fa', $selectionToken));
         $processor->process('123456789', $selectionUpdateId);
         self::assertSame(1, $payment->prepareEffects);
-        self::assertCount(1, $payment->prepareCalls);
+        self::assertCount(2, $payment->prepareCalls);
         self::assertSame(1, DB::table('processed_telegram_updates')->where('update_id', $selectionUpdateId)->count());
         self::assertIsNumeric($accountId);
     }
