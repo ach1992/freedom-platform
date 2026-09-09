@@ -58,7 +58,6 @@ return [
         'app/Modules/Telegram/Application/TelegramProtectedReferenceDeliveryOutboxHandler.php',
         'app/Modules/Telegram/Application/TelegramNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramUsdtNavigationHandler.php',
-        'app/Modules/Telegram/Application/TelegramZarinpalNavigationHandler.php',
     ],
 
     // Critical MariaDB authority-surface lifecycle contracts. Every registered surface
