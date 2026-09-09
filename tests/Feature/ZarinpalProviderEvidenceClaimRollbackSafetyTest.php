@@ -15,6 +15,7 @@ use App\Modules\Payments\Zarinpal\Application\Contracts\ZarinpalTransport;
 use App\Modules\Payments\Zarinpal\Application\Contracts\ZarinpalVerifyResult;
 use App\Modules\Payments\Zarinpal\Application\ZarinpalPaymentService;
 use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -125,6 +126,139 @@ final class ZarinpalProviderEvidenceClaimRollbackSafetyTest extends TestCase
         self::assertSame($requestId, (int) DB::table('zarinpal_provider_evidence_claims')->value('zarinpal_payment_request_id'));
     }
 
+    public function test_case_distinct_provider_claim_authority_is_rejected_by_exact_request_guard(): void
+    {
+        [$userId, $quotePublicId, $decisionPublicId] = $this->plainContext('case-distinct-insert');
+        $intent = $this->app->make(PurchasePaymentIntentService::class)->create(
+            'zpal.rollback.case.insert.intent.000001',
+            $userId,
+            $quotePublicId,
+            $decisionPublicId,
+            'zarinpal',
+            $this->correlation('case-distinct-insert-intent'),
+        );
+        $legacy = $this->app->make(ZarinpalPaymentService::class)->initiate(
+            'zpal.rollback.case.insert.request.000001',
+            $intent->intentPublicId,
+            $this->correlation('case-distinct-insert-initiate'),
+        );
+        self::assertSame('redirectable', $legacy->state->value);
+        self::assertSame(0, DB::table('orders')->count());
+
+        $intentId = (int) DB::table('payment_intents')->where('public_id', $intent->intentPublicId)->value('id');
+        $requestId = (int) DB::table('zarinpal_payment_requests')->where('payment_intent_id', $intentId)->value('id');
+        $authority = (string) DB::table('zarinpal_payment_requests')->where('id', $requestId)->value('authority');
+        $caseDistinctAuthority = strtolower($authority);
+        $amountIrr = (int) DB::table('zarinpal_payment_requests')->where('id', $requestId)->value('amount_irr');
+        $currency = (string) DB::table('zarinpal_payment_requests')->where('id', $requestId)->value('currency');
+
+        self::assertNotSame($authority, $caseDistinctAuthority);
+        self::assertSame(
+            1,
+            DB::table('zarinpal_payment_requests')
+                ->where('id', $requestId)
+                ->where('authority', $caseDistinctAuthority)
+                ->count(),
+        );
+        self::assertSame(
+            0,
+            DB::table('zarinpal_payment_requests')
+                ->where('id', $requestId)
+                ->whereRaw('BINARY authority = BINARY ?', [$caseDistinctAuthority])
+                ->count(),
+        );
+
+        try {
+            DB::table('zarinpal_provider_evidence_claims')->insert([
+                'zarinpal_payment_request_id' => $requestId,
+                'authority' => $caseDistinctAuthority,
+                'provider_ref_id' => '260003097',
+                'evidence_payload_hash' => hash('sha256', 'case-distinct-provider-evidence-claim'),
+                'evidence_disposition' => 'settled',
+                'amount_irr' => $amountIrr,
+                'currency' => $currency,
+                'created_at' => now('UTC'),
+            ]);
+            self::fail('A case-distinct provider Authority must not be accepted as the durable request Authority.');
+        } catch (QueryException $exception) {
+            self::assertStringContainsString(
+                'Zarinpal provider evidence claim requires one matching durable provider request authority.',
+                $exception->getMessage(),
+            );
+        }
+
+        self::assertSame(0, DB::table('zarinpal_provider_evidence_claims')->count());
+        self::assertSame(0, DB::table('zarinpal_payment_verifications')->count());
+    }
+
+    public function test_collation_equivalent_nonidentical_legacy_claim_blocks_semantic_rollback(): void
+    {
+        [$userId, $quotePublicId, $decisionPublicId] = $this->plainContext('case-distinct-rollback');
+        $intent = $this->app->make(PurchasePaymentIntentService::class)->create(
+            'zpal.rollback.case.down.intent.000001',
+            $userId,
+            $quotePublicId,
+            $decisionPublicId,
+            'zarinpal',
+            $this->correlation('case-distinct-down-intent'),
+        );
+        $service = $this->app->make(ZarinpalPaymentService::class);
+        $service->initiate(
+            'zpal.rollback.case.down.request.000001',
+            $intent->intentPublicId,
+            $this->correlation('case-distinct-down-initiate'),
+        );
+        $verified = $service->handleCallback(
+            'A'.str_repeat('8', 35),
+            'OK',
+            $this->correlation('case-distinct-down-callback'),
+        );
+
+        self::assertSame('verified', $verified->state->value);
+        self::assertSame(0, DB::table('orders')->count());
+        self::assertSame(1, DB::table('zarinpal_payment_verifications')->count());
+        self::assertSame(1, DB::table('zarinpal_provider_evidence_claims')->count());
+        self::assertSame(1, $this->matchingBaselineClaimCount());
+        self::assertSame(0, DB::table('zarinpal_verified_unsettled_evidence')->count());
+        self::assertSame(0, DB::table('zarinpal_reconciliation_findings')->count());
+        self::assertSame(0, DB::table('zarinpal_payment_requests')->whereNotNull('promotion_usage_reservation_id')->count());
+
+        $claimId = (int) DB::table('zarinpal_provider_evidence_claims')->value('id');
+        $canonicalAuthority = (string) DB::table('zarinpal_payment_verifications')->value('authority');
+        $caseDistinctAuthority = strtolower($canonicalAuthority);
+        self::assertNotSame($canonicalAuthority, $caseDistinctAuthority);
+
+        DB::unprepared('DROP TRIGGER IF EXISTS zarinpal_provider_evidence_claims_update_guard');
+
+        try {
+            DB::table('zarinpal_provider_evidence_claims')
+                ->where('id', $claimId)
+                ->update(['authority' => $caseDistinctAuthority]);
+
+            self::assertSame(
+                $caseDistinctAuthority,
+                (string) DB::table('zarinpal_provider_evidence_claims')->where('id', $claimId)->value('authority'),
+            );
+            self::assertSame(1, $this->collationEquivalentBaselineClaimCount());
+            self::assertSame(0, $this->matchingBaselineClaimCount());
+
+            $this->assertRollbackRejected();
+
+            self::assertTrue(Schema::hasTable('zarinpal_provider_evidence_claims'));
+            self::assertSame(1, DB::table('zarinpal_provider_evidence_claims')->count());
+            self::assertSame(
+                $caseDistinctAuthority,
+                (string) DB::table('zarinpal_provider_evidence_claims')->where('id', $claimId)->value('authority'),
+            );
+            self::assertSame(
+                $canonicalAuthority,
+                (string) DB::table('zarinpal_payment_verifications')->value('authority'),
+            );
+        } finally {
+            $this->restoreMigrationAfterForcedProviderClaimState();
+        }
+    }
+
     public function test_exact_legacy_settled_claim_redundant_with_baseline_verification_can_roll_back(): void
     {
         [$userId, $quotePublicId, $decisionPublicId] = $this->plainContext('redundant-claim');
@@ -156,6 +290,7 @@ final class ZarinpalProviderEvidenceClaimRollbackSafetyTest extends TestCase
         self::assertSame(0, DB::table('zarinpal_verified_unsettled_evidence')->count());
         self::assertSame(0, DB::table('zarinpal_reconciliation_findings')->count());
 
+        $beforeDown = $this->exactClaimIdentity();
         $this->migration()->down();
 
         self::assertFalse(Schema::hasTable('zarinpal_provider_evidence_claims'));
@@ -169,9 +304,25 @@ final class ZarinpalProviderEvidenceClaimRollbackSafetyTest extends TestCase
         self::assertTrue(Schema::hasTable('zarinpal_provider_evidence_claims'));
         self::assertSame(1, DB::table('zarinpal_provider_evidence_claims')->count());
         self::assertSame(1, $this->matchingBaselineClaimCount());
+        self::assertSame($beforeDown, $this->exactClaimIdentity());
     }
 
     private function matchingBaselineClaimCount(): int
+    {
+        return DB::table('zarinpal_provider_evidence_claims as claim_row')
+            ->join('zarinpal_payment_verifications as verification_row', function ($join): void {
+                $join->on('verification_row.zarinpal_payment_request_id', '=', 'claim_row.zarinpal_payment_request_id')
+                    ->whereRaw('BINARY verification_row.authority = BINARY claim_row.authority')
+                    ->whereRaw('BINARY verification_row.provider_ref_id = BINARY claim_row.provider_ref_id')
+                    ->whereRaw('BINARY verification_row.evidence_payload_hash = BINARY claim_row.evidence_payload_hash')
+                    ->on('verification_row.amount_irr', '=', 'claim_row.amount_irr')
+                    ->whereRaw('BINARY verification_row.currency = BINARY claim_row.currency');
+            })
+            ->whereRaw("BINARY claim_row.evidence_disposition = BINARY 'settled'")
+            ->count();
+    }
+
+    private function collationEquivalentBaselineClaimCount(): int
     {
         return DB::table('zarinpal_provider_evidence_claims as claim_row')
             ->join('zarinpal_payment_verifications as verification_row', function ($join): void {
@@ -184,6 +335,38 @@ final class ZarinpalProviderEvidenceClaimRollbackSafetyTest extends TestCase
             })
             ->where('claim_row.evidence_disposition', 'settled')
             ->count();
+    }
+
+    /** @return array{request_id:int,authority:string,provider_ref_id:string,evidence_payload_hash:string,evidence_disposition:string,amount_irr:int,currency:string} */
+    private function exactClaimIdentity(): array
+    {
+        $claim = DB::table('zarinpal_provider_evidence_claims')->first();
+        self::assertNotNull($claim);
+
+        return [
+            'request_id' => (int) $claim->zarinpal_payment_request_id,
+            'authority' => (string) $claim->authority,
+            'provider_ref_id' => (string) $claim->provider_ref_id,
+            'evidence_payload_hash' => (string) $claim->evidence_payload_hash,
+            'evidence_disposition' => (string) $claim->evidence_disposition,
+            'amount_irr' => (int) $claim->amount_irr,
+            'currency' => (string) $claim->currency,
+        ];
+    }
+
+    private function restoreMigrationAfterForcedProviderClaimState(): void
+    {
+        if (! Schema::hasTable('zarinpal_provider_evidence_claims')) {
+            $this->migration()->up();
+
+            return;
+        }
+
+        DB::unprepared('DROP TRIGGER IF EXISTS zarinpal_provider_evidence_claims_delete_guard');
+        DB::unprepared('DROP TRIGGER IF EXISTS zarinpal_provider_evidence_claims_update_guard');
+        DB::table('zarinpal_provider_evidence_claims')->delete();
+        $this->migration()->down();
+        $this->migration()->up();
     }
 
     /** @return array{0:int,1:string,2:string} */
