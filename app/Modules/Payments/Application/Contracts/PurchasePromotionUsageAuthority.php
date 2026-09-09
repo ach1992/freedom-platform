@@ -14,6 +14,16 @@ interface PurchasePromotionUsageAuthority
         string $quotePublicId,
     ): ?string;
 
+    public function requiresFinalizationForQuote(
+        int $actorUserId,
+        string $quotePublicId,
+    ): bool;
+
+    public function isFinalizationAuthorityAvailableForQuote(
+        int $actorUserId,
+        string $quotePublicId,
+    ): bool;
+
     public function finalizeForSettlement(
         string $redemptionKey,
         int $actorUserId,

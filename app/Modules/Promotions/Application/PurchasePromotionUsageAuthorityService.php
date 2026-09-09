@@ -65,6 +65,49 @@ final readonly class PurchasePromotionUsageAuthorityService implements PurchaseP
     }
 
     /** @requirement PRO-001 PAY-003 DAT-002 DAT-003 SEC-002 */
+    public function requiresFinalizationForQuote(int $actorUserId, string $quotePublicId): bool
+    {
+        return $this->database->connection()->transaction(function (Connection $connection) use ($actorUserId, $quotePublicId): bool {
+            $quote = $this->purchaseQuote($connection, $quotePublicId, $actorUserId, true);
+
+            return ! $this->isZeroDiscount($quote);
+        }, 3);
+    }
+
+    /** @requirement PRO-001 PAY-003 DAT-002 DAT-003 SEC-002 */
+    public function isFinalizationAuthorityAvailableForQuote(int $actorUserId, string $quotePublicId): bool
+    {
+        return $this->database->connection()->transaction(function (Connection $connection) use ($actorUserId, $quotePublicId): bool {
+            $quote = $this->purchaseQuote($connection, $quotePublicId, $actorUserId, true);
+            if ($this->isZeroDiscount($quote)) {
+                return true;
+            }
+            $this->assertDiscountedPurchaseQuoteShape($quote);
+
+            $reservation = $connection->table('promotion_usage_reservations')
+                ->where('quote_id', (int) $quote->id)
+                ->lockForUpdate()
+                ->first(['id']);
+            if ($reservation === null) {
+                return false;
+            }
+            $reservationId = $this->positiveInt($reservation->id, 'Promotion usage reservation ID');
+            $released = $connection->table('promotion_usage_releases')
+                ->where('promotion_usage_reservation_id', $reservationId)
+                ->lockForUpdate()
+                ->exists();
+            if ($released) {
+                return false;
+            }
+
+            return ! $connection->table('promotion_usage_redemptions')
+                ->where('promotion_usage_reservation_id', $reservationId)
+                ->lockForUpdate()
+                ->exists();
+        }, 3);
+    }
+
+    /** @requirement PRO-001 PAY-003 DAT-002 DAT-003 SEC-002 */
     public function finalizeForSettlement(string $redemptionKey, int $actorUserId, string $purchaseSettlementPublicId): ?string
     {
         $context = new PromotionUsageContext($actorUserId);
