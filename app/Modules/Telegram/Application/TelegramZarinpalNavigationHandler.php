@@ -8,7 +8,6 @@ use App\Modules\Customers\Application\CustomerAccountSummaryService;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseOrder;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchasePaymentMethods;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseZarinpalPayment;
-use App\Modules\Telegram\Domain\TelegramDeliveryAction;
 use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
@@ -38,7 +37,7 @@ final readonly class TelegramZarinpalNavigationHandler
     public function __construct(
         private Translator $translator,
         private ConfidentialTelegramPresentationFactory $confidentialPresentations,
-        private TelegramDeliveryQueueService $delivery,
+        private TelegramConfidentialDeliveryQueue $delivery,
         private TelegramInteractionSessionService $sessions,
         private TelegramInteractionCallbackService $callbacks,
         private CustomerAccountSummaryService $customers,
@@ -491,10 +490,8 @@ final readonly class TelegramZarinpalNavigationHandler
             }
         };
         $presentation = $this->confidentialPresentations->fromSource($source);
-        $this->delivery->queueConfidential(
-            TelegramDeliveryAction::Send,
+        $this->delivery->send(
             $action->telegramUserId,
-            null,
             $presentation,
             'tg-zarinpal-delivery:'.hash('sha256', $action->requestKey.':'.$surface),
             'tg-zarinpal:'.substr(hash('sha256', $action->botId.':'.$action->updateId.':'.$surface), 0, 48),
