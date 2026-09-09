@@ -76,12 +76,12 @@ final readonly class TelegramZarinpalNavigationHandler
             return;
         }
         if ($action->sessionState === self::STATE_REDIRECT) {
-            $this->handleTerminalSurface($action, false);
+            $this->handleRedirectSurface($action);
 
             return;
         }
         if ($action->sessionState === self::STATE_PENDING) {
-            $this->handleTerminalSurface($action, true);
+            $this->handlePendingSurface($action);
 
             return;
         }
@@ -137,7 +137,7 @@ final readonly class TelegramZarinpalNavigationHandler
                 $state['quote_configuration_hash'],
                 $state['payment_decision_public_id'],
                 $state['payment_decision_configuration_hash'],
-                hash('sha256', 'telegram-zarinpal-order:'.$state['order_public_id']),
+                $this->operationKey($state),
             );
         } catch (AuthorizationException) {
             $this->returnHome($action, $sessionVersion);
@@ -158,12 +158,7 @@ final readonly class TelegramZarinpalNavigationHandler
 
         if ($redirect->state === 'redirectable' && $redirect->redirectUrl !== null) {
             try {
-                $urlButton = new TelegramInlineHttpsUrlButton(
-                    $this->translation('telegram_zarinpal.open_gateway', $this->locale($action->userId)),
-                    $redirect->redirectUrl,
-                    TelegramInlineHttpsUrlPurpose::ZarinpalStartPay,
-                    TelegramInlineButtonStyle::Primary,
-                );
+                $urlButton = $this->urlButton($action, $redirect->redirectUrl);
             } catch (InvalidArgumentException) {
                 $this->moveToPending($action, $sessionVersion, $activeState, false);
 
@@ -201,6 +196,92 @@ final readonly class TelegramZarinpalNavigationHandler
         );
     }
 
+    private function handleRedirectSurface(TelegramInteractionAction $action): void
+    {
+        $state = $this->activeStateFromPayload($action->sessionPayload);
+        if ($this->isBackAction($action)) {
+            $this->returnPaymentMethods($action, $state);
+
+            return;
+        }
+        if ($this->isEntryCommand($action->messageText)) {
+            $this->returnHome($action);
+
+            return;
+        }
+
+        $this->replayRedirect($action, $state);
+    }
+
+    /** @param array<string,mixed> $state */
+    private function replayRedirect(TelegramInteractionAction $action, array $state): void
+    {
+        try {
+            $redirect = $this->zarinpal->prepareForSelf(
+                $action->userId,
+                $action->userId,
+                $state['order_public_id'],
+                $state['quote_public_id'],
+                $state['quote_configuration_hash'],
+                $state['payment_decision_public_id'],
+                $state['payment_decision_configuration_hash'],
+                $this->operationKey($state),
+            );
+        } catch (AuthorizationException) {
+            $this->returnHome($action);
+
+            return;
+        } catch (DomainException|InvalidArgumentException) {
+            $this->moveToPending($action, $action->sessionVersion, $state, false);
+
+            return;
+        }
+
+        if (! hash_equals($state['zarinpal_request_public_id'], $redirect->requestPublicId)
+            || ! hash_equals($state['zarinpal_payment_intent_public_id'], $redirect->paymentIntentPublicId)) {
+            throw new RuntimeException('Telegram Zarinpal replay identity changed.');
+        }
+
+        $state['zarinpal_state'] = $redirect->state;
+        if ($redirect->state !== 'redirectable' || $redirect->redirectUrl === null) {
+            $this->moveToPending(
+                $action,
+                $action->sessionVersion,
+                $state,
+                $redirect->manualReviewRequired || in_array($redirect->state, ['uncertain', 'manual_review', 'initiating'], true),
+            );
+
+            return;
+        }
+
+        try {
+            $urlButton = $this->urlButton($action, $redirect->redirectUrl);
+        } catch (InvalidArgumentException) {
+            $this->moveToPending($action, $action->sessionVersion, $state, false);
+
+            return;
+        }
+        $this->renderRedirect($action, $action->sessionVersion, $urlButton);
+    }
+
+    private function handlePendingSurface(TelegramInteractionAction $action): void
+    {
+        $state = $this->activeStateFromPayload($action->sessionPayload);
+        if ($this->isBackAction($action)) {
+            $this->returnPaymentMethods($action, $state);
+
+            return;
+        }
+        if ($this->isEntryCommand($action->messageText)) {
+            $this->returnHome($action);
+
+            return;
+        }
+        if ($action->kind === TelegramInteractionActionKind::Callback) {
+            throw new RuntimeException('Telegram pending Zarinpal callback action is unsupported.');
+        }
+    }
+
     /** @param array<string,mixed> $state */
     private function moveToPending(
         TelegramInteractionAction $action,
@@ -221,26 +302,6 @@ final readonly class TelegramZarinpalNavigationHandler
         }
         $this->assertActor($action, $session->userId);
         $this->renderPending($action, $session->version, $uncertain);
-    }
-
-    private function handleTerminalSurface(TelegramInteractionAction $action, bool $pending): void
-    {
-        $state = $this->activeStateFromPayload($action->sessionPayload);
-        if ($this->isBackAction($action)) {
-            $this->returnPaymentMethods($action, $state);
-
-            return;
-        }
-        if ($this->isEntryCommand($action->messageText)) {
-            $this->returnHome($action);
-
-            return;
-        }
-        if ($action->kind === TelegramInteractionActionKind::Callback) {
-            throw new RuntimeException($pending
-                ? 'Telegram pending Zarinpal callback action is unsupported.'
-                : 'Telegram Zarinpal redirect callback action is unsupported.');
-        }
     }
 
     /** @param array<string,mixed> $state */
@@ -404,6 +465,16 @@ final readonly class TelegramZarinpalNavigationHandler
         )];
     }
 
+    private function urlButton(TelegramInteractionAction $action, string $url): TelegramInlineHttpsUrlButton
+    {
+        return new TelegramInlineHttpsUrlButton(
+            $this->translation('telegram_zarinpal.open_gateway', $this->locale($action->userId)),
+            $url,
+            TelegramInlineHttpsUrlPurpose::ZarinpalStartPay,
+            TelegramInlineButtonStyle::Primary,
+        );
+    }
+
     private function queueConfidential(
         TelegramInteractionAction $action,
         string $text,
@@ -505,6 +576,12 @@ final readonly class TelegramZarinpalNavigationHandler
         }
 
         return $payload['method_code'];
+    }
+
+    /** @param array<string,mixed> $state */
+    private function operationKey(array $state): string
+    {
+        return hash('sha256', 'telegram-zarinpal-order:'.$state['order_public_id']);
     }
 
     private function methodLabel(string $methodCode, string $locale, int $number): string
