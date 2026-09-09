@@ -124,7 +124,7 @@ final class ZarinpalProviderEvidenceExactRuntimeTest extends TestCase
         );
 
         self::assertSame('manual_review', $receipt->state->value);
-        self::assertTrue($receipt->requiresManualReview);
+        self::assertTrue($receipt->manualReviewRequired);
         self::assertSame(1, DB::table('zarinpal_provider_evidence_claims')->count());
         self::assertSame($caseDistinctHash, (string) DB::table('zarinpal_provider_evidence_claims')->value('evidence_payload_hash'));
         self::assertSame(0, DB::table('zarinpal_payment_verifications')->count());
