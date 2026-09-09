@@ -206,6 +206,7 @@ final class TelegramCustomerPurchaseZarinpalPaymentServiceTest extends TestCase
             'telegram.zarinpal.adapter.eligibility.'.$suffix.'.000001',
             $userId,
             $quote->quotePublicId,
+            $quote->configurationSnapshotHash,
         );
         $opening = $this->app->make(PurchaseOrderService::class)->openFromQuote(
             $quote->quotePublicId,
