@@ -28,12 +28,12 @@ return new class extends Migration
                 ->references('id')
                 ->on('zarinpal_payment_requests')
                 ->restrictOnDelete();
-            $table->string('authority', 64)->unique('zpec_authority_unique');
-            $table->string('provider_ref_id', 64)->unique('zpec_provider_ref_unique');
-            $table->char('evidence_payload_hash', 64);
-            $table->string('evidence_disposition', 16);
+            $table->string('authority', 64)->collation('utf8mb4_bin')->unique('zpec_authority_unique');
+            $table->string('provider_ref_id', 64)->collation('utf8mb4_bin')->unique('zpec_provider_ref_unique');
+            $table->char('evidence_payload_hash', 64)->collation('utf8mb4_bin');
+            $table->string('evidence_disposition', 16)->collation('utf8mb4_bin');
             $table->bigInteger('amount_irr');
-            $table->char('currency', 3);
+            $table->char('currency', 3)->collation('utf8mb4_bin');
             $table->dateTime('created_at', 6);
         });
         DB::statement("ALTER TABLE zarinpal_provider_evidence_claims ADD CONSTRAINT zpec_money_chk CHECK (`amount_irr` > 0 AND `currency` = 'IRR')");
