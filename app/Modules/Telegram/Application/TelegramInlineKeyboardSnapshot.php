@@ -125,6 +125,7 @@ final readonly class TelegramInlineKeyboardSnapshot
                         $decodedButton['callback_public_id'],
                         $style,
                     );
+
                     continue;
                 }
 
@@ -148,6 +149,7 @@ final readonly class TelegramInlineKeyboardSnapshot
                         $purpose,
                         $style,
                     );
+
                     continue;
                 }
 

@@ -125,7 +125,7 @@ final class TelegramHttpsUrlButtonAuthorityTest extends TestCase
             'https://payment.zarinpal.com/pg/StartPay/A'.str_repeat('1', 20).'?x=1',
             'https://payment.zarinpal.com/pg/StartPay/A'.str_repeat('1', 20).'#fragment',
             'https://payment.zarinpal.com/pg/StartPay/A'.str_repeat('1', 20).'/',
-            "https://payment.zarinpal.com/pg/StartPay/A".str_repeat('1', 20)."\n",
+            'https://payment.zarinpal.com/pg/StartPay/A'.str_repeat('1', 20)."\n",
         ];
         foreach ($unsafe as $candidate) {
             try {
