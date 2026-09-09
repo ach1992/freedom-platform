@@ -137,14 +137,14 @@ SQL);
         $hasNonBaselineProviderEvidenceClaim = DB::table('zarinpal_provider_evidence_claims as claim_row')
             ->leftJoin('zarinpal_payment_verifications as verification_row', function ($join): void {
                 $join->on('verification_row.zarinpal_payment_request_id', '=', 'claim_row.zarinpal_payment_request_id')
-                    ->on('verification_row.authority', '=', 'claim_row.authority')
-                    ->on('verification_row.provider_ref_id', '=', 'claim_row.provider_ref_id')
-                    ->on('verification_row.evidence_payload_hash', '=', 'claim_row.evidence_payload_hash')
+                    ->whereRaw('BINARY verification_row.authority = BINARY claim_row.authority')
+                    ->whereRaw('BINARY verification_row.provider_ref_id = BINARY claim_row.provider_ref_id')
+                    ->whereRaw('BINARY verification_row.evidence_payload_hash = BINARY claim_row.evidence_payload_hash')
                     ->on('verification_row.amount_irr', '=', 'claim_row.amount_irr')
-                    ->on('verification_row.currency', '=', 'claim_row.currency');
+                    ->whereRaw('BINARY verification_row.currency = BINARY claim_row.currency');
             })
             ->where(function ($query): void {
-                $query->where('claim_row.evidence_disposition', '<>', 'settled')
+                $query->whereRaw("BINARY claim_row.evidence_disposition <> BINARY 'settled'")
                     ->orWhereNull('verification_row.id');
             })
             ->exists();
@@ -238,15 +238,15 @@ BEGIN
     FROM zarinpal_payment_requests request_row
     INNER JOIN payment_intents intent_row ON intent_row.id = request_row.payment_intent_id
     WHERE request_row.id = NEW.zarinpal_payment_request_id
-      AND request_row.authority = NEW.authority
+      AND BINARY request_row.authority = BINARY NEW.authority
       AND request_row.amount_irr = NEW.amount_irr
-      AND request_row.currency = NEW.currency
+      AND BINARY request_row.currency = BINARY NEW.currency
       AND request_row.merchant_configuration_hash IS NOT NULL
       AND request_row.state IN ('redirectable','manual_review','verified','failed')
       AND intent_row.purpose = 'purchase'
       AND intent_row.provider_code = 'zarinpal'
       AND intent_row.amount_irr = NEW.amount_irr
-      AND intent_row.currency = NEW.currency;
+      AND BINARY intent_row.currency = BINARY NEW.currency;
 
     IF matching_request_count <> 1 THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Zarinpal provider evidence claim requires one matching durable provider request authority.';
@@ -442,12 +442,12 @@ BEGIN
     SELECT COUNT(*) INTO matching_claim_count
     FROM zarinpal_provider_evidence_claims claim_row
     WHERE claim_row.zarinpal_payment_request_id = NEW.zarinpal_payment_request_id
-      AND claim_row.authority = NEW.authority
-      AND claim_row.provider_ref_id = NEW.provider_ref_id
-      AND claim_row.evidence_payload_hash = NEW.evidence_payload_hash
-      AND claim_row.evidence_disposition = 'unsettled'
+      AND BINARY claim_row.authority = BINARY NEW.authority
+      AND BINARY claim_row.provider_ref_id = BINARY NEW.provider_ref_id
+      AND BINARY claim_row.evidence_payload_hash = BINARY NEW.evidence_payload_hash
+      AND BINARY claim_row.evidence_disposition = BINARY 'unsettled'
       AND claim_row.amount_irr = NEW.amount_irr
-      AND claim_row.currency = NEW.currency;
+      AND BINARY claim_row.currency = BINARY NEW.currency;
 
     IF matching_claim_count <> 1 THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Unsettled Zarinpal verification conflicts with the shared provider evidence identity authority.';
@@ -506,12 +506,12 @@ BEGIN
     SELECT COUNT(*) INTO matching_claim_count
     FROM zarinpal_provider_evidence_claims claim_row
     WHERE claim_row.zarinpal_payment_request_id = NEW.zarinpal_payment_request_id
-      AND claim_row.authority = NEW.authority
-      AND claim_row.provider_ref_id = NEW.provider_ref_id
-      AND claim_row.evidence_payload_hash = NEW.evidence_payload_hash
-      AND claim_row.evidence_disposition = 'settled'
+      AND BINARY claim_row.authority = BINARY NEW.authority
+      AND BINARY claim_row.provider_ref_id = BINARY NEW.provider_ref_id
+      AND BINARY claim_row.evidence_payload_hash = BINARY NEW.evidence_payload_hash
+      AND BINARY claim_row.evidence_disposition = BINARY 'settled'
       AND claim_row.amount_irr = NEW.amount_irr
-      AND claim_row.currency = NEW.currency;
+      AND BINARY claim_row.currency = BINARY NEW.currency;
 
     IF matching_claim_count <> 1 THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Settled Zarinpal verification conflicts with the shared provider evidence identity authority.';
