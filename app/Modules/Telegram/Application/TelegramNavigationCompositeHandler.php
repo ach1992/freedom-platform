@@ -16,6 +16,7 @@ final readonly class TelegramNavigationCompositeHandler implements TelegramInter
         private TelegramNavigationHandler $navigation,
         private TelegramGiftCardNavigationHandler $giftCards,
         private TelegramUsdtNavigationHandler $usdt,
+        private TelegramZarinpalNavigationHandler $zarinpal,
     ) {}
 
     public function flow(): string
@@ -32,6 +33,11 @@ final readonly class TelegramNavigationCompositeHandler implements TelegramInter
         }
         if ($this->usdt->supports($action)) {
             $this->usdt->handle($action);
+
+            return;
+        }
+        if ($this->zarinpal->supports($action)) {
+            $this->zarinpal->handle($action);
 
             return;
         }
