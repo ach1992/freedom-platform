@@ -3655,7 +3655,7 @@ SQL);
         ]);
         self::assertSame(1, DB::table('agent_applications')->where('customer_id', $userId)->count());
         self::assertSame(1, DB::table('agent_application_histories')->count());
-        self::assertSame(1, DB::table('audit_logs')->where('action', 'agent.application.submit')->where('actor_user_id', $userId)->count());
+        self::assertSame(1, DB::table('audit_logs')->where('action', 'agent.application.submit')->where('actor_type', 'user')->where('actor_id', (string) $userId)->count());
         $presentation = $this->latestConfidentialPresentation();
         self::assertStringContainsString('وضعیت فعلی: ثبت‌شده', $presentation);
         self::assertStringNotContainsString('application_id', $presentation);
@@ -3674,7 +3674,7 @@ SQL);
         $businessCounts = [
             DB::table('agent_applications')->where('customer_id', $userId)->count(),
             DB::table('agent_application_histories')->count(),
-            DB::table('audit_logs')->where('action', 'agent.application.submit')->where('actor_user_id', $userId)->count(),
+            DB::table('audit_logs')->where('action', 'agent.application.submit')->where('actor_type', 'user')->where('actor_id', (string) $userId)->count(),
         ];
         $deliveryCount = DB::table('telegram_delivery_operations')->count();
         $this->accept($this->callbackPayload(7103, $telegramUserId, 'agent_cooperation', 'fa', $submitToken));
@@ -3682,7 +3682,7 @@ SQL);
         self::assertSame($businessCounts, [
             DB::table('agent_applications')->where('customer_id', $userId)->count(),
             DB::table('agent_application_histories')->count(),
-            DB::table('audit_logs')->where('action', 'agent.application.submit')->where('actor_user_id', $userId)->count(),
+            DB::table('audit_logs')->where('action', 'agent.application.submit')->where('actor_type', 'user')->where('actor_id', (string) $userId)->count(),
         ]);
         self::assertSame($deliveryCount, DB::table('telegram_delivery_operations')->count());
     }
@@ -3747,7 +3747,7 @@ SQL);
         ]);
         self::assertSame(1, DB::table('agent_applications')->where('customer_id', $userId)->count());
         self::assertSame(1, DB::table('agent_application_histories')->count());
-        self::assertSame(1, DB::table('audit_logs')->where('action', 'agent.application.submit')->where('actor_user_id', $userId)->count());
+        self::assertSame(1, DB::table('audit_logs')->where('action', 'agent.application.submit')->where('actor_type', 'user')->where('actor_id', (string) $userId)->count());
         self::assertSame($deliveriesBefore, DB::table('telegram_delivery_operations')->where('recipient_chat_id', $telegramUserId)->count());
         $backCallbacks = DB::table('telegram_interaction_callbacks')
             ->where('telegram_interaction_session_id', (int) $session->id)
@@ -3775,7 +3775,7 @@ SQL);
         ]);
         self::assertSame(1, DB::table('agent_applications')->where('customer_id', $userId)->count());
         self::assertSame(1, DB::table('agent_application_histories')->count());
-        self::assertSame(1, DB::table('audit_logs')->where('action', 'agent.application.submit')->where('actor_user_id', $userId)->count());
+        self::assertSame(1, DB::table('audit_logs')->where('action', 'agent.application.submit')->where('actor_type', 'user')->where('actor_id', (string) $userId)->count());
         self::assertSame($deliveriesBefore + 1, DB::table('telegram_delivery_operations')->where('recipient_chat_id', $telegramUserId)->count());
         self::assertSame($backCallbacks, DB::table('telegram_interaction_callbacks')
             ->where('telegram_interaction_session_id', (int) $session->id)
@@ -3810,7 +3810,7 @@ SQL);
 
         self::assertSame(0, DB::table('agent_applications')->where('customer_id', $userId)->count());
         self::assertSame(0, DB::table('agent_application_histories')->count());
-        self::assertSame(0, DB::table('audit_logs')->where('action', 'agent.application.submit')->where('actor_user_id', $userId)->count());
+        self::assertSame(0, DB::table('audit_logs')->where('action', 'agent.application.submit')->where('actor_type', 'user')->where('actor_id', (string) $userId)->count());
         $this->assertDatabaseHas('telegram_interaction_sessions', [
             'telegram_account_id' => $accountId,
             'state' => 'agent_cooperation_unavailable',
