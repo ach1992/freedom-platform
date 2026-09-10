@@ -406,8 +406,14 @@ final readonly class TelegramAgentNavigationHandler
     private function translation(string $key, string $locale, array $replace = []): string
     {
         $value = $this->translator->get($key, $replace, $locale);
-        if (! is_string($value)) {
-            throw new RuntimeException('Telegram Agent translation is invalid.');
+        if (! is_string($value) || $value === '' || $value === $key) {
+            $value = $this->translator->get($key, $replace, 'en');
+        }
+        if (! is_string($value) || $value === '' || $value === $key) {
+            throw new RuntimeException('Telegram Agent translation is unavailable.');
+        }
+        if (preg_match('/:[A-Za-z_][A-Za-z0-9_]*/', $value) === 1) {
+            throw new RuntimeException('Telegram Agent translation has an unresolved placeholder.');
         }
 
         return $value;
