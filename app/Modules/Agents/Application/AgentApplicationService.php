@@ -59,11 +59,11 @@ final readonly class AgentApplicationService
             /** @var object{account_type: string, account_status: string}|null $customer */
             $customer = $connection->table('users')->where('id', $customerId)->lockForUpdate()->first(['account_type', 'account_status']);
             if ($customer === null || $customer->account_type !== 'customer' || $customer->account_status !== 'active') {
-                throw new RuntimeException('An active customer account is required.');
+                throw new AgentApplicationSubmissionRejected('An active customer account is required.');
             }
 
             if ($connection->table('agent_applications')->where('active_customer_id', $customerId)->exists()) {
-                throw new RuntimeException('An active agent application already exists.');
+                throw new AgentApplicationSubmissionRejected('An active agent application already exists.');
             }
 
             /** @var object{state: string, reapply_allowed_at: ?string, reapplication_released_at: ?string}|null $latest */
@@ -389,7 +389,7 @@ final readonly class AgentApplicationService
             return;
         }
         if ($latest->state !== AgentApplicationState::Rejected->value) {
-            throw new RuntimeException('A new agent application is not allowed after the current terminal state.');
+            throw new AgentApplicationSubmissionRejected('A new agent application is not allowed after the current terminal state.');
         }
         if ($latest->reapplication_released_at !== null) {
             return;
@@ -397,7 +397,7 @@ final readonly class AgentApplicationService
 
         $allowedAt = $latest->reapply_allowed_at === null ? false : strtotime($latest->reapply_allowed_at);
         if ($allowedAt === false || $this->clock->now()->getTimestamp() < $allowedAt) {
-            throw new RuntimeException('Agent reapplication cooldown is still active.');
+            throw new AgentApplicationSubmissionRejected('Agent reapplication cooldown is still active.');
         }
     }
 

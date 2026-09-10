@@ -12,6 +12,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramInteractionHandler;
 use App\Modules\Telegram\Application\Contracts\TelegramMutationTransport;
 use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaFetcher;
 use App\Modules\Telegram\Application\Contracts\TelegramRuntime;
+use App\Modules\Telegram\Application\TelegramAgentNavigationHandler;
 use App\Modules\Telegram\Application\TelegramConfidentialDeliveryOutboxHandler;
 use App\Modules\Telegram\Application\TelegramConfidentialPresentationHasher;
 use App\Modules\Telegram\Application\TelegramDeliveryOperationExecutor;
@@ -79,6 +80,7 @@ final class TelegramServiceProvider extends ServiceProvider
         );
         $this->app->singleton(TelegramNavigationEntryGateway::class);
         $this->app->singleton(TelegramNavigationHandler::class);
+        $this->app->singleton(TelegramAgentNavigationHandler::class);
         $this->app->singleton(TelegramGiftCardNavigationHandler::class);
         $this->app->singleton(TelegramUsdtNavigationHandler::class);
         $this->app->singleton(TelegramNavigationCompositeHandler::class);
