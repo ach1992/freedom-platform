@@ -36,7 +36,11 @@ final readonly class TelegramAgentNavigationHandler
 
     private const ACTION_PURCHASE = 'navigation.agent.purchase';
 
+    private const ACTION_SERVICES = 'navigation.agent.services';
+
     private const ACTION_CANONICAL_PURCHASE = 'navigation.purchase';
+
+    private const ACTION_CANONICAL_SERVICES = 'navigation.my_services';
 
     private const ACTION_CANONICAL_DISCOUNT = 'navigation.purchase.discount';
 
@@ -60,7 +64,7 @@ final readonly class TelegramAgentNavigationHandler
                 && $action->kind === TelegramInteractionActionKind::Callback
                 && $action->callbackAction === self::ACTION_AGENT)
             || ($action->kind === TelegramInteractionActionKind::Callback
-                && in_array($action->callbackAction, [self::ACTION_PURCHASE, self::ACTION_CANONICAL_DISCOUNT], true))
+                && in_array($action->callbackAction, [self::ACTION_PURCHASE, self::ACTION_SERVICES, self::ACTION_CANONICAL_DISCOUNT], true))
             || in_array($action->sessionState, [self::STATE_AGENT, self::STATE_UNAVAILABLE], true);
     }
 
@@ -79,6 +83,16 @@ final readonly class TelegramAgentNavigationHandler
                 throw new RuntimeException('Telegram Agent purchase callback payload is invalid.');
             }
             $this->openPurchase($action);
+
+            return;
+        }
+
+        if ($action->kind === TelegramInteractionActionKind::Callback
+            && $action->callbackAction === self::ACTION_SERVICES) {
+            if ($action->callbackPayload !== []) {
+                throw new RuntimeException('Telegram Agent Services callback payload is invalid.');
+            }
+            $this->openServices($action);
 
             return;
         }
@@ -144,7 +158,7 @@ final readonly class TelegramAgentNavigationHandler
 
     private function openPurchase(TelegramInteractionAction $action): void
     {
-        if ($action->replayed && $this->recoverAdvancedPurchase($action)) {
+        if ($action->replayed && $this->recoverAdvancedNavigationDelegation($action)) {
             return;
         }
         if ($action->sessionState !== self::STATE_AGENT) {
@@ -158,27 +172,28 @@ final readonly class TelegramAgentNavigationHandler
             return;
         }
 
-        $this->navigation->handle(new TelegramInteractionAction(
-            TelegramInteractionActionKind::Callback,
-            $action->requestKey.':agent-purchase',
-            $action->botId,
-            $action->updateId,
-            $action->telegramAccountId,
-            $action->userId,
-            $action->telegramUserId,
-            $action->sessionPublicId,
-            $action->flow,
-            TelegramNavigationEntryGateway::STATE,
-            $action->sessionVersion,
-            [],
-            null,
-            $action->callbackPublicId,
-            self::ACTION_CANONICAL_PURCHASE,
-            [],
-            $action->replayed,
-            $action->callbackAcceptedAt,
-            $action->messageAcceptedAt,
-        ));
+        $this->delegateToCanonicalNavigation($action, 'agent-purchase', self::ACTION_CANONICAL_PURCHASE);
+
+    }
+
+    private function openServices(TelegramInteractionAction $action): void
+    {
+        if ($action->replayed && $this->recoverAdvancedNavigationDelegation($action)) {
+            return;
+        }
+        if ($action->sessionState !== self::STATE_AGENT) {
+            throw new RuntimeException('Telegram Agent Services callback state is unsupported.');
+        }
+
+        $summary = $this->customers->forSelf($action->userId, $action->userId);
+        if (! $this->canViewAgentServices($summary)) {
+            $this->renderStatus($action, $action->sessionVersion, $summary, false);
+
+            return;
+        }
+
+        $this->delegateToCanonicalNavigation($action, 'agent-services', self::ACTION_CANONICAL_SERVICES);
+
     }
 
     private function handleCanonicalDiscount(TelegramInteractionAction $action): void
@@ -213,7 +228,7 @@ final readonly class TelegramAgentNavigationHandler
         );
     }
 
-    private function recoverAdvancedPurchase(TelegramInteractionAction $action): bool
+    private function recoverAdvancedNavigationDelegation(TelegramInteractionAction $action): bool
     {
         $session = $this->sessions->activeForAccount($action->telegramAccountId);
 
@@ -221,6 +236,34 @@ final readonly class TelegramAgentNavigationHandler
             && $session->publicId === $action->sessionPublicId
             && $session->userId === $action->userId
             && $session->version > $action->sessionVersion;
+    }
+
+    private function delegateToCanonicalNavigation(
+        TelegramInteractionAction $action,
+        string $requestSuffix,
+        string $callbackAction,
+    ): void {
+        $this->navigation->handle(new TelegramInteractionAction(
+            TelegramInteractionActionKind::Callback,
+            $action->requestKey.':'.$requestSuffix,
+            $action->botId,
+            $action->updateId,
+            $action->telegramAccountId,
+            $action->userId,
+            $action->telegramUserId,
+            $action->sessionPublicId,
+            $action->flow,
+            TelegramNavigationEntryGateway::STATE,
+            $action->sessionVersion,
+            [],
+            null,
+            $action->callbackPublicId,
+            $callbackAction,
+            [],
+            $action->replayed,
+            $action->callbackAcceptedAt,
+            $action->messageAcceptedAt,
+        ));
     }
 
     private function submitApplication(TelegramInteractionAction $action): void
@@ -406,6 +449,21 @@ final readonly class TelegramAgentNavigationHandler
             )];
         }
 
+        if ($this->canViewAgentServices($summary)) {
+            $services = $this->callbacks->issue(
+                $action->sessionPublicId,
+                $sessionVersion,
+                self::ACTION_SERVICES,
+                [],
+                'tg-agent-services-button:'.hash('sha256', $action->requestKey),
+            );
+            $rows[] = [new TelegramInlineCallbackButton(
+                $this->translation('telegram_agent.services.button', $locale),
+                $services->publicId,
+                TelegramInlineButtonStyle::Primary,
+            )];
+        }
+
         $this->appendBack($action, $sessionVersion, $rows, $locale);
 
         if ($summary->accountType === 'agent' && $summary->agentStatus !== null) {
@@ -493,6 +551,12 @@ final readonly class TelegramAgentNavigationHandler
         return $summary->accountType === 'agent'
             && $summary->accountStatus === 'active'
             && $summary->agentStatus === 'active';
+    }
+
+    private function canViewAgentServices(CustomerAccountSummary $summary): bool
+    {
+        return $summary->accountType === 'agent'
+            && $summary->agentStatus !== null;
     }
 
     private function applicationStateLabel(string $state, string $locale): string
