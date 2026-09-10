@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Orders\Application;
 
 use App\Modules\Agents\Domain\AgentPricingAction;
+use App\Modules\Orders\Domain\QuoteAction;
 use App\Modules\Orders\Domain\QuoteOverrideSource;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCatalog;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseQuote;
@@ -60,6 +61,30 @@ final readonly class TelegramCustomerPurchaseQuoteService implements TelegramCus
                 }
 
                 throw $exception;
+            }
+            if ($quote->accountType === 'agent') {
+                if ($quote->action !== QuoteAction::Purchase) {
+                    throw new AuthorizationException('Telegram purchase Quote preview is unavailable.');
+                }
+                try {
+                    $quote = $this->quotes->create(
+                        $quote->quoteKey,
+                        $subjectUserId,
+                        $quote->planOfferingId,
+                        new QuotePricingInput(
+                            QuoteOverrideSource::None,
+                            null,
+                            null,
+                            $quote->discountReferenceCode,
+                            $quote->discountIrr,
+                            $quote->expiresAt,
+                        ),
+                        'tg-purchase-preview:'.$quote->quotePublicId,
+                        new QuoteAgentPricingContext($actorUserId, AgentPricingAction::Purchase),
+                    );
+                } catch (\DomainException|AuthorizationException $exception) {
+                    throw new AuthorizationException('Telegram purchase Quote preview is unavailable.', previous: $exception);
+                }
             }
             if ($quote->userId !== $subjectUserId
                 || $quote->accountType !== $offering->accountType

@@ -705,7 +705,7 @@ final readonly class PaymentMethodEligibilityService
         DateTimeImmutable $now,
         ?string $expectedQuoteConfigurationHash,
     ): array {
-        /** @var object{quote_id:int|string,quote_public_id:string,user_id:int|string,action_snapshot:string,currency:string,final_price_irr:int|string,expires_at:string,configuration_snapshot_hash:string,account_type:string,account_status:string,offering_code:string,product_id:int|string,sales_server_id:int|string,identity_verification_status:?string,tier_code:?string,agent_status:?string}|null $row */
+        /** @var object{quote_id:int|string,quote_public_id:string,user_id:int|string,quote_account_type:string,quote_agent_pricing_profile_code:?string,action_snapshot:string,currency:string,final_price_irr:int|string,expires_at:string,configuration_snapshot_hash:string,account_type:string,account_status:string,offering_code:string,product_id:int|string,sales_server_id:int|string,identity_verification_status:?string,tier_code:?string,agent_status:?string,agent_pricing_profile_code:?string}|null $row */
         $row = $connection->table('quotes as quotes')
             ->join('users as users', 'users.id', '=', 'quotes.user_id')
             ->join('plan_offerings as offerings', 'offerings.id', '=', 'quotes.plan_offering_id')
@@ -715,11 +715,14 @@ final readonly class PaymentMethodEligibilityService
             ->where('quotes.public_id', $quotePublicId)
             ->lockForUpdate()
             ->first([
-                'quotes.id as quote_id', 'quotes.public_id as quote_public_id', 'quotes.user_id', 'quotes.action_snapshot',
-                'quotes.currency', 'quotes.final_price_irr', 'quotes.expires_at', 'quotes.configuration_snapshot_hash',
-                'users.account_type', 'users.account_status', 'offerings.code as offering_code',
-                'offerings.product_id', 'offerings.sales_server_id', 'profiles.identity_verification_status',
-                'tiers.code as tier_code', 'agents.status as agent_status',
+                'quotes.id as quote_id', 'quotes.public_id as quote_public_id', 'quotes.user_id',
+                'quotes.account_type_snapshot as quote_account_type',
+                'quotes.agent_pricing_profile_code_snapshot as quote_agent_pricing_profile_code',
+                'quotes.action_snapshot', 'quotes.currency', 'quotes.final_price_irr', 'quotes.expires_at',
+                'quotes.configuration_snapshot_hash', 'users.account_type', 'users.account_status',
+                'offerings.code as offering_code', 'offerings.product_id', 'offerings.sales_server_id',
+                'profiles.identity_verification_status', 'tiers.code as tier_code', 'agents.status as agent_status',
+                'agents.pricing_profile_code as agent_pricing_profile_code',
             ]);
         if ($row === null || (int) $row->user_id !== $actorUserId) {
             throw new AuthorizationException('Payment eligibility decision access denied.');
@@ -727,6 +730,17 @@ final readonly class PaymentMethodEligibilityService
         if ($expectedQuoteConfigurationHash !== null
             && ! hash_equals((string) $row->configuration_snapshot_hash, $expectedQuoteConfigurationHash)) {
             throw new RuntimeException('Payment eligibility Quote snapshot does not match the expected configuration.');
+        }
+        $accountType = (string) $row->account_type;
+        if (! hash_equals((string) $row->quote_account_type, $accountType)
+            || ($accountType === 'agent'
+                && ($row->quote_agent_pricing_profile_code === null
+                    || $row->agent_pricing_profile_code === null
+                    || ! hash_equals(
+                        (string) $row->quote_agent_pricing_profile_code,
+                        (string) $row->agent_pricing_profile_code,
+                    )))) {
+            throw new RuntimeException('Payment eligibility requires a current commercial Quote.');
         }
         if ((string) $row->currency !== 'IRR' || (int) $row->final_price_irr < 0) {
             throw new RuntimeException('Payment eligibility requires an IRR Quote.');

@@ -485,6 +485,50 @@ final class TelegramCustomerPurchaseCatalogTest extends TestCase
             hash('sha256', 'telegram-agent-payment-rule'),
         );
         $paymentMethods = $this->app->make(TelegramCustomerPurchasePaymentMethods::class);
+
+        $alternatePricingProfileCode = 'telegram-agent-purchase-other';
+        $pricing->createProfile(
+            'telegram.agent.profile.create.0002',
+            $alternatePricingProfileCode,
+            new AgentPricingProfileDefinition(AgentPricingState::Active, false),
+            $context('profile-other'),
+        );
+        DB::table('agent_profiles')->where('user_id', $scenario['user_id'])->update([
+            'pricing_profile_code' => $alternatePricingProfileCode,
+            'updated_at' => now('UTC'),
+        ]);
+        $effectsBeforePricingContextDrift = $this->businessEffectCounts();
+        try {
+            $quotes->previewForSelf(
+                $scenario['user_id'],
+                $scenario['user_id'],
+                $agentOffering->selectionToken,
+                $preview->quotePublicId,
+                $preview->configurationSnapshotHash,
+            );
+            self::fail('Agent pricing-profile drift must invalidate Telegram Quote preview.');
+        } catch (AuthorizationException) {
+            // Expected: stale Agent pricing context must not remain presentable.
+        }
+        try {
+            $paymentMethods->discoverForSelf(
+                $scenario['user_id'],
+                $scenario['user_id'],
+                $preview->quotePublicId,
+                $preview->configurationSnapshotHash,
+                'telegram-purchase-payment-methods:'.(string) Str::ulid(),
+            );
+            self::fail('Agent pricing-profile drift must fail closed before PAY-001 persistence.');
+        } catch (AuthorizationException) {
+            // Expected: the current Agent pricing context no longer matches the Quote snapshot.
+        }
+        self::assertSame($effectsBeforePricingContextDrift, $this->businessEffectCounts());
+        self::assertSame(0, DB::table('payment_method_eligibility_decisions')->count());
+        DB::table('agent_profiles')->where('user_id', $scenario['user_id'])->update([
+            'pricing_profile_code' => $pricingProfileCode,
+            'updated_at' => now('UTC'),
+        ]);
+
         $paymentDecision = $paymentMethods->discoverForSelf(
             $scenario['user_id'],
             $scenario['user_id'],
