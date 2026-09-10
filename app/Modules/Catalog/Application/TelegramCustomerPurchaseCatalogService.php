@@ -73,8 +73,14 @@ final readonly class TelegramCustomerPurchaseCatalogService implements TelegramC
     private function eligibleOfferings(int $userId): array
     {
         $connection = $this->database->connection();
-        $this->assertActiveCustomer($connection, $userId);
-        $actor = $this->eligibility->authoritativeActor($connection, $userId, RouteSelectionActor::Customer);
+        $accountType = $this->activePurchaseAccountType($connection, $userId);
+        $selectionActor = $accountType === 'agent'
+            ? RouteSelectionActor::Agent
+            : RouteSelectionActor::Customer;
+        $audiences = $accountType === 'agent'
+            ? ['agents', 'both']
+            : ['customers', 'both'];
+        $actor = $this->eligibility->authoritativeActor($connection, $userId, $selectionActor);
 
         /** @var list<object{id:int|string,code:string,category_name_fa:string,category_name_en:?string,product_name_fa:string,product_name_en:?string,variant_name_fa:?string,variant_name_en:?string,service_mode_label_fa:string,service_mode_label_en:?string,audience:string,server_selection_mode:string,protocol_selection_mode:string,tag_match_mode:string,base_price_irr:int|string,duration_days:int|string,data_allowance_bytes:int|string|null,device_limit:int|string|null}> $rows */
         $rows = $connection->table('plan_offerings as offering')
@@ -86,7 +92,7 @@ final readonly class TelegramCustomerPurchaseCatalogService implements TelegramC
             ->where('product.state', 'active')
             ->where('product.visibility', 'visible')
             ->where('category.state', 'active')
-            ->whereIn('offering.audience', ['customers', 'both'])
+            ->whereIn('offering.audience', $audiences)
             ->where(function ($query): void {
                 $query->whereNull('offering.variant_id')->orWhere('variant.state', 'active');
             })
@@ -111,7 +117,7 @@ final readonly class TelegramCustomerPurchaseCatalogService implements TelegramC
         foreach ($rows as $row) {
             $offeringId = $this->positiveDatabaseInt($row->id, 'Plan Offering ID');
             try {
-                $this->eligibility->assertAudience((string) $row->audience, RouteSelectionActor::Customer);
+                $this->eligibility->assertAudience((string) $row->audience, $selectionActor);
                 $this->eligibility->assertOfferingEligibility(
                     $connection,
                     $offeringId,
@@ -132,7 +138,7 @@ final readonly class TelegramCustomerPurchaseCatalogService implements TelegramC
 
             $offeringCode = $this->databaseString($row->code, 'Plan Offering code');
             $items[] = new TelegramCustomerPurchaseOffering(
-                $this->selectionToken($userId, $offeringCode),
+                $this->selectionToken($userId, $offeringCode, $accountType),
                 $offeringCode,
                 $this->databaseString($row->category_name_fa, 'Purchase category Persian label'),
                 $this->optionalDatabaseString($row->category_name_en),
@@ -146,22 +152,27 @@ final readonly class TelegramCustomerPurchaseCatalogService implements TelegramC
                 $this->positiveDatabaseInt($row->duration_days, 'Plan Offering duration'),
                 $this->optionalPositiveDatabaseInt($row->data_allowance_bytes, 'Plan Offering data allowance'),
                 $this->optionalPositiveDatabaseInt($row->device_limit, 'Plan Offering device limit'),
+                $accountType,
             );
         }
 
         return $items;
     }
 
-    private function assertActiveCustomer(Connection $connection, int $userId): void
+    private function activePurchaseAccountType(Connection $connection, int $userId): string
     {
         if ($userId < 1) {
             throw new AuthorizationException('Telegram purchase catalog access denied.');
         }
         /** @var object{account_type:string,account_status:string}|null $user */
         $user = $connection->table('users')->where('id', $userId)->first(['account_type', 'account_status']);
-        if ($user === null || $user->account_type !== 'customer' || $user->account_status !== 'active') {
-            throw new AuthorizationException('Telegram purchase catalog requires an active customer.');
+        if ($user === null
+            || $user->account_status !== 'active'
+            || ! in_array($user->account_type, ['customer', 'agent'], true)) {
+            throw new AuthorizationException('Telegram purchase catalog requires an active purchase account.');
         }
+
+        return $user->account_type;
     }
 
     private function hasOperationalRoute(
@@ -232,9 +243,13 @@ final readonly class TelegramCustomerPurchaseCatalogService implements TelegramC
         return false;
     }
 
-    private function selectionToken(int $userId, string $offeringCode): string
+    private function selectionToken(int $userId, string $offeringCode, string $accountType): string
     {
-        return substr(hash('sha256', "telegram-purchase-offering-v1:{$userId}:{$offeringCode}"), 0, 40);
+        $namespace = $accountType === 'customer'
+            ? "telegram-purchase-offering-v1:{$userId}:{$offeringCode}"
+            : "telegram-purchase-offering-v2:agent:{$userId}:{$offeringCode}";
+
+        return substr(hash('sha256', $namespace), 0, 40);
     }
 
     private function assertSelf(int $actorUserId, int $subjectUserId): void
