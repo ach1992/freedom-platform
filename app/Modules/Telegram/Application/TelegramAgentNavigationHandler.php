@@ -28,6 +28,8 @@ final readonly class TelegramAgentNavigationHandler
 
     private const STATE_SUBMITTING = 'agent_cooperation_submitting';
 
+    private const STATE_UNAVAILABLE = 'agent_cooperation_unavailable';
+
     private const ACTION_AGENT = 'navigation.agent';
 
     private const ACTION_SUBMIT = 'navigation.agent.submit';
@@ -51,7 +53,7 @@ final readonly class TelegramAgentNavigationHandler
         return ($action->sessionState === TelegramNavigationEntryGateway::STATE
                 && $action->kind === TelegramInteractionActionKind::Callback
                 && $action->callbackAction === self::ACTION_AGENT)
-            || $action->sessionState === self::STATE_AGENT;
+            || in_array($action->sessionState, [self::STATE_AGENT, self::STATE_UNAVAILABLE], true);
     }
 
     public function handle(TelegramInteractionAction $action): void
@@ -65,7 +67,7 @@ final readonly class TelegramAgentNavigationHandler
             return;
         }
 
-        if ($action->sessionState !== self::STATE_AGENT) {
+        if (! in_array($action->sessionState, [self::STATE_AGENT, self::STATE_UNAVAILABLE], true)) {
             throw new RuntimeException('Telegram Agent navigation state is unsupported.');
         }
 
@@ -117,9 +119,13 @@ final readonly class TelegramAgentNavigationHandler
 
     private function submitApplication(TelegramInteractionAction $action): void
     {
+        if ($action->replayed && $this->recoverAdvancedSubmission($action)) {
+            return;
+        }
+
         $summary = $this->customers->forSelf($action->userId, $action->userId);
         if (! $this->canSubmit($summary)) {
-            $this->renderStatus($action, $action->sessionVersion, $summary, true);
+            $this->consumeUnavailableSubmission($action, $summary);
 
             return;
         }
@@ -158,7 +164,7 @@ final readonly class TelegramAgentNavigationHandler
             }, 3);
         } catch (AgentApplicationSubmissionRejected) {
             $current = $this->customers->forSelf($action->userId, $action->userId);
-            $this->renderStatus($action, $action->sessionVersion, $current, true);
+            $this->consumeUnavailableSubmission($action, $current);
 
             return;
         } catch (AuthorizationException) {
@@ -170,6 +176,54 @@ final readonly class TelegramAgentNavigationHandler
 
         $current = $this->customers->forSelf($action->userId, $action->userId);
         $this->renderStatus($action, $session->version, $current, false);
+    }
+
+    private function recoverAdvancedSubmission(TelegramInteractionAction $action): bool
+    {
+        $session = $this->sessions->activeForAccount($action->telegramAccountId);
+        if ($session === null
+            || $session->publicId !== $action->sessionPublicId
+            || $session->userId !== $action->userId
+            || $session->version <= $action->sessionVersion) {
+            return false;
+        }
+
+        // A newer version is the durable fence proving that the accepted
+        // callback's original version was already consumed. Never replay the
+        // Agent mutation against that old snapshot. If the same journey is
+        // still active, only recover its idempotent presentation.
+        if (! in_array($session->state, [self::STATE_AGENT, self::STATE_UNAVAILABLE], true)) {
+            return true;
+        }
+
+        $summary = $this->customers->forSelf($action->userId, $action->userId);
+        $this->renderStatus(
+            $action,
+            $session->version,
+            $summary,
+            $session->state === self::STATE_UNAVAILABLE,
+        );
+
+        return true;
+    }
+
+    private function consumeUnavailableSubmission(
+        TelegramInteractionAction $action,
+        CustomerAccountSummary $summary,
+    ): void {
+        try {
+            $session = $this->sessions->transition(
+                $action->sessionPublicId,
+                $action->sessionVersion,
+                self::STATE_UNAVAILABLE,
+                [],
+                'tg-agent-submit-unavailable:'.hash('sha256', $action->requestKey),
+            );
+        } catch (DomainException) {
+            return;
+        }
+        $this->assertActor($action, $session->userId);
+        $this->renderStatus($action, $session->version, $summary, true);
     }
 
     private function returnHome(TelegramInteractionAction $action): void
