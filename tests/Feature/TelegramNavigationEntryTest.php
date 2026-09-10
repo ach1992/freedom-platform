@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Modules\Agents\Application\AgentApplicationService;
+use App\Modules\Agents\Application\AgentChangeContext;
 use App\Modules\Promotions\Application\ReferralAttributionService;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCardToCardPayment;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCatalog;
@@ -782,7 +784,7 @@ final class TelegramNavigationOwnedServiceDeliveryResender implements TelegramOw
     }
 }
 
-/** @requirement ONB-002 ONB-003 USR-001 BUY-001 BUY-003 CAT-002 CAT-003 CAT-008 ADM-002 ACL-001 ACL-002 ACL-003 USDT-002 IPG-002 ARCH-003 ARCH-004 DAT-002 DAT-003 SEC-002 SEC-003 OPS-003 QUA-001 QUA-004 */
+/** @requirement ONB-002 ONB-003 USR-001 BUY-001 BUY-003 AGT-001 CAT-002 CAT-003 CAT-008 ADM-002 ACL-001 ACL-002 ACL-003 USDT-002 IPG-002 ARCH-003 ARCH-004 DAT-002 DAT-003 SEC-002 SEC-003 LOC-001 OPS-003 QUA-001 QUA-004 */
 final class TelegramNavigationEntryTest extends TestCase
 {
     use DatabaseTruncation;
@@ -3594,6 +3596,516 @@ SQL);
         self::assertSame(0, DB::table('telegram_interaction_transitions')
             ->where('telegram_interaction_session_id', (int) $session->id)
             ->where('to_state', 'admin_usdt_rate_submitting')
+            ->count());
+    }
+
+    public function test_agent_cooperation_submission_is_explicit_confidential_and_replay_safe(): void
+    {
+        $telegramUserId = 9710;
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $this->accept($this->payload(7100, $telegramUserId, 'agent_cooperation', 'fa', '/start'));
+        $processor->process('123456789', 7100);
+
+        $account = DB::table('telegram_accounts')->where('telegram_user_id', $telegramUserId)->first(['id', 'user_id']);
+        self::assertNotNull($account);
+        $accountId = (int) $account->id;
+        $userId = (int) $account->user_id;
+        self::assertSame(0, DB::table('agent_applications')->where('customer_id', $userId)->count());
+        $agentToken = $this->callbackToken('navigation.agent', $accountId);
+
+        $otherTelegramUserId = 9711;
+        $this->accept($this->payload(7110, $otherTelegramUserId, 'agent_other', 'fa', '/start'));
+        $processor->process('123456789', 7110);
+        $operationsBeforeCrossActor = DB::table('telegram_delivery_operations')->count();
+        $this->accept($this->callbackPayload(7111, $otherTelegramUserId, 'agent_other', 'fa', $agentToken));
+        $processor->process('123456789', 7111);
+        self::assertSame($operationsBeforeCrossActor, DB::table('telegram_delivery_operations')->count());
+        self::assertSame(0, DB::table('agent_applications')->where('customer_id', $userId)->count());
+
+        $this->accept($this->callbackPayload(7101, $telegramUserId, 'agent_cooperation', 'fa', $agentToken));
+        $processor->process('123456789', 7101);
+        $session = DB::table('telegram_interaction_sessions')->where('telegram_account_id', $accountId)->first(['id', 'state', 'version', 'payload']);
+        self::assertNotNull($session);
+        self::assertSame('agent_cooperation', (string) $session->state);
+        self::assertSame(2, (int) $session->version);
+        self::assertSame('{}', (string) $session->payload);
+        $initialPresentation = $this->latestConfidentialPresentation();
+        self::assertStringContainsString('درخواست همکاری', $initialPresentation);
+        self::assertStringContainsString('درخواست به‌صورت دستی', $initialPresentation);
+        self::assertStringContainsString('تضمینی برای تأیید، قیمت‌گذاری، تخفیف', $initialPresentation);
+        self::assertStringContainsString('فقط یک درخواست فعال', $initialPresentation);
+        self::assertStringContainsString('اطلاعات اختصاصی دیگری', $initialPresentation);
+        self::assertSame(0, DB::table('agent_applications')->where('customer_id', $userId)->count());
+
+        $submitToken = $this->callbackToken('navigation.agent.submit', $accountId);
+        $this->accept($this->callbackPayload(7102, $telegramUserId, 'agent_cooperation', 'fa', $submitToken));
+        $processor->process('123456789', 7102);
+
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'id' => (int) $session->id,
+            'state' => 'agent_cooperation',
+            'version' => 4,
+            'payload' => '{}',
+        ]);
+        $this->assertDatabaseHas('agent_applications', [
+            'customer_id' => $userId,
+            'active_customer_id' => $userId,
+            'state' => 'submitted',
+            'application_version' => 1,
+        ]);
+        self::assertSame(1, DB::table('agent_applications')->where('customer_id', $userId)->count());
+        self::assertSame(1, DB::table('agent_application_histories')->count());
+        self::assertSame(1, DB::table('audit_logs')->where('action', 'agent.application.submit')->where('actor_type', 'user')->where('actor_id', (string) $userId)->count());
+        $presentation = $this->latestConfidentialPresentation();
+        self::assertStringContainsString('وضعیت فعلی: ثبت‌شده', $presentation);
+        self::assertStringNotContainsString('application_id', $presentation);
+        self::assertStringNotContainsString('decision_reason', $presentation);
+        self::assertSame(0, DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $session->id)
+            ->where('session_version', 4)
+            ->where('action', 'navigation.agent.submit')
+            ->count());
+
+        $commonEvidence = $this->navigationCommonDurableEvidence((int) $session->id, $telegramUserId);
+        self::assertStringNotContainsString('application_id', $commonEvidence);
+        self::assertStringNotContainsString('decision_reason', $commonEvidence);
+        self::assertStringNotContainsString('claimed_by_administrator_id', $commonEvidence);
+
+        $businessCounts = [
+            DB::table('agent_applications')->where('customer_id', $userId)->count(),
+            DB::table('agent_application_histories')->count(),
+            DB::table('audit_logs')->where('action', 'agent.application.submit')->where('actor_type', 'user')->where('actor_id', (string) $userId)->count(),
+        ];
+        $deliveryCount = DB::table('telegram_delivery_operations')->count();
+        $this->accept($this->callbackPayload(7103, $telegramUserId, 'agent_cooperation', 'fa', $submitToken));
+        $processor->process('123456789', 7103);
+        self::assertSame($businessCounts, [
+            DB::table('agent_applications')->where('customer_id', $userId)->count(),
+            DB::table('agent_application_histories')->count(),
+            DB::table('audit_logs')->where('action', 'agent.application.submit')->where('actor_type', 'user')->where('actor_id', (string) $userId)->count(),
+        ]);
+        self::assertSame($deliveryCount, DB::table('telegram_delivery_operations')->count());
+    }
+
+    public function test_agent_submit_recovers_after_business_commit_before_callback_completion_without_duplicate_effect(): void
+    {
+        $telegramUserId = 9715;
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $this->accept($this->payload(7150, $telegramUserId, 'agent_commit_recovery', 'en', '/start'));
+        $processor->process('123456789', 7150);
+        $account = DB::table('telegram_accounts')->where('telegram_user_id', $telegramUserId)->first(['id', 'user_id']);
+        self::assertNotNull($account);
+        $accountId = (int) $account->id;
+        $userId = (int) $account->user_id;
+
+        $agentToken = $this->callbackToken('navigation.agent', $accountId);
+        $this->accept($this->callbackPayload(7151, $telegramUserId, 'agent_commit_recovery', 'en', $agentToken));
+        $processor->process('123456789', 7151);
+        $submit = DB::table('telegram_interaction_callbacks')
+            ->where('telegram_account_id', $accountId)
+            ->where('action', 'navigation.agent.submit')
+            ->first(['public_id', 'token_ciphertext']);
+        self::assertNotNull($submit);
+        $submitToken = $this->app->make(StringEncrypter::class)->decryptString((string) $submit->token_ciphertext);
+        $deliveriesBefore = DB::table('telegram_delivery_operations')->where('recipient_chat_id', $telegramUserId)->count();
+        $this->accept($this->callbackPayload(7152, $telegramUserId, 'agent_commit_recovery', 'en', $submitToken));
+
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER telegram_agent_test_fail_delivery_7152
+BEFORE INSERT ON telegram_delivery_operations
+FOR EACH ROW
+BEGIN
+    IF NEW.recipient_chat_id = 9715 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'simulated-agent-post-commit-presentation-failure';
+    END IF;
+END
+SQL);
+        try {
+            try {
+                $processor->process('123456789', 7152);
+                self::fail('The simulated presentation failure must keep the accepted Agent callback retryable.');
+            } catch (RuntimeException $exception) {
+                self::assertSame('Telegram update processing failed.', $exception->getMessage());
+            }
+        } finally {
+            DB::unprepared('DROP TRIGGER IF EXISTS telegram_agent_test_fail_delivery_7152');
+        }
+
+        $session = DB::table('telegram_interaction_sessions')->where('telegram_account_id', $accountId)->first(['id', 'state', 'version']);
+        self::assertNotNull($session);
+        self::assertSame('agent_cooperation', (string) $session->state);
+        self::assertSame(4, (int) $session->version);
+        $this->assertDatabaseHas('telegram_interaction_callbacks', [
+            'public_id' => (string) $submit->public_id,
+            'state' => 'accepted',
+            'accepted_update_id' => 7152,
+        ]);
+        $this->assertDatabaseHas('processed_telegram_updates', [
+            'update_id' => 7152,
+            'state' => 'failed',
+            'attempt_count' => 1,
+        ]);
+        self::assertSame(1, DB::table('agent_applications')->where('customer_id', $userId)->count());
+        self::assertSame(1, DB::table('agent_application_histories')->count());
+        self::assertSame(1, DB::table('audit_logs')->where('action', 'agent.application.submit')->where('actor_type', 'user')->where('actor_id', (string) $userId)->count());
+        self::assertSame($deliveriesBefore, DB::table('telegram_delivery_operations')->where('recipient_chat_id', $telegramUserId)->count());
+        $backCallbacks = DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $session->id)
+            ->where('session_version', 4)
+            ->where('action', 'navigation.back')
+            ->count();
+        self::assertSame(1, $backCallbacks);
+
+        $processor->process('123456789', 7152);
+
+        $this->assertDatabaseHas('processed_telegram_updates', [
+            'update_id' => 7152,
+            'state' => 'processed',
+            'attempt_count' => 2,
+        ]);
+        $this->assertDatabaseHas('telegram_interaction_callbacks', [
+            'public_id' => (string) $submit->public_id,
+            'state' => 'completed',
+            'accepted_update_id' => 7152,
+        ]);
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'id' => (int) $session->id,
+            'state' => 'agent_cooperation',
+            'version' => 4,
+        ]);
+        self::assertSame(1, DB::table('agent_applications')->where('customer_id', $userId)->count());
+        self::assertSame(1, DB::table('agent_application_histories')->count());
+        self::assertSame(1, DB::table('audit_logs')->where('action', 'agent.application.submit')->where('actor_type', 'user')->where('actor_id', (string) $userId)->count());
+        self::assertSame($deliveriesBefore + 1, DB::table('telegram_delivery_operations')->where('recipient_chat_id', $telegramUserId)->count());
+        self::assertSame($backCallbacks, DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $session->id)
+            ->where('session_version', 4)
+            ->where('action', 'navigation.back')
+            ->count());
+        self::assertStringContainsString('Current status: Submitted', $this->latestConfidentialPresentation());
+    }
+
+    public function test_agent_submit_revalidates_current_customer_state_before_mutation(): void
+    {
+        $telegramUserId = 9720;
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $this->accept($this->payload(7200, $telegramUserId, 'agent_revalidate', 'en', '/start'));
+        $processor->process('123456789', 7200);
+        $account = DB::table('telegram_accounts')->where('telegram_user_id', $telegramUserId)->first(['id', 'user_id']);
+        self::assertNotNull($account);
+        $accountId = (int) $account->id;
+        $userId = (int) $account->user_id;
+
+        $agentToken = $this->callbackToken('navigation.agent', $accountId);
+        $this->accept($this->callbackPayload(7201, $telegramUserId, 'agent_revalidate', 'en', $agentToken));
+        $processor->process('123456789', 7201);
+        $submitToken = $this->callbackToken('navigation.agent.submit', $accountId);
+
+        DB::table('users')->where('id', $userId)->update([
+            'account_status' => 'suspended',
+            'updated_at' => now('UTC'),
+        ]);
+        $this->accept($this->callbackPayload(7202, $telegramUserId, 'agent_revalidate', 'en', $submitToken));
+        $processor->process('123456789', 7202);
+
+        self::assertSame(0, DB::table('agent_applications')->where('customer_id', $userId)->count());
+        self::assertSame(0, DB::table('agent_application_histories')->count());
+        self::assertSame(0, DB::table('audit_logs')->where('action', 'agent.application.submit')->where('actor_type', 'user')->where('actor_id', (string) $userId)->count());
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'telegram_account_id' => $accountId,
+            'state' => 'agent_cooperation_unavailable',
+            'version' => 3,
+            'payload' => '{}',
+        ]);
+        $presentation = $this->latestConfidentialPresentation();
+        self::assertStringContainsString('could not be submitted', $presentation);
+        self::assertSame(0, DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) DB::table('telegram_interaction_sessions')->where('telegram_account_id', $accountId)->value('id'))
+            ->where('session_version', 3)
+            ->where('action', 'navigation.agent.submit')
+            ->where('state', 'pending')
+            ->count());
+    }
+
+    public function test_approved_agent_gets_localized_agent_menu_status_without_customer_submit_or_purchase_actions(): void
+    {
+        $telegramUserId = 9730;
+        $reviewerTelegramUserId = 9731;
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+
+        $this->accept($this->payload(7300, $telegramUserId, 'agent_approved', 'en', '/start'));
+        $processor->process('123456789', 7300);
+        $account = DB::table('telegram_accounts')->where('telegram_user_id', $telegramUserId)->first(['id', 'user_id']);
+        self::assertNotNull($account);
+        $accountId = (int) $account->id;
+        $userId = (int) $account->user_id;
+
+        $this->accept($this->payload(7310, $reviewerTelegramUserId, 'agent_reviewer', 'en', '/start'));
+        $processor->process('123456789', 7310);
+        $reviewerUserId = DB::table('telegram_accounts')->where('telegram_user_id', $reviewerTelegramUserId)->value('user_id');
+        self::assertIsNumeric($reviewerUserId);
+        $now = now('UTC');
+        $administratorId = (int) DB::table('administrators')->insertGetId([
+            'user_id' => (int) $reviewerUserId,
+            'status' => 'active',
+            'is_owner' => true,
+            'permission_version' => 1,
+            'last_authenticated_at' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $applications = $this->app->make(AgentApplicationService::class);
+        $applications->submit($userId, new AgentChangeContext(
+            'telegram-agent-approved-submit-7300',
+            'telegram-agent-submit-correlation-7300',
+            'customer_request',
+            actorUserId: $userId,
+        ));
+        $applicationId = DB::table('agent_applications')->where('customer_id', $userId)->value('id');
+        self::assertIsNumeric($applicationId);
+        $applications->claim((int) $applicationId, new AgentChangeContext(
+            'telegram-agent-approved-claim-7300',
+            'telegram-agent-claim-correlation-7300',
+            'review_action',
+            actorAdministratorId: $administratorId,
+        ));
+        $applications->approve((int) $applicationId, 'default', new AgentChangeContext(
+            'telegram-agent-approved-final-7300',
+            'telegram-agent-final-correlation-7300',
+            'approved',
+            'Approved for Telegram Agent navigation test.',
+            actorAdministratorId: $administratorId,
+        ));
+
+        $this->accept($this->payload(7301, $telegramUserId, 'agent_approved', 'en', '/menu'));
+        $processor->process('123456789', 7301);
+        $session = DB::table('telegram_interaction_sessions')->where('telegram_account_id', $accountId)->first(['id', 'version']);
+        self::assertNotNull($session);
+        $homeOperation = DB::table('telegram_delivery_operations')->where('recipient_chat_id', $telegramUserId)->orderByDesc('id')->first(['public_id']);
+        self::assertNotNull($homeOperation);
+        $homeKeyboard = DB::table(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)
+            ->where('delivery_operation_public_id', (string) $homeOperation->public_id)
+            ->value('keyboard_snapshot');
+        self::assertIsString($homeKeyboard);
+        self::assertStringContainsString('Agent Menu', $homeKeyboard);
+        self::assertStringNotContainsString('Request Cooperation', $homeKeyboard);
+        self::assertStringNotContainsString('Buy Service', $homeKeyboard);
+
+        $agentToken = $this->callbackToken('navigation.agent', $accountId);
+        $this->accept($this->callbackPayload(7302, $telegramUserId, 'agent_approved', 'en', $agentToken));
+        $processor->process('123456789', 7302);
+        $presentation = $this->latestConfidentialPresentation();
+        self::assertStringContainsString('Agent Menu', $presentation);
+        self::assertStringContainsString('Agent status: Active', $presentation);
+        self::assertStringContainsString('Member since:', $presentation);
+        self::assertStringContainsString('Approved at:', $presentation);
+        self::assertStringNotContainsString('Approved for Telegram Agent navigation test.', $presentation);
+        $currentVersion = (int) DB::table('telegram_interaction_sessions')->where('id', (int) $session->id)->value('version');
+        self::assertSame(0, DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $session->id)
+            ->where('session_version', $currentVersion)
+            ->where('action', 'navigation.agent.submit')
+            ->count());
+    }
+
+    public function test_agent_navigation_recovers_through_back_entry_command_and_cancel_without_agent_mutation(): void
+    {
+        $telegramUserId = 9740;
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $this->accept($this->payload(7400, $telegramUserId, 'agent_recovery', 'en', '/start'));
+        $processor->process('123456789', 7400);
+
+        $account = DB::table('telegram_accounts')->where('telegram_user_id', $telegramUserId)->first(['id', 'user_id']);
+        self::assertNotNull($account);
+        $accountId = (int) $account->id;
+        $userId = (int) $account->user_id;
+
+        $agentToken = $this->callbackToken('navigation.agent', $accountId);
+        $this->accept($this->callbackPayload(7401, $telegramUserId, 'agent_recovery', 'en', $agentToken));
+        $processor->process('123456789', 7401);
+        $session = DB::table('telegram_interaction_sessions')->where('telegram_account_id', $accountId)->first(['id', 'public_id', 'state', 'status', 'version']);
+        self::assertNotNull($session);
+        self::assertSame('agent_cooperation', (string) $session->state);
+        self::assertSame('active', (string) $session->status);
+        self::assertSame(2, (int) $session->version);
+
+        $backToken = $this->callbackToken('navigation.back', $accountId);
+        $this->accept($this->callbackPayload(7402, $telegramUserId, 'agent_recovery', 'en', $backToken));
+        $processor->process('123456789', 7402);
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'id' => (int) $session->id,
+            'state' => 'home',
+            'status' => 'active',
+            'version' => 3,
+        ]);
+        self::assertSame(0, DB::table('agent_applications')->where('customer_id', $userId)->count());
+
+        $agentToken = $this->callbackToken('navigation.agent', $accountId);
+        $this->accept($this->callbackPayload(7403, $telegramUserId, 'agent_recovery', 'en', $agentToken));
+        $processor->process('123456789', 7403);
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'id' => (int) $session->id,
+            'state' => 'agent_cooperation',
+            'status' => 'active',
+            'version' => 4,
+        ]);
+
+        $this->accept($this->payload(7404, $telegramUserId, 'agent_recovery', 'en', '/menu'));
+        $processor->process('123456789', 7404);
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'id' => (int) $session->id,
+            'state' => 'home',
+            'status' => 'active',
+            'version' => 5,
+        ]);
+        self::assertSame(0, DB::table('agent_applications')->where('customer_id', $userId)->count());
+
+        $agentToken = $this->callbackToken('navigation.agent', $accountId);
+        $this->accept($this->callbackPayload(7405, $telegramUserId, 'agent_recovery', 'en', $agentToken));
+        $processor->process('123456789', 7405);
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'id' => (int) $session->id,
+            'state' => 'agent_cooperation',
+            'status' => 'active',
+            'version' => 6,
+        ]);
+
+        $this->accept($this->payload(7406, $telegramUserId, 'agent_recovery', 'en', '/cancel'));
+        $processor->process('123456789', 7406);
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'id' => (int) $session->id,
+            'status' => 'cancelled',
+            'active_telegram_account_id' => null,
+        ]);
+        self::assertSame(0, DB::table('agent_applications')->where('customer_id', $userId)->count());
+
+        $this->accept($this->payload(7407, $telegramUserId, 'agent_recovery', 'en', '/start'));
+        $processor->process('123456789', 7407);
+        $restarted = DB::table('telegram_interaction_sessions')
+            ->where('active_telegram_account_id', $accountId)
+            ->first(['id', 'state', 'status', 'version']);
+        self::assertNotNull($restarted);
+        self::assertNotSame((int) $session->id, (int) $restarted->id);
+        self::assertSame('home', (string) $restarted->state);
+        self::assertSame('active', (string) $restarted->status);
+        self::assertSame(1, (int) $restarted->version);
+        self::assertSame(0, DB::table('agent_applications')->where('customer_id', $userId)->count());
+    }
+
+    public function test_agent_existing_application_states_render_without_exposing_review_details(): void
+    {
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $telegramUserId = 9741;
+        $reviewerTelegramUserId = 9742;
+
+        $this->accept($this->payload(7410, $telegramUserId, 'agent_states', 'en', 'hello'));
+        $processor->process('123456789', 7410);
+        $account = DB::table('telegram_accounts')->where('telegram_user_id', $telegramUserId)->first(['id', 'user_id']);
+        self::assertNotNull($account);
+        $accountId = (int) $account->id;
+        $userId = (int) $account->user_id;
+
+        $this->accept($this->payload(7411, $reviewerTelegramUserId, 'agent_states_reviewer', 'en', 'hello'));
+        $processor->process('123456789', 7411);
+        $reviewerUserId = DB::table('telegram_accounts')->where('telegram_user_id', $reviewerTelegramUserId)->value('user_id');
+        self::assertIsNumeric($reviewerUserId);
+        $now = now('UTC');
+        $administratorId = (int) DB::table('administrators')->insertGetId([
+            'user_id' => (int) $reviewerUserId,
+            'status' => 'active',
+            'is_owner' => true,
+            'permission_version' => 1,
+            'last_authenticated_at' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        $applications = $this->app->make(AgentApplicationService::class);
+        $applications->submit($userId, new AgentChangeContext(
+            'telegram-agent-states-submit-7410',
+            'telegram-agent-states-submit-correlation-7410',
+            'customer_request',
+            actorUserId: $userId,
+        ));
+        $applicationId = DB::table('agent_applications')->where('customer_id', $userId)->value('id');
+        self::assertIsNumeric($applicationId);
+        $applications->claim((int) $applicationId, new AgentChangeContext(
+            'telegram-agent-states-claim-7410',
+            'telegram-agent-states-claim-correlation-7410',
+            'review_action',
+            actorAdministratorId: $administratorId,
+        ));
+
+        $this->accept($this->payload(7412, $telegramUserId, 'agent_states', 'en', '/start'));
+        $processor->process('123456789', 7412);
+        $agentToken = $this->callbackToken('navigation.agent', $accountId);
+        $this->accept($this->callbackPayload(7413, $telegramUserId, 'agent_states', 'en', $agentToken));
+        $processor->process('123456789', 7413);
+        self::assertStringContainsString('Current status: Under review', $this->latestConfidentialPresentation());
+        $sessionId = DB::table('telegram_interaction_sessions')->where('telegram_account_id', $accountId)->value('id');
+        self::assertIsNumeric($sessionId);
+        $currentVersion = DB::table('telegram_interaction_sessions')->where('id', (int) $sessionId)->value('version');
+        self::assertIsNumeric($currentVersion);
+        self::assertSame(0, DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $sessionId)
+            ->where('session_version', (int) $currentVersion)
+            ->where('action', 'navigation.agent.submit')
+            ->count());
+
+        $privateReason = 'Private reviewer reason must never be presented to the customer.';
+        $applications->reject((int) $applicationId, new AgentChangeContext(
+            'telegram-agent-states-reject-7410',
+            'telegram-agent-states-reject-correlation-7410',
+            'not_eligible',
+            $privateReason,
+            actorAdministratorId: $administratorId,
+        ));
+        $this->accept($this->payload(7414, $telegramUserId, 'agent_states', 'en', '/menu'));
+        $processor->process('123456789', 7414);
+        $agentToken = $this->callbackToken('navigation.agent', $accountId);
+        $this->accept($this->callbackPayload(7415, $telegramUserId, 'agent_states', 'en', $agentToken));
+        $processor->process('123456789', 7415);
+        $presentation = $this->latestConfidentialPresentation();
+        self::assertStringContainsString('Current status: Rejected', $presentation);
+        self::assertStringNotContainsString($privateReason, $presentation);
+        self::assertStringNotContainsString((string) $administratorId, $presentation);
+
+        $withdrawnTelegramUserId = 9743;
+        $this->accept($this->payload(7420, $withdrawnTelegramUserId, 'agent_withdrawn', 'en', 'hello'));
+        $processor->process('123456789', 7420);
+        $withdrawnAccount = DB::table('telegram_accounts')->where('telegram_user_id', $withdrawnTelegramUserId)->first(['id', 'user_id']);
+        self::assertNotNull($withdrawnAccount);
+        $withdrawnAccountId = (int) $withdrawnAccount->id;
+        $withdrawnUserId = (int) $withdrawnAccount->user_id;
+        $applications->submit($withdrawnUserId, new AgentChangeContext(
+            'telegram-agent-withdrawn-submit-7420',
+            'telegram-agent-withdrawn-submit-correlation-7420',
+            'customer_request',
+            actorUserId: $withdrawnUserId,
+        ));
+        $withdrawnApplicationId = DB::table('agent_applications')->where('customer_id', $withdrawnUserId)->value('id');
+        self::assertIsNumeric($withdrawnApplicationId);
+        $applications->withdraw((int) $withdrawnApplicationId, new AgentChangeContext(
+            'telegram-agent-withdrawn-final-7420',
+            'telegram-agent-withdrawn-final-correlation-7420',
+            'customer_withdrawal',
+            actorUserId: $withdrawnUserId,
+        ));
+
+        $this->accept($this->payload(7421, $withdrawnTelegramUserId, 'agent_withdrawn', 'en', '/start'));
+        $processor->process('123456789', 7421);
+        $withdrawnToken = $this->callbackToken('navigation.agent', $withdrawnAccountId);
+        $this->accept($this->callbackPayload(7422, $withdrawnTelegramUserId, 'agent_withdrawn', 'en', $withdrawnToken));
+        $processor->process('123456789', 7422);
+        self::assertStringContainsString('Current status: Withdrawn', $this->latestConfidentialPresentation());
+        $withdrawnSessionId = DB::table('telegram_interaction_sessions')->where('telegram_account_id', $withdrawnAccountId)->value('id');
+        self::assertIsNumeric($withdrawnSessionId);
+        $withdrawnVersion = DB::table('telegram_interaction_sessions')->where('id', (int) $withdrawnSessionId)->value('version');
+        self::assertIsNumeric($withdrawnVersion);
+        self::assertSame(0, DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $withdrawnSessionId)
+            ->where('session_version', (int) $withdrawnVersion)
+            ->where('action', 'navigation.agent.submit')
             ->count());
     }
 

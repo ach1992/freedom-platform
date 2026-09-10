@@ -14,7 +14,7 @@ return [
         'Payments' => ['AccessControl', 'Orders', 'Telegram', 'Wallet'],
         'Promotions' => ['AccessControl', 'Wallet'],
         'Provisioning' => ['AccessControl', 'Catalog', 'Orders', 'Panels', 'Payments', 'Telegram', 'Wallet'],
-        'Telegram' => ['Customers', 'Identity', 'Promotions', 'Wallet'],
+        'Telegram' => ['Agents', 'Customers', 'Identity', 'Promotions', 'Wallet'],
         'Wallet' => ['AccessControl'],
     ],
     // Exact dependency-inversion seams where an owning module implements a
@@ -45,6 +45,7 @@ return [
     // data-classification review boundary; RESTRICTED owners must keep using
     // their protected/reference delivery authority instead.
     'telegram_confidential_presentation_sources' => [
+        'app/Modules/Telegram/Application/TelegramAgentNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramCardToCardReceiptStatusDelivery.php',
         'app/Modules/Telegram/Application/TelegramCardToCardReceiptStatusPresentation.php',
         'app/Modules/Telegram/Application/TelegramGiftCardNavigationHandler.php',
