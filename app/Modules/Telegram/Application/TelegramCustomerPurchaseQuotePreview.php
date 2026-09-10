@@ -21,6 +21,7 @@ final readonly class TelegramCustomerPurchaseQuotePreview
         public DateTimeImmutable $validFrom,
         public DateTimeImmutable $expiresAt,
         public bool $replayed,
+        public string $accountType = 'customer',
     ) {
         if (preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/i', $quotePublicId) !== 1) {
             throw new InvalidArgumentException('Telegram purchase Quote public identity is invalid.');
@@ -39,6 +40,9 @@ final readonly class TelegramCustomerPurchaseQuotePreview
         }
         if ($expiresAt <= $validFrom) {
             throw new InvalidArgumentException('Telegram purchase Quote validity window is invalid.');
+        }
+        if (! in_array($accountType, ['customer', 'agent'], true)) {
+            throw new InvalidArgumentException('Telegram purchase Quote account type is invalid.');
         }
     }
 }
