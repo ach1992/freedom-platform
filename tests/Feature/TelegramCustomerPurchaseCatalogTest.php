@@ -546,6 +546,32 @@ final class TelegramCustomerPurchaseCatalogTest extends TestCase
             ->where('method_code', 'agent_blocked')
             ->value('reason_code'));
 
+        DB::table('agent_profiles')->where('user_id', $scenario['user_id'])->update([
+            'pricing_profile_code' => $alternatePricingProfileCode,
+            'updated_at' => now('UTC'),
+        ]);
+        $effectsBeforePaymentSelectionPricingDrift = $this->businessEffectCounts();
+        try {
+            $paymentMethods->selectForSelf(
+                $scenario['user_id'],
+                $scenario['user_id'],
+                $preview->quotePublicId,
+                $preview->configurationSnapshotHash,
+                $paymentDecision->decisionPublicId,
+                $paymentDecision->configurationSnapshotHash,
+                'wallet',
+            );
+            self::fail('Agent pricing-profile drift must invalidate PAY-001 selection replay.');
+        } catch (AuthorizationException $exception) {
+            self::assertSame('Telegram purchase payment methods are unavailable.', $exception->getMessage());
+        }
+        self::assertSame($effectsBeforePaymentSelectionPricingDrift, $this->businessEffectCounts());
+        self::assertSame(1, DB::table('payment_method_eligibility_decisions')->count());
+        DB::table('agent_profiles')->where('user_id', $scenario['user_id'])->update([
+            'pricing_profile_code' => $pricingProfileCode,
+            'updated_at' => now('UTC'),
+        ]);
+
         $orders = $this->app->make(TelegramCustomerPurchaseOrder::class);
         $order = $orders->openForSelf(
             $scenario['user_id'],
