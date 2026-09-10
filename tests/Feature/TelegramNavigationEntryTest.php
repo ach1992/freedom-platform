@@ -3992,6 +3992,123 @@ SQL);
         self::assertSame(0, DB::table('agent_applications')->where('customer_id', $userId)->count());
     }
 
+    public function test_agent_existing_application_states_render_without_exposing_review_details(): void
+    {
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $telegramUserId = 9741;
+        $reviewerTelegramUserId = 9742;
+
+        $this->accept($this->payload(7410, $telegramUserId, 'agent_states', 'en', 'hello'));
+        $processor->process('123456789', 7410);
+        $account = DB::table('telegram_accounts')->where('telegram_user_id', $telegramUserId)->first(['id', 'user_id']);
+        self::assertNotNull($account);
+        $accountId = (int) $account->id;
+        $userId = (int) $account->user_id;
+
+        $this->accept($this->payload(7411, $reviewerTelegramUserId, 'agent_states_reviewer', 'en', 'hello'));
+        $processor->process('123456789', 7411);
+        $reviewerUserId = DB::table('telegram_accounts')->where('telegram_user_id', $reviewerTelegramUserId)->value('user_id');
+        self::assertIsNumeric($reviewerUserId);
+        $now = now('UTC');
+        $administratorId = (int) DB::table('administrators')->insertGetId([
+            'user_id' => (int) $reviewerUserId,
+            'status' => 'active',
+            'is_owner' => true,
+            'permission_version' => 1,
+            'last_authenticated_at' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        $applications = $this->app->make(AgentApplicationService::class);
+        $applications->submit($userId, new AgentChangeContext(
+            'telegram-agent-states-submit-7410',
+            'telegram-agent-states-submit-correlation-7410',
+            'customer_request',
+            actorUserId: $userId,
+        ));
+        $applicationId = DB::table('agent_applications')->where('customer_id', $userId)->value('id');
+        self::assertIsNumeric($applicationId);
+        $applications->claim((int) $applicationId, new AgentChangeContext(
+            'telegram-agent-states-claim-7410',
+            'telegram-agent-states-claim-correlation-7410',
+            'review_action',
+            actorAdministratorId: $administratorId,
+        ));
+
+        $this->accept($this->payload(7412, $telegramUserId, 'agent_states', 'en', '/start'));
+        $processor->process('123456789', 7412);
+        $agentToken = $this->callbackToken('navigation.agent', $accountId);
+        $this->accept($this->callbackPayload(7413, $telegramUserId, 'agent_states', 'en', $agentToken));
+        $processor->process('123456789', 7413);
+        self::assertStringContainsString('Current status: Under review', $this->latestConfidentialPresentation());
+        $sessionId = DB::table('telegram_interaction_sessions')->where('telegram_account_id', $accountId)->value('id');
+        self::assertIsNumeric($sessionId);
+        $currentVersion = DB::table('telegram_interaction_sessions')->where('id', (int) $sessionId)->value('version');
+        self::assertIsNumeric($currentVersion);
+        self::assertSame(0, DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $sessionId)
+            ->where('session_version', (int) $currentVersion)
+            ->where('action', 'navigation.agent.submit')
+            ->count());
+
+        $privateReason = 'Private reviewer reason must never be presented to the customer.';
+        $applications->reject((int) $applicationId, new AgentChangeContext(
+            'telegram-agent-states-reject-7410',
+            'telegram-agent-states-reject-correlation-7410',
+            'not_eligible',
+            $privateReason,
+            actorAdministratorId: $administratorId,
+        ));
+        $this->accept($this->payload(7414, $telegramUserId, 'agent_states', 'en', '/menu'));
+        $processor->process('123456789', 7414);
+        $agentToken = $this->callbackToken('navigation.agent', $accountId);
+        $this->accept($this->callbackPayload(7415, $telegramUserId, 'agent_states', 'en', $agentToken));
+        $processor->process('123456789', 7415);
+        $presentation = $this->latestConfidentialPresentation();
+        self::assertStringContainsString('Current status: Rejected', $presentation);
+        self::assertStringNotContainsString($privateReason, $presentation);
+        self::assertStringNotContainsString((string) $administratorId, $presentation);
+
+        $withdrawnTelegramUserId = 9743;
+        $this->accept($this->payload(7420, $withdrawnTelegramUserId, 'agent_withdrawn', 'en', 'hello'));
+        $processor->process('123456789', 7420);
+        $withdrawnAccount = DB::table('telegram_accounts')->where('telegram_user_id', $withdrawnTelegramUserId)->first(['id', 'user_id']);
+        self::assertNotNull($withdrawnAccount);
+        $withdrawnAccountId = (int) $withdrawnAccount->id;
+        $withdrawnUserId = (int) $withdrawnAccount->user_id;
+        $applications->submit($withdrawnUserId, new AgentChangeContext(
+            'telegram-agent-withdrawn-submit-7420',
+            'telegram-agent-withdrawn-submit-correlation-7420',
+            'customer_request',
+            actorUserId: $withdrawnUserId,
+        ));
+        $withdrawnApplicationId = DB::table('agent_applications')->where('customer_id', $withdrawnUserId)->value('id');
+        self::assertIsNumeric($withdrawnApplicationId);
+        $applications->withdraw((int) $withdrawnApplicationId, new AgentChangeContext(
+            'telegram-agent-withdrawn-final-7420',
+            'telegram-agent-withdrawn-final-correlation-7420',
+            'customer_withdrawal',
+            actorUserId: $withdrawnUserId,
+        ));
+
+        $this->accept($this->payload(7421, $withdrawnTelegramUserId, 'agent_withdrawn', 'en', '/start'));
+        $processor->process('123456789', 7421);
+        $withdrawnToken = $this->callbackToken('navigation.agent', $withdrawnAccountId);
+        $this->accept($this->callbackPayload(7422, $withdrawnTelegramUserId, 'agent_withdrawn', 'en', $withdrawnToken));
+        $processor->process('123456789', 7422);
+        self::assertStringContainsString('Current status: Withdrawn', $this->latestConfidentialPresentation());
+        $withdrawnSessionId = DB::table('telegram_interaction_sessions')->where('telegram_account_id', $withdrawnAccountId)->value('id');
+        self::assertIsNumeric($withdrawnSessionId);
+        $withdrawnVersion = DB::table('telegram_interaction_sessions')->where('id', (int) $withdrawnSessionId)->value('version');
+        self::assertIsNumeric($withdrawnVersion);
+        self::assertSame(0, DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $withdrawnSessionId)
+            ->where('session_version', (int) $withdrawnVersion)
+            ->where('action', 'navigation.agent.submit')
+            ->count());
+    }
+
     public function test_arbitrary_text_and_non_private_start_do_not_implicitly_create_navigation_authority(): void
     {
         $processor = $this->app->make(TelegramUpdateProcessor::class);
