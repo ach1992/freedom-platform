@@ -11,7 +11,7 @@ return [
         'unavailable_notice' => 'The request could not be submitted in the current state. Your account and application state were rechecked.',
     ],
     'agent' => [
-        'status' => "Agent Menu\n\nAgent status: :status\nMember since: :joined_at\nApproved at: :approved_at\n\nChoose an available Agent action below.",
+        'status' => "Agent Menu\n\nAgent status: :status\nMember since: :joined_at\nApproved at: :approved_at\nServices purchased as Agent: :purchase_count\n\nChoose an available Agent action below.",
     ],
     'purchase' => [
         'single_button' => 'Single-service purchase',

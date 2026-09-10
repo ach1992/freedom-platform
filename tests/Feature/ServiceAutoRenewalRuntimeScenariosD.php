@@ -4,17 +4,83 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Modules\Agents\Domain\AgentPricingAction;
+use App\Modules\Orders\Application\AgentPurchaseCountService;
 use App\Modules\Orders\Application\QuoteAgentPricingContext;
 use App\Modules\Orders\Application\QuotePricingInput;
 use App\Modules\Orders\Application\QuoteService;
 use App\Modules\Orders\Application\ServicePackageQuoteContext;
 use App\Modules\Orders\Domain\QuoteOverrideSource;
+use App\Modules\Payments\Application\PurchaseWalletPaymentService;
+use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
 use App\Modules\Provisioning\Application\ServiceAutoRenewalProcessor;
 use Database\Seeders\WalletFinancialFoundationSeeder;
 use Illuminate\Support\Facades\DB;
 
 trait ServiceAutoRenewalRuntimeScenariosD
 {
+    public function test_agent_renewal_settlement_does_not_increment_initial_agent_purchase_count(): void
+    {
+        $suffix = 'agent-purchase-count-renewal';
+        $scenario = $this->scenario($suffix);
+        $this->enableWalletMethod($suffix);
+        $this->seed(WalletFinancialFoundationSeeder::class);
+        $walletAccountId = $this->fundWallet($scenario['user_id'], 700_000, $suffix);
+        $this->enableScenarioAgentRenewPricing($scenario, 600_000, $suffix);
+
+        $counts = $this->app->make(AgentPurchaseCountService::class);
+        self::assertSame(0, $counts->forSelf($scenario['user_id'], $scenario['user_id']));
+
+        $quote = $this->app->make(QuoteService::class)->create(
+            'service.agent-count.renew.quote.000001',
+            $scenario['user_id'],
+            $scenario['offering_id'],
+            new QuotePricingInput(
+                QuoteOverrideSource::None,
+                null,
+                null,
+                null,
+                0,
+                $this->purchaseOrderClock->value->modify('+15 minutes'),
+            ),
+            $this->purchaseOrderCorrelation('agent-count-renew-quote'),
+            new QuoteAgentPricingContext($scenario['user_id'], AgentPricingAction::Renew),
+            new ServicePackageQuoteContext($scenario['service_public_id'], 'aq-renew-30d'),
+        );
+        self::assertSame('renew', $quote->action->value);
+        self::assertNotNull($quote->agentPricing);
+        self::assertSame('renew', $quote->agentPricing->action->value);
+
+        $decision = $this->app->make(PaymentMethodEligibilityService::class)->evaluate(
+            'service.agent-count.renew.eligibility.000001',
+            $scenario['user_id'],
+            $quote->quotePublicId,
+        );
+        $intent = $this->app->make(PurchaseWalletPaymentService::class)->reserve(
+            'service.agent-count.renew.intent.000001',
+            $scenario['user_id'],
+            $walletAccountId,
+            $quote->quotePublicId,
+            $decision->publicId,
+            $this->purchaseOrderCorrelation('agent-count-renew-reserve'),
+        );
+        $order = $this->app->make(PurchaseWalletPaymentService::class)->capture(
+            $intent->intentPublicId,
+            $this->purchaseOrderCorrelation('agent-count-renew-capture'),
+        );
+
+        self::assertSame('purchase', DB::table('payment_intents')
+            ->where('public_id', $order->paymentIntentPublicId)
+            ->value('purpose'));
+        self::assertSame('renew', DB::table('quotes')
+            ->where('public_id', $order->sourceQuotePublicId)
+            ->value('action_snapshot'));
+        self::assertSame('renew', DB::table('quotes')
+            ->where('public_id', $order->sourceQuotePublicId)
+            ->value('agent_pricing_action_snapshot'));
+        self::assertSame(0, $counts->forSelf($scenario['user_id'], $scenario['user_id']));
+    }
+
     public function test_configuration_retry_after_pre_commit_quote_does_not_conflict_with_crashed_request(): void
     {
         $suffix = 'configuration-quote-crash';

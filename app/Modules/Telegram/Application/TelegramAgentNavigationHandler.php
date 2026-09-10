@@ -9,6 +9,7 @@ use App\Modules\Agents\Application\AgentApplicationSubmissionRejected;
 use App\Modules\Agents\Application\AgentChangeContext;
 use App\Modules\Customers\Application\CustomerAccountSummary;
 use App\Modules\Customers\Application\CustomerAccountSummaryService;
+use App\Modules\Telegram\Application\Contracts\TelegramAgentPurchaseCount;
 use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
 use DateTimeImmutable;
 use DateTimeZone;
@@ -54,6 +55,7 @@ final readonly class TelegramAgentNavigationHandler
         private TelegramInteractionCallbackService $callbacks,
         private CustomerAccountSummaryService $customers,
         private AgentApplicationService $applications,
+        private TelegramAgentPurchaseCount $purchaseCounts,
         private TelegramNavigationHandler $navigation,
         private DatabaseManager $database,
     ) {}
@@ -471,6 +473,7 @@ final readonly class TelegramAgentNavigationHandler
                 'status' => $this->agentStatusLabel($summary->agentStatus, $locale),
                 'joined_at' => $this->dateLabel($summary->joinedAt, $locale),
                 'approved_at' => $this->dateLabel($summary->agentApprovedAt, $locale),
+                'purchase_count' => (string) $this->purchaseCounts->forSelf($action->userId, $action->userId),
             ]);
         } elseif ($summary->agentApplicationState !== null) {
             $text = $this->translation('telegram_agent.application.status', $locale, [

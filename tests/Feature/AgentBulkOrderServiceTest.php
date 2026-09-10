@@ -7,6 +7,7 @@ namespace Tests\Feature;
 use App\Modules\Agents\Application\AgentPricingService;
 use App\Modules\Agents\Domain\AgentPricingAction;
 use App\Modules\Orders\Application\AgentBulkOrderService;
+use App\Modules\Orders\Application\AgentPurchaseCountService;
 use App\Modules\Orders\Application\PurchaseOrderService;
 use App\Modules\Orders\Application\QuoteAgentPricingContext;
 use App\Modules\Orders\Application\QuotePricingInput;
@@ -18,6 +19,7 @@ use App\Modules\Payments\Application\Contracts\PaymentTransactionStatus;
 use App\Modules\Payments\Application\Contracts\ProviderOperationOutcome;
 use App\Modules\Payments\Application\Contracts\VerifiedPaymentEvent;
 use App\Modules\Payments\Application\PurchasePaymentIntentService;
+use App\Modules\Payments\Application\PurchaseRefundService;
 use App\Modules\Payments\Application\PurchaseSettlementReceipt;
 use App\Modules\Payments\Application\PurchaseSettlementService;
 use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
@@ -27,6 +29,7 @@ use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
 use Database\Seeders\WalletFinancialFoundationSeeder;
 use DomainException;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -49,6 +52,70 @@ final class AgentBulkOrderServiceTest extends TestCase
         $this->seed(PaymentEligibilityAccessFoundationSeeder::class);
         $this->seed(WalletFinancialFoundationSeeder::class);
         $this->bootPurchaseOrderClock();
+    }
+
+    public function test_agent_purchase_count_uses_authoritative_purchase_settlements_and_is_self_only(): void
+    {
+        [$agent, $offering] = $this->agentAuthority('purchase-count');
+        $counts = $this->app->make(AgentPurchaseCountService::class);
+
+        self::assertSame(0, $counts->forSelf($agent, $agent));
+
+        $first = $this->agentSettlement('purchase-count-first', $agent, $offering['id']);
+        self::assertSame(1, $counts->forSelf($agent, $agent));
+        $this->agentSettlement('purchase-count-second', $agent, $offering['id']);
+        self::assertSame(2, $counts->forSelf($agent, $agent));
+
+        $customerSettlement = $this->createPurchaseOrderSettlement('purchase-count-customer');
+        self::assertSame(2, $counts->forSelf($agent, $agent));
+
+        $refundedAt = $this->purchaseOrderClock->value->modify('+5 minutes');
+        $refundEventId = 'evt-agent-count-refund';
+        $refund = $this->app->make(PurchaseRefundService::class)->record(
+            'agent.purchase.count.refund.000001',
+            $first->settlementPublicId,
+            $first->providerCode,
+            new VerifiedPaymentEvent(
+                $refundEventId,
+                hash('sha256', 'agent-purchase-count-refund-event'),
+                new PaymentEvidence(
+                    ProviderOperationOutcome::Success,
+                    PaymentEvidenceAuthority::Authoritative,
+                    PaymentTransactionStatus::Refunded,
+                    'refund-agent-purchase-count-first',
+                    $refundEventId,
+                    Money::irr($first->amount->amount()),
+                    $refundedAt,
+                    $refundedAt,
+                    hash('sha256', 'agent-purchase-count-refund-evidence'),
+                    ['provider_reference' => 'refund-agent-purchase-count-first'],
+                ),
+            ),
+            $this->purchaseOrderCorrelation('agent-count-refund'),
+        );
+        self::assertSame('refunded', $refund->state->value);
+        self::assertSame(2, $counts->forSelf($agent, $agent));
+
+        DB::table('agent_profiles')->where('user_id', $agent)->update([
+            'status' => 'suspended',
+            'suspended_at' => $this->purchaseOrderTimestamp(),
+            'updated_at' => $this->purchaseOrderTimestamp(),
+        ]);
+        self::assertSame(2, $counts->forSelf($agent, $agent));
+
+        try {
+            $counts->forSelf($customerSettlement->userId, $agent);
+            self::fail('Cross-user Agent purchase count reads must fail closed.');
+        } catch (AuthorizationException $exception) {
+            self::assertSame('Agent purchase count is self-only.', $exception->getMessage());
+        }
+
+        try {
+            $counts->forSelf($customerSettlement->userId, $customerSettlement->userId);
+            self::fail('Customer accounts must not read Agent purchase counts.');
+        } catch (AuthorizationException $exception) {
+            self::assertSame('Agent purchase count requires a current Agent account.', $exception->getMessage());
+        }
     }
 
     public function test_empty_bulk_request_fails_before_creating_any_authority(): void
