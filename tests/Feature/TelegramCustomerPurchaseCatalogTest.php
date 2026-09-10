@@ -10,14 +10,20 @@ use App\Modules\Agents\Domain\AgentPricingAction;
 use App\Modules\Agents\Domain\AgentPricingProfileDefinition;
 use App\Modules\Agents\Domain\AgentPricingRuleDefinition;
 use App\Modules\Agents\Domain\AgentPricingState;
+use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
+use App\Modules\Payments\Eligibility\Domain\PaymentEligibilityRuleDefinition;
+use App\Modules\Payments\Eligibility\Domain\PaymentEligibilityRuleEffect;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCatalog;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseDiscountQuote;
+use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseOrder;
+use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchasePaymentMethods;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseQuote;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseCatalogPage;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseOffering;
 use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PanelsAccessFoundationSeeder;
+use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
 use DateTimeImmutable;
 use DateTimeZone;
 use Illuminate\Auth\Access\AuthorizationException;
@@ -37,6 +43,7 @@ final class TelegramCustomerPurchaseCatalogTest extends TestCase
         $this->seed(IdentityAccessFoundationSeeder::class);
         $this->seed(CatalogAccessFoundationSeeder::class);
         $this->seed(PanelsAccessFoundationSeeder::class);
+        $this->seed(PaymentEligibilityAccessFoundationSeeder::class);
     }
 
     public function test_projection_reuses_customer_eligibility_operational_capacity_and_creates_no_purchase_effect(): void
@@ -288,6 +295,51 @@ final class TelegramCustomerPurchaseCatalogTest extends TestCase
         );
         self::assertSame('customer', $customerOffering->accountType);
 
+        $targetId = (int) DB::table('plan_offerings')
+            ->where('id', $scenario['eligible_offering_id'])
+            ->value('panel_service_target_id');
+        $profileId = (int) DB::table('plan_offering_protocol_profiles')
+            ->where('plan_offering_id', $scenario['eligible_offering_id'])
+            ->value('panel_protocol_profile_id');
+        $audienceFixtureNow = now('UTC');
+        $customerOnlyOfferingId = $this->offering(
+            'purchase-customer-only',
+            $scenario['product_id'],
+            $scenario['server_id'],
+            $targetId,
+            $profileId,
+            $scenario['eligible_tag_id'],
+            'normal',
+            $audienceFixtureNow,
+            'customers',
+        );
+        $agentOnlyOfferingId = $this->offering(
+            'purchase-agent-only',
+            $scenario['product_id'],
+            $scenario['server_id'],
+            $targetId,
+            $profileId,
+            $scenario['eligible_tag_id'],
+            'normal',
+            $audienceFixtureNow,
+            'agents',
+        );
+        foreach ([$customerOnlyOfferingId, $agentOnlyOfferingId] as $offeringId) {
+            $this->route($offeringId, $scenario['server_id'], $targetId, $audienceFixtureNow);
+            DB::table('plan_offerings')->where('id', $offeringId)->update([
+                'state' => 'active',
+                'visibility' => 'visible',
+                'version' => 2,
+                'updated_at' => $audienceFixtureNow,
+            ]);
+        }
+        $customerCodes = array_map(
+            static fn (TelegramCustomerPurchaseOffering $item): string => $item->offeringCode,
+            $catalog->pageForSelf($scenario['user_id'], $scenario['user_id'], 1, 6)->items,
+        );
+        sort($customerCodes);
+        self::assertSame(['purchase-customer-only', 'purchase-standard'], $customerCodes);
+
         $pricingProfileCode = 'telegram-agent-purchase-test';
         $pricing = $this->app->make(AgentPricingService::class);
         $context = static fn (string $suffix): AccessChangeContext => new AccessChangeContext(
@@ -355,8 +407,19 @@ final class TelegramCustomerPurchaseCatalogTest extends TestCase
             'updated_at' => $now,
         ]);
         $agentPage = $catalog->pageForSelf($scenario['user_id'], $scenario['user_id'], 1, 6);
-        self::assertSame(1, $agentPage->totalItems);
-        $agentOffering = $agentPage->items[0];
+        self::assertSame(2, $agentPage->totalItems);
+        $agentCodes = array_map(
+            static fn (TelegramCustomerPurchaseOffering $item): string => $item->offeringCode,
+            $agentPage->items,
+        );
+        sort($agentCodes);
+        self::assertSame(['purchase-agent-only', 'purchase-standard'], $agentCodes);
+        $standardAgentOfferings = array_values(array_filter(
+            $agentPage->items,
+            static fn (TelegramCustomerPurchaseOffering $item): bool => $item->offeringCode === 'purchase-standard',
+        ));
+        self::assertCount(1, $standardAgentOfferings);
+        $agentOffering = $standardAgentOfferings[0];
         self::assertSame('agent', $agentOffering->accountType);
         self::assertNotSame($customerOffering->selectionToken, $agentOffering->selectionToken);
         self::assertSame(
@@ -404,6 +467,76 @@ final class TelegramCustomerPurchaseCatalogTest extends TestCase
         self::assertSame(1, DB::table('quotes')->count());
         self::assertSame(1, DB::table('agent_pricing_resolutions')->count());
 
+        $paymentEligibility = $this->app->make(PaymentMethodEligibilityService::class);
+        $this->configureHealthyPaymentMethod($paymentEligibility, $scenario['administrator_id'], 'wallet', 10);
+        $this->configureHealthyPaymentMethod($paymentEligibility, $scenario['administrator_id'], 'agent_blocked', 20);
+        $paymentEligibility->configureRule(
+            'telegram.agent.payment.rule.000001',
+            $scenario['administrator_id'],
+            new PaymentEligibilityRuleDefinition(
+                'agent_blocked',
+                'active_agent_deny',
+                true,
+                PaymentEligibilityRuleEffect::Deny,
+                100,
+                requiredAgentStatus: 'active',
+            ),
+            'Agent payment policy regression.',
+            hash('sha256', 'telegram-agent-payment-rule'),
+        );
+        $paymentMethods = $this->app->make(TelegramCustomerPurchasePaymentMethods::class);
+        $paymentDecision = $paymentMethods->discoverForSelf(
+            $scenario['user_id'],
+            $scenario['user_id'],
+            $preview->quotePublicId,
+            $preview->configurationSnapshotHash,
+            'telegram-purchase-payment-methods:'.(string) Str::ulid(),
+        );
+        self::assertSame(['wallet'], $paymentDecision->methodCodes);
+        $paymentDecisionId = (int) DB::table('payment_method_eligibility_decisions')
+            ->where('public_id', $paymentDecision->decisionPublicId)
+            ->value('id');
+        self::assertGreaterThan(0, $paymentDecisionId);
+        self::assertSame('rule_denied', DB::table('payment_method_eligibility_decision_methods')
+            ->where('payment_method_eligibility_decision_id', $paymentDecisionId)
+            ->where('method_code', 'agent_blocked')
+            ->value('reason_code'));
+
+        $orders = $this->app->make(TelegramCustomerPurchaseOrder::class);
+        $order = $orders->openForSelf(
+            $scenario['user_id'],
+            $scenario['user_id'],
+            $preview->quotePublicId,
+            $preview->configurationSnapshotHash,
+            'telegram-order:'.(string) Str::ulid(),
+        );
+        self::assertSame($preview->quotePublicId, $order->sourceQuotePublicId);
+        self::assertSame($preview->configurationSnapshotHash, $order->sourceQuoteConfigurationHash);
+        self::assertSame(750_000, $order->amountIrr);
+        self::assertSame('IRR', $order->currency);
+        $orderId = (int) DB::table('orders')->where('public_id', $order->orderPublicId)->value('id');
+        self::assertGreaterThan(0, $orderId);
+        self::assertSame('awaiting_payment', DB::table('orders')->where('id', $orderId)->value('state'));
+        self::assertSame('agent', DB::table('order_items')->where('order_id', $orderId)->value('account_type_snapshot'));
+        self::assertSame('agent', DB::table('order_items')->where('order_id', $orderId)->value('override_source'));
+        self::assertSame(750_000, (int) DB::table('order_items')->where('order_id', $orderId)->value('final_price_irr'));
+
+        $selection = $paymentMethods->selectForSelf(
+            $scenario['user_id'],
+            $scenario['user_id'],
+            $preview->quotePublicId,
+            $preview->configurationSnapshotHash,
+            $paymentDecision->decisionPublicId,
+            $paymentDecision->configurationSnapshotHash,
+            'wallet',
+        );
+        self::assertSame('wallet', $selection->methodCode);
+        self::assertSame($paymentDecision->decisionPublicId, $selection->decisionPublicId);
+        self::assertSame($preview->quotePublicId, $selection->sourceQuotePublicId);
+        self::assertSame(0, DB::table('payment_intents')->count());
+        self::assertSame(0, DB::table('purchase_settlements')->count());
+        self::assertSame(0, DB::table('ledger_transactions')->count());
+
         $discounts = $this->app->make(TelegramCustomerPurchaseDiscountQuote::class);
         $beforeDiscountEffects = $this->businessEffectCounts();
         try {
@@ -428,6 +561,26 @@ final class TelegramCustomerPurchaseCatalogTest extends TestCase
             'suspended_at' => now('UTC'),
             'updated_at' => now('UTC'),
         ]);
+        try {
+            $paymentMethods->selectForSelf(
+                $scenario['user_id'],
+                $scenario['user_id'],
+                $preview->quotePublicId,
+                $preview->configurationSnapshotHash,
+                $paymentDecision->decisionPublicId,
+                $paymentDecision->configurationSnapshotHash,
+                'wallet',
+            );
+            self::fail('Expected PAY-001 replay to deny a suspended Agent before financial effects.');
+        } catch (AuthorizationException $exception) {
+            self::assertSame('Payment eligibility decision access denied.', $exception->getMessage());
+        }
+        self::assertSame(1, DB::table('payment_method_eligibility_decisions')->count());
+        self::assertSame(1, DB::table('orders')->count());
+        self::assertSame(0, DB::table('payment_intents')->count());
+        self::assertSame(0, DB::table('purchase_settlements')->count());
+        self::assertSame(0, DB::table('ledger_transactions')->count());
+
         $beforeDenied = $this->businessEffectCounts();
         try {
             $catalog->pageForSelf($scenario['user_id'], $scenario['user_id'], 1, 6);
@@ -436,6 +589,33 @@ final class TelegramCustomerPurchaseCatalogTest extends TestCase
             self::assertSame('Route selection requires an active agent profile.', $exception->getMessage());
         }
         self::assertSame($beforeDenied, $this->businessEffectCounts());
+    }
+
+    private function configureHealthyPaymentMethod(
+        PaymentMethodEligibilityService $service,
+        int $administratorId,
+        string $methodCode,
+        int $priority,
+    ): void {
+        $service->configureMethod(
+            'telegram.agent.payment.method.'.$methodCode,
+            $administratorId,
+            $methodCode,
+            true,
+            false,
+            $priority,
+            'Telegram Agent payment regression method.',
+            hash('sha256', 'telegram-agent-payment-method-'.$methodCode),
+        );
+        $service->recordHealth(
+            'telegram.agent.payment.health.'.$methodCode,
+            $administratorId,
+            $methodCode,
+            true,
+            new DateTimeImmutable('+10 minutes', new DateTimeZone('UTC')),
+            'Healthy Telegram Agent payment regression method.',
+            hash('sha256', 'telegram-agent-payment-health-'.$methodCode),
+        );
     }
 
     /** @return array{user_id:int,administrator_id:int,eligible_tag_id:int,capacity_id:int,eligible_offering_id:int,product_id:int,server_id:int} */
