@@ -3629,7 +3629,12 @@ SQL);
         self::assertSame('agent_cooperation', (string) $session->state);
         self::assertSame(2, (int) $session->version);
         self::assertSame('{}', (string) $session->payload);
-        self::assertStringContainsString('درخواست همکاری', $this->latestConfidentialPresentation());
+        $initialPresentation = $this->latestConfidentialPresentation();
+        self::assertStringContainsString('درخواست همکاری', $initialPresentation);
+        self::assertStringContainsString('درخواست به‌صورت دستی', $initialPresentation);
+        self::assertStringContainsString('تضمینی برای تأیید، قیمت‌گذاری، تخفیف', $initialPresentation);
+        self::assertStringContainsString('فقط یک درخواست فعال', $initialPresentation);
+        self::assertStringContainsString('اطلاعات اختصاصی دیگری', $initialPresentation);
         self::assertSame(0, DB::table('agent_applications')->where('customer_id', $userId)->count());
 
         $submitToken = $this->callbackToken('navigation.agent.submit', $accountId);
@@ -3892,6 +3897,8 @@ SQL);
         $presentation = $this->latestConfidentialPresentation();
         self::assertStringContainsString('Agent Menu', $presentation);
         self::assertStringContainsString('Agent status: Active', $presentation);
+        self::assertStringContainsString('Member since:', $presentation);
+        self::assertStringContainsString('Approved at:', $presentation);
         self::assertStringNotContainsString('Approved for Telegram Agent navigation test.', $presentation);
         $currentVersion = (int) DB::table('telegram_interaction_sessions')->where('id', (int) $session->id)->value('version');
         self::assertSame(0, DB::table('telegram_interaction_callbacks')

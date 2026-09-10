@@ -292,6 +292,7 @@ final readonly class TelegramAgentNavigationHandler
         if ($summary->accountType === 'agent' && $summary->agentStatus !== null) {
             $text = $this->translation('telegram_agent.agent.status', $locale, [
                 'status' => $this->agentStatusLabel($summary->agentStatus, $locale),
+                'joined_at' => $this->dateLabel($summary->joinedAt, $locale),
                 'approved_at' => $this->dateLabel($summary->agentApprovedAt, $locale),
             ]);
         } elseif ($summary->agentApplicationState !== null) {
