@@ -63,6 +63,15 @@ final class AgentBulkOrderServiceTest extends TestCase
 
         $first = $this->agentSettlement('purchase-count-first', $agent, $offering['id']);
         self::assertSame(1, $counts->forSelf($agent, $agent));
+        $replay = $this->app->make(PurchaseSettlementService::class)->capture(
+            $first->intentPublicId,
+            $first->providerCode,
+            $this->settlementEvent('purchase-count-first', $first->amount->amount()),
+            $this->purchaseOrderCorrelation('purchase-count-first-replay'),
+        );
+        self::assertTrue($replay->replayed);
+        self::assertSame($first->settlementId, $replay->settlementId);
+        self::assertSame(1, $counts->forSelf($agent, $agent));
         $this->agentSettlement('purchase-count-second', $agent, $offering['id']);
         self::assertSame(2, $counts->forSelf($agent, $agent));
 
