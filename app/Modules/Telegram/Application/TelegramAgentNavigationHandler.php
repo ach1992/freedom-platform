@@ -167,8 +167,6 @@ final readonly class TelegramAgentNavigationHandler
             $this->consumeUnavailableSubmission($action, $current);
 
             return;
-        } catch (AuthorizationException) {
-            return;
         } catch (DomainException) {
             // The callback lost the session-version race before the Agent mutation committed.
             return;
