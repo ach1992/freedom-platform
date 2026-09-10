@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Orders\Application;
 
+use App\Modules\Agents\Domain\AgentPricingAction;
 use App\Modules\Orders\Domain\QuoteOverrideSource;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCatalog;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseQuote;
@@ -26,7 +27,7 @@ final readonly class TelegramCustomerPurchaseQuoteService implements TelegramCus
         private TelegramCustomerPurchaseCatalog $catalog,
     ) {}
 
-    /** @requirement BUY-001 BUY-002 BUY-003 DAT-002 DAT-003 SEC-002 QUA-001 */
+    /** @requirement AGT-003 AGT-005 BUY-001 BUY-002 BUY-003 DAT-002 DAT-003 SEC-002 QUA-001 */
     public function previewForSelf(
         int $actorUserId,
         int $subjectUserId,
@@ -61,6 +62,8 @@ final readonly class TelegramCustomerPurchaseQuoteService implements TelegramCus
                 throw $exception;
             }
             if ($quote->userId !== $subjectUserId
+                || $quote->accountType !== $offering->accountType
+                || ! $this->pricingBindingMatchesAccountType($quote)
                 || ! hash_equals($quote->configurationSnapshotHash, $quoteConfigurationHash)
                 || ! hash_equals($quote->offeringCode, $offering->offeringCode)
                 || $quote->offeringVersion !== $offeringIdentity['version']
@@ -83,11 +86,12 @@ final readonly class TelegramCustomerPurchaseQuoteService implements TelegramCus
                 $quote->validFrom,
                 $quote->expiresAt,
                 true,
+                $quote->accountType,
             );
         }, 3);
     }
 
-    /** @requirement BUY-001 BUY-002 BUY-003 DAT-002 DAT-003 SEC-002 QUA-001 */
+    /** @requirement AGT-003 AGT-005 BUY-001 BUY-002 BUY-003 DAT-002 DAT-003 SEC-002 QUA-001 */
     public function quoteForSelf(
         int $actorUserId,
         int $subjectUserId,
@@ -119,6 +123,9 @@ final readonly class TelegramCustomerPurchaseQuoteService implements TelegramCus
                 $offeringSelectionToken,
             );
             $offeringIdentity = $this->currentOfferingIdentity($connection, $offering->offeringCode);
+            $agentPricingContext = $offering->accountType === 'agent'
+                ? new QuoteAgentPricingContext($subjectUserId, AgentPricingAction::Purchase)
+                : null;
 
             $quote = $this->quotes->create(
                 $quoteKey,
@@ -133,6 +140,7 @@ final readonly class TelegramCustomerPurchaseQuoteService implements TelegramCus
                     $expiresAt,
                 ),
                 $correlationId,
+                $agentPricingContext,
             );
 
             $currentOffering = $this->catalog->offeringForSelf(
@@ -142,6 +150,8 @@ final readonly class TelegramCustomerPurchaseQuoteService implements TelegramCus
             );
             if (! hash_equals($quote->offeringCode, $currentOffering->offeringCode)
                 || $quote->userId !== $subjectUserId
+                || $quote->accountType !== $currentOffering->accountType
+                || ! $this->pricingBindingMatchesAccountType($quote)
                 || $quote->offeringVersion !== $offeringIdentity['version']
                 || ! hash_equals($quote->offeringConfigurationHash, $offeringIdentity['configuration_hash'])
                 || $quote->basePriceIrr !== $offeringIdentity['base_price_irr']
@@ -162,8 +172,18 @@ final readonly class TelegramCustomerPurchaseQuoteService implements TelegramCus
                 $quote->validFrom,
                 $quote->expiresAt,
                 $quote->replayed,
+                $quote->accountType,
             );
         }, 3);
+    }
+
+    private function pricingBindingMatchesAccountType(QuoteReceipt $quote): bool
+    {
+        return match ($quote->accountType) {
+            'agent' => $quote->agentPricing !== null,
+            'customer' => $quote->agentPricing === null,
+            default => false,
+        };
     }
 
     /** @return array{id:int,version:int,configuration_hash:string,base_price_irr:int} */
