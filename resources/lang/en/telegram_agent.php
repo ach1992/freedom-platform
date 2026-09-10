@@ -11,7 +11,12 @@ return [
         'unavailable_notice' => 'The request could not be submitted in the current state. Your account and application state were rechecked.',
     ],
     'agent' => [
-        'status' => "Agent Menu\n\nAgent status: :status\nMember since: :joined_at\nApproved at: :approved_at\n\nThis section currently shows your Agent status. Additional Agent journeys remain separate steps.",
+        'status' => "Agent Menu\n\nAgent status: :status\nMember since: :joined_at\nApproved at: :approved_at\n\nChoose an available Agent action below.",
+    ],
+    'purchase' => [
+        'single_button' => 'Single-service purchase',
+        'agent_price_note' => 'The listed amount is the base price. Your final Agent price is resolved and snapshotted when the quote is created.',
+        'benefit_code_unavailable' => 'Benefit codes are not available for Agent purchases in this flow.',
     ],
     'states' => [
         'application' => [
