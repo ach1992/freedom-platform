@@ -17,6 +17,7 @@ use App\Modules\Payments\Zarinpal\Application\Contracts\ZarinpalUnverifiedCandid
 use App\Modules\Payments\Zarinpal\Application\Contracts\ZarinpalVerifyResult;
 use App\Modules\Payments\Zarinpal\Application\ZarinpalPaymentService;
 use App\Modules\Payments\Zarinpal\Domain\ZarinpalRequestState;
+use App\Modules\Payments\Zarinpal\Infrastructure\HttpZarinpalTransport;
 use App\Modules\Wallet\Application\LedgerEntryDraft;
 use App\Modules\Wallet\Application\LedgerPostingService;
 use App\Modules\Wallet\Domain\IrrMoney;
@@ -30,6 +31,7 @@ use DateTimeImmutable;
 use DomainException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
 final class ZarinpalProviderBoundaryFakeTransport implements ZarinpalTransport
@@ -176,6 +178,59 @@ final class ZarinpalPrePaymentProviderBoundaryTest extends TestCase
         self::assertSame(1, $this->transport->requestCalls);
         self::assertSame(1, DB::table('zarinpal_payment_requests')->count());
         self::assertSame(1, DB::table('payment_intents')->where('provider_code', 'zarinpal')->count());
+    }
+
+    public function test_post_send_connection_ambiguity_is_durable_and_fresh_service_replay_never_reissues_provider_mutation(): void
+    {
+        [$userId, $quote, $decision] = $this->purchaseContext('connection-ambiguity', false);
+        $simulatedProviderEffects = 0;
+        Http::fake([
+            'https://payment.zarinpal.com/pg/v4/payment/request.json' => function () use (&$simulatedProviderEffects) {
+                $simulatedProviderEffects++;
+
+                return Http::failedConnection('simulated post-send timeout');
+            },
+        ]);
+        $this->app->instance(ZarinpalTransport::class, $this->app->make(HttpZarinpalTransport::class));
+        $service = $this->app->make(ZarinpalPaymentService::class);
+
+        $uncertain = $service->initiatePurchase(
+            $userId,
+            $quote->quotePublicId,
+            $decision->publicId,
+            $this->correlation('connection-ambiguity-initiate'),
+        );
+
+        self::assertSame(ZarinpalRequestState::Uncertain, $uncertain->state);
+        self::assertTrue($uncertain->manualReviewRequired);
+        self::assertFalse($uncertain->replayed);
+        self::assertSame(1, $simulatedProviderEffects);
+        Http::assertSentCount(1);
+        self::assertSame('uncertain', DB::table('zarinpal_payment_requests')->where('public_id', $uncertain->publicId)->value('state'));
+        self::assertSame(1, DB::table('zarinpal_payment_requests')->count());
+        self::assertSame(1, DB::table('payment_intents')->where('provider_code', 'zarinpal')->count());
+
+        $this->app->instance(ZarinpalTransport::class, $this->app->make(HttpZarinpalTransport::class));
+        $freshService = $this->app->make(ZarinpalPaymentService::class);
+        self::assertNotSame($service, $freshService);
+
+        $replay = $freshService->initiatePurchase(
+            $userId,
+            $quote->quotePublicId,
+            $decision->publicId,
+            $this->correlation('connection-ambiguity-replay'),
+        );
+
+        self::assertTrue($replay->replayed);
+        self::assertSame($uncertain->publicId, $replay->publicId);
+        self::assertSame($uncertain->paymentIntentPublicId, $replay->paymentIntentPublicId);
+        self::assertSame(ZarinpalRequestState::Uncertain, $replay->state);
+        self::assertSame(1, $simulatedProviderEffects);
+        Http::assertSentCount(1);
+        self::assertSame(0, DB::table('purchase_settlements')->where('provider_code', 'zarinpal')->count());
+        self::assertSame(0, DB::table('promotion_usage_redemptions')->count());
+        self::assertSame(0, DB::table('service_subscriptions')->count());
+        self::assertSame(0, DB::table('provisioning_operations')->count());
     }
 
     private function purchaseContext(string $suffix, bool $includeWallet): array

@@ -103,6 +103,7 @@ final class ConfidentialTelegramPresentationProvenanceTest extends TestCase
             'app/Modules/Telegram/Application/TelegramGiftCardNavigationHandler.php',
             'app/Modules/Telegram/Application/TelegramNavigationHandler.php',
             'app/Modules/Telegram/Application/TelegramUsdtNavigationHandler.php',
+            'app/Modules/Telegram/Application/TelegramZarinpalNavigationHandler.php',
         ], TelegramConfidentialPresentationProvenanceGuard::REVIEWED_SOURCE_FILES);
     }
 
@@ -112,6 +113,14 @@ final class ConfidentialTelegramPresentationProvenanceTest extends TestCase
 
         self::assertContains($receiptStatusSource, TelegramConfidentialPresentationProvenanceGuard::REVIEWED_SOURCE_FILES);
         self::assertNotContains($receiptStatusSource, TelegramPresentationProvenanceGuard::REVIEWED_SOURCE_FILES);
+    }
+
+    public function test_zarinpal_navigation_has_confidential_but_not_generic_delivery_provenance(): void
+    {
+        $zarinpalSource = 'app/Modules/Telegram/Application/TelegramZarinpalNavigationHandler.php';
+
+        self::assertContains($zarinpalSource, TelegramConfidentialPresentationProvenanceGuard::REVIEWED_SOURCE_FILES);
+        self::assertNotContains($zarinpalSource, TelegramPresentationProvenanceGuard::REVIEWED_SOURCE_FILES);
     }
 
     public function test_confidential_object_is_redacted_and_not_serializable(): void
