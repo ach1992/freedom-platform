@@ -38,6 +38,8 @@ final readonly class TelegramAgentNavigationHandler
 
     private const ACTION_CANONICAL_PURCHASE = 'navigation.purchase';
 
+    private const ACTION_CANONICAL_DISCOUNT = 'navigation.purchase.discount';
+
     private const ACTION_BACK = 'navigation.back';
 
     public function __construct(
@@ -58,12 +60,19 @@ final readonly class TelegramAgentNavigationHandler
                 && $action->kind === TelegramInteractionActionKind::Callback
                 && $action->callbackAction === self::ACTION_AGENT)
             || ($action->kind === TelegramInteractionActionKind::Callback
-                && $action->callbackAction === self::ACTION_PURCHASE)
+                && in_array($action->callbackAction, [self::ACTION_PURCHASE, self::ACTION_CANONICAL_DISCOUNT], true))
             || in_array($action->sessionState, [self::STATE_AGENT, self::STATE_UNAVAILABLE], true);
     }
 
     public function handle(TelegramInteractionAction $action): void
     {
+        if ($action->kind === TelegramInteractionActionKind::Callback
+            && $action->callbackAction === self::ACTION_CANONICAL_DISCOUNT) {
+            $this->handleCanonicalDiscount($action);
+
+            return;
+        }
+
         if ($action->kind === TelegramInteractionActionKind::Callback
             && $action->callbackAction === self::ACTION_PURCHASE) {
             if ($action->callbackPayload !== []) {
@@ -170,6 +179,38 @@ final readonly class TelegramAgentNavigationHandler
             $action->callbackAcceptedAt,
             $action->messageAcceptedAt,
         ));
+    }
+
+    private function handleCanonicalDiscount(TelegramInteractionAction $action): void
+    {
+        if ($action->callbackPayload !== []) {
+            throw new RuntimeException('Telegram purchase discount callback payload is invalid.');
+        }
+
+        $summary = $this->customers->forSelf($action->userId, $action->userId);
+        if ($summary->accountType !== 'agent') {
+            $this->navigation->handle($action);
+
+            return;
+        }
+
+        $locale = $summary->locale === 'en' ? 'en' : 'fa';
+        $back = $this->callbacks->issue(
+            $action->sessionPublicId,
+            $action->sessionVersion,
+            self::ACTION_BACK,
+            [],
+            'tg-agent-discount-unavailable-back:'.hash('sha256', $action->requestKey),
+        );
+        $this->queueConfidential(
+            $action,
+            $this->translation('telegram_agent.purchase.benefit_code_unavailable', $locale),
+            'discount-unavailable',
+            new TelegramInlineKeyboardSnapshot([[new TelegramInlineCallbackButton(
+                $this->translation('telegram.navigation.buttons.back', $locale),
+                $back->publicId,
+            )]]),
+        );
     }
 
     private function recoverAdvancedPurchase(TelegramInteractionAction $action): bool
