@@ -18,6 +18,9 @@ return [
         'agent_price_note' => 'The listed amount is the base price. Your final Agent price is resolved and snapshotted when the quote is created.',
         'benefit_code_unavailable' => 'Benefit codes are not available for Agent purchases in this flow.',
     ],
+    'services' => [
+        'button' => 'Purchased services',
+    ],
     'states' => [
         'application' => [
             'submitted' => 'Submitted',
