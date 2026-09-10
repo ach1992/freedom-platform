@@ -3908,6 +3908,90 @@ SQL);
             ->count());
     }
 
+    public function test_agent_navigation_recovers_through_back_entry_command_and_cancel_without_agent_mutation(): void
+    {
+        $telegramUserId = 9740;
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $this->accept($this->payload(7400, $telegramUserId, 'agent_recovery', 'en', '/start'));
+        $processor->process('123456789', 7400);
+
+        $account = DB::table('telegram_accounts')->where('telegram_user_id', $telegramUserId)->first(['id', 'user_id']);
+        self::assertNotNull($account);
+        $accountId = (int) $account->id;
+        $userId = (int) $account->user_id;
+
+        $agentToken = $this->callbackToken('navigation.agent', $accountId);
+        $this->accept($this->callbackPayload(7401, $telegramUserId, 'agent_recovery', 'en', $agentToken));
+        $processor->process('123456789', 7401);
+        $session = DB::table('telegram_interaction_sessions')->where('telegram_account_id', $accountId)->first(['id', 'public_id', 'state', 'status', 'version']);
+        self::assertNotNull($session);
+        self::assertSame('agent_cooperation', (string) $session->state);
+        self::assertSame('active', (string) $session->status);
+        self::assertSame(2, (int) $session->version);
+
+        $backToken = $this->callbackToken('navigation.back', $accountId);
+        $this->accept($this->callbackPayload(7402, $telegramUserId, 'agent_recovery', 'en', $backToken));
+        $processor->process('123456789', 7402);
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'id' => (int) $session->id,
+            'state' => 'home',
+            'status' => 'active',
+            'version' => 3,
+        ]);
+        self::assertSame(0, DB::table('agent_applications')->where('customer_id', $userId)->count());
+
+        $agentToken = $this->callbackToken('navigation.agent', $accountId);
+        $this->accept($this->callbackPayload(7403, $telegramUserId, 'agent_recovery', 'en', $agentToken));
+        $processor->process('123456789', 7403);
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'id' => (int) $session->id,
+            'state' => 'agent_cooperation',
+            'status' => 'active',
+            'version' => 4,
+        ]);
+
+        $this->accept($this->payload(7404, $telegramUserId, 'agent_recovery', 'en', '/menu'));
+        $processor->process('123456789', 7404);
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'id' => (int) $session->id,
+            'state' => 'home',
+            'status' => 'active',
+            'version' => 5,
+        ]);
+        self::assertSame(0, DB::table('agent_applications')->where('customer_id', $userId)->count());
+
+        $agentToken = $this->callbackToken('navigation.agent', $accountId);
+        $this->accept($this->callbackPayload(7405, $telegramUserId, 'agent_recovery', 'en', $agentToken));
+        $processor->process('123456789', 7405);
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'id' => (int) $session->id,
+            'state' => 'agent_cooperation',
+            'status' => 'active',
+            'version' => 6,
+        ]);
+
+        $this->accept($this->payload(7406, $telegramUserId, 'agent_recovery', 'en', '/cancel'));
+        $processor->process('123456789', 7406);
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'id' => (int) $session->id,
+            'status' => 'cancelled',
+            'active_telegram_account_id' => null,
+        ]);
+        self::assertSame(0, DB::table('agent_applications')->where('customer_id', $userId)->count());
+
+        $this->accept($this->payload(7407, $telegramUserId, 'agent_recovery', 'en', '/start'));
+        $processor->process('123456789', 7407);
+        $restarted = DB::table('telegram_interaction_sessions')
+            ->where('active_telegram_account_id', $accountId)
+            ->first(['id', 'state', 'status', 'version']);
+        self::assertNotNull($restarted);
+        self::assertNotSame((int) $session->id, (int) $restarted->id);
+        self::assertSame('home', (string) $restarted->state);
+        self::assertSame('active', (string) $restarted->status);
+        self::assertSame(1, (int) $restarted->version);
+        self::assertSame(0, DB::table('agent_applications')->where('customer_id', $userId)->count());
+    }
+
     public function test_arbitrary_text_and_non_private_start_do_not_implicitly_create_navigation_authority(): void
     {
         $processor = $this->app->make(TelegramUpdateProcessor::class);
