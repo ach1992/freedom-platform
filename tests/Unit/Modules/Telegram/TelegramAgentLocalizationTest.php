@@ -33,7 +33,7 @@ final class TelegramAgentLocalizationTest extends TestCase
         }
 
         self::assertSame(
-            [':approved_at', ':joined_at', ':status'],
+            [':approved_at', ':joined_at', ':purchase_count', ':status'],
             $this->placeholders($enStrings['agent.status']),
         );
         self::assertSame([], $this->placeholders($enStrings['application.not_submitted']));

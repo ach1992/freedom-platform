@@ -3912,6 +3912,7 @@ SQL);
         self::assertStringContainsString('Agent status: Active', $presentation);
         self::assertStringContainsString('Member since:', $presentation);
         self::assertStringContainsString('Approved at:', $presentation);
+        self::assertStringContainsString('Services purchased as Agent: 0', $presentation);
         self::assertStringNotContainsString('Approved for Telegram Agent navigation test.', $presentation);
         $currentVersion = (int) DB::table('telegram_interaction_sessions')->where('id', (int) $session->id)->value('version');
         self::assertSame(0, DB::table('telegram_interaction_callbacks')
