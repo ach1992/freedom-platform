@@ -1343,7 +1343,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         string $requestKey,
     ): void {
         $rows = [];
-        if (! $this->purchaseQuoteHasDiscount($state)) {
+        if (! $this->purchaseQuoteHasDiscount($state) && $preview->accountType === 'customer') {
             $discount = $this->callbacks->issue(
                 $action->sessionPublicId,
                 $sessionVersion,
@@ -3185,19 +3185,25 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             ]);
         }
 
-        return $this->translation('telegram.navigation.purchase.list', $locale, [
+        $text = $this->translation('telegram.navigation.purchase.list', $locale, [
             'items' => implode("\n\n", $lines),
             'page' => $catalog->page,
             'total_pages' => $catalog->totalPages,
             'total_items' => $catalog->totalItems,
         ]);
+
+        if ($catalog->items[0]->accountType === 'agent') {
+            $text .= "\n\n".$this->translation('telegram_agent.purchase.agent_price_note', $locale);
+        }
+
+        return $text;
     }
 
     private function purchaseOfferingText(TelegramCustomerPurchaseOffering $offering, string $locale): string
     {
         $notAvailable = $this->translation('telegram.navigation.purchase.not_available', $locale);
 
-        return $this->translation('telegram.navigation.purchase.detail', $locale, [
+        $text = $this->translation('telegram.navigation.purchase.detail', $locale, [
             'category' => $this->localizedLabel($offering->categoryNameFa, $offering->categoryNameEn, $locale),
             'plan' => $this->purchasePlanLabel($offering, $locale),
             'mode' => $this->localizedLabel($offering->serviceModeLabelFa, $offering->serviceModeLabelEn, $locale),
@@ -3206,6 +3212,12 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             'data' => $this->formatBytes($offering->dataAllowanceBytes, $notAvailable),
             'devices' => $offering->deviceLimit === null ? $notAvailable : (string) $offering->deviceLimit,
         ]);
+
+        if ($offering->accountType === 'agent') {
+            $text .= "\n\n".$this->translation('telegram_agent.purchase.agent_price_note', $locale);
+        }
+
+        return $text;
     }
 
     private function purchaseQuoteText(TelegramCustomerPurchaseQuotePreview $preview, string $locale): string

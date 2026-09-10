@@ -23,6 +23,7 @@ final readonly class TelegramCustomerPurchaseOffering
         public int $durationDays,
         public ?int $dataAllowanceBytes,
         public ?int $deviceLimit,
+        public string $accountType = 'customer',
     ) {
         if (preg_match('/\A[0-9a-f]{40}\z/', $selectionToken) !== 1) {
             throw new InvalidArgumentException('Telegram purchase offering selection token is invalid.');
@@ -48,6 +49,9 @@ final readonly class TelegramCustomerPurchaseOffering
         }
         if ($deviceLimit !== null && $deviceLimit < 1) {
             throw new InvalidArgumentException('Telegram purchase offering device limit is invalid.');
+        }
+        if (! in_array($accountType, ['customer', 'agent'], true)) {
+            throw new InvalidArgumentException('Telegram purchase offering account type is invalid.');
         }
     }
 }

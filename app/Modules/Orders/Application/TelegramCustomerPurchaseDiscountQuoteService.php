@@ -86,7 +86,11 @@ final readonly class TelegramCustomerPurchaseDiscountQuoteService implements Tel
                     previous: $exception,
                 );
             }
-            if ($sourceQuote->userId !== $subjectUserId
+            if ($sourceQuote->accountType === 'agent' || $sourceQuote->agentPricing !== null) {
+                throw new AuthorizationException('Benefit codes are unavailable for Agent purchase Quotes.');
+            }
+            if ($sourceQuote->accountType !== 'customer'
+                || $sourceQuote->userId !== $subjectUserId
                 || ! hash_equals($sourceQuote->configurationSnapshotHash, $sourceQuoteConfigurationHash)
                 || ! hash_equals($sourceQuote->offeringCode, $offering->offeringCode)
                 || $sourceQuote->basePriceIrr !== $offering->basePriceIrr
@@ -131,7 +135,9 @@ final readonly class TelegramCustomerPurchaseDiscountQuoteService implements Tel
                 ),
                 $correlationId,
             );
-            if (! hash_equals($quote->offeringCode, $sourceQuote->offeringCode)
+            if ($quote->accountType !== 'customer'
+                || $quote->agentPricing !== null
+                || ! hash_equals($quote->offeringCode, $sourceQuote->offeringCode)
                 || $quote->offeringVersion !== $sourceQuote->offeringVersion
                 || ! hash_equals($quote->offeringConfigurationHash, $sourceQuote->offeringConfigurationHash)
                 || $quote->basePriceIrr !== $sourceQuote->basePriceIrr
@@ -158,7 +164,8 @@ final readonly class TelegramCustomerPurchaseDiscountQuoteService implements Tel
                     previous: $exception,
                 );
             }
-            if (! hash_equals($currentOffering->offeringCode, $quote->offeringCode)
+            if ($currentOffering->accountType !== 'customer'
+                || ! hash_equals($currentOffering->offeringCode, $quote->offeringCode)
                 || $currentOffering->basePriceIrr !== $quote->basePriceIrr) {
                 throw new TelegramCustomerPurchaseQuoteRefreshRequired(
                     'Telegram discounted Quote Offering changed before completion.',
@@ -178,6 +185,7 @@ final readonly class TelegramCustomerPurchaseDiscountQuoteService implements Tel
                     $quote->validFrom,
                     $quote->expiresAt,
                     $quote->replayed,
+                    $quote->accountType,
                 ),
                 $consumption->consumptionPublicId,
                 $consumption->configurationHash,

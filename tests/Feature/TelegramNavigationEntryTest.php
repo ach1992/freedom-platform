@@ -76,7 +76,7 @@ final class TelegramNavigationCustomerPurchaseCatalog implements TelegramCustome
 
     public bool $offeringAvailable = true;
 
-    public function __construct()
+    public function __construct(string $accountType = 'customer')
     {
         $this->items = [
             new TelegramCustomerPurchaseOffering(
@@ -94,6 +94,7 @@ final class TelegramNavigationCustomerPurchaseCatalog implements TelegramCustome
                 30,
                 50 * 1024 * 1024 * 1024,
                 2,
+                $accountType,
             ),
             new TelegramCustomerPurchaseOffering(
                 str_repeat('d', 40),
@@ -110,6 +111,7 @@ final class TelegramNavigationCustomerPurchaseCatalog implements TelegramCustome
                 15,
                 null,
                 null,
+                $accountType,
             ),
         ];
     }
@@ -201,6 +203,7 @@ final class TelegramNavigationCustomerPurchaseQuote implements TelegramCustomerP
             $now,
             $now->modify('+15 minutes'),
             true,
+            $offering->accountType,
         );
     }
 
@@ -234,6 +237,7 @@ final class TelegramNavigationCustomerPurchaseQuote implements TelegramCustomerP
             $acceptedAt,
             $acceptedAt->modify('+15 minutes'),
             false,
+            $offering->accountType,
         );
     }
 
@@ -301,6 +305,7 @@ final class TelegramNavigationCustomerPurchaseDiscountQuote implements TelegramC
                 $acceptedAt,
                 $acceptedAt->modify('+15 minutes'),
                 false,
+                $offering->accountType,
             ),
             str_pad('01C', 26, '0'),
             str_repeat('c', 64),
@@ -3827,8 +3832,16 @@ SQL);
             ->count());
     }
 
-    public function test_approved_agent_gets_localized_agent_menu_status_without_customer_submit_or_purchase_actions(): void
+    public function test_approved_agent_gets_localized_agent_menu_and_single_purchase_with_execution_time_revalidation(): void
     {
+        $catalog = new TelegramNavigationCustomerPurchaseCatalog('agent');
+        $quotes = new TelegramNavigationCustomerPurchaseQuote($catalog);
+        $paymentMethods = new TelegramNavigationCustomerPurchasePaymentMethods;
+        $purchaseOrders = new TelegramNavigationCustomerPurchaseOrder;
+        $this->app->instance(TelegramCustomerPurchaseCatalog::class, $catalog);
+        $this->app->instance(TelegramCustomerPurchaseQuote::class, $quotes);
+        $this->app->instance(TelegramCustomerPurchasePaymentMethods::class, $paymentMethods);
+        $this->app->instance(TelegramCustomerPurchaseOrder::class, $purchaseOrders);
         $telegramUserId = 9730;
         $reviewerTelegramUserId = 9731;
         $processor = $this->app->make(TelegramUpdateProcessor::class);
@@ -3906,6 +3919,99 @@ SQL);
             ->where('session_version', $currentVersion)
             ->where('action', 'navigation.agent.submit')
             ->count());
+        self::assertSame(1, DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $session->id)
+            ->where('session_version', $currentVersion)
+            ->where('action', 'navigation.agent.purchase')
+            ->where('state', 'pending')
+            ->count());
+
+        $beforePurchase = $this->purchaseMutationCounts();
+        $purchaseToken = $this->callbackToken('navigation.agent.purchase', $accountId);
+        $this->accept($this->callbackPayload(7303, $telegramUserId, 'agent_approved', 'en', $purchaseToken));
+        $processor->process('123456789', 7303);
+        $purchaseSession = DB::table('telegram_interaction_sessions')->where('id', (int) $session->id)->first(['state', 'version']);
+        self::assertNotNull($purchaseSession);
+        self::assertSame('purchase_catalog', (string) $purchaseSession->state);
+        self::assertSame($currentVersion + 1, (int) $purchaseSession->version);
+        self::assertStringContainsString(
+            'The listed amount is the base price.',
+            $this->latestConfidentialPresentation(),
+        );
+        self::assertSame($beforePurchase, $this->purchaseMutationCounts());
+
+        $offeringToken = $this->callbackToken('navigation.purchase.'.str_repeat('c', 40), $accountId);
+        $this->accept($this->callbackPayload(7320, $telegramUserId, 'agent_approved', 'en', $offeringToken));
+        $processor->process('123456789', 7320);
+        $quoteToken = $this->callbackToken('navigation.purchase.quote', $accountId);
+        $this->accept($this->callbackPayload(7321, $telegramUserId, 'agent_approved', 'en', $quoteToken));
+        $processor->process('123456789', 7321);
+        self::assertCount(1, $quotes->calls);
+        $quoteSession = DB::table('telegram_interaction_sessions')
+            ->where('id', (int) $session->id)
+            ->first(['state', 'version']);
+        self::assertNotNull($quoteSession);
+        self::assertSame('purchase_quote', (string) $quoteSession->state);
+        self::assertSame(0, DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $session->id)
+            ->where('session_version', (int) $quoteSession->version)
+            ->where('action', 'navigation.purchase.discount')
+            ->count());
+        self::assertSame(1, DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $session->id)
+            ->where('session_version', (int) $quoteSession->version)
+            ->where('action', 'navigation.purchase.payment_methods')
+            ->where('state', 'pending')
+            ->count());
+        self::assertStringContainsString('Service Purchase Quote', $this->latestConfidentialPresentation());
+
+        $paymentToken = $this->callbackToken('navigation.purchase.payment_methods', $accountId);
+        $this->accept($this->callbackPayload(7322, $telegramUserId, 'agent_approved', 'en', $paymentToken));
+        $processor->process('123456789', 7322);
+        self::assertCount(1, $paymentMethods->calls);
+        self::assertCount(1, $purchaseOrders->openCalls);
+        self::assertSame($userId, $paymentMethods->calls[0]['actor_user_id']);
+        self::assertSame($userId, $paymentMethods->calls[0]['subject_user_id']);
+        self::assertSame($userId, $purchaseOrders->openCalls[0]['actor_user_id']);
+        self::assertSame($userId, $purchaseOrders->openCalls[0]['subject_user_id']);
+        $paymentSession = DB::table('telegram_interaction_sessions')
+            ->where('id', (int) $session->id)
+            ->first(['state', 'version', 'payload']);
+        self::assertNotNull($paymentSession);
+        self::assertSame('purchase_payment_methods', (string) $paymentSession->state);
+        self::assertStringContainsString(str_pad('01K', 26, '0'), (string) $paymentSession->payload);
+        self::assertStringContainsString(str_pad('01N', 26, '0'), (string) $paymentSession->payload);
+        self::assertSame($beforePurchase, $this->purchaseMutationCounts());
+
+        $deliveryCount = DB::table('telegram_delivery_operations')->where('recipient_chat_id', $telegramUserId)->count();
+        $processor->process('123456789', 7303);
+        self::assertSame((int) $paymentSession->version, (int) DB::table('telegram_interaction_sessions')->where('id', (int) $session->id)->value('version'));
+        self::assertSame($deliveryCount, DB::table('telegram_delivery_operations')->where('recipient_chat_id', $telegramUserId)->count());
+        self::assertSame($beforePurchase, $this->purchaseMutationCounts());
+
+        $this->accept($this->payload(7304, $telegramUserId, 'agent_approved', 'en', '/menu'));
+        $processor->process('123456789', 7304);
+        $agentToken = $this->callbackToken('navigation.agent', $accountId);
+        $this->accept($this->callbackPayload(7305, $telegramUserId, 'agent_approved', 'en', $agentToken));
+        $processor->process('123456789', 7305);
+        $staleVersion = (int) DB::table('telegram_interaction_sessions')->where('id', (int) $session->id)->value('version');
+        $stalePurchaseToken = $this->callbackToken('navigation.agent.purchase', $accountId);
+        DB::table('agent_profiles')->where('user_id', $userId)->update([
+            'status' => 'suspended',
+            'suspended_at' => now('UTC'),
+            'updated_at' => now('UTC'),
+        ]);
+        $beforeDeniedPurchase = $this->purchaseMutationCounts();
+
+        $this->accept($this->callbackPayload(7306, $telegramUserId, 'agent_approved', 'en', $stalePurchaseToken));
+        $processor->process('123456789', 7306);
+
+        $deniedSession = DB::table('telegram_interaction_sessions')->where('id', (int) $session->id)->first(['state', 'version']);
+        self::assertNotNull($deniedSession);
+        self::assertSame('agent_cooperation', (string) $deniedSession->state);
+        self::assertSame($staleVersion, (int) $deniedSession->version);
+        self::assertStringContainsString('Agent status: Suspended', $this->latestConfidentialPresentation());
+        self::assertSame($beforeDeniedPurchase, $this->purchaseMutationCounts());
     }
 
     public function test_agent_navigation_recovers_through_back_entry_command_and_cancel_without_agent_mutation(): void
