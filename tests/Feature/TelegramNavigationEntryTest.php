@@ -3827,7 +3827,7 @@ SQL);
             ->count());
     }
 
-    public function test_approved_agent_gets_localized_agent_menu_status_without_customer_submit_or_purchase_actions(): void
+    public function test_approved_agent_gets_localized_agent_menu_and_single_purchase_with_execution_time_revalidation(): void
     {
         $telegramUserId = 9730;
         $reviewerTelegramUserId = 9731;
@@ -3906,6 +3906,52 @@ SQL);
             ->where('session_version', $currentVersion)
             ->where('action', 'navigation.agent.submit')
             ->count());
+        self::assertSame(1, DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $session->id)
+            ->where('session_version', $currentVersion)
+            ->where('action', 'navigation.agent.purchase')
+            ->where('state', 'pending')
+            ->count());
+
+        $beforePurchase = $this->purchaseMutationCounts();
+        $purchaseToken = $this->callbackToken('navigation.agent.purchase', $accountId);
+        $this->accept($this->callbackPayload(7303, $telegramUserId, 'agent_approved', 'en', $purchaseToken));
+        $processor->process('123456789', 7303);
+        $purchaseSession = DB::table('telegram_interaction_sessions')->where('id', (int) $session->id)->first(['state', 'version']);
+        self::assertNotNull($purchaseSession);
+        self::assertSame('purchase_catalog', (string) $purchaseSession->state);
+        self::assertSame($currentVersion + 1, (int) $purchaseSession->version);
+        self::assertSame($beforePurchase, $this->purchaseMutationCounts());
+
+        $deliveryCount = DB::table('telegram_delivery_operations')->where('recipient_chat_id', $telegramUserId)->count();
+        $processor->process('123456789', 7303);
+        self::assertSame($currentVersion + 1, (int) DB::table('telegram_interaction_sessions')->where('id', (int) $session->id)->value('version'));
+        self::assertSame($deliveryCount, DB::table('telegram_delivery_operations')->where('recipient_chat_id', $telegramUserId)->count());
+        self::assertSame($beforePurchase, $this->purchaseMutationCounts());
+
+        $this->accept($this->payload(7304, $telegramUserId, 'agent_approved', 'en', '/menu'));
+        $processor->process('123456789', 7304);
+        $agentToken = $this->callbackToken('navigation.agent', $accountId);
+        $this->accept($this->callbackPayload(7305, $telegramUserId, 'agent_approved', 'en', $agentToken));
+        $processor->process('123456789', 7305);
+        $staleVersion = (int) DB::table('telegram_interaction_sessions')->where('id', (int) $session->id)->value('version');
+        $stalePurchaseToken = $this->callbackToken('navigation.agent.purchase', $accountId);
+        DB::table('agent_profiles')->where('user_id', $userId)->update([
+            'status' => 'suspended',
+            'suspended_at' => now('UTC'),
+            'updated_at' => now('UTC'),
+        ]);
+        $beforeDeniedPurchase = $this->purchaseMutationCounts();
+
+        $this->accept($this->callbackPayload(7306, $telegramUserId, 'agent_approved', 'en', $stalePurchaseToken));
+        $processor->process('123456789', 7306);
+
+        $deniedSession = DB::table('telegram_interaction_sessions')->where('id', (int) $session->id)->first(['state', 'version']);
+        self::assertNotNull($deniedSession);
+        self::assertSame('agent_cooperation', (string) $deniedSession->state);
+        self::assertSame($staleVersion, (int) $deniedSession->version);
+        self::assertStringContainsString('Agent status: Suspended', $this->latestConfidentialPresentation());
+        self::assertSame($beforeDeniedPurchase, $this->purchaseMutationCounts());
     }
 
     public function test_agent_navigation_recovers_through_back_entry_command_and_cancel_without_agent_mutation(): void

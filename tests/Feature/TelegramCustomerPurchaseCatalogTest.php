@@ -4,7 +4,14 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Modules\AccessControl\Application\AccessChangeContext;
+use App\Modules\Agents\Application\AgentPricingService;
+use App\Modules\Agents\Domain\AgentPricingAction;
+use App\Modules\Agents\Domain\AgentPricingProfileDefinition;
+use App\Modules\Agents\Domain\AgentPricingRuleDefinition;
+use App\Modules\Agents\Domain\AgentPricingState;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCatalog;
+use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseDiscountQuote;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseQuote;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseCatalogPage;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseOffering;
@@ -250,7 +257,7 @@ final class TelegramCustomerPurchaseCatalogTest extends TestCase
         $catalog->pageForSelf($scenario['user_id'], $scenario['user_id'], 1, 6);
     }
 
-    public function test_cross_actor_and_non_customer_access_fail_closed(): void
+    public function test_cross_actor_and_unsupported_account_access_fail_closed(): void
     {
         $scenario = $this->scenario();
         $catalog = $this->app->make(TelegramCustomerPurchaseCatalog::class);
@@ -263,14 +270,175 @@ final class TelegramCustomerPurchaseCatalogTest extends TestCase
         }
 
         DB::table('users')->where('id', $scenario['user_id'])->update([
-            'account_type' => 'agent',
+            'account_type' => 'administrator',
             'updated_at' => now('UTC'),
         ]);
         $this->expectException(AuthorizationException::class);
         $catalog->pageForSelf($scenario['user_id'], $scenario['user_id'], 1, 6);
     }
 
-    /** @return array{user_id:int,eligible_tag_id:int,capacity_id:int} */
+    public function test_agent_catalog_quote_pricing_replay_and_discount_denial_use_canonical_authorities(): void
+    {
+        $scenario = $this->scenario();
+        $catalog = $this->app->make(TelegramCustomerPurchaseCatalog::class);
+        $customerOffering = $catalog->pageForSelf($scenario['user_id'], $scenario['user_id'], 1, 6)->items[0];
+        self::assertSame(
+            substr(hash('sha256', 'telegram-purchase-offering-v1:'.$scenario['user_id'].':purchase-standard'), 0, 40),
+            $customerOffering->selectionToken,
+        );
+        self::assertSame('customer', $customerOffering->accountType);
+
+        $pricingProfileCode = 'telegram-agent-purchase-test';
+        $pricing = $this->app->make(AgentPricingService::class);
+        $context = static fn (string $suffix): AccessChangeContext => new AccessChangeContext(
+            hash('sha256', 'telegram-agent-pricing-'.$suffix),
+            substr(hash('sha256', 'telegram-agent-pricing-correlation-'.$suffix), 0, 64),
+            'telegram_agent_purchase_test',
+            'Telegram Agent purchase pricing integration fixture.',
+            $scenario['administrator_id'],
+        );
+        $pricing->createProfile(
+            'telegram.agent.profile.create.0001',
+            $pricingProfileCode,
+            new AgentPricingProfileDefinition(AgentPricingState::Active, false),
+            $context('profile'),
+        );
+        $pricing->createRule(
+            'telegram.agent.rule.create.000001',
+            $pricingProfileCode,
+            'telegram-purchase-specific',
+            new AgentPricingRuleDefinition(
+                AgentPricingState::Active,
+                750_000,
+                AgentPricingAction::Purchase,
+                $scenario['eligible_offering_id'],
+                $scenario['server_id'],
+                $scenario['product_id'],
+            ),
+            $context('rule'),
+        );
+
+        $now = now('UTC');
+        $applicationId = (int) DB::table('agent_applications')->insertGetId([
+            'customer_id' => $scenario['user_id'],
+            'active_customer_id' => null,
+            'state' => 'approved',
+            'claimed_by_administrator_id' => null,
+            'decided_by_administrator_id' => $scenario['administrator_id'],
+            'decision_reason_code' => 'approved',
+            'decision_reason' => 'Approved Agent purchase integration fixture.',
+            'application_version' => 1,
+            'submitted_at' => $now,
+            'claimed_at' => $now,
+            'decided_at' => $now,
+            'reapply_allowed_at' => null,
+            'reapplication_released_at' => null,
+            'reapplication_released_by_administrator_id' => null,
+            'reapplication_release_reason_code' => null,
+            'reapplication_release_reason' => null,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        DB::table('agent_profiles')->insert([
+            'user_id' => $scenario['user_id'],
+            'status' => 'active',
+            'pricing_profile_code' => $pricingProfileCode,
+            'approved_application_id' => $applicationId,
+            'approved_by_administrator_id' => $scenario['administrator_id'],
+            'approved_at' => $now,
+            'suspended_at' => null,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        DB::table('users')->where('id', $scenario['user_id'])->update([
+            'account_type' => 'agent',
+            'updated_at' => $now,
+        ]);
+        $agentPage = $catalog->pageForSelf($scenario['user_id'], $scenario['user_id'], 1, 6);
+        self::assertSame(1, $agentPage->totalItems);
+        $agentOffering = $agentPage->items[0];
+        self::assertSame('agent', $agentOffering->accountType);
+        self::assertNotSame($customerOffering->selectionToken, $agentOffering->selectionToken);
+        self::assertSame(
+            substr(hash('sha256', 'telegram-purchase-offering-v2:agent:'.$scenario['user_id'].':purchase-standard'), 0, 40),
+            $agentOffering->selectionToken,
+        );
+
+        $quotes = $this->app->make(TelegramCustomerPurchaseQuote::class);
+        $acceptedAt = new DateTimeImmutable('now', new DateTimeZone('UTC'));
+        $callbackPublicId = (string) Str::ulid();
+        $preview = $quotes->quoteForSelf(
+            $scenario['user_id'],
+            $scenario['user_id'],
+            $agentOffering->selectionToken,
+            $acceptedAt,
+            'telegram-purchase-quote:'.$callbackPublicId,
+            'tg-purchase-quote:'.$callbackPublicId,
+        );
+        self::assertSame('agent', $preview->accountType);
+        self::assertSame(900_000, $preview->basePriceIrr);
+        self::assertSame(750_000, $preview->effectivePriceIrr);
+        self::assertSame(750_000, $preview->finalPriceIrr);
+        self::assertSame(0, $preview->discountIrr);
+        $stored = DB::table('quotes')->where('public_id', $preview->quotePublicId)->first([
+            'account_type_snapshot', 'override_source', 'override_price_irr', 'agent_pricing_resolution_id',
+        ]);
+        self::assertNotNull($stored);
+        self::assertSame('agent', (string) $stored->account_type_snapshot);
+        self::assertSame('agent', (string) $stored->override_source);
+        self::assertSame(750_000, (int) $stored->override_price_irr);
+        self::assertGreaterThan(0, (int) $stored->agent_pricing_resolution_id);
+        self::assertSame(1, DB::table('agent_pricing_resolutions')->count());
+
+        $replay = $quotes->quoteForSelf(
+            $scenario['user_id'],
+            $scenario['user_id'],
+            $agentOffering->selectionToken,
+            $acceptedAt,
+            'telegram-purchase-quote:'.$callbackPublicId,
+            'tg-purchase-quote:'.$callbackPublicId,
+        );
+        self::assertTrue($replay->replayed);
+        self::assertSame($preview->quotePublicId, $replay->quotePublicId);
+        self::assertSame($preview->configurationSnapshotHash, $replay->configurationSnapshotHash);
+        self::assertSame(1, DB::table('quotes')->count());
+        self::assertSame(1, DB::table('agent_pricing_resolutions')->count());
+
+        $discounts = $this->app->make(TelegramCustomerPurchaseDiscountQuote::class);
+        $beforeDiscountEffects = $this->businessEffectCounts();
+        try {
+            $discounts->requoteForSelf(
+                $scenario['user_id'],
+                $scenario['user_id'],
+                $agentOffering->selectionToken,
+                $preview->quotePublicId,
+                $preview->configurationSnapshotHash,
+                'IGNORED-AGENT-CODE',
+                $acceptedAt,
+                hash('sha256', 'telegram-agent-discount-denied'),
+            );
+            self::fail('Expected Agent Benefit Code continuation to fail closed.');
+        } catch (AuthorizationException $exception) {
+            self::assertSame('Benefit codes are unavailable for Agent purchase Quotes.', $exception->getMessage());
+        }
+        self::assertSame($beforeDiscountEffects, $this->businessEffectCounts());
+
+        DB::table('agent_profiles')->where('user_id', $scenario['user_id'])->update([
+            'status' => 'suspended',
+            'suspended_at' => now('UTC'),
+            'updated_at' => now('UTC'),
+        ]);
+        $beforeDenied = $this->businessEffectCounts();
+        try {
+            $catalog->pageForSelf($scenario['user_id'], $scenario['user_id'], 1, 6);
+            self::fail('Expected suspended Agent Catalog access to fail closed.');
+        } catch (\DomainException $exception) {
+            self::assertSame('Route selection requires an active agent profile.', $exception->getMessage());
+        }
+        self::assertSame($beforeDenied, $this->businessEffectCounts());
+    }
+
+    /** @return array{user_id:int,administrator_id:int,eligible_tag_id:int,capacity_id:int,eligible_offering_id:int,product_id:int,server_id:int} */
     private function scenario(): array
     {
         $now = now('UTC');
@@ -463,6 +631,7 @@ final class TelegramCustomerPurchaseCatalogTest extends TestCase
             $eligibleTagId,
             'normal',
             $now,
+            'both',
         );
         $this->route($eligibleOfferingId, $serverId, $targetId, $now);
         DB::table('plan_offerings')->where('id', $eligibleOfferingId)->update([
@@ -511,8 +680,12 @@ final class TelegramCustomerPurchaseCatalogTest extends TestCase
 
         return [
             'user_id' => $userId,
+            'administrator_id' => $administratorId,
             'eligible_tag_id' => $eligibleTagId,
             'capacity_id' => $capacityId,
+            'eligible_offering_id' => $eligibleOfferingId,
+            'product_id' => $productId,
+            'server_id' => $serverId,
         ];
     }
 
@@ -525,6 +698,7 @@ final class TelegramCustomerPurchaseCatalogTest extends TestCase
         int $tagId,
         string $tierCode,
         mixed $now,
+        string $audience = 'customers',
     ): int {
         $offeringId = (int) DB::table('plan_offerings')->insertGetId([
             'code' => $code,
@@ -535,7 +709,7 @@ final class TelegramCustomerPurchaseCatalogTest extends TestCase
             'service_mode_code' => 'standard',
             'service_mode_label_fa' => 'استاندارد',
             'service_mode_label_en' => 'Standard',
-            'audience' => 'customers',
+            'audience' => $audience,
             'server_selection_mode' => 'system_selects',
             'protocol_selection_mode' => 'fixed',
             'tag_match_mode' => 'all',
