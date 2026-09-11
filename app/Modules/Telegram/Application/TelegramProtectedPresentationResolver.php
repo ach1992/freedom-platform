@@ -15,13 +15,24 @@ final readonly class TelegramProtectedPresentationResolver
     public function __construct(
         private TelegramCustomerPurchaseCardToCardPayment $cardToCardPayments,
         private Translator $translator,
+        private ?TelegramMembershipJoinPresentationResolver $membershipJoinPresentations = null,
     ) {}
 
     public function resolveForSelf(
         int $userId,
         TelegramProtectedPresentationReference $reference,
     ): ProtectedTelegramPresentation {
-        if ($userId < 1 || ! $reference->isCardToCardDestination()) {
+        if ($userId < 1) {
+            throw new RuntimeException('Protected Telegram presentation reference is unavailable.');
+        }
+        if ($reference->isMembershipJoinPrompt()) {
+            if ($this->membershipJoinPresentations === null) {
+                throw new RuntimeException('Protected Telegram membership presentation resolver is unavailable.');
+            }
+
+            return $this->membershipJoinPresentations->resolveForSelf($userId, $reference);
+        }
+        if (! $reference->isCardToCardDestination()) {
             throw new RuntimeException('Protected Telegram presentation reference is unavailable.');
         }
 

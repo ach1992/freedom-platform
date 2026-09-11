@@ -28,6 +28,8 @@ use App\Modules\Telegram\Application\TelegramGiftCardNavigationHandler;
 use App\Modules\Telegram\Application\TelegramInteractionHandlerRegistry;
 use App\Modules\Telegram\Application\TelegramInteractionPolicy;
 use App\Modules\Telegram\Application\TelegramInteractiveDeliveryOutboxHandler;
+use App\Modules\Telegram\Application\TelegramMembershipConfigurationFence;
+use App\Modules\Telegram\Application\TelegramMembershipJoinPresentationResolver;
 use App\Modules\Telegram\Application\TelegramNavigationCompositeHandler;
 use App\Modules\Telegram\Application\TelegramNavigationEntryGateway;
 use App\Modules\Telegram\Application\TelegramNavigationHandler;
@@ -137,6 +139,7 @@ final class TelegramServiceProvider extends ServiceProvider
                 $application->make(DatabaseManager::class),
                 $application->make(AdministratorPermissionAuthorizer::class),
                 $application->make(TelegramConfigurationMutationAudit::class),
+                $application->make(TelegramMembershipConfigurationFence::class),
             ),
         );
         $this->app->singleton(
@@ -190,6 +193,7 @@ final class TelegramServiceProvider extends ServiceProvider
                 $application->make(TelegramRuntimeConfiguration::class),
             ),
         );
+        $this->app->singleton(TelegramMembershipJoinPresentationResolver::class);
         $this->app->singleton(TelegramProtectedPresentationResolver::class);
         $this->app->singleton(
             TelegramMutationTransport::class,

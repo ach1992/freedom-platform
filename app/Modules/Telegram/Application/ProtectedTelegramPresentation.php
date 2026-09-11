@@ -10,10 +10,14 @@ use Stringable;
 
 /**
  * Restricted payload held only until the one provider-boundary attempt.
- * Its string/debug representations cannot expose link, QR, or copy material.
+ * Its string/debug/serialization representations cannot expose link, QR, copy,
+ * or URL material.
  */
 final readonly class ProtectedTelegramPresentation implements Stringable
 {
+    /**
+     * @param  list<ProtectedTelegramHttpsUrlButton>  $httpsUrlButtons
+     */
     private function __construct(
         private ?string $text,
         private ?string $documentContents,
@@ -21,6 +25,7 @@ final readonly class ProtectedTelegramPresentation implements Stringable
         private ?string $caption,
         private ?string $copyButtonText = null,
         private ?string $copyText = null,
+        private array $httpsUrlButtons = [],
     ) {}
 
     public static function plainText(string $text): self
@@ -47,6 +52,21 @@ final readonly class ProtectedTelegramPresentation implements Stringable
         }
 
         return new self($text, null, null, null, $buttonText, $copyText);
+    }
+
+    /** @param list<ProtectedTelegramHttpsUrlButton> $buttons */
+    public static function plainTextWithHttpsUrlButtons(string $text, array $buttons): self
+    {
+        if ($text === '' || $buttons === [] || count($buttons) > 32) {
+            throw new InvalidArgumentException('Protected Telegram HTTPS URL presentation is invalid.');
+        }
+        foreach ($buttons as $button) {
+            if (! $button instanceof ProtectedTelegramHttpsUrlButton) {
+                throw new InvalidArgumentException('Protected Telegram HTTPS URL presentation contains an invalid button.');
+            }
+        }
+
+        return new self($text, null, null, null, null, null, array_values($buttons));
     }
 
     public static function svgDocument(string $contents, string $caption): self
@@ -83,6 +103,17 @@ final readonly class ProtectedTelegramPresentation implements Stringable
         return $this->copyText ?? throw new LogicException('Protected Telegram copy text is unavailable.');
     }
 
+    public function hasHttpsUrlButtons(): bool
+    {
+        return $this->httpsUrlButtons !== [];
+    }
+
+    /** @return list<ProtectedTelegramHttpsUrlButton> */
+    public function httpsUrlButtons(): array
+    {
+        return $this->httpsUrlButtons;
+    }
+
     public function documentContents(): string
     {
         return $this->documentContents ?? throw new LogicException('Protected Telegram document is unavailable.');
@@ -107,5 +138,17 @@ final readonly class ProtectedTelegramPresentation implements Stringable
     public function __toString(): string
     {
         return '[PROTECTED_TELEGRAM_PRESENTATION]';
+    }
+
+    /** @return never */
+    public function __serialize(): array
+    {
+        throw new LogicException('Protected Telegram presentations cannot be serialized.');
+    }
+
+    /** @param array<array-key,mixed> $data */
+    public function __unserialize(array $data): void
+    {
+        throw new LogicException('Protected Telegram presentations cannot be unserialized.');
     }
 }
