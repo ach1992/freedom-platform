@@ -227,6 +227,67 @@ final class TelegramMembershipJoinPresentationTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_membership_v2_reference_replay_is_exact_and_changed_reference_semantics_conflict(): void
+    {
+        $joinUrl = 'https://t.me/+PrivateJoinSecret290Replay';
+        $channelId = $this->activeChannel('join-replay-290', -1002900000009, 'private', 'Replay 290', $joinUrl);
+        $userId = $this->customerWithTelegram(790000009);
+        $this->activeRule('join-replay-rule-290', [$channelId]);
+        $reference = $this->referenceFor($userId, 'en');
+        $queue = $this->queue();
+
+        $created = NonRestrictedTelegramPresentationTestFactory::queueProtectedReference(
+            $queue,
+            TelegramDeliveryAction::Send,
+            790000009,
+            $reference,
+            'membership-join-replay-290-001',
+            'correlation-membership-join-replay-290',
+        );
+        self::assertFalse($created->replayed);
+
+        $replayed = NonRestrictedTelegramPresentationTestFactory::queueProtectedReference(
+            $queue,
+            TelegramDeliveryAction::Send,
+            790000009,
+            TelegramProtectedPresentationReference::restore($reference->durableText()),
+            'membership-join-replay-290-001',
+            'correlation-membership-join-replay-290',
+        );
+        self::assertTrue($replayed->replayed);
+        self::assertSame($created->publicId, $replayed->publicId);
+        self::assertSame($created->outboxEventId, $replayed->outboxEventId);
+        self::assertSame(1, DB::table('telegram_delivery_operations')->count());
+        self::assertSame(1, DB::table('outbox_messages')->where('event_type', TelegramDeliveryQueueService::OUTBOX_EVENT_TYPE)->count());
+
+        $operation = DB::table('telegram_delivery_operations')->where('public_id', $created->publicId)->first();
+        self::assertNotNull($operation);
+        self::assertSame($reference->durableText(), (string) $operation->presentation_text);
+        self::assertStringNotContainsString($joinUrl, (string) $operation->request_fingerprint);
+
+        try {
+            NonRestrictedTelegramPresentationTestFactory::queueProtectedReference(
+                $queue,
+                TelegramDeliveryAction::Send,
+                790000009,
+                TelegramProtectedPresentationReference::membershipJoinPrompt(
+                    'bot_entry',
+                    null,
+                    str_repeat('b', 64),
+                    'en',
+                ),
+                'membership-join-replay-290-001',
+                'correlation-membership-join-replay-290',
+            );
+            self::fail('Changed membership protected-reference semantics must conflict on the same request key.');
+        } catch (DomainException $exception) {
+            self::assertStringContainsString('conflicting semantics', $exception->getMessage());
+        }
+
+        self::assertSame(1, DB::table('telegram_delivery_operations')->count());
+        self::assertSame(1, DB::table('outbox_messages')->where('event_type', TelegramDeliveryQueueService::OUTBOX_EVENT_TYPE)->count());
+    }
+
     public function test_protected_delivery_persists_no_join_secret_and_reveals_ordered_links_only_to_provider(): void
     {
         $privateUrl = 'https://t.me/+PrivateJoinSecret290B';
