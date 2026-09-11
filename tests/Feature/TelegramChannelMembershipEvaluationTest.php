@@ -450,9 +450,8 @@ final class TelegramChannelMembershipEvaluationTest extends TestCase
 
         /** @var list<string> $redisCommands */
         $redisCommands = [];
-        foreach (array_keys(Redis::connections()) as $connectionName) {
-            Redis::purge($connectionName);
-        }
+        Redis::purge('default');
+        Redis::purge('cache');
         Redis::enableEvents();
         $redis = Redis::connection('cache');
         $redis->listen(static function (CommandExecuted $command) use (&$redisCommands): void {
