@@ -30,6 +30,7 @@ use App\Modules\Telegram\Application\TelegramGiftCardNavigationHandler;
 use App\Modules\Telegram\Application\TelegramInteractionHandlerRegistry;
 use App\Modules\Telegram\Application\TelegramInteractionPolicy;
 use App\Modules\Telegram\Application\TelegramInteractionSessionService;
+use App\Modules\Telegram\Application\TelegramInteractionUpdateBindingService;
 use App\Modules\Telegram\Application\TelegramInteractiveDeliveryOutboxHandler;
 use App\Modules\Telegram\Application\TelegramMembershipConfigurationFence;
 use App\Modules\Telegram\Application\TelegramMembershipJoinPresentationResolver;
@@ -99,6 +100,8 @@ final class TelegramServiceProvider extends ServiceProvider
             TelegramNavigationEntryGateway::class,
             fn (Application $application): TelegramNavigationEntryGateway => new TelegramNavigationEntryGateway(
                 $application->make(TelegramInteractionSessionService::class),
+                $application->make(DatabaseManager::class),
+                $application->make(TelegramInteractionUpdateBindingService::class),
                 fn (): TelegramChannelMembershipEvaluator => $application->make(TelegramChannelMembershipEvaluator::class),
                 fn (): NonRestrictedTelegramPresentationFactory => $application->make(NonRestrictedTelegramPresentationFactory::class),
                 fn (): TelegramDeliveryQueueService => $application->make(TelegramDeliveryQueueService::class),

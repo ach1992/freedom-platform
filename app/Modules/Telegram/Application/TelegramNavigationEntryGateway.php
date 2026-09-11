@@ -8,6 +8,7 @@ use App\Modules\Telegram\Domain\TelegramDeliveryAction;
 use Closure;
 use DomainException;
 use Illuminate\Contracts\Translation\Translator;
+use Illuminate\Database\DatabaseManager;
 use RuntimeException;
 
 final readonly class TelegramNavigationEntryGateway
@@ -24,6 +25,8 @@ final readonly class TelegramNavigationEntryGateway
      */
     public function __construct(
         private TelegramInteractionSessionService $sessions,
+        private DatabaseManager $database,
+        private TelegramInteractionUpdateBindingService $updateBindings,
         private Closure $membership,
         private Closure $presentations,
         private Closure $delivery,
@@ -54,29 +57,49 @@ final readonly class TelegramNavigationEntryGateway
                 new TelegramChannelMembershipResolutionRequest($userId, 'bot_entry', null),
             );
         } catch (DomainException|RuntimeException) {
-            $this->queueSafeBlockedFeedback($botId, $updateId, $telegramUserId, $locale);
+            $this->queueSafeBlockedFeedback(
+                $botId,
+                $updateId,
+                $telegramAccountId,
+                $telegramUserId,
+                $locale,
+            );
 
             return false;
         }
 
         if ($evaluation->plan->required && $evaluation->telegramUserId !== $telegramUserId) {
-            $this->queueSafeBlockedFeedback($botId, $updateId, $telegramUserId, $locale);
+            $this->queueSafeBlockedFeedback(
+                $botId,
+                $updateId,
+                $telegramAccountId,
+                $telegramUserId,
+                $locale,
+            );
 
             return false;
         }
 
         if ($evaluation->decision === TelegramChannelMembershipEvaluationDecision::Unsatisfied) {
-            ($this->delivery)()->queueProtectedReference(
-                TelegramDeliveryAction::Send,
-                $telegramUserId,
-                TelegramProtectedPresentationReference::membershipJoinPrompt(
-                    'bot_entry',
-                    null,
-                    $evaluation->plan->configurationHash,
-                    $locale,
-                ),
-                "telegram-entry-membership-join:{$botId}:{$updateId}",
-                "tg-entry:{$botId}:{$updateId}:mjoin",
+            $reference = TelegramProtectedPresentationReference::membershipJoinPrompt(
+                'bot_entry',
+                null,
+                $evaluation->plan->configurationHash,
+                $locale,
+            );
+            $this->persistBlockedEntry(
+                $botId,
+                $updateId,
+                $telegramAccountId,
+                function () use ($botId, $updateId, $telegramUserId, $reference): void {
+                    ($this->delivery)()->queueProtectedReference(
+                        TelegramDeliveryAction::Send,
+                        $telegramUserId,
+                        $reference,
+                        "telegram-entry-membership-join:{$botId}:{$updateId}",
+                        "tg-entry:{$botId}:{$updateId}:mjoin",
+                    );
+                },
             );
 
             return false;
@@ -86,7 +109,13 @@ final readonly class TelegramNavigationEntryGateway
             TelegramChannelMembershipEvaluationDecision::ManualReview,
             TelegramChannelMembershipEvaluationDecision::ConfigurationChanged,
         ], true)) {
-            $this->queueSafeBlockedFeedback($botId, $updateId, $telegramUserId, $locale);
+            $this->queueSafeBlockedFeedback(
+                $botId,
+                $updateId,
+                $telegramAccountId,
+                $telegramUserId,
+                $locale,
+            );
 
             return false;
         }
@@ -145,6 +174,7 @@ final readonly class TelegramNavigationEntryGateway
     private function queueSafeBlockedFeedback(
         string $botId,
         int $updateId,
+        int $telegramAccountId,
         int $telegramUserId,
         string $locale,
     ): void {
@@ -158,15 +188,56 @@ final readonly class TelegramNavigationEntryGateway
                 return $this->text;
             }
         };
+        $presentation = ($this->presentations)()->fromSource($source);
 
-        ($this->delivery)()->queue(
-            TelegramDeliveryAction::Send,
-            $telegramUserId,
-            null,
-            ($this->presentations)()->fromSource($source),
-            "telegram-entry-membership-feedback:{$botId}:{$updateId}",
-            "tg-entry:{$botId}:{$updateId}:mfail",
+        $this->persistBlockedEntry(
+            $botId,
+            $updateId,
+            $telegramAccountId,
+            function () use ($botId, $updateId, $telegramUserId, $presentation): void {
+                ($this->delivery)()->queue(
+                    TelegramDeliveryAction::Send,
+                    $telegramUserId,
+                    null,
+                    $presentation,
+                    "telegram-entry-membership-feedback:{$botId}:{$updateId}",
+                    "tg-entry:{$botId}:{$updateId}:mfail",
+                );
+            },
         );
+    }
+
+    /** @param Closure(): void $queue */
+    private function persistBlockedEntry(
+        string $botId,
+        int $updateId,
+        int $telegramAccountId,
+        Closure $queue,
+    ): void {
+        $requestKey = "telegram-update:{$botId}:{$updateId}:message";
+        $connection = $this->database->connection();
+
+        $connection->transaction(function () use (
+            $botId,
+            $updateId,
+            $telegramAccountId,
+            $requestKey,
+            $queue,
+        ): void {
+            $binding = $this->updateBindings->bind(
+                $botId,
+                $updateId,
+                $telegramAccountId,
+                'message',
+                $requestKey,
+            );
+
+            if ($binding->replayed || $binding->sessionPublicId !== null) {
+                return;
+            }
+
+            $queue();
+        }, 3);
     }
 
     private function translation(string $key, string $locale): string
