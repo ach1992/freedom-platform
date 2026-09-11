@@ -151,6 +151,43 @@ final class TelegramChannelMembershipEvaluationTest extends TestCase
         self::assertSame(TelegramChannelMembershipEvaluationDecision::Satisfied, $result->decision);
     }
 
+    public function test_all_member_and_any_not_member_complete_truth_tables(): void
+    {
+        $ownerId = $this->administrator();
+
+        $allFirst = $this->channel('eval-all-member-first', -1002400000051);
+        $allSecond = $this->channel('eval-all-member-second', -1002400000052);
+        $allUserId = $this->customerWithTelegram(700000051);
+        $this->activeRule($ownerId, 'eval-all-member-rule', [$allFirst, $allSecond], 'all', 'fail_closed', 'service_view');
+        $memberLookup = $this->lookup(static fn (): TelegramMembershipLookupResult => new TelegramMembershipLookupResult(
+            TelegramMembershipEvidence::Member,
+            'telegram_membership_member',
+        ));
+
+        $allResult = $this->evaluator($memberLookup)->evaluate(
+            new TelegramChannelMembershipResolutionRequest($allUserId, 'service_view'),
+        );
+
+        self::assertSame(TelegramChannelMembershipEvaluationDecision::Satisfied, $allResult->decision);
+        self::assertCount(2, $memberLookup->calls);
+
+        $anyFirst = $this->channel('eval-any-left-first', -1002400000061);
+        $anySecond = $this->channel('eval-any-left-second', -1002400000062);
+        $anyUserId = $this->customerWithTelegram(700000061);
+        $this->activeRule($ownerId, 'eval-any-left-rule', [$anyFirst, $anySecond], 'any', 'fail_open', 'support_view');
+        $notMemberLookup = $this->lookup(static fn (): TelegramMembershipLookupResult => new TelegramMembershipLookupResult(
+            TelegramMembershipEvidence::NotMember,
+            'telegram_membership_left',
+        ));
+
+        $anyResult = $this->evaluator($notMemberLookup)->evaluate(
+            new TelegramChannelMembershipResolutionRequest($anyUserId, 'support_view'),
+        );
+
+        self::assertSame(TelegramChannelMembershipEvaluationDecision::Unsatisfied, $anyResult->decision);
+        self::assertCount(2, $notMemberLookup->calls);
+    }
+
     public function test_unresolved_unavailable_evidence_applies_each_configured_failure_policy(): void
     {
         $ownerId = $this->administrator();
