@@ -39,6 +39,7 @@ use DomainException;
 use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Contracts\Encryption\StringEncrypter;
 use Illuminate\Contracts\Translation\Translator;
+use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
@@ -90,6 +91,23 @@ if (PHP_SAPI === 'cli' && ($argv[1] ?? null) === '--telegram-membership-configur
         echo 'MUTATION_STARTED:'.$stateBefore."\n";
         flush();
 
+        $fenceAttemptAnnounced = false;
+        $database->connection()->beforeExecuting(function (string $query, array $bindings, Connection $connection) use (&$fenceAttemptAnnounced): void {
+            if ($fenceAttemptAnnounced) {
+                return;
+            }
+            $sql = strtolower(preg_replace('/\s+/', ' ', trim($query)) ?? $query);
+            if (! str_contains($sql, 'from `channel_membership_rules`')
+                || ! str_contains($sql, 'order by `id` asc')
+                || ! str_contains($sql, 'limit 1 for update')) {
+                return;
+            }
+
+            $fenceAttemptAnnounced = true;
+            echo "FENCE_ATTEMPT\n";
+            flush();
+        });
+
         $receipt = $app->make(TelegramChannelMembershipRuleService::class)->disable(
             (int) $payload['rule_id'],
             (int) $payload['expected_version'],
@@ -102,9 +120,13 @@ if (PHP_SAPI === 'cli' && ($argv[1] ?? null) === '--telegram-membership-configur
             ),
         );
 
+        $deliveryStateAfter = (string) $database->connection()->table('telegram_delivery_operations')
+            ->where('public_id', (string) $payload['operation_public_id'])
+            ->value('state');
         echo json_encode([
             'ok' => true,
             'state_before' => $stateBefore,
+            'delivery_state_after' => $deliveryStateAfter,
             'state_after' => $receipt->after['state'] ?? null,
             'version_after' => $receipt->after['version'] ?? null,
         ], JSON_THROW_ON_ERROR)."\n";
@@ -486,6 +508,11 @@ final class TelegramMembershipJoinPresentationTest extends TestCase
                     $this->readWorkerLine($worker, 'mutation start'),
                     'Concurrent configuration mutation must start while the provider boundary is still uncommitted.',
                 );
+                self::assertSame(
+                    "FENCE_ATTEMPT\n",
+                    $this->readWorkerLine($worker, 'fence attempt'),
+                    'Concurrent canonical mutation must reach the same membership configuration fence while the delivery transaction holds it.',
+                );
                 $mutationBlocked = $this->tryReadWorkerLine($worker, 0.75) === null;
             });
 
@@ -510,6 +537,7 @@ final class TelegramMembershipJoinPresentationTest extends TestCase
             $workerResult = $this->readConfigurationFenceWorkerResult($worker);
             self::assertTrue($workerResult['ok'], json_encode($workerResult, JSON_THROW_ON_ERROR));
             self::assertSame('prepared', $workerResult['state_before']);
+            self::assertContains($workerResult['delivery_state_after'], ['sending', 'succeeded']);
             self::assertSame('disabled', $workerResult['state_after']);
             self::assertSame(3, $workerResult['version_after']);
 
