@@ -401,6 +401,47 @@ final class TelegramMembershipJoinPresentationTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_overlong_join_button_label_becomes_failed_final_without_provider_attempt(): void
+    {
+        $joinUrl = 'https://t.me/+PrivateJoinSecret290F';
+        $channelId = $this->activeChannel(
+            'join-long-label-290',
+            -1002900000061,
+            'private',
+            str_repeat('L', 80),
+            $joinUrl,
+        );
+        $userId = $this->customerWithTelegram(790000061);
+        $this->activeRule('join-long-label-rule-290', [$channelId]);
+        $reference = $this->referenceFor($userId, 'en');
+        $created = NonRestrictedTelegramPresentationTestFactory::queueProtectedReference(
+            $this->queue(),
+            TelegramDeliveryAction::Send,
+            790000061,
+            $reference,
+            'membership-join-long-label-290-001',
+            'correlation-membership-join-long-label-290',
+        );
+        Http::fake();
+        $generic = new TelegramMembershipJoinPresentationTestTransport;
+
+        $result = $this->executor($generic)->execute(
+            $created->publicId,
+            $created->outboxEventId,
+            'correlation-membership-join-long-label-290',
+            TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_PROTECTED_REFERENCE,
+        );
+
+        self::assertSame(TelegramDeliveryOperationState::FailedFinal, $result->state);
+        self::assertSame(0, $generic->attempts);
+        Http::assertNothingSent();
+        $operation = DB::table('telegram_delivery_operations')->where('public_id', $created->publicId)->first();
+        self::assertNotNull($operation);
+        self::assertSame('failed_final', (string) $operation->state);
+        self::assertSame('telegram_protected_reference_unavailable', (string) $operation->result_code);
+        self::assertSame(0, (int) $operation->provider_attempts);
+    }
+
     private function referenceFor(int $userId, string $locale): TelegramProtectedPresentationReference
     {
         $plan = $this->rules()->resolve(new TelegramChannelMembershipResolutionRequest($userId, 'bot_entry'));
