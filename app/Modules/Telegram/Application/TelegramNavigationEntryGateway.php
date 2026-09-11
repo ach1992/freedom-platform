@@ -4,28 +4,83 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Application;
 
+use App\Modules\Telegram\Domain\TelegramDeliveryAction;
+use DomainException;
+use Illuminate\Contracts\Translation\Translator;
+use RuntimeException;
+
 final readonly class TelegramNavigationEntryGateway
 {
     public const FLOW = 'navigation.home';
 
     public const STATE = 'home';
 
-    public function __construct(private TelegramInteractionSessionService $sessions) {}
+    public function __construct(
+        private TelegramInteractionSessionService $sessions,
+        private TelegramChannelMembershipEvaluator $membership,
+        private NonRestrictedTelegramPresentationFactory $presentations,
+        private TelegramDeliveryQueueService $delivery,
+        private Translator $translator,
+    ) {}
 
     /** @param array<string, mixed> $message */
     public function startIfEligible(
         string $botId,
         int $updateId,
+        int $userId,
         int $telegramAccountId,
         int $telegramUserId,
         array $message,
         string $text,
     ): bool {
-        if (! $this->isEntryCommand($text) || ! $this->isPrivateActorChat($message, $telegramUserId)) {
+        if (! $this->matchesEntryCommand($text) || ! $this->isPrivateActorChat($message, $telegramUserId)) {
             return false;
         }
 
         if ($this->sessions->activeForAccount($telegramAccountId) !== null) {
+            return false;
+        }
+
+        $locale = $this->locale($message);
+        try {
+            $evaluation = $this->membership->evaluate(
+                new TelegramChannelMembershipResolutionRequest($userId, 'bot_entry', null),
+            );
+        } catch (DomainException|RuntimeException) {
+            $this->queueSafeBlockedFeedback($botId, $updateId, $telegramUserId, $locale);
+
+            return false;
+        }
+
+        if ($evaluation->plan->required && $evaluation->telegramUserId !== $telegramUserId) {
+            $this->queueSafeBlockedFeedback($botId, $updateId, $telegramUserId, $locale);
+
+            return false;
+        }
+
+        if ($evaluation->decision === TelegramChannelMembershipEvaluationDecision::Unsatisfied) {
+            $this->delivery->queueProtectedReference(
+                TelegramDeliveryAction::Send,
+                $telegramUserId,
+                TelegramProtectedPresentationReference::membershipJoinPrompt(
+                    'bot_entry',
+                    null,
+                    $evaluation->plan->configurationHash,
+                    $locale,
+                ),
+                "telegram-entry-membership-join:{$botId}:{$updateId}",
+                "tg-entry:{$botId}:{$updateId}:mjoin",
+            );
+
+            return false;
+        }
+
+        if (in_array($evaluation->decision, [
+            TelegramChannelMembershipEvaluationDecision::ManualReview,
+            TelegramChannelMembershipEvaluationDecision::ConfigurationChanged,
+        ], true)) {
+            $this->queueSafeBlockedFeedback($botId, $updateId, $telegramUserId, $locale);
+
             return false;
         }
 
@@ -40,7 +95,7 @@ final readonly class TelegramNavigationEntryGateway
         return true;
     }
 
-    private function isEntryCommand(string $text): bool
+    public function matchesEntryCommand(string $text): bool
     {
         $trimmed = trim($text);
 
@@ -52,12 +107,71 @@ final readonly class TelegramNavigationEntryGateway
     private function isPrivateActorChat(array $message, int $telegramUserId): bool
     {
         $chat = $message['chat'] ?? null;
-        if (! is_array($chat) || array_is_list($chat) || ($chat['type'] ?? null) !== 'private') {
+        $from = $message['from'] ?? null;
+        if (! is_array($chat)
+            || array_is_list($chat)
+            || ($chat['type'] ?? null) !== 'private'
+            || ! is_array($from)
+            || array_is_list($from)) {
             return false;
         }
 
         $chatId = $chat['id'] ?? null;
+        $fromId = $from['id'] ?? null;
 
-        return is_int($chatId) && $chatId > 0 && $chatId === $telegramUserId;
+        return is_int($chatId)
+            && is_int($fromId)
+            && $chatId > 0
+            && $fromId > 0
+            && $chatId === $telegramUserId
+            && $fromId === $telegramUserId;
+    }
+
+    /** @param array<string, mixed> $message */
+    private function locale(array $message): string
+    {
+        $from = $message['from'] ?? null;
+
+        return is_array($from) && ($from['language_code'] ?? null) === 'en' ? 'en' : 'fa';
+    }
+
+    private function queueSafeBlockedFeedback(
+        string $botId,
+        int $updateId,
+        int $telegramUserId,
+        string $locale,
+    ): void {
+        $text = $this->translation('telegram_membership.entry_unavailable', $locale);
+        $source = new readonly class($text) implements NonRestrictedTelegramPresentationSource
+        {
+            public function __construct(private string $text) {}
+
+            public function nonRestrictedTelegramText(): string
+            {
+                return $this->text;
+            }
+        };
+
+        $this->delivery->queue(
+            TelegramDeliveryAction::Send,
+            $telegramUserId,
+            null,
+            $this->presentations->fromSource($source),
+            "telegram-entry-membership-feedback:{$botId}:{$updateId}",
+            "tg-entry:{$botId}:{$updateId}:mfail",
+        );
+    }
+
+    private function translation(string $key, string $locale): string
+    {
+        $text = $this->translator->get($key, [], $locale);
+        if (! is_string($text) || $text === '' || $text === $key) {
+            $text = $this->translator->get($key, [], 'en');
+        }
+        if (! is_string($text) || $text === '' || $text === $key) {
+            throw new DomainException('Telegram bot-entry membership feedback is unavailable.');
+        }
+
+        return $text;
     }
 }

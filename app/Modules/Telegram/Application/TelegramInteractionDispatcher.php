@@ -94,25 +94,38 @@ final readonly class TelegramInteractionDispatcher
         }
 
         $trimmed = trim($text);
-        $this->navigationEntry->startIfEligible(
-            $botId,
-            $updateId,
-            (int) $account->id,
-            (int) $account->telegram_user_id,
-            $message,
-            $trimmed,
-        );
         $isCancel = preg_match('/\A\/cancel(?:@[A-Za-z0-9_]+)?\z/u', $trimmed) === 1;
         $isBack = preg_match('/\A\/back(?:@[A-Za-z0-9_]+)?\z/u', $trimmed) === 1;
         $kind = $isCancel ? 'cancel' : ($isBack ? 'back' : 'message');
         $requestKey = $this->updateRequestKey($botId, $updateId, $kind);
-        $binding = $this->updateBindings->bind(
-            $botId,
-            $updateId,
-            (int) $account->id,
-            $kind,
-            $requestKey,
-        );
+        $binding = $this->navigationEntry->matchesEntryCommand($trimmed)
+            ? $this->updateBindings->existing(
+                $botId,
+                $updateId,
+                (int) $account->id,
+                $kind,
+                $requestKey,
+            )
+            : null;
+
+        if ($binding === null) {
+            $this->navigationEntry->startIfEligible(
+                $botId,
+                $updateId,
+                $userId,
+                (int) $account->id,
+                (int) $account->telegram_user_id,
+                $message,
+                $trimmed,
+            );
+            $binding = $this->updateBindings->bind(
+                $botId,
+                $updateId,
+                (int) $account->id,
+                $kind,
+                $requestKey,
+            );
+        }
 
         if ($isCancel) {
             if ($binding->sessionPublicId === null || $binding->sessionVersion === null) {

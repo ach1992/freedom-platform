@@ -98,6 +98,17 @@ final class NonRestrictedTelegramPresentationProvenanceTest extends TestCase
         $architecture = require $root.'/scripts/ci/architecture-boundaries.php';
         self::assertIsArray($architecture);
         self::assertSame($runtimeSources, $architecture['telegram_non_restricted_presentation_sources'] ?? null);
+
+        $entryGateway = 'app/Modules/Telegram/Application/TelegramNavigationEntryGateway.php';
+        self::assertContains($entryGateway, $runtimeSources);
+        self::assertNotContains('app/Modules/Telegram/Application/TelegramInteractionDispatcher.php', $runtimeSources);
+        self::assertSame(
+            [$entryGateway],
+            array_values(array_filter(
+                $runtimeSources,
+                static fn (string $source): bool => str_contains($source, 'NavigationEntry'),
+            )),
+        );
     }
 
     public function test_presentation_object_cannot_be_serialized_for_reconstruction(): void
