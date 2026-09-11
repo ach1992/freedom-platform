@@ -34,7 +34,7 @@ use Illuminate\Contracts\Encryption\StringEncrypter;
 use Illuminate\Contracts\Translation\Translator;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\Events\QueryExecuted;
-use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Client\Request;
 use Illuminate\Redis\Events\CommandExecuted;
@@ -103,7 +103,7 @@ final readonly class TelegramMembershipJoinPresentationNeverCardToCard implement
 /** @requirement ONB-003 CHN-001 SEC-001 SEC-003 SEC-008 DAT-003 QUA-001 QUA-004 QUA-007 */
 final class TelegramMembershipJoinPresentationTest extends TestCase
 {
-    use RefreshDatabase;
+    use DatabaseTruncation;
 
     private TelegramMembershipJoinPresentationTestClock $clock;
 
@@ -112,6 +112,13 @@ final class TelegramMembershipJoinPresentationTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+
+        if (DB::connection()->getDriverName() !== 'mysql') {
+            $this->markTestSkipped('Protected Telegram membership join presentation verification requires MariaDB/MySQL.');
+        }
+
+        (require database_path('migrations/2026_08_25_000200_enable_telegram_outbound_delivery_authority.php'))->up();
+
         $this->seed(IdentityAccessFoundationSeeder::class);
         $this->seed(CatalogAccessFoundationSeeder::class);
         $this->seed(TelegramMembershipAccessFoundationSeeder::class);
