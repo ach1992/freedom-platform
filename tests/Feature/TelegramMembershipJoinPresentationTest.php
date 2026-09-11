@@ -13,6 +13,7 @@ use App\Modules\Telegram\Application\TelegramCustomerPurchaseCardToCardDestinati
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseCardToCardReservation;
 use App\Modules\Telegram\Application\TelegramDeliveryDatabaseCapability;
 use App\Modules\Telegram\Application\TelegramDeliveryOperationExecutor;
+use App\Modules\Telegram\Application\TelegramDeliveryOutboxHandler;
 use App\Modules\Telegram\Application\TelegramDeliveryQueueService;
 use App\Modules\Telegram\Application\TelegramMembershipJoinPresentationResolver;
 use App\Modules\Telegram\Application\TelegramMutationRequest;
@@ -24,6 +25,8 @@ use App\Modules\Telegram\Domain\TelegramDeliveryOperationState;
 use App\Modules\Telegram\Infrastructure\HttpProtectedTelegramMessageSender;
 use App\Modules\Telegram\Infrastructure\TelegramRuntimeConfiguration;
 use App\Shared\Application\Clock;
+use App\Shared\Application\OutboxDispatchOutcome;
+use App\Shared\Application\OutboxMessage;
 use App\Shared\Infrastructure\DatabaseOutboxPublisher;
 use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
@@ -408,7 +411,7 @@ final class TelegramMembershipJoinPresentationTest extends TestCase
         Http::assertNothingSent();
     }
 
-    public function test_join_secret_hash_tamper_becomes_failed_final_without_provider_attempt(): void
+    public function test_join_secret_hash_tamper_is_definitive_outbox_failure_without_provider_attempt(): void
     {
         $joinUrl = 'https://t.me/+PrivateJoinSecret290E';
         $channelId = $this->activeChannel(
@@ -432,22 +435,44 @@ final class TelegramMembershipJoinPresentationTest extends TestCase
         );
         Http::fake();
         $generic = new TelegramMembershipJoinPresentationTestTransport;
-
-        $result = $this->executor($generic)->execute(
-            $created->publicId,
-            $created->outboxEventId,
-            'correlation-membership-join-hash-tamper-290',
+        $before = DB::table('telegram_delivery_operations')->where('public_id', $created->publicId)->first([
+            'state',
+            'state_version',
+            'provider_attempts',
+            'provider_boundary_started_at',
+            'completed_at',
+            'result_code',
+        ]);
+        self::assertNotNull($before);
+        $executor = $this->executor($generic);
+        $handler = new TelegramDeliveryOutboxHandler(
+            static fn (): TelegramDeliveryOperationExecutor => $executor,
             TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_PROTECTED_REFERENCE,
         );
 
-        self::assertSame(TelegramDeliveryOperationState::FailedFinal, $result->state);
+        $outcome = $handler->handle(new OutboxMessage(
+            $created->outboxEventId,
+            TelegramDeliveryQueueService::OUTBOX_EVENT_KEY_PREFIX.$created->publicId,
+            TelegramDeliveryQueueService::OUTBOX_EVENT_TYPE,
+            TelegramDeliveryQueueService::OUTBOX_AGGREGATE_TYPE,
+            $created->publicId,
+            ['telegram_delivery_operation_public_id' => $created->publicId],
+            'correlation-membership-join-hash-tamper-290',
+            1,
+            TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_PROTECTED_REFERENCE,
+        ));
+
+        self::assertSame(OutboxDispatchOutcome::DefinitiveFailure, $outcome);
         self::assertSame(0, $generic->attempts);
         Http::assertNothingSent();
         $operation = DB::table('telegram_delivery_operations')->where('public_id', $created->publicId)->first();
         self::assertNotNull($operation);
-        self::assertSame('failed_final', (string) $operation->state);
-        self::assertSame('telegram_protected_reference_unavailable', (string) $operation->result_code);
+        self::assertSame('prepared', (string) $operation->state);
+        self::assertSame((int) $before->state_version, (int) $operation->state_version);
         self::assertSame(0, (int) $operation->provider_attempts);
+        self::assertNull($operation->provider_boundary_started_at);
+        self::assertNull($operation->completed_at);
+        self::assertNull($operation->result_code);
     }
 
     public function test_decrypted_non_telegram_join_url_fails_closed_before_provider(): void
@@ -469,7 +494,7 @@ final class TelegramMembershipJoinPresentationTest extends TestCase
         Http::assertNothingSent();
     }
 
-    public function test_overlong_join_button_label_becomes_failed_final_without_provider_attempt(): void
+    public function test_overlong_join_button_label_is_definitive_outbox_failure_without_provider_attempt(): void
     {
         $joinUrl = 'https://t.me/+PrivateJoinSecret290F';
         $channelId = $this->activeChannel(
@@ -492,22 +517,44 @@ final class TelegramMembershipJoinPresentationTest extends TestCase
         );
         Http::fake();
         $generic = new TelegramMembershipJoinPresentationTestTransport;
-
-        $result = $this->executor($generic)->execute(
-            $created->publicId,
-            $created->outboxEventId,
-            'correlation-membership-join-long-label-290',
+        $before = DB::table('telegram_delivery_operations')->where('public_id', $created->publicId)->first([
+            'state',
+            'state_version',
+            'provider_attempts',
+            'provider_boundary_started_at',
+            'completed_at',
+            'result_code',
+        ]);
+        self::assertNotNull($before);
+        $executor = $this->executor($generic);
+        $handler = new TelegramDeliveryOutboxHandler(
+            static fn (): TelegramDeliveryOperationExecutor => $executor,
             TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_PROTECTED_REFERENCE,
         );
 
-        self::assertSame(TelegramDeliveryOperationState::FailedFinal, $result->state);
+        $outcome = $handler->handle(new OutboxMessage(
+            $created->outboxEventId,
+            TelegramDeliveryQueueService::OUTBOX_EVENT_KEY_PREFIX.$created->publicId,
+            TelegramDeliveryQueueService::OUTBOX_EVENT_TYPE,
+            TelegramDeliveryQueueService::OUTBOX_AGGREGATE_TYPE,
+            $created->publicId,
+            ['telegram_delivery_operation_public_id' => $created->publicId],
+            'correlation-membership-join-long-label-290',
+            1,
+            TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_PROTECTED_REFERENCE,
+        ));
+
+        self::assertSame(OutboxDispatchOutcome::DefinitiveFailure, $outcome);
         self::assertSame(0, $generic->attempts);
         Http::assertNothingSent();
         $operation = DB::table('telegram_delivery_operations')->where('public_id', $created->publicId)->first();
         self::assertNotNull($operation);
-        self::assertSame('failed_final', (string) $operation->state);
-        self::assertSame('telegram_protected_reference_unavailable', (string) $operation->result_code);
+        self::assertSame('prepared', (string) $operation->state);
+        self::assertSame((int) $before->state_version, (int) $operation->state_version);
         self::assertSame(0, (int) $operation->provider_attempts);
+        self::assertNull($operation->provider_boundary_started_at);
+        self::assertNull($operation->completed_at);
+        self::assertNull($operation->result_code);
     }
 
     private function referenceFor(int $userId, string $locale): TelegramProtectedPresentationReference
