@@ -84,6 +84,7 @@ final class TelegramBotEntryMembershipEnforcementTest extends TestCase
             if (DB::connection()->getDriverName() === 'mysql') {
                 DB::unprepared('DROP TRIGGER IF EXISTS telegram_bot_entry_membership_fail_processed');
             }
+            $this->truncateTablesForAllConnections();
         } finally {
             parent::tearDown();
         }
