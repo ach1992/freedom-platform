@@ -8,6 +8,7 @@ use DomainException;
 use Illuminate\Contracts\Encryption\StringEncrypter;
 use Illuminate\Contracts\Translation\Translator;
 use Illuminate\Database\DatabaseManager;
+use InvalidArgumentException;
 use RuntimeException;
 use Throwable;
 
@@ -68,12 +69,16 @@ final readonly class TelegramMembershipJoinPresentationResolver
             }
 
             $joinUrl = $this->decryptJoinUrl($row->join_url_ciphertext, $row->join_url_hash, $channel->visibility);
-            $buttons[] = new ProtectedTelegramHttpsUrlButton(
-                $this->translation('telegram_membership.join_button', $reference->locale, [
-                    'channel' => $channel->displayTitle,
-                ]),
-                $joinUrl,
-            );
+            try {
+                $buttons[] = new ProtectedTelegramHttpsUrlButton(
+                    $this->translation('telegram_membership.join_button', $reference->locale, [
+                        'channel' => $channel->displayTitle,
+                    ]),
+                    $joinUrl,
+                );
+            } catch (InvalidArgumentException $exception) {
+                throw new DomainException('Protected Telegram membership join presentation is invalid.', previous: $exception);
+            }
         }
 
         if ($buttons === []) {
@@ -84,10 +89,14 @@ final readonly class TelegramMembershipJoinPresentationResolver
         $this->assertSamePlanAfterResolution($plan, $currentPlan);
         $this->assertReferencedPlan($currentPlan, $reference);
 
-        return ProtectedTelegramPresentation::plainTextWithHttpsUrlButtons(
-            $this->translation('telegram_membership.join_prompt', $reference->locale),
-            $buttons,
-        );
+        try {
+            return ProtectedTelegramPresentation::plainTextWithHttpsUrlButtons(
+                $this->translation('telegram_membership.join_prompt', $reference->locale),
+                $buttons,
+            );
+        } catch (InvalidArgumentException $exception) {
+            throw new DomainException('Protected Telegram membership join presentation is invalid.', previous: $exception);
+        }
     }
 
     private function assertReferencedPlan(
@@ -136,7 +145,7 @@ final readonly class TelegramMembershipJoinPresentationResolver
 
         try {
             return TelegramRequiredChannelDefinition::normalizeJoinUrl($joinUrl, $visibility);
-        } catch (\InvalidArgumentException $exception) {
+        } catch (InvalidArgumentException $exception) {
             throw new DomainException('Protected Telegram membership join URL is invalid.', previous: $exception);
         }
     }
