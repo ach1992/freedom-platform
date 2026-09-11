@@ -22,9 +22,13 @@ use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\TelegramMembershipAccessFoundationSeeder;
 use DateTimeImmutable;
 use DomainException;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Redis\Events\CommandExecuted;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Redis;
 use Illuminate\Support\Str;
+use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
 use Tests\TestCase;
 
@@ -216,6 +220,98 @@ final class TelegramChannelMembershipEvaluationTest extends TestCase
         }
     }
 
+    /**
+     * @return array<string, array{
+     *     0:string,
+     *     1:TelegramMembershipEvidence,
+     *     2:string,
+     *     3:TelegramChannelMembershipEvaluationDecision
+     * }>
+     */
+    public static function unresolvedMixedEvidencePolicies(): array
+    {
+        return [
+            'all member plus unavailable fail open' => [
+                'all',
+                TelegramMembershipEvidence::Member,
+                'fail_open',
+                TelegramChannelMembershipEvaluationDecision::Satisfied,
+            ],
+            'all member plus unavailable fail closed' => [
+                'all',
+                TelegramMembershipEvidence::Member,
+                'fail_closed',
+                TelegramChannelMembershipEvaluationDecision::Unsatisfied,
+            ],
+            'all member plus unavailable manual review' => [
+                'all',
+                TelegramMembershipEvidence::Member,
+                'manual_review',
+                TelegramChannelMembershipEvaluationDecision::ManualReview,
+            ],
+            'any not member plus unavailable fail open' => [
+                'any',
+                TelegramMembershipEvidence::NotMember,
+                'fail_open',
+                TelegramChannelMembershipEvaluationDecision::Satisfied,
+            ],
+            'any not member plus unavailable fail closed' => [
+                'any',
+                TelegramMembershipEvidence::NotMember,
+                'fail_closed',
+                TelegramChannelMembershipEvaluationDecision::Unsatisfied,
+            ],
+            'any not member plus unavailable manual review' => [
+                'any',
+                TelegramMembershipEvidence::NotMember,
+                'manual_review',
+                TelegramChannelMembershipEvaluationDecision::ManualReview,
+            ],
+        ];
+    }
+
+    #[DataProvider('unresolvedMixedEvidencePolicies')]
+    public function test_unresolved_mixed_evidence_applies_each_configured_failure_policy(
+        string $matchMode,
+        TelegramMembershipEvidence $firstEvidence,
+        string $failurePolicy,
+        TelegramChannelMembershipEvaluationDecision $expectedDecision,
+    ): void {
+        $ownerId = $this->administrator();
+        $first = $this->channel('eval-mixed-first', -1002400000111);
+        $second = $this->channel('eval-mixed-second', -1002400000112);
+        $userId = $this->customerWithTelegram(700000111);
+        $this->activeRule($ownerId, 'eval-mixed-'.$matchMode.'-'.$failurePolicy, [$first, $second], $matchMode, $failurePolicy);
+        $lookup = $this->lookup(static function (int $chatId) use ($firstEvidence): TelegramMembershipLookupResult {
+            if ($chatId === -1002400000111) {
+                return new TelegramMembershipLookupResult(
+                    $firstEvidence,
+                    $firstEvidence === TelegramMembershipEvidence::Member
+                        ? 'telegram_membership_member'
+                        : 'telegram_membership_left',
+                );
+            }
+
+            return new TelegramMembershipLookupResult(
+                TelegramMembershipEvidence::Unavailable,
+                'telegram_membership_http_unavailable',
+            );
+        });
+
+        $result = $this->evaluator($lookup)->evaluate(new TelegramChannelMembershipResolutionRequest($userId, 'bot_entry'));
+
+        self::assertSame($expectedDecision, $result->decision);
+        self::assertSame([$first, $second], array_map(
+            static fn ($item): int => $item->requiredChannelId,
+            $result->channels,
+        ));
+        self::assertSame(
+            [$firstEvidence, TelegramMembershipEvidence::Unavailable],
+            array_map(static fn ($item): TelegramMembershipEvidence => $item->evidence, $result->channels),
+        );
+        self::assertCount(2, $lookup->calls);
+    }
+
     public function test_disabled_linked_channel_is_unavailable_without_provider_call(): void
     {
         $ownerId = $this->administrator();
@@ -253,6 +349,38 @@ final class TelegramChannelMembershipEvaluationTest extends TestCase
         self::assertSame(TelegramChannelMembershipEvaluationDecision::ConfigurationChanged, $result->decision);
         self::assertNotSame(TelegramChannelMembershipEvaluationDecision::Satisfied, $result->decision);
         self::assertSame(1, count($lookup->calls));
+    }
+
+    public function test_identity_revalidation_precedes_configuration_changed_when_both_drift_during_provider_io(): void
+    {
+        $ownerId = $this->administrator();
+        $channelId = $this->channel('eval-combined-drift', -1002400000302);
+        $userId = $this->customerWithTelegram(700000302);
+        $this->activeRule($ownerId, 'eval-combined-drift-rule', [$channelId], 'all', 'fail_open');
+        $lookup = $this->lookup(function () use ($channelId, $userId): TelegramMembershipLookupResult {
+            DB::table('telegram_accounts')
+                ->where('bot_id', 123456)
+                ->where('user_id', $userId)
+                ->where('is_bot', false)
+                ->update(['telegram_user_id' => 700000399, 'updated_at' => now('UTC')]);
+            $this->disableChannel($channelId);
+
+            return new TelegramMembershipLookupResult(
+                TelegramMembershipEvidence::Member,
+                'telegram_membership_member',
+            );
+        });
+
+        try {
+            $this->evaluator($lookup)->evaluate(new TelegramChannelMembershipResolutionRequest($userId, 'bot_entry'));
+            self::fail('Expected identity drift to fail closed before a configuration-changed decision can return.');
+        } catch (DomainException $exception) {
+            self::assertSame('Telegram membership evaluation identity changed during provider lookup.', $exception->getMessage());
+        }
+        self::assertSame(
+            [['chat_id' => -1002400000302, 'user_id' => 700000302]],
+            $lookup->calls,
+        );
     }
 
     public function test_required_evaluation_fails_closed_when_telegram_identity_is_missing(): void
@@ -303,7 +431,7 @@ final class TelegramChannelMembershipEvaluationTest extends TestCase
         );
     }
 
-    public function test_required_evaluation_is_read_only_for_business_session_and_audit_state(): void
+    public function test_required_evaluation_executes_only_read_only_sql_and_no_redis_commands(): void
     {
         $ownerId = $this->administrator();
         $channelId = $this->channel('eval-read-only', -1002400000403);
@@ -313,24 +441,37 @@ final class TelegramChannelMembershipEvaluationTest extends TestCase
             TelegramMembershipEvidence::Member,
             'telegram_membership_member',
         ));
-        $countsBefore = [
-            'audit_logs' => DB::table('audit_logs')->count(),
-            'telegram_interaction_sessions' => DB::table('telegram_interaction_sessions')->count(),
-            'orders' => DB::table('orders')->count(),
-            'payment_intents' => DB::table('payment_intents')->count(),
-            'service_subscriptions' => DB::table('service_subscriptions')->count(),
-        ];
+
+        /** @var list<string> $sqlStatements */
+        $sqlStatements = [];
+        DB::listen(static function (QueryExecuted $query) use (&$sqlStatements): void {
+            $sqlStatements[] = $query->sql;
+        });
+
+        /** @var list<string> $redisCommands */
+        $redisCommands = [];
+        Redis::purge('cache');
+        Redis::enableEvents();
+        $redis = Redis::connection('cache');
+        $redis->listen(static function (CommandExecuted $command) use (&$redisCommands): void {
+            $redisCommands[] = $command->connectionName.':'.strtolower($command->command);
+        });
+        $redis->command('ping');
+        self::assertSame(['cache:ping'], $redisCommands, 'Authenticated Redis command capture must be active before evaluation.');
+        $redisCommands = [];
 
         $result = $this->evaluator($lookup)->evaluate(new TelegramChannelMembershipResolutionRequest($userId, 'bot_entry'));
 
         self::assertSame(TelegramChannelMembershipEvaluationDecision::Satisfied, $result->decision);
-        self::assertSame($countsBefore, [
-            'audit_logs' => DB::table('audit_logs')->count(),
-            'telegram_interaction_sessions' => DB::table('telegram_interaction_sessions')->count(),
-            'orders' => DB::table('orders')->count(),
-            'payment_intents' => DB::table('payment_intents')->count(),
-            'service_subscriptions' => DB::table('service_subscriptions')->count(),
-        ]);
+        self::assertNotEmpty($sqlStatements, 'The evaluator must exercise its database read path for this proof.');
+        foreach ($sqlStatements as $sql) {
+            self::assertMatchesRegularExpression(
+                '/^\s*select\b/i',
+                $sql,
+                'Evaluator executed non-read-only SQL: '.$sql,
+            );
+        }
+        self::assertSame([], $redisCommands, 'Evaluator must not execute Redis/cache commands.');
     }
 
     private function evaluator(TelegramMembershipLookup $lookup): TelegramChannelMembershipEvaluator
