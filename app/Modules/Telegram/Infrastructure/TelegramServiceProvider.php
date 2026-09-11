@@ -15,6 +15,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramMutationTransport;
 use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaFetcher;
 use App\Modules\Telegram\Application\Contracts\TelegramRuntime;
 use App\Modules\Telegram\Application\TelegramAgentNavigationHandler;
+use App\Modules\Telegram\Application\TelegramChannelMembershipRuleService;
 use App\Modules\Telegram\Application\TelegramConfidentialDeliveryOutboxHandler;
 use App\Modules\Telegram\Application\TelegramConfidentialPresentationHasher;
 use App\Modules\Telegram\Application\TelegramConfigurationMutationAudit;
@@ -143,6 +144,15 @@ final class TelegramServiceProvider extends ServiceProvider
                 $application->make(StringEncrypter::class),
                 $application->make(TelegramMembershipLookup::class),
                 $application->make(TelegramRuntime::class),
+                $application->make(TelegramConfigurationMutationExecutor::class),
+                $application->make(TelegramConfigurationMutationAudit::class),
+                $application->make(Clock::class),
+            ),
+        );
+        $this->app->singleton(
+            TelegramChannelMembershipRuleService::class,
+            fn (Application $application): TelegramChannelMembershipRuleService => new TelegramChannelMembershipRuleService(
+                $application->make(DatabaseManager::class),
                 $application->make(TelegramConfigurationMutationExecutor::class),
                 $application->make(TelegramConfigurationMutationAudit::class),
                 $application->make(Clock::class),
