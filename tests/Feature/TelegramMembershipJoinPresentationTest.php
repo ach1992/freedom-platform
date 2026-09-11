@@ -7,7 +7,6 @@ namespace Tests\Feature;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCardToCardPayment;
 use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\TelegramMutationTransport;
-use App\Modules\Telegram\Application\ProtectedTelegramPresentation;
 use App\Modules\Telegram\Application\TelegramChannelMembershipResolutionRequest;
 use App\Modules\Telegram\Application\TelegramChannelMembershipRuleResolver;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseCardToCardDestination;
