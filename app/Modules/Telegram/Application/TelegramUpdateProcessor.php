@@ -18,6 +18,7 @@ final readonly class TelegramUpdateProcessor
         private DatabaseManager $database,
         private StringEncrypter $encrypter,
         private TelegramIdentitySynchronizer $identitySynchronizer,
+        private TelegramReferralStartAttributionService $referralAttribution,
         private TelegramInteractionDispatcher $interactionDispatcher,
         private TelegramRuntime $configuration,
     ) {}
@@ -48,6 +49,9 @@ final readonly class TelegramUpdateProcessor
             }
 
             $userId = $this->identitySynchronizer->synchronize($botId, $updateId, $payload);
+            if ($userId !== null) {
+                $this->referralAttribution->bindFirstStart($botId, $updateId, $userId);
+            }
             $this->interactionDispatcher->dispatch($botId, $updateId, $userId, $payload);
             $now = now('UTC')->format('Y-m-d H:i:s.u');
 
