@@ -55,6 +55,11 @@ final readonly class TelegramChannelMembershipEvaluator
         }
 
         $currentPlan = $this->resolver->resolve($request);
+        $currentAccount = $this->telegramAccount($request->userId);
+        if ($currentAccount['id'] !== $account['id'] || $currentAccount['telegram_user_id'] !== $telegramUserId) {
+            throw new DomainException('Telegram membership evaluation identity changed during provider lookup.');
+        }
+
         if (! $this->samePlan($plan, $currentPlan)) {
             return new TelegramChannelMembershipEvaluationResult(
                 $plan,
@@ -62,11 +67,6 @@ final readonly class TelegramChannelMembershipEvaluator
                 $telegramUserId,
                 $evidence,
             );
-        }
-
-        $currentAccount = $this->telegramAccount($request->userId);
-        if ($currentAccount['id'] !== $account['id'] || $currentAccount['telegram_user_id'] !== $telegramUserId) {
-            throw new DomainException('Telegram membership evaluation identity changed during provider lookup.');
         }
 
         return new TelegramChannelMembershipEvaluationResult(

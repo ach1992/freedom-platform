@@ -131,6 +131,10 @@ final class TelegramChannelMembershipEvaluationTest extends TestCase
             [TelegramMembershipEvidence::NotMember, TelegramMembershipEvidence::Unavailable],
             array_map(static fn ($item): TelegramMembershipEvidence => $item->evidence, $result->channels),
         );
+        self::assertSame(
+            ['telegram_membership_left', 'telegram_membership_http_unavailable'],
+            array_map(static fn ($item): string => $item->resultCode, $result->channels),
+        );
     }
 
     public function test_any_mode_definitive_member_wins_over_unavailable(): void
@@ -266,6 +270,67 @@ final class TelegramChannelMembershipEvaluationTest extends TestCase
             self::assertSame('Telegram membership evaluation requires a synchronized Telegram identity.', $exception->getMessage());
         }
         self::assertSame([], $lookup->calls);
+    }
+
+    public function test_required_evaluation_fails_closed_when_telegram_identity_changes_during_provider_lookup(): void
+    {
+        $ownerId = $this->administrator();
+        $channelId = $this->channel('eval-identity-drift', -1002400000402);
+        $userId = $this->customerWithTelegram(700000402);
+        $this->activeRule($ownerId, 'eval-identity-drift-rule', [$channelId], 'all', 'fail_open');
+        $lookup = $this->lookup(function () use ($userId): TelegramMembershipLookupResult {
+            DB::table('telegram_accounts')
+                ->where('bot_id', 123456)
+                ->where('user_id', $userId)
+                ->where('is_bot', false)
+                ->update(['telegram_user_id' => 700000499, 'updated_at' => now('UTC')]);
+
+            return new TelegramMembershipLookupResult(
+                TelegramMembershipEvidence::Member,
+                'telegram_membership_member',
+            );
+        });
+
+        try {
+            $this->evaluator($lookup)->evaluate(new TelegramChannelMembershipResolutionRequest($userId, 'bot_entry'));
+            self::fail('Expected changed Telegram identity to fail closed.');
+        } catch (DomainException $exception) {
+            self::assertSame('Telegram membership evaluation identity changed during provider lookup.', $exception->getMessage());
+        }
+        self::assertSame(
+            [['chat_id' => -1002400000402, 'user_id' => 700000402]],
+            $lookup->calls,
+        );
+    }
+
+    public function test_required_evaluation_is_read_only_for_business_session_and_audit_state(): void
+    {
+        $ownerId = $this->administrator();
+        $channelId = $this->channel('eval-read-only', -1002400000403);
+        $userId = $this->customerWithTelegram(700000403);
+        $this->activeRule($ownerId, 'eval-read-only-rule', [$channelId], 'all', 'fail_closed');
+        $lookup = $this->lookup(static fn (): TelegramMembershipLookupResult => new TelegramMembershipLookupResult(
+            TelegramMembershipEvidence::Member,
+            'telegram_membership_member',
+        ));
+        $countsBefore = [
+            'audit_logs' => DB::table('audit_logs')->count(),
+            'telegram_interaction_sessions' => DB::table('telegram_interaction_sessions')->count(),
+            'orders' => DB::table('orders')->count(),
+            'payment_intents' => DB::table('payment_intents')->count(),
+            'service_subscriptions' => DB::table('service_subscriptions')->count(),
+        ];
+
+        $result = $this->evaluator($lookup)->evaluate(new TelegramChannelMembershipResolutionRequest($userId, 'bot_entry'));
+
+        self::assertSame(TelegramChannelMembershipEvaluationDecision::Satisfied, $result->decision);
+        self::assertSame($countsBefore, [
+            'audit_logs' => DB::table('audit_logs')->count(),
+            'telegram_interaction_sessions' => DB::table('telegram_interaction_sessions')->count(),
+            'orders' => DB::table('orders')->count(),
+            'payment_intents' => DB::table('payment_intents')->count(),
+            'service_subscriptions' => DB::table('service_subscriptions')->count(),
+        ]);
     }
 
     private function evaluator(TelegramMembershipLookup $lookup): TelegramChannelMembershipEvaluator
