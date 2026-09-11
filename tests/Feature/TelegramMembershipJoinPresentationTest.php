@@ -482,13 +482,27 @@ final class TelegramMembershipJoinPresentationTest extends TestCase
         $userId = $this->customerWithTelegram(790000051);
         $this->activeRule('join-invalid-url-rule-290', [$channelId]);
         $reference = $this->referenceFor($userId, 'en');
+        $ciphertext = (string) DB::table('required_channels')->where('id', $channelId)->value('join_url_ciphertext');
         Http::fake();
+        $ignoreArgs = ini_get('zend.exception_ignore_args');
 
         try {
-            $this->membershipResolver()->resolveForSelf($userId, $reference);
-            self::fail('Non-Telegram membership join URLs must fail canonical validation.');
-        } catch (DomainException $exception) {
-            self::assertSame('Protected Telegram membership join URL is invalid.', $exception->getMessage());
+            ini_set('zend.exception_ignore_args', '0');
+            try {
+                $this->membershipResolver()->resolveForSelf($userId, $reference);
+                self::fail('Non-Telegram membership join URLs must fail canonical validation.');
+            } catch (DomainException $exception) {
+                self::assertSame('Protected Telegram membership join URL is invalid.', $exception->getMessage());
+                self::assertNull($exception->getPrevious(), 'Restricted join material must not survive in a chained validation exception.');
+                $diagnostic = (string) $exception
+                    .json_encode($exception->getTrace(), JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
+                self::assertStringNotContainsString($joinUrl, $diagnostic);
+                self::assertStringNotContainsString($ciphertext, $diagnostic);
+            }
+        } finally {
+            if (is_string($ignoreArgs)) {
+                ini_set('zend.exception_ignore_args', $ignoreArgs);
+            }
         }
 
         Http::assertNothingSent();

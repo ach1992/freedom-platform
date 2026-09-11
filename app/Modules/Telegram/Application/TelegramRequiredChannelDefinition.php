@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Telegram\Application;
 
 use InvalidArgumentException;
+use SensitiveParameter;
 
 final readonly class TelegramRequiredChannelDefinition
 {
@@ -20,7 +21,7 @@ final readonly class TelegramRequiredChannelDefinition
         public string $chatType,
         public string $visibility,
         string $displayTitle,
-        string $joinUrl,
+        #[SensitiveParameter] string $joinUrl,
         public int $sortOrder,
     ) {
         $key = strtolower(trim($channelKey));
@@ -50,7 +51,7 @@ final readonly class TelegramRequiredChannelDefinition
         $this->joinUrl = self::normalizeJoinUrl($joinUrl, $visibility);
     }
 
-    public static function normalizeJoinUrl(string $joinUrl, string $visibility): string
+    public static function normalizeJoinUrl(#[SensitiveParameter] string $joinUrl, string $visibility): string
     {
         $value = trim($joinUrl);
         if ($value === '' || strlen($value) > 2048 || preg_match('/[\x00-\x20\x7F]/', $value) === 1) {

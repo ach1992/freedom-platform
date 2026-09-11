@@ -10,6 +10,7 @@ use Illuminate\Contracts\Translation\Translator;
 use Illuminate\Database\DatabaseManager;
 use InvalidArgumentException;
 use RuntimeException;
+use SensitiveParameter;
 use Throwable;
 
 /**
@@ -127,7 +128,7 @@ final readonly class TelegramMembershipJoinPresentationResolver
         }
     }
 
-    private function decryptJoinUrl(string $ciphertext, string $expectedHash, string $visibility): string
+    private function decryptJoinUrl(#[SensitiveParameter] string $ciphertext, string $expectedHash, string $visibility): string
     {
         if ($ciphertext === '' || preg_match('/\A[0-9a-f]{64}\z/', $expectedHash) !== 1) {
             throw new DomainException('Protected Telegram membership join secret is invalid.');
@@ -135,8 +136,8 @@ final readonly class TelegramMembershipJoinPresentationResolver
 
         try {
             $joinUrl = $this->encrypter->decryptString($ciphertext);
-        } catch (Throwable $exception) {
-            throw new DomainException('Protected Telegram membership join secret cannot be decrypted.', previous: $exception);
+        } catch (Throwable) {
+            throw new DomainException('Protected Telegram membership join secret cannot be decrypted.');
         }
 
         if (! hash_equals($expectedHash, hash('sha256', $joinUrl))) {
@@ -145,8 +146,8 @@ final readonly class TelegramMembershipJoinPresentationResolver
 
         try {
             return TelegramRequiredChannelDefinition::normalizeJoinUrl($joinUrl, $visibility);
-        } catch (InvalidArgumentException $exception) {
-            throw new DomainException('Protected Telegram membership join URL is invalid.', previous: $exception);
+        } catch (InvalidArgumentException) {
+            throw new DomainException('Protected Telegram membership join URL is invalid.');
         }
     }
 
