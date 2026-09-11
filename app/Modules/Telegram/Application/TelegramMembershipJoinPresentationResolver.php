@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Application;
 
+use DomainException;
 use Illuminate\Contracts\Encryption\StringEncrypter;
 use Illuminate\Contracts\Translation\Translator;
 use Illuminate\Database\DatabaseManager;
@@ -31,7 +32,7 @@ final readonly class TelegramMembershipJoinPresentationResolver
             || ! $reference->isMembershipJoinPrompt()
             || $reference->action === null
             || $reference->configurationHash === null) {
-            throw new RuntimeException('Protected Telegram membership join reference is unavailable.');
+            throw new DomainException('Protected Telegram membership join reference is unavailable.');
         }
 
         $request = new TelegramChannelMembershipResolutionRequest(
@@ -57,7 +58,7 @@ final readonly class TelegramMembershipJoinPresentationResolver
                 'version',
             ]);
             if ($row === null) {
-                throw new RuntimeException('Protected Telegram membership channel is unavailable.');
+                throw new DomainException('Protected Telegram membership channel is unavailable.');
             }
             /** @var object{id:int|string,channel_key:string,telegram_chat_id:int|string,chat_type:string,visibility:string,display_title:string,join_url_ciphertext:string,join_url_hash:string,state:string,version:int|string} $row */
             $this->assertCurrentChannel($row, $channel);
@@ -76,7 +77,7 @@ final readonly class TelegramMembershipJoinPresentationResolver
         }
 
         if ($buttons === []) {
-            throw new RuntimeException('Protected Telegram membership join targets are unavailable.');
+            throw new DomainException('Protected Telegram membership join targets are unavailable.');
         }
 
         $currentPlan = $this->rules->resolve($request);
@@ -98,7 +99,7 @@ final readonly class TelegramMembershipJoinPresentationResolver
             || $plan->planOfferingId !== $reference->planOfferingId
             || $reference->configurationHash === null
             || ! hash_equals($reference->configurationHash, $plan->configurationHash)) {
-            throw new RuntimeException('Protected Telegram membership configuration changed.');
+            throw new DomainException('Protected Telegram membership configuration changed.');
         }
     }
 
@@ -113,30 +114,30 @@ final readonly class TelegramMembershipJoinPresentationResolver
             || $row->display_title !== $channel->displayTitle
             || $row->state !== $channel->state
             || (int) $row->version !== $channel->version) {
-            throw new RuntimeException('Protected Telegram membership channel configuration changed.');
+            throw new DomainException('Protected Telegram membership channel configuration changed.');
         }
     }
 
     private function decryptJoinUrl(string $ciphertext, string $expectedHash, string $visibility): string
     {
         if ($ciphertext === '' || preg_match('/\A[0-9a-f]{64}\z/', $expectedHash) !== 1) {
-            throw new RuntimeException('Protected Telegram membership join secret is invalid.');
+            throw new DomainException('Protected Telegram membership join secret is invalid.');
         }
 
         try {
             $joinUrl = $this->encrypter->decryptString($ciphertext);
         } catch (Throwable $exception) {
-            throw new RuntimeException('Protected Telegram membership join secret cannot be decrypted.', previous: $exception);
+            throw new DomainException('Protected Telegram membership join secret cannot be decrypted.', previous: $exception);
         }
 
         if (! hash_equals($expectedHash, hash('sha256', $joinUrl))) {
-            throw new RuntimeException('Protected Telegram membership join secret integrity check failed.');
+            throw new DomainException('Protected Telegram membership join secret integrity check failed.');
         }
 
         try {
             return TelegramRequiredChannelDefinition::normalizeJoinUrl($joinUrl, $visibility);
         } catch (\InvalidArgumentException $exception) {
-            throw new RuntimeException('Protected Telegram membership join URL is invalid.', previous: $exception);
+            throw new DomainException('Protected Telegram membership join URL is invalid.', previous: $exception);
         }
     }
 
@@ -148,7 +149,7 @@ final readonly class TelegramMembershipJoinPresentationResolver
             || $before->ruleKey !== $after->ruleKey
             || $before->ruleVersion !== $after->ruleVersion
             || $before->configurationHash !== $after->configurationHash) {
-            throw new RuntimeException('Protected Telegram membership configuration changed during resolution.');
+            throw new DomainException('Protected Telegram membership configuration changed during resolution.');
         }
     }
 

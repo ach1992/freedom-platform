@@ -66,7 +66,7 @@ final readonly class HttpProtectedTelegramMessageSender implements ProtectedTele
             foreach ($presentation->httpsUrlButtons() as $button) {
                 $keyboard[] = [[
                     'text' => $button->text,
-                    'url' => $button->httpsUrl(),
+                    'url' => $button->revealHttpsUrlForProvider(),
                 ]];
             }
             $payload['reply_markup'] = ['inline_keyboard' => $keyboard];

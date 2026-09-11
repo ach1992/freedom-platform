@@ -6,18 +6,26 @@ namespace App\Modules\Telegram\Application;
 
 use InvalidArgumentException;
 use LogicException;
+use SensitiveParameter;
 use Stringable;
+use WeakMap;
 
 /**
  * Restricted URL button kept only in the transient protected provider payload.
+ * Invite plaintext is held outside inspectable object properties and can be
+ * revealed only by the exact protected Telegram provider gateway.
  */
-final readonly class ProtectedTelegramHttpsUrlButton implements Stringable
+final class ProtectedTelegramHttpsUrlButton implements Stringable
 {
+    /** @var WeakMap<self,string>|null */
+    private static ?WeakMap $httpsUrlByInstance = null;
+
     public function __construct(
-        public string $text,
-        private string $httpsUrl,
+        public readonly string $text,
+        #[SensitiveParameter] string $httpsUrl,
     ) {
         if ($text === ''
+            || trim($text) === ''
             || mb_strlen($text) > 64
             || ! mb_check_encoding($text, 'UTF-8')
             || str_contains($text, "\0")
@@ -26,11 +34,22 @@ final readonly class ProtectedTelegramHttpsUrlButton implements Stringable
             || preg_match('/[\x00-\x20\x7F]/', $httpsUrl) === 1) {
             throw new InvalidArgumentException('Protected Telegram HTTPS URL button is invalid.');
         }
+
+        self::httpsUrlByInstance()[$this] = $httpsUrl;
     }
 
-    public function httpsUrl(): string
+    /**
+     * @internal Restricted to HttpProtectedTelegramMessageSender by the runtime guard.
+     */
+    public function revealHttpsUrlForProvider(): string
     {
-        return $this->httpsUrl;
+        TelegramProtectedPresentationProvenanceGuard::assertHttpsUrlRevealCaller();
+        $map = self::$httpsUrlByInstance;
+        if ($map === null || ! isset($map[$this])) {
+            throw new LogicException('Protected Telegram HTTPS URL is unavailable.');
+        }
+
+        return $map[$this];
     }
 
     public function __toString(): string
@@ -59,4 +78,12 @@ final readonly class ProtectedTelegramHttpsUrlButton implements Stringable
     {
         throw new LogicException('Protected Telegram HTTPS URL buttons cannot be unserialized.');
     }
+
+    /** @return WeakMap<self,string> */
+    private static function httpsUrlByInstance(): WeakMap
+    {
+        return self::$httpsUrlByInstance ??= new WeakMap;
+    }
+
+    private function __clone(): void {}
 }

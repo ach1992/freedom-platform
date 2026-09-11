@@ -10,7 +10,8 @@ use Stringable;
 
 /**
  * Restricted payload held only until the one provider-boundary attempt.
- * Its string/debug representations cannot expose link, QR, copy, or URL material.
+ * Its string/debug/serialization representations cannot expose link, QR, copy,
+ * or URL material.
  */
 final readonly class ProtectedTelegramPresentation implements Stringable
 {
@@ -56,7 +57,7 @@ final readonly class ProtectedTelegramPresentation implements Stringable
     /** @param list<ProtectedTelegramHttpsUrlButton> $buttons */
     public static function plainTextWithHttpsUrlButtons(string $text, array $buttons): self
     {
-        if ($text === '' || $buttons === [] || count($buttons) > 100) {
+        if ($text === '' || $buttons === [] || count($buttons) > 32) {
             throw new InvalidArgumentException('Protected Telegram HTTPS URL presentation is invalid.');
         }
         foreach ($buttons as $button) {
@@ -137,5 +138,17 @@ final readonly class ProtectedTelegramPresentation implements Stringable
     public function __toString(): string
     {
         return '[PROTECTED_TELEGRAM_PRESENTATION]';
+    }
+
+    /** @return never */
+    public function __serialize(): array
+    {
+        throw new LogicException('Protected Telegram presentations cannot be serialized.');
+    }
+
+    /** @param array<array-key,mixed> $data */
+    public function __unserialize(array $data): void
+    {
+        throw new LogicException('Protected Telegram presentations cannot be unserialized.');
     }
 }
