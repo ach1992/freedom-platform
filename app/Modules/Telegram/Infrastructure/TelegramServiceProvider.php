@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Infrastructure;
 
+use App\Modules\AccessControl\Application\AdministratorPermissionAuthorizer;
 use App\Modules\Telegram\Application\Contracts\ProtectedTelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\ProtectedTelegramMessageSender;
 use App\Modules\Telegram\Application\Contracts\TelegramBotApi;
@@ -16,6 +17,8 @@ use App\Modules\Telegram\Application\Contracts\TelegramRuntime;
 use App\Modules\Telegram\Application\TelegramAgentNavigationHandler;
 use App\Modules\Telegram\Application\TelegramConfidentialDeliveryOutboxHandler;
 use App\Modules\Telegram\Application\TelegramConfidentialPresentationHasher;
+use App\Modules\Telegram\Application\TelegramConfigurationMutationAudit;
+use App\Modules\Telegram\Application\TelegramConfigurationMutationExecutor;
 use App\Modules\Telegram\Application\TelegramDeliveryOperationExecutor;
 use App\Modules\Telegram\Application\TelegramDeliveryOutboxHandler;
 use App\Modules\Telegram\Application\TelegramGiftCardNavigationHandler;
@@ -27,10 +30,14 @@ use App\Modules\Telegram\Application\TelegramNavigationEntryGateway;
 use App\Modules\Telegram\Application\TelegramNavigationHandler;
 use App\Modules\Telegram\Application\TelegramProtectedPresentationResolver;
 use App\Modules\Telegram\Application\TelegramProtectedReferenceDeliveryOutboxHandler;
+use App\Modules\Telegram\Application\TelegramRequiredChannelService;
 use App\Modules\Telegram\Application\TelegramUsdtNavigationHandler;
+use App\Shared\Application\Clock;
 use App\Shared\Application\OutboxEventHandler;
 use Illuminate\Contracts\Config\Repository;
+use Illuminate\Contracts\Encryption\StringEncrypter;
 use Illuminate\Contracts\Foundation\Application;
+use Illuminate\Database\DatabaseManager;
 use Illuminate\Encryption\Encrypter;
 use Illuminate\Http\Client\Factory;
 use Illuminate\Support\ServiceProvider;
@@ -112,6 +119,33 @@ final class TelegramServiceProvider extends ServiceProvider
             fn (Application $application): TelegramMembershipLookup => new HttpTelegramMembershipLookup(
                 $application->make(Factory::class),
                 $application->make(TelegramRuntimeConfiguration::class),
+            ),
+        );
+        $this->app->singleton(
+            TelegramConfigurationMutationAudit::class,
+            fn (Application $application): TelegramConfigurationMutationAudit => new TelegramConfigurationMutationAudit(
+                $application->make(DatabaseManager::class),
+                $application->make(Clock::class),
+            ),
+        );
+        $this->app->singleton(
+            TelegramConfigurationMutationExecutor::class,
+            fn (Application $application): TelegramConfigurationMutationExecutor => new TelegramConfigurationMutationExecutor(
+                $application->make(DatabaseManager::class),
+                $application->make(AdministratorPermissionAuthorizer::class),
+                $application->make(TelegramConfigurationMutationAudit::class),
+            ),
+        );
+        $this->app->singleton(
+            TelegramRequiredChannelService::class,
+            fn (Application $application): TelegramRequiredChannelService => new TelegramRequiredChannelService(
+                $application->make(DatabaseManager::class),
+                $application->make(StringEncrypter::class),
+                $application->make(TelegramMembershipLookup::class),
+                $application->make(TelegramRuntime::class),
+                $application->make(TelegramConfigurationMutationExecutor::class),
+                $application->make(TelegramConfigurationMutationAudit::class),
+                $application->make(Clock::class),
             ),
         );
         $this->app->singleton(
