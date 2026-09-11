@@ -9,12 +9,15 @@ use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\TelegramMutationTransport;
 use App\Modules\Telegram\Application\TelegramChannelMembershipResolutionRequest;
 use App\Modules\Telegram\Application\TelegramChannelMembershipRuleResolver;
+use App\Modules\Telegram\Application\TelegramChannelMembershipRuleService;
+use App\Modules\Telegram\Application\TelegramConfigurationChangeContext;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseCardToCardDestination;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseCardToCardReservation;
 use App\Modules\Telegram\Application\TelegramDeliveryDatabaseCapability;
 use App\Modules\Telegram\Application\TelegramDeliveryOperationExecutor;
 use App\Modules\Telegram\Application\TelegramDeliveryOutboxHandler;
 use App\Modules\Telegram\Application\TelegramDeliveryQueueService;
+use App\Modules\Telegram\Application\TelegramMembershipConfigurationFence;
 use App\Modules\Telegram\Application\TelegramMembershipJoinPresentationResolver;
 use App\Modules\Telegram\Application\TelegramMutationRequest;
 use App\Modules\Telegram\Application\TelegramMutationResult;
@@ -33,6 +36,7 @@ use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\TelegramMembershipAccessFoundationSeeder;
 use DateTimeImmutable;
 use DomainException;
+use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Contracts\Encryption\StringEncrypter;
 use Illuminate\Contracts\Translation\Translator;
 use Illuminate\Database\DatabaseManager;
@@ -51,6 +55,68 @@ use Tests\Support\ConfidentialTelegramPresentationTestFactory;
 use Tests\Support\NonRestrictedTelegramPresentationTestFactory;
 use Tests\Support\TelegramInteractivePresentationTestFactory;
 use Tests\TestCase;
+
+require_once dirname(__DIR__, 2).'/vendor/autoload.php';
+
+if (PHP_SAPI === 'cli' && ($argv[1] ?? null) === '--telegram-membership-configuration-fence-worker') {
+    $app = require dirname(__DIR__, 2).'/bootstrap/app.php';
+    $app->make(Kernel::class)->bootstrap();
+    $decoded = base64_decode($argv[2] ?? '', true);
+    if ($decoded === false) {
+        fwrite(STDERR, "Invalid membership fence worker payload encoding.\n");
+        exit(2);
+    }
+
+    try {
+        /** @var array<string, int|string> $payload */
+        $payload = json_decode($decoded, true, flags: JSON_THROW_ON_ERROR);
+    } catch (\JsonException $exception) {
+        fwrite(STDERR, 'Invalid membership fence worker payload: '.$exception->getMessage()."\n");
+        exit(2);
+    }
+
+    echo "READY\n";
+    flush();
+    if (fgets(STDIN) === false) {
+        fwrite(STDERR, "Membership fence worker barrier was not released.\n");
+        exit(2);
+    }
+
+    try {
+        $database = $app->make(DatabaseManager::class);
+        $stateBefore = (string) $database->connection()->table('telegram_delivery_operations')
+            ->where('public_id', (string) $payload['operation_public_id'])
+            ->value('state');
+        echo 'MUTATION_STARTED:'.$stateBefore."\n";
+        flush();
+
+        $receipt = $app->make(TelegramChannelMembershipRuleService::class)->disable(
+            (int) $payload['rule_id'],
+            (int) $payload['expected_version'],
+            new TelegramConfigurationChangeContext(
+                (string) $payload['request_fingerprint'],
+                (string) $payload['correlation_id'],
+                'telegram_membership_configuration',
+                'Concurrent membership configuration fence verification.',
+                (int) $payload['administrator_id'],
+            ),
+        );
+
+        echo json_encode([
+            'ok' => true,
+            'state_before' => $stateBefore,
+            'state_after' => $receipt->after['state'] ?? null,
+            'version_after' => $receipt->after['version'] ?? null,
+        ], JSON_THROW_ON_ERROR)."\n";
+    } catch (\Throwable $exception) {
+        echo json_encode([
+            'ok' => false,
+            'exception' => $exception::class,
+            'message' => $exception->getMessage(),
+        ], JSON_THROW_ON_ERROR)."\n";
+    }
+    exit(0);
+}
 
 final class TelegramMembershipJoinPresentationTestClock implements Clock
 {
@@ -107,6 +173,8 @@ final readonly class TelegramMembershipJoinPresentationNeverCardToCard implement
 final class TelegramMembershipJoinPresentationTest extends TestCase
 {
     use DatabaseTruncation;
+
+    private const WORKER_TIMEOUT_SECONDS = 30;
 
     private TelegramMembershipJoinPresentationTestClock $clock;
 
@@ -371,6 +439,92 @@ final class TelegramMembershipJoinPresentationTest extends TestCase
         }
     }
 
+    public function test_canonical_membership_configuration_write_waits_until_provider_boundary_commit(): void
+    {
+        $joinUrl = 'https://t.me/+PrivateJoinSecret290Fence';
+        $channelId = $this->activeChannel('join-fence-290', -1002900000019, 'private', 'Fence 290', $joinUrl);
+        $userId = $this->customerWithTelegram(790000019);
+        $ruleId = $this->activeRule('join-fence-rule-290', [$channelId]);
+        $reference = $this->referenceFor($userId, 'en');
+        $created = NonRestrictedTelegramPresentationTestFactory::queueProtectedReference(
+            $this->queue(),
+            TelegramDeliveryAction::Send,
+            790000019,
+            $reference,
+            'membership-join-fence-290-001',
+            'correlation-membership-join-fence-290',
+        );
+        $administratorId = $this->administrator(true);
+        $worker = $this->startConfigurationFenceWorker([
+            'rule_id' => $ruleId,
+            'expected_version' => 2,
+            'administrator_id' => $administratorId,
+            'operation_public_id' => $created->publicId,
+            'request_fingerprint' => 'membership-fence-disable-290',
+            'correlation_id' => 'correlation-fence-disable-290',
+        ]);
+        $fenceObserved = false;
+        $mutationBlocked = false;
+
+        try {
+            self::assertSame("READY\n", $this->readWorkerLine($worker, 'readiness'));
+            DB::listen(function (QueryExecuted $query) use ($worker, &$fenceObserved, &$mutationBlocked): void {
+                if ($fenceObserved) {
+                    return;
+                }
+                $sql = strtolower(preg_replace('/\s+/', ' ', trim($query->sql)) ?? $query->sql);
+                if (! str_contains($sql, 'from `channel_membership_rules`')
+                    || ! str_contains($sql, 'order by `id` asc')
+                    || ! str_contains($sql, 'limit 1 for update')) {
+                    return;
+                }
+
+                $fenceObserved = true;
+                $this->sendWorkerLine($worker, "GO\n");
+                self::assertSame(
+                    "MUTATION_STARTED:prepared\n",
+                    $this->readWorkerLine($worker, 'mutation start'),
+                    'Concurrent configuration mutation must start while the provider boundary is still uncommitted.',
+                );
+                $mutationBlocked = $this->tryReadWorkerLine($worker, 0.75) === null;
+            });
+
+            Http::fake(['*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 29019],
+            ], 200)]);
+            $generic = new TelegramMembershipJoinPresentationTestTransport;
+            $receipt = $this->executor($generic)->execute(
+                $created->publicId,
+                $created->outboxEventId,
+                'correlation-membership-join-fence-290',
+                TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_PROTECTED_REFERENCE,
+            );
+
+            self::assertTrue($fenceObserved, 'Provider-bound membership resolution must acquire the configuration fence.');
+            self::assertTrue($mutationBlocked, 'Canonical membership configuration mutation must remain blocked until provider-boundary commit.');
+            self::assertSame(TelegramDeliveryOperationState::Succeeded, $receipt->state);
+            self::assertSame(0, $generic->attempts);
+            Http::assertSentCount(1);
+
+            $workerResult = $this->readConfigurationFenceWorkerResult($worker);
+            self::assertTrue($workerResult['ok'], json_encode($workerResult, JSON_THROW_ON_ERROR));
+            self::assertSame('prepared', $workerResult['state_before']);
+            self::assertSame('disabled', $workerResult['state_after']);
+            self::assertSame(3, $workerResult['version_after']);
+
+            $operation = DB::table('telegram_delivery_operations')->where('public_id', $created->publicId)->first();
+            self::assertNotNull($operation);
+            self::assertSame('succeeded', (string) $operation->state);
+            self::assertSame(1, (int) $operation->provider_attempts);
+            self::assertNotNull($operation->provider_boundary_started_at);
+            self::assertSame('disabled', DB::table('channel_membership_rules')->where('id', $ruleId)->value('state'));
+            self::assertSame(3, (int) DB::table('channel_membership_rules')->where('id', $ruleId)->value('version'));
+        } finally {
+            $this->terminateConfigurationFenceWorker($worker);
+        }
+    }
+
     public function test_configuration_drift_after_reference_creation_fails_closed_before_provider(): void
     {
         $joinUrl = 'https://t.me/+PrivateJoinSecret290C';
@@ -593,6 +747,7 @@ final class TelegramMembershipJoinPresentationTest extends TestCase
             $this->app->make(StringEncrypter::class),
             $this->rules(),
             $this->app->make(Translator::class),
+            new TelegramMembershipConfigurationFence,
         );
     }
 
@@ -792,6 +947,159 @@ final class TelegramMembershipJoinPresentationTest extends TestCase
         ]);
 
         return $userId;
+    }
+
+    private function administrator(bool $owner): int
+    {
+        $now = now('UTC');
+
+        return (int) DB::table('administrators')->insertGetId([
+            'user_id' => DB::table('users')->insertGetId([
+                'public_id' => (string) Str::ulid(),
+                'account_type' => 'customer',
+                'account_status' => 'active',
+                'locale' => 'fa',
+                'first_seen_at' => $now,
+                'last_seen_at' => $now,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]),
+            'status' => 'active',
+            'is_owner' => $owner,
+            'permission_version' => 1,
+            'last_authenticated_at' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+    }
+
+    /**
+     * @param  array<string, int|string>  $payload
+     * @return array{process:resource,pipes:array{0:resource,1:resource,2:resource}}
+     */
+    private function startConfigurationFenceWorker(array $payload): array
+    {
+        $pipes = [];
+        $process = proc_open([
+            PHP_BINARY,
+            '-d',
+            'pcov.enabled=0',
+            __FILE__,
+            '--telegram-membership-configuration-fence-worker',
+            base64_encode(json_encode($payload, JSON_THROW_ON_ERROR)),
+        ], [
+            0 => ['pipe', 'r'],
+            1 => ['pipe', 'w'],
+            2 => ['pipe', 'w'],
+        ], $pipes, dirname(__DIR__, 2));
+        if (! is_resource($process)) {
+            throw new RuntimeException('Unable to start Telegram membership configuration fence worker.');
+        }
+        /** @var array{0:resource,1:resource,2:resource} $pipes */
+        stream_set_blocking($pipes[1], false);
+        stream_set_blocking($pipes[2], false);
+
+        return ['process' => $process, 'pipes' => $pipes];
+    }
+
+    /** @param array{process:resource,pipes:array{0:resource,1:resource,2:resource}} $worker */
+    private function sendWorkerLine(array $worker, string $line): void
+    {
+        if (fwrite($worker['pipes'][0], $line) === false) {
+            throw new RuntimeException('Unable to release Telegram membership configuration fence worker barrier.');
+        }
+        fflush($worker['pipes'][0]);
+    }
+
+    /**
+     * @param  array{process:resource,pipes:array{0:resource,1:resource,2:resource}}  $worker
+     * @return array<string, mixed>
+     */
+    private function readConfigurationFenceWorkerResult(array $worker): array
+    {
+        $line = $this->readWorkerLine($worker, 'result');
+        /** @var array<string, mixed> $result */
+        $result = json_decode($line, true, flags: JSON_THROW_ON_ERROR);
+
+        return $result;
+    }
+
+    /** @param array{process:resource,pipes:array{0:resource,1:resource,2:resource}} $worker */
+    private function readWorkerLine(array $worker, string $phase): string
+    {
+        $deadline = microtime(true) + self::WORKER_TIMEOUT_SECONDS;
+        $stderr = '';
+        while (microtime(true) < $deadline) {
+            $read = [$worker['pipes'][1], $worker['pipes'][2]];
+            $write = null;
+            $except = null;
+            $selected = stream_select($read, $write, $except, 0, 200_000);
+            if ($selected === false) {
+                throw new RuntimeException('Unable to wait for Telegram membership configuration fence worker output.');
+            }
+            foreach ($read as $stream) {
+                if ($stream === $worker['pipes'][2]) {
+                    $stderr .= stream_get_contents($stream);
+
+                    continue;
+                }
+                $line = fgets($stream);
+                if ($line !== false && trim($line) !== '') {
+                    return $line;
+                }
+            }
+            $status = proc_get_status($worker['process']);
+            if (! $status['running'] && feof($worker['pipes'][1])) {
+                $stderr .= stream_get_contents($worker['pipes'][2]);
+                throw new RuntimeException('Telegram membership configuration fence worker exited before '.$phase.' output: '.$stderr);
+            }
+        }
+
+        throw new RuntimeException('Telegram membership configuration fence worker timed out during '.$phase.': '.$stderr);
+    }
+
+    /** @param array{process:resource,pipes:array{0:resource,1:resource,2:resource}} $worker */
+    private function tryReadWorkerLine(array $worker, float $timeoutSeconds): ?string
+    {
+        $deadline = microtime(true) + $timeoutSeconds;
+        while (microtime(true) < $deadline) {
+            $read = [$worker['pipes'][1]];
+            $write = null;
+            $except = null;
+            $remaining = max(0.0, $deadline - microtime(true));
+            $seconds = (int) floor($remaining);
+            $microseconds = (int) (($remaining - $seconds) * 1_000_000);
+            $selected = stream_select($read, $write, $except, $seconds, $microseconds);
+            if ($selected === false) {
+                throw new RuntimeException('Unable to probe Telegram membership configuration fence worker output.');
+            }
+            if ($selected === 0) {
+                return null;
+            }
+            $line = fgets($worker['pipes'][1]);
+            if ($line !== false && trim($line) !== '') {
+                return $line;
+            }
+        }
+
+        return null;
+    }
+
+    /** @param array{process:resource,pipes:array{0:resource,1:resource,2:resource}} $worker */
+    private function terminateConfigurationFenceWorker(array $worker): void
+    {
+        foreach ($worker['pipes'] as $pipe) {
+            if (is_resource($pipe)) {
+                fclose($pipe);
+            }
+        }
+        if (is_resource($worker['process'])) {
+            $status = proc_get_status($worker['process']);
+            if ($status['running']) {
+                proc_terminate($worker['process']);
+            }
+            proc_close($worker['process']);
+        }
     }
 
     private function assertSerializationRejected(object $value): void

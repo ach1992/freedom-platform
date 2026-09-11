@@ -19,6 +19,7 @@ final readonly class TelegramConfigurationMutationExecutor
         private DatabaseManager $database,
         private AdministratorPermissionAuthorizer $authorizer,
         private TelegramConfigurationMutationAudit $audit,
+        private TelegramMembershipConfigurationFence $membershipConfigurationFence,
     ) {}
 
     public function authorize(TelegramConfigurationChangeContext $context): void
@@ -62,6 +63,7 @@ final readonly class TelegramConfigurationMutationExecutor
         try {
             return $this->database->connection()->transaction(function (Connection $connection) use ($action, $targetType, $expectedTargetId, $payloadHash, $context, $operation): TelegramConfigurationMutationReceipt {
                 $this->authorizeInsideTransaction($connection, $context->actorAdministratorId);
+                $this->membershipConfigurationFence->acquire($connection);
                 $existing = $this->audit->existing($action, $context->requestFingerprint, true);
                 if ($existing !== null) {
                     return $this->validateReplay($existing, $targetType, $expectedTargetId, $payloadHash);

@@ -7,6 +7,7 @@ namespace App\Modules\Telegram\Application;
 use DomainException;
 use Illuminate\Contracts\Encryption\StringEncrypter;
 use Illuminate\Contracts\Translation\Translator;
+use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
 use InvalidArgumentException;
 use RuntimeException;
@@ -24,6 +25,7 @@ final readonly class TelegramMembershipJoinPresentationResolver
         private StringEncrypter $encrypter,
         private TelegramChannelMembershipRuleResolver $rules,
         private Translator $translator,
+        private TelegramMembershipConfigurationFence $configurationFence,
     ) {}
 
     public function resolveForSelf(
@@ -37,6 +39,8 @@ final readonly class TelegramMembershipJoinPresentationResolver
             throw new DomainException('Protected Telegram membership join reference is unavailable.');
         }
 
+        $connection = $this->database->connection();
+        $this->configurationFence->acquire($connection);
         $request = new TelegramChannelMembershipResolutionRequest(
             $userId,
             $reference->action,
@@ -44,10 +48,11 @@ final readonly class TelegramMembershipJoinPresentationResolver
         );
         $plan = $this->rules->resolve($request);
         $this->assertReferencedPlan($plan, $reference);
+        $this->lockSelectedRule($connection, $plan);
 
         $buttons = [];
         foreach ($plan->channels as $channel) {
-            $row = $this->database->connection()->table('required_channels')->where('id', $channel->requiredChannelId)->first([
+            $row = $connection->table('required_channels')->where('id', $channel->requiredChannelId)->lockForUpdate()->first([
                 'id',
                 'channel_key',
                 'telegram_chat_id',
@@ -109,6 +114,27 @@ final readonly class TelegramMembershipJoinPresentationResolver
             || $plan->planOfferingId !== $reference->planOfferingId
             || $reference->configurationHash === null
             || ! hash_equals($reference->configurationHash, $plan->configurationHash)) {
+            throw new DomainException('Protected Telegram membership configuration changed.');
+        }
+    }
+
+    private function lockSelectedRule(
+        Connection $connection,
+        TelegramChannelMembershipRequirementPlan $plan,
+    ): void {
+        if ($plan->ruleId === null || $plan->ruleKey === null || $plan->ruleVersion === null) {
+            throw new DomainException('Protected Telegram membership configuration changed.');
+        }
+
+        $row = $connection->table('channel_membership_rules')
+            ->where('id', $plan->ruleId)
+            ->lockForUpdate()
+            ->first(['id', 'rule_key', 'state', 'version']);
+        if ($row === null
+            || (int) $row->id !== $plan->ruleId
+            || (string) $row->rule_key !== $plan->ruleKey
+            || (string) $row->state !== 'active'
+            || (int) $row->version !== $plan->ruleVersion) {
             throw new DomainException('Protected Telegram membership configuration changed.');
         }
     }
