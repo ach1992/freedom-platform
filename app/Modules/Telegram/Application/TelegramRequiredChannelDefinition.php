@@ -50,7 +50,7 @@ final readonly class TelegramRequiredChannelDefinition
         $this->joinUrl = self::normalizeJoinUrl($joinUrl, $visibility);
     }
 
-    private static function normalizeJoinUrl(string $joinUrl, string $visibility): string
+    public static function normalizeJoinUrl(string $joinUrl, string $visibility): string
     {
         $value = trim($joinUrl);
         if ($value === '' || strlen($value) > 2048 || preg_match('/[\x00-\x20\x7F]/', $value) === 1) {
