@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Modules\Promotions\Application\ReferralAttributionService;
 use App\Modules\Telegram\Application\Contracts\TelegramInteractionHandler;
 use App\Modules\Telegram\Application\TelegramInteractionAction;
 use App\Modules\Telegram\Application\TelegramInteractionDispatcher;
 use App\Modules\Telegram\Application\TelegramInteractionHandlerRegistry;
 use App\Modules\Telegram\Application\TelegramInteractionSessionService;
+use App\Modules\Telegram\Application\TelegramReferralStartAttributionService;
 use App\Modules\Telegram\Application\TelegramUpdateProcessor;
 use Illuminate\Contracts\Encryption\StringEncrypter;
 use Illuminate\Database\QueryException;
@@ -94,6 +96,161 @@ final class TelegramUpdateProcessorTest extends TestCase
             'telegram_user_id' => 9100,
             'username' => 'renamed_user',
         ]);
+    }
+
+    public function test_first_canonical_start_referral_binds_once_and_later_competing_start_cannot_replace_it(): void
+    {
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $referrals = $this->app->make(ReferralAttributionService::class);
+
+        $this->accept($this->payload(3010, 9110, 'referral_inviter_a', 'hello'));
+        $processor->process('123456789', 3010);
+        $this->accept($this->payload(3011, 9111, 'referral_inviter_b', 'hello'));
+        $processor->process('123456789', 3011);
+        $inviterA = (int) DB::table('telegram_accounts')->where('telegram_user_id', 9110)->value('user_id');
+        $inviterB = (int) DB::table('telegram_accounts')->where('telegram_user_id', 9111)->value('user_id');
+        $tokenA = $referrals->identityForUser($inviterA);
+        $tokenB = $referrals->identityForUser($inviterB);
+
+        $this->accept($this->payload(3012, 9112, 'referral_referred', '/start '.$tokenA));
+        $processor->process('123456789', 3012);
+        $processor->process('123456789', 3012);
+        $referred = (int) DB::table('telegram_accounts')->where('telegram_user_id', 9112)->value('user_id');
+
+        $relationship = DB::table('referral_relationships')->where('referred_user_id', $referred)->first();
+        self::assertNotNull($relationship);
+        self::assertSame($inviterA, (int) $relationship->inviter_user_id);
+        self::assertSame(1, DB::table('referral_relationships')->where('referred_user_id', $referred)->count());
+        self::assertSame(1, DB::table('referral_attribution_events')->where('relationship_id', (int) $relationship->id)->where('event_type', 'bound')->count());
+        self::assertSame(0, DB::table('referral_rewards')->count());
+        $this->assertDatabaseHas('processed_telegram_updates', ['update_id' => 3012, 'state' => 'processed', 'attempt_count' => 1]);
+        $this->assertDatabaseHas('telegram_interaction_sessions', ['user_id' => $referred, 'flow' => 'navigation.home', 'state' => 'home']);
+
+        $stored = DB::table('telegram_start_attributions')->where('user_id', $referred)->first();
+        self::assertNotNull($stored);
+        self::assertSame(3012, (int) $stored->first_update_id);
+        self::assertSame(hash('sha256', $tokenA), (string) $stored->payload_hash);
+        self::assertStringNotContainsString($tokenA, (string) $stored->payload_ciphertext);
+        self::assertSame(0, DB::table('telegram_interaction_sessions')->where('payload', 'like', '%'.$tokenA.'%')->count());
+        self::assertSame(0, DB::table('telegram_delivery_operations')->where('presentation_text', 'like', '%'.$tokenA.'%')->count());
+
+        $this->accept($this->payload(3013, 9112, 'referral_referred', '/start '.$tokenB));
+        $processor->process('123456789', 3013);
+
+        $unchanged = DB::table('referral_relationships')->where('referred_user_id', $referred)->first();
+        self::assertNotNull($unchanged);
+        self::assertSame($inviterA, (int) $unchanged->inviter_user_id);
+        self::assertSame(1, DB::table('referral_attribution_events')->where('relationship_id', (int) $unchanged->id)->where('event_type', 'bound')->count());
+        self::assertSame(3012, (int) DB::table('telegram_start_attributions')->where('user_id', $referred)->value('first_update_id'));
+    }
+
+    public function test_noncanonical_first_start_blocks_later_referral_and_expected_referral_rejections_do_not_trap_navigation(): void
+    {
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $referrals = $this->app->make(ReferralAttributionService::class);
+
+        $this->accept($this->payload(3020, 9120, 'referral_inviter', 'hello'));
+        $processor->process('123456789', 3020);
+        $inviter = (int) DB::table('telegram_accounts')->where('telegram_user_id', 9120)->value('user_id');
+        $token = $referrals->identityForUser($inviter);
+
+        $this->accept($this->payload(3021, 9121, 'referral_campaign', '/start campaign_1'));
+        $processor->process('123456789', 3021);
+        $campaignUser = (int) DB::table('telegram_accounts')->where('telegram_user_id', 9121)->value('user_id');
+        self::assertSame(0, DB::table('referral_relationships')->where('referred_user_id', $campaignUser)->count());
+        $this->assertDatabaseHas('processed_telegram_updates', ['update_id' => 3021, 'state' => 'processed']);
+        $this->assertDatabaseHas('telegram_interaction_sessions', ['user_id' => $campaignUser, 'flow' => 'navigation.home']);
+
+        $this->accept($this->payload(3022, 9121, 'referral_campaign', '/start '.$token));
+        $processor->process('123456789', 3022);
+        self::assertSame(0, DB::table('referral_relationships')->where('referred_user_id', $campaignUser)->count());
+        self::assertSame(3021, (int) DB::table('telegram_start_attributions')->where('user_id', $campaignUser)->value('first_update_id'));
+
+        $this->accept($this->payload(3023, 9122, 'referral_self', 'hello'));
+        $processor->process('123456789', 3023);
+        $selfUser = (int) DB::table('telegram_accounts')->where('telegram_user_id', 9122)->value('user_id');
+        $selfToken = $referrals->identityForUser($selfUser);
+        $this->accept($this->payload(3024, 9122, 'referral_self', '/start '.$selfToken));
+        $processor->process('123456789', 3024);
+        self::assertSame(0, DB::table('referral_relationships')->where('referred_user_id', $selfUser)->count());
+        $this->assertDatabaseHas('processed_telegram_updates', ['update_id' => 3024, 'state' => 'processed']);
+        $this->assertDatabaseHas('telegram_interaction_sessions', ['user_id' => $selfUser, 'flow' => 'navigation.home']);
+
+        $unknownToken = str_repeat('f', 32);
+        self::assertNotSame($token, $unknownToken);
+        $this->accept($this->payload(3025, 9123, 'referral_unknown', '/start '.$unknownToken));
+        $processor->process('123456789', 3025);
+        $unknownUser = (int) DB::table('telegram_accounts')->where('telegram_user_id', 9123)->value('user_id');
+        self::assertSame(0, DB::table('referral_relationships')->where('referred_user_id', $unknownUser)->count());
+        $this->assertDatabaseHas('processed_telegram_updates', ['update_id' => 3025, 'state' => 'processed']);
+        $this->assertDatabaseHas('telegram_interaction_sessions', ['user_id' => $unknownUser, 'flow' => 'navigation.home']);
+    }
+
+    public function test_referral_binding_replays_after_post_dispatch_failure_without_duplicate_attribution(): void
+    {
+        if (DB::connection()->getDriverName() !== 'mysql') {
+            $this->markTestSkipped('Referral update replay verification requires MariaDB/MySQL.');
+        }
+
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $referrals = $this->app->make(ReferralAttributionService::class);
+        $this->accept($this->payload(3030, 9130, 'referral_retry_inviter', 'hello'));
+        $processor->process('123456789', 3030);
+        $inviter = (int) DB::table('telegram_accounts')->where('telegram_user_id', 9130)->value('user_id');
+        $token = $referrals->identityForUser($inviter);
+        $this->accept($this->payload(3031, 9131, 'referral_retry_user', '/start '.$token));
+
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER telegram_update_test_fail_processed_3031
+BEFORE UPDATE ON processed_telegram_updates
+FOR EACH ROW
+BEGIN
+    IF OLD.bot_id = '123456789' AND OLD.update_id = 3031 AND NEW.state = 'processed' THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'simulated-referral-post-dispatch-failure';
+    END IF;
+END
+SQL);
+        try {
+            try {
+                $processor->process('123456789', 3031);
+                self::fail('The simulated post-dispatch failure must leave referral update retryable.');
+            } catch (RuntimeException $exception) {
+                self::assertSame('Telegram update processing failed.', $exception->getMessage());
+            }
+        } finally {
+            DB::unprepared('DROP TRIGGER IF EXISTS telegram_update_test_fail_processed_3031');
+        }
+
+        $referred = (int) DB::table('telegram_accounts')->where('telegram_user_id', 9131)->value('user_id');
+        $relationship = DB::table('referral_relationships')->where('referred_user_id', $referred)->first();
+        self::assertNotNull($relationship);
+        self::assertSame(1, DB::table('referral_attribution_events')->where('relationship_id', (int) $relationship->id)->where('event_type', 'bound')->count());
+        $this->assertDatabaseHas('processed_telegram_updates', ['update_id' => 3031, 'state' => 'failed', 'attempt_count' => 1]);
+
+        $processor->process('123456789', 3031);
+
+        self::assertSame(1, DB::table('referral_relationships')->where('referred_user_id', $referred)->count());
+        self::assertSame(1, DB::table('referral_attribution_events')->where('relationship_id', (int) $relationship->id)->where('event_type', 'bound')->count());
+        $this->assertDatabaseHas('processed_telegram_updates', ['update_id' => 3031, 'state' => 'processed', 'attempt_count' => 2]);
+    }
+
+    public function test_corrupted_first_start_evidence_fails_before_referral_mutation(): void
+    {
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $this->accept($this->payload(3040, 9140, 'referral_corrupt', '/start campaign_safe'));
+        $processor->process('123456789', 3040);
+        $userId = (int) DB::table('telegram_accounts')->where('telegram_user_id', 9140)->value('user_id');
+
+        DB::table('telegram_start_attributions')->where('user_id', $userId)->update(['payload_hash' => str_repeat('0', 64)]);
+
+        try {
+            $this->app->make(TelegramReferralStartAttributionService::class)->bindFirstStart('123456789', 3040, $userId);
+            self::fail('Corrupted first-start evidence must fail closed.');
+        } catch (RuntimeException $exception) {
+            self::assertSame('Telegram referral attribution payload integrity check failed.', $exception->getMessage());
+        }
+        self::assertSame(0, DB::table('referral_relationships')->where('referred_user_id', $userId)->count());
+        self::assertSame(0, DB::table('referral_attribution_events')->count());
     }
 
     public function test_processed_update_routes_one_restart_safe_interaction_transition_without_duplicate_replay(): void
@@ -332,6 +489,7 @@ SQL);
             }
         } finally {
             DB::unprepared('DROP TRIGGER IF EXISTS telegram_update_test_fail_processed_3071');
+            DB::unprepared('DROP TRIGGER IF EXISTS telegram_update_test_fail_processed_3031');
         }
 
         $this->assertDatabaseHas('processed_telegram_updates', [
