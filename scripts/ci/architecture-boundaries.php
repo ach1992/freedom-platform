@@ -14,7 +14,7 @@ return [
         'Payments' => ['AccessControl', 'Orders', 'Telegram', 'Wallet'],
         'Promotions' => ['AccessControl', 'Wallet'],
         'Provisioning' => ['AccessControl', 'Catalog', 'Orders', 'Panels', 'Payments', 'Telegram', 'Wallet'],
-        'Telegram' => ['Agents', 'Customers', 'Identity', 'Promotions', 'Wallet'],
+        'Telegram' => ['AccessControl', 'Agents', 'Customers', 'Identity', 'Promotions', 'Wallet'],
         'Wallet' => ['AccessControl'],
     ],
     // Exact dependency-inversion seams where an owning module implements a
@@ -458,6 +458,7 @@ return [
         'pricing_rule_versions' => 'Promotions',
         'pricing_rules' => 'Promotions',
         'processed_telegram_updates' => 'Telegram',
+        'required_channels' => 'Telegram',
         'product_categories' => 'Catalog',
         'product_category_histories' => 'Catalog',
         'product_histories' => 'Catalog',
