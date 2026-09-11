@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Telegram\Application;
 
 use App\Modules\Telegram\Domain\TelegramDeliveryAction;
+use Closure;
 use DomainException;
 use Illuminate\Contracts\Translation\Translator;
 use RuntimeException;
@@ -15,12 +16,18 @@ final readonly class TelegramNavigationEntryGateway
 
     public const STATE = 'home';
 
+    /**
+     * @param  Closure(): TelegramChannelMembershipEvaluator  $membership
+     * @param  Closure(): NonRestrictedTelegramPresentationFactory  $presentations
+     * @param  Closure(): TelegramDeliveryQueueService  $delivery
+     * @param  Closure(): Translator  $translator
+     */
     public function __construct(
         private TelegramInteractionSessionService $sessions,
-        private TelegramChannelMembershipEvaluator $membership,
-        private NonRestrictedTelegramPresentationFactory $presentations,
-        private TelegramDeliveryQueueService $delivery,
-        private Translator $translator,
+        private Closure $membership,
+        private Closure $presentations,
+        private Closure $delivery,
+        private Closure $translator,
     ) {}
 
     /** @param array<string, mixed> $message */
@@ -43,7 +50,7 @@ final readonly class TelegramNavigationEntryGateway
 
         $locale = $this->locale($message);
         try {
-            $evaluation = $this->membership->evaluate(
+            $evaluation = ($this->membership)()->evaluate(
                 new TelegramChannelMembershipResolutionRequest($userId, 'bot_entry', null),
             );
         } catch (DomainException|RuntimeException) {
@@ -59,7 +66,7 @@ final readonly class TelegramNavigationEntryGateway
         }
 
         if ($evaluation->decision === TelegramChannelMembershipEvaluationDecision::Unsatisfied) {
-            $this->delivery->queueProtectedReference(
+            ($this->delivery)()->queueProtectedReference(
                 TelegramDeliveryAction::Send,
                 $telegramUserId,
                 TelegramProtectedPresentationReference::membershipJoinPrompt(
@@ -152,11 +159,11 @@ final readonly class TelegramNavigationEntryGateway
             }
         };
 
-        $this->delivery->queue(
+        ($this->delivery)()->queue(
             TelegramDeliveryAction::Send,
             $telegramUserId,
             null,
-            $this->presentations->fromSource($source),
+            ($this->presentations)()->fromSource($source),
             "telegram-entry-membership-feedback:{$botId}:{$updateId}",
             "tg-entry:{$botId}:{$updateId}:mfail",
         );
@@ -164,9 +171,10 @@ final readonly class TelegramNavigationEntryGateway
 
     private function translation(string $key, string $locale): string
     {
-        $text = $this->translator->get($key, [], $locale);
+        $translator = ($this->translator)();
+        $text = $translator->get($key, [], $locale);
         if (! is_string($text) || $text === '' || $text === $key) {
-            $text = $this->translator->get($key, [], 'en');
+            $text = $translator->get($key, [], 'en');
         }
         if (! is_string($text) || $text === '' || $text === $key) {
             throw new DomainException('Telegram bot-entry membership feedback is unavailable.');
