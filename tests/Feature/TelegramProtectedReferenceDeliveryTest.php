@@ -15,6 +15,7 @@ use App\Modules\Telegram\Application\TelegramCustomerPurchaseCardToCardDestinati
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseCardToCardReservation;
 use App\Modules\Telegram\Application\TelegramDeliveryDatabaseCapability;
 use App\Modules\Telegram\Application\TelegramDeliveryOperationExecutor;
+use App\Modules\Telegram\Application\TelegramDeliveryOutboxHandler;
 use App\Modules\Telegram\Application\TelegramDeliveryQueueService;
 use App\Modules\Telegram\Application\TelegramMutationRequest;
 use App\Modules\Telegram\Application\TelegramMutationResult;
@@ -23,9 +24,12 @@ use App\Modules\Telegram\Application\TelegramProtectedPresentationResolver;
 use App\Modules\Telegram\Domain\TelegramDeliveryAction;
 use App\Modules\Telegram\Domain\TelegramDeliveryOperationState;
 use App\Shared\Application\Clock;
+use App\Shared\Application\OutboxDispatchOutcome;
+use App\Shared\Application\OutboxMessage;
 use App\Shared\Application\RestrictedValue;
 use App\Shared\Infrastructure\DatabaseOutboxPublisher;
 use DateTimeImmutable;
+use DomainException;
 use Illuminate\Contracts\Translation\Translator;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
@@ -93,6 +97,7 @@ final readonly class TelegramProtectedReferenceTestCardToCard implements Telegra
         private int $expectedUserId,
         private string $reservationPublicId,
         private DateTimeImmutable $expiresAt,
+        private bool $rejectDestination = false,
     ) {}
 
     public function reserveForSelf(
@@ -117,6 +122,9 @@ final readonly class TelegramProtectedReferenceTestCardToCard implements Telegra
             || $subjectUserId !== $this->expectedUserId
             || ! hash_equals($this->reservationPublicId, $reservationPublicId)) {
             throw new RuntimeException('Protected-reference resolver used an unexpected authority identity.');
+        }
+        if ($this->rejectDestination) {
+            throw new DomainException('Protected Telegram presentation is unavailable.');
         }
 
         return new TelegramCustomerPurchaseCardToCardDestination(
@@ -244,6 +252,78 @@ final class TelegramProtectedReferenceDeliveryTest extends TestCase
             ->value('provider_attempts'));
     }
 
+    public function test_pre_provider_protected_reference_domain_failure_is_definitive_without_delivery_transition(): void
+    {
+        $correlationId = 'correlation-protected-reference-domain-failure';
+        $created = NonRestrictedTelegramPresentationTestFactory::queueProtectedReference(
+            $this->queue(),
+            TelegramDeliveryAction::Send,
+            900001,
+            TelegramProtectedPresentationReference::cardToCardDestination($this->reservationPublicId, 'en'),
+            'protected-reference-domain-failure-001',
+            $correlationId,
+        );
+        $before = DB::table('telegram_delivery_operations')->where('public_id', $created->publicId)->first([
+            'state',
+            'state_version',
+            'provider_attempts',
+            'provider_boundary_started_at',
+            'completed_at',
+            'result_code',
+            'request_fingerprint',
+            'presentation_text',
+        ]);
+        self::assertNotNull($before);
+
+        $generic = new TelegramProtectedReferenceTestTransport;
+        $sender = new TelegramProtectedReferenceTestSender(new ProtectedTelegramSendResult(
+            ProtectedTelegramSendOutcome::Success,
+            'telegram_success',
+            messageId: 4402,
+        ));
+        $executor = $this->executor($generic, $sender, true);
+        $handler = new TelegramDeliveryOutboxHandler(
+            static fn (): TelegramDeliveryOperationExecutor => $executor,
+            TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_PROTECTED_REFERENCE,
+        );
+
+        $outcome = $handler->handle(new OutboxMessage(
+            $created->outboxEventId,
+            TelegramDeliveryQueueService::OUTBOX_EVENT_KEY_PREFIX.$created->publicId,
+            TelegramDeliveryQueueService::OUTBOX_EVENT_TYPE,
+            TelegramDeliveryQueueService::OUTBOX_AGGREGATE_TYPE,
+            $created->publicId,
+            ['telegram_delivery_operation_public_id' => $created->publicId],
+            $correlationId,
+            1,
+            TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_PROTECTED_REFERENCE,
+        ));
+
+        self::assertSame(OutboxDispatchOutcome::DefinitiveFailure, $outcome);
+        self::assertSame(0, $generic->attempts);
+        self::assertSame(0, $sender->attempts);
+
+        $after = DB::table('telegram_delivery_operations')->where('public_id', $created->publicId)->first([
+            'state',
+            'state_version',
+            'provider_attempts',
+            'provider_boundary_started_at',
+            'completed_at',
+            'result_code',
+            'request_fingerprint',
+            'presentation_text',
+        ]);
+        self::assertNotNull($after);
+        self::assertSame('prepared', (string) $after->state);
+        self::assertSame((int) $before->state_version, (int) $after->state_version);
+        self::assertSame(0, (int) $after->provider_attempts);
+        self::assertNull($after->provider_boundary_started_at);
+        self::assertNull($after->completed_at);
+        self::assertNull($after->result_code);
+        self::assertSame((string) $before->request_fingerprint, (string) $after->request_fingerprint);
+        self::assertSame((string) $before->presentation_text, (string) $after->presentation_text);
+    }
+
     public function test_missing_protected_dependencies_fail_before_provider_boundary(): void
     {
         $created = NonRestrictedTelegramPresentationTestFactory::queueProtectedReference(
@@ -332,12 +412,14 @@ final class TelegramProtectedReferenceDeliveryTest extends TestCase
     private function executor(
         TelegramMutationTransport $transport,
         ProtectedTelegramMessageSender $sender,
+        bool $rejectDestination = false,
     ): TelegramDeliveryOperationExecutor {
         $database = $this->app->make(DatabaseManager::class);
         $cardToCard = new TelegramProtectedReferenceTestCardToCard(
             $this->userId,
             $this->reservationPublicId,
             $this->clock->value->modify('+30 minutes'),
+            $rejectDestination,
         );
 
         return new TelegramDeliveryOperationExecutor(

@@ -145,24 +145,8 @@ final readonly class TelegramDeliveryOperationExecutor
                     (string) $row->bot_id,
                     $recipientChatId,
                 );
-                try {
-                    $protectedPresentations = $this->protectedPresentations ?? throw new RuntimeException('Protected Telegram presentation resolver is unavailable.');
-                    $protectedPresentation = $protectedPresentations->resolveForSelf($userId, $protectedReference);
-                } catch (DomainException) {
-                    return [
-                        'row' => $this->transition(
-                            $connection,
-                            $row,
-                            TelegramDeliveryOperationState::FailedFinal,
-                            'telegram_protected_reference_unavailable',
-                            null,
-                            null,
-                        ),
-                        'boundary_entered' => false,
-                        'request' => null,
-                        'protected_presentation' => null,
-                    ];
-                }
+                $protectedPresentations = $this->protectedPresentations ?? throw new RuntimeException('Protected Telegram presentation resolver is unavailable.');
+                $protectedPresentation = $protectedPresentations->resolveForSelf($userId, $protectedReference);
             } else {
                 throw new DomainException('Telegram delivery Outbox contract version is unsupported.');
             }
