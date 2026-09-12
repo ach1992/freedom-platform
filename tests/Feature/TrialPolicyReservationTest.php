@@ -196,6 +196,7 @@ final class TrialPolicyReservationTest extends TestCase
 
     public function test_canonical_telegram_trial_membership_applies_member_and_failure_policy_semantics(): void
     {
+        $ownerId = $this->administrator(true);
         $cases = [
             ['member', 'fail_closed', TelegramMembershipEvidence::Member, true],
             ['provider unavailable fail open', 'fail_open', TelegramMembershipEvidence::Unavailable, true],
@@ -205,7 +206,7 @@ final class TrialPolicyReservationTest extends TestCase
         ];
 
         foreach ($cases as [$label, $failurePolicy, $evidence, $allowed]) {
-            $scenario = $this->scenario(dailyCapacity: 2);
+            $scenario = $this->scenario(dailyCapacity: 2, ownerId: $ownerId);
             $this->app->make(TrialPolicyService::class)->create(
                 $scenario['offering_id'],
                 $this->policyDefinition($scenario['tag_id'], membershipRequired: true),
