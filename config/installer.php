@@ -91,6 +91,7 @@ return [
             'SESSION_ENCRYPT',
             'SESSION_SECURE_COOKIE',
             'TELEGRAM_BOT_TOKEN',
+            'TELEGRAM_BOT_USERNAME',
             'TELEGRAM_WEBHOOK_SECRET',
             'OWNER_TELEGRAM_ID',
             'REPORT_CHAT_ID',

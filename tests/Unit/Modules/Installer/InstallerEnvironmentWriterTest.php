@@ -55,6 +55,7 @@ final class InstallerEnvironmentWriterTest extends TestCase
         $nonPersistableKeys = config('installer.environment.non_persistable_keys');
         $this->assertIsArray($allowedKeys);
         $this->assertIsArray($nonPersistableKeys);
+        $this->assertContains('TELEGRAM_BOT_USERNAME', $allowedKeys);
         $this->assertContains('TELEGRAM_METADATA_DB_URL', $allowedKeys);
         $this->assertContains('TELEGRAM_METADATA_DB_USERNAME', $allowedKeys);
         $this->assertContains('TELEGRAM_METADATA_DB_PASSWORD', $allowedKeys);

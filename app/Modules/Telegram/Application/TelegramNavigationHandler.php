@@ -142,6 +142,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         private CustomerAccountSummaryService $customers,
         private WalletSelfBalanceService $wallets,
         private ReferralSelfSummaryService $referrals,
+        private TelegramReferralDeepLink $referralLinks,
         private TelegramCustomerPurchaseQuote $purchaseQuotes,
         private TelegramCustomerPurchaseDiscountQuote $purchaseDiscountQuotes,
         private TelegramCustomerPurchasePaymentMethods $purchasePaymentMethods,
@@ -3347,6 +3348,8 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             'cash_holds' => $this->formatIrr($wallet->cashActiveHoldsIrr),
             'promotional_available' => $this->formatIrr($wallet->promotionalAvailableBalanceIrr),
             'referral_token' => $referral->referralToken,
+            'referral_link' => $this->referralLinks->forReferralToken($referral->referralToken)
+                ?? $this->translation('telegram.navigation.account.referral_link_unavailable', $locale),
             'has_inviter' => $this->yesNo($referral->hasInviter, $locale),
             'referral_locked' => $this->yesNo($referral->locked, $locale),
         ]);

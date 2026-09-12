@@ -17,10 +17,11 @@ return [
             'back' => 'بازگشت',
         ],
         'account' => [
-            'view' => "حساب من\n\nشناسه حساب: :public_id\nنوع حساب: :account_type\nوضعیت: :account_status\nسطح: :tier\nتأیید تلفن: :phone_verification\nتأیید هویت: :identity_verification\nاطلاعات هویتی:\n:identity_items\nتاریخ عضویت: :joined_at\nآخرین مشاهده: :last_seen_at\n\nکیف پول\nموجودی قابل استفاده نقدی: :cash_available ریال\nمبلغ در حال نگهداری: :cash_holds ریال\nموجودی تشویقی قابل استفاده: :promotional_available ریال\n\nمعرفی\nکد معرفی شما: :referral_token\nمعرف ثبت شده: :has_inviter\nوضعیت قفل معرفی: :referral_locked",
+            'view' => "حساب من\n\nشناسه حساب: :public_id\nنوع حساب: :account_type\nوضعیت: :account_status\nسطح: :tier\nتأیید تلفن: :phone_verification\nتأیید هویت: :identity_verification\nاطلاعات هویتی:\n:identity_items\nتاریخ عضویت: :joined_at\nآخرین مشاهده: :last_seen_at\n\nکیف پول\nموجودی قابل استفاده نقدی: :cash_available ریال\nمبلغ در حال نگهداری: :cash_holds ریال\nموجودی تشویقی قابل استفاده: :promotional_available ریال\n\nمعرفی\nکد معرفی شما: :referral_token\nلینک معرفی شما: :referral_link\nمعرف ثبت شده: :has_inviter\nوضعیت قفل معرفی: :referral_locked",
             'identity_item' => '• :type — :masked (:state)',
             'identity_none' => '• موردی ثبت نشده است',
             'not_available' => 'ثبت نشده',
+            'referral_link_unavailable' => 'تا زمان تنظیم نام کاربری عمومی ربات در دسترس نیست',
             'yes' => 'بله',
             'no' => 'خیر',
             'values' => [

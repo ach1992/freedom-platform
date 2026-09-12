@@ -41,6 +41,7 @@ use App\Modules\Telegram\Application\TelegramNavigationEntryGateway;
 use App\Modules\Telegram\Application\TelegramNavigationHandler;
 use App\Modules\Telegram\Application\TelegramProtectedPresentationResolver;
 use App\Modules\Telegram\Application\TelegramProtectedReferenceDeliveryOutboxHandler;
+use App\Modules\Telegram\Application\TelegramReferralDeepLink;
 use App\Modules\Telegram\Application\TelegramRequiredChannelService;
 use App\Modules\Telegram\Application\TelegramTrialNavigationHandler;
 use App\Modules\Telegram\Application\TelegramUsdtNavigationHandler;
@@ -82,6 +83,14 @@ final class TelegramServiceProvider extends ServiceProvider
                     is_array($configuration) ? $configuration : [],
                     is_string($applicationUrl) ? $applicationUrl : '',
                 );
+            },
+        );
+        $this->app->singleton(
+            TelegramReferralDeepLink::class,
+            function (Application $application): TelegramReferralDeepLink {
+                $repository = $application->make(Repository::class);
+
+                return TelegramReferralDeepLink::fromConfiguration($repository->get('telegram.bot_username'));
             },
         );
         $this->app->singleton(

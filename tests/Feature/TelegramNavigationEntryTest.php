@@ -1026,6 +1026,7 @@ final class TelegramNavigationEntryTest extends TestCase
     public function test_my_account_uses_same_session_confidential_v3_owner_boundaries_and_back_without_common_plaintext_leakage(): void
     {
         $telegramUserId = 9620;
+        config(['telegram.bot_username' => 'FreedomReferralBot']);
         $this->accept($this->payload(6200, $telegramUserId, 'navigation_account', 'fa', '/start'));
         $processor = $this->app->make(TelegramUpdateProcessor::class);
         $processor->process('123456789', 6200);
@@ -1086,6 +1087,7 @@ final class TelegramNavigationEntryTest extends TestCase
             ],
         );
         $referralToken = $this->app->make(ReferralAttributionService::class)->identityForUser($userId);
+        $referralLink = 'https://t.me/FreedomReferralBot?start='.$referralToken;
         $walletCounts = $this->walletMutationCounts();
         $referralCounts = $this->referralMutationCounts();
 
@@ -1134,6 +1136,7 @@ final class TelegramNavigationEntryTest extends TestCase
         self::assertStringContainsString('700,000', $presentation);
         self::assertStringContainsString('125,000', $presentation);
         self::assertStringContainsString($referralToken, $presentation);
+        self::assertStringContainsString($referralLink, $presentation);
         self::assertStringNotContainsString($rawNationalId, $presentation);
         self::assertStringNotContainsString($lookupHash, $presentation);
 
@@ -1154,7 +1157,7 @@ final class TelegramNavigationEntryTest extends TestCase
             'outbox' => (array) $accountOutbox,
             'keyboard' => (string) $accountSnapshot->keyboard_snapshot,
         ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
-        foreach ([$rawNationalId, $lookupHash, $homeToken, $backToken] as $secret) {
+        foreach ([$rawNationalId, $lookupHash, $homeToken, $backToken, $referralToken, $referralLink] as $secret) {
             self::assertStringNotContainsString($secret, $commonEvidence);
         }
         self::assertStringNotContainsString($rawNationalId, (string) $companion->presentation_ciphertext);
@@ -1198,6 +1201,7 @@ final class TelegramNavigationEntryTest extends TestCase
     public function test_menu_and_my_account_use_english_copy_without_requiring_referral_or_wallet_creation(): void
     {
         $telegramUserId = 9630;
+        config(['telegram.bot_username' => 'FreedomReferralBot']);
         $this->accept($this->payload(6300, $telegramUserId, 'navigation_en', 'en', '/menu@FreedomBot'));
         $processor = $this->app->make(TelegramUpdateProcessor::class);
         $processor->process('123456789', 6300);
@@ -1233,11 +1237,50 @@ final class TelegramNavigationEntryTest extends TestCase
         self::assertStringContainsString('Referral', $presentation);
         if (is_string($referralToken)) {
             self::assertStringContainsString($referralToken, $presentation);
+            self::assertStringContainsString('https://t.me/FreedomReferralBot?start='.$referralToken, $presentation);
         } else {
             self::assertStringContainsString('Not available', $presentation);
         }
         self::assertSame(0, DB::table('ledger_accounts')->where('owner_user_id', $userId)->count());
         self::assertSame($referralIdentityCount, DB::table('referral_identities')->where('user_id', $userId)->count());
+    }
+
+    /** @requirement REF-001 USR-001 LOC-001 SEC-003 QUA-001 */
+    public function test_my_account_remains_available_when_public_referral_bot_username_is_missing(): void
+    {
+        config(['telegram.bot_username' => null]);
+        $telegramUserId = 9631;
+        $this->accept($this->payload(6310, $telegramUserId, 'navigation_referral_unavailable', 'en', '/start'));
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $processor->process('123456789', 6310);
+
+        $account = DB::table('telegram_accounts')->where('telegram_user_id', $telegramUserId)->first(['user_id']);
+        self::assertNotNull($account);
+        $userId = (int) $account->user_id;
+        $referralToken = DB::table('referral_identities')->where('user_id', $userId)->value('token');
+        self::assertIsString($referralToken);
+        $referralCounts = $this->referralMutationCounts();
+
+        $callback = DB::table('telegram_interaction_callbacks')->where('action', 'navigation.my_account')->first(['token_ciphertext']);
+        self::assertNotNull($callback);
+        $token = $this->app->make(StringEncrypter::class)->decryptString((string) $callback->token_ciphertext);
+        $this->accept($this->callbackPayload(6311, $telegramUserId, 'navigation_referral_unavailable', 'en', $token));
+        $processor->process('123456789', 6311);
+
+        $operation = DB::table('telegram_delivery_operations')->orderByDesc('id')->first(['public_id']);
+        self::assertNotNull($operation);
+        $ciphertext = DB::table(TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1::TABLE)
+            ->where('delivery_operation_public_id', (string) $operation->public_id)
+            ->value('presentation_ciphertext');
+        self::assertIsString($ciphertext);
+        $presentation = $this->app->make(StringEncrypter::class)->decryptString($ciphertext);
+        self::assertStringContainsString($referralToken, $presentation);
+        self::assertStringContainsString(
+            'Not available until the public bot username is configured',
+            $presentation,
+        );
+        self::assertStringNotContainsString('https://t.me/', $presentation);
+        self::assertSame($referralCounts, $this->referralMutationCounts());
     }
 
     public function test_post_dispatch_failure_after_callback_completion_replays_without_duplicate_transition_back_callback_or_confidential_delivery(): void

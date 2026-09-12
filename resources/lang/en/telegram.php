@@ -17,10 +17,11 @@ return [
             'back' => 'Back',
         ],
         'account' => [
-            'view' => "My Account\n\nAccount ID: :public_id\nType: :account_type\nStatus: :account_status\nTier: :tier\nPhone verification: :phone_verification\nIdentity verification: :identity_verification\nIdentity items:\n:identity_items\nJoined: :joined_at\nLast seen: :last_seen_at\n\nWallet\nCash available: :cash_available IRR\nCash on hold: :cash_holds IRR\nPromotional available: :promotional_available IRR\n\nReferral\nYour referral code: :referral_token\nInviter set: :has_inviter\nReferral locked: :referral_locked",
+            'view' => "My Account\n\nAccount ID: :public_id\nType: :account_type\nStatus: :account_status\nTier: :tier\nPhone verification: :phone_verification\nIdentity verification: :identity_verification\nIdentity items:\n:identity_items\nJoined: :joined_at\nLast seen: :last_seen_at\n\nWallet\nCash available: :cash_available IRR\nCash on hold: :cash_holds IRR\nPromotional available: :promotional_available IRR\n\nReferral\nYour referral code: :referral_token\nYour referral link: :referral_link\nInviter set: :has_inviter\nReferral locked: :referral_locked",
             'identity_item' => '• :type — :masked (:state)',
             'identity_none' => '• None',
             'not_available' => 'Not available',
+            'referral_link_unavailable' => 'Not available until the public bot username is configured',
             'yes' => 'Yes',
             'no' => 'No',
             'values' => [
