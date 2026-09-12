@@ -36,9 +36,14 @@ final class TelegramReferralDeepLinkTest extends TestCase
     /** @requirement REF-001 SEC-002 SEC-003 */
     public function test_malformed_bot_username_fails_closed_before_any_url_can_be_built(): void
     {
-        $this->expectException(RuntimeException::class);
-
-        TelegramReferralDeepLink::fromConfiguration('https://evil.example/path');
+        foreach (['https://evil.example/path', '1abcd', '_abcd', 'abcd_'] as $invalidUsername) {
+            try {
+                TelegramReferralDeepLink::fromConfiguration($invalidUsername);
+                self::fail('Malformed Telegram bot username was accepted: '.$invalidUsername);
+            } catch (RuntimeException) {
+                self::assertTrue(true);
+            }
+        }
     }
 
     /** @requirement REF-001 SEC-002 */

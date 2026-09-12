@@ -22,7 +22,7 @@ final readonly class TelegramReferralDeepLink
         }
         if (! is_string($botUsername)
             || trim($botUsername) !== $botUsername
-            || preg_match('/\A[A-Za-z0-9_]{5,32}\z/', $botUsername) !== 1) {
+            || preg_match('/\A[A-Za-z][A-Za-z0-9_]{3,30}[A-Za-z0-9]\z/', $botUsername) !== 1) {
             throw new RuntimeException('Telegram bot username configuration is invalid.');
         }
 
