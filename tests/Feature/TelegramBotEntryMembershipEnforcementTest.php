@@ -5,11 +5,13 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Modules\Telegram\Application\Contracts\TelegramMembershipLookup;
+use App\Modules\Telegram\Application\TelegramBotEntryMembershipGateHandler;
 use App\Modules\Telegram\Application\TelegramChannelMembershipEvaluator;
 use App\Modules\Telegram\Application\TelegramChannelMembershipResolutionRequest;
 use App\Modules\Telegram\Application\TelegramChannelMembershipRuleResolver;
 use App\Modules\Telegram\Application\TelegramDeliveryInteractivePresentationDatabaseSurfaceV1;
 use App\Modules\Telegram\Application\TelegramInteractionDispatcher;
+use App\Modules\Telegram\Application\TelegramInteractionHandlerRegistry;
 use App\Modules\Telegram\Application\TelegramMembershipEvidence;
 use App\Modules\Telegram\Application\TelegramMembershipLookupResult;
 use App\Modules\Telegram\Application\TelegramNavigationEntryGateway;
@@ -123,7 +125,7 @@ final class TelegramBotEntryMembershipEnforcementTest extends TestCase
         self::assertSame(3, DB::table('telegram_delivery_operations')->count());
     }
 
-    public function test_unsatisfied_entry_creates_no_session_and_only_one_actor_bound_protected_reference_without_join_secret_leakage(): void
+    public function test_unsatisfied_entry_creates_gate_and_retry_without_join_secret_leakage(): void
     {
         $privateUrl = 'https://t.me/+BotEntryPrivateSecret294';
         [, $ciphertext] = $this->activeRule('blocked-entry', 'fail_closed', $privateUrl);
@@ -149,28 +151,28 @@ final class TelegramBotEntryMembershipEnforcementTest extends TestCase
             'fa',
         )->durableText();
 
-        self::assertSame(0, DB::table('telegram_interaction_sessions')->count());
-        self::assertSame(1, DB::table('telegram_delivery_operations')->count());
+        self::assertSame(1, DB::table('telegram_interaction_sessions')->where('flow', TelegramNavigationEntryGateway::MEMBERSHIP_GATE_FLOW)->count());
+        self::assertSame(0, DB::table('telegram_interaction_sessions')->where('flow', TelegramNavigationEntryGateway::FLOW)->count());
+        self::assertSame(2, DB::table('telegram_delivery_operations')->count());
         self::assertSame(1, DB::table('telegram_interaction_update_bindings')->where('update_id', 8201)->count());
-        $operation = DB::table('telegram_delivery_operations')->first();
+
+        $operation = DB::table('telegram_delivery_operations')->where('presentation_text', $expectedReference)->first();
         self::assertNotNull($operation);
         self::assertSame(98201, (int) $operation->recipient_chat_id);
-        self::assertSame($expectedReference, (string) $operation->presentation_text);
         self::assertSame(hash('sha256', 'telegram-entry-membership-join:123456789:8201'), (string) $operation->request_key_hash);
         self::assertSame(1, count($lookup->calls));
         self::assertSame([0], $lookup->transactionLevels);
 
-        $outbox = DB::table('outbox_messages')->where('aggregate_id', (string) $operation->public_id)->first();
-        self::assertNotNull($outbox);
-        $durableSurfaces = implode("\n", [
-            (string) $operation->presentation_text,
-            (string) $operation->request_fingerprint,
-            (string) $outbox->payload,
-        ]);
+        $durableSurfaces = implode("\n", array_merge(
+            DB::table('telegram_delivery_operations')->pluck('presentation_text')->map(static fn (mixed $value): string => (string) $value)->all(),
+            DB::table('telegram_delivery_operations')->pluck('request_fingerprint')->map(static fn (mixed $value): string => (string) $value)->all(),
+            DB::table('outbox_messages')->pluck('payload')->map(static fn (mixed $value): string => (string) $value)->all(),
+            DB::table(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)->pluck('keyboard_snapshot')->map(static fn (mixed $value): string => (string) $value)->all(),
+        ));
         self::assertStringNotContainsString($privateUrl, $durableSurfaces);
         self::assertStringNotContainsString($ciphertext, $durableSurfaces);
-        self::assertSame(0, DB::table(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)->count());
-        self::assertSame(0, DB::table('telegram_interaction_sessions')->count());
+        self::assertSame(1, DB::table(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)->count());
+        self::assertSame(1, DB::table('telegram_interaction_callbacks')->where('state', 'pending')->count());
     }
 
     public function test_fail_closed_manual_review_and_configuration_change_all_fail_closed_without_stale_join_authority(): void
@@ -183,12 +185,10 @@ final class TelegramBotEntryMembershipEnforcementTest extends TestCase
         $this->accept($this->payload(8301, 98301, 'entry_fail_closed', 'fa', '/start'));
         $this->processor()->process('123456789', 8301);
 
-        self::assertSame(0, DB::table('telegram_interaction_sessions')->count());
-        self::assertSame(1, DB::table('telegram_delivery_operations')->count());
-        self::assertStringContainsString(
-            '[PROTECTED_TELEGRAM_REFERENCE:v2:membership_join_prompt:bot_entry:-:',
-            (string) DB::table('telegram_delivery_operations')->value('presentation_text'),
-        );
+        self::assertSame(1, DB::table('telegram_interaction_sessions')->where('flow', TelegramNavigationEntryGateway::MEMBERSHIP_GATE_FLOW)->count());
+        self::assertSame(0, DB::table('telegram_interaction_sessions')->where('flow', TelegramNavigationEntryGateway::FLOW)->count());
+        self::assertSame(2, DB::table('telegram_delivery_operations')->count());
+        self::assertTrue(DB::table('telegram_delivery_operations')->where('presentation_text', 'like', '[PROTECTED_TELEGRAM_REFERENCE:v2:membership_join_prompt:bot_entry:-:%')->exists());
 
         $this->disableRule($failClosedRule);
         [$manualReviewRule] = $this->activeRule('manual-review-entry', 'manual_review', 'https://t.me/+ManualReview294');
@@ -199,7 +199,7 @@ final class TelegramBotEntryMembershipEnforcementTest extends TestCase
         $this->accept($this->payload(8302, 98302, 'entry_manual_review', 'en', '/menu'));
         $this->processor()->process('123456789', 8302);
 
-        self::assertSame(0, DB::table('telegram_interaction_sessions')->count());
+        self::assertSame(2, DB::table('telegram_interaction_sessions')->where('flow', TelegramNavigationEntryGateway::MEMBERSHIP_GATE_FLOW)->count());
         $manual = DB::table('telegram_delivery_operations')->where('recipient_chat_id', 98302)->first();
         self::assertNotNull($manual);
         self::assertSame(trans('telegram_membership.entry_unavailable', locale: 'en'), (string) $manual->presentation_text);
@@ -223,7 +223,7 @@ final class TelegramBotEntryMembershipEnforcementTest extends TestCase
         $this->processor()->process('123456789', 8303);
 
         self::assertSame([0], $lookup->transactionLevels);
-        self::assertSame(0, DB::table('telegram_interaction_sessions')->count());
+        self::assertSame(3, DB::table('telegram_interaction_sessions')->where('flow', TelegramNavigationEntryGateway::MEMBERSHIP_GATE_FLOW)->count());
         $changed = DB::table('telegram_delivery_operations')->where('recipient_chat_id', 98303)->first();
         self::assertNotNull($changed);
         self::assertSame(trans('telegram_membership.entry_unavailable', locale: 'fa'), (string) $changed->presentation_text);
@@ -236,7 +236,8 @@ final class TelegramBotEntryMembershipEnforcementTest extends TestCase
         $this->processor()->process('123456789', 8304);
 
         self::assertSame([], $ambiguousLookup->calls);
-        self::assertSame(0, DB::table('telegram_interaction_sessions')->count());
+        self::assertSame(4, DB::table('telegram_interaction_sessions')->where('flow', TelegramNavigationEntryGateway::MEMBERSHIP_GATE_FLOW)->count());
+        self::assertSame(0, DB::table('telegram_interaction_sessions')->where('flow', TelegramNavigationEntryGateway::FLOW)->count());
         $ambiguous = DB::table('telegram_delivery_operations')->where('recipient_chat_id', 98304)->first();
         self::assertNotNull($ambiguous);
         self::assertSame(trans('telegram_membership.entry_unavailable', locale: 'fa'), (string) $ambiguous->presentation_text);
@@ -273,7 +274,7 @@ final class TelegramBotEntryMembershipEnforcementTest extends TestCase
         self::assertSame(0, DB::table('telegram_delivery_operations')->count());
     }
 
-    public function test_failed_post_dispatch_retry_reuses_no_session_binding_and_cannot_turn_same_blocked_update_into_a_session(): void
+    public function test_failed_post_dispatch_retry_reuses_blocked_binding_without_re_evaluating_membership(): void
     {
         $this->activeRule('replay-entry', 'fail_closed', 'https://t.me/+Replay294');
         $lookup = $this->useLookup(static fn (): TelegramMembershipLookupResult => new TelegramMembershipLookupResult(
@@ -304,8 +305,9 @@ SQL);
         }
 
         self::assertSame(1, count($lookup->calls));
-        self::assertSame(0, DB::table('telegram_interaction_sessions')->count());
-        self::assertSame(1, DB::table('telegram_delivery_operations')->count());
+        self::assertSame(1, DB::table('telegram_interaction_sessions')->where('flow', TelegramNavigationEntryGateway::MEMBERSHIP_GATE_FLOW)->count());
+        self::assertSame(0, DB::table('telegram_interaction_sessions')->where('flow', TelegramNavigationEntryGateway::FLOW)->count());
+        self::assertSame(2, DB::table('telegram_delivery_operations')->count());
         self::assertSame(1, DB::table('telegram_interaction_update_bindings')->where('update_id', 8501)->count());
         $this->assertDatabaseHas('processed_telegram_updates', ['update_id' => 8501, 'state' => 'failed', 'attempt_count' => 1]);
 
@@ -316,8 +318,9 @@ SQL);
         $this->processor()->process('123456789', 8501);
 
         self::assertSame(1, count($lookup->calls), 'A durable blocked update binding must prevent membership re-evaluation on replay.');
-        self::assertSame(0, DB::table('telegram_interaction_sessions')->count());
-        self::assertSame(1, DB::table('telegram_delivery_operations')->count());
+        self::assertSame(1, DB::table('telegram_interaction_sessions')->where('flow', TelegramNavigationEntryGateway::MEMBERSHIP_GATE_FLOW)->count());
+        self::assertSame(0, DB::table('telegram_interaction_sessions')->where('flow', TelegramNavigationEntryGateway::FLOW)->count());
+        self::assertSame(2, DB::table('telegram_delivery_operations')->count());
         $this->assertDatabaseHas('processed_telegram_updates', ['update_id' => 8501, 'state' => 'processed', 'attempt_count' => 2]);
     }
 
@@ -402,6 +405,8 @@ SQL);
         foreach ([
             TelegramChannelMembershipEvaluator::class,
             TelegramNavigationEntryGateway::class,
+            TelegramBotEntryMembershipGateHandler::class,
+            TelegramInteractionHandlerRegistry::class,
             TelegramInteractionDispatcher::class,
             TelegramUpdateProcessor::class,
         ] as $service) {
