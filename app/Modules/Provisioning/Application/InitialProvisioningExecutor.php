@@ -9,6 +9,7 @@ use App\Modules\Catalog\Application\RouteSelectionContext;
 use App\Modules\Catalog\Application\RouteSelectionReceipt;
 use App\Modules\Catalog\Application\RouteSelectionRequest;
 use App\Modules\Catalog\Domain\RouteSelectionActor;
+use App\Modules\Orders\Domain\OrderSourceType;
 use App\Modules\Panels\Application\CapacityOperationContext;
 use App\Modules\Panels\Application\Contracts\PanelCreateServiceRequest;
 use App\Modules\Panels\Application\Contracts\PanelOperationOutcome;
@@ -25,6 +26,7 @@ use DomainException;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\Query\Builder;
+use JsonException;
 use RuntimeException;
 use Throwable;
 
@@ -59,10 +61,13 @@ use Throwable;
  *     payment_intent_id:int|string|null,
  *     order_state:string,
  *     order_state_version:int|string,
+ *     order_source_type:string,
+ *     order_source_authorization_id:int|string|null,
  *     plan_offering_id:int|string,
  *     account_type_snapshot:string,
  *     service_public_id:string
  * }
+ * @phpstan-type TrialProvisioningAuthority array{route:RouteSelectionReceipt,capacity_expires_at:string,data_bytes:int,duration_days:int}
  */
 final readonly class InitialProvisioningExecutor
 {
@@ -191,9 +196,14 @@ final readonly class InitialProvisioningExecutor
             }
 
             $now = $this->nowString();
-            $holdExpiry = $locked->route_selection_id === null
-                ? $this->clock->now()->add(new DateInterval(self::ROUTE_HOLD_INTERVAL))->format('Y-m-d H:i:s.u')
-                : $locked->route_hold_expires_at;
+            if ($locked->route_selection_id !== null) {
+                $holdExpiry = $locked->route_hold_expires_at;
+            } elseif ($this->isTrialSource($locked)) {
+                $trialAuthority = $this->trialProvisioningAuthority($locked, $connection, true);
+                $holdExpiry = $trialAuthority['capacity_expires_at'];
+            } else {
+                $holdExpiry = $this->clock->now()->add(new DateInterval(self::ROUTE_HOLD_INTERVAL))->format('Y-m-d H:i:s.u');
+            }
             if (! is_string($holdExpiry) || $holdExpiry === '') {
                 throw new RuntimeException('Provisioning route hold expiry is unavailable.');
             }
@@ -236,6 +246,18 @@ final readonly class InitialProvisioningExecutor
         }
 
         $expiresAt = $this->storedDateTime($operation->route_hold_expires_at, 'Provisioning route hold expiry');
+        if ($this->isTrialSource($operation)) {
+            $trialAuthority = $this->trialProvisioningAuthority($operation);
+            $trialCapacityExpiry = $this->storedDateTime(
+                $trialAuthority['capacity_expires_at'],
+                'Trial capacity reservation expiry',
+            );
+            if ($expiresAt->format('Y-m-d H:i:s.u') !== $trialCapacityExpiry->format('Y-m-d H:i:s.u')) {
+                throw new DomainException('Trial provisioning route hold does not match the committed Trial capacity authority.');
+            }
+
+            return $this->bindRouteIntent($operation, $trialAuthority['route']);
+        }
         $actor = $operation->account_type_snapshot === RouteSelectionActor::Agent->value
             ? RouteSelectionActor::Agent
             : RouteSelectionActor::Customer;
@@ -339,14 +361,26 @@ final readonly class InitialProvisioningExecutor
                 throw new DomainException('Provisioning capacity authority is incomplete.');
             }
 
-            /** @var object{capacity_reservation_id:int|string,selected_service_target_id:int|string,units:int|string}|null $selection */
-            $selection = $connection->table('plan_offering_route_selections')
-                ->where('id', (int) $locked->route_selection_id)
-                ->where('command_key', $this->routeCommandKey($locked->public_id))
-                ->first(['capacity_reservation_id', 'selected_service_target_id', 'units']);
-            if ($selection === null
-                || (int) $selection->capacity_reservation_id !== (int) $locked->capacity_reservation_id
-                || (int) $selection->selected_service_target_id !== (int) $locked->service_target_id
+            if ($this->isTrialSource($locked)) {
+                $trialAuthority = $this->trialProvisioningAuthority($locked, $connection, true);
+                $selectionCapacityReservationId = $trialAuthority['route']->capacityReservationId;
+                $selectionServiceTargetId = $trialAuthority['route']->serviceTargetId;
+                $selectionUnits = $trialAuthority['route']->units;
+            } else {
+                /** @var object{capacity_reservation_id:int|string,selected_service_target_id:int|string,units:int|string}|null $selection */
+                $selection = $connection->table('plan_offering_route_selections')
+                    ->where('id', (int) $locked->route_selection_id)
+                    ->where('command_key', $this->routeCommandKey($locked->public_id))
+                    ->first(['capacity_reservation_id', 'selected_service_target_id', 'units']);
+                if ($selection === null) {
+                    throw new DomainException('Provisioning route capacity binding is inconsistent.');
+                }
+                $selectionCapacityReservationId = (int) $selection->capacity_reservation_id;
+                $selectionServiceTargetId = (int) $selection->selected_service_target_id;
+                $selectionUnits = (int) $selection->units;
+            }
+            if ($selectionCapacityReservationId !== (int) $locked->capacity_reservation_id
+                || $selectionServiceTargetId !== (int) $locked->service_target_id
             ) {
                 throw new DomainException('Provisioning route capacity binding is inconsistent.');
             }
@@ -358,7 +392,7 @@ final readonly class InitialProvisioningExecutor
                 ->first(['panel_target_capacity_id', 'reservation_key', 'units', 'state', 'expires_at']);
             if ($reservation === null
                 || ! hash_equals($reservation->reservation_key, $locked->capacity_reservation_key)
-                || (int) $reservation->units !== (int) $selection->units
+                || (int) $reservation->units !== $selectionUnits
             ) {
                 throw new DomainException('Provisioning capacity reservation binding is no longer authoritative.');
             }
@@ -604,13 +638,25 @@ final readonly class InitialProvisioningExecutor
             throw new RuntimeException('Provisioning remote identity is unavailable.');
         }
 
+        $dataLimitBytes = null;
+        $expiresAt = null;
+        if ($this->isTrialSource($operation)) {
+            $trialAuthority = $this->trialProvisioningAuthority($operation);
+            if ($trialAuthority['route']->selectionId !== $route->selectionId) {
+                throw new DomainException('Trial provisioning route no longer matches the source authorization.');
+            }
+            $startedAt = $this->storedDateTime($operation->remote_effect_started_at, 'Provisioning remote-effect start');
+            $dataLimitBytes = $trialAuthority['data_bytes'];
+            $expiresAt = $startedAt->add(new DateInterval('P'.$trialAuthority['duration_days'].'D'));
+        }
+
         return new PanelCreateServiceRequest(
             $operation->public_id,
             $operation->operation_key,
             $operation->remote_username,
             $operation->target_reference,
-            null,
-            null,
+            $dataLimitBytes,
+            $expiresAt,
             [
                 'plan_offering_id' => (int) $operation->plan_offering_id,
                 'route_selection_id' => $route->selectionId,
@@ -628,6 +674,19 @@ final readonly class InitialProvisioningExecutor
         object $operation,
         ?Connection $connection = null,
     ): RouteSelectionReceipt {
+        if ($this->isTrialSource($operation)) {
+            $trialAuthority = $this->trialProvisioningAuthority($operation, $connection);
+            $route = $trialAuthority['route'];
+            if ($route->selectionId !== $selectionId
+                || $route->serviceTargetId !== (int) $operation->service_target_id
+                || $route->capacityReservationId !== (int) $operation->capacity_reservation_id
+                || ! hash_equals($route->capacityReservationKey, (string) $operation->capacity_reservation_key)
+            ) {
+                throw new RuntimeException('Stored Trial provisioning route selection is inconsistent.');
+            }
+
+            return $route;
+        }
         $database = $connection ?? $this->database->connection();
         /** @var object{selection_id:int|string,offering_id:int|string,route_policy_id:int|string,route_id:int|string,sales_server_id:int|string,service_target_id:int|string,protocol_profile_id:int|string,capacity_reservation_id:int|string,capacity_reservation_key:string,units:int|string,fallback_used:int|bool,disclosure_fa:?string,capacity_available_units:int|string,capacity_version:int|string}|null $row */
         $row = $database->table('plan_offering_route_selections as selection')
@@ -676,6 +735,155 @@ final readonly class InitialProvisioningExecutor
             (int) $row->capacity_version,
             true,
         );
+    }
+
+    /**
+     * @param  OperationRow  $operation
+     * @return TrialProvisioningAuthority
+     */
+    private function trialProvisioningAuthority(
+        object $operation,
+        ?Connection $connection = null,
+        bool $lock = false,
+    ): array {
+        if (! $this->isTrialSource($operation) || $operation->order_source_authorization_id === null) {
+            throw new DomainException('Trial provisioning source authorization is unavailable.');
+        }
+
+        $database = $connection ?? $this->database->connection();
+        $authorizationQuery = $database->table('order_source_authorizations')
+            ->where('id', (int) $operation->order_source_authorization_id);
+        if ($lock) {
+            $authorizationQuery->lockForUpdate();
+        }
+        /** @var object{source_type:string,user_id:int|string,plan_offering_id:int|string,trial_reservation_id:int|string|null,trial_reservation_command_key:?string,configuration_snapshot:string,configuration_snapshot_hash:string}|null $authorization */
+        $authorization = $authorizationQuery->first([
+            'source_type', 'user_id', 'plan_offering_id', 'trial_reservation_id', 'trial_reservation_command_key',
+            'configuration_snapshot', 'configuration_snapshot_hash',
+        ]);
+        if ($authorization === null
+            || $authorization->source_type !== OrderSourceType::Trial->value
+            || (int) $authorization->user_id !== (int) $operation->user_id
+            || (int) $authorization->plan_offering_id !== (int) $operation->plan_offering_id
+            || $authorization->trial_reservation_id === null
+            || ! is_string($authorization->trial_reservation_command_key)
+            || $authorization->trial_reservation_command_key === ''
+            || ! hash_equals(strtolower($authorization->configuration_snapshot_hash), hash('sha256', $authorization->configuration_snapshot))
+        ) {
+            throw new DomainException('Trial provisioning source authorization is inconsistent.');
+        }
+
+        try {
+            $configuration = json_decode($authorization->configuration_snapshot, true, 512, JSON_THROW_ON_ERROR);
+        } catch (JsonException $exception) {
+            throw new DomainException('Trial provisioning configuration snapshot is invalid.', previous: $exception);
+        }
+        if (! is_array($configuration)) {
+            throw new DomainException('Trial provisioning configuration snapshot is invalid.');
+        }
+        $selectionId = $this->positiveSnapshotInt($configuration['plan_offering_route_selection_id'] ?? null, 'Trial route selection ID');
+        $dataBytes = $this->positiveSnapshotInt($configuration['data_bytes'] ?? null, 'Trial data allowance');
+        $durationDays = $this->positiveSnapshotInt($configuration['duration_days'] ?? null, 'Trial duration');
+
+        $reservationQuery = $database->table('trial_reservations')
+            ->where('id', (int) $authorization->trial_reservation_id);
+        if ($lock) {
+            $reservationQuery->lockForUpdate();
+        }
+        /** @var object{command_key:string,plan_offering_id:int|string,user_id:int|string,plan_offering_route_selection_id:int|string,state:string,data_bytes:int|string,duration_days:int|string}|null $trial */
+        $trial = $reservationQuery->first([
+            'command_key', 'plan_offering_id', 'user_id', 'plan_offering_route_selection_id', 'state', 'data_bytes', 'duration_days',
+        ]);
+        if ($trial === null
+            || $trial->state !== 'committed'
+            || ! hash_equals($authorization->trial_reservation_command_key, $trial->command_key)
+            || (int) $trial->plan_offering_id !== (int) $operation->plan_offering_id
+            || (int) $trial->user_id !== (int) $operation->user_id
+            || (int) $trial->plan_offering_route_selection_id !== $selectionId
+            || (int) $trial->data_bytes !== $dataBytes
+            || (int) $trial->duration_days !== $durationDays
+        ) {
+            throw new DomainException('Trial provisioning reservation authority is inconsistent.');
+        }
+
+        $selectionQuery = $database->table('plan_offering_route_selections as selection')
+            ->where('selection.id', $selectionId);
+        if ($lock) {
+            $selectionQuery->lockForUpdate();
+        }
+        /** @var object{selection_id:int|string,offering_id:int|string,user_id:int|string,route_policy_id:int|string,route_id:int|string,sales_server_id:int|string,service_target_id:int|string,protocol_profile_id:int|string,capacity_reservation_id:int|string,units:int|string,fallback_used:int|bool,disclosure_fa:?string,capacity_available_units:int|string,capacity_version:int|string}|null $selection */
+        $selection = $selectionQuery->first([
+            'selection.id as selection_id', 'selection.plan_offering_id as offering_id', 'selection.user_id',
+            'selection.plan_offering_route_policy_id as route_policy_id', 'selection.plan_offering_route_id as route_id',
+            'selection.selected_sales_server_id as sales_server_id', 'selection.selected_service_target_id as service_target_id',
+            'selection.panel_protocol_profile_id as protocol_profile_id', 'selection.capacity_reservation_id', 'selection.units',
+            'selection.fallback_used', 'selection.disclosure_fa_snapshot as disclosure_fa',
+            'selection.capacity_available_units', 'selection.capacity_version',
+        ]);
+        if ($selection === null
+            || (int) $selection->offering_id !== (int) $operation->plan_offering_id
+            || (int) $selection->user_id !== (int) $operation->user_id
+            || (int) $selection->units !== 1
+        ) {
+            throw new DomainException('Trial provisioning route selection is inconsistent.');
+        }
+
+        $capacityReservationQuery = $database->table('panel_capacity_reservations as reservation')
+            ->join('panel_target_capacities as capacity', 'capacity.id', '=', 'reservation.panel_target_capacity_id')
+            ->where('reservation.id', (int) $selection->capacity_reservation_id);
+        if ($lock) {
+            $capacityReservationQuery->lockForUpdate();
+        }
+        /** @var object{reservation_key:string,units:int|string,state:string,expires_at:string,service_target_id:int|string}|null $capacityReservation */
+        $capacityReservation = $capacityReservationQuery->first([
+            'reservation.reservation_key', 'reservation.units', 'reservation.state', 'reservation.expires_at',
+            'capacity.panel_service_target_id as service_target_id',
+        ]);
+        if ($capacityReservation === null
+            || $capacityReservation->state !== CapacityReservationState::Committed->value
+            || (int) $capacityReservation->units !== 1
+            || (int) $capacityReservation->service_target_id !== (int) $selection->service_target_id
+        ) {
+            throw new DomainException('Trial provisioning committed capacity authority is inconsistent.');
+        }
+
+        return [
+            'route' => new RouteSelectionReceipt(
+                (int) $selection->selection_id,
+                (int) $selection->offering_id,
+                (int) $selection->route_policy_id,
+                (int) $selection->route_id,
+                (int) $selection->sales_server_id,
+                (int) $selection->service_target_id,
+                (int) $selection->protocol_profile_id,
+                (int) $selection->capacity_reservation_id,
+                $capacityReservation->reservation_key,
+                (int) $selection->units,
+                (bool) $selection->fallback_used,
+                $selection->disclosure_fa,
+                (int) $selection->capacity_available_units,
+                (int) $selection->capacity_version,
+                true,
+            ),
+            'capacity_expires_at' => $capacityReservation->expires_at,
+            'data_bytes' => $dataBytes,
+            'duration_days' => $durationDays,
+        ];
+    }
+
+    /** @param OperationRow $operation */
+    private function isTrialSource(object $operation): bool
+    {
+        return $operation->order_source_type === OrderSourceType::Trial->value;
+    }
+
+    private function positiveSnapshotInt(mixed $value, string $field): int
+    {
+        if (! is_int($value) || $value < 1) {
+            throw new DomainException($field.' must be a positive integer in the Trial source snapshot.');
+        }
+
+        return $value;
     }
 
     /** @return OperationRow */
@@ -733,6 +941,7 @@ final readonly class InitialProvisioningExecutor
             'operation.last_result_message', 'operation.remote_service_id', 'operation.remote_effect_started_at',
             'operation.remote_effect_completed_at', 'order_row.purchase_settlement_id', 'order_row.payment_intent_id',
             'order_row.state as order_state', 'order_row.state_version as order_state_version',
+            'order_row.source_type as order_source_type', 'order_row.order_source_authorization_id',
             'item.plan_offering_id', 'item.account_type_snapshot', 'service.public_id as service_public_id',
         ];
     }
