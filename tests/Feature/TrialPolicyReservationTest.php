@@ -47,7 +47,7 @@ use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Connection;
 use Illuminate\Database\QueryException;
-use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Tests\TestCase;
@@ -55,7 +55,7 @@ use Tests\TestCase;
 /** @requirement CAT-006 CAT-008 ACL-002 SEC-002 DAT-003 QUA-001 */
 final class TrialPolicyReservationTest extends TestCase
 {
-    use RefreshDatabase;
+    use DatabaseTruncation;
 
     protected function setUp(): void
     {
@@ -473,7 +473,7 @@ final class TrialPolicyReservationTest extends TestCase
         );
 
         try {
-            $this->app->make(TrialReservationService::class)->reserve(
+            $this->serviceWithMembershipVerifier(new FailingTrialMembershipVerifier)->reserve(
                 $this->request($scenario['offering_id'], $scenario['user_id']),
                 $this->trialContext('trial-membership-denied-00001', 'trial-correlation-0007'),
             );
@@ -873,7 +873,7 @@ final class TrialPolicyReservationTest extends TestCase
     {
         $now = now('UTC');
 
-        return (int) DB::table('required_channels')->insertGetId([
+        $id = (int) DB::table('required_channels')->insertGetId([
             'channel_key' => $key,
             'telegram_chat_id' => $chatId,
             'chat_type' => 'channel',
@@ -882,14 +882,24 @@ final class TrialPolicyReservationTest extends TestCase
             'join_url_ciphertext' => str_repeat('x', 64),
             'join_url_hash' => hash('sha256', 'https://t.me/'.$key),
             'sort_order' => 0,
-            'state' => 'active',
+            'state' => 'draft',
             'version' => 1,
-            'verified_bot_id' => 123456,
-            'verification_result_code' => 'telegram_membership_administrator',
-            'verified_at' => $now,
+            'verified_bot_id' => null,
+            'verification_result_code' => null,
+            'verified_at' => null,
             'created_at' => $now,
             'updated_at' => $now,
         ]);
+        DB::table('required_channels')->where('id', $id)->update([
+            'state' => 'active',
+            'version' => 2,
+            'verified_bot_id' => 123456,
+            'verification_result_code' => 'telegram_membership_administrator',
+            'verified_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        return $id;
     }
 
     private function telegramIdentity(int $userId, int $telegramUserId): void
@@ -1194,5 +1204,13 @@ final class TrialMembershipTestLookup implements TelegramMembershipLookup
         $this->transactionLevels[] = DB::connection()->transactionLevel();
 
         return $this->result;
+    }
+}
+
+final class FailingTrialMembershipVerifier implements TrialMembershipVerifier
+{
+    public function assertSatisfied(Connection $connection, int $userId, int $offeringId, int $policyId): void
+    {
+        throw new DomainException('Trial membership verification is unavailable.');
     }
 }
