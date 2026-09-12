@@ -2229,7 +2229,7 @@ SQL);
         self::assertStringContainsString('Trial Service', $this->latestConfidentialPresentation());
         self::assertStringContainsString('Trial plan — Base variant', $this->latestConfidentialPresentation());
 
-        $nextToken = $this->callbackToken('navigation.trial.page', (int) $account->id);
+        $nextToken = $this->callbackToken('navigation.trial.page', (int) $account->id, '{"page":2}');
         $this->accept($this->callbackPayload(6942, $telegramUserId, 'navigation_trial_en', 'en', $nextToken));
         $processor->process('123456789', 6942);
         $this->assertDatabaseHas('telegram_interaction_sessions', [
@@ -4969,7 +4969,7 @@ SQL);
         return $administratorId;
     }
 
-    private function callbackToken(string $action, int $telegramAccountId): string
+    private function callbackToken(string $action, int $telegramAccountId, string $expectedActionPayload = '{}'): string
     {
         $sessionId = DB::table('telegram_interaction_sessions')
             ->where('telegram_account_id', $telegramAccountId)
@@ -4981,7 +4981,7 @@ SQL);
             ->orderByDesc('id')
             ->first(['action_payload', 'token_ciphertext']);
         self::assertNotNull($callback);
-        self::assertSame('{}', (string) $callback->action_payload);
+        self::assertSame($expectedActionPayload, (string) $callback->action_payload);
         self::assertIsString($callback->token_ciphertext);
 
         return $this->app->make(StringEncrypter::class)->decryptString((string) $callback->token_ciphertext);
