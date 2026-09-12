@@ -13,8 +13,22 @@ final class TrialEligibility
 {
     public function actor(Connection $connection, int $userId): TrialActorSnapshot
     {
+        return $this->actorSnapshot($connection, $userId, true);
+    }
+
+    public function readActor(Connection $connection, int $userId): TrialActorSnapshot
+    {
+        return $this->actorSnapshot($connection, $userId, false);
+    }
+
+    private function actorSnapshot(Connection $connection, int $userId, bool $lock): TrialActorSnapshot
+    {
+        $userQuery = $connection->table('users')->where('id', $userId);
+        if ($lock) {
+            $userQuery->lockForUpdate();
+        }
         /** @var object{account_status: string}|null $user */
-        $user = $connection->table('users')->where('id', $userId)->lockForUpdate()->first(['account_status']);
+        $user = $userQuery->first(['account_status']);
         if ($user === null || $user->account_status !== 'active') {
             throw new DomainException('Trial actor is unavailable.');
         }
@@ -39,12 +53,14 @@ final class TrialEligibility
             ->all();
         $tagIds = array_map(static fn (int|string $id): int => (int) $id, $tagRows);
 
-        /** @var object{id: int|string}|null $phone */
-        $phone = $connection->table('phone_numbers')
+        $phoneQuery = $connection->table('phone_numbers')
             ->where('active_user_id', $userId)
-            ->where('status', 'verified')
-            ->lockForUpdate()
-            ->first(['id']);
+            ->where('status', 'verified');
+        if ($lock) {
+            $phoneQuery->lockForUpdate();
+        }
+        /** @var object{id: int|string}|null $phone */
+        $phone = $phoneQuery->first(['id']);
         $phoneNumberId = $phone === null ? null : (int) $phone->id;
         $telegramVerified = false;
         $otpVerified = false;

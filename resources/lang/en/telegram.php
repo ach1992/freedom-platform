@@ -8,6 +8,7 @@ return [
         'buttons' => [
             'my_account' => 'My Account',
             'buy_service' => 'Buy Service',
+            'trial_service' => 'Trial Service',
             'my_services' => 'My Services',
             'request_cooperation' => 'Request Cooperation',
             'agent_status' => 'Cooperation Status',
