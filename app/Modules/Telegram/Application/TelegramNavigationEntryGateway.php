@@ -174,8 +174,6 @@ final readonly class TelegramNavigationEntryGateway
             if (! is_string($action->messageText) || ! $this->matchesEntryCommand($action->messageText)) {
                 return;
             }
-        } elseif ($action->kind === TelegramInteractionActionKind::Back) {
-            return;
         } else {
             return;
         }
@@ -462,7 +460,17 @@ final readonly class TelegramNavigationEntryGateway
     {
         $identity = $this->actionIdentity($action);
         $connection = $this->database->connection();
-        $navigation = $connection->transaction(function () use ($action, $identity): ?TelegramInteractionSessionReceipt {
+        $navigation = $connection->transaction(function () use ($connection, $action, $identity): ?TelegramInteractionSessionReceipt {
+            $account = $connection->table('telegram_accounts')
+                ->where('id', $action->telegramAccountId)
+                ->lockForUpdate()
+                ->first(['id', 'user_id', 'telegram_user_id']);
+            if ($account === null
+                || (int) $account->user_id !== $action->userId
+                || (int) $account->telegram_user_id !== $action->telegramUserId) {
+                throw new RuntimeException('Telegram membership handoff account binding changed.');
+            }
+
             $active = $this->sessions->activeForAccount($action->telegramAccountId);
             if ($active === null) {
                 return null;
