@@ -16,6 +16,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaFetcher;
 use App\Modules\Telegram\Application\Contracts\TelegramRuntime;
 use App\Modules\Telegram\Application\NonRestrictedTelegramPresentationFactory;
 use App\Modules\Telegram\Application\TelegramAgentNavigationHandler;
+use App\Modules\Telegram\Application\TelegramBotEntryMembershipGateHandler;
 use App\Modules\Telegram\Application\TelegramChannelMembershipEvaluator;
 use App\Modules\Telegram\Application\TelegramChannelMembershipRuleResolver;
 use App\Modules\Telegram\Application\TelegramChannelMembershipRuleService;
@@ -27,6 +28,7 @@ use App\Modules\Telegram\Application\TelegramDeliveryOperationExecutor;
 use App\Modules\Telegram\Application\TelegramDeliveryOutboxHandler;
 use App\Modules\Telegram\Application\TelegramDeliveryQueueService;
 use App\Modules\Telegram\Application\TelegramGiftCardNavigationHandler;
+use App\Modules\Telegram\Application\TelegramInteractionCallbackService;
 use App\Modules\Telegram\Application\TelegramInteractionHandlerRegistry;
 use App\Modules\Telegram\Application\TelegramInteractionPolicy;
 use App\Modules\Telegram\Application\TelegramInteractionSessionService;
@@ -105,6 +107,8 @@ final class TelegramServiceProvider extends ServiceProvider
                 fn (): TelegramChannelMembershipEvaluator => $application->make(TelegramChannelMembershipEvaluator::class),
                 fn (): NonRestrictedTelegramPresentationFactory => $application->make(NonRestrictedTelegramPresentationFactory::class),
                 fn (): TelegramDeliveryQueueService => $application->make(TelegramDeliveryQueueService::class),
+                fn (): TelegramInteractionCallbackService => $application->make(TelegramInteractionCallbackService::class),
+                fn (): TelegramNavigationHandler => $application->make(TelegramNavigationHandler::class),
                 fn (): Translator => $application->make(Translator::class),
             ),
         );
@@ -113,7 +117,11 @@ final class TelegramServiceProvider extends ServiceProvider
         $this->app->singleton(TelegramGiftCardNavigationHandler::class);
         $this->app->singleton(TelegramUsdtNavigationHandler::class);
         $this->app->singleton(TelegramNavigationCompositeHandler::class);
-        $this->app->tag([TelegramNavigationCompositeHandler::class], TelegramInteractionHandler::class);
+        $this->app->singleton(TelegramBotEntryMembershipGateHandler::class);
+        $this->app->tag([
+            TelegramNavigationCompositeHandler::class,
+            TelegramBotEntryMembershipGateHandler::class,
+        ], TelegramInteractionHandler::class);
         $this->app->singleton(
             TelegramInteractionHandlerRegistry::class,
             fn (Application $application): TelegramInteractionHandlerRegistry => new TelegramInteractionHandlerRegistry(
