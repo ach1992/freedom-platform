@@ -68,6 +68,12 @@ final class TrialPolicyReservationTest extends TestCase
         $this->app->instance(RouteOperationalVerifier::class, new PassingTrialRouteOperationalVerifier);
     }
 
+    protected function tearDown(): void
+    {
+        $this->truncateTablesForAllConnections();
+        parent::tearDown();
+    }
+
     public function test_membership_verifier_runs_outside_transaction_and_accepted_replay_does_not_recheck(): void
     {
         $scenario = $this->scenario(dailyCapacity: 2);
@@ -221,7 +227,7 @@ final class TrialPolicyReservationTest extends TestCase
             try {
                 $receipt = $service->reserve(
                     $this->request($scenario['offering_id'], $scenario['user_id']),
-                    $this->trialContext('trial-canonical-'.$scenario['offering_id'], 'trial-canonical-correlation-'.$scenario['offering_id']),
+                    $this->trialContext('trial-canonical-reserve-'.$scenario['offering_id'], 'trial-canonical-correlation-'.$scenario['offering_id']),
                 );
                 self::assertTrue($allowed, $label);
                 self::assertSame('reserved', $receipt->state, $label);
