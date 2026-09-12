@@ -14,6 +14,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramMembershipLookup;
 use App\Modules\Telegram\Application\Contracts\TelegramMutationTransport;
 use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaFetcher;
 use App\Modules\Telegram\Application\Contracts\TelegramRuntime;
+use App\Modules\Telegram\Application\NonRestrictedTelegramPresentationFactory;
 use App\Modules\Telegram\Application\TelegramAgentNavigationHandler;
 use App\Modules\Telegram\Application\TelegramChannelMembershipEvaluator;
 use App\Modules\Telegram\Application\TelegramChannelMembershipRuleResolver;
@@ -24,9 +25,12 @@ use App\Modules\Telegram\Application\TelegramConfigurationMutationAudit;
 use App\Modules\Telegram\Application\TelegramConfigurationMutationExecutor;
 use App\Modules\Telegram\Application\TelegramDeliveryOperationExecutor;
 use App\Modules\Telegram\Application\TelegramDeliveryOutboxHandler;
+use App\Modules\Telegram\Application\TelegramDeliveryQueueService;
 use App\Modules\Telegram\Application\TelegramGiftCardNavigationHandler;
 use App\Modules\Telegram\Application\TelegramInteractionHandlerRegistry;
 use App\Modules\Telegram\Application\TelegramInteractionPolicy;
+use App\Modules\Telegram\Application\TelegramInteractionSessionService;
+use App\Modules\Telegram\Application\TelegramInteractionUpdateBindingService;
 use App\Modules\Telegram\Application\TelegramInteractiveDeliveryOutboxHandler;
 use App\Modules\Telegram\Application\TelegramMembershipConfigurationFence;
 use App\Modules\Telegram\Application\TelegramMembershipJoinPresentationResolver;
@@ -42,6 +46,7 @@ use App\Shared\Application\OutboxEventHandler;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Contracts\Encryption\StringEncrypter;
 use Illuminate\Contracts\Foundation\Application;
+use Illuminate\Contracts\Translation\Translator;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Encryption\Encrypter;
 use Illuminate\Http\Client\Factory;
@@ -91,7 +96,18 @@ final class TelegramServiceProvider extends ServiceProvider
                 );
             },
         );
-        $this->app->singleton(TelegramNavigationEntryGateway::class);
+        $this->app->singleton(
+            TelegramNavigationEntryGateway::class,
+            fn (Application $application): TelegramNavigationEntryGateway => new TelegramNavigationEntryGateway(
+                $application->make(TelegramInteractionSessionService::class),
+                $application->make(DatabaseManager::class),
+                $application->make(TelegramInteractionUpdateBindingService::class),
+                fn (): TelegramChannelMembershipEvaluator => $application->make(TelegramChannelMembershipEvaluator::class),
+                fn (): NonRestrictedTelegramPresentationFactory => $application->make(NonRestrictedTelegramPresentationFactory::class),
+                fn (): TelegramDeliveryQueueService => $application->make(TelegramDeliveryQueueService::class),
+                fn (): Translator => $application->make(Translator::class),
+            ),
+        );
         $this->app->singleton(TelegramNavigationHandler::class);
         $this->app->singleton(TelegramAgentNavigationHandler::class);
         $this->app->singleton(TelegramGiftCardNavigationHandler::class);

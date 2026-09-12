@@ -24,6 +24,62 @@ final readonly class TelegramInteractionUpdateBindingService
         private TelegramInteractionDatabaseCapability $databaseCapability,
     ) {}
 
+    public function existing(
+        string $botId,
+        int $updateId,
+        int $telegramAccountId,
+        string $kind,
+        string $requestKey,
+    ): ?TelegramInteractionUpdateBindingReceipt {
+        $botNumericId = $this->botNumericId($botId);
+        if ($updateId < 1 || $telegramAccountId < 1) {
+            throw new InvalidArgumentException('Telegram interaction update binding identity is invalid.');
+        }
+        if (! in_array($kind, ['message', 'back', 'cancel'], true)) {
+            throw new InvalidArgumentException('Telegram interaction update binding kind is invalid.');
+        }
+        $requestHash = $this->requestHash($requestKey);
+        $connection = $this->database->connection();
+
+        return $connection->transaction(function () use (
+            $connection,
+            $botId,
+            $botNumericId,
+            $updateId,
+            $telegramAccountId,
+            $kind,
+            $requestKey,
+            $requestHash,
+        ): ?TelegramInteractionUpdateBindingReceipt {
+            $account = $connection->table('telegram_accounts')
+                ->where('id', $telegramAccountId)
+                ->lockForUpdate()
+                ->first(['id', 'user_id', 'bot_id', 'telegram_user_id']);
+            if ($account === null
+                || (int) $account->bot_id !== $botNumericId
+                || (string) (int) $account->bot_id !== $botId) {
+                throw new RuntimeException('Telegram interaction update binding account is invalid.');
+            }
+
+            /** @var BindingRow|null $existing */
+            $existing = $connection->table('telegram_interaction_update_bindings')
+                ->where('bot_id', $botId)
+                ->where('update_id', $updateId)
+                ->lockForUpdate()
+                ->first();
+            if ($existing === null) {
+                return null;
+            }
+            if ((int) $existing->telegram_account_id !== $telegramAccountId
+                || (string) $existing->kind !== $kind
+                || ! hash_equals((string) $existing->request_hash, $requestHash)) {
+                throw new RuntimeException('Telegram interaction update binding conflicts with durable update semantics.');
+            }
+
+            return $this->receiptFromRow($connection, $existing, $requestKey, true);
+        }, 3);
+    }
+
     public function bind(
         string $botId,
         int $updateId,
