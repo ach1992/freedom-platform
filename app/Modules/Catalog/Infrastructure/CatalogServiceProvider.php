@@ -22,6 +22,7 @@ use App\Modules\Catalog\Application\ProductService;
 use App\Modules\Catalog\Application\ProductVariantService;
 use App\Modules\Catalog\Application\RouteOperationalVerifier;
 use App\Modules\Catalog\Application\ServiceUsernameAvailability;
+use App\Modules\Catalog\Application\TelegramTrialMembershipVerifier;
 use App\Modules\Catalog\Application\TrialEligibility;
 use App\Modules\Catalog\Application\TrialMembershipVerifier;
 use App\Modules\Catalog\Application\TrialPolicyService;
@@ -40,7 +41,7 @@ final class CatalogServiceProvider extends ServiceProvider
         $this->app->bind(RouteOperationalVerifier::class, DatabaseRouteOperationalVerifier::class);
         $this->app->bind(CustomPlanOperationalVerifier::class, DatabaseCustomPlanOperationalVerifier::class);
         $this->app->bind(ServiceUsernameAvailability::class, DatabaseServiceUsernameAvailability::class);
-        $this->app->bind(TrialMembershipVerifier::class, UnavailableTrialMembershipVerifier::class);
+        $this->app->bind(TrialMembershipVerifier::class, TelegramTrialMembershipVerifier::class);
 
         $this->app->singleton(
             CatalogMutationAudit::class,
