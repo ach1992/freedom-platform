@@ -798,7 +798,7 @@ final class TrialPolicyReservationTest extends TestCase
         $activated = $this->app->make(PlanOfferingService::class)->activate(
             $scenario['offering_id'],
             (int) $offering->version,
-            $this->catalogContext($scenario['owner_id'], 'trial-order-offering-activate-0001'),
+            $this->catalogContext($scenario['owner_id'], 'trial-order-offering-activate-'.$scenario['offering_id']),
         );
         self::assertTrue($activated->changed);
     }
