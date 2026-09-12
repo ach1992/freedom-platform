@@ -10,6 +10,10 @@ use App\Modules\Agents\Domain\AgentPricingAction;
 use App\Modules\Agents\Domain\AgentPricingProfileDefinition;
 use App\Modules\Agents\Domain\AgentPricingRuleDefinition;
 use App\Modules\Agents\Domain\AgentPricingState;
+use App\Modules\Catalog\Application\TrialContext;
+use App\Modules\Catalog\Application\TrialMembershipVerifier;
+use App\Modules\Catalog\Application\TrialReservationRequest;
+use App\Modules\Catalog\Application\TrialReservationService;
 use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
 use App\Modules\Payments\Eligibility\Domain\PaymentEligibilityRuleDefinition;
 use App\Modules\Payments\Eligibility\Domain\PaymentEligibilityRuleEffect;
@@ -18,8 +22,10 @@ use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseDiscountQ
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseOrder;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchasePaymentMethods;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseQuote;
+use App\Modules\Telegram\Application\Contracts\TelegramCustomerTrialCatalog;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseCatalogPage;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseOffering;
+use App\Modules\Telegram\Application\TelegramCustomerTrialOffering;
 use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PanelsAccessFoundationSeeder;
@@ -27,6 +33,7 @@ use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
 use DateTimeImmutable;
 use DateTimeZone;
 use Illuminate\Auth\Access\AuthorizationException;
+use Illuminate\Database\Connection;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -86,6 +93,176 @@ final class TelegramCustomerPurchaseCatalogTest extends TestCase
         self::assertSame(0, $full->totalItems);
         self::assertSame([], $full->items);
         self::assertSame($before, $this->businessEffectCounts());
+    }
+
+    public function test_trial_projection_reuses_purchase_eligibility_applies_trial_policy_filters_and_is_read_only(): void
+    {
+        $scenario = $this->scenario();
+        $now = now('UTC');
+        $definitions = [
+            ['trial-eligible', $scenario['eligible_tag_id'], 'normal', 'none', true],
+            ['trial-tag-denied', $scenario['other_tag_id'], 'normal', 'none', false],
+            ['trial-tier-denied', $scenario['eligible_tag_id'], 'vip', 'none', false],
+            ['trial-phone-denied', $scenario['eligible_tag_id'], 'normal', 'telegram_contact_only', false],
+        ];
+        $policyIds = [];
+        foreach ($definitions as [$code, $policyTagId, $policyTier, $phonePolicy, $membershipRequired]) {
+            $offeringId = $this->offering(
+                $code,
+                $scenario['product_id'],
+                $scenario['server_id'],
+                $scenario['target_id'],
+                $scenario['profile_id'],
+                $scenario['eligible_tag_id'],
+                'normal',
+                $now,
+                'customers',
+                true,
+            );
+            $this->route($offeringId, $scenario['server_id'], $scenario['target_id'], $now);
+            $policyIds[$code] = $this->trialPolicy(
+                $offeringId,
+                $policyTagId,
+                $policyTier,
+                $phonePolicy,
+                $membershipRequired,
+                5,
+                $now,
+            );
+            $this->activateOffering($offeringId, $now);
+        }
+
+        $catalog = $this->app->make(TelegramCustomerTrialCatalog::class);
+        $before = $this->trialDiscoveryEffectCounts();
+        $page = $catalog->pageForSelf($scenario['user_id'], $scenario['user_id'], 1, 6);
+
+        self::assertSame(1, $page->totalItems);
+        self::assertCount(1, $page->items);
+        $offering = $page->items[0];
+        self::assertInstanceOf(TelegramCustomerTrialOffering::class, $offering);
+        self::assertSame('trial-eligible', $offering->offeringCode);
+        self::assertSame(2 * 1024 * 1024 * 1024, $offering->trialDataBytes);
+        self::assertSame(2, $offering->trialDurationDays);
+        self::assertSame('none', $offering->phoneVerificationPolicy);
+        self::assertTrue($offering->membershipRequired);
+        self::assertSame(
+            substr(hash('sha256', 'telegram-trial-offering-v1:'.$scenario['user_id'].':trial-eligible'), 0, 40),
+            $offering->selectionToken,
+        );
+        self::assertSame($before, $this->trialDiscoveryEffectCounts());
+
+        $resolved = $catalog->offeringForSelf(
+            $scenario['user_id'],
+            $scenario['user_id'],
+            $offering->selectionToken,
+        );
+        self::assertSame($offering->selectionToken, $resolved->selectionToken);
+        self::assertSame($before, $this->trialDiscoveryEffectCounts());
+
+        $eligiblePolicyId = $policyIds['trial-eligible'] ?? throw new \RuntimeException('Eligible Trial policy fixture is missing.');
+        DB::table('trial_daily_capacity_counters')->insert([
+            'trial_policy_id' => $eligiblePolicyId,
+            'capacity_date' => now('Asia/Tehran')->format('Y-m-d'),
+            'hard_limit_snapshot' => 5,
+            'reserved_count' => 5,
+            'committed_count' => 0,
+            'released_count' => 0,
+            'expired_count' => 0,
+            'version' => 1,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $afterCapacityFixture = $this->trialDiscoveryEffectCounts();
+        self::assertSame(0, $catalog->pageForSelf($scenario['user_id'], $scenario['user_id'], 1, 6)->totalItems);
+        self::assertSame($afterCapacityFixture, $this->trialDiscoveryEffectCounts());
+
+        $this->expectException(AuthorizationException::class);
+        $catalog->pageForSelf($scenario['user_id'] + 1, $scenario['user_id'], 1, 6);
+    }
+
+    /** @requirement CAT-006 DAT-002 DAT-003 QUA-001 */
+    public function test_trial_projection_hides_an_active_one_per_user_claim_before_capacity_is_exhausted(): void
+    {
+        $scenario = $this->scenario();
+        $now = now('UTC');
+        DB::table('panel_target_capacities')->where('id', $scenario['capacity_id'])->update([
+            'hard_limit' => 5,
+            'version' => 2,
+            'updated_at' => $now,
+        ]);
+        $offeringId = $this->offering(
+            'trial-consumed',
+            $scenario['product_id'],
+            $scenario['server_id'],
+            $scenario['target_id'],
+            $scenario['profile_id'],
+            $scenario['eligible_tag_id'],
+            'normal',
+            $now,
+            'customers',
+            true,
+        );
+        $this->route($offeringId, $scenario['server_id'], $scenario['target_id'], $now);
+        $policyId = $this->trialPolicy(
+            $offeringId,
+            $scenario['eligible_tag_id'],
+            'normal',
+            'none',
+            false,
+            5,
+            $now,
+        );
+        $this->activateOffering($offeringId, $now);
+
+        $catalog = $this->app->make(TelegramCustomerTrialCatalog::class);
+        self::assertSame(1, $catalog->pageForSelf($scenario['user_id'], $scenario['user_id'], 1, 6)->totalItems);
+
+        $membership = new class implements TrialMembershipVerifier
+        {
+            public int $calls = 0;
+
+            public function assertSatisfied(Connection $connection, int $userId, int $offeringId, int $policyId): void
+            {
+                $this->calls++;
+                throw new \RuntimeException('Membership verifier must not be called for this Trial policy.');
+            }
+        };
+        $this->app->instance(TrialMembershipVerifier::class, $membership);
+        $this->app->forgetInstance(TrialReservationService::class);
+        $reservation = $this->app->make(TrialReservationService::class)->reserve(
+            new TrialReservationRequest(
+                $offeringId,
+                $scenario['user_id'],
+                null,
+                null,
+                (new DateTimeImmutable('now', new DateTimeZone('UTC')))->modify('+10 minutes'),
+            ),
+            new TrialContext(
+                'telegram-trial-consumed-reserve-0001',
+                'telegram-trial-consumed-correlation',
+                'telegram',
+                'trial_discovery_test',
+            ),
+        );
+        self::assertSame('reserved', $reservation->state);
+        self::assertSame(0, $membership->calls);
+        $dailyCounter = DB::table('trial_daily_capacity_counters')
+            ->where('trial_policy_id', $policyId)
+            ->first(['hard_limit_snapshot', 'reserved_count', 'committed_count']);
+        self::assertNotNull($dailyCounter);
+        self::assertSame(5, (int) $dailyCounter->hard_limit_snapshot);
+        self::assertSame(1, (int) $dailyCounter->reserved_count);
+        self::assertSame(0, (int) $dailyCounter->committed_count);
+        $targetCapacity = DB::table('panel_target_capacities')->where('id', $scenario['capacity_id'])->first(['hard_limit', 'held_units']);
+        self::assertNotNull($targetCapacity);
+        self::assertSame(5, (int) $targetCapacity->hard_limit);
+        self::assertSame(1, (int) $targetCapacity->held_units);
+
+        $afterReservation = $this->trialDiscoveryEffectCounts();
+        $page = $catalog->pageForSelf($scenario['user_id'], $scenario['user_id'], 1, 6);
+        self::assertSame(0, $page->totalItems);
+        self::assertSame([], $page->items);
+        self::assertSame($afterReservation, $this->trialDiscoveryEffectCounts());
     }
 
     public function test_quote_contract_creates_one_canonical_zero_discount_quote_and_replays_without_other_purchase_effects(): void
@@ -688,7 +865,7 @@ final class TelegramCustomerPurchaseCatalogTest extends TestCase
         );
     }
 
-    /** @return array{user_id:int,administrator_id:int,eligible_tag_id:int,capacity_id:int,eligible_offering_id:int,product_id:int,server_id:int} */
+    /** @return array{user_id:int,administrator_id:int,eligible_tag_id:int,other_tag_id:int,capacity_id:int,eligible_offering_id:int,product_id:int,server_id:int,target_id:int,profile_id:int} */
     private function scenario(): array
     {
         $now = now('UTC');
@@ -932,10 +1109,13 @@ final class TelegramCustomerPurchaseCatalogTest extends TestCase
             'user_id' => $userId,
             'administrator_id' => $administratorId,
             'eligible_tag_id' => $eligibleTagId,
+            'other_tag_id' => $otherTagId,
             'capacity_id' => $capacityId,
             'eligible_offering_id' => $eligibleOfferingId,
             'product_id' => $productId,
             'server_id' => $serverId,
+            'target_id' => $targetId,
+            'profile_id' => $profileId,
         ];
     }
 
@@ -949,6 +1129,7 @@ final class TelegramCustomerPurchaseCatalogTest extends TestCase
         string $tierCode,
         mixed $now,
         string $audience = 'customers',
+        bool $trialAllowed = false,
     ): int {
         $offeringId = (int) DB::table('plan_offerings')->insertGetId([
             'code' => $code,
@@ -973,7 +1154,7 @@ final class TelegramCustomerPurchaseCatalogTest extends TestCase
             'discount_eligible' => true,
             'auto_renew_allowed' => false,
             'custom_plan_allowed' => false,
-            'trial_allowed' => false,
+            'trial_allowed' => $trialAllowed,
             'state' => 'draft',
             'visibility' => 'hidden',
             'version' => 1,
@@ -1000,6 +1181,71 @@ final class TelegramCustomerPurchaseCatalogTest extends TestCase
         ]);
 
         return $offeringId;
+    }
+
+    private function trialPolicy(
+        int $offeringId,
+        int $tagId,
+        string $tierCode,
+        string $phonePolicy,
+        bool $membershipRequired,
+        int $dailyCapacity,
+        mixed $now,
+    ): int {
+        $policyId = (int) DB::table('trial_policies')->insertGetId([
+            'plan_offering_id' => $offeringId,
+            'enabled' => true,
+            'data_bytes' => 2 * 1024 * 1024 * 1024,
+            'duration_days' => 2,
+            'daily_capacity' => $dailyCapacity,
+            'phone_verification_policy' => $phonePolicy,
+            'membership_required' => $membershipRequired,
+            'one_per_user' => true,
+            'one_per_phone' => false,
+            'administrator_regrant_allowed' => false,
+            'fallback_allowed' => false,
+            'tag_match_mode' => 'all',
+            'delivery_template_key' => 'trial.discovery.test',
+            'configuration_hash' => hash('sha256', 'trial-policy-'.$offeringId),
+            'version' => 1,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        DB::table('trial_policy_tiers')->insert([
+            'trial_policy_id' => $policyId,
+            'tier_code' => $tierCode,
+            'created_at' => $now,
+        ]);
+        DB::table('trial_policy_tags')->insert([
+            'trial_policy_id' => $policyId,
+            'customer_tag_id' => $tagId,
+            'created_at' => $now,
+        ]);
+
+        return $policyId;
+    }
+
+    private function activateOffering(int $offeringId, mixed $now): void
+    {
+        DB::table('plan_offerings')->where('id', $offeringId)->update([
+            'state' => 'active',
+            'visibility' => 'visible',
+            'version' => 2,
+            'updated_at' => $now,
+        ]);
+    }
+
+    /** @return array<string,int> */
+    private function trialDiscoveryEffectCounts(): array
+    {
+        return [
+            'trial_reservations' => DB::table('trial_reservations')->count(),
+            'route_selections' => DB::table('plan_offering_route_selections')->count(),
+            'capacity_reservations' => DB::table('panel_capacity_reservations')->count(),
+            'orders' => DB::table('orders')->count(),
+            'provisioning_operations' => DB::table('provisioning_operations')->count(),
+            'services' => DB::table('service_subscriptions')->count(),
+        ];
     }
 
     private function route(int $offeringId, int $serverId, int $targetId, mixed $now): void

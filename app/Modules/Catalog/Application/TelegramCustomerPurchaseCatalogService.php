@@ -49,6 +49,14 @@ final readonly class TelegramCustomerPurchaseCatalogService implements TelegramC
         return new TelegramCustomerPurchaseCatalogPage($pageItems, $effectivePage, $totalPages, $totalItems);
     }
 
+    /** @return list<TelegramCustomerPurchaseOffering> */
+    public function offeringsForSelf(int $actorUserId, int $subjectUserId): array
+    {
+        $this->assertSelf($actorUserId, $subjectUserId);
+
+        return $this->eligibleOfferings($subjectUserId);
+    }
+
     /** @requirement BUY-001 BUY-003 DAT-002 DAT-003 SEC-002 */
     public function offeringForSelf(
         int $actorUserId,

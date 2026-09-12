@@ -118,6 +118,8 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
 
     private const ACTION_AGENT = 'navigation.agent';
 
+    private const ACTION_TRIAL = 'navigation.trial';
+
     private const ACTION_ADMIN_USDT_RATE = 'navigation.admin.usdt_rate';
 
     private const ACTION_ADMIN_USDT_RATE_EDIT = 'navigation.admin.usdt_rate.edit';
@@ -2936,6 +2938,18 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             $rows[] = [new TelegramInlineCallbackButton(
                 $this->translation('telegram.navigation.buttons.buy_service', $locale),
                 $purchase->publicId,
+                TelegramInlineButtonStyle::Primary,
+            )];
+            $trial = $this->callbacks->issue(
+                $action->sessionPublicId,
+                $sessionVersion,
+                self::ACTION_TRIAL,
+                [],
+                'nav-home-trial:'.$requestKey,
+            );
+            $rows[] = [new TelegramInlineCallbackButton(
+                $this->translation('telegram.navigation.buttons.trial_service', $locale),
+                $trial->publicId,
                 TelegramInlineButtonStyle::Primary,
             )];
         }

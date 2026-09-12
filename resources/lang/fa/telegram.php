@@ -8,6 +8,7 @@ return [
         'buttons' => [
             'my_account' => 'حساب من',
             'buy_service' => 'خرید سرویس',
+            'trial_service' => 'سرویس آزمایشی',
             'my_services' => 'سرویس‌های من',
             'request_cooperation' => 'درخواست همکاری',
             'agent_status' => 'وضعیت درخواست همکاری',
