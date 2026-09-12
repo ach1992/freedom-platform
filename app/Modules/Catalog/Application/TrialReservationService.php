@@ -44,11 +44,22 @@ final readonly class TrialReservationService
             throw new DomainException('Trial reservation expiry must be in the future.');
         }
 
+        $membershipPolicy = $this->membershipAuthorizationPreflight($request);
+        if ($membershipPolicy->membership_required) {
+            $this->membershipVerifier->assertSatisfied(
+                $this->database->connection(),
+                $request->userId,
+                $request->offeringId,
+                $membershipPolicy->id,
+            );
+        }
+
         try {
             return $this->database->connection()->transaction(function (Connection $connection) use (
                 $request,
                 $context,
                 $payloadHash,
+                $membershipPolicy,
             ): TrialReservationReceipt {
                 $replay = $this->existingReservation($context->commandKey, $payloadHash, $connection, true);
                 if ($replay !== null) {
@@ -57,6 +68,7 @@ final readonly class TrialReservationService
 
                 $offering = $this->lockedOffering($connection, $request->offeringId);
                 $policy = $this->lockedPolicy($connection, $request->offeringId);
+                $this->assertMembershipPolicyUnchanged($policy, $membershipPolicy);
                 $actor = $this->eligibility->actor($connection, $request->userId);
                 $this->eligibility->assertOfferingAudience($offering->audience);
                 $this->eligibility->assertOfferingEligibility(
@@ -72,14 +84,6 @@ final readonly class TrialReservationService
                     $actor,
                 );
                 $this->eligibility->assertPhonePolicy($policy->phone_verification_policy, $actor);
-                if ($policy->membership_required) {
-                    $this->membershipVerifier->assertSatisfied(
-                        $connection,
-                        $request->userId,
-                        $request->offeringId,
-                        $policy->id,
-                    );
-                }
                 $this->assertNoPriorClaim($connection, $policy, $actor);
 
                 $capacityDate = $this->businessDate();
@@ -496,6 +500,52 @@ final readonly class TrialReservationService
             'audience' => $row->audience,
             'tag_match_mode' => $row->tag_match_mode,
         ];
+    }
+
+    /** @return object{id:int,version:int,configuration_hash:string,membership_required:bool} */
+    private function membershipAuthorizationPreflight(TrialReservationRequest $request): object
+    {
+        return $this->database->connection()->transaction(function (Connection $connection) use ($request): object {
+            $offering = $this->lockedOffering($connection, $request->offeringId);
+            $policy = $this->lockedPolicy($connection, $request->offeringId);
+            $actor = $this->eligibility->actor($connection, $request->userId);
+            $this->eligibility->assertOfferingAudience($offering->audience);
+            $this->eligibility->assertOfferingEligibility(
+                $connection,
+                $request->offeringId,
+                $offering->tag_match_mode,
+                $actor,
+            );
+            $this->eligibility->assertPolicyEligibility(
+                $connection,
+                $policy->id,
+                $policy->tag_match_mode,
+                $actor,
+            );
+            $this->eligibility->assertPhonePolicy($policy->phone_verification_policy, $actor);
+
+            return (object) [
+                'id' => $policy->id,
+                'version' => $policy->version,
+                'configuration_hash' => $policy->configuration_hash,
+                'membership_required' => $policy->membership_required,
+            ];
+        }, 1);
+    }
+
+    /**
+     * @param  object{id:int,version:int,configuration_hash:string,membership_required:bool}  $policy
+     * @param  object{id:int,version:int,configuration_hash:string,membership_required:bool}  $preflight
+     */
+    private function assertMembershipPolicyUnchanged(object $policy, object $preflight): void
+    {
+        if ($policy->id !== $preflight->id
+            || $policy->version !== $preflight->version
+            || $policy->membership_required !== $preflight->membership_required
+            || ! hash_equals($policy->configuration_hash, $preflight->configuration_hash)
+        ) {
+            throw new DomainException('Trial membership policy changed after verification.');
+        }
     }
 
     /** @return object{id: int, version: int, configuration_hash: string, data_bytes: int, duration_days: int, daily_capacity: int, phone_verification_policy: string, membership_required: bool, one_per_user: bool, one_per_phone: bool, fallback_allowed: bool, tag_match_mode: string, delivery_template_key: string} */

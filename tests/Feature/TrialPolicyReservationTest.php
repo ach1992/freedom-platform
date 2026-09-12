@@ -29,15 +29,25 @@ use App\Modules\Orders\Domain\OrderSourceType;
 use App\Modules\Orders\Domain\OrderState;
 use App\Modules\Provisioning\Application\InitialProvisioningQueueService;
 use App\Modules\Provisioning\Domain\ProvisioningState;
+use App\Modules\Telegram\Application\Contracts\ProtectedTelegramDeliveryRuntime;
+use App\Modules\Telegram\Application\Contracts\TelegramMembershipLookup;
+use App\Modules\Telegram\Application\TelegramChannelMembershipEvaluator;
+use App\Modules\Telegram\Application\TelegramChannelMembershipRuleDefinition;
+use App\Modules\Telegram\Application\TelegramChannelMembershipRuleResolver;
+use App\Modules\Telegram\Application\TelegramChannelMembershipRuleService;
+use App\Modules\Telegram\Application\TelegramConfigurationChangeContext;
+use App\Modules\Telegram\Application\TelegramMembershipEvidence;
+use App\Modules\Telegram\Application\TelegramMembershipLookupResult;
 use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PanelsAccessFoundationSeeder;
+use Database\Seeders\TelegramMembershipAccessFoundationSeeder;
 use DateTimeImmutable;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Connection;
 use Illuminate\Database\QueryException;
-use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Tests\TestCase;
@@ -45,7 +55,7 @@ use Tests\TestCase;
 /** @requirement CAT-006 CAT-008 ACL-002 SEC-002 DAT-003 QUA-001 */
 final class TrialPolicyReservationTest extends TestCase
 {
-    use RefreshDatabase;
+    use DatabaseTruncation;
 
     protected function setUp(): void
     {
@@ -53,7 +63,212 @@ final class TrialPolicyReservationTest extends TestCase
         $this->seed(IdentityAccessFoundationSeeder::class);
         $this->seed(CatalogAccessFoundationSeeder::class);
         $this->seed(PanelsAccessFoundationSeeder::class);
+        $this->seed(TelegramMembershipAccessFoundationSeeder::class);
+        $this->app->instance(ProtectedTelegramDeliveryRuntime::class, new TrialMembershipTestRuntime);
         $this->app->instance(RouteOperationalVerifier::class, new PassingTrialRouteOperationalVerifier);
+    }
+
+    protected function tearDown(): void
+    {
+        $this->truncateTablesForAllConnections();
+        parent::tearDown();
+    }
+
+    public function test_membership_verifier_runs_outside_transaction_and_accepted_replay_does_not_recheck(): void
+    {
+        $scenario = $this->scenario(dailyCapacity: 2);
+        $this->app->make(TrialPolicyService::class)->create(
+            $scenario['offering_id'],
+            $this->policyDefinition($scenario['tag_id'], membershipRequired: true),
+            $this->catalogContext($scenario['owner_id'], 'trial-membership-boundary-policy'),
+        );
+        $verifier = new RecordingTrialMembershipVerifier;
+        $service = $this->serviceWithMembershipVerifier($verifier);
+        $request = $this->request($scenario['offering_id'], $scenario['user_id']);
+        $context = $this->trialContext('trial-membership-boundary-reserve-01', 'trial-membership-boundary-correlation');
+
+        $reserved = $service->reserve($request, $context);
+        $replayed = $service->reserve($request, $context);
+
+        self::assertSame('reserved', $reserved->state);
+        self::assertTrue($replayed->replayed);
+        self::assertSame($reserved->reservationId, $replayed->reservationId);
+        self::assertSame([0], $verifier->transactionLevels);
+        self::assertSame(1, $verifier->calls);
+    }
+
+    public function test_membership_policy_drift_after_external_verification_fails_before_reservation_effects(): void
+    {
+        $scenario = $this->scenario(dailyCapacity: 2);
+        $policy = $this->app->make(TrialPolicyService::class)->create(
+            $scenario['offering_id'],
+            $this->policyDefinition($scenario['tag_id'], membershipRequired: true),
+            $this->catalogContext($scenario['owner_id'], 'trial-membership-drift-policy'),
+        );
+        $before = [
+            'reservations' => DB::table('trial_reservations')->count(),
+            'daily_counters' => DB::table('trial_daily_capacity_counters')->count(),
+            'route_selections' => DB::table('plan_offering_route_selections')->count(),
+            'capacity_reservations' => DB::table('panel_capacity_reservations')->count(),
+        ];
+        $verifier = new RecordingTrialMembershipVerifier(static function () use ($policy): void {
+            DB::table('trial_policies')->where('id', $policy->targetId)->update([
+                'version' => 2,
+                'configuration_hash' => hash('sha256', 'trial-membership-drifted-policy'),
+                'updated_at' => now('UTC'),
+            ]);
+        });
+        $service = $this->serviceWithMembershipVerifier($verifier);
+
+        try {
+            $service->reserve(
+                $this->request($scenario['offering_id'], $scenario['user_id']),
+                $this->trialContext('trial-membership-drift-reserve-01', 'trial-membership-drift-correlation'),
+            );
+            self::fail('Expected Trial membership policy drift to fail closed.');
+        } catch (DomainException $exception) {
+            self::assertSame('Trial membership policy changed after verification.', $exception->getMessage());
+        }
+
+        self::assertSame([0], $verifier->transactionLevels);
+        self::assertSame($before['reservations'], DB::table('trial_reservations')->count());
+        self::assertSame($before['daily_counters'], DB::table('trial_daily_capacity_counters')->count());
+        self::assertSame($before['route_selections'], DB::table('plan_offering_route_selections')->count());
+        self::assertSame($before['capacity_reservations'], DB::table('panel_capacity_reservations')->count());
+    }
+
+    public function test_membership_not_required_policy_performs_no_membership_lookup(): void
+    {
+        $scenario = $this->scenario(dailyCapacity: 2);
+        $this->app->make(TrialPolicyService::class)->create(
+            $scenario['offering_id'],
+            $this->policyDefinition($scenario['tag_id'], membershipRequired: false),
+            $this->catalogContext($scenario['owner_id'], 'trial-membership-not-required-policy'),
+        );
+        $verifier = new RecordingTrialMembershipVerifier(static function (): void {
+            throw new \RuntimeException('Membership verifier must not be called.');
+        });
+
+        $reserved = $this->serviceWithMembershipVerifier($verifier)->reserve(
+            $this->request($scenario['offering_id'], $scenario['user_id']),
+            $this->trialContext('trial-membership-not-required-01', 'trial-membership-not-required-correlation'),
+        );
+
+        self::assertSame('reserved', $reserved->state);
+        self::assertSame(0, $verifier->calls);
+        self::assertSame([], $verifier->transactionLevels);
+    }
+
+    public function test_local_phone_guard_runs_before_canonical_membership_provider_lookup(): void
+    {
+        $scenario = $this->scenario(dailyCapacity: 2, phoneEvidence: 'telegram');
+        $this->app->make(TrialPolicyService::class)->create(
+            $scenario['offering_id'],
+            $this->policyDefinition(
+                $scenario['tag_id'],
+                phonePolicy: PhoneVerificationPolicy::Both,
+                membershipRequired: true,
+            ),
+            $this->catalogContext($scenario['owner_id'], 'trial-membership-phone-preflight-policy'),
+        );
+        $this->activateScenarioOffering($scenario);
+        $this->telegramIdentity($scenario['user_id'], 720000000 + $scenario['user_id']);
+        $this->activeTrialMembershipRule($scenario, 'fail_closed');
+        $lookup = new TrialMembershipTestLookup(new TelegramMembershipLookupResult(
+            TelegramMembershipEvidence::Member,
+            'telegram_membership_member',
+        ));
+        $service = $this->serviceWithCanonicalMembership($lookup);
+
+        try {
+            $service->reserve(
+                $this->request($scenario['offering_id'], $scenario['user_id']),
+                $this->trialContext('trial-membership-phone-preflight-reserve', 'trial-membership-phone-preflight-correlation'),
+            );
+            self::fail('Expected local phone policy to reject before Telegram membership lookup.');
+        } catch (DomainException $exception) {
+            self::assertSame('Trial phone-verification requirement is not satisfied.', $exception->getMessage());
+        }
+
+        self::assertSame(0, $lookup->calls);
+        self::assertSame([], $lookup->transactionLevels);
+    }
+
+    public function test_canonical_telegram_trial_membership_applies_member_and_failure_policy_semantics(): void
+    {
+        $ownerId = $this->administrator(true);
+        $cases = [
+            ['member', 'fail_closed', TelegramMembershipEvidence::Member, true],
+            ['provider unavailable fail open', 'fail_open', TelegramMembershipEvidence::Unavailable, true],
+            ['not member remains denied', 'fail_open', TelegramMembershipEvidence::NotMember, false],
+            ['provider unavailable fail closed', 'fail_closed', TelegramMembershipEvidence::Unavailable, false],
+            ['provider unavailable manual review', 'manual_review', TelegramMembershipEvidence::Unavailable, false],
+        ];
+
+        foreach ($cases as [$label, $failurePolicy, $evidence, $allowed]) {
+            $scenario = $this->scenario(dailyCapacity: 2, ownerId: $ownerId);
+            $this->app->make(TrialPolicyService::class)->create(
+                $scenario['offering_id'],
+                $this->policyDefinition($scenario['tag_id'], membershipRequired: true),
+                $this->catalogContext($scenario['owner_id'], 'trial-canonical-'.$failurePolicy.'-'.$scenario['offering_id']),
+            );
+            $this->activateScenarioOffering($scenario);
+            $this->telegramIdentity($scenario['user_id'], 710000000 + $scenario['user_id']);
+            $this->activeTrialMembershipRule($scenario, $failurePolicy);
+            $lookup = new TrialMembershipTestLookup(new TelegramMembershipLookupResult(
+                $evidence,
+                $evidence === TelegramMembershipEvidence::Member
+                    ? 'telegram_membership_member'
+                    : ($evidence === TelegramMembershipEvidence::NotMember
+                        ? 'telegram_membership_left'
+                        : 'telegram_membership_http_unavailable'),
+            ));
+            $service = $this->serviceWithCanonicalMembership($lookup);
+
+            try {
+                $receipt = $service->reserve(
+                    $this->request($scenario['offering_id'], $scenario['user_id']),
+                    $this->trialContext('trial-canonical-reserve-'.$scenario['offering_id'], 'trial-canonical-correlation-'.$scenario['offering_id']),
+                );
+                self::assertTrue($allowed, $label);
+                self::assertSame('reserved', $receipt->state, $label);
+            } catch (DomainException $exception) {
+                self::assertFalse($allowed, $label.': '.$exception->getMessage());
+                self::assertSame('Trial membership requirement is not satisfied.', $exception->getMessage(), $label);
+            }
+
+            self::assertSame([0], $lookup->transactionLevels, $label);
+            self::assertSame(1, $lookup->calls, $label);
+        }
+    }
+
+    public function test_membership_required_trial_without_applicable_canonical_rule_fails_closed_without_provider_lookup(): void
+    {
+        $scenario = $this->scenario(dailyCapacity: 2);
+        $this->app->make(TrialPolicyService::class)->create(
+            $scenario['offering_id'],
+            $this->policyDefinition($scenario['tag_id'], membershipRequired: true),
+            $this->catalogContext($scenario['owner_id'], 'trial-no-membership-rule-policy'),
+        );
+        $this->activateScenarioOffering($scenario);
+        $lookup = new TrialMembershipTestLookup(new TelegramMembershipLookupResult(
+            TelegramMembershipEvidence::Member,
+            'telegram_membership_member',
+        ));
+        $service = $this->serviceWithCanonicalMembership($lookup);
+
+        try {
+            $service->reserve(
+                $this->request($scenario['offering_id'], $scenario['user_id']),
+                $this->trialContext('trial-no-membership-rule-reserve', 'trial-no-membership-rule-correlation'),
+            );
+            self::fail('Expected membership-required Trial without a canonical rule to fail closed.');
+        } catch (DomainException $exception) {
+            self::assertSame('Trial membership requirement is not satisfied.', $exception->getMessage());
+        }
+
+        self::assertSame(0, $lookup->calls);
+        self::assertSame(0, DB::table('trial_reservations')->where('plan_offering_id', $scenario['offering_id'])->count());
     }
 
     public function test_reservation_commit_admin_regrant_and_replay_are_idempotent(): void
@@ -265,7 +480,7 @@ final class TrialPolicyReservationTest extends TestCase
         );
 
         try {
-            $this->app->make(TrialReservationService::class)->reserve(
+            $this->serviceWithMembershipVerifier(new FailingTrialMembershipVerifier)->reserve(
                 $this->request($scenario['offering_id'], $scenario['user_id']),
                 $this->trialContext('trial-membership-denied-00001', 'trial-correlation-0007'),
             );
@@ -583,7 +798,7 @@ final class TrialPolicyReservationTest extends TestCase
         $activated = $this->app->make(PlanOfferingService::class)->activate(
             $scenario['offering_id'],
             (int) $offering->version,
-            $this->catalogContext($scenario['owner_id'], 'trial-order-offering-activate-0001'),
+            $this->catalogContext($scenario['owner_id'], 'trial-order-offering-activate-'.$scenario['offering_id']),
         );
         self::assertTrue($activated->changed);
     }
@@ -606,13 +821,127 @@ final class TrialPolicyReservationTest extends TestCase
         );
     }
 
-    private function serviceWithMembershipAllowed(): TrialReservationService
+    private function serviceWithMembershipVerifier(TrialMembershipVerifier $verifier): TrialReservationService
     {
-        $this->app->instance(TrialMembershipVerifier::class, new PassingTrialMembershipVerifier);
+        $this->app->instance(TrialMembershipVerifier::class, $verifier);
         $this->app->forgetInstance(TrialRouteSelector::class);
         $this->app->forgetInstance(TrialReservationService::class);
 
         return $this->app->make(TrialReservationService::class);
+    }
+
+    private function serviceWithCanonicalMembership(TelegramMembershipLookup $lookup): TrialReservationService
+    {
+        $this->app->forgetInstance(TrialMembershipVerifier::class);
+        $this->app->instance(TelegramMembershipLookup::class, $lookup);
+        $this->app->forgetInstance(TelegramChannelMembershipEvaluator::class);
+        $this->app->forgetInstance(TelegramChannelMembershipRuleResolver::class);
+        $this->app->forgetInstance(TrialRouteSelector::class);
+        $this->app->forgetInstance(TrialReservationService::class);
+
+        return $this->app->make(TrialReservationService::class);
+    }
+
+    /** @param array<string,int> $scenario */
+    private function activeTrialMembershipRule(array $scenario, string $failurePolicy): void
+    {
+        $channelId = $this->activeMembershipChannel(
+            'trial-membership-'.$scenario['offering_id'],
+            -1002500000000 - $scenario['offering_id'],
+        );
+        $service = $this->app->make(TelegramChannelMembershipRuleService::class);
+        $definition = new TelegramChannelMembershipRuleDefinition(
+            'trial-membership-rule-'.$scenario['offering_id'],
+            'trial',
+            'customers',
+            null,
+            null,
+            $scenario['offering_id'],
+            'all',
+            $failurePolicy,
+            100,
+            null,
+            null,
+            [$channelId],
+        );
+        $created = $service->create(
+            $definition,
+            $this->telegramContext($scenario['owner_id'], 'create-trial-membership-'.$scenario['offering_id']),
+        );
+        $service->activate(
+            $created->targetId,
+            1,
+            $this->telegramContext($scenario['owner_id'], 'activate-trial-membership-'.$scenario['offering_id']),
+        );
+        $this->app->forgetInstance(TelegramChannelMembershipRuleResolver::class);
+    }
+
+    private function activeMembershipChannel(string $key, int $chatId): int
+    {
+        $now = now('UTC');
+
+        $id = (int) DB::table('required_channels')->insertGetId([
+            'channel_key' => $key,
+            'telegram_chat_id' => $chatId,
+            'chat_type' => 'channel',
+            'visibility' => 'public',
+            'display_title' => $key,
+            'join_url_ciphertext' => str_repeat('x', 64),
+            'join_url_hash' => hash('sha256', 'https://t.me/'.$key),
+            'sort_order' => 0,
+            'state' => 'draft',
+            'version' => 1,
+            'verified_bot_id' => null,
+            'verification_result_code' => null,
+            'verified_at' => null,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        DB::table('required_channels')->where('id', $id)->update([
+            'state' => 'active',
+            'version' => 2,
+            'verified_bot_id' => 123456,
+            'verification_result_code' => 'telegram_membership_administrator',
+            'verified_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        return $id;
+    }
+
+    private function telegramIdentity(int $userId, int $telegramUserId): void
+    {
+        $now = now('UTC');
+        DB::table('telegram_accounts')->insert([
+            'user_id' => $userId,
+            'bot_id' => 123456,
+            'telegram_user_id' => $telegramUserId,
+            'username' => null,
+            'language_code' => 'fa',
+            'is_bot' => false,
+            'first_seen_at' => $now,
+            'last_seen_at' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+    }
+
+    private function telegramContext(int $administratorId, string $suffix): TelegramConfigurationChangeContext
+    {
+        $identity = substr(hash('sha256', $suffix), 0, 24);
+
+        return new TelegramConfigurationChangeContext(
+            'trial-membership-'.$identity,
+            'correlation-'.$identity,
+            'trial_membership_test',
+            'Trial membership test fixture.',
+            $administratorId,
+        );
+    }
+
+    private function serviceWithMembershipAllowed(): TrialReservationService
+    {
+        return $this->serviceWithMembershipVerifier(new PassingTrialMembershipVerifier);
     }
 
     private function customer(int $ownerId, int $tagId, string $phoneEvidence = 'none'): int
@@ -838,4 +1167,57 @@ final class PassingTrialRouteOperationalVerifier implements RouteOperationalVeri
 final class PassingTrialMembershipVerifier implements TrialMembershipVerifier
 {
     public function assertSatisfied(Connection $connection, int $userId, int $offeringId, int $policyId): void {}
+}
+
+final class RecordingTrialMembershipVerifier implements TrialMembershipVerifier
+{
+    public int $calls = 0;
+
+    /** @var list<int> */
+    public array $transactionLevels = [];
+
+    public function __construct(private ?\Closure $callback = null) {}
+
+    public function assertSatisfied(Connection $connection, int $userId, int $offeringId, int $policyId): void
+    {
+        $this->calls++;
+        $this->transactionLevels[] = $connection->transactionLevel();
+        if ($this->callback !== null) {
+            ($this->callback)();
+        }
+    }
+}
+
+final class TrialMembershipTestRuntime implements ProtectedTelegramDeliveryRuntime
+{
+    public function botId(): string
+    {
+        return '123456';
+    }
+}
+
+final class TrialMembershipTestLookup implements TelegramMembershipLookup
+{
+    public int $calls = 0;
+
+    /** @var list<int> */
+    public array $transactionLevels = [];
+
+    public function __construct(private TelegramMembershipLookupResult $result) {}
+
+    public function lookup(int $chatId, int $telegramUserId): TelegramMembershipLookupResult
+    {
+        $this->calls++;
+        $this->transactionLevels[] = DB::connection()->transactionLevel();
+
+        return $this->result;
+    }
+}
+
+final class FailingTrialMembershipVerifier implements TrialMembershipVerifier
+{
+    public function assertSatisfied(Connection $connection, int $userId, int $offeringId, int $policyId): void
+    {
+        throw new DomainException('Trial membership verification is unavailable.');
+    }
 }
