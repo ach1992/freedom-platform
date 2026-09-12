@@ -20,6 +20,7 @@ use Illuminate\Contracts\Encryption\StringEncrypter;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
+use RuntimeException;
 use Tests\TestCase;
 
 final class TelegramBotEntryMembershipRetryLookup implements TelegramMembershipLookup
@@ -78,6 +79,9 @@ final class TelegramBotEntryMembershipRetryTest extends TestCase
     protected function tearDown(): void
     {
         try {
+            if (DB::connection()->getDriverName() === 'mysql') {
+                DB::unprepared('DROP TRIGGER IF EXISTS telegram_bot_entry_membership_retry_fail_processed');
+            }
             $this->truncateTablesForAllConnections();
         } finally {
             parent::tearDown();
@@ -114,7 +118,32 @@ final class TelegramBotEntryMembershipRetryTest extends TestCase
         self::assertSame(1, DB::table('telegram_interaction_callbacks')->where('state', 'completed')->count());
     }
 
-    public function test_unsatisfied_retry_refreshes_gate_once_and_callback_replay_cannot_duplicate_effects(): void
+    public function test_fail_open_unavailable_retry_hands_gate_to_navigation_only_through_canonical_satisfied_decision(): void
+    {
+        $this->activeRule('retry-fail-open', 'fail_open', 'https://t.me/+RetryFailOpen296');
+        $lookup = $this->useLookup(static fn (): TelegramMembershipLookupResult => new TelegramMembershipLookupResult(
+            TelegramMembershipEvidence::NotMember,
+            'telegram_membership_left',
+        ));
+
+        $this->accept($this->payload(9151, 99151, 'retry_fail_open', 'fa', '/start'));
+        $this->processor()->process('123456789', 9151);
+        $token = $this->pendingCallbackToken();
+
+        $lookup->callback = static fn (): TelegramMembershipLookupResult => new TelegramMembershipLookupResult(
+            TelegramMembershipEvidence::Unavailable,
+            'telegram_membership_http_unavailable',
+        );
+        $this->dispatchCallback(9152, 99151, $token);
+
+        self::assertSame(2, count($lookup->calls));
+        self::assertSame([0, 0], $lookup->transactionLevels);
+        self::assertSame(0, $this->activeFlowCount(TelegramNavigationEntryGateway::MEMBERSHIP_GATE_FLOW));
+        self::assertSame(1, $this->activeFlowCount(TelegramNavigationEntryGateway::FLOW));
+        self::assertSame(3, DB::table('telegram_delivery_operations')->count());
+    }
+
+    public function test_fail_closed_unavailable_retry_refreshes_gate_once_and_callback_replay_cannot_duplicate_effects(): void
     {
         $this->activeRule('retry-unsatisfied', 'fail_closed', 'https://t.me/+RetryUnsatisfied296');
         $lookup = $this->useLookup(static fn (): TelegramMembershipLookupResult => new TelegramMembershipLookupResult(
@@ -125,11 +154,15 @@ final class TelegramBotEntryMembershipRetryTest extends TestCase
         $this->accept($this->payload(9201, 99201, 'retry_unsatisfied', 'fa', '/start'));
         $this->processor()->process('123456789', 9201);
         $token = $this->pendingCallbackToken();
+        $lookup->callback = static fn (): TelegramMembershipLookupResult => new TelegramMembershipLookupResult(
+            TelegramMembershipEvidence::Unavailable,
+            'telegram_membership_http_unavailable',
+        );
 
         $this->dispatchCallback(9202, 99201, $token);
 
         $gate = DB::table('telegram_interaction_sessions')
-            ->where('active_telegram_account_id', '!=', null)
+            ->whereNotNull('active_telegram_account_id')
             ->where('flow', TelegramNavigationEntryGateway::MEMBERSHIP_GATE_FLOW)
             ->first(['version']);
         self::assertNotNull($gate);
@@ -146,6 +179,74 @@ final class TelegramBotEntryMembershipRetryTest extends TestCase
         self::assertSame(2, count($lookup->calls), 'Completed callback replay must not re-evaluate membership.');
         self::assertSame(4, DB::table('telegram_delivery_operations')->count());
         self::assertSame(1, $this->activeFlowCount(TelegramNavigationEntryGateway::MEMBERSHIP_GATE_FLOW));
+    }
+
+    public function test_manual_review_retry_remains_blocked_with_safe_feedback_and_fresh_retry_authority(): void
+    {
+        $this->activeRule('retry-manual-review', 'manual_review', 'https://t.me/+RetryManual296');
+        $lookup = $this->useLookup(static fn (): TelegramMembershipLookupResult => new TelegramMembershipLookupResult(
+            TelegramMembershipEvidence::NotMember,
+            'telegram_membership_left',
+        ));
+
+        $this->accept($this->payload(9251, 99251, 'retry_manual', 'en', '/start'));
+        $this->processor()->process('123456789', 9251);
+        $token = $this->pendingCallbackToken();
+        $lookup->callback = static fn (): TelegramMembershipLookupResult => new TelegramMembershipLookupResult(
+            TelegramMembershipEvidence::Unavailable,
+            'telegram_membership_http_unavailable',
+        );
+
+        $this->dispatchCallback(9252, 99251, $token);
+
+        self::assertSame(2, count($lookup->calls));
+        self::assertSame([0, 0], $lookup->transactionLevels);
+        self::assertSame(1, $this->activeFlowCount(TelegramNavigationEntryGateway::MEMBERSHIP_GATE_FLOW));
+        self::assertSame(0, $this->activeFlowCount(TelegramNavigationEntryGateway::FLOW));
+        self::assertSame(3, DB::table('telegram_delivery_operations')->count());
+        self::assertSame(1, DB::table('telegram_interaction_callbacks')->where('state', 'completed')->count());
+        self::assertSame(1, DB::table('telegram_interaction_callbacks')->where('state', 'pending')->count());
+        $latest = DB::table('telegram_delivery_operations')->orderByDesc('id')->first(['presentation_text']);
+        self::assertNotNull($latest);
+        self::assertSame(trans('telegram_membership.entry_unavailable', locale: 'en'), (string) $latest->presentation_text);
+        self::assertStringNotContainsString('PROTECTED_TELEGRAM_REFERENCE', (string) $latest->presentation_text);
+    }
+
+    public function test_configuration_changed_retry_remains_blocked_without_reusing_stale_join_authority(): void
+    {
+        $ruleId = $this->activeRule('retry-config-change', 'fail_closed', 'https://t.me/+RetryConfig296');
+        $lookup = $this->useLookup(static fn (): TelegramMembershipLookupResult => new TelegramMembershipLookupResult(
+            TelegramMembershipEvidence::NotMember,
+            'telegram_membership_left',
+        ));
+
+        $this->accept($this->payload(9271, 99271, 'retry_config', 'fa', '/start'));
+        $this->processor()->process('123456789', 9271);
+        $token = $this->pendingCallbackToken();
+        $lookup->callback = static function () use ($ruleId): TelegramMembershipLookupResult {
+            DB::table('channel_membership_rules')->where('id', $ruleId)->update([
+                'state' => 'disabled',
+                'version' => 3,
+                'updated_at' => now('UTC'),
+            ]);
+
+            return new TelegramMembershipLookupResult(
+                TelegramMembershipEvidence::NotMember,
+                'telegram_membership_left',
+            );
+        };
+
+        $this->dispatchCallback(9272, 99271, $token);
+
+        self::assertSame(2, count($lookup->calls));
+        self::assertSame([0, 0], $lookup->transactionLevels);
+        self::assertSame(1, $this->activeFlowCount(TelegramNavigationEntryGateway::MEMBERSHIP_GATE_FLOW));
+        self::assertSame(0, $this->activeFlowCount(TelegramNavigationEntryGateway::FLOW));
+        self::assertSame(3, DB::table('telegram_delivery_operations')->count());
+        $latest = DB::table('telegram_delivery_operations')->orderByDesc('id')->first(['presentation_text']);
+        self::assertNotNull($latest);
+        self::assertSame(trans('telegram_membership.entry_unavailable', locale: 'fa'), (string) $latest->presentation_text);
+        self::assertStringNotContainsString('PROTECTED_TELEGRAM_REFERENCE', (string) $latest->presentation_text);
     }
 
     public function test_repeated_private_menu_while_gated_reuses_retry_path_and_cannot_bypass_membership(): void
@@ -172,6 +273,63 @@ final class TelegramBotEntryMembershipRetryTest extends TestCase
         self::assertSame(0, $this->activeFlowCount(TelegramNavigationEntryGateway::MEMBERSHIP_GATE_FLOW));
         self::assertSame(1, $this->activeFlowCount(TelegramNavigationEntryGateway::FLOW));
         self::assertSame(3, DB::table('telegram_delivery_operations')->count());
+    }
+
+    public function test_post_handoff_update_failure_replay_converges_on_existing_navigation_without_rechecking_membership(): void
+    {
+        $this->activeRule('retry-post-handoff', 'fail_closed', 'https://t.me/+RetryPostHandoff296');
+        $lookup = $this->useLookup(static fn (): TelegramMembershipLookupResult => new TelegramMembershipLookupResult(
+            TelegramMembershipEvidence::NotMember,
+            'telegram_membership_left',
+        ));
+
+        $this->accept($this->payload(9351, 99351, 'retry_post_handoff', 'fa', '/start'));
+        $this->processor()->process('123456789', 9351);
+        $lookup->callback = static fn (): TelegramMembershipLookupResult => new TelegramMembershipLookupResult(
+            TelegramMembershipEvidence::Member,
+            'telegram_membership_member',
+        );
+        $this->accept($this->payload(9352, 99351, 'retry_post_handoff', 'fa', '/menu'));
+
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER telegram_bot_entry_membership_retry_fail_processed
+BEFORE UPDATE ON processed_telegram_updates
+FOR EACH ROW
+BEGIN
+    IF OLD.bot_id = '123456789' AND OLD.update_id = 9352 AND NEW.state = 'processed' THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'simulated-post-membership-handoff-failure';
+    END IF;
+END
+SQL);
+        try {
+            try {
+                $this->processor()->process('123456789', 9352);
+                self::fail('The simulated post-handoff failure must keep the update retryable.');
+            } catch (RuntimeException $exception) {
+                self::assertSame('Telegram update processing failed.', $exception->getMessage());
+            }
+        } finally {
+            DB::unprepared('DROP TRIGGER IF EXISTS telegram_bot_entry_membership_retry_fail_processed');
+        }
+
+        self::assertSame(2, count($lookup->calls));
+        self::assertSame([0, 0], $lookup->transactionLevels);
+        self::assertSame(0, $this->activeFlowCount(TelegramNavigationEntryGateway::MEMBERSHIP_GATE_FLOW));
+        self::assertSame(1, $this->activeFlowCount(TelegramNavigationEntryGateway::FLOW));
+        self::assertSame(3, DB::table('telegram_delivery_operations')->count());
+        $this->assertDatabaseHas('processed_telegram_updates', ['update_id' => 9352, 'state' => 'failed', 'attempt_count' => 1]);
+
+        $lookup->callback = static fn (): TelegramMembershipLookupResult => new TelegramMembershipLookupResult(
+            TelegramMembershipEvidence::NotMember,
+            'telegram_membership_left',
+        );
+        $this->processor()->process('123456789', 9352);
+
+        self::assertSame(2, count($lookup->calls), 'Durable gate binding replay must not re-evaluate membership after navigation handoff.');
+        self::assertSame(0, $this->activeFlowCount(TelegramNavigationEntryGateway::MEMBERSHIP_GATE_FLOW));
+        self::assertSame(1, $this->activeFlowCount(TelegramNavigationEntryGateway::FLOW));
+        self::assertSame(3, DB::table('telegram_delivery_operations')->count());
+        $this->assertDatabaseHas('processed_telegram_updates', ['update_id' => 9352, 'state' => 'processed', 'attempt_count' => 2]);
     }
 
     public function test_forged_retry_actor_is_rejected_before_membership_evaluation(): void
@@ -258,7 +416,7 @@ final class TelegramBotEntryMembershipRetryTest extends TestCase
         );
     }
 
-    private function activeRule(string $key, string $failurePolicy, string $joinUrl): void
+    private function activeRule(string $key, string $failurePolicy, string $joinUrl): int
     {
         $now = now('UTC');
         $ciphertext = $this->app->make(StringEncrypter::class)->encryptString($joinUrl);
@@ -316,6 +474,8 @@ final class TelegramBotEntryMembershipRetryTest extends TestCase
             'version' => 2,
             'updated_at' => $now,
         ]);
+
+        return $ruleId;
     }
 
     private function useLookup(Closure $callback): TelegramBotEntryMembershipRetryLookup
