@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 return [
     'bot_token' => env('TELEGRAM_BOT_TOKEN'),
+    'bot_username' => env('TELEGRAM_BOT_USERNAME'),
     'webhook_secret' => env('TELEGRAM_WEBHOOK_SECRET'),
     'webhook_path' => env('TELEGRAM_WEBHOOK_PATH', 'api/telegram/webhook'),
     'max_body_bytes' => (int) env('TELEGRAM_WEBHOOK_MAX_BODY_BYTES', 1_048_576),
