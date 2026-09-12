@@ -539,17 +539,9 @@ final readonly class TrialReservationService
      */
     private function assertMembershipPolicyUnchanged(object $policy, object $preflight): void
     {
-        if (! $preflight->membership_required) {
-            if ($policy->membership_required) {
-                throw new DomainException('Trial membership policy changed after verification.');
-            }
-
-            return;
-        }
-
         if ($policy->id !== $preflight->id
             || $policy->version !== $preflight->version
-            || ! $policy->membership_required
+            || $policy->membership_required !== $preflight->membership_required
             || ! hash_equals($policy->configuration_hash, $preflight->configuration_hash)
         ) {
             throw new DomainException('Trial membership policy changed after verification.');
