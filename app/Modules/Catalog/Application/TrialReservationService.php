@@ -44,7 +44,7 @@ final readonly class TrialReservationService
             throw new DomainException('Trial reservation expiry must be in the future.');
         }
 
-        $membershipPolicy = $this->membershipPolicyPreflight($request->offeringId);
+        $membershipPolicy = $this->membershipAuthorizationPreflight($request);
         if ($membershipPolicy->membership_required) {
             $this->membershipVerifier->assertSatisfied(
                 $this->database->connection(),
@@ -503,25 +503,34 @@ final readonly class TrialReservationService
     }
 
     /** @return object{id:int,version:int,configuration_hash:string,membership_required:bool} */
-    private function membershipPolicyPreflight(int $offeringId): object
+    private function membershipAuthorizationPreflight(TrialReservationRequest $request): object
     {
-        /** @var object{id:int|string,version:int|string,configuration_hash:string,enabled:bool|int,membership_required:bool|int}|null $row */
-        $row = $this->database->connection()->table('trial_policies')
-            ->where('plan_offering_id', $offeringId)
-            ->first(['id', 'version', 'configuration_hash', 'enabled', 'membership_required']);
-        if ($row === null || ! (bool) $row->enabled) {
-            throw new DomainException('Trial policy is unavailable.');
-        }
-        if (preg_match('/\A[0-9a-f]{64}\z/', $row->configuration_hash) !== 1) {
-            throw new RuntimeException('Trial policy configuration hash is invalid.');
-        }
+        return $this->database->connection()->transaction(function (Connection $connection) use ($request): object {
+            $offering = $this->lockedOffering($connection, $request->offeringId);
+            $policy = $this->lockedPolicy($connection, $request->offeringId);
+            $actor = $this->eligibility->actor($connection, $request->userId);
+            $this->eligibility->assertOfferingAudience($offering->audience);
+            $this->eligibility->assertOfferingEligibility(
+                $connection,
+                $request->offeringId,
+                $offering->tag_match_mode,
+                $actor,
+            );
+            $this->eligibility->assertPolicyEligibility(
+                $connection,
+                $policy->id,
+                $policy->tag_match_mode,
+                $actor,
+            );
+            $this->eligibility->assertPhonePolicy($policy->phone_verification_policy, $actor);
 
-        return (object) [
-            'id' => (int) $row->id,
-            'version' => (int) $row->version,
-            'configuration_hash' => $row->configuration_hash,
-            'membership_required' => (bool) $row->membership_required,
-        ];
+            return (object) [
+                'id' => $policy->id,
+                'version' => $policy->version,
+                'configuration_hash' => $policy->configuration_hash,
+                'membership_required' => $policy->membership_required,
+            ];
+        }, 1);
     }
 
     /**

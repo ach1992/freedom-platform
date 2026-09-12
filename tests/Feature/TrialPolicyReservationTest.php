@@ -153,6 +153,41 @@ final class TrialPolicyReservationTest extends TestCase
         self::assertSame([], $verifier->transactionLevels);
     }
 
+    public function test_local_phone_guard_runs_before_canonical_membership_provider_lookup(): void
+    {
+        $scenario = $this->scenario(dailyCapacity: 2, phoneEvidence: 'telegram');
+        $this->app->make(TrialPolicyService::class)->create(
+            $scenario['offering_id'],
+            $this->policyDefinition(
+                $scenario['tag_id'],
+                phonePolicy: PhoneVerificationPolicy::Both,
+                membershipRequired: true,
+            ),
+            $this->catalogContext($scenario['owner_id'], 'trial-membership-phone-preflight-policy'),
+        );
+        $this->activateScenarioOffering($scenario);
+        $this->telegramIdentity($scenario['user_id'], 720000000 + $scenario['user_id']);
+        $this->activeTrialMembershipRule($scenario, 'fail_closed');
+        $lookup = new TrialMembershipTestLookup(new TelegramMembershipLookupResult(
+            TelegramMembershipEvidence::Member,
+            'telegram_membership_member',
+        ));
+        $service = $this->serviceWithCanonicalMembership($lookup);
+
+        try {
+            $service->reserve(
+                $this->request($scenario['offering_id'], $scenario['user_id']),
+                $this->trialContext('trial-membership-phone-preflight-reserve', 'trial-membership-phone-preflight-correlation'),
+            );
+            self::fail('Expected local phone policy to reject before Telegram membership lookup.');
+        } catch (DomainException $exception) {
+            self::assertSame('Trial phone-verification requirement is not satisfied.', $exception->getMessage());
+        }
+
+        self::assertSame(0, $lookup->calls);
+        self::assertSame([], $lookup->transactionLevels);
+    }
+
     public function test_canonical_telegram_trial_membership_applies_member_and_failure_policy_semantics(): void
     {
         $cases = [
