@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Provisioning\Application;
 
 use App\Modules\Catalog\Application\PlanOfferingRouteSelector;
+use App\Modules\Catalog\Application\RouteOperationalVerifier;
 use App\Modules\Catalog\Application\RouteSelectionContext;
 use App\Modules\Catalog\Application\RouteSelectionReceipt;
 use App\Modules\Catalog\Application\RouteSelectionRequest;
@@ -84,6 +85,7 @@ final readonly class InitialProvisioningExecutor
         private InitialProvisioningAuthorityGuard $authority,
         private Clock $clock,
         private PlanOfferingRouteSelector $routes,
+        private RouteOperationalVerifier $routeOperationalVerifier,
         private ProvisioningPanelAdapterResolver $adapters,
         private PanelCreateCoordinator $coordinator,
         private TargetCapacityAllocator $capacity,
@@ -363,9 +365,17 @@ final readonly class InitialProvisioningExecutor
 
             if ($this->isTrialSource($locked)) {
                 $trialAuthority = $this->trialProvisioningAuthority($locked, $connection, true);
-                $selectionCapacityReservationId = $trialAuthority['route']->capacityReservationId;
-                $selectionServiceTargetId = $trialAuthority['route']->serviceTargetId;
-                $selectionUnits = $trialAuthority['route']->units;
+                $trialRoute = $trialAuthority['route'];
+                $this->routeOperationalVerifier->assertOperational(
+                    $connection,
+                    (int) $locked->plan_offering_id,
+                    $trialRoute->salesServerId,
+                    $trialRoute->serviceTargetId,
+                    $trialRoute->protocolProfileId,
+                );
+                $selectionCapacityReservationId = $trialRoute->capacityReservationId;
+                $selectionServiceTargetId = $trialRoute->serviceTargetId;
+                $selectionUnits = $trialRoute->units;
             } else {
                 /** @var object{capacity_reservation_id:int|string,selected_service_target_id:int|string,units:int|string}|null $selection */
                 $selection = $connection->table('plan_offering_route_selections')
