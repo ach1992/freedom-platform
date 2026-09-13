@@ -19,6 +19,7 @@ use App\Modules\Telegram\Application\TelegramCustomerPurchaseOffering;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseQuotePreview;
 use App\Modules\Telegram\Application\TelegramMembershipConfigurationFence;
 use App\Modules\Telegram\Application\TelegramProtectedPresentationReference;
+use Closure;
 use DateTimeImmutable;
 use DateTimeZone;
 use Illuminate\Auth\Access\AuthorizationException;
@@ -31,11 +32,12 @@ final readonly class TelegramCustomerPurchaseQuoteService implements TelegramCus
 {
     private const QUOTE_TTL_MINUTES = 15;
 
+    /** @param Closure(): TelegramChannelMembershipEvaluator $membershipEvaluator */
     public function __construct(
         private DatabaseManager $database,
         private QuoteService $quotes,
         private TelegramCustomerPurchaseCatalog $catalog,
-        private TelegramChannelMembershipEvaluator $membershipEvaluator,
+        private Closure $membershipEvaluator,
         private TelegramChannelMembershipRuleResolver $membershipResolver,
         private TelegramMembershipConfigurationFence $membershipConfigurationFence,
     ) {}
@@ -70,7 +72,7 @@ final readonly class TelegramCustomerPurchaseQuoteService implements TelegramCus
             return [$offering, $identity];
         }, 1);
 
-        $evaluation = $this->membershipEvaluator->evaluate(new TelegramChannelMembershipResolutionRequest(
+        $evaluation = ($this->membershipEvaluator)()->evaluate(new TelegramChannelMembershipResolutionRequest(
             $subjectUserId,
             'purchase',
             $identity['id'],

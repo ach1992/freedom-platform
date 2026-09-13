@@ -26,7 +26,7 @@ use App\Modules\Telegram\Application\TelegramMembershipLookupResult;
 use Closure;
 use DateTimeImmutable;
 use DateTimeZone;
-use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use RuntimeException;
@@ -102,7 +102,7 @@ final readonly class TelegramPurchaseMembershipCatalog implements TelegramCustom
 final class TelegramCustomerPurchaseMembershipTest extends TestCase
 {
     use CreatesBenefitCodeFixtures;
-    use RefreshDatabase;
+    use DatabaseTruncation;
 
     private int $mutationSequence = 0;
 
@@ -449,12 +449,20 @@ final class TelegramCustomerPurchaseMembershipTest extends TestCase
             'join_url_ciphertext' => str_repeat('x', 64),
             'join_url_hash' => hash('sha256', 'https://t.me/'.$suffix),
             'sort_order' => 0,
+            'state' => 'draft',
+            'version' => 1,
+            'verified_bot_id' => null,
+            'verification_result_code' => null,
+            'verified_at' => null,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        DB::table('required_channels')->where('id', $id)->update([
             'state' => 'active',
             'version' => 2,
             'verified_bot_id' => 123456,
             'verification_result_code' => 'telegram_membership_administrator',
             'verified_at' => $now,
-            'created_at' => $now,
             'updated_at' => $now,
         ]);
 
