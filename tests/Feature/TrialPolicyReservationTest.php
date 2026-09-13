@@ -807,7 +807,7 @@ final class TrialPolicyReservationTest extends TestCase
         );
         $this->app->make(TrialPolicyService::class)->create(
             $customer['offering_id'],
-            $this->policyDefinition($customer['tag_id']),
+            $this->policyDefinition($customer['tag_id'], fallbackAllowed: true),
             $this->catalogContext($customer['owner_id'], 'telegram-trial-customer-choice-policy'),
         );
         $this->activateAndExposeOffering($customer, 'telegram-trial-customer-choice');
@@ -835,7 +835,7 @@ final class TrialPolicyReservationTest extends TestCase
             $customerOptions->routeOptions[0]->selectionToken,
             $customerOptions->protocolOptions[0]->selectionToken,
         );
-        self::assertContains($customerResolved->requestedRouteId, [$customer['primary_route_id'], $customer['fallback_route_id']]);
+        self::assertSame($customer['primary_route_id'], $customerResolved->requestedRouteId);
         self::assertSame($customer['profile_id'], $customerResolved->requestedProtocolProfileId);
         try {
             $selections->resolveForSelf($customer['user_id'], $customer['user_id'], $customerToken, null, $customerOptions->protocolOptions[0]->selectionToken);
@@ -1214,6 +1214,9 @@ final class TrialPolicyReservationTest extends TestCase
         self::assertSame(1, DB::table('service_subscriptions')->count());
         self::assertSame(1, DB::table('provisioning_operations')->where('state', ProvisioningState::Queued->value)->count());
         self::assertSame(1, DB::table('outbox_messages')->where('event_type', InitialProvisioningQueueService::OUTBOX_EVENT_TYPE)->count());
+        self::assertSame('pending', DB::table('outbox_messages')
+            ->where('event_type', InitialProvisioningQueueService::OUTBOX_EVENT_TYPE)
+            ->value('dispatch_state'));
     }
 
     /** @requirement CAT-006 BUY-001 DAT-002 DAT-003 SEC-002 QUA-001 */
