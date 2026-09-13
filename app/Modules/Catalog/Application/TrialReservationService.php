@@ -97,18 +97,27 @@ final readonly class TrialReservationService
             return $this->committedReplayForUser($reserveContext->commandKey, $request->userId)
                 ?? throw new RuntimeException('Committed Trial replay authority is unavailable.');
         }
-        if ($request->expiresAt <= $this->clock->now()) {
-            throw new DomainException('Trial reservation expiry must be in the future.');
-        }
+        try {
+            if ($request->expiresAt <= $this->clock->now()) {
+                throw new DomainException('Trial reservation expiry must be in the future.');
+            }
+            $membershipPolicy = $this->membershipAuthorizationPreflight($request);
+            if ($membershipPolicy->membership_required) {
+                $this->membershipVerifier->assertSatisfied(
+                    $this->database->connection(),
+                    $request->userId,
+                    $request->offeringId,
+                    $membershipPolicy->id,
+                );
+            }
+        } catch (DomainException|RuntimeException $exception) {
+            $replay = $this->existingReservation($reserveContext->commandKey, $payloadHash);
+            if ($replay !== null && $replay->state === TrialReservationState::Committed->value) {
+                return $this->committedReplayForUser($reserveContext->commandKey, $request->userId)
+                    ?? throw new RuntimeException('Committed Trial replay authority is unavailable.');
+            }
 
-        $membershipPolicy = $this->membershipAuthorizationPreflight($request);
-        if ($membershipPolicy->membership_required) {
-            $this->membershipVerifier->assertSatisfied(
-                $this->database->connection(),
-                $request->userId,
-                $request->offeringId,
-                $membershipPolicy->id,
-            );
+            throw $exception;
         }
 
         try {
@@ -119,13 +128,17 @@ final readonly class TrialReservationService
                 $payloadHash,
                 $membershipPolicy,
             ): TrialReservationReceipt {
-                $this->assertCustomerClaimOfferingAvailable($connection, $request->offeringId);
                 $reservation = $this->existingReservation(
                     $reserveContext->commandKey,
                     $payloadHash,
                     $connection,
                     true,
                 );
+                if ($reservation !== null && $reservation->state === TrialReservationState::Committed->value) {
+                    return $this->committedReplayForUser($reserveContext->commandKey, $request->userId)
+                        ?? throw new RuntimeException('Committed Trial replay authority is unavailable.');
+                }
+                $this->assertCustomerClaimOfferingAvailable($connection, $request->offeringId);
                 if ($reservation === null) {
                     $reservation = $this->reserveInsideTransaction(
                         $connection,

@@ -292,6 +292,46 @@ final class TrialPolicyReservationTest extends TestCase
         self::assertSame($before['capacity_reservations'], DB::table('panel_capacity_reservations')->count());
     }
 
+    public function test_atomic_customer_claim_recovers_concurrent_commit_before_fresh_offering_checks(): void
+    {
+        $scenario = $this->scenario(dailyCapacity: 2);
+        $this->app->make(TrialPolicyService::class)->create(
+            $scenario['offering_id'],
+            $this->policyDefinition($scenario['tag_id'], membershipRequired: true),
+            $this->catalogContext($scenario['owner_id'], 'trial-concurrent-hide-policy'),
+        );
+        $this->activateAndExposeOffering($scenario, 'trial-concurrent-hide');
+        $request = $this->request($scenario['offering_id'], $scenario['user_id']);
+        $reserveContext = $this->trialContext('trial-concurrent-hide-reserve-001', 'trial-concurrent-hide-correlation');
+        $commitContext = $this->trialContext('trial-concurrent-hide-commit-0001', 'trial-concurrent-hide-correlation');
+        $competing = $this->serviceWithMembershipAllowed();
+        $injected = false;
+        $service = $this->serviceWithMembershipVerifier(new RecordingTrialMembershipVerifier(
+            function () use (&$injected, $competing, $request, $reserveContext, $commitContext, $scenario): void {
+                if ($injected) {
+                    return;
+                }
+                $injected = true;
+                $competing->reserveAndCommit($request, $reserveContext, $commitContext);
+                $version = (int) DB::table('plan_offerings')->where('id', $scenario['offering_id'])->value('version');
+                $this->app->make(PlanOfferingService::class)->setVisibility(
+                    $scenario['offering_id'],
+                    $version,
+                    ProductVisibility::Hidden,
+                    $this->catalogContext($scenario['owner_id'], 'trial-concurrent-hide-after-commit'),
+                );
+            },
+        ));
+
+        $replayed = $service->reserveAndCommit($request, $reserveContext, $commitContext);
+
+        self::assertTrue($injected);
+        self::assertTrue($replayed->replayed);
+        self::assertSame('committed', $replayed->state);
+        self::assertSame('hidden', DB::table('plan_offerings')->where('id', $scenario['offering_id'])->value('visibility'));
+        self::assertSame(1, DB::table('trial_reservations')->where('command_key', $reserveContext->commandKey)->count());
+    }
+
     public function test_atomic_customer_claim_rechecks_committed_replay_authority_after_concurrent_commit_and_reset(): void
     {
         $scenario = $this->scenario(dailyCapacity: 2);
