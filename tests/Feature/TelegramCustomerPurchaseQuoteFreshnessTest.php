@@ -105,6 +105,21 @@ final class TelegramCustomerPurchaseQuoteFreshnessTest extends TestCase
         $this->app->instance(TelegramCustomerPurchaseCatalog::class, $catalog);
 
         $userId = $this->benefitUser('customer');
+        $tierId = DB::table('customer_tiers')->where('code', 'normal')->value('id');
+        if (! is_int($tierId) && ! is_string($tierId)) {
+            throw new RuntimeException('Normal customer tier is unavailable.');
+        }
+        $now = now('UTC');
+        DB::table('customer_profiles')->insert([
+            'user_id' => $userId,
+            'current_tier_id' => (int) $tierId,
+            'tier_locked' => false,
+            'tier_lock_reason_code' => null,
+            'phone_verification_status' => 'unverified',
+            'identity_verification_status' => 'unverified',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
         $quotes = $this->app->make(TelegramCustomerPurchaseQuote::class);
         $callbackPublicId = (string) Str::ulid();
         $acceptedAt = new DateTimeImmutable('now', new DateTimeZone('UTC'));

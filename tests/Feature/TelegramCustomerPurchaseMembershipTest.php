@@ -116,7 +116,7 @@ final class TelegramCustomerPurchaseMembershipTest extends TestCase
     public function test_satisfied_purchase_membership_runs_provider_outside_transaction_and_allows_exact_quote(): void
     {
         [$offeringId, $catalog, $selectionToken] = $this->purchaseOffering('membership-satisfied');
-        $userId = $this->benefitUser('customer');
+        $userId = $this->membershipUser('customer');
         $this->telegramAccount($userId, 710000001);
         $this->activeRule($offeringId, 'customers', 'fail_closed', 'purchase-member');
         $lookup = $this->lookup(static fn (): TelegramMembershipLookupResult => new TelegramMembershipLookupResult(
@@ -153,7 +153,7 @@ final class TelegramCustomerPurchaseMembershipTest extends TestCase
     public function test_unsatisfied_purchase_membership_has_protected_join_reference_and_cannot_create_quote(): void
     {
         [$offeringId, $catalog, $selectionToken] = $this->purchaseOffering('membership-denied');
-        $userId = $this->benefitUser('customer');
+        $userId = $this->membershipUser('customer');
         $this->telegramAccount($userId, 710000002);
         $this->activeRule($offeringId, 'customers', 'fail_closed', 'purchase-denied');
         $lookup = $this->lookup(static fn (): TelegramMembershipLookupResult => new TelegramMembershipLookupResult(
@@ -178,7 +178,7 @@ final class TelegramCustomerPurchaseMembershipTest extends TestCase
     public function test_no_rule_preflight_cannot_authorize_quote_after_purchase_rule_becomes_applicable(): void
     {
         [$offeringId, $catalog, $selectionToken] = $this->purchaseOffering('membership-no-rule-drift');
-        $userId = $this->benefitUser('customer');
+        $userId = $this->membershipUser('customer');
         $this->telegramAccount($userId, 710000003);
         $lookup = $this->lookup(static fn (): TelegramMembershipLookupResult => throw new RuntimeException('Provider must not be called without a rule.'));
         $this->bindCatalogAndLookup($catalog, $lookup);
@@ -196,7 +196,7 @@ final class TelegramCustomerPurchaseMembershipTest extends TestCase
     public function test_fail_open_is_allowed_only_through_canonical_satisfied_decision_and_agent_rule_uses_agent_identity(): void
     {
         [$offeringId, $catalog, $selectionToken] = $this->purchaseOffering('membership-agent-fail-open', 'agent');
-        $userId = $this->benefitUser('agent');
+        $userId = $this->membershipUser('agent');
         $this->telegramAccount($userId, 710000004);
         $this->activeRule($offeringId, 'agents', 'fail_open', 'purchase-agent-fail-open');
         $lookup = $this->lookup(static fn (): TelegramMembershipLookupResult => new TelegramMembershipLookupResult(
@@ -217,7 +217,7 @@ final class TelegramCustomerPurchaseMembershipTest extends TestCase
     public function test_manual_review_and_configuration_changed_decisions_cannot_authorize_quote(): void
     {
         [$offeringId, $catalog, $selectionToken] = $this->purchaseOffering('membership-manual-review');
-        $userId = $this->benefitUser('customer');
+        $userId = $this->membershipUser('customer');
         $this->telegramAccount($userId, 710000005);
         $this->activeRule($offeringId, 'customers', 'manual_review', 'purchase-manual-review');
         $lookup = $this->lookup(static fn (): TelegramMembershipLookupResult => new TelegramMembershipLookupResult(
@@ -235,7 +235,7 @@ final class TelegramCustomerPurchaseMembershipTest extends TestCase
         self::assertSame(0, DB::table('quotes')->count());
 
         [$driftOfferingId, $driftCatalog, $driftSelectionToken] = $this->purchaseOffering('membership-config-changed');
-        $driftUserId = $this->benefitUser('customer');
+        $driftUserId = $this->membershipUser('customer');
         $this->telegramAccount($driftUserId, 710000006);
         $ruleId = $this->activeRule($driftOfferingId, 'customers', 'fail_closed', 'purchase-config-changed');
         $driftLookup = $this->lookup(static function () use ($ruleId): TelegramMembershipLookupResult {
@@ -268,7 +268,7 @@ final class TelegramCustomerPurchaseMembershipTest extends TestCase
             ['agent', 710000008, 'membership-no-rule-agent'],
         ] as [$accountType, $telegramUserId, $suffix]) {
             [, $catalog, $selectionToken] = $this->purchaseOffering($suffix, $accountType);
-            $userId = $this->benefitUser($accountType);
+            $userId = $this->membershipUser($accountType);
             $this->telegramAccount($userId, $telegramUserId);
             $lookup = $this->lookup(static fn (): TelegramMembershipLookupResult => throw new RuntimeException('No-rule purchase must not call membership provider.'));
             $this->bindCatalogAndLookup($catalog, $lookup);
@@ -286,7 +286,7 @@ final class TelegramCustomerPurchaseMembershipTest extends TestCase
     public function test_offering_subject_and_membership_configuration_drift_are_rejected_before_quote_creation(): void
     {
         [$offeringId, $catalog, $selectionToken] = $this->purchaseOffering('membership-drift-fences');
-        $userId = $this->benefitUser('customer');
+        $userId = $this->membershipUser('customer');
         $this->telegramAccount($userId, 710000009);
         $ruleId = $this->activeRule($offeringId, 'customers', 'fail_closed', 'purchase-drift-fences');
         $lookup = $this->lookup(static fn (): TelegramMembershipLookupResult => new TelegramMembershipLookupResult(
@@ -394,6 +394,32 @@ final class TelegramCustomerPurchaseMembershipTest extends TestCase
     private function lookup(Closure $callback): TelegramPurchaseMembershipLookup
     {
         return new TelegramPurchaseMembershipLookup($callback);
+    }
+
+    private function membershipUser(string $accountType): int
+    {
+        $userId = $this->benefitUser($accountType);
+        if ($accountType !== 'customer') {
+            return $userId;
+        }
+
+        $tierId = DB::table('customer_tiers')->where('code', 'normal')->value('id');
+        if (! is_int($tierId) && ! is_string($tierId)) {
+            throw new RuntimeException('Normal customer tier is unavailable.');
+        }
+        $now = now('UTC');
+        DB::table('customer_profiles')->insert([
+            'user_id' => $userId,
+            'current_tier_id' => (int) $tierId,
+            'tier_locked' => false,
+            'tier_lock_reason_code' => null,
+            'phone_verification_status' => 'unverified',
+            'identity_verification_status' => 'unverified',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        return $userId;
     }
 
     private function telegramAccount(int $userId, int $telegramUserId): void
