@@ -132,11 +132,18 @@ final readonly class TelegramInteractionDispatcher
                 return new TelegramInteractionDispatchResult(TelegramInteractionDispatchStatus::Ignored);
             }
 
-            $session = $this->sessions->cancel(
-                $binding->sessionPublicId,
-                $binding->sessionVersion,
-                $requestKey,
-            );
+            try {
+                $session = $this->sessions->cancel(
+                    $binding->sessionPublicId,
+                    $binding->sessionVersion,
+                    $requestKey,
+                );
+            } catch (TelegramInteractionCancellationLocked) {
+                return new TelegramInteractionDispatchResult(
+                    TelegramInteractionDispatchStatus::Handled,
+                    $binding->sessionPublicId,
+                );
+            }
 
             return new TelegramInteractionDispatchResult(
                 TelegramInteractionDispatchStatus::Cancelled,

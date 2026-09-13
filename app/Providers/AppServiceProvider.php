@@ -33,6 +33,7 @@ use App\Modules\Payments\Zarinpal\Application\TelegramCustomerPurchaseZarinpalPa
 use App\Modules\Payments\Zarinpal\Infrastructure\HttpZarinpalTransport;
 use App\Modules\Promotions\Application\BenefitCodeDiscountQuoteAuthority;
 use App\Modules\Promotions\Application\PurchasePromotionUsageAuthorityService;
+use App\Modules\Provisioning\Application\TelegramCustomerTrialClaimService;
 use App\Modules\Provisioning\Application\TelegramOwnedServiceDeliveryResendService;
 use App\Modules\Provisioning\Application\TelegramOwnedServiceProjectionService;
 use App\Modules\Telegram\Application\Contracts\TelegramAgentPurchaseCount;
@@ -48,6 +49,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseUsdtPayme
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseWalletPayment;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseZarinpalPayment;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerTrialCatalog;
+use App\Modules\Telegram\Application\Contracts\TelegramCustomerTrialClaim;
 use App\Modules\Telegram\Application\Contracts\TelegramManagedUsdtRateSettings;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceDeliveryResender;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceProjection;
@@ -66,6 +68,7 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind(TelegramAgentPurchaseCount::class, AgentPurchaseCountService::class);
         $this->app->bind(TelegramCustomerPurchaseCatalog::class, TelegramCustomerPurchaseCatalogService::class);
         $this->app->bind(TelegramCustomerTrialCatalog::class, TelegramCustomerTrialCatalogService::class);
+        $this->app->bind(TelegramCustomerTrialClaim::class, TelegramCustomerTrialClaimService::class);
         $this->app->bind(QuoteDiscountAuthority::class, BenefitCodeDiscountQuoteAuthority::class);
         $this->app->bind(PurchasePromotionUsageAuthority::class, PurchasePromotionUsageAuthorityService::class);
         $this->app->bind(TelegramCustomerPurchaseDiscountQuote::class, TelegramCustomerPurchaseDiscountQuoteService::class);

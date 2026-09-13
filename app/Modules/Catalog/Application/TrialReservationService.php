@@ -55,110 +55,16 @@ final readonly class TrialReservationService
         }
 
         try {
-            return $this->database->connection()->transaction(function (Connection $connection) use (
-                $request,
-                $context,
-                $payloadHash,
-                $membershipPolicy,
-            ): TrialReservationReceipt {
-                $replay = $this->existingReservation($context->commandKey, $payloadHash, $connection, true);
-                if ($replay !== null) {
-                    return $replay;
-                }
-
-                $offering = $this->lockedOffering($connection, $request->offeringId);
-                $policy = $this->lockedPolicy($connection, $request->offeringId);
-                $this->assertMembershipPolicyUnchanged($policy, $membershipPolicy);
-                $actor = $this->eligibility->actor($connection, $request->userId);
-                $this->eligibility->assertOfferingAudience($offering->audience);
-                $this->eligibility->assertOfferingEligibility(
-                    $connection,
-                    $request->offeringId,
-                    $offering->tag_match_mode,
-                    $actor,
-                );
-                $this->eligibility->assertPolicyEligibility(
-                    $connection,
-                    $policy->id,
-                    $policy->tag_match_mode,
-                    $actor,
-                );
-                $this->eligibility->assertPhonePolicy($policy->phone_verification_policy, $actor);
-                $this->assertNoPriorClaim($connection, $policy, $actor);
-
-                $capacityDate = $this->businessDate();
-                $counter = $this->reserveDailyCapacity(
-                    $connection,
-                    $policy->id,
-                    $capacityDate,
-                    $policy->daily_capacity,
-                );
-
-                $route = $this->routeSelector->select(
+            return $this->database->connection()->transaction(
+                fn (Connection $connection): TrialReservationReceipt => $this->reserveInsideTransaction(
                     $connection,
                     $request,
-                    $policy->fallback_allowed,
                     $context,
-                );
-
-                $reservationId = (int) $connection->table('trial_reservations')->insertGetId([
-                    'command_key' => $context->commandKey,
-                    'payload_hash' => $payloadHash,
-                    'trial_policy_id' => $policy->id,
-                    'trial_policy_version' => $policy->version,
-                    'policy_configuration_hash' => $policy->configuration_hash,
-                    'plan_offering_id' => $request->offeringId,
-                    'user_id' => $request->userId,
-                    'phone_number_id' => $actor->phoneNumberId,
-                    'active_user_id' => $policy->one_per_user ? $request->userId : null,
-                    'active_phone_number_id' => $policy->one_per_phone ? $actor->phoneNumberId : null,
-                    'trial_daily_capacity_counter_id' => $counter->id,
-                    'plan_offering_route_selection_id' => $route->selectionId,
-                    'state' => TrialReservationState::Reserved->value,
-                    'version' => 1,
-                    'capacity_date' => $capacityDate,
-                    'data_bytes' => $policy->data_bytes,
-                    'duration_days' => $policy->duration_days,
-                    'daily_capacity_snapshot' => $policy->daily_capacity,
-                    'phone_verification_policy_snapshot' => $policy->phone_verification_policy,
-                    'membership_required_snapshot' => $policy->membership_required,
-                    'one_per_user_snapshot' => $policy->one_per_user,
-                    'one_per_phone_snapshot' => $policy->one_per_phone,
-                    'fallback_allowed_snapshot' => $policy->fallback_allowed,
-                    'fallback_used_snapshot' => $route->fallbackUsed,
-                    'disclosure_fa_snapshot' => $route->disclosureFa,
-                    'delivery_template_key_snapshot' => $policy->delivery_template_key,
-                    'eligibility_snapshot_hash' => $actor->eligibilityHash,
-                    'expires_at' => $request->expiresAt->format('Y-m-d H:i:s.u'),
-                    'committed_at' => null,
-                    'released_at' => null,
-                    'expired_at' => null,
-                    'eligibility_reset_at' => null,
-                    'eligibility_reset_by_administrator_id' => null,
-                    'correlation_id' => $context->correlationId,
-                    'source_code' => $context->sourceCode,
-                    'reason_code' => $context->reasonCode,
-                    'created_at' => $this->timestamp(),
-                    'updated_at' => $this->timestamp(),
-                ]);
-                $this->recordEvent(
-                    $connection,
-                    $reservationId,
-                    $context->commandKey,
                     $payloadHash,
-                    'trial.reserve',
-                    null,
-                    TrialReservationState::Reserved->value,
-                    1,
-                    null,
-                    $context->correlationId,
-                    $context->sourceCode,
-                    $context->reasonCode,
-                    null,
-                );
-
-                return $this->currentReceipt($connection, $reservationId, false);
-            }, 3);
+                    $membershipPolicy,
+                ),
+                3,
+            );
         } catch (QueryException $exception) {
             $replay = $this->existingReservation($context->commandKey, $payloadHash);
             if ($replay !== null) {
@@ -173,6 +79,115 @@ final readonly class TrialReservationService
 
             throw $exception;
         }
+    }
+
+    /**
+     * Atomically reserve and commit an effectful customer Trial claim after external membership preflight.
+     *
+     * @requirement CAT-006 CAT-008 SEC-002 DAT-003 QUA-001
+     */
+    public function reserveAndCommit(
+        TrialReservationRequest $request,
+        TrialContext $reserveContext,
+        TrialContext $commitContext,
+    ): TrialReservationReceipt {
+        $payloadHash = CatalogPayloadHash::make($request->payload());
+        $existing = $this->existingReservation($reserveContext->commandKey, $payloadHash);
+        if ($existing !== null && $existing->state === TrialReservationState::Committed->value) {
+            return $existing;
+        }
+        if ($request->expiresAt <= $this->clock->now()) {
+            throw new DomainException('Trial reservation expiry must be in the future.');
+        }
+
+        $membershipPolicy = $this->membershipAuthorizationPreflight($request);
+        if ($membershipPolicy->membership_required) {
+            $this->membershipVerifier->assertSatisfied(
+                $this->database->connection(),
+                $request->userId,
+                $request->offeringId,
+                $membershipPolicy->id,
+            );
+        }
+
+        try {
+            return $this->database->connection()->transaction(function (Connection $connection) use (
+                $request,
+                $reserveContext,
+                $commitContext,
+                $payloadHash,
+                $membershipPolicy,
+            ): TrialReservationReceipt {
+                $this->assertCustomerClaimOfferingAvailable($connection, $request->offeringId);
+                $reservation = $this->existingReservation(
+                    $reserveContext->commandKey,
+                    $payloadHash,
+                    $connection,
+                    true,
+                );
+                if ($reservation === null) {
+                    $reservation = $this->reserveInsideTransaction(
+                        $connection,
+                        $request,
+                        $reserveContext,
+                        $payloadHash,
+                        $membershipPolicy,
+                    );
+                }
+                if ($reservation->state === TrialReservationState::Committed->value) {
+                    return $reservation;
+                }
+                if ($reservation->state !== TrialReservationState::Reserved->value || $reservation->version !== 1) {
+                    throw new RuntimeException('Trial reservation is not in the atomic commit state.');
+                }
+
+                return $this->transition(
+                    $reservation->reservationId,
+                    $reservation->version,
+                    TrialReservationState::Committed,
+                    'trial.commit',
+                    $commitContext,
+                );
+            }, 3);
+        } catch (QueryException $exception) {
+            $replay = $this->existingReservation($reserveContext->commandKey, $payloadHash);
+            if ($replay !== null && $replay->state === TrialReservationState::Committed->value) {
+                return $replay;
+            }
+            if (str_contains($exception->getMessage(), 'trial_reservation_active_user_unique')) {
+                throw new DomainException('Trial one-per-user policy is already consumed.', previous: $exception);
+            }
+            if (str_contains($exception->getMessage(), 'trial_reservation_active_phone_unique')) {
+                throw new DomainException('Trial one-per-phone policy is already consumed.', previous: $exception);
+            }
+
+            throw $exception;
+        }
+    }
+
+    public function committedReplayForUser(string $commandKey, int $userId): ?TrialReservationReceipt
+    {
+        if ($userId < 1 || strlen($commandKey) < 8 || strlen($commandKey) > 128) {
+            throw new AuthorizationException('Trial committed replay authority is invalid.');
+        }
+        /** @var object{id:int|string,user_id:int|string,active_user_id:int|string|null,state:string,eligibility_reset_at:?string}|null $row */
+        $row = $this->database->connection()->table('trial_reservations')
+            ->where('command_key', $commandKey)
+            ->first(['id', 'user_id', 'active_user_id', 'state', 'eligibility_reset_at']);
+        if ($row === null) {
+            return null;
+        }
+        if ((int) $row->user_id !== $userId) {
+            throw new AuthorizationException('Trial committed replay actor does not match.');
+        }
+        if ($row->state !== TrialReservationState::Committed->value) {
+            return null;
+        }
+        if ($row->eligibility_reset_at !== null || (int) $row->active_user_id !== $userId) {
+            throw new DomainException('Trial committed replay authority is no longer active.');
+        }
+
+        return $this->currentReceipt($this->database->connection(), (int) $row->id, true);
     }
 
     public function commit(
@@ -328,6 +343,131 @@ final readonly class TrialReservationService
 
             throw $exception;
         }
+    }
+
+    private function assertCustomerClaimOfferingAvailable(Connection $connection, int $offeringId): void
+    {
+        /** @var object{state:string,visibility:string,trial_allowed:bool|int}|null $offering */
+        $offering = $connection->table('plan_offerings')
+            ->where('id', $offeringId)
+            ->lockForUpdate()
+            ->first(['state', 'visibility', 'trial_allowed']);
+        if ($offering === null
+            || $offering->state !== 'active'
+            || $offering->visibility !== 'visible'
+            || ! (bool) $offering->trial_allowed
+        ) {
+            throw new DomainException('Customer Trial offering is no longer available.');
+        }
+    }
+
+    /**
+     * @param  object{id:int,version:int,configuration_hash:string,membership_required:bool}  $membershipPolicy
+     */
+    private function reserveInsideTransaction(
+        Connection $connection,
+        TrialReservationRequest $request,
+        TrialContext $context,
+        string $payloadHash,
+        object $membershipPolicy,
+    ): TrialReservationReceipt {
+        $replay = $this->existingReservation($context->commandKey, $payloadHash, $connection, true);
+        if ($replay !== null) {
+            return $replay;
+        }
+
+        $offering = $this->lockedOffering($connection, $request->offeringId);
+        $policy = $this->lockedPolicy($connection, $request->offeringId);
+        $this->assertMembershipPolicyUnchanged($policy, $membershipPolicy);
+        $actor = $this->eligibility->actor($connection, $request->userId);
+        $this->eligibility->assertOfferingAudience($offering->audience);
+        $this->eligibility->assertOfferingEligibility(
+            $connection,
+            $request->offeringId,
+            $offering->tag_match_mode,
+            $actor,
+        );
+        $this->eligibility->assertPolicyEligibility(
+            $connection,
+            $policy->id,
+            $policy->tag_match_mode,
+            $actor,
+        );
+        $this->eligibility->assertPhonePolicy($policy->phone_verification_policy, $actor);
+        $this->assertNoPriorClaim($connection, $policy, $actor);
+
+        $capacityDate = $this->businessDate();
+        $counter = $this->reserveDailyCapacity(
+            $connection,
+            $policy->id,
+            $capacityDate,
+            $policy->daily_capacity,
+        );
+
+        $route = $this->routeSelector->select(
+            $connection,
+            $request,
+            $policy->fallback_allowed,
+            $context,
+        );
+
+        $reservationId = (int) $connection->table('trial_reservations')->insertGetId([
+            'command_key' => $context->commandKey,
+            'payload_hash' => $payloadHash,
+            'trial_policy_id' => $policy->id,
+            'trial_policy_version' => $policy->version,
+            'policy_configuration_hash' => $policy->configuration_hash,
+            'plan_offering_id' => $request->offeringId,
+            'user_id' => $request->userId,
+            'phone_number_id' => $actor->phoneNumberId,
+            'active_user_id' => $policy->one_per_user ? $request->userId : null,
+            'active_phone_number_id' => $policy->one_per_phone ? $actor->phoneNumberId : null,
+            'trial_daily_capacity_counter_id' => $counter->id,
+            'plan_offering_route_selection_id' => $route->selectionId,
+            'state' => TrialReservationState::Reserved->value,
+            'version' => 1,
+            'capacity_date' => $capacityDate,
+            'data_bytes' => $policy->data_bytes,
+            'duration_days' => $policy->duration_days,
+            'daily_capacity_snapshot' => $policy->daily_capacity,
+            'phone_verification_policy_snapshot' => $policy->phone_verification_policy,
+            'membership_required_snapshot' => $policy->membership_required,
+            'one_per_user_snapshot' => $policy->one_per_user,
+            'one_per_phone_snapshot' => $policy->one_per_phone,
+            'fallback_allowed_snapshot' => $policy->fallback_allowed,
+            'fallback_used_snapshot' => $route->fallbackUsed,
+            'disclosure_fa_snapshot' => $route->disclosureFa,
+            'delivery_template_key_snapshot' => $policy->delivery_template_key,
+            'eligibility_snapshot_hash' => $actor->eligibilityHash,
+            'expires_at' => $request->expiresAt->format('Y-m-d H:i:s.u'),
+            'committed_at' => null,
+            'released_at' => null,
+            'expired_at' => null,
+            'eligibility_reset_at' => null,
+            'eligibility_reset_by_administrator_id' => null,
+            'correlation_id' => $context->correlationId,
+            'source_code' => $context->sourceCode,
+            'reason_code' => $context->reasonCode,
+            'created_at' => $this->timestamp(),
+            'updated_at' => $this->timestamp(),
+        ]);
+        $this->recordEvent(
+            $connection,
+            $reservationId,
+            $context->commandKey,
+            $payloadHash,
+            'trial.reserve',
+            null,
+            TrialReservationState::Reserved->value,
+            1,
+            null,
+            $context->correlationId,
+            $context->sourceCode,
+            $context->reasonCode,
+            null,
+        );
+
+        return $this->currentReceipt($connection, $reservationId, false);
     }
 
     private function transition(
