@@ -303,10 +303,7 @@ final readonly class TelegramTrialClaimSelectionService
         if ($context['protocol_selection_mode'] !== 'customer_selects') {
             return [];
         }
-        $routes = $selectedRoute === null ? $context['routes'] : [$selectedRoute];
-        if ($selectedRoute === null && $context['server_selection_mode'] === 'customer_selects') {
-            $routes = array_values(array_filter($routes, static fn (object $route): bool => $route->customer_selectable));
-        }
+        $routes = $this->protocolCandidateRoutes($context, $selectedRoute);
         $options = [];
         foreach ($context['profiles'] as $profile) {
             if (! $profile->customer_selectable) {
@@ -354,6 +351,37 @@ final readonly class TelegramTrialClaimSelectionService
         }
 
         throw new AuthorizationException('Telegram Trial protocol selection is unavailable.');
+    }
+
+    /**
+     * Mirror TrialRouteSelector::orderedCandidates() for read-only protocol projection.
+     *
+     * @param  array{server_selection_mode:string,fallback_allowed:bool,routes:list<object{id:int,sales_server_id:int,panel_service_target_id:int,route_type:string,customer_selectable:bool,disclosure_fa:?string,disclosure_en:?string,server_name_fa:string,server_name_en:?string}>}  $context
+     * @param  object{id:int,sales_server_id:int,panel_service_target_id:int,route_type:string,customer_selectable:bool,disclosure_fa:?string,disclosure_en:?string,server_name_fa:string,server_name_en:?string}|null  $selectedRoute
+     * @return list<object{id:int,sales_server_id:int,panel_service_target_id:int,route_type:string,customer_selectable:bool,disclosure_fa:?string,disclosure_en:?string,server_name_fa:string,server_name_en:?string}>
+     */
+    private function protocolCandidateRoutes(array $context, ?object $selectedRoute): array
+    {
+        if ($selectedRoute === null) {
+            if ($context['server_selection_mode'] === 'customer_selects') {
+                return array_values(array_filter(
+                    $context['routes'],
+                    static fn (object $route): bool => $route->customer_selectable,
+                ));
+            }
+
+            return $context['fallback_allowed'] ? $context['routes'] : array_slice($context['routes'], 0, 1);
+        }
+        if (! $context['fallback_allowed']) {
+            return [$selectedRoute];
+        }
+
+        $fallbacks = array_values(array_filter(
+            $context['routes'],
+            static fn (object $route): bool => $route->id !== $selectedRoute->id && $route->route_type === 'fallback',
+        ));
+
+        return [$selectedRoute, ...$fallbacks];
     }
 
     /**

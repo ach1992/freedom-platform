@@ -94,7 +94,8 @@ final readonly class TrialReservationService
         $payloadHash = CatalogPayloadHash::make($request->payload());
         $existing = $this->existingReservation($reserveContext->commandKey, $payloadHash);
         if ($existing !== null && $existing->state === TrialReservationState::Committed->value) {
-            return $existing;
+            return $this->committedReplayForUser($reserveContext->commandKey, $request->userId)
+                ?? throw new RuntimeException('Committed Trial replay authority is unavailable.');
         }
         if ($request->expiresAt <= $this->clock->now()) {
             throw new DomainException('Trial reservation expiry must be in the future.');
@@ -152,7 +153,8 @@ final readonly class TrialReservationService
         } catch (QueryException $exception) {
             $replay = $this->existingReservation($reserveContext->commandKey, $payloadHash);
             if ($replay !== null && $replay->state === TrialReservationState::Committed->value) {
-                return $replay;
+                return $this->committedReplayForUser($reserveContext->commandKey, $request->userId)
+                    ?? throw new RuntimeException('Committed Trial replay authority is unavailable.');
             }
             if (str_contains($exception->getMessage(), 'trial_reservation_active_user_unique')) {
                 throw new DomainException('Trial one-per-user policy is already consumed.', previous: $exception);
@@ -170,10 +172,10 @@ final readonly class TrialReservationService
         if ($userId < 1 || strlen($commandKey) < 8 || strlen($commandKey) > 128) {
             throw new AuthorizationException('Trial committed replay authority is invalid.');
         }
-        /** @var object{id:int|string,user_id:int|string,active_user_id:int|string|null,state:string,eligibility_reset_at:?string}|null $row */
+        /** @var object{id:int|string,user_id:int|string,active_user_id:int|string|null,state:string,eligibility_reset_at:?string,one_per_user_snapshot:bool|int}|null $row */
         $row = $this->database->connection()->table('trial_reservations')
             ->where('command_key', $commandKey)
-            ->first(['id', 'user_id', 'active_user_id', 'state', 'eligibility_reset_at']);
+            ->first(['id', 'user_id', 'active_user_id', 'state', 'eligibility_reset_at', 'one_per_user_snapshot']);
         if ($row === null) {
             return null;
         }
@@ -183,7 +185,9 @@ final readonly class TrialReservationService
         if ($row->state !== TrialReservationState::Committed->value) {
             return null;
         }
-        if ($row->eligibility_reset_at !== null || (int) $row->active_user_id !== $userId) {
+        $ownsUserEligibility = ! (bool) $row->one_per_user_snapshot
+            || ($row->active_user_id !== null && (int) $row->active_user_id === $userId);
+        if ($row->eligibility_reset_at !== null || ! $ownsUserEligibility) {
             throw new DomainException('Trial committed replay authority is no longer active.');
         }
 

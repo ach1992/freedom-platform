@@ -292,6 +292,30 @@ final class TrialPolicyReservationTest extends TestCase
         self::assertSame($before['capacity_reservations'], DB::table('panel_capacity_reservations')->count());
     }
 
+    public function test_committed_customer_replay_remains_valid_when_one_per_user_policy_is_disabled(): void
+    {
+        $scenario = $this->scenario(dailyCapacity: 2);
+        $this->app->make(TrialPolicyService::class)->create(
+            $scenario['offering_id'],
+            $this->policyDefinition($scenario['tag_id'], onePerUser: false),
+            $this->catalogContext($scenario['owner_id'], 'trial-replay-without-one-per-user-policy'),
+        );
+        $this->activateAndExposeOffering($scenario, 'trial-replay-without-one-per-user');
+        $service = $this->serviceWithMembershipAllowed();
+        $request = $this->request($scenario['offering_id'], $scenario['user_id']);
+        $reserveContext = $this->trialContext('trial-replay-no-user-limit-reserve-01', 'trial-replay-no-user-limit-correlation');
+        $commitContext = $this->trialContext('trial-replay-no-user-limit-commit-001', 'trial-replay-no-user-limit-correlation');
+
+        $committed = $service->reserveAndCommit($request, $reserveContext, $commitContext);
+        $replayed = $service->committedReplayForUser($reserveContext->commandKey, $scenario['user_id']);
+
+        self::assertNotNull($replayed);
+        self::assertSame($committed->reservationId, $replayed->reservationId);
+        self::assertTrue($replayed->replayed);
+        self::assertNull(DB::table('trial_reservations')->where('id', $committed->reservationId)->value('active_user_id'));
+        self::assertFalse((bool) DB::table('trial_reservations')->where('id', $committed->reservationId)->value('one_per_user_snapshot'));
+    }
+
     public function test_reserve_and_commit_keeps_membership_verification_outside_transaction_and_replays_one_committed_capacity_effect(): void
     {
         $scenario = $this->scenario(dailyCapacity: 2);
@@ -563,6 +587,12 @@ final class TrialPolicyReservationTest extends TestCase
         } catch (DomainException $exception) {
             self::assertSame('Trial committed replay authority is no longer active.', $exception->getMessage());
         }
+        try {
+            $service->reserveAndCommit($request, $reserveContext, $commitContext);
+            self::fail('Expected atomic customer-claim replay to honor the administrator eligibility reset.');
+        } catch (DomainException $exception) {
+            self::assertSame('Trial committed replay authority is no longer active.', $exception->getMessage());
+        }
 
         $second = $service->reserve(
             $this->request($scenario['offering_id'], $scenario['user_id']),
@@ -760,6 +790,47 @@ final class TrialPolicyReservationTest extends TestCase
         );
         self::assertContains($selected->requestedRouteId, [$hybrid['primary_route_id'], $hybrid['fallback_route_id']]);
         self::assertNull($selected->requestedProtocolProfileId);
+        self::assertSame(0, DB::table('trial_reservations')->count());
+        self::assertSame(0, DB::table('plan_offering_route_selections')->count());
+        self::assertSame(0, DB::table('panel_capacity_reservations')->count());
+    }
+
+    /** @requirement CAT-006 DAT-002 DAT-003 SEC-002 QUA-001 */
+    public function test_telegram_trial_protocol_projection_excludes_routes_the_automatic_selector_cannot_use_without_fallback(): void
+    {
+        $scenario = $this->scenario(
+            dailyCapacity: 2,
+            serverSelectionMode: PlanOfferingServerSelectionMode::System,
+            protocolSelectionMode: PlanOfferingProtocolSelectionMode::Customer,
+            customerSelectableProfile: true,
+        );
+        $this->app->make(TrialPolicyService::class)->create(
+            $scenario['offering_id'],
+            $this->policyDefinition($scenario['tag_id'], fallbackAllowed: false),
+            $this->catalogContext($scenario['owner_id'], 'telegram-trial-protocol-projection-policy'),
+        );
+        $this->activateAndExposeOffering($scenario, 'telegram-trial-protocol-projection');
+        $this->app->instance(
+            RouteOperationalVerifier::class,
+            new RejectingTrialRouteOperationalVerifier($scenario['primary_target_id']),
+        );
+        $this->app->forgetInstance(TelegramTrialClaimSelectionService::class);
+        $catalog = $this->app->make(TelegramCustomerTrialCatalog::class)
+            ->pageForSelf($scenario['user_id'], $scenario['user_id'], 1, 6);
+        self::assertCount(1, $catalog->items);
+
+        try {
+            $this->app->make(TelegramTrialClaimSelectionService::class)->optionsForSelf(
+                $scenario['user_id'],
+                $scenario['user_id'],
+                $catalog->items[0]->selectionToken,
+                null,
+            );
+            self::fail('Expected automatic Trial protocol projection to exclude fallback-only compatibility when fallback is disabled.');
+        } catch (AuthorizationException $exception) {
+            self::assertSame('Telegram Trial has no currently available customer-selectable protocol.', $exception->getMessage());
+        }
+
         self::assertSame(0, DB::table('trial_reservations')->count());
         self::assertSame(0, DB::table('plan_offering_route_selections')->count());
         self::assertSame(0, DB::table('panel_capacity_reservations')->count());
@@ -1485,6 +1556,7 @@ final class TrialPolicyReservationTest extends TestCase
         PhoneVerificationPolicy $phonePolicy = PhoneVerificationPolicy::None,
         bool $membershipRequired = false,
         bool $onePerPhone = false,
+        bool $onePerUser = true,
     ): TrialPolicyDefinition {
         return new TrialPolicyDefinition(
             true,
@@ -1493,7 +1565,7 @@ final class TrialPolicyReservationTest extends TestCase
             $this->currentScenarioDailyCapacity(),
             $phonePolicy,
             $membershipRequired,
-            true,
+            $onePerUser,
             $onePerPhone,
             $administratorRegrantAllowed,
             $fallbackAllowed,
@@ -1905,6 +1977,23 @@ final class TrialPolicyReservationTest extends TestCase
     private function trialContext(string $commandKey, string $correlationId): TrialContext
     {
         return new TrialContext($commandKey, $correlationId, 'test', 'trial_test');
+    }
+}
+
+final readonly class RejectingTrialRouteOperationalVerifier implements RouteOperationalVerifier
+{
+    public function __construct(private int $rejectedServiceTargetId) {}
+
+    public function assertOperational(
+        Connection $connection,
+        int $offeringId,
+        int $salesServerId,
+        int $serviceTargetId,
+        int $protocolProfileId,
+    ): void {
+        if ($serviceTargetId === $this->rejectedServiceTargetId) {
+            throw new RouteCandidateUnavailable('Selected Trial route/profile is unavailable for the regression scenario.');
+        }
     }
 }
 
