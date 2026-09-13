@@ -144,11 +144,13 @@ final readonly class TelegramInteractionUpdateBindingService
                     'bot_id',
                     'telegram_user_id',
                     'version',
+                    'payload',
                     'expires_at',
                 ]);
             if ($session !== null) {
                 $expiresAt = new \DateTimeImmutable((string) $session->expires_at, new \DateTimeZone('UTC'));
-                if ($expiresAt <= $this->clock->now()) {
+                $payload = $this->payloadFromJson((string) $session->payload);
+                if ($expiresAt <= $this->clock->now() && ($payload['expiry_locked'] ?? false) !== true) {
                     $session = null;
                 }
             }

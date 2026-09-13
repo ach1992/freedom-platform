@@ -448,9 +448,10 @@ final class TelegramInteractionAuthorityTest extends TestCase
             $account['telegram_account_id'],
             'customer.demo',
             'effect_submitting',
-            ['cancel_locked' => true],
+            ['cancel_locked' => true, 'expiry_locked' => true],
             'dispatcher-cancel-locked-session',
         );
+        $this->clock->advance('+31 minutes');
         $lockedCancel = $dispatcher->dispatch('123456', 6004, $account['user_id'], [
             'message' => ['text' => '/cancel'],
         ]);

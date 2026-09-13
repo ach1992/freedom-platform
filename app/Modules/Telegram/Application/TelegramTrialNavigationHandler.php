@@ -23,7 +23,7 @@ use RuntimeException;
  * @phpstan-type OfferingState array{page:int,selection:string}
  * @phpstan-type ProtocolState array{page:int,selection:string,route:?string}
  * @phpstan-type ConfirmationState array{page:int,selection:string,route:?string,protocol:?string}
- * @phpstan-type SubmittingState array{page:int,selection:string,route:?string,protocol:?string,operation_key:string,accepted_at:string,cancel_locked:true}
+ * @phpstan-type SubmittingState array{page:int,selection:string,route:?string,protocol:?string,operation_key:string,accepted_at:string,cancel_locked:true,expiry_locked:true}
  * @phpstan-type QueuedState array{operation_key:string,order_public_id:string,service_public_id:string,provisioning_public_id:string,data_bytes:int,duration_days:int,server_name_fa:string,server_name_en:?string,protocol_name_fa:string,protocol_name_en:?string,fallback_used:bool,fallback_disclosure_fa:?string,fallback_disclosure_en:?string}
  */
 final readonly class TelegramTrialNavigationHandler
@@ -402,6 +402,7 @@ final readonly class TelegramTrialNavigationHandler
                     'operation_key' => $operationKey,
                     'accepted_at' => $action->callbackAcceptedAt->format(DATE_ATOM),
                     'cancel_locked' => true,
+                    'expiry_locked' => true,
                 ],
                 'tg-trial-claim-fence:'.$operationKey,
             );
@@ -1212,7 +1213,7 @@ final readonly class TelegramTrialNavigationHandler
     {
         $keys = array_keys($payload);
         sort($keys, SORT_STRING);
-        if ($keys !== ['accepted_at', 'cancel_locked', 'operation_key', 'page', 'protocol', 'route', 'selection']
+        if ($keys !== ['accepted_at', 'cancel_locked', 'expiry_locked', 'operation_key', 'page', 'protocol', 'route', 'selection']
             || ! is_int($payload['page'] ?? null)
             || $payload['page'] < 1
             || ! $this->validSelectionToken($payload['selection'] ?? null)
@@ -1221,7 +1222,8 @@ final readonly class TelegramTrialNavigationHandler
             || ! is_string($payload['operation_key'] ?? null)
             || preg_match('/\A[0-9a-f]{64}\z/', $payload['operation_key']) !== 1
             || ! is_string($payload['accepted_at'] ?? null)
-            || ($payload['cancel_locked'] ?? null) !== true) {
+            || ($payload['cancel_locked'] ?? null) !== true
+            || ($payload['expiry_locked'] ?? null) !== true) {
             throw new RuntimeException('Telegram Trial submitting state is invalid.');
         }
         try {
@@ -1238,6 +1240,7 @@ final readonly class TelegramTrialNavigationHandler
             'operation_key' => $payload['operation_key'],
             'accepted_at' => $payload['accepted_at'],
             'cancel_locked' => true,
+            'expiry_locked' => true,
         ];
     }
 

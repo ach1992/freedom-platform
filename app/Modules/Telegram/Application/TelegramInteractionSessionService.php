@@ -669,6 +669,11 @@ final readonly class TelegramInteractionSessionService
     /** @param SessionRow $session */
     private function isExpired(object $session): bool
     {
+        $payload = $this->payloadFromJson((string) $session->payload);
+        if (($payload['expiry_locked'] ?? false) === true) {
+            return false;
+        }
+
         return $this->parseTime((string) $session->expires_at) <= $this->clock->now();
     }
 
