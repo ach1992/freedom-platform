@@ -376,6 +376,294 @@ final class TrialPolicyReservationTest extends TestCase
         self::assertSame(1, DB::table('trial_reservations')->where('command_key', $reserveContext->commandKey)->count());
     }
 
+    /** @requirement CAT-006 BUY-001 BUY-002 PRV-002 DAT-003 SEC-002 QUA-001 QUA-004 */
+    public function test_trial_source_authorization_revalidates_reset_after_stale_committed_replay_read(): void
+    {
+        if (! function_exists('pcntl_fork')) {
+            self::markTestSkipped('pcntl is required for Trial replay lock-order verification.');
+        }
+
+        $scenario = $this->scenario(dailyCapacity: 2);
+        $this->app->make(TrialPolicyService::class)->create(
+            $scenario['offering_id'],
+            $this->policyDefinition($scenario['tag_id'], administratorRegrantAllowed: true),
+            $this->catalogContext($scenario['owner_id'], 'trial-source-reset-race-policy'),
+        );
+        $this->activateAndExposeOffering($scenario, 'trial-source-reset-race');
+        $operationKey = str_repeat('4', 64);
+        $reservationCommandKey = 'telegram-trial-reserve:'.$operationKey;
+        $correlationId = 'tgtrial:'.substr($operationKey, 0, 56);
+        $trial = $this->serviceWithMembershipAllowed();
+        $committed = $trial->reserveAndCommit(
+            new TrialReservationRequest(
+                $scenario['offering_id'],
+                $scenario['user_id'],
+                null,
+                null,
+                (new DateTimeImmutable('now', new DateTimeZone('UTC')))->modify('+15 minutes'),
+            ),
+            new TrialContext($reservationCommandKey, $correlationId, 'telegram', 'customer_claim_reserve'),
+            new TrialContext(
+                'telegram-trial-commit:'.substr(hash('sha256', $reservationCommandKey), 0, 64),
+                $correlationId,
+                'telegram',
+                'customer_claim_commit',
+            ),
+        );
+        $staleReplay = $trial->committedReplayForUser($reservationCommandKey, $scenario['user_id']);
+        self::assertNotNull($staleReplay);
+        self::assertTrue($staleReplay->replayed);
+
+        $before = [
+            'route_selections' => DB::table('plan_offering_route_selections')->count(),
+            'capacity_reservations' => DB::table('panel_capacity_reservations')->count(),
+            'source_authorizations' => DB::table('order_source_authorizations')->count(),
+            'orders' => DB::table('orders')->count(),
+            'order_items' => DB::table('order_items')->count(),
+            'services' => DB::table('service_subscriptions')->count(),
+            'provisioning_operations' => DB::table('provisioning_operations')->count(),
+            'outbox' => DB::table('outbox_messages')->count(),
+        ];
+        $prefix = sys_get_temp_dir().'/trial-source-reset-race-'.bin2hex(random_bytes(8));
+        $resetLocked = $prefix.'-reset-locked';
+        $resetDone = $prefix.'-reset-done';
+        $authorizationAttempted = $prefix.'-authorization-attempted';
+        $authorizationResult = $prefix.'-authorization-result';
+        $waitForFile = static function (string $path): void {
+            $deadline = microtime(true) + 10.0;
+            while (! file_exists($path)) {
+                if (microtime(true) >= $deadline) {
+                    throw new \RuntimeException('Timed out waiting for Trial concurrency barrier.');
+                }
+                usleep(1000);
+            }
+        };
+        $resetContext = $this->catalogContext($scenario['owner_id'], 'trial-source-reset-race-admin');
+
+        DB::disconnect();
+        $resetPid = pcntl_fork();
+        self::assertNotSame(-1, $resetPid);
+        if ($resetPid === 0) {
+            try {
+                DB::reconnect();
+                DB::connection()->transaction(function () use (
+                    $committed,
+                    $resetContext,
+                    $resetLocked,
+                    $authorizationAttempted,
+                    $waitForFile,
+                ): void {
+                    $this->app->make(TrialReservationService::class)->resetEligibility(
+                        $committed->reservationId,
+                        $committed->version,
+                        $resetContext,
+                    );
+                    file_put_contents($resetLocked, 'locked');
+                    $waitForFile($authorizationAttempted);
+                    usleep(100000);
+                }, 1);
+                file_put_contents($resetDone, 'committed');
+                exit(0);
+            } catch (\Throwable $exception) {
+                file_put_contents($resetDone, 'error|'.$exception::class.'|'.$exception->getMessage());
+                exit(1);
+            }
+        }
+
+        $authorizationPid = pcntl_fork();
+        self::assertNotSame(-1, $authorizationPid);
+        if ($authorizationPid === 0) {
+            try {
+                DB::reconnect();
+                $waitForFile($resetLocked);
+                file_put_contents($authorizationAttempted, 'attempted');
+                try {
+                    DB::connection()->transaction(function () use ($reservationCommandKey, $correlationId): void {
+                        $authorization = $this->app->make(OrderSourceAuthorizationService::class)->authorizeTrial(
+                            $reservationCommandKey,
+                            $correlationId,
+                        );
+                        $order = $this->app->make(NonPaidOrderService::class)
+                            ->materialize($authorization->publicId, $correlationId);
+                        $this->app->make(InitialProvisioningQueueService::class)
+                            ->queueInitial($order->orderPublicId, $correlationId);
+                    }, 3);
+                    file_put_contents($authorizationResult, 'unexpected-success');
+                    exit(2);
+                } catch (DomainException $exception) {
+                    file_put_contents($authorizationResult, 'rejected|'.$exception->getMessage());
+                    exit(0);
+                }
+            } catch (\Throwable $exception) {
+                file_put_contents($authorizationResult, 'error|'.$exception::class.'|'.$exception->getMessage());
+                exit(1);
+            }
+        }
+
+        pcntl_waitpid($resetPid, $resetStatus);
+        pcntl_waitpid($authorizationPid, $authorizationStatus);
+        DB::reconnect();
+
+        self::assertSame(0, pcntl_wexitstatus($resetStatus));
+        self::assertSame(0, pcntl_wexitstatus($authorizationStatus));
+        self::assertSame('committed', trim((string) file_get_contents($resetDone)));
+        self::assertSame(
+            'rejected|Trial committed replay authority is no longer active.',
+            trim((string) file_get_contents($authorizationResult)),
+        );
+        self::assertNotNull(DB::table('trial_reservations')->where('id', $committed->reservationId)->value('eligibility_reset_at'));
+        self::assertSame($before['route_selections'], DB::table('plan_offering_route_selections')->count());
+        self::assertSame($before['capacity_reservations'], DB::table('panel_capacity_reservations')->count());
+        self::assertSame($before['source_authorizations'], DB::table('order_source_authorizations')->count());
+        self::assertSame($before['orders'], DB::table('orders')->count());
+        self::assertSame($before['order_items'], DB::table('order_items')->count());
+        self::assertSame($before['services'], DB::table('service_subscriptions')->count());
+        self::assertSame($before['provisioning_operations'], DB::table('provisioning_operations')->count());
+        self::assertSame($before['outbox'], DB::table('outbox_messages')->count());
+
+        foreach ([$resetLocked, $resetDone, $authorizationAttempted, $authorizationResult] as $path) {
+            @unlink($path);
+        }
+    }
+
+    /** @requirement CAT-006 BUY-001 BUY-002 PRV-002 PRV-003 DAT-003 SEC-002 QUA-001 QUA-004 */
+    public function test_trial_downstream_handoff_holds_reset_fence_until_atomic_effects_commit(): void
+    {
+        if (! function_exists('pcntl_fork')) {
+            self::markTestSkipped('pcntl is required for Trial replay lock-order verification.');
+        }
+
+        $scenario = $this->scenario(dailyCapacity: 2);
+        $this->app->make(TrialPolicyService::class)->create(
+            $scenario['offering_id'],
+            $this->policyDefinition($scenario['tag_id'], administratorRegrantAllowed: true),
+            $this->catalogContext($scenario['owner_id'], 'trial-source-handoff-race-policy'),
+        );
+        $this->activateAndExposeOffering($scenario, 'trial-source-handoff-race');
+        $operationKey = str_repeat('5', 64);
+        $reservationCommandKey = 'telegram-trial-reserve:'.$operationKey;
+        $correlationId = 'tgtrial:'.substr($operationKey, 0, 56);
+        $trial = $this->serviceWithMembershipAllowed();
+        $committed = $trial->reserveAndCommit(
+            new TrialReservationRequest(
+                $scenario['offering_id'],
+                $scenario['user_id'],
+                null,
+                null,
+                (new DateTimeImmutable('now', new DateTimeZone('UTC')))->modify('+15 minutes'),
+            ),
+            new TrialContext($reservationCommandKey, $correlationId, 'telegram', 'customer_claim_reserve'),
+            new TrialContext(
+                'telegram-trial-commit:'.substr(hash('sha256', $reservationCommandKey), 0, 64),
+                $correlationId,
+                'telegram',
+                'customer_claim_commit',
+            ),
+        );
+        self::assertNotNull($trial->committedReplayForUser($reservationCommandKey, $scenario['user_id']));
+
+        $before = [
+            'source_authorizations' => DB::table('order_source_authorizations')->count(),
+            'orders' => DB::table('orders')->count(),
+            'order_items' => DB::table('order_items')->count(),
+            'services' => DB::table('service_subscriptions')->count(),
+            'provisioning_operations' => DB::table('provisioning_operations')->count(),
+            'outbox' => DB::table('outbox_messages')->count(),
+        ];
+        $prefix = sys_get_temp_dir().'/trial-source-handoff-race-'.bin2hex(random_bytes(8));
+        $authorizationLocked = $prefix.'-authorization-locked';
+        $resetAttempted = $prefix.'-reset-attempted';
+        $handoffDone = $prefix.'-handoff-done';
+        $resetDone = $prefix.'-reset-done';
+        $waitForFile = static function (string $path): void {
+            $deadline = microtime(true) + 10.0;
+            while (! file_exists($path)) {
+                if (microtime(true) >= $deadline) {
+                    throw new \RuntimeException('Timed out waiting for Trial concurrency barrier.');
+                }
+                usleep(1000);
+            }
+        };
+        $resetContext = $this->catalogContext($scenario['owner_id'], 'trial-source-handoff-race-admin');
+
+        DB::disconnect();
+        $handoffPid = pcntl_fork();
+        self::assertNotSame(-1, $handoffPid);
+        if ($handoffPid === 0) {
+            try {
+                DB::reconnect();
+                DB::connection()->transaction(function () use (
+                    $reservationCommandKey,
+                    $correlationId,
+                    $authorizationLocked,
+                    $resetAttempted,
+                    $resetDone,
+                    $waitForFile,
+                ): void {
+                    $authorization = $this->app->make(OrderSourceAuthorizationService::class)->authorizeTrial(
+                        $reservationCommandKey,
+                        $correlationId,
+                    );
+                    file_put_contents($authorizationLocked, 'locked');
+                    $waitForFile($resetAttempted);
+                    usleep(100000);
+                    if (file_exists($resetDone)) {
+                        throw new \RuntimeException('Administrator reset completed while Trial handoff still held the reservation lock.');
+                    }
+                    $order = $this->app->make(NonPaidOrderService::class)
+                        ->materialize($authorization->publicId, $correlationId);
+                    $this->app->make(InitialProvisioningQueueService::class)
+                        ->queueInitial($order->orderPublicId, $correlationId);
+                }, 3);
+                file_put_contents($handoffDone, 'committed');
+                exit(0);
+            } catch (\Throwable $exception) {
+                file_put_contents($handoffDone, 'error|'.$exception::class.'|'.$exception->getMessage());
+                exit(1);
+            }
+        }
+
+        $resetPid = pcntl_fork();
+        self::assertNotSame(-1, $resetPid);
+        if ($resetPid === 0) {
+            try {
+                DB::reconnect();
+                $waitForFile($authorizationLocked);
+                file_put_contents($resetAttempted, 'attempted');
+                $this->app->make(TrialReservationService::class)->resetEligibility(
+                    $committed->reservationId,
+                    $committed->version,
+                    $resetContext,
+                );
+                file_put_contents($resetDone, 'committed');
+                exit(0);
+            } catch (\Throwable $exception) {
+                file_put_contents($resetDone, 'error|'.$exception::class.'|'.$exception->getMessage());
+                exit(1);
+            }
+        }
+
+        pcntl_waitpid($handoffPid, $handoffStatus);
+        pcntl_waitpid($resetPid, $resetStatus);
+        DB::reconnect();
+
+        self::assertSame(0, pcntl_wexitstatus($handoffStatus));
+        self::assertSame(0, pcntl_wexitstatus($resetStatus));
+        self::assertSame('committed', trim((string) file_get_contents($handoffDone)));
+        self::assertSame('committed', trim((string) file_get_contents($resetDone)));
+        self::assertNotNull(DB::table('trial_reservations')->where('id', $committed->reservationId)->value('eligibility_reset_at'));
+        self::assertSame($before['source_authorizations'] + 1, DB::table('order_source_authorizations')->count());
+        self::assertSame($before['orders'] + 1, DB::table('orders')->count());
+        self::assertSame($before['order_items'] + 1, DB::table('order_items')->count());
+        self::assertSame($before['services'] + 1, DB::table('service_subscriptions')->count());
+        self::assertSame($before['provisioning_operations'] + 1, DB::table('provisioning_operations')->count());
+        self::assertSame($before['outbox'] + 1, DB::table('outbox_messages')->count());
+
+        foreach ([$authorizationLocked, $resetAttempted, $handoffDone, $resetDone] as $path) {
+            @unlink($path);
+        }
+    }
+
     public function test_committed_customer_replay_remains_valid_when_one_per_user_policy_is_disabled(): void
     {
         $scenario = $this->scenario(dailyCapacity: 2, phoneEvidence: 'telegram');
