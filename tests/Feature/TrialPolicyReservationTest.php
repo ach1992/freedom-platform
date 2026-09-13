@@ -943,8 +943,9 @@ final class TrialPolicyReservationTest extends TestCase
                 $this->policyDefinition($scenario['tag_id'], fallbackAllowed: false),
                 $this->catalogContext($scenario['owner_id'], 'telegram-trial-priority-projection-policy-'.$index),
             );
+            $this->swapPrimaryAndFallbackRouteBindings($scenario);
             $this->activateAndExposeOffering($scenario, 'telegram-trial-priority-projection-'.$index);
-            $this->activateRouteRuntime($scenario['fallback_route_id']);
+            $this->activateRouteRuntime($scenario['primary_route_id']);
             $this->disableRouteSalesServer($scenario['primary_route_id']);
             $this->app->instance(RouteOperationalVerifier::class, new DatabaseRouteOperationalVerifier);
             $this->app->forgetInstance(TelegramTrialClaimSelectionService::class);
@@ -966,8 +967,9 @@ final class TrialPolicyReservationTest extends TestCase
                 self::assertSame('Telegram Trial has no currently available customer-selectable protocol.', $exception->getMessage());
             }
 
+            $trial = $this->serviceWithMembershipAllowed();
             try {
-                $this->app->make(TrialReservationService::class)->reserveAndCommit(
+                $trial->reserveAndCommit(
                     new TrialReservationRequest(
                         $scenario['offering_id'],
                         $scenario['user_id'],
@@ -1000,8 +1002,9 @@ final class TrialPolicyReservationTest extends TestCase
             $this->policyDefinition($scenario['tag_id'], fallbackAllowed: true),
             $this->catalogContext($scenario['owner_id'], 'telegram-trial-fallback-projection-policy'),
         );
+        $this->swapPrimaryAndFallbackRouteBindings($scenario);
         $this->activateAndExposeOffering($scenario, 'telegram-trial-fallback-projection');
-        $this->activateRouteRuntime($scenario['fallback_route_id']);
+        $this->activateRouteRuntime($scenario['primary_route_id']);
         $this->disableRouteSalesServer($scenario['primary_route_id']);
         $this->app->instance(RouteOperationalVerifier::class, new DatabaseRouteOperationalVerifier);
         $this->app->forgetInstance(TelegramTrialClaimSelectionService::class);
@@ -1019,7 +1022,7 @@ final class TrialPolicyReservationTest extends TestCase
         );
         self::assertCount(1, $options->protocolOptions);
 
-        $committed = $this->app->make(TrialReservationService::class)->reserveAndCommit(
+        $committed = $this->serviceWithMembershipAllowed()->reserveAndCommit(
             new TrialReservationRequest(
                 $scenario['offering_id'],
                 $scenario['user_id'],
@@ -1155,7 +1158,7 @@ final class TrialPolicyReservationTest extends TestCase
         $correlationId = 'tgtrial:'.substr($operationKey, 0, 56);
         $acceptedAt = new DateTimeImmutable('now', new DateTimeZone('UTC'));
 
-        $committed = $this->app->make(TrialReservationService::class)->reserveAndCommit(
+        $committed = $this->serviceWithMembershipAllowed()->reserveAndCommit(
             new TrialReservationRequest(
                 $scenario['offering_id'],
                 $scenario['user_id'],
@@ -1255,6 +1258,8 @@ final class TrialPolicyReservationTest extends TestCase
             'source_authorizations' => DB::table('order_source_authorizations')->count(),
             'orders' => DB::table('orders')->count(),
         ];
+        $this->serviceWithMembershipAllowed();
+        $this->app->forgetInstance(TelegramCustomerTrialClaimService::class);
         try {
             $this->app->make(TelegramCustomerTrialClaimService::class)->claimForSelf(
                 $scenario['user_id'],
@@ -1670,6 +1675,33 @@ final class TrialPolicyReservationTest extends TestCase
             $this->policyDefinition($scenario['tag_id']),
             $this->catalogContext($scenario['administrator_id'], 'trial-policy-unauthorized-0001'),
         );
+    }
+
+    /** @param array<string,int> $scenario */
+    private function swapPrimaryAndFallbackRouteBindings(array $scenario): void
+    {
+        /** @var object{sales_server_id:int|string,panel_service_target_id:int|string}|null $primary */
+        $primary = DB::table('plan_offering_routes')->where('id', $scenario['primary_route_id'])->first([
+            'sales_server_id', 'panel_service_target_id',
+        ]);
+        /** @var object{sales_server_id:int|string,panel_service_target_id:int|string}|null $fallback */
+        $fallback = DB::table('plan_offering_routes')->where('id', $scenario['fallback_route_id'])->first([
+            'sales_server_id', 'panel_service_target_id',
+        ]);
+        self::assertNotNull($primary);
+        self::assertNotNull($fallback);
+        $now = now('UTC');
+
+        DB::table('plan_offering_routes')->where('id', $scenario['primary_route_id'])->update([
+            'sales_server_id' => (int) $fallback->sales_server_id,
+            'panel_service_target_id' => (int) $fallback->panel_service_target_id,
+            'updated_at' => $now,
+        ]);
+        DB::table('plan_offering_routes')->where('id', $scenario['fallback_route_id'])->update([
+            'sales_server_id' => (int) $primary->sales_server_id,
+            'panel_service_target_id' => (int) $primary->panel_service_target_id,
+            'updated_at' => $now,
+        ]);
     }
 
     private function activateRouteRuntime(int $routeId): void
