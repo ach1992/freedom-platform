@@ -298,18 +298,16 @@ final class TelegramCustomerPurchaseMembershipTest extends TestCase
         $membership = $quotes->membershipForSelf($userId, $userId, $selectionToken, 'fa');
         self::assertTrue($membership->allowsQuote());
 
-        DB::table('channel_membership_rules')->where('id', $ruleId)->update([
-            'version' => 3,
-            'updated_at' => now('UTC'),
-        ]);
+        $this->app->make(TelegramChannelMembershipRuleService::class)->disable(
+            $ruleId,
+            2,
+            $this->membershipContext('disable-purchase-drift-fences'),
+        );
         $this->assertQuoteRejected($quotes, $userId, $selectionToken, $membership);
         self::assertSame(0, DB::table('quotes')->count());
 
-        DB::table('channel_membership_rules')->where('id', $ruleId)->update([
-            'version' => 2,
-            'updated_at' => now('UTC'),
-        ]);
         $fresh = $quotes->membershipForSelf($userId, $userId, $selectionToken, 'fa');
+        self::assertSame(TelegramChannelMembershipEvaluationDecision::NotRequired, $fresh->decision);
         self::assertTrue($fresh->allowsQuote());
         $offeringVersion = (int) DB::table('plan_offerings')->where('id', $offeringId)->value('version');
         $this->app->make(PlanOfferingService::class)->setVisibility(
