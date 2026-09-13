@@ -381,7 +381,12 @@ final class TrialPolicyReservationTest extends TestCase
         $scenario = $this->scenario(dailyCapacity: 2, phoneEvidence: 'telegram');
         $this->app->make(TrialPolicyService::class)->create(
             $scenario['offering_id'],
-            $this->policyDefinition($scenario['tag_id'], onePerPhone: true, onePerUser: false),
+            $this->policyDefinition(
+                $scenario['tag_id'],
+                phonePolicy: PhoneVerificationPolicy::TelegramContactOnly,
+                onePerPhone: true,
+                onePerUser: false,
+            ),
             $this->catalogContext($scenario['owner_id'], 'trial-replay-without-one-per-user-policy'),
         );
         $this->activateAndExposeOffering($scenario, 'trial-replay-without-one-per-user');
