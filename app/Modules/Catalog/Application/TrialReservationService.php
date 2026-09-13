@@ -136,7 +136,8 @@ final readonly class TrialReservationService
                     );
                 }
                 if ($reservation->state === TrialReservationState::Committed->value) {
-                    return $reservation;
+                    return $this->committedReplayForUser($reserveContext->commandKey, $request->userId)
+                        ?? throw new RuntimeException('Committed Trial replay authority is unavailable.');
                 }
                 if ($reservation->state !== TrialReservationState::Reserved->value || $reservation->version !== 1) {
                     throw new RuntimeException('Trial reservation is not in the atomic commit state.');

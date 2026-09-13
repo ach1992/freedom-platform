@@ -292,6 +292,46 @@ final class TrialPolicyReservationTest extends TestCase
         self::assertSame($before['capacity_reservations'], DB::table('panel_capacity_reservations')->count());
     }
 
+    public function test_atomic_customer_claim_rechecks_committed_replay_authority_after_concurrent_commit_and_reset(): void
+    {
+        $scenario = $this->scenario(dailyCapacity: 2);
+        $this->app->make(TrialPolicyService::class)->create(
+            $scenario['offering_id'],
+            $this->policyDefinition($scenario['tag_id'], administratorRegrantAllowed: true),
+            $this->catalogContext($scenario['owner_id'], 'trial-concurrent-reset-policy'),
+        );
+        $this->activateAndExposeOffering($scenario, 'trial-concurrent-reset');
+        $request = $this->request($scenario['offering_id'], $scenario['user_id']);
+        $reserveContext = $this->trialContext('trial-concurrent-reset-reserve-01', 'trial-concurrent-reset-correlation');
+        $commitContext = $this->trialContext('trial-concurrent-reset-commit-001', 'trial-concurrent-reset-correlation');
+        $competing = $this->serviceWithMembershipAllowed();
+        $injected = false;
+        $service = $this->serviceWithMembershipVerifier(new RecordingTrialMembershipVerifier(
+            function () use (&$injected, $competing, $request, $reserveContext, $commitContext, $scenario): void {
+                if ($injected) {
+                    return;
+                }
+                $injected = true;
+                $committed = $competing->reserveAndCommit($request, $reserveContext, $commitContext);
+                $competing->resetEligibility(
+                    $committed->reservationId,
+                    $committed->version,
+                    $this->catalogContext($scenario['owner_id'], 'trial-concurrent-reset-admin'),
+                );
+            },
+        ));
+
+        try {
+            $service->reserveAndCommit($request, $reserveContext, $commitContext);
+            self::fail('Expected in-transaction committed replay to honor the concurrent administrator eligibility reset.');
+        } catch (DomainException $exception) {
+            self::assertSame('Trial committed replay authority is no longer active.', $exception->getMessage());
+        }
+
+        self::assertTrue($injected);
+        self::assertSame(1, DB::table('trial_reservations')->where('command_key', $reserveContext->commandKey)->count());
+    }
+
     public function test_committed_customer_replay_remains_valid_when_one_per_user_policy_is_disabled(): void
     {
         $scenario = $this->scenario(dailyCapacity: 2);
