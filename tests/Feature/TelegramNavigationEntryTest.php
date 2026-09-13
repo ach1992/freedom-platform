@@ -2422,13 +2422,17 @@ SQL);
             'telegram_account_id' => (int) $account->id,
             'state' => 'trial_confirm',
             'version' => 4,
-            'payload' => json_encode([
-                'page' => 1,
-                'selection' => str_repeat('e', 40),
-                'route' => null,
-                'protocol' => null,
-            ], JSON_THROW_ON_ERROR),
         ]);
+        $confirmPayload = DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', (int) $account->id)
+            ->value('payload');
+        self::assertIsString($confirmPayload);
+        self::assertSame([
+            'page' => 1,
+            'protocol' => null,
+            'route' => null,
+            'selection' => str_repeat('e', 40),
+        ], json_decode($confirmPayload, true, 32, JSON_THROW_ON_ERROR));
         self::assertSame([], $claims->claimCalls);
         self::assertSame([], $membership->calls);
         self::assertSame($before, $this->trialDiscoveryMutationCounts());
@@ -2506,7 +2510,7 @@ SQL);
             $processor->process('123456789', 6968);
             self::fail('Expected simulated Trial claim interruption after the durable submit fence.');
         } catch (RuntimeException $exception) {
-            self::assertSame('simulated-trial-claim-interruption', $exception->getMessage());
+            self::assertSame('Telegram update processing failed.', $exception->getMessage());
         }
         self::assertSame([], $claims->claimCalls);
         $submitting = DB::table('telegram_interaction_sessions')
@@ -2577,7 +2581,10 @@ SQL);
         self::assertNotNull($routeState);
         self::assertSame('trial_route', $routeState->state);
         self::assertStringContainsString('Choose Trial server', $this->latestConfidentialPresentation());
-        self::assertStringContainsString('Automatic server selection', $this->latestConfidentialPresentation());
+        self::assertStringContainsString(
+            'Automatic server selection',
+            $this->navigationCommonDurableEvidence((int) $session->id, $telegramUserId),
+        );
 
         $routeToken = $this->callbackToken('navigation.trial.r.'.str_repeat('a', 40), (int) $account->id);
         $this->accept($this->callbackPayload(6958, $telegramUserId, 'navigation_trial_options', 'en', $routeToken));

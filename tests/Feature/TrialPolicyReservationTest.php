@@ -337,7 +337,11 @@ final class TrialPolicyReservationTest extends TestCase
         $scenario = $this->scenario(dailyCapacity: 2);
         $this->app->make(TrialPolicyService::class)->create(
             $scenario['offering_id'],
-            $this->policyDefinition($scenario['tag_id'], administratorRegrantAllowed: true),
+            $this->policyDefinition(
+                $scenario['tag_id'],
+                administratorRegrantAllowed: true,
+                membershipRequired: true,
+            ),
             $this->catalogContext($scenario['owner_id'], 'trial-concurrent-reset-policy'),
         );
         $this->activateAndExposeOffering($scenario, 'trial-concurrent-reset');
@@ -374,10 +378,10 @@ final class TrialPolicyReservationTest extends TestCase
 
     public function test_committed_customer_replay_remains_valid_when_one_per_user_policy_is_disabled(): void
     {
-        $scenario = $this->scenario(dailyCapacity: 2);
+        $scenario = $this->scenario(dailyCapacity: 2, phoneEvidence: 'telegram');
         $this->app->make(TrialPolicyService::class)->create(
             $scenario['offering_id'],
-            $this->policyDefinition($scenario['tag_id'], onePerUser: false),
+            $this->policyDefinition($scenario['tag_id'], onePerPhone: true, onePerUser: false),
             $this->catalogContext($scenario['owner_id'], 'trial-replay-without-one-per-user-policy'),
         );
         $this->activateAndExposeOffering($scenario, 'trial-replay-without-one-per-user');
@@ -841,6 +845,7 @@ final class TrialPolicyReservationTest extends TestCase
 
         $hybrid = $this->scenario(
             dailyCapacity: 2,
+            ownerId: $customer['owner_id'],
             serverSelectionMode: PlanOfferingServerSelectionMode::Hybrid,
             protocolSelectionMode: PlanOfferingProtocolSelectionMode::Fixed,
             customerSelectableRoutes: true,
@@ -940,6 +945,9 @@ final class TrialPolicyReservationTest extends TestCase
         $outboxCount = DB::table('outbox_messages')->count();
         $remoteEffectCount = DB::table('provisioning_remote_effect_events')->count();
 
+        $this->app->instance(TrialMembershipVerifier::class, new PassingTrialMembershipVerifier);
+        $this->app->forgetInstance(TrialReservationService::class);
+        $this->app->forgetInstance(TelegramCustomerTrialClaimService::class);
         $service = $this->app->make(TelegramCustomerTrialClaimService::class);
         $claimed = $service->claimForSelf(
             $scenario['user_id'],
