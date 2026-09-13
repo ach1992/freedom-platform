@@ -10,6 +10,7 @@ use App\Modules\Catalog\Application\RouteOperationalVerifier;
 use App\Modules\Catalog\Application\TrialContext;
 use App\Modules\Catalog\Application\TrialMembershipVerifier;
 use App\Modules\Catalog\Application\TrialPolicyService;
+use App\Modules\Catalog\Application\TrialReservationReceipt;
 use App\Modules\Catalog\Application\TrialReservationRequest;
 use App\Modules\Catalog\Application\TrialReservationService;
 use App\Modules\Catalog\Application\TrialRouteSelector;
@@ -20,14 +21,35 @@ use App\Modules\Catalog\Domain\PlanOfferingProtocolSelectionMode;
 use App\Modules\Catalog\Domain\PlanOfferingServerSelectionMode;
 use App\Modules\Catalog\Domain\PlanOfferingServiceMode;
 use App\Modules\Catalog\Domain\PlanOfferingTagMatchMode;
+use App\Modules\Catalog\Domain\ProductVisibility;
 use App\Modules\Catalog\Domain\RouteCandidateUnavailable;
 use App\Modules\Catalog\Domain\TrialPolicyDefinition;
+use App\Modules\Catalog\Infrastructure\DatabaseRouteOperationalVerifier;
 use App\Modules\Identity\Domain\PhoneVerificationPolicy;
 use App\Modules\Orders\Application\NonPaidOrderService;
 use App\Modules\Orders\Application\OrderSourceAuthorizationService;
 use App\Modules\Orders\Domain\OrderSourceType;
 use App\Modules\Orders\Domain\OrderState;
+use App\Modules\Panels\Application\Contracts\DataAllowanceMode;
+use App\Modules\Panels\Application\Contracts\PanelAdapter;
+use App\Modules\Panels\Application\Contracts\PanelAdapterFactory;
+use App\Modules\Panels\Application\Contracts\PanelCapabilities;
+use App\Modules\Panels\Application\Contracts\PanelCreateServiceRequest;
+use App\Modules\Panels\Application\Contracts\PanelOperationResult;
+use App\Modules\Panels\Application\Contracts\RemoteServiceSnapshot;
+use App\Modules\Panels\Application\Contracts\SensitiveDeliveryArtifacts;
+use App\Modules\Panels\Application\Exceptions\AuthoritativePanelLookupUnavailable;
+use App\Modules\Panels\Application\PanelAdapterRegistry;
+use App\Modules\Panels\Application\PanelAdapterSession;
+use App\Modules\Panels\Application\PanelCredentialPolicy;
+use App\Modules\Panels\Application\PanelServiceCanonicalizer;
+use App\Modules\Panels\Domain\PanelProviderType;
+use App\Modules\Panels\Infrastructure\FakePanelAdapter;
+use App\Modules\Provisioning\Application\InitialProvisioningExecutor;
 use App\Modules\Provisioning\Application\InitialProvisioningQueueService;
+use App\Modules\Provisioning\Application\InitialProvisioningRecoveryService;
+use App\Modules\Provisioning\Application\ProvisioningPanelAdapterResolver;
+use App\Modules\Provisioning\Application\ProvisioningQueueReceipt;
 use App\Modules\Provisioning\Domain\ProvisioningState;
 use App\Modules\Telegram\Application\Contracts\ProtectedTelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\TelegramMembershipLookup;
@@ -43,14 +65,151 @@ use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PanelsAccessFoundationSeeder;
 use Database\Seeders\TelegramMembershipAccessFoundationSeeder;
 use DateTimeImmutable;
+use DateTimeZone;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Connection;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
+use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Tests\TestCase;
+
+final readonly class TrialProvisioningTestPanelAdapterFactory implements PanelAdapterFactory
+{
+    public function __construct(private PanelAdapter $adapter) {}
+
+    public function providerType(): PanelProviderType
+    {
+        return PanelProviderType::Fake;
+    }
+
+    public function make(PanelAdapterSession $session): PanelAdapter
+    {
+        return $this->adapter;
+    }
+}
+
+final class InterruptedTrialProvisioningPanelAdapter implements PanelAdapter
+{
+    public int $createCalls = 0;
+
+    public ?PanelCreateServiceRequest $lastCreateRequest = null;
+
+    public ?PanelCreateServiceRequest $lastCanonicalRequest = null;
+
+    private bool $hidePostCreateLookup = false;
+
+    public function __construct(private readonly FakePanelAdapter $inner) {}
+
+    public function testConnection(): PanelOperationResult
+    {
+        return $this->inner->testConnection();
+    }
+
+    public function capabilities(): PanelCapabilities
+    {
+        return $this->inner->capabilities();
+    }
+
+    public function findByRemoteId(string $remoteId): ?RemoteServiceSnapshot
+    {
+        return $this->inner->findByRemoteId($remoteId);
+    }
+
+    public function findByDeterministicUsername(string $username): ?RemoteServiceSnapshot
+    {
+        if ($this->hidePostCreateLookup) {
+            $this->hidePostCreateLookup = false;
+
+            throw new AuthoritativePanelLookupUnavailable('Simulated interruption after remote Trial create.');
+        }
+
+        return $this->inner->findByDeterministicUsername($username);
+    }
+
+    public function createEquivalenceHash(PanelCreateServiceRequest $request): string
+    {
+        $this->lastCanonicalRequest = $request;
+
+        return $this->inner->createEquivalenceHash($request);
+    }
+
+    public function createService(PanelCreateServiceRequest $request): PanelOperationResult
+    {
+        $this->createCalls++;
+        $this->lastCreateRequest = $request;
+        $this->inner->makeNextCreateUncertain();
+        $this->hidePostCreateLookup = true;
+
+        return $this->inner->createService($request);
+    }
+
+    public function fetchStatus(string $remoteId): PanelOperationResult
+    {
+        return $this->inner->fetchStatus($remoteId);
+    }
+
+    public function updateExpiry(string $idempotencyKey, string $remoteId, DateTimeImmutable $expiresAt): PanelOperationResult
+    {
+        return $this->inner->updateExpiry($idempotencyKey, $remoteId, $expiresAt);
+    }
+
+    public function updateDataAllowance(
+        string $idempotencyKey,
+        string $remoteId,
+        int $bytes,
+        DataAllowanceMode $mode,
+    ): PanelOperationResult {
+        return $this->inner->updateDataAllowance($idempotencyKey, $remoteId, $bytes, $mode);
+    }
+
+    public function resetUsage(string $idempotencyKey, string $remoteId): PanelOperationResult
+    {
+        return $this->inner->resetUsage($idempotencyKey, $remoteId);
+    }
+
+    public function suspend(string $idempotencyKey, string $remoteId): PanelOperationResult
+    {
+        return $this->inner->suspend($idempotencyKey, $remoteId);
+    }
+
+    public function activate(string $idempotencyKey, string $remoteId): PanelOperationResult
+    {
+        return $this->inner->activate($idempotencyKey, $remoteId);
+    }
+
+    public function delete(string $idempotencyKey, string $remoteId): PanelOperationResult
+    {
+        return $this->inner->delete($idempotencyKey, $remoteId);
+    }
+
+    public function rotateSubscriptionLink(string $idempotencyKey, string $remoteId): PanelOperationResult
+    {
+        return $this->inner->rotateSubscriptionLink($idempotencyKey, $remoteId);
+    }
+
+    public function getDeliveryArtifacts(string $remoteId): SensitiveDeliveryArtifacts
+    {
+        return $this->inner->getDeliveryArtifacts($remoteId);
+    }
+
+    public function synchronize(string $remoteId): PanelOperationResult
+    {
+        return $this->inner->synchronize($remoteId);
+    }
+
+    public function listCompatibleTargets(): array
+    {
+        return $this->inner->listCompatibleTargets();
+    }
+
+    public function serviceCount(): int
+    {
+        return $this->inner->serviceCount();
+    }
+}
 
 /** @requirement CAT-006 CAT-008 ACL-002 SEC-002 DAT-003 QUA-001 */
 final class TrialPolicyReservationTest extends TestCase
@@ -417,6 +576,151 @@ final class TrialPolicyReservationTest extends TestCase
         self::assertSame(1, DB::table('outbox_messages')->where('id', $queued->outboxEventId)->count());
         self::assertSame($paymentIntentCount, DB::table('payment_intents')->count());
         self::assertSame($settlementCount, DB::table('purchase_settlements')->count());
+
+        $routeSelectionCount = DB::table('plan_offering_route_selections')->count();
+        $capacityReservationCount = DB::table('panel_capacity_reservations')->count();
+        $adapter = new FakePanelAdapter($this->app->make(PanelServiceCanonicalizer::class));
+        $this->app->instance(
+            PanelAdapterRegistry::class,
+            new PanelAdapterRegistry(
+                [new TrialProvisioningTestPanelAdapterFactory($adapter)],
+                $this->app->make(PanelCredentialPolicy::class),
+            ),
+        );
+        $this->app->forgetInstance(ProvisioningPanelAdapterResolver::class);
+        $this->app->forgetInstance(InitialProvisioningExecutor::class);
+
+        $executed = $this->app->make(InitialProvisioningExecutor::class)->execute($queued->provisioningOperationPublicId);
+        self::assertSame(ProvisioningState::Succeeded, $executed->state);
+        self::assertSame($reservation->routeSelectionId, $executed->routeSelectionId);
+        self::assertSame($routeSelectionCount, DB::table('plan_offering_route_selections')->count());
+        self::assertSame($capacityReservationCount, DB::table('panel_capacity_reservations')->count());
+
+        $operation = DB::table('provisioning_operations')
+            ->where('id', $queued->provisioningOperationId)
+            ->first(['remote_service_id', 'remote_effect_started_at']);
+        self::assertNotNull($operation);
+        self::assertIsString($operation->remote_service_id);
+        self::assertIsString($operation->remote_effect_started_at);
+        $remote = $adapter->findByRemoteId($operation->remote_service_id);
+        self::assertNotNull($remote);
+        self::assertSame($reservation->dataBytes, $remote->dataLimitBytes);
+        self::assertNotNull($remote->expiresAt);
+        $expectedExpiry = (new DateTimeImmutable($operation->remote_effect_started_at, new DateTimeZone('UTC')))
+            ->modify('+'.$reservation->durationDays.' days');
+        self::assertSame($expectedExpiry->getTimestamp(), $remote->expiresAt->getTimestamp());
+
+        $executionReplay = $this->app->make(InitialProvisioningExecutor::class)->execute($queued->provisioningOperationPublicId);
+        self::assertTrue($executionReplay->replayed);
+        self::assertSame(ProvisioningState::Succeeded, $executionReplay->state);
+        self::assertSame($executed->remoteServiceId, $executionReplay->remoteServiceId);
+        self::assertSame($routeSelectionCount, DB::table('plan_offering_route_selections')->count());
+        self::assertSame($capacityReservationCount, DB::table('panel_capacity_reservations')->count());
+    }
+
+    public function test_trial_provisioning_fails_closed_when_committed_route_operational_evidence_is_stale(): void
+    {
+        $prepared = $this->queuedCommittedTrial('stale-route-evidence');
+        $scenario = $prepared['scenario'];
+        $reservation = $prepared['reservation'];
+        $queued = $prepared['queue'];
+        $routeSelectionCount = DB::table('plan_offering_route_selections')->count();
+        $capacityReservationCount = DB::table('panel_capacity_reservations')->count();
+        $adapter = new FakePanelAdapter($this->app->make(PanelServiceCanonicalizer::class));
+        $this->installProvisioningRuntime($adapter, true);
+
+        $this->app->make(RouteOperationalVerifier::class)->assertOperational(
+            DB::connection(),
+            $scenario['offering_id'],
+            $reservation->salesServerId,
+            $reservation->serviceTargetId,
+            $reservation->protocolProfileId,
+        );
+        $connectionId = (int) DB::table('panel_service_targets')
+            ->where('id', $reservation->serviceTargetId)
+            ->value('panel_connection_id');
+        self::assertGreaterThan(0, $connectionId);
+        DB::table('panel_connections')->where('id', $connectionId)->increment('version', 1, [
+            'updated_at' => now('UTC'),
+        ]);
+
+        $receipt = $this->app->make(InitialProvisioningExecutor::class)->execute($queued->provisioningOperationPublicId);
+
+        self::assertSame(ProvisioningState::NeedsReview, $receipt->state);
+        self::assertSame(0, $adapter->serviceCount());
+        self::assertSame($routeSelectionCount, DB::table('plan_offering_route_selections')->count());
+        self::assertSame($capacityReservationCount, DB::table('panel_capacity_reservations')->count());
+        $operation = DB::table('provisioning_operations')->where('id', $queued->provisioningOperationId)->first([
+            'route_selection_id', 'capacity_reservation_id', 'last_result_code',
+        ]);
+        self::assertNotNull($operation);
+        self::assertSame($reservation->routeSelectionId, (int) $operation->route_selection_id);
+        self::assertSame($reservation->targetCapacityReservationId, (int) $operation->capacity_reservation_id);
+        self::assertSame('capacity_authority_lost', $operation->last_result_code);
+    }
+
+    public function test_trial_uncertain_remote_effect_recovers_lookup_first_without_duplicate_create(): void
+    {
+        $prepared = $this->queuedCommittedTrial('uncertain-recovery');
+        $reservation = $prepared['reservation'];
+        $queued = $prepared['queue'];
+        $routeSelectionCount = DB::table('plan_offering_route_selections')->count();
+        $capacityReservationCount = DB::table('panel_capacity_reservations')->count();
+        $inner = new FakePanelAdapter($this->app->make(PanelServiceCanonicalizer::class));
+        $adapter = new InterruptedTrialProvisioningPanelAdapter($inner);
+        $this->installProvisioningRuntime($adapter);
+
+        $first = $this->app->make(InitialProvisioningExecutor::class)->execute($queued->provisioningOperationPublicId);
+
+        self::assertSame(ProvisioningState::UncertainRemoteResult, $first->state);
+        self::assertSame(1, $adapter->createCalls);
+        self::assertSame(1, $adapter->serviceCount());
+        $firstRequest = $adapter->lastCreateRequest;
+        self::assertNotNull($firstRequest);
+        self::assertSame($reservation->dataBytes, $firstRequest->dataLimitBytes);
+        self::assertNotNull($firstRequest->expiresAt);
+        $firstHash = $inner->createEquivalenceHash($firstRequest);
+
+        $beforeRetry = DB::table('provisioning_operations')->where('id', $queued->provisioningOperationId)->first([
+            'route_selection_id', 'capacity_reservation_id', 'remote_username', 'remote_effect_started_at',
+        ]);
+        self::assertNotNull($beforeRetry);
+        self::assertIsString($beforeRetry->remote_username);
+        self::assertIsString($beforeRetry->remote_effect_started_at);
+        $remote = $adapter->findByDeterministicUsername($beforeRetry->remote_username);
+        self::assertNotNull($remote);
+        self::assertSame($firstHash, $remote->createEquivalenceHash);
+        self::assertSame($reservation->dataBytes, $remote->dataLimitBytes);
+        self::assertNotNull($remote->expiresAt);
+        self::assertSame($firstRequest->expiresAt->getTimestamp(), $remote->expiresAt->getTimestamp());
+
+        self::assertSame(
+            ProvisioningState::RetryScheduled,
+            $this->app->make(InitialProvisioningRecoveryService::class)->prepare($queued->provisioningOperationPublicId),
+        );
+        $retry = $this->app->make(InitialProvisioningExecutor::class)->execute($queued->provisioningOperationPublicId);
+
+        self::assertSame(ProvisioningState::Succeeded, $retry->state);
+        self::assertSame(1, $adapter->createCalls);
+        self::assertSame($remote->remoteId, $retry->remoteServiceId);
+        self::assertSame($reservation->routeSelectionId, $retry->routeSelectionId);
+        self::assertSame($routeSelectionCount, DB::table('plan_offering_route_selections')->count());
+        self::assertSame($capacityReservationCount, DB::table('panel_capacity_reservations')->count());
+        $retryRequest = $adapter->lastCanonicalRequest;
+        self::assertNotNull($retryRequest);
+        self::assertSame($reservation->dataBytes, $retryRequest->dataLimitBytes);
+        self::assertNotNull($retryRequest->expiresAt);
+        self::assertSame($firstRequest->expiresAt->getTimestamp(), $retryRequest->expiresAt->getTimestamp());
+        self::assertSame($firstHash, $inner->createEquivalenceHash($retryRequest));
+
+        $afterRetry = DB::table('provisioning_operations')->where('id', $queued->provisioningOperationId)->first([
+            'route_selection_id', 'capacity_reservation_id', 'remote_effect_started_at', 'remote_service_id',
+        ]);
+        self::assertNotNull($afterRetry);
+        self::assertSame($reservation->routeSelectionId, (int) $afterRetry->route_selection_id);
+        self::assertSame($reservation->targetCapacityReservationId, (int) $afterRetry->capacity_reservation_id);
+        self::assertSame($beforeRetry->remote_effect_started_at, $afterRetry->remote_effect_started_at);
+        self::assertSame($remote->remoteId, $afterRetry->remote_service_id);
     }
 
     public function test_fallback_policy_controls_route_substitution_and_disclosure_snapshot(): void
@@ -553,7 +857,75 @@ final class TrialPolicyReservationTest extends TestCase
         );
     }
 
-    /** @return array<string, int> */
+    /**
+     * @return array{scenario:array<string,int>,reservation:TrialReservationReceipt,queue:ProvisioningQueueReceipt}
+     */
+    private function queuedCommittedTrial(string $suffix): array
+    {
+        $scenario = $this->scenario(dailyCapacity: 2);
+        $this->app->make(TrialPolicyService::class)->create(
+            $scenario['offering_id'],
+            $this->policyDefinition($scenario['tag_id']),
+            $this->catalogContext($scenario['owner_id'], 'trial-'.$suffix.'-policy'),
+        );
+        $trial = $this->serviceWithMembershipAllowed();
+        $reservationCommandKey = 'trial-'.$suffix.'-reservation-command-01';
+        $reservation = $trial->reserve(
+            $this->request($scenario['offering_id'], $scenario['user_id']),
+            $this->trialContext($reservationCommandKey, 'trial-'.$suffix.'-reserve-correlation'),
+        );
+        $committed = $trial->commit(
+            $reservation->reservationId,
+            1,
+            $this->trialContext('trial-'.$suffix.'-commit-command-01', 'trial-'.$suffix.'-commit-correlation'),
+        );
+        self::assertSame('committed', $committed->state);
+        $this->activateScenarioOffering($scenario);
+        $offeringVersion = (int) DB::table('plan_offerings')
+            ->where('id', $scenario['offering_id'])
+            ->value('version');
+        $visible = $this->app->make(PlanOfferingService::class)->setVisibility(
+            $scenario['offering_id'],
+            $offeringVersion,
+            ProductVisibility::Visible,
+            $this->catalogContext($scenario['owner_id'], 'trial-'.$suffix.'-offering-visible'),
+        );
+        self::assertTrue($visible->changed);
+        $authorization = $this->app->make(OrderSourceAuthorizationService::class)->authorizeTrial(
+            $reservationCommandKey,
+            'trial-'.$suffix.'-source-correlation',
+        );
+        $order = $this->app->make(NonPaidOrderService::class)->materialize(
+            $authorization->publicId,
+            'trial-'.$suffix.'-materialize-correlation',
+        );
+        $queue = $this->app->make(InitialProvisioningQueueService::class)->queueInitial(
+            $order->orderPublicId,
+            'trial-'.$suffix.'-queue-correlation',
+        );
+
+        return ['scenario' => $scenario, 'reservation' => $reservation, 'queue' => $queue];
+    }
+
+    private function installProvisioningRuntime(PanelAdapter $adapter, bool $useDatabaseRouteVerifier = false): void
+    {
+        if ($useDatabaseRouteVerifier) {
+            $this->app->instance(RouteOperationalVerifier::class, new DatabaseRouteOperationalVerifier);
+        }
+        $this->app->instance(
+            PanelAdapterRegistry::class,
+            new PanelAdapterRegistry(
+                [new TrialProvisioningTestPanelAdapterFactory($adapter)],
+                $this->app->make(PanelCredentialPolicy::class),
+            ),
+        );
+        $this->app->forgetInstance(ProvisioningPanelAdapterResolver::class);
+        $this->app->forgetInstance(InitialProvisioningExecutor::class);
+    }
+
+    /**
+     * @return array{owner_id:int,administrator_id:int,user_id:int,tag_id:int,offering_id:int,profile_id:int,primary_route_id:int,fallback_route_id:int,primary_target_id:int,fallback_target_id:int,primary_capacity_id:int,fallback_capacity_id:int,daily_capacity:int}
+     */
     private function scenario(
         int $dailyCapacity,
         string $phoneEvidence = 'none',
@@ -768,6 +1140,7 @@ final class TrialPolicyReservationTest extends TestCase
         $targetId = (int) $offering->panel_service_target_id;
         $evidenceHash = hash('sha256', 'trial-order-target-evidence:'.$scenario['offering_id']);
         DB::table('panel_connections')->where('id', $connectionId)->update([
+            'encrypted_credentials' => Crypt::encryptString(json_encode(['token' => 'trial-provisioning-test'], JSON_THROW_ON_ERROR)),
             'state' => 'active',
             'last_test_status' => 'success',
             'last_panel_version' => 'trial-order-test-1.0.0',
