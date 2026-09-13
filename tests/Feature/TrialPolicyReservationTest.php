@@ -21,6 +21,7 @@ use App\Modules\Catalog\Domain\PlanOfferingProtocolSelectionMode;
 use App\Modules\Catalog\Domain\PlanOfferingServerSelectionMode;
 use App\Modules\Catalog\Domain\PlanOfferingServiceMode;
 use App\Modules\Catalog\Domain\PlanOfferingTagMatchMode;
+use App\Modules\Catalog\Domain\ProductVisibility;
 use App\Modules\Catalog\Domain\RouteCandidateUnavailable;
 use App\Modules\Catalog\Domain\TrialPolicyDefinition;
 use App\Modules\Catalog\Infrastructure\DatabaseRouteOperationalVerifier;
@@ -617,9 +618,9 @@ final class TrialPolicyReservationTest extends TestCase
         self::assertSame($capacityReservationCount, DB::table('panel_capacity_reservations')->count());
     }
 
-    public function test_trial_provisioning_fails_closed_when_committed_profile_is_no_longer_operational(): void
+    public function test_trial_provisioning_fails_closed_when_committed_route_operational_evidence_is_stale(): void
     {
-        $prepared = $this->queuedCommittedTrial('stale-profile');
+        $prepared = $this->queuedCommittedTrial('stale-route-evidence');
         $scenario = $prepared['scenario'];
         $reservation = $prepared['reservation'];
         $queued = $prepared['queue'];
@@ -880,6 +881,16 @@ final class TrialPolicyReservationTest extends TestCase
         );
         self::assertSame('committed', $committed->state);
         $this->activateScenarioOffering($scenario);
+        $offeringVersion = (int) DB::table('plan_offerings')
+            ->where('id', $scenario['offering_id'])
+            ->value('version');
+        $visible = $this->app->make(PlanOfferingService::class)->setVisibility(
+            $scenario['offering_id'],
+            $offeringVersion,
+            ProductVisibility::Visible,
+            $this->catalogContext($scenario['owner_id'], 'trial-'.$suffix.'-offering-visible'),
+        );
+        self::assertTrue($visible->changed);
         $authorization = $this->app->make(OrderSourceAuthorizationService::class)->authorizeTrial(
             $reservationCommandKey,
             'trial-'.$suffix.'-source-correlation',
