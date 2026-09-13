@@ -2518,6 +2518,7 @@ SQL);
         self::assertSame(5, (int) $submitting->version);
         $submittingPayload = json_decode((string) $submitting->payload, true, 32, JSON_THROW_ON_ERROR);
         self::assertTrue($submittingPayload['cancel_locked'] ?? false);
+        self::assertTrue($submittingPayload['expiry_locked'] ?? false);
 
         $this->accept($this->payload(6969, $telegramUserId, 'navigation_trial_cancel_lock', 'fa', '/cancel'));
         $processor->process('123456789', 6969);
@@ -2541,6 +2542,7 @@ SQL);
         self::assertSame(6, (int) $queued->version);
         $queuedPayload = json_decode((string) $queued->payload, true, 32, JSON_THROW_ON_ERROR);
         self::assertArrayNotHasKey('cancel_locked', $queuedPayload);
+        self::assertArrayNotHasKey('expiry_locked', $queuedPayload);
     }
 
     /** @requirement CAT-006 CHN-001 DAT-002 SEC-002 LOC-001 QUA-001 */
