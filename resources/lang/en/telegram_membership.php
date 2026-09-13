@@ -6,4 +6,5 @@ return [
     'entry_unavailable' => 'Bot access is temporarily unavailable. Please try again shortly.',
     'retry_prompt' => 'Join the required Telegram channels or groups, then check your membership again.',
     'retry_button' => 'Check Membership Again',
+    'purchase_unavailable' => 'Purchase membership verification is temporarily unavailable. Check your membership again before continuing.',
 ];

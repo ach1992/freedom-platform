@@ -19,10 +19,12 @@ use App\Modules\Telegram\Application\Contracts\TelegramCustomerTrialClaim;
 use App\Modules\Telegram\Application\Contracts\TelegramMembershipLookup;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceDeliveryResender;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceProjection;
+use App\Modules\Telegram\Application\TelegramChannelMembershipEvaluationDecision;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseCardToCardDestination;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseCardToCardReservation;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseCatalogPage;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseDiscountQuotePreview;
+use App\Modules\Telegram\Application\TelegramCustomerPurchaseMembershipPreflight;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseOffering;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseOrderReceipt;
 use App\Modules\Telegram\Application\TelegramCustomerPurchasePaymentMethodsDecision;
@@ -55,6 +57,7 @@ use App\Modules\Telegram\Application\TelegramOwnedServiceDetail;
 use App\Modules\Telegram\Application\TelegramOwnedServiceListItem;
 use App\Modules\Telegram\Application\TelegramOwnedServicePage;
 use App\Modules\Telegram\Application\TelegramOwnedServiceSearchResult;
+use App\Modules\Telegram\Application\TelegramProtectedPresentationReference;
 use App\Modules\Telegram\Application\TelegramUpdateProcessor;
 use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
 use App\Modules\Wallet\Application\LedgerEntryDraft;
@@ -428,7 +431,41 @@ final class TelegramNavigationCustomerPurchaseQuote implements TelegramCustomerP
     /** @var list<array{actor_user_id:int,subject_user_id:int,selection_token:string,accepted_at:DateTimeImmutable,quote_key:string,correlation_id:string}> */
     public array $calls = [];
 
+    /** @var list<array{actor_user_id:int,subject_user_id:int,selection_token:string,locale:string}> */
+    public array $membershipCalls = [];
+
+    public TelegramChannelMembershipEvaluationDecision $membershipDecision = TelegramChannelMembershipEvaluationDecision::NotRequired;
+
     public function __construct(private readonly TelegramNavigationCustomerPurchaseCatalog $catalog) {}
+
+    public function membershipForSelf(
+        int $actorUserId,
+        int $subjectUserId,
+        string $offeringSelectionToken,
+        string $locale,
+    ): TelegramCustomerPurchaseMembershipPreflight {
+        $this->membershipCalls[] = [
+            'actor_user_id' => $actorUserId,
+            'subject_user_id' => $subjectUserId,
+            'selection_token' => $offeringSelectionToken,
+            'locale' => $locale,
+        ];
+        $offering = $this->catalog->offeringForSelf($actorUserId, $subjectUserId, $offeringSelectionToken);
+        $configurationHash = str_repeat('c', 64);
+        $joinReference = $this->membershipDecision === TelegramChannelMembershipEvaluationDecision::Unsatisfied
+            ? TelegramProtectedPresentationReference::membershipJoinPrompt('purchase', 1, $configurationHash, $locale)
+            : null;
+
+        return new TelegramCustomerPurchaseMembershipPreflight(
+            $this->membershipDecision,
+            $configurationHash,
+            $offering->offeringCode,
+            1,
+            str_repeat('d', 64),
+            $offering->accountType,
+            $joinReference,
+        );
+    }
 
     public function previewForSelf(
         int $actorUserId,
@@ -466,6 +503,7 @@ final class TelegramNavigationCustomerPurchaseQuote implements TelegramCustomerP
         DateTimeImmutable $acceptedAt,
         string $quoteKey,
         string $correlationId,
+        ?TelegramCustomerPurchaseMembershipPreflight $membership = null,
     ): TelegramCustomerPurchaseQuotePreview {
         $this->calls[] = [
             'actor_user_id' => $actorUserId,
@@ -2935,6 +2973,111 @@ SQL);
         $processor->process('123456789', 6988);
         self::assertCount(2, $quotes->calls);
         self::assertSame($before, $this->purchaseMutationCounts());
+    }
+
+    public function test_purchase_membership_gate_uses_protected_join_retry_and_keeps_internal_identity_out_of_public_state(): void
+    {
+        $catalog = new TelegramNavigationCustomerPurchaseCatalog;
+        $quotes = new TelegramNavigationCustomerPurchaseQuote($catalog);
+        $quotes->membershipDecision = TelegramChannelMembershipEvaluationDecision::Unsatisfied;
+        $this->app->instance(TelegramCustomerPurchaseCatalog::class, $catalog);
+        $this->app->instance(TelegramCustomerPurchaseQuote::class, $quotes);
+        $telegramUserId = 9711;
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+
+        $this->accept($this->payload(6990, $telegramUserId, 'navigation_purchase_membership', 'fa', '/start'));
+        $processor->process('123456789', 6990);
+        $account = DB::table('telegram_accounts')->where('telegram_user_id', $telegramUserId)->first(['id', 'user_id']);
+        self::assertNotNull($account);
+        $session = DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', (int) $account->id)
+            ->first(['id']);
+        self::assertNotNull($session);
+
+        $purchase = DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $session->id)
+            ->where('session_version', 1)
+            ->where('action', 'navigation.purchase')
+            ->first(['token_ciphertext']);
+        self::assertNotNull($purchase);
+        $purchaseToken = $this->app->make(StringEncrypter::class)->decryptString((string) $purchase->token_ciphertext);
+        $this->accept($this->callbackPayload(6991, $telegramUserId, 'navigation_purchase_membership', 'fa', $purchaseToken));
+        $processor->process('123456789', 6991);
+
+        $offering = DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $session->id)
+            ->where('session_version', 2)
+            ->where('action', 'navigation.purchase.'.str_repeat('c', 40))
+            ->first(['token_ciphertext']);
+        self::assertNotNull($offering);
+        $offeringToken = $this->app->make(StringEncrypter::class)->decryptString((string) $offering->token_ciphertext);
+        $this->accept($this->callbackPayload(6992, $telegramUserId, 'navigation_purchase_membership', 'fa', $offeringToken));
+        $processor->process('123456789', 6992);
+
+        $quote = DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $session->id)
+            ->where('session_version', 3)
+            ->where('action', 'navigation.purchase.quote')
+            ->first(['token_ciphertext']);
+        self::assertNotNull($quote);
+        $quoteToken = $this->app->make(StringEncrypter::class)->decryptString((string) $quote->token_ciphertext);
+        $before = $this->purchaseMutationCounts();
+        $this->accept($this->callbackPayload(6993, $telegramUserId, 'navigation_purchase_membership', 'fa', $quoteToken));
+        $processor->process('123456789', 6993);
+
+        self::assertCount(1, $quotes->membershipCalls);
+        self::assertSame([], $quotes->calls, 'Unsatisfied membership must not reach Quote creation.');
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'id' => (int) $session->id,
+            'state' => 'purchase_membership',
+            'version' => 4,
+            'payload' => json_encode([
+                'offering_selection' => str_repeat('c', 40),
+                'page' => 1,
+            ], JSON_THROW_ON_ERROR),
+        ]);
+        $retry = DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $session->id)
+            ->where('session_version', 4)
+            ->where('action', 'navigation.purchase.membership.retry')
+            ->first(['action_payload', 'token_ciphertext']);
+        self::assertNotNull($retry);
+        self::assertSame('{}', (string) $retry->action_payload);
+        $retryToken = $this->app->make(StringEncrypter::class)->decryptString((string) $retry->token_ciphertext);
+
+        $protected = DB::table('telegram_delivery_operations')
+            ->where('recipient_chat_id', $telegramUserId)
+            ->where('presentation_text', 'like', '[PROTECTED_TELEGRAM_REFERENCE:v2:membership_join_prompt:purchase:%')
+            ->first(['presentation_text']);
+        self::assertNotNull($protected);
+        self::assertStringContainsString(':purchase:1:', (string) $protected->presentation_text);
+        self::assertStringContainsString(str_repeat('c', 64), (string) $protected->presentation_text);
+        $common = $this->navigationCommonDurableEvidence((int) $session->id, $telegramUserId);
+        self::assertStringNotContainsString('plan_offering_id', $common);
+        self::assertStringNotContainsString('membership_configuration_hash', $common);
+        $publicPresentation = $this->latestConfidentialPresentation();
+        self::assertStringNotContainsString(str_repeat('c', 64), $publicPresentation);
+        self::assertStringNotContainsString('plan_offering_id', $publicPresentation);
+        self::assertSame($before, $this->purchaseMutationCounts());
+
+        $quotes->membershipDecision = TelegramChannelMembershipEvaluationDecision::Satisfied;
+        $this->accept($this->callbackPayload(6994, $telegramUserId, 'navigation_purchase_membership', 'fa', $retryToken));
+        $processor->process('123456789', 6994);
+
+        self::assertCount(2, $quotes->membershipCalls);
+        self::assertCount(1, $quotes->calls);
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'id' => (int) $session->id,
+            'state' => 'purchase_quote',
+            'version' => 6,
+        ]);
+        self::assertSame($before, $this->purchaseMutationCounts());
+        $operationCount = DB::table('telegram_delivery_operations')->where('recipient_chat_id', $telegramUserId)->count();
+
+        $processor->process('123456789', 6994);
+        self::assertCount(2, $quotes->membershipCalls, 'Completed Retry replay must not re-evaluate membership.');
+        self::assertCount(1, $quotes->calls, 'Completed Retry replay must not duplicate Quote creation.');
+        self::assertSame($operationCount, DB::table('telegram_delivery_operations')->where('recipient_chat_id', $telegramUserId)->count());
     }
 
     public function test_customer_purchase_discount_requote_keeps_plaintext_out_of_durable_state_and_rebuilds_pay_001_from_new_quote(): void

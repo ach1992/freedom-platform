@@ -64,6 +64,8 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
 
     private const STATE_PURCHASE_QUOTE_SUBMITTING = 'purchase_quote_submitting';
 
+    private const STATE_PURCHASE_MEMBERSHIP = 'purchase_membership';
+
     private const STATE_PURCHASE_OFFERING = 'purchase_offering';
 
     private const STATE_MY_SERVICES = 'my_services';
@@ -101,6 +103,8 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
     private const ACTION_PURCHASE_WALLET_CONFIRM = 'navigation.purchase.wallet.confirm';
 
     private const ACTION_PURCHASE_QUOTE = 'navigation.purchase.quote';
+
+    private const ACTION_PURCHASE_MEMBERSHIP_RETRY = 'navigation.purchase.membership.retry';
 
     private const ACTION_PURCHASE_OFFERING_PREFIX = 'navigation.purchase.';
 
@@ -211,6 +215,12 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
 
         if ($action->sessionState === self::STATE_PURCHASE_OFFERING) {
             $this->handlePurchaseOffering($action);
+
+            return;
+        }
+
+        if ($action->sessionState === self::STATE_PURCHASE_MEMBERSHIP) {
+            $this->handlePurchaseMembership($action);
 
             return;
         }
@@ -360,6 +370,35 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
 
         if ($action->kind === TelegramInteractionActionKind::Back) {
             $this->returnPurchaseCatalog($action);
+
+            return;
+        }
+        if ($this->isEntryCommand($action->messageText)) {
+            $this->returnHome($action);
+        }
+    }
+
+    private function handlePurchaseMembership(TelegramInteractionAction $action): void
+    {
+        $this->purchaseOfferingStateFromPayload($action->sessionPayload);
+        if ($action->kind === TelegramInteractionActionKind::Callback) {
+            if ($action->callbackAction === self::ACTION_PURCHASE_MEMBERSHIP_RETRY
+                && $action->callbackPayload === []) {
+                $this->showPurchaseQuote($action);
+
+                return;
+            }
+            if ($action->callbackAction !== self::ACTION_BACK || $action->callbackPayload !== []) {
+                throw new RuntimeException('Telegram purchase membership callback action is unsupported.');
+            }
+
+            $this->returnPurchaseOfferingFromMembership($action);
+
+            return;
+        }
+
+        if ($action->kind === TelegramInteractionActionKind::Back) {
+            $this->returnPurchaseOfferingFromMembership($action);
 
             return;
         }
@@ -1265,9 +1304,37 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         if ($action->callbackAcceptedAt === null) {
             throw new RuntimeException('Telegram purchase Quote callback acceptance time is unavailable.');
         }
+        $locale = $this->localeForActor($action->userId);
 
         try {
-            [$session, $preview] = $this->database->connection()->transaction(function () use ($action, $state): array {
+            $membership = $this->purchaseQuotes->membershipForSelf(
+                $action->userId,
+                $action->userId,
+                $state['offering_selection'],
+                $locale,
+            );
+        } catch (AuthorizationException) {
+            try {
+                $this->returnPurchaseCatalog($action);
+            } catch (AuthorizationException|\DomainException) {
+                // The selected offering or actor became stale while returning safely.
+            }
+
+            return;
+        } catch (\DomainException|RuntimeException) {
+            $this->showPurchaseMembershipGate($action, $state, null, $locale);
+
+            return;
+        }
+
+        if (! $membership->allowsQuote()) {
+            $this->showPurchaseMembershipGate($action, $state, $membership, $locale);
+
+            return;
+        }
+
+        try {
+            [$session, $preview] = $this->database->connection()->transaction(function () use ($action, $state, $membership): array {
                 $claim = $this->sessions->transition(
                     $action->sessionPublicId,
                     $action->sessionVersion,
@@ -1287,6 +1354,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
                     $action->callbackAcceptedAt,
                     $this->purchaseQuoteRequestKey($action),
                     $this->purchaseQuoteCorrelationId($action),
+                    $membership,
                 );
 
                 $session = $this->sessions->transition(
@@ -1305,6 +1373,10 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
 
                 return [$session, $preview];
             }, 3);
+        } catch (TelegramCustomerPurchaseMembershipChanged) {
+            $this->showPurchaseMembershipGate($action, $state, null, $locale);
+
+            return;
         } catch (AuthorizationException) {
             try {
                 $this->returnPurchaseCatalog($action);
@@ -1329,8 +1401,82 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             $session->version,
             $preview,
             $quoteState,
-            $this->localeForActor($action->userId),
+            $locale,
             $action->requestKey,
+        );
+    }
+
+    /**
+     * @param  array{page:int,offering_selection:string}  $state
+     */
+    private function showPurchaseMembershipGate(
+        TelegramInteractionAction $action,
+        array $state,
+        ?TelegramCustomerPurchaseMembershipPreflight $membership,
+        string $locale,
+    ): void {
+        try {
+            $session = $this->sessions->transition(
+                $action->sessionPublicId,
+                $action->sessionVersion,
+                self::STATE_PURCHASE_MEMBERSHIP,
+                [
+                    'page' => $state['page'],
+                    'offering_selection' => $state['offering_selection'],
+                ],
+                'nav-purchase-membership-transition:'.hash('sha256', $action->requestKey),
+            );
+        } catch (\DomainException) {
+            return;
+        }
+        $this->assertActorBinding($action, $session->userId);
+
+        $retry = $this->callbacks->issue(
+            $action->sessionPublicId,
+            $session->version,
+            self::ACTION_PURCHASE_MEMBERSHIP_RETRY,
+            [],
+            'nav-purchase-membership-retry:'.$action->requestKey,
+        );
+        $back = $this->callbacks->issue(
+            $action->sessionPublicId,
+            $session->version,
+            self::ACTION_BACK,
+            [],
+            'nav-purchase-membership-back:'.$action->requestKey,
+        );
+
+        $unsatisfied = $membership?->decision === TelegramChannelMembershipEvaluationDecision::Unsatisfied
+            && $membership->joinReference !== null;
+        if ($unsatisfied) {
+            $this->delivery->queueProtectedReference(
+                TelegramDeliveryAction::Send,
+                $action->telegramUserId,
+                $membership->joinReference,
+                'nav-purchase-membership-join:'.$action->requestKey,
+                $this->correlationId($action, 'purchase-membership-join'),
+            );
+        }
+
+        $this->queueConfidential(
+            $action,
+            $this->translation(
+                $unsatisfied ? 'telegram_membership.retry_prompt' : 'telegram_membership.purchase_unavailable',
+                $locale,
+            ),
+            'nav-purchase-membership-delivery:'.$action->requestKey,
+            'purchase-membership',
+            new TelegramInlineKeyboardSnapshot([
+                [new TelegramInlineCallbackButton(
+                    $this->translation('telegram_membership.retry_button', $locale),
+                    $retry->publicId,
+                    TelegramInlineButtonStyle::Primary,
+                )],
+                [new TelegramInlineCallbackButton(
+                    $this->translation('telegram.navigation.buttons.back', $locale),
+                    $back->publicId,
+                )],
+            ]),
         );
     }
 
@@ -2646,6 +2792,37 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             'service-search-'.$surface,
             $keyboard,
         );
+    }
+
+    private function returnPurchaseOfferingFromMembership(TelegramInteractionAction $action): void
+    {
+        $state = $this->purchaseOfferingStateFromPayload($action->sessionPayload);
+        try {
+            $offering = $this->purchaseCatalog->offeringForSelf(
+                $action->userId,
+                $action->userId,
+                $state['offering_selection'],
+            );
+        } catch (AuthorizationException) {
+            try {
+                $this->returnPurchaseCatalogFromQuote($action, $state['page']);
+            } catch (AuthorizationException|\DomainException) {
+                // The actor or Offering changed while returning from membership verification. Fail closed.
+            }
+
+            return;
+        }
+
+        $locale = $this->localeForActor($action->userId);
+        $session = $this->sessions->transition(
+            $action->sessionPublicId,
+            $action->sessionVersion,
+            self::STATE_PURCHASE_OFFERING,
+            ['page' => $state['page'], 'offering_selection' => $state['offering_selection']],
+            'nav-purchase-membership-back-transition:'.$action->requestKey,
+        );
+        $this->assertActorBinding($action, $session->userId);
+        $this->renderPurchaseOffering($action, $session->version, $offering, $locale, $action->requestKey);
     }
 
     private function returnPurchaseOffering(TelegramInteractionAction $action): void

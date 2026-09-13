@@ -9,7 +9,16 @@ use App\Modules\Orders\Domain\QuoteAction;
 use App\Modules\Orders\Domain\QuoteOverrideSource;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCatalog;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseQuote;
+use App\Modules\Telegram\Application\TelegramChannelMembershipEvaluationDecision;
+use App\Modules\Telegram\Application\TelegramChannelMembershipEvaluator;
+use App\Modules\Telegram\Application\TelegramChannelMembershipResolutionRequest;
+use App\Modules\Telegram\Application\TelegramChannelMembershipRuleResolver;
+use App\Modules\Telegram\Application\TelegramCustomerPurchaseMembershipChanged;
+use App\Modules\Telegram\Application\TelegramCustomerPurchaseMembershipPreflight;
+use App\Modules\Telegram\Application\TelegramCustomerPurchaseOffering;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseQuotePreview;
+use App\Modules\Telegram\Application\TelegramMembershipConfigurationFence;
+use App\Modules\Telegram\Application\TelegramProtectedPresentationReference;
 use DateTimeImmutable;
 use DateTimeZone;
 use Illuminate\Auth\Access\AuthorizationException;
@@ -26,7 +35,71 @@ final readonly class TelegramCustomerPurchaseQuoteService implements TelegramCus
         private DatabaseManager $database,
         private QuoteService $quotes,
         private TelegramCustomerPurchaseCatalog $catalog,
+        private TelegramChannelMembershipEvaluator $membershipEvaluator,
+        private TelegramChannelMembershipRuleResolver $membershipResolver,
+        private TelegramMembershipConfigurationFence $membershipConfigurationFence,
     ) {}
+
+    /** @requirement ONB-003 CHN-001 BUY-001 BUY-002 AGT-003 AGT-005 DAT-003 SEC-002 QUA-001 */
+    public function membershipForSelf(
+        int $actorUserId,
+        int $subjectUserId,
+        string $offeringSelectionToken,
+        string $locale,
+    ): TelegramCustomerPurchaseMembershipPreflight {
+        if ($actorUserId < 1 || $subjectUserId < 1 || $actorUserId !== $subjectUserId) {
+            throw new AuthorizationException('Telegram purchase membership self access denied.');
+        }
+        if (! in_array($locale, ['fa', 'en'], true)) {
+            throw new RuntimeException('Telegram purchase membership locale is invalid.');
+        }
+
+        $connection = $this->database->connection();
+        if ($connection->transactionLevel() !== 0) {
+            throw new RuntimeException('Telegram purchase membership provider verification must run outside a database transaction.');
+        }
+
+        [$offering, $identity] = $connection->transaction(function (Connection $connection) use (
+            $actorUserId,
+            $subjectUserId,
+            $offeringSelectionToken,
+        ): array {
+            $offering = $this->catalog->offeringForSelf($actorUserId, $subjectUserId, $offeringSelectionToken);
+            $identity = $this->currentOfferingIdentity($connection, $offering->offeringCode);
+
+            return [$offering, $identity];
+        }, 1);
+
+        $evaluation = $this->membershipEvaluator->evaluate(new TelegramChannelMembershipResolutionRequest(
+            $subjectUserId,
+            'purchase',
+            $identity['id'],
+        ));
+        if ($evaluation->plan->userId !== $subjectUserId
+            || $evaluation->plan->planOfferingId !== $identity['id']
+            || $evaluation->plan->subjectAccountType !== $offering->accountType) {
+            throw new TelegramCustomerPurchaseMembershipChanged('Telegram purchase membership evaluation identity changed.');
+        }
+
+        $joinReference = $evaluation->decision === TelegramChannelMembershipEvaluationDecision::Unsatisfied
+            ? TelegramProtectedPresentationReference::membershipJoinPrompt(
+                'purchase',
+                $identity['id'],
+                $evaluation->plan->configurationHash,
+                $locale,
+            )
+            : null;
+
+        return new TelegramCustomerPurchaseMembershipPreflight(
+            $evaluation->decision,
+            $evaluation->plan->configurationHash,
+            $offering->offeringCode,
+            $identity['version'],
+            $identity['configuration_hash'],
+            $offering->accountType,
+            $joinReference,
+        );
+    }
 
     /** @requirement AGT-003 AGT-005 BUY-001 BUY-002 BUY-003 DAT-002 DAT-003 SEC-002 QUA-001 */
     public function previewForSelf(
@@ -124,6 +197,7 @@ final readonly class TelegramCustomerPurchaseQuoteService implements TelegramCus
         DateTimeImmutable $acceptedAt,
         string $quoteKey,
         string $correlationId,
+        ?TelegramCustomerPurchaseMembershipPreflight $membership = null,
     ): TelegramCustomerPurchaseQuotePreview {
         if ($actorUserId < 1 || $subjectUserId < 1 || $actorUserId !== $subjectUserId) {
             throw new AuthorizationException('Telegram purchase Quote self access denied.');
@@ -141,6 +215,7 @@ final readonly class TelegramCustomerPurchaseQuoteService implements TelegramCus
             $quoteKey,
             $correlationId,
             $expiresAt,
+            $membership,
         ): TelegramCustomerPurchaseQuotePreview {
             $offering = $this->catalog->offeringForSelf(
                 $actorUserId,
@@ -148,6 +223,13 @@ final readonly class TelegramCustomerPurchaseQuoteService implements TelegramCus
                 $offeringSelectionToken,
             );
             $offeringIdentity = $this->currentOfferingIdentity($connection, $offering->offeringCode);
+            $this->assertCurrentMembership(
+                $connection,
+                $subjectUserId,
+                $offering,
+                $offeringIdentity,
+                $membership,
+            );
             $agentPricingContext = $offering->accountType === 'agent'
                 ? new QuoteAgentPricingContext($subjectUserId, AgentPricingAction::Purchase)
                 : null;
@@ -200,6 +282,77 @@ final readonly class TelegramCustomerPurchaseQuoteService implements TelegramCus
                 $quote->accountType,
             );
         }, 3);
+    }
+
+    /**
+     * @param  array{id:int,version:int,configuration_hash:string,base_price_irr:int}  $offeringIdentity
+     */
+    private function assertCurrentMembership(
+        Connection $connection,
+        int $subjectUserId,
+        TelegramCustomerPurchaseOffering $offering,
+        array $offeringIdentity,
+        ?TelegramCustomerPurchaseMembershipPreflight $membership,
+    ): void {
+        if ($connection->transactionLevel() < 1) {
+            throw new RuntimeException('Telegram purchase membership revalidation requires the Quote transaction.');
+        }
+
+        $this->membershipConfigurationFence->acquire($connection);
+        $this->lockMembershipSubject($connection, $subjectUserId, $offering->accountType);
+        $plan = $this->membershipResolver->resolve(new TelegramChannelMembershipResolutionRequest(
+            $subjectUserId,
+            'purchase',
+            $offeringIdentity['id'],
+        ));
+
+        if ($membership === null) {
+            if ($plan->required) {
+                throw new TelegramCustomerPurchaseMembershipChanged('Telegram purchase membership preflight is required.');
+            }
+
+            return;
+        }
+        if (! $membership->allowsQuote()
+            || ! hash_equals($membership->offeringCode, $offering->offeringCode)
+            || $membership->offeringVersion !== $offeringIdentity['version']
+            || ! hash_equals($membership->offeringConfigurationHash, $offeringIdentity['configuration_hash'])
+            || $membership->accountType !== $offering->accountType
+            || $plan->userId !== $subjectUserId
+            || $plan->planOfferingId !== $offeringIdentity['id']
+            || $plan->subjectAccountType !== $offering->accountType
+            || ! hash_equals($membership->membershipConfigurationHash, $plan->configurationHash)
+            || ($membership->decision === TelegramChannelMembershipEvaluationDecision::NotRequired && $plan->required)
+            || ($membership->decision === TelegramChannelMembershipEvaluationDecision::Satisfied && ! $plan->required)) {
+            throw new TelegramCustomerPurchaseMembershipChanged('Telegram purchase membership authority changed after provider verification.');
+        }
+    }
+
+    private function lockMembershipSubject(Connection $connection, int $userId, string $expectedAccountType): void
+    {
+        /** @var object{account_type:string,account_status:string}|null $user */
+        $user = $connection->table('users')
+            ->where('id', $userId)
+            ->lockForUpdate()
+            ->first(['account_type', 'account_status']);
+        if ($user === null
+            || $user->account_status !== 'active'
+            || $user->account_type !== $expectedAccountType
+            || ! in_array($user->account_type, ['customer', 'agent'], true)) {
+            throw new TelegramCustomerPurchaseMembershipChanged('Telegram purchase membership subject changed after provider verification.');
+        }
+
+        if ($user->account_type !== 'customer') {
+            return;
+        }
+
+        $profile = $connection->table('customer_profiles')
+            ->where('user_id', $userId)
+            ->lockForUpdate()
+            ->first(['user_id']);
+        if ($profile === null) {
+            throw new TelegramCustomerPurchaseMembershipChanged('Telegram purchase membership customer profile changed after provider verification.');
+        }
     }
 
     private function pricingBindingMatchesAccountType(QuoteReceipt $quote): bool

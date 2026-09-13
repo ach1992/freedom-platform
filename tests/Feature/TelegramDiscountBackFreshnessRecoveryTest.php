@@ -8,8 +8,10 @@ use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCatalog;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseDiscountQuote;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchasePaymentMethods;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseQuote;
+use App\Modules\Telegram\Application\TelegramChannelMembershipEvaluationDecision;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseCatalogPage;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseDiscountQuotePreview;
+use App\Modules\Telegram\Application\TelegramCustomerPurchaseMembershipPreflight;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseOffering;
 use App\Modules\Telegram\Application\TelegramCustomerPurchasePaymentMethodsDecision;
 use App\Modules\Telegram\Application\TelegramCustomerPurchasePaymentMethodSelection;
@@ -74,6 +76,25 @@ final class StaleDiscountBackPurchaseQuote implements TelegramCustomerPurchaseQu
 
     public function __construct(private readonly TelegramCustomerPurchaseCatalog $catalog) {}
 
+    public function membershipForSelf(
+        int $actorUserId,
+        int $subjectUserId,
+        string $offeringSelectionToken,
+        string $locale,
+    ): TelegramCustomerPurchaseMembershipPreflight {
+        $offering = $this->catalog->offeringForSelf($actorUserId, $subjectUserId, $offeringSelectionToken);
+
+        return new TelegramCustomerPurchaseMembershipPreflight(
+            TelegramChannelMembershipEvaluationDecision::NotRequired,
+            str_repeat('c', 64),
+            $offering->offeringCode,
+            1,
+            str_repeat('d', 64),
+            $offering->accountType,
+            null,
+        );
+    }
+
     public function previewForSelf(
         int $actorUserId,
         int $subjectUserId,
@@ -112,6 +133,7 @@ final class StaleDiscountBackPurchaseQuote implements TelegramCustomerPurchaseQu
         DateTimeImmutable $acceptedAt,
         string $quoteKey,
         string $correlationId,
+        ?TelegramCustomerPurchaseMembershipPreflight $membership = null,
     ): TelegramCustomerPurchaseQuotePreview {
         $offering = $this->catalog->offeringForSelf($actorUserId, $subjectUserId, $offeringSelectionToken);
 
