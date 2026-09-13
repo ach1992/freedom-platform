@@ -626,10 +626,20 @@ final class TrialPolicyReservationTest extends TestCase
         $routeSelectionCount = DB::table('plan_offering_route_selections')->count();
         $capacityReservationCount = DB::table('panel_capacity_reservations')->count();
         $adapter = new FakePanelAdapter($this->app->make(PanelServiceCanonicalizer::class));
-        $this->installProvisioningRuntime($adapter);
+        $this->installProvisioningRuntime($adapter, true);
 
-        DB::table('panel_protocol_profiles')->where('id', $scenario['profile_id'])->update([
-            'state' => 'disabled',
+        $this->app->make(RouteOperationalVerifier::class)->assertOperational(
+            DB::connection(),
+            $scenario['offering_id'],
+            $reservation->salesServerId,
+            $reservation->serviceTargetId,
+            $reservation->protocolProfileId,
+        );
+        $connectionId = (int) DB::table('panel_service_targets')
+            ->where('id', $reservation->serviceTargetId)
+            ->value('panel_connection_id');
+        self::assertGreaterThan(0, $connectionId);
+        DB::table('panel_connections')->where('id', $connectionId)->increment('version', 1, [
             'updated_at' => now('UTC'),
         ]);
 
@@ -886,9 +896,11 @@ final class TrialPolicyReservationTest extends TestCase
         return ['scenario' => $scenario, 'reservation' => $reservation, 'queue' => $queue];
     }
 
-    private function installProvisioningRuntime(PanelAdapter $adapter): void
+    private function installProvisioningRuntime(PanelAdapter $adapter, bool $useDatabaseRouteVerifier = false): void
     {
-        $this->app->instance(RouteOperationalVerifier::class, new DatabaseRouteOperationalVerifier);
+        if ($useDatabaseRouteVerifier) {
+            $this->app->instance(RouteOperationalVerifier::class, new DatabaseRouteOperationalVerifier);
+        }
         $this->app->instance(
             PanelAdapterRegistry::class,
             new PanelAdapterRegistry(
