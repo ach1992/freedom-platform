@@ -18,7 +18,7 @@ use RuntimeException;
 
 /**
  * @phpstan-type AuthorizationRow object{id:int|string,public_id:string,source_type:string,user_id:int|string,plan_offering_id:int|string,trial_reservation_id:int|string|null,trial_reservation_command_key:string|null,benefit_entitlement_id:int|string|null,benefit_entitlement_public_id:string|null,authorization_key:string,request_payload_hash:string,configuration_snapshot:string,configuration_snapshot_hash:string,actor_type:string,actor_id:int|string|null,reason_code:string,correlation_id:string}
- * @phpstan-type TrialReservationRow object{id:int|string,command_key:string,payload_hash:string,trial_policy_id:int|string,trial_policy_version:int|string,policy_configuration_hash:string,plan_offering_id:int|string,user_id:int|string,plan_offering_route_selection_id:int|string,state:string,version:int|string,data_bytes:int|string,duration_days:int|string,fallback_used_snapshot:int|bool,delivery_template_key_snapshot:string,eligibility_snapshot_hash:string}
+ * @phpstan-type TrialReservationRow object{id:int|string,command_key:string,payload_hash:string,trial_policy_id:int|string,trial_policy_version:int|string,policy_configuration_hash:string,plan_offering_id:int|string,user_id:int|string,plan_offering_route_selection_id:int|string,state:string,version:int|string,data_bytes:int|string,duration_days:int|string,fallback_used_snapshot:int|bool,delivery_template_key_snapshot:string,eligibility_snapshot_hash:string,eligibility_reset_at:?string}
  * @phpstan-type BenefitEntitlementRow object{id:int|string,public_id:string,user_id:int|string,plan_offering_id:int|string,configuration_snapshot:string,configuration_hash:string}
  * @phpstan-type TrialConfiguration array{data_bytes:int,delivery_template_key:string,duration_days:int,eligibility_snapshot_hash:string,fallback_used:bool,plan_offering_route_selection_id:int,policy_configuration_hash:string,trial_policy_id:int,trial_policy_version:int,trial_reservation_version:int}
  * @phpstan-type AdministratorGrantConfiguration array{data_allowance_bytes:int|null,device_limit:int|null,duration_days:int,offering_code:string,offering_version:int,protocol_selection_mode:string,sales_server_id:int,server_selection_mode:string,service_mode_code:string,service_target_id:int}
@@ -51,6 +51,9 @@ final readonly class OrderSourceAuthorizationService
                 }
                 if ($reservation->state !== 'committed') {
                     throw new DomainException('Trial reservation is not committed.');
+                }
+                if ($reservation->eligibility_reset_at !== null) {
+                    throw new DomainException('Trial committed replay authority is no longer active.');
                 }
 
                 $userId = $this->positiveDatabaseInt($reservation->user_id, 'Trial reservation user ID');
@@ -503,27 +506,33 @@ SQL);
 
     private function trialReplayAfterUniqueRace(string $trialCommandKey, string $authorizationKey): ?OrderSourceAuthorizationReceipt
     {
-        $connection = $this->database->connection();
-        $reservation = $this->trialReservationByCommandKey($connection, $trialCommandKey, false);
-        $existing = $this->authorizationByKey($connection, $authorizationKey);
-        if ($reservation === null || $existing === null || $reservation->state !== 'committed') {
-            return null;
-        }
-
         try {
-            $userId = $this->positiveDatabaseInt($reservation->user_id, 'Trial reservation user ID');
-            $offeringId = $this->positiveDatabaseInt($reservation->plan_offering_id, 'Trial reservation offering ID');
-            $configurationHash = hash('sha256', $this->canonicalJson($this->trialConfiguration($reservation)));
-            $requestHash = $this->hashPayload([
-                'payload_hash' => $this->storedSha256($reservation->payload_hash, 'Trial reservation payload hash'),
-                'plan_offering_id' => $offeringId,
-                'policy_configuration_hash' => $this->storedSha256($reservation->policy_configuration_hash, 'Trial policy configuration hash'),
-                'trial_reservation_id' => $this->positiveDatabaseInt($reservation->id, 'Trial reservation ID'),
-                'trial_reservation_command_key' => $trialCommandKey,
-                'user_id' => $userId,
-            ]);
+            return $this->database->connection()->transaction(function (Connection $connection) use ($trialCommandKey, $authorizationKey): ?OrderSourceAuthorizationReceipt {
+                $reservation = $this->trialReservationByCommandKey($connection, $trialCommandKey, true);
+                $existing = $this->authorizationByKey($connection, $authorizationKey);
+                if (
+                    $reservation === null
+                    || $existing === null
+                    || $reservation->state !== 'committed'
+                    || $reservation->eligibility_reset_at !== null
+                ) {
+                    return null;
+                }
 
-            return $this->replayReceipt($existing, OrderSourceType::Trial, $userId, $offeringId, $authorizationKey, $requestHash, 'system', null, 'trial_committed', $configurationHash);
+                $userId = $this->positiveDatabaseInt($reservation->user_id, 'Trial reservation user ID');
+                $offeringId = $this->positiveDatabaseInt($reservation->plan_offering_id, 'Trial reservation offering ID');
+                $configurationHash = hash('sha256', $this->canonicalJson($this->trialConfiguration($reservation)));
+                $requestHash = $this->hashPayload([
+                    'payload_hash' => $this->storedSha256($reservation->payload_hash, 'Trial reservation payload hash'),
+                    'plan_offering_id' => $offeringId,
+                    'policy_configuration_hash' => $this->storedSha256($reservation->policy_configuration_hash, 'Trial policy configuration hash'),
+                    'trial_reservation_id' => $this->positiveDatabaseInt($reservation->id, 'Trial reservation ID'),
+                    'trial_reservation_command_key' => $trialCommandKey,
+                    'user_id' => $userId,
+                ]);
+
+                return $this->replayReceipt($existing, OrderSourceType::Trial, $userId, $offeringId, $authorizationKey, $requestHash, 'system', null, 'trial_committed', $configurationHash);
+            }, self::DEADLOCK_RETRY_ATTEMPTS);
         } catch (DomainException|RuntimeException) {
             return null;
         }
@@ -583,6 +592,7 @@ SQL);
             'fallback_used_snapshot',
             'delivery_template_key_snapshot',
             'eligibility_snapshot_hash',
+            'eligibility_reset_at',
         ]);
 
         return $row;

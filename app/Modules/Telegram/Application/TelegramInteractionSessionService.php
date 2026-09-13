@@ -420,6 +420,7 @@ final readonly class TelegramInteractionSessionService
 
                 return null;
             }
+            $this->assertCancellationAllowed($session);
 
             return $this->terminalize(
                 $connection,
@@ -465,6 +466,7 @@ final readonly class TelegramInteractionSessionService
             if ((int) $session->version !== $expectedVersion) {
                 throw new DomainException('Telegram interaction session version is stale.');
             }
+            $this->assertCancellationAllowed($session);
 
             return $this->terminalize(
                 $connection,
@@ -667,6 +669,11 @@ final readonly class TelegramInteractionSessionService
     /** @param SessionRow $session */
     private function isExpired(object $session): bool
     {
+        $payload = $this->payloadFromJson((string) $session->payload);
+        if (($payload['expiry_locked'] ?? false) === true) {
+            return false;
+        }
+
         return $this->parseTime((string) $session->expires_at) <= $this->clock->now();
     }
 
@@ -775,6 +782,17 @@ final readonly class TelegramInteractionSessionService
             $this->parseTime((string) $transition->to_expires_at),
             true,
         );
+    }
+
+    /** @param SessionRow $session */
+    private function assertCancellationAllowed(object $session): void
+    {
+        $payload = $this->payloadFromJson((string) $session->payload);
+        if (($payload['cancel_locked'] ?? false) === true) {
+            throw new TelegramInteractionCancellationLocked(
+                'Telegram interaction cancellation is locked while a confirmed effect is being submitted.',
+            );
+        }
     }
 
     /** @param SessionRow $session */

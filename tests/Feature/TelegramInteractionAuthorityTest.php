@@ -444,6 +444,38 @@ final class TelegramInteractionAuthorityTest extends TestCase
         self::assertCount(2, $handler->actions);
         self::assertNull($this->sessions()->activeForAccount($account['telegram_account_id']));
 
+        $lockedSession = $this->sessions()->start(
+            $account['telegram_account_id'],
+            'customer.demo',
+            'effect_submitting',
+            ['cancel_locked' => true, 'expiry_locked' => true],
+            'dispatcher-cancel-locked-session',
+        );
+        $this->clock->advance('+31 minutes');
+        $lockedCancel = $dispatcher->dispatch('123456', 6004, $account['user_id'], [
+            'message' => ['text' => '/cancel'],
+        ]);
+        self::assertSame(TelegramInteractionDispatchStatus::Handled, $lockedCancel->status);
+        self::assertSame($lockedSession->publicId, $lockedCancel->sessionPublicId);
+        $stillActive = $this->sessions()->activeForAccount($account['telegram_account_id']);
+        self::assertNotNull($stillActive);
+        self::assertSame($lockedSession->publicId, $stillActive->publicId);
+        self::assertSame('effect_submitting', $stillActive->state);
+        self::assertSame(TelegramInteractionSessionStatus::Active, $stillActive->status);
+        $unlockedSession = $this->sessions()->transition(
+            $lockedSession->publicId,
+            1,
+            'effect_queued',
+            [],
+            'dispatcher-cancel-unlock-transition',
+        );
+        $unlockedCancel = $dispatcher->dispatch('123456', 6005, $account['user_id'], [
+            'message' => ['text' => '/cancel'],
+        ]);
+        self::assertSame(TelegramInteractionDispatchStatus::Cancelled, $unlockedCancel->status);
+        self::assertSame($unlockedSession->publicId, $unlockedCancel->sessionPublicId);
+        self::assertNull($this->sessions()->activeForAccount($account['telegram_account_id']));
+
         $callbackSession = $this->sessions()->start(
             $account['telegram_account_id'],
             'customer.demo',
