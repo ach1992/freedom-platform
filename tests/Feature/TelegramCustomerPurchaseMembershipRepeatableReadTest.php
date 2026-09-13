@@ -6,6 +6,7 @@ namespace Tests\Feature;
 
 use App\Modules\Customers\Application\CustomerChangeContext;
 use App\Modules\Customers\Application\CustomerTagService;
+use App\Modules\Telegram\Application\Contracts\ProtectedTelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCatalog;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseQuote;
 use App\Modules\Telegram\Application\Contracts\TelegramMembershipLookup;
@@ -35,6 +36,14 @@ final class TelegramRepeatableReadMembershipLookup implements TelegramMembership
     public function lookup(int $chatId, int $telegramUserId): TelegramMembershipLookupResult
     {
         throw new RuntimeException('Repeatable-read stale NotRequired verification must not call the membership provider.');
+    }
+}
+
+final readonly class TelegramRepeatableReadDeliveryRuntime implements ProtectedTelegramDeliveryRuntime
+{
+    public function botId(): string
+    {
+        return '123456';
     }
 }
 
@@ -262,6 +271,7 @@ final class TelegramCustomerPurchaseMembershipRepeatableReadTest extends TestCas
     {
         $this->app->instance(TelegramCustomerPurchaseCatalog::class, $catalog);
         $this->app->instance(TelegramMembershipLookup::class, new TelegramRepeatableReadMembershipLookup);
+        $this->app->instance(ProtectedTelegramDeliveryRuntime::class, new TelegramRepeatableReadDeliveryRuntime);
         $this->app->forgetInstance(TelegramChannelMembershipEvaluator::class);
         $this->app->forgetInstance(TelegramChannelMembershipRuleResolver::class);
         $this->app->forgetInstance(TelegramCustomerPurchaseQuote::class);
