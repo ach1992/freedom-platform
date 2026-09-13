@@ -943,9 +943,10 @@ final class TrialPolicyReservationTest extends TestCase
                 $this->policyDefinition($scenario['tag_id'], fallbackAllowed: false),
                 $this->catalogContext($scenario['owner_id'], 'telegram-trial-priority-projection-policy-'.$index),
             );
-            $this->swapPrimaryAndFallbackRouteBindings($scenario);
+            $this->rebindPrimaryRouteToIndependentRuntime($scenario);
             $this->activateAndExposeOffering($scenario, 'telegram-trial-priority-projection-'.$index);
             $this->activateRouteRuntime($scenario['primary_route_id']);
+            $this->activateRouteRuntime($scenario['fallback_route_id']);
             $this->disableRouteSalesServer($scenario['primary_route_id']);
             $this->app->instance(RouteOperationalVerifier::class, new DatabaseRouteOperationalVerifier);
             $this->app->forgetInstance(TelegramTrialClaimSelectionService::class);
@@ -1002,9 +1003,10 @@ final class TrialPolicyReservationTest extends TestCase
             $this->policyDefinition($scenario['tag_id'], fallbackAllowed: true),
             $this->catalogContext($scenario['owner_id'], 'telegram-trial-fallback-projection-policy'),
         );
-        $this->swapPrimaryAndFallbackRouteBindings($scenario);
+        $this->rebindPrimaryRouteToIndependentRuntime($scenario);
         $this->activateAndExposeOffering($scenario, 'telegram-trial-fallback-projection');
         $this->activateRouteRuntime($scenario['primary_route_id']);
+        $this->activateRouteRuntime($scenario['fallback_route_id']);
         $this->disableRouteSalesServer($scenario['primary_route_id']);
         $this->app->instance(RouteOperationalVerifier::class, new DatabaseRouteOperationalVerifier);
         $this->app->forgetInstance(TelegramTrialClaimSelectionService::class);
@@ -1678,28 +1680,32 @@ final class TrialPolicyReservationTest extends TestCase
     }
 
     /** @param array<string,int> $scenario */
-    private function swapPrimaryAndFallbackRouteBindings(array $scenario): void
+    private function rebindPrimaryRouteToIndependentRuntime(array $scenario): void
     {
-        /** @var object{sales_server_id:int|string,panel_service_target_id:int|string}|null $primary */
-        $primary = DB::table('plan_offering_routes')->where('id', $scenario['primary_route_id'])->first([
-            'sales_server_id', 'panel_service_target_id',
-        ]);
-        /** @var object{sales_server_id:int|string,panel_service_target_id:int|string}|null $fallback */
-        $fallback = DB::table('plan_offering_routes')->where('id', $scenario['fallback_route_id'])->first([
-            'sales_server_id', 'panel_service_target_id',
-        ]);
-        self::assertNotNull($primary);
-        self::assertNotNull($fallback);
         $now = now('UTC');
-
-        DB::table('plan_offering_routes')->where('id', $scenario['primary_route_id'])->update([
-            'sales_server_id' => (int) $fallback->sales_server_id,
-            'panel_service_target_id' => (int) $fallback->panel_service_target_id,
+        $serverId = $this->server('trial-route-primary', $now);
+        $targetId = $this->target('trial-route-primary', $now);
+        DB::table('panel_target_protocol_profiles')->insert([
+            'panel_service_target_id' => $targetId,
+            'panel_protocol_profile_id' => $scenario['profile_id'],
+            'customer_selectable' => true,
+            'created_at' => $now,
             'updated_at' => $now,
         ]);
-        DB::table('plan_offering_routes')->where('id', $scenario['fallback_route_id'])->update([
-            'sales_server_id' => (int) $primary->sales_server_id,
-            'panel_service_target_id' => (int) $primary->panel_service_target_id,
+        DB::table('panel_target_capabilities')->insert([
+            'panel_service_target_id' => $targetId,
+            'capability_code' => 'create_service',
+            'verification_status' => 'declared',
+            'evidence_hash' => null,
+            'verified_at' => null,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $this->capacity($targetId, 5, $now);
+
+        DB::table('plan_offering_routes')->where('id', $scenario['primary_route_id'])->update([
+            'sales_server_id' => $serverId,
+            'panel_service_target_id' => $targetId,
             'updated_at' => $now,
         ]);
     }
