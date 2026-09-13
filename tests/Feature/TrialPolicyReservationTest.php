@@ -926,6 +926,115 @@ final class TrialPolicyReservationTest extends TestCase
         self::assertSame(0, DB::table('panel_capacity_reservations')->count());
     }
 
+    /** @requirement CAT-006 DAT-002 DAT-003 SEC-002 QUA-001 */
+    public function test_telegram_trial_protocol_projection_preserves_primary_priority_before_operational_filtering_without_fallback(): void
+    {
+        $ownerId = $this->administrator(true);
+        foreach ([PlanOfferingServerSelectionMode::System, PlanOfferingServerSelectionMode::Hybrid] as $index => $mode) {
+            $scenario = $this->scenario(
+                dailyCapacity: 2,
+                ownerId: $ownerId,
+                serverSelectionMode: $mode,
+                protocolSelectionMode: PlanOfferingProtocolSelectionMode::Customer,
+                customerSelectableProfile: true,
+            );
+            $this->app->make(TrialPolicyService::class)->create(
+                $scenario['offering_id'],
+                $this->policyDefinition($scenario['tag_id'], fallbackAllowed: false),
+                $this->catalogContext($scenario['owner_id'], 'telegram-trial-priority-projection-policy-'.$index),
+            );
+            $this->activateAndExposeOffering($scenario, 'telegram-trial-priority-projection-'.$index);
+            $this->activateRouteRuntime($scenario['fallback_route_id']);
+            $this->disableRouteSalesServer($scenario['primary_route_id']);
+            $this->app->instance(RouteOperationalVerifier::class, new DatabaseRouteOperationalVerifier);
+            $this->app->forgetInstance(TelegramTrialClaimSelectionService::class);
+            $this->app->forgetInstance(TrialRouteSelector::class);
+            $this->app->forgetInstance(TrialReservationService::class);
+
+            $catalog = $this->app->make(TelegramCustomerTrialCatalog::class)
+                ->pageForSelf($scenario['user_id'], $scenario['user_id'], 1, 6);
+            self::assertCount(1, $catalog->items);
+            try {
+                $this->app->make(TelegramTrialClaimSelectionService::class)->optionsForSelf(
+                    $scenario['user_id'],
+                    $scenario['user_id'],
+                    $catalog->items[0]->selectionToken,
+                    null,
+                );
+                self::fail('Fallback-disabled automatic projection must not promote a lower-priority route after the primary becomes unavailable.');
+            } catch (AuthorizationException $exception) {
+                self::assertSame('Telegram Trial has no currently available customer-selectable protocol.', $exception->getMessage());
+            }
+
+            try {
+                $this->app->make(TrialReservationService::class)->reserveAndCommit(
+                    new TrialReservationRequest(
+                        $scenario['offering_id'],
+                        $scenario['user_id'],
+                        null,
+                        $scenario['profile_id'],
+                        (new DateTimeImmutable('now', new DateTimeZone('UTC')))->modify('+15 minutes'),
+                    ),
+                    $this->trialContext('trial-priority-projection-reserve-'.$index, 'trial-priority-projection-correlation-'.$index),
+                    $this->trialContext('trial-priority-projection-commit-'.$index, 'trial-priority-projection-correlation-'.$index),
+                );
+                self::fail('Canonical fallback-disabled Trial selection must fail when its original priority-0 route is unavailable.');
+            } catch (RouteCandidateUnavailable) {
+            }
+            self::assertSame(0, DB::table('trial_reservations')->where('plan_offering_id', $scenario['offering_id'])->count());
+            self::assertSame(0, DB::table('plan_offering_route_selections')->where('plan_offering_id', $scenario['offering_id'])->count());
+        }
+    }
+
+    /** @requirement CAT-006 DAT-002 DAT-003 SEC-002 QUA-001 */
+    public function test_telegram_trial_protocol_projection_and_claim_use_authorized_fallback_after_primary_becomes_unavailable(): void
+    {
+        $scenario = $this->scenario(
+            dailyCapacity: 2,
+            serverSelectionMode: PlanOfferingServerSelectionMode::System,
+            protocolSelectionMode: PlanOfferingProtocolSelectionMode::Customer,
+            customerSelectableProfile: true,
+        );
+        $this->app->make(TrialPolicyService::class)->create(
+            $scenario['offering_id'],
+            $this->policyDefinition($scenario['tag_id'], fallbackAllowed: true),
+            $this->catalogContext($scenario['owner_id'], 'telegram-trial-fallback-projection-policy'),
+        );
+        $this->activateAndExposeOffering($scenario, 'telegram-trial-fallback-projection');
+        $this->activateRouteRuntime($scenario['fallback_route_id']);
+        $this->disableRouteSalesServer($scenario['primary_route_id']);
+        $this->app->instance(RouteOperationalVerifier::class, new DatabaseRouteOperationalVerifier);
+        $this->app->forgetInstance(TelegramTrialClaimSelectionService::class);
+        $this->app->forgetInstance(TrialRouteSelector::class);
+        $this->app->forgetInstance(TrialReservationService::class);
+
+        $catalog = $this->app->make(TelegramCustomerTrialCatalog::class)
+            ->pageForSelf($scenario['user_id'], $scenario['user_id'], 1, 6);
+        self::assertCount(1, $catalog->items);
+        $options = $this->app->make(TelegramTrialClaimSelectionService::class)->optionsForSelf(
+            $scenario['user_id'],
+            $scenario['user_id'],
+            $catalog->items[0]->selectionToken,
+            null,
+        );
+        self::assertCount(1, $options->protocolOptions);
+
+        $committed = $this->app->make(TrialReservationService::class)->reserveAndCommit(
+            new TrialReservationRequest(
+                $scenario['offering_id'],
+                $scenario['user_id'],
+                null,
+                $scenario['profile_id'],
+                (new DateTimeImmutable('now', new DateTimeZone('UTC')))->modify('+15 minutes'),
+            ),
+            $this->trialContext('trial-fallback-projection-reserve-01', 'trial-fallback-projection-correlation'),
+            $this->trialContext('trial-fallback-projection-commit-01', 'trial-fallback-projection-correlation'),
+        );
+        self::assertSame('committed', $committed->state);
+        self::assertTrue($committed->fallbackUsed);
+        self::assertSame($scenario['fallback_route_id'], $committed->routeId);
+    }
+
     /** @requirement CAT-006 BUY-001 BUY-002 PRV-002 PRV-003 DAT-002 DAT-003 DAT-004 SEC-002 SEC-008 QUA-001 QUA-004 */
     public function test_telegram_trial_claim_commits_and_hands_off_one_zero_cost_order_to_provisioning_queue_without_inline_provider_effect(): void
     {
@@ -1025,6 +1134,183 @@ final class TrialPolicyReservationTest extends TestCase
         self::assertSame((int) $reservation->plan_offering_route_selection_id, $snapshot['plan_offering_route_selection_id'] ?? null);
         self::assertSame((int) $reservation->data_bytes, $snapshot['data_bytes'] ?? null);
         self::assertSame((int) $reservation->duration_days, $snapshot['duration_days'] ?? null);
+    }
+
+    /** @requirement CAT-006 BUY-001 BUY-002 PRV-002 PRV-003 DAT-002 DAT-003 DAT-004 SEC-002 SEC-008 QUA-001 QUA-004 */
+    public function test_telegram_trial_claim_recovers_after_committed_trial_is_archived_before_order_handoff(): void
+    {
+        $scenario = $this->scenario(dailyCapacity: 2);
+        $this->app->make(TrialPolicyService::class)->create(
+            $scenario['offering_id'],
+            $this->policyDefinition($scenario['tag_id']),
+            $this->catalogContext($scenario['owner_id'], 'telegram-trial-archive-recovery-policy'),
+        );
+        $this->activateAndExposeOffering($scenario, 'telegram-trial-archive-recovery');
+        $page = $this->app->make(TelegramCustomerTrialCatalog::class)
+            ->pageForSelf($scenario['user_id'], $scenario['user_id'], 1, 6);
+        self::assertCount(1, $page->items);
+        $selectionToken = $page->items[0]->selectionToken;
+        $operationKey = str_repeat('d', 64);
+        $reservationCommandKey = 'telegram-trial-reserve:'.$operationKey;
+        $correlationId = 'tgtrial:'.substr($operationKey, 0, 56);
+        $acceptedAt = new DateTimeImmutable('now', new DateTimeZone('UTC'));
+
+        $committed = $this->app->make(TrialReservationService::class)->reserveAndCommit(
+            new TrialReservationRequest(
+                $scenario['offering_id'],
+                $scenario['user_id'],
+                null,
+                null,
+                $acceptedAt->modify('+15 minutes'),
+            ),
+            new TrialContext($reservationCommandKey, $correlationId, 'telegram', 'customer_claim_reserve'),
+            new TrialContext(
+                'telegram-trial-commit:'.substr(hash('sha256', $reservationCommandKey), 0, 64),
+                $correlationId,
+                'telegram',
+                'customer_claim_commit',
+            ),
+        );
+        self::assertSame('committed', $committed->state);
+        self::assertSame(0, DB::table('order_source_authorizations')->count());
+        self::assertSame(0, DB::table('orders')->count());
+        $routeSelectionCount = DB::table('plan_offering_route_selections')->count();
+        $capacityReservationCount = DB::table('panel_capacity_reservations')->count();
+
+        $offerings = $this->app->make(PlanOfferingService::class);
+        $version = (int) DB::table('plan_offerings')->where('id', $scenario['offering_id'])->value('version');
+        $hidden = $offerings->setVisibility(
+            $scenario['offering_id'],
+            $version,
+            ProductVisibility::Hidden,
+            $this->catalogContext($scenario['owner_id'], 'telegram-trial-archive-recovery-hidden'),
+        );
+        self::assertTrue($hidden->changed);
+        $version = (int) DB::table('plan_offerings')->where('id', $scenario['offering_id'])->value('version');
+        $archived = $offerings->archive(
+            $scenario['offering_id'],
+            $version,
+            $this->catalogContext($scenario['owner_id'], 'telegram-trial-archive-recovery-archived'),
+        );
+        self::assertTrue($archived->changed);
+        self::assertSame('archived', DB::table('plan_offerings')->where('id', $scenario['offering_id'])->value('state'));
+
+        $receipt = $this->app->make(TelegramCustomerTrialClaimService::class)->claimForSelf(
+            $scenario['user_id'],
+            $scenario['user_id'],
+            $selectionToken,
+            null,
+            null,
+            $operationKey,
+            $acceptedAt,
+        );
+        self::assertTrue($receipt->replayed);
+        self::assertSame(1, DB::table('trial_reservations')->where('command_key', $reservationCommandKey)->where('state', 'committed')->count());
+        self::assertSame($routeSelectionCount, DB::table('plan_offering_route_selections')->count());
+        self::assertSame($capacityReservationCount, DB::table('panel_capacity_reservations')->count());
+        self::assertSame(1, DB::table('order_source_authorizations')->where('source_type', 'trial')->count());
+        self::assertSame(1, DB::table('orders')->where('source_type', 'trial')->count());
+        self::assertSame(1, DB::table('order_items')->count());
+        self::assertSame(1, DB::table('service_subscriptions')->count());
+        self::assertSame(1, DB::table('provisioning_operations')->where('state', ProvisioningState::Queued->value)->count());
+        self::assertSame(1, DB::table('outbox_messages')->where('event_type', InitialProvisioningQueueService::OUTBOX_EVENT_TYPE)->count());
+    }
+
+    /** @requirement CAT-006 BUY-001 DAT-002 DAT-003 SEC-002 QUA-001 */
+    public function test_fresh_telegram_trial_claim_fails_without_effect_after_offering_is_archived(): void
+    {
+        $scenario = $this->scenario(dailyCapacity: 2);
+        $this->app->make(TrialPolicyService::class)->create(
+            $scenario['offering_id'],
+            $this->policyDefinition($scenario['tag_id']),
+            $this->catalogContext($scenario['owner_id'], 'telegram-trial-fresh-archive-policy'),
+        );
+        $this->activateAndExposeOffering($scenario, 'telegram-trial-fresh-archive');
+        $page = $this->app->make(TelegramCustomerTrialCatalog::class)
+            ->pageForSelf($scenario['user_id'], $scenario['user_id'], 1, 6);
+        self::assertCount(1, $page->items);
+        $selectionToken = $page->items[0]->selectionToken;
+
+        $offerings = $this->app->make(PlanOfferingService::class);
+        $version = (int) DB::table('plan_offerings')->where('id', $scenario['offering_id'])->value('version');
+        $offerings->setVisibility(
+            $scenario['offering_id'],
+            $version,
+            ProductVisibility::Hidden,
+            $this->catalogContext($scenario['owner_id'], 'telegram-trial-fresh-archive-hidden'),
+        );
+        $version = (int) DB::table('plan_offerings')->where('id', $scenario['offering_id'])->value('version');
+        $offerings->archive(
+            $scenario['offering_id'],
+            $version,
+            $this->catalogContext($scenario['owner_id'], 'telegram-trial-fresh-archive-archived'),
+        );
+        $before = [
+            'reservations' => DB::table('trial_reservations')->count(),
+            'route_selections' => DB::table('plan_offering_route_selections')->count(),
+            'capacity_reservations' => DB::table('panel_capacity_reservations')->count(),
+            'source_authorizations' => DB::table('order_source_authorizations')->count(),
+            'orders' => DB::table('orders')->count(),
+        ];
+        try {
+            $this->app->make(TelegramCustomerTrialClaimService::class)->claimForSelf(
+                $scenario['user_id'],
+                $scenario['user_id'],
+                $selectionToken,
+                null,
+                null,
+                str_repeat('e', 64),
+                new DateTimeImmutable('now', new DateTimeZone('UTC')),
+            );
+            self::fail('Fresh Telegram Trial claim must fail once the Offering is archived.');
+        } catch (AuthorizationException|DomainException) {
+        }
+        self::assertSame($before['reservations'], DB::table('trial_reservations')->count());
+        self::assertSame($before['route_selections'], DB::table('plan_offering_route_selections')->count());
+        self::assertSame($before['capacity_reservations'], DB::table('panel_capacity_reservations')->count());
+        self::assertSame($before['source_authorizations'], DB::table('order_source_authorizations')->count());
+        self::assertSame($before['orders'], DB::table('orders')->count());
+    }
+
+    public function test_archived_trial_order_recovery_requires_active_visible_offering_at_commit(): void
+    {
+        $scenario = $this->scenario(dailyCapacity: 2);
+        $this->app->make(TrialPolicyService::class)->create(
+            $scenario['offering_id'],
+            $this->policyDefinition($scenario['tag_id']),
+            $this->catalogContext($scenario['owner_id'], 'trial-archive-without-active-policy'),
+        );
+        $trial = $this->serviceWithMembershipAllowed();
+        $commandKey = 'trial-archive-without-active-reservation-01';
+        $reservation = $trial->reserve(
+            $this->request($scenario['offering_id'], $scenario['user_id']),
+            $this->trialContext($commandKey, 'trial-archive-without-active-correlation'),
+        );
+        $committed = $trial->commit(
+            $reservation->reservationId,
+            1,
+            $this->trialContext('trial-archive-without-active-commit-01', 'trial-archive-without-active-correlation'),
+        );
+        self::assertSame('committed', $committed->state);
+        $authorization = $this->app->make(OrderSourceAuthorizationService::class)->authorizeTrial(
+            $commandKey,
+            'trial-archive-without-active-source',
+        );
+        $this->app->make(PlanOfferingService::class)->archive(
+            $scenario['offering_id'],
+            1,
+            $this->catalogContext($scenario['owner_id'], 'trial-archive-without-active-offering'),
+        );
+        try {
+            $this->app->make(NonPaidOrderService::class)->materialize(
+                $authorization->publicId,
+                'trial-archive-without-active-order',
+            );
+            self::fail('Archived Trial materialization must not recover a Trial committed before active-visible Offering authority existed.');
+        } catch (DomainException $exception) {
+            self::assertSame('Archived Trial Order recovery requires an active visible Offering at Trial commit.', $exception->getMessage());
+        }
+        self::assertSame(0, DB::table('orders')->count());
     }
 
     public function test_committed_trial_materializes_and_queues_one_zero_cost_order_with_replay(): void
@@ -1381,6 +1667,63 @@ final class TrialPolicyReservationTest extends TestCase
             $this->policyDefinition($scenario['tag_id']),
             $this->catalogContext($scenario['administrator_id'], 'trial-policy-unauthorized-0001'),
         );
+    }
+
+    private function activateRouteRuntime(int $routeId): void
+    {
+        /** @var object{sales_server_id:int|string,panel_service_target_id:int|string}|null $route */
+        $route = DB::table('plan_offering_routes')->where('id', $routeId)->first([
+            'sales_server_id', 'panel_service_target_id',
+        ]);
+        self::assertNotNull($route);
+        /** @var object{panel_connection_id:int|string}|null $target */
+        $target = DB::table('panel_service_targets')->where('id', (int) $route->panel_service_target_id)->first([
+            'panel_connection_id',
+        ]);
+        self::assertNotNull($target);
+        $now = now('UTC');
+        $connectionId = (int) $target->panel_connection_id;
+        $targetId = (int) $route->panel_service_target_id;
+        $evidenceHash = hash('sha256', 'trial-route-runtime-evidence:'.$routeId);
+        DB::table('panel_connections')->where('id', $connectionId)->update([
+            'encrypted_credentials' => Crypt::encryptString(json_encode(['token' => 'trial-route-runtime-test'], JSON_THROW_ON_ERROR)),
+            'state' => 'active',
+            'last_test_status' => 'success',
+            'last_panel_version' => 'trial-route-runtime-1.0.0',
+            'last_capabilities_hash' => hash('sha256', 'trial-route-runtime-capabilities:'.$routeId),
+            'last_tested_at' => $now,
+            'updated_at' => $now,
+        ]);
+        DB::table('panel_target_capabilities')->where('panel_service_target_id', $targetId)->update([
+            'verification_status' => 'verified',
+            'evidence_hash' => $evidenceHash,
+            'verified_at' => $now,
+            'updated_at' => $now,
+        ]);
+        DB::table('panel_service_targets')->where('id', $targetId)->update([
+            'state' => 'active',
+            'capability_status' => 'verified',
+            'capability_evidence_hash' => $evidenceHash,
+            'capability_verified_at' => $now,
+            'verified_connection_version' => 1,
+            'updated_at' => $now,
+        ]);
+        DB::table('sales_servers')->where('id', (int) $route->sales_server_id)->update([
+            'state' => 'active',
+            'visibility' => 'listed',
+            'updated_at' => $now,
+        ]);
+    }
+
+    private function disableRouteSalesServer(int $routeId): void
+    {
+        $serverId = DB::table('plan_offering_routes')->where('id', $routeId)->value('sales_server_id');
+        self::assertTrue(is_int($serverId) || is_string($serverId));
+        DB::table('sales_servers')->where('id', (int) $serverId)->update([
+            'state' => 'disabled',
+            'visibility' => 'hidden',
+            'updated_at' => now('UTC'),
+        ]);
     }
 
     /** @param array<string,int> $scenario */

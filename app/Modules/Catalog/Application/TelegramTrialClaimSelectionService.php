@@ -179,8 +179,6 @@ final readonly class TelegramTrialClaimSelectionService
         $routeRows = $connection->table('plan_offering_routes as route')
             ->join('sales_servers as server', 'server.id', '=', 'route.sales_server_id')
             ->where('route.plan_offering_route_policy_id', (int) $routePolicyId)
-            ->where('server.state', 'active')
-            ->where('server.visibility', 'listed')
             ->orderBy('route.priority')
             ->get([
                 'route.id', 'route.sales_server_id', 'route.panel_service_target_id', 'route.route_type',

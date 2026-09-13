@@ -17,7 +17,7 @@ use Illuminate\Support\Str;
 use RuntimeException;
 
 /**
- * @phpstan-type SourceAuthorizationRow object{id:int|string,public_id:string,source_type:string,user_id:int|string,plan_offering_id:int|string,authorization_key:string,request_payload_hash:string,configuration_snapshot:string,configuration_snapshot_hash:string,actor_type:string,actor_id:int|string|null,reason_code:string,correlation_id:string}
+ * @phpstan-type SourceAuthorizationRow object{id:int|string,public_id:string,source_type:string,user_id:int|string,plan_offering_id:int|string,trial_reservation_id:int|string|null,authorization_key:string,request_payload_hash:string,configuration_snapshot:string,configuration_snapshot_hash:string,actor_type:string,actor_id:int|string|null,reason_code:string,correlation_id:string}
  * @phpstan-type SubjectRow object{id:int|string,account_type:string,account_status:string}
  * @phpstan-type OfferingRow object{id:int|string,code:string,base_price_irr:int|string,state:string,version:int|string}
  * @phpstan-type OfferingHistoryRow object{to_configuration_hash:string}
@@ -117,7 +117,7 @@ SQL);
         $userId = $this->positiveDatabaseInt($authorization->user_id, 'Order source authorization user ID');
         $subject = $this->activeSubject($connection, $userId);
         $offeringId = $this->positiveDatabaseInt($authorization->plan_offering_id, 'Order source authorization Plan Offering ID');
-        $offering = $this->activeOffering($connection, $offeringId);
+        $offering = $this->offeringForSource($connection, $offeringId, $authorization, $sourceType);
         $offeringVersion = $this->positiveDatabaseInt($offering->version, 'Plan Offering version');
         $offeringConfigurationHash = $this->offeringConfigurationHash($connection, $offeringId, $offeringVersion);
         $snapshotHash = $this->storedSha256($authorization->configuration_snapshot_hash, 'Order source configuration snapshot hash');
@@ -207,7 +207,7 @@ SQL);
 
         /** @var SourceAuthorizationRow|null $row */
         $row = $query->first([
-            'id', 'public_id', 'source_type', 'user_id', 'plan_offering_id', 'authorization_key',
+            'id', 'public_id', 'source_type', 'user_id', 'plan_offering_id', 'trial_reservation_id', 'authorization_key',
             'request_payload_hash', 'configuration_snapshot', 'configuration_snapshot_hash',
             'actor_type', 'actor_id', 'reason_code', 'correlation_id',
         ]);
@@ -244,18 +244,67 @@ SQL);
         return $row;
     }
 
-    /** @return OfferingRow */
-    private function activeOffering(Connection $connection, int $offeringId): object
-    {
+    /**
+     * @param  SourceAuthorizationRow  $authorization
+     * @return OfferingRow
+     */
+    private function offeringForSource(
+        Connection $connection,
+        int $offeringId,
+        object $authorization,
+        OrderSourceType $sourceType,
+    ): object {
         /** @var OfferingRow|null $row */
         $row = $connection->table('plan_offerings')->where('id', $offeringId)->first([
             'id', 'code', 'base_price_irr', 'state', 'version',
         ]);
-        if ($row === null || $row->state !== 'active') {
+        if ($row === null) {
+            throw new DomainException('Zero-cost Order creation requires an active Plan Offering.');
+        }
+        if ($row->state === 'active') {
+            return $row;
+        }
+        if ($sourceType !== OrderSourceType::Trial || $row->state !== 'archived') {
             throw new DomainException('Zero-cost Order creation requires an active Plan Offering.');
         }
 
+        $this->assertArchivedTrialRecoveryAuthority($connection, $authorization, $offeringId);
+
         return $row;
+    }
+
+    /** @param SourceAuthorizationRow $authorization */
+    private function assertArchivedTrialRecoveryAuthority(
+        Connection $connection,
+        object $authorization,
+        int $offeringId,
+    ): void {
+        if ($authorization->trial_reservation_id === null) {
+            throw new DomainException('Archived Trial Order recovery requires committed Trial authority.');
+        }
+        /** @var object{plan_offering_id:int|string,state:string,committed_at:?string,eligibility_reset_at:?string}|null $reservation */
+        $reservation = $connection->table('trial_reservations')
+            ->where('id', $this->positiveDatabaseInt($authorization->trial_reservation_id, 'Trial reservation ID'))
+            ->lockForUpdate()
+            ->first(['plan_offering_id', 'state', 'committed_at', 'eligibility_reset_at']);
+        if ($reservation === null
+            || (int) $reservation->plan_offering_id !== $offeringId
+            || $reservation->state !== 'committed'
+            || $reservation->committed_at === null
+            || $reservation->eligibility_reset_at !== null
+        ) {
+            throw new DomainException('Archived Trial Order recovery requires committed Trial authority.');
+        }
+
+        /** @var object{to_state:string,to_visibility:string}|null $history */
+        $history = $connection->table('plan_offering_histories')
+            ->where('plan_offering_id', $offeringId)
+            ->where('created_at', '<=', $reservation->committed_at)
+            ->orderByDesc('version')
+            ->first(['to_state', 'to_visibility']);
+        if ($history === null || $history->to_state !== 'active' || $history->to_visibility !== 'visible') {
+            throw new DomainException('Archived Trial Order recovery requires an active visible Offering at Trial commit.');
+        }
     }
 
     private function offeringConfigurationHash(Connection $connection, int $offeringId, int $version): string
