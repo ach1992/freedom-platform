@@ -10,6 +10,7 @@ use App\Modules\Customers\Application\CustomerIdentityProfilePersistence;
 use App\Modules\Identity\Application\Contracts\CustomerIdentityProfileWriter;
 use App\Modules\Orders\Application\AgentPurchaseCountService;
 use App\Modules\Orders\Application\Contracts\QuoteDiscountAuthority;
+use App\Modules\Orders\Application\QuoteService;
 use App\Modules\Orders\Application\TelegramCustomerPurchaseDiscountQuoteService;
 use App\Modules\Orders\Application\TelegramCustomerPurchaseOrderService;
 use App\Modules\Orders\Application\TelegramCustomerPurchaseQuoteService;
@@ -53,6 +54,10 @@ use App\Modules\Telegram\Application\Contracts\TelegramCustomerTrialClaim;
 use App\Modules\Telegram\Application\Contracts\TelegramManagedUsdtRateSettings;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceDeliveryResender;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceProjection;
+use App\Modules\Telegram\Application\TelegramChannelMembershipEvaluator;
+use App\Modules\Telegram\Application\TelegramChannelMembershipRuleResolver;
+use App\Modules\Telegram\Application\TelegramMembershipConfigurationFence;
+use Illuminate\Database\DatabaseManager;
 use Illuminate\Http\Client\Factory as HttpFactory;
 use Illuminate\Support\ServiceProvider;
 use RuntimeException;
@@ -72,7 +77,17 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind(QuoteDiscountAuthority::class, BenefitCodeDiscountQuoteAuthority::class);
         $this->app->bind(PurchasePromotionUsageAuthority::class, PurchasePromotionUsageAuthorityService::class);
         $this->app->bind(TelegramCustomerPurchaseDiscountQuote::class, TelegramCustomerPurchaseDiscountQuoteService::class);
-        $this->app->bind(TelegramCustomerPurchaseQuote::class, TelegramCustomerPurchaseQuoteService::class);
+        $this->app->bind(
+            TelegramCustomerPurchaseQuote::class,
+            fn ($app): TelegramCustomerPurchaseQuote => new TelegramCustomerPurchaseQuoteService(
+                $app->make(DatabaseManager::class),
+                $app->make(QuoteService::class),
+                $app->make(TelegramCustomerPurchaseCatalog::class),
+                fn (): TelegramChannelMembershipEvaluator => $app->make(TelegramChannelMembershipEvaluator::class),
+                $app->make(TelegramChannelMembershipRuleResolver::class),
+                $app->make(TelegramMembershipConfigurationFence::class),
+            ),
+        );
         $this->app->bind(TelegramCustomerPurchasePaymentMethods::class, TelegramCustomerPurchasePaymentMethodsService::class);
         $this->app->bind(TelegramCustomerPurchaseCardToCardPayment::class, TelegramCustomerPurchaseCardToCardPaymentService::class);
         $this->app->bind(TelegramCustomerPurchaseGiftCardPayment::class, TelegramCustomerPurchaseGiftCardPaymentService::class);

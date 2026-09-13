@@ -28,84 +28,115 @@ final readonly class TelegramChannelMembershipRuleResolver
     {
         $connection = $this->database->connection();
 
-        return $connection->transaction(function () use ($connection, $request): TelegramChannelMembershipRequirementPlan {
-            $subject = $this->subjectContext($connection, $request->userId);
-            $this->assertCurrentPlanOffering($connection, $request->planOfferingId);
-            $now = $this->clock->now()->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s.u');
-            $rules = $this->candidateRules($connection, $request, $subject['account_type'], $now);
+        return $connection->transaction(
+            fn (): TelegramChannelMembershipRequirementPlan => $this->resolveWithConnection($connection, $request, false),
+            1,
+        );
+    }
 
-            $applicable = [];
-            foreach ($rules as $rule) {
-                if ($this->matchesSubjectSelectors($rule, $subject, $request->planOfferingId)) {
-                    $applicable[] = $rule;
-                }
+    /**
+     * Resolve canonical membership authority from current locking reads inside an
+     * already-open mutation transaction. This keeps authorization independent of
+     * any earlier REPEATABLE READ snapshot established by the caller.
+     *
+     * @requirement ONB-003 CHN-001 SEC-001 DAT-003 QUA-001
+     */
+    public function resolveCurrentForUpdate(
+        TelegramChannelMembershipResolutionRequest $request,
+    ): TelegramChannelMembershipRequirementPlan {
+        $connection = $this->database->connection();
+        if ($connection->transactionLevel() < 1) {
+            throw new RuntimeException('Current Telegram membership resolution requires an active database transaction.');
+        }
+
+        return $this->resolveWithConnection($connection, $request, true);
+    }
+
+    private function resolveWithConnection(
+        Connection $connection,
+        TelegramChannelMembershipResolutionRequest $request,
+        bool $lockForUpdate,
+    ): TelegramChannelMembershipRequirementPlan {
+        $subject = $this->subjectContext($connection, $request->userId, $lockForUpdate);
+        $this->assertCurrentPlanOffering($connection, $request->planOfferingId, $lockForUpdate);
+        $now = $this->clock->now()->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s.u');
+        $rules = $this->candidateRules($connection, $request, $subject['account_type'], $now, $lockForUpdate);
+
+        $applicable = [];
+        foreach ($rules as $rule) {
+            if ($this->matchesSubjectSelectors($rule, $subject, $request->planOfferingId)) {
+                $applicable[] = $rule;
             }
+        }
 
-            if ($applicable === []) {
-                return new TelegramChannelMembershipRequirementPlan(
-                    $request->userId,
-                    $subject['account_type'],
-                    $request->action,
-                    $request->planOfferingId,
-                    false,
-                    null,
-                    null,
-                    null,
-                    null,
-                    null,
-                    null,
-                    null,
-                    null,
-                    [],
-                    $this->hashPayload([
-                        'schema' => 1,
-                        'required' => false,
-                        'action' => $request->action,
-                        'plan_offering_id' => $request->planOfferingId,
-                    ]),
-                );
-            }
-
-            $highestPriority = (int) $applicable[0]->priority;
-            $highest = array_values(array_filter(
-                $applicable,
-                static fn (stdClass $rule): bool => (int) $rule->priority === $highestPriority,
-            ));
-            if (count($highest) !== 1) {
-                throw new DomainException('Telegram membership-rule configuration is ambiguous at the highest priority.');
-            }
-
-            $selected = $highest[0];
-            $channels = $this->channels($connection, (int) $selected->id);
-            $configurationHash = $this->configurationHash($selected, $channels);
-
+        if ($applicable === []) {
             return new TelegramChannelMembershipRequirementPlan(
                 $request->userId,
                 $subject['account_type'],
                 $request->action,
                 $request->planOfferingId,
-                true,
-                (int) $selected->id,
-                (string) $selected->rule_key,
-                (int) $selected->version,
-                (string) $selected->match_mode,
-                (string) $selected->failure_policy,
-                (int) $selected->priority,
-                $selected->effective_from === null ? null : (string) $selected->effective_from,
-                $selected->effective_until === null ? null : (string) $selected->effective_until,
-                $channels,
-                $configurationHash,
+                false,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                [],
+                $this->hashPayload([
+                    'schema' => 1,
+                    'required' => false,
+                    'action' => $request->action,
+                    'plan_offering_id' => $request->planOfferingId,
+                ]),
             );
-        }, 1);
+        }
+
+        $highestPriority = (int) $applicable[0]->priority;
+        $highest = array_values(array_filter(
+            $applicable,
+            static fn (stdClass $rule): bool => (int) $rule->priority === $highestPriority,
+        ));
+        if (count($highest) !== 1) {
+            throw new DomainException('Telegram membership-rule configuration is ambiguous at the highest priority.');
+        }
+
+        $selected = $highest[0];
+        $channels = $this->channels($connection, (int) $selected->id, $lockForUpdate);
+        $configurationHash = $this->configurationHash($selected, $channels);
+
+        return new TelegramChannelMembershipRequirementPlan(
+            $request->userId,
+            $subject['account_type'],
+            $request->action,
+            $request->planOfferingId,
+            true,
+            (int) $selected->id,
+            (string) $selected->rule_key,
+            (int) $selected->version,
+            (string) $selected->match_mode,
+            (string) $selected->failure_policy,
+            (int) $selected->priority,
+            $selected->effective_from === null ? null : (string) $selected->effective_from,
+            $selected->effective_until === null ? null : (string) $selected->effective_until,
+            $channels,
+            $configurationHash,
+        );
     }
 
     /**
      * @return array{account_type:'customer'|'agent',tier_code:?string,active_tag_ids:list<int>}
      */
-    private function subjectContext(Connection $connection, int $userId): array
+    private function subjectContext(Connection $connection, int $userId, bool $lockForUpdate): array
     {
+        $userQuery = $connection->table('users')->where('id', $userId);
+        if ($lockForUpdate) {
+            $userQuery->lockForUpdate();
+        }
         /** @var object{account_type:string,account_status:string}|null $user */
-        $user = $connection->table('users')->where('id', $userId)->first(['account_type', 'account_status']);
+        $user = $userQuery->first(['account_type', 'account_status']);
         if ($user === null || $user->account_status !== 'active' || ! in_array($user->account_type, ['customer', 'agent'], true)) {
             throw new DomainException('Telegram membership resolution requires an active customer or agent.');
         }
@@ -118,30 +149,40 @@ final readonly class TelegramChannelMembershipRuleResolver
             ];
         }
 
+        $profileQuery = $connection->table('customer_profiles')->where('user_id', $userId);
+        if ($lockForUpdate) {
+            $profileQuery->lockForUpdate();
+        }
         /** @var object{current_tier_id:int|string|null}|null $profile */
-        $profile = $connection->table('customer_profiles')->where('user_id', $userId)->first(['current_tier_id']);
+        $profile = $profileQuery->first(['current_tier_id']);
         if ($profile === null) {
             throw new DomainException('Telegram membership resolution customer profile is unavailable.');
         }
 
         $tierCode = null;
         if ($profile->current_tier_id !== null) {
-            $tier = $connection->table('customer_tiers')
+            $tierQuery = $connection->table('customer_tiers')
                 ->where('id', (int) $profile->current_tier_id)
-                ->where('is_active', true)
-                ->value('code');
-            $tierCode = is_string($tier) ? $tier : null;
+                ->where('is_active', true);
+            if ($lockForUpdate) {
+                $tierQuery->lockForUpdate();
+            }
+            /** @var object{code:string}|null $tier */
+            $tier = $tierQuery->first(['code']);
+            $tierCode = $tier !== null && is_string($tier->code) ? $tier->code : null;
         }
 
-        /** @var list<int|string> $tagIds */
-        $tagIds = $connection->table('customer_tag_assignments as assignment')
+        $tagQuery = $connection->table('customer_tag_assignments as assignment')
             ->join('customer_tags as tag', 'tag.id', '=', 'assignment.tag_id')
             ->where('assignment.user_id', $userId)
             ->whereNull('assignment.removed_at')
             ->where('tag.is_active', true)
-            ->orderBy('assignment.tag_id')
-            ->pluck('assignment.tag_id')
-            ->all();
+            ->orderBy('assignment.tag_id');
+        if ($lockForUpdate) {
+            $tagQuery->lockForUpdate();
+        }
+        /** @var list<int|string> $tagIds */
+        $tagIds = $tagQuery->pluck('assignment.tag_id')->all();
 
         return [
             'account_type' => 'customer',
@@ -150,17 +191,22 @@ final readonly class TelegramChannelMembershipRuleResolver
         ];
     }
 
-    private function assertCurrentPlanOffering(Connection $connection, ?int $planOfferingId): void
-    {
+    private function assertCurrentPlanOffering(
+        Connection $connection,
+        ?int $planOfferingId,
+        bool $lockForUpdate,
+    ): void {
         if ($planOfferingId === null) {
             return;
         }
 
-        if (! $connection->table('plan_offerings')
+        $query = $connection->table('plan_offerings')
             ->where('id', $planOfferingId)
-            ->where('state', 'active')
-            ->exists()
-        ) {
+            ->where('state', 'active');
+        if ($lockForUpdate) {
+            $query->lockForUpdate();
+        }
+        if ($query->first(['id']) === null) {
             throw new DomainException('Telegram membership resolution Plan Offering is unavailable.');
         }
     }
@@ -174,9 +220,10 @@ final readonly class TelegramChannelMembershipRuleResolver
         TelegramChannelMembershipResolutionRequest $request,
         string $accountType,
         string $now,
+        bool $lockForUpdate,
     ): array {
         $audience = $accountType === 'customer' ? 'customers' : 'agents';
-        $rows = $connection->table('channel_membership_rules')
+        $query = $connection->table('channel_membership_rules')
             ->where('state', 'active')
             ->where(static function ($query) use ($request): void {
                 $query->whereNull('action')->orWhere('action', $request->action);
@@ -191,12 +238,14 @@ final readonly class TelegramChannelMembershipRuleResolver
                 $query->whereNull('effective_until')->orWhere('effective_until', '>', $now);
             })
             ->orderByDesc('priority')
-            ->orderBy('id')
-            ->get([
-                'id', 'rule_key', 'action', 'audience', 'tier_code', 'customer_tag_id', 'plan_offering_id',
-                'match_mode', 'failure_policy', 'priority', 'effective_from', 'effective_until', 'state', 'version',
-            ])
-            ->all();
+            ->orderBy('id');
+        if ($lockForUpdate) {
+            $query->lockForUpdate();
+        }
+        $rows = $query->get([
+            'id', 'rule_key', 'action', 'audience', 'tier_code', 'customer_tag_id', 'plan_offering_id',
+            'match_mode', 'failure_policy', 'priority', 'effective_from', 'effective_until', 'state', 'version',
+        ])->all();
 
         /** @var list<stdClass> $rows */
         return $rows;
@@ -223,19 +272,21 @@ final readonly class TelegramChannelMembershipRuleResolver
     }
 
     /** @return list<TelegramChannelMembershipRequirementChannel> */
-    private function channels(Connection $connection, int $ruleId): array
+    private function channels(Connection $connection, int $ruleId, bool $lockForUpdate): array
     {
-        $rows = $connection->table('channel_membership_rule_channels as association')
+        $query = $connection->table('channel_membership_rule_channels as association')
             ->join('required_channels as channel', 'channel.id', '=', 'association.required_channel_id')
             ->where('association.channel_membership_rule_id', $ruleId)
             ->orderBy('association.sort_order')
-            ->orderBy('association.id')
-            ->get([
-                'association.required_channel_id', 'association.sort_order', 'channel.channel_key',
-                'channel.telegram_chat_id', 'channel.chat_type', 'channel.visibility', 'channel.display_title',
-                'channel.state', 'channel.version',
-            ])
-            ->all();
+            ->orderBy('association.id');
+        if ($lockForUpdate) {
+            $query->lockForUpdate();
+        }
+        $rows = $query->get([
+            'association.required_channel_id', 'association.sort_order', 'channel.channel_key',
+            'channel.telegram_chat_id', 'channel.chat_type', 'channel.visibility', 'channel.display_title',
+            'channel.state', 'channel.version',
+        ])->all();
 
         if ($rows === []) {
             throw new RuntimeException('Active Telegram membership rule has no configured channels.');
