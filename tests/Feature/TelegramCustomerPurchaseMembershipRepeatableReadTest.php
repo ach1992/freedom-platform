@@ -4,9 +4,6 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
-use App\Modules\Catalog\Application\CatalogChangeContext;
-use App\Modules\Catalog\Application\PlanOfferingService;
-use App\Modules\Catalog\Domain\ProductVisibility;
 use App\Modules\Customers\Application\CustomerChangeContext;
 use App\Modules\Customers\Application\CustomerTagService;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCatalog;
@@ -18,8 +15,10 @@ use App\Modules\Telegram\Application\TelegramChannelMembershipRuleDefinition;
 use App\Modules\Telegram\Application\TelegramChannelMembershipRuleResolver;
 use App\Modules\Telegram\Application\TelegramChannelMembershipRuleService;
 use App\Modules\Telegram\Application\TelegramConfigurationChangeContext;
+use App\Modules\Telegram\Application\TelegramCustomerPurchaseCatalogPage;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseMembershipChanged;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseMembershipPreflight;
+use App\Modules\Telegram\Application\TelegramCustomerPurchaseOffering;
 use App\Modules\Telegram\Application\TelegramMembershipLookupResult;
 use DateTimeImmutable;
 use DateTimeZone;
@@ -36,6 +35,46 @@ final class TelegramRepeatableReadMembershipLookup implements TelegramMembership
     public function lookup(int $chatId, int $telegramUserId): TelegramMembershipLookupResult
     {
         throw new RuntimeException('Repeatable-read stale NotRequired verification must not call the membership provider.');
+    }
+}
+
+final readonly class TelegramRepeatableReadPurchaseCatalog implements TelegramCustomerPurchaseCatalog
+{
+    public function __construct(
+        private string $selectionToken,
+        private string $offeringCode,
+        private int $basePriceIrr,
+        private int $durationDays,
+    ) {}
+
+    public function pageForSelf(int $actorUserId, int $subjectUserId, int $page, int $pageSize): TelegramCustomerPurchaseCatalogPage
+    {
+        throw new RuntimeException('Repeatable-read purchase membership verification does not request a catalog page.');
+    }
+
+    public function offeringForSelf(int $actorUserId, int $subjectUserId, string $selectionToken): TelegramCustomerPurchaseOffering
+    {
+        if ($actorUserId !== $subjectUserId || ! hash_equals($this->selectionToken, $selectionToken)) {
+            throw new RuntimeException('Unexpected repeatable-read purchase membership catalog request.');
+        }
+
+        return new TelegramCustomerPurchaseOffering(
+            $this->selectionToken,
+            $this->offeringCode,
+            'دسته خرید',
+            'Purchase category',
+            'پلن خرید',
+            'Purchase plan',
+            null,
+            null,
+            'استاندارد',
+            'Standard',
+            $this->basePriceIrr,
+            $this->durationDays,
+            null,
+            2,
+            'customer',
+        );
     }
 }
 
@@ -57,9 +96,9 @@ final class TelegramCustomerPurchaseMembershipRepeatableReadTest extends TestCas
     {
         $this->requireMariaDb();
         $userId = $this->membershipUser();
-        [$offeringId, $selectionToken] = $this->purchaseOffering($userId, 'membership-repeatable-rule-race');
+        [$offeringId, $catalog, $selectionToken] = $this->purchaseOffering('membership-repeatable-rule-race');
         $this->telegramAccount($userId, 720000001);
-        $this->bindNoProviderLookup();
+        $this->bindNoProviderLookup($catalog);
 
         $quotes = $this->app->make(TelegramCustomerPurchaseQuote::class);
         $membership = $quotes->membershipForSelf($userId, $userId, $selectionToken, 'fa');
@@ -98,7 +137,7 @@ final class TelegramCustomerPurchaseMembershipRepeatableReadTest extends TestCas
     {
         $this->requireMariaDb();
         $userId = $this->membershipUser();
-        [$offeringId, $selectionToken] = $this->purchaseOffering($userId, 'membership-repeatable-tag-race');
+        [$offeringId, $catalog, $selectionToken] = $this->purchaseOffering('membership-repeatable-tag-race');
         $this->telegramAccount($userId, 720000002);
         $tagCode = 'membership_repeatable_tag';
         $tagId = $this->customerTag($tagCode);
@@ -109,7 +148,7 @@ final class TelegramCustomerPurchaseMembershipRepeatableReadTest extends TestCas
             'repeatable-tag-selector',
             $tagId,
         );
-        $this->bindNoProviderLookup();
+        $this->bindNoProviderLookup($catalog);
 
         $quotes = $this->app->make(TelegramCustomerPurchaseQuote::class);
         $membership = $quotes->membershipForSelf($userId, $userId, $selectionToken, 'fa');
@@ -158,37 +197,26 @@ final class TelegramCustomerPurchaseMembershipRepeatableReadTest extends TestCas
         }
     }
 
-    /** @return array{int,string} */
-    private function purchaseOffering(int $userId, string $suffix): array
+    /** @return array{int,TelegramCustomerPurchaseCatalog,string} */
+    private function purchaseOffering(string $suffix): array
     {
         $offering = $this->activeBenefitOffering($suffix);
         $row = DB::table('plan_offerings')
             ->where('id', $offering['id'])
-            ->first(['code', 'version']);
+            ->first(['code', 'base_price_irr', 'duration_days']);
         self::assertNotNull($row);
+        $selectionToken = substr(hash('sha256', 'selection-'.$suffix), 0, 40);
 
-        $this->app->make(PlanOfferingService::class)->setVisibility(
+        return [
             $offering['id'],
-            (int) $row->version,
-            ProductVisibility::Visible,
-            new CatalogChangeContext(
-                'purchase-membership-rr-visible-'.substr(hash('sha256', $suffix), 0, 20),
-                'purchase-membership-rr-correlation-'.substr(hash('sha256', $suffix), 0, 16),
-                'telegram_purchase_membership_test',
-                'Expose the verified Offering for repeatable-read membership verification.',
-                $this->benefitOwner(),
+            new TelegramRepeatableReadPurchaseCatalog(
+                $selectionToken,
+                (string) $row->code,
+                (int) $row->base_price_irr,
+                (int) $row->duration_days,
             ),
-        );
-
-        $selectionToken = substr(hash('sha256', 'telegram-purchase-offering-v1:'.$userId.':'.(string) $row->code), 0, 40);
-        $resolved = $this->app->make(TelegramCustomerPurchaseCatalog::class)->offeringForSelf(
-            $userId,
-            $userId,
             $selectionToken,
-        );
-        self::assertSame((string) $row->code, $resolved->offeringCode);
-
-        return [$offering['id'], $selectionToken];
+        ];
     }
 
     private function membershipUser(): int
@@ -230,8 +258,9 @@ final class TelegramCustomerPurchaseMembershipRepeatableReadTest extends TestCas
         ]);
     }
 
-    private function bindNoProviderLookup(): void
+    private function bindNoProviderLookup(TelegramCustomerPurchaseCatalog $catalog): void
     {
+        $this->app->instance(TelegramCustomerPurchaseCatalog::class, $catalog);
         $this->app->instance(TelegramMembershipLookup::class, new TelegramRepeatableReadMembershipLookup);
         $this->app->forgetInstance(TelegramChannelMembershipEvaluator::class);
         $this->app->forgetInstance(TelegramChannelMembershipRuleResolver::class);
