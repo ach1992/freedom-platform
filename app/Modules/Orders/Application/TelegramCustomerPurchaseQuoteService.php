@@ -219,11 +219,16 @@ final readonly class TelegramCustomerPurchaseQuoteService implements TelegramCus
             $expiresAt,
             $membership,
         ): TelegramCustomerPurchaseQuotePreview {
+            $this->membershipConfigurationFence->acquire($connection);
+            $currentAccountType = $this->lockMembershipSubject($connection, $subjectUserId);
             $offering = $this->catalog->offeringForSelf(
                 $actorUserId,
                 $subjectUserId,
                 $offeringSelectionToken,
             );
+            if ($offering->accountType !== $currentAccountType) {
+                throw new TelegramCustomerPurchaseMembershipChanged('Telegram purchase membership subject changed after provider verification.');
+            }
             $offeringIdentity = $this->currentOfferingIdentity($connection, $offering->offeringCode);
             $this->assertCurrentMembership(
                 $connection,
@@ -300,9 +305,7 @@ final readonly class TelegramCustomerPurchaseQuoteService implements TelegramCus
             throw new RuntimeException('Telegram purchase membership revalidation requires the Quote transaction.');
         }
 
-        $this->membershipConfigurationFence->acquire($connection);
-        $this->lockMembershipSubject($connection, $subjectUserId, $offering->accountType);
-        $plan = $this->membershipResolver->resolve(new TelegramChannelMembershipResolutionRequest(
+        $plan = $this->membershipResolver->resolveCurrentForUpdate(new TelegramChannelMembershipResolutionRequest(
             $subjectUserId,
             'purchase',
             $offeringIdentity['id'],
@@ -330,7 +333,8 @@ final readonly class TelegramCustomerPurchaseQuoteService implements TelegramCus
         }
     }
 
-    private function lockMembershipSubject(Connection $connection, int $userId, string $expectedAccountType): void
+    /** @return 'customer'|'agent' */
+    private function lockMembershipSubject(Connection $connection, int $userId): string
     {
         /** @var object{account_type:string,account_status:string}|null $user */
         $user = $connection->table('users')
@@ -339,22 +343,21 @@ final readonly class TelegramCustomerPurchaseQuoteService implements TelegramCus
             ->first(['account_type', 'account_status']);
         if ($user === null
             || $user->account_status !== 'active'
-            || $user->account_type !== $expectedAccountType
             || ! in_array($user->account_type, ['customer', 'agent'], true)) {
             throw new TelegramCustomerPurchaseMembershipChanged('Telegram purchase membership subject changed after provider verification.');
         }
 
-        if ($user->account_type !== 'customer') {
-            return;
+        if ($user->account_type === 'customer') {
+            $profile = $connection->table('customer_profiles')
+                ->where('user_id', $userId)
+                ->lockForUpdate()
+                ->first(['user_id']);
+            if ($profile === null) {
+                throw new TelegramCustomerPurchaseMembershipChanged('Telegram purchase membership customer profile changed after provider verification.');
+            }
         }
 
-        $profile = $connection->table('customer_profiles')
-            ->where('user_id', $userId)
-            ->lockForUpdate()
-            ->first(['user_id']);
-        if ($profile === null) {
-            throw new TelegramCustomerPurchaseMembershipChanged('Telegram purchase membership customer profile changed after provider verification.');
-        }
+        return $user->account_type;
     }
 
     private function pricingBindingMatchesAccountType(QuoteReceipt $quote): bool
