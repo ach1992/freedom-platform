@@ -7,6 +7,7 @@ namespace Tests\Feature;
 use App\Modules\Localization\Application\LocalizationResolver;
 use App\Modules\Telegram\Application\TelegramNavigationEntryGateway;
 use Closure;
+use DomainException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -54,6 +55,17 @@ final class TelegramBotEntryLocalizationResolverTest extends TestCase
             trans('telegram_membership.entry_unavailable', locale: 'en'),
             $translation->invoke($gateway, 'telegram_membership.entry_unavailable', 'en'),
         );
+    }
+
+    public function test_bot_entry_gateway_rejects_missing_localization_instead_of_emitting_raw_key(): void
+    {
+        $gateway = $this->app->make(TelegramNavigationEntryGateway::class);
+        $translation = new ReflectionMethod($gateway, 'translation');
+
+        $this->expectException(DomainException::class);
+        $this->expectExceptionMessage('Telegram bot-entry membership feedback is unavailable.');
+
+        $translation->invoke($gateway, 'telegram_membership.missing_copy', 'fa');
     }
 
     private function administrator(): int
