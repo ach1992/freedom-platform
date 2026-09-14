@@ -262,6 +262,37 @@ final class LocalizationOverrideAuthorityTest extends TestCase
             self::assertSame(0, DB::table('localization_overrides')->count());
         }
 
+        $unauthorizedMalformedMutations = [
+            fn () => $service->set(
+                'runtime.only',
+                'de',
+                'Broken ::code',
+                null,
+                $this->context($unauthorizedId, 'localization-unauth-invalid-set-0001'),
+            ),
+            fn () => $service->reset(
+                'runtime.only',
+                'de',
+                1,
+                $this->context($unauthorizedId, 'localization-unauth-invalid-reset-0001'),
+            ),
+            fn () => $service->restore(
+                'runtime.only',
+                'de',
+                1,
+                1,
+                $this->context($unauthorizedId, 'localization-unauth-invalid-restore-0001'),
+            ),
+        ];
+        foreach ($unauthorizedMalformedMutations as $mutation) {
+            try {
+                $mutation();
+                self::fail('Authorization must precede localization mutation payload validation.');
+            } catch (AuthorizationException) {
+                self::assertSame(0, DB::table('localization_overrides')->count());
+            }
+        }
+
         foreach (['Missing placeholder', 'Unknown :code and :other'] as $invalidValue) {
             try {
                 $service->set($key, 'en', $invalidValue, null, $this->context($salesId, 'localization-invalid-'.substr(hash('sha256', $invalidValue), 0, 20)));

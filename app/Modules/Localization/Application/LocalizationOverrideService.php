@@ -98,6 +98,7 @@ final readonly class LocalizationOverrideService
         ?int $expectedVersion,
         LocalizationChangeContext $context,
     ): LocalizationOverrideReceipt {
+        $this->authorizeMutation($context);
         $value = $this->templates->validateOverride($key, $locale, $value);
         if ($expectedVersion !== null && $expectedVersion < 1) {
             throw new RuntimeException('Localization override expected version is invalid.');
@@ -163,6 +164,7 @@ final readonly class LocalizationOverrideService
         int $expectedVersion,
         LocalizationChangeContext $context,
     ): LocalizationOverrideReceipt {
+        $this->authorizeMutation($context);
         $this->templates->template($key, $locale);
         if ($expectedVersion < 1) {
             throw new RuntimeException('Localization override expected version is invalid.');
@@ -211,6 +213,7 @@ final readonly class LocalizationOverrideService
         int $expectedVersion,
         LocalizationChangeContext $context,
     ): LocalizationOverrideReceipt {
+        $this->authorizeMutation($context);
         $this->templates->template($key, $locale);
         if ($sourceVersion < 1 || $expectedVersion < 1) {
             throw new RuntimeException('Localization override version is invalid.');
@@ -271,9 +274,6 @@ final readonly class LocalizationOverrideService
         LocalizationChangeContext $context,
         callable $operation,
     ): LocalizationOverrideReceipt {
-        $context->requireReason();
-        $this->authorizer->authorize($context->actorAdministratorId, self::MANAGE_PERMISSION);
-
         $existing = $this->existingAuditReceipt($action, $context->requestFingerprint, $payloadHash, $key, $locale);
         if ($existing !== null) {
             return $existing;
@@ -297,6 +297,12 @@ final readonly class LocalizationOverrideService
 
             throw $exception;
         }
+    }
+
+    private function authorizeMutation(LocalizationChangeContext $context): void
+    {
+        $context->requireReason();
+        $this->authorizer->authorize($context->actorAdministratorId, self::MANAGE_PERMISSION);
     }
 
     private function authorizeRead(int $administratorId): void
