@@ -10,6 +10,25 @@ use RuntimeException;
 
 final class ArchitectureBoundaryChecker
 {
+    private const PERSISTENCE_MUTATION_METHODS = [
+        'insert',
+        'insertGetId',
+        'insertOrIgnore',
+        'insertOrIgnoreReturning',
+        'insertUsing',
+        'insertOrIgnoreUsing',
+        'update',
+        'updateFrom',
+        'delete',
+        'upsert',
+        'updateOrInsert',
+        'increment',
+        'incrementEach',
+        'decrement',
+        'decrementEach',
+        'truncate',
+    ];
+
     /** @var array<string,true> */
     private array $usedPersistenceExceptions = [];
 
@@ -232,17 +251,13 @@ final class ArchitectureBoundaryChecker
         $this->scanDynamicTableAccess($relativePath, $source, $violations);
         $this->scanUnsupportedQuerySources($relativePath, $source, $violations);
 
-        preg_match_all(
-            '/(?:DB::|->)(?:table|from)\(\s*[\'\"]([^\'\"]+)[\'\"]\s*\)/',
-            $source,
-            $matches,
-            PREG_SET_ORDER | PREG_OFFSET_CAPTURE,
-        );
+        foreach ($this->persistenceMethodInvocations($source, ['table', 'from']) as $call) {
+            $table = $this->literalTableName($call['argument']);
+            if ($table === null) {
+                continue;
+            }
 
-        foreach ($matches as $match) {
-            $tableParts = preg_split('/\s+as\s+/i', trim($match[1][0]));
-            $table = is_array($tableParts) && isset($tableParts[0]) ? $tableParts[0] : trim($match[1][0]);
-            $offset = $match[0][1];
+            $offset = $call['offset'];
             $statement = substr($source, $offset, $this->statementLength($source, $offset));
             $mutation = $this->mutationMethod($statement);
             if ($mutation === null) {
@@ -361,20 +376,13 @@ final class ArchitectureBoundaryChecker
     /** @param list<string> $violations */
     private function scanDynamicTableAccess(string $relativePath, string $source, array &$violations): void
     {
-        preg_match_all(
-            '/(?:\bDB::|->)\s*(?:table|from)\(\s*([^)]*)\)/',
-            $source,
-            $matches,
-            PREG_SET_ORDER | PREG_OFFSET_CAPTURE,
-        );
-
-        foreach ($matches as $match) {
-            $offset = $match[0][1];
-            if ($this->isConsoleTableRenderer($relativePath, $source, $offset)) {
+        foreach ($this->persistenceMethodInvocations($source, ['table', 'from']) as $call) {
+            $offset = $call['offset'];
+            if ($this->isConsoleTableRenderer($relativePath, $source, $call['receiver'])) {
                 continue;
             }
 
-            $expression = trim($match[1][0]);
+            $expression = trim($call['argument']);
             if ($this->literalTableName($expression) !== null) {
                 continue;
             }
@@ -514,6 +522,145 @@ final class ArchitectureBoundaryChecker
         return $this->literalTableList($match[1][0]);
     }
 
+    /**
+     * @param  list<string>  $methods
+     * @return list<array{method:string,offset:int,argument:string,receiver:?string}>
+     */
+    private function persistenceMethodInvocations(string $source, array $methods, bool $allowDbStatic = true): array
+    {
+        $methodMap = [];
+        foreach ($methods as $method) {
+            $methodMap[strtolower($method)] = $method;
+        }
+
+        $tokens = $this->sourceTokens($source);
+
+        $calls = [];
+        $count = count($tokens);
+        for ($index = 0; $index < $count; $index++) {
+            $token = $tokens[$index]['token'];
+            if (! is_array($token) || $token[0] !== T_STRING) {
+                continue;
+            }
+
+            $methodKey = strtolower($token[1]);
+            if (! array_key_exists($methodKey, $methodMap)) {
+                continue;
+            }
+
+            $operatorIndex = $this->previousSignificantTokenIndex($tokens, $index - 1);
+            if ($operatorIndex === null) {
+                continue;
+            }
+            $operator = $tokens[$operatorIndex]['token'];
+            $isObjectCall = is_array($operator)
+                && in_array($operator[0], [T_OBJECT_OPERATOR, T_NULLSAFE_OBJECT_OPERATOR], true);
+            $isStaticCall = is_array($operator) && $operator[0] === T_DOUBLE_COLON;
+            if (! $isObjectCall && ! $isStaticCall) {
+                continue;
+            }
+
+            $receiverIndex = $this->previousSignificantTokenIndex($tokens, $operatorIndex - 1);
+            $receiver = null;
+            if ($receiverIndex !== null) {
+                $receiverToken = $tokens[$receiverIndex]['token'];
+                if (is_array($receiverToken) && $receiverToken[0] === T_VARIABLE) {
+                    $receiver = $receiverToken[1];
+                }
+            }
+
+            if ($isStaticCall) {
+                if (! $allowDbStatic || $receiverIndex === null) {
+                    continue;
+                }
+                $receiverToken = $tokens[$receiverIndex]['token'];
+                if (! is_array($receiverToken)) {
+                    continue;
+                }
+                $staticReceiver = ltrim($receiverToken[1], '\\');
+                $segments = explode('\\', $staticReceiver);
+                if (strtoupper((string) end($segments)) !== 'DB') {
+                    continue;
+                }
+                $receiver = 'DB';
+            }
+
+            $openParenIndex = $this->nextSignificantTokenIndex($tokens, $index + 1);
+            if ($openParenIndex === null || $tokens[$openParenIndex]['token'] !== '(') {
+                continue;
+            }
+
+            $openParenOffset = $tokens[$openParenIndex]['offset'];
+            $calls[] = [
+                'method' => $methodMap[$methodKey],
+                'offset' => $tokens[$operatorIndex]['offset'],
+                'argument' => $this->firstCallArgument($source, $openParenOffset + 1),
+                'receiver' => $receiver,
+            ];
+        }
+
+        return $calls;
+    }
+
+    /** @return list<array{token:array|string,offset:int}> */
+    private function sourceTokens(string $source): array
+    {
+        $tokenSource = $source;
+        $offsetAdjustment = 0;
+        if (preg_match('/\A\s*<\?php\b/i', $source) !== 1) {
+            $prefix = '<?php ';
+            $tokenSource = $prefix.$source;
+            $offsetAdjustment = strlen($prefix);
+        }
+
+        $tokens = [];
+        $offset = 0;
+        foreach (token_get_all($tokenSource) as $token) {
+            $text = is_array($token) ? $token[1] : $token;
+            $tokens[] = [
+                'token' => $token,
+                'offset' => $offset - $offsetAdjustment,
+            ];
+            $offset += strlen($text);
+        }
+
+        return $tokens;
+    }
+
+    /**
+     * @param  list<array{token:array|string,offset:int}>  $tokens
+     */
+    private function previousSignificantTokenIndex(array $tokens, int $index): ?int
+    {
+        for (; $index >= 0; $index--) {
+            if (! $this->isTriviaToken($tokens[$index]['token'])) {
+                return $index;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  list<array{token:array|string,offset:int}>  $tokens
+     */
+    private function nextSignificantTokenIndex(array $tokens, int $index): ?int
+    {
+        $count = count($tokens);
+        for (; $index < $count; $index++) {
+            if (! $this->isTriviaToken($tokens[$index]['token'])) {
+                return $index;
+            }
+        }
+
+        return null;
+    }
+
+    private function isTriviaToken(array|string $token): bool
+    {
+        return is_array($token) && in_array($token[0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true);
+    }
+
     private function tokenIdAtOffset(string $source, int $targetOffset): ?int
     {
         $offset = 0;
@@ -619,17 +766,11 @@ final class ArchitectureBoundaryChecker
         return $seenOpen && $depth > 0;
     }
 
-    private function isConsoleTableRenderer(string $relativePath, string $source, int $offset): bool
+    private function isConsoleTableRenderer(string $relativePath, string $source, ?string $receiver): bool
     {
-        if (! str_contains($relativePath, '/Presentation/Console/')
-            || preg_match('/\bextends\s+Command\b/', $source) !== 1
-        ) {
-            return false;
-        }
-
-        $prefix = substr($source, max(0, $offset - 24), min(24, $offset));
-
-        return preg_match('/\$this\s*\z/', $prefix) === 1;
+        return $receiver === '$this'
+            && str_contains($relativePath, '/Presentation/Console/')
+            && preg_match('/\bextends\s+Command\b/', $source) === 1;
     }
 
     private function resolvedTableConstant(string $source, string $expression): ?string
@@ -789,33 +930,34 @@ final class ArchitectureBoundaryChecker
     /** @param list<string> $violations */
     private function scanDeferredTableMutations(string $relativePath, string $source, array &$violations): void
     {
-        preg_match_all(
-            '/(\$[A-Za-z_][A-Za-z0-9_]*)\s*=\s*[^;]*?(?:DB::|->)(?:table|from|fromRaw|fromSub)\(\s*[^)]*\)[^;]*;/',
-            $source,
-            $matches,
-            PREG_SET_ORDER | PREG_OFFSET_CAPTURE,
-        );
+        foreach ($this->persistenceMethodInvocations($source, ['table', 'from', 'fromRaw', 'fromSub']) as $call) {
+            $assignment = $this->simpleAssignmentForInvocation($source, $call['offset']);
+            if ($assignment === null) {
+                continue;
+            }
 
-        foreach ($matches as $match) {
-            $variable = $match[1][0];
-            $assignmentOffset = $match[0][1];
-            $afterAssignment = $assignmentOffset + strlen($match[0][0]);
+            $variable = $assignment['variable'];
+            $assignmentOffset = $assignment['offset'];
+            $afterAssignment = $assignment['statement_end'];
             $functionEnd = $this->enclosingFunctionEnd($source, $assignmentOffset) ?? strlen($source);
             if ($functionEnd <= $afterAssignment) {
                 continue;
             }
 
             $segment = substr($source, $afterAssignment, $functionEnd - $afterAssignment);
-            $reassignmentPattern = '/'.preg_quote($variable, '/').'\s*=/';
-            if (preg_match($reassignmentPattern, $segment, $reassignment, PREG_OFFSET_CAPTURE) === 1) {
-                $segment = substr($segment, 0, $reassignment[0][1]);
+            $reassignmentOffset = $this->simpleVariableReassignmentOffset($segment, $variable);
+            if ($reassignmentOffset !== null) {
+                $segment = substr($segment, 0, $reassignmentOffset);
             }
 
-            if (preg_match(
-                '/'.preg_quote($variable, '/').'\s*->\s*(insert|insertGetId|insertOrIgnore|insertOrIgnoreReturning|insertUsing|insertOrIgnoreUsing|update|updateFrom|delete|upsert|updateOrInsert|increment|incrementEach|decrement|decrementEach|truncate)\s*\(/',
-                $segment,
-                $mutationMatch,
-            ) !== 1) {
+            $hasMutation = false;
+            foreach ($this->persistenceMethodInvocations($segment, self::PERSISTENCE_MUTATION_METHODS, false) as $mutationCall) {
+                if ($mutationCall['receiver'] === $variable) {
+                    $hasMutation = true;
+                    break;
+                }
+            }
+            if (! $hasMutation) {
                 continue;
             }
 
@@ -828,22 +970,82 @@ final class ArchitectureBoundaryChecker
         }
     }
 
+    /** @return array{variable:string,offset:int,statement_end:int}|null */
+    private function simpleAssignmentForInvocation(string $source, int $invocationOffset): ?array
+    {
+        $tokens = $this->sourceTokens($source);
+        $invocationIndex = null;
+        foreach ($tokens as $index => $token) {
+            if ($token['offset'] === $invocationOffset) {
+                $invocationIndex = $index;
+                break;
+            }
+        }
+        if ($invocationIndex === null) {
+            return null;
+        }
+
+        for ($index = $invocationIndex - 1; $index >= 0; $index--) {
+            $token = $tokens[$index]['token'];
+            if (in_array($token, [';', '{', '}'], true)) {
+                break;
+            }
+            if ($token !== '=') {
+                continue;
+            }
+
+            $variableIndex = $this->previousSignificantTokenIndex($tokens, $index - 1);
+            if ($variableIndex === null) {
+                return null;
+            }
+            $variableToken = $tokens[$variableIndex]['token'];
+            if (! is_array($variableToken) || $variableToken[0] !== T_VARIABLE) {
+                return null;
+            }
+
+            for ($endIndex = $invocationIndex; $endIndex < count($tokens); $endIndex++) {
+                if ($tokens[$endIndex]['token'] === ';') {
+                    return [
+                        'variable' => $variableToken[1],
+                        'offset' => $tokens[$variableIndex]['offset'],
+                        'statement_end' => $tokens[$endIndex]['offset'] + 1,
+                    ];
+                }
+            }
+
+            return null;
+        }
+
+        return null;
+    }
+
+    private function simpleVariableReassignmentOffset(string $source, string $variable): ?int
+    {
+        $tokens = $this->sourceTokens($source);
+        foreach ($tokens as $index => $token) {
+            $current = $token['token'];
+            if (! is_array($current) || $current[0] !== T_VARIABLE || $current[1] !== $variable) {
+                continue;
+            }
+
+            $nextIndex = $this->nextSignificantTokenIndex($tokens, $index + 1);
+            if ($nextIndex !== null && $tokens[$nextIndex]['token'] === '=') {
+                return $token['offset'];
+            }
+        }
+
+        return null;
+    }
+
     /** @param list<string> $violations */
     private function scanUnsupportedQuerySources(string $relativePath, string $source, array &$violations): void
     {
-        preg_match_all(
-            '/->\s*(fromRaw|fromSub)\s*\(/',
-            $source,
-            $matches,
-            PREG_SET_ORDER | PREG_OFFSET_CAPTURE,
-        );
-        foreach ($matches as $match) {
-            $offset = $match[0][1];
+        foreach ($this->persistenceMethodInvocations($source, ['fromRaw', 'fromSub'], false) as $call) {
             $violations[] = sprintf(
                 '%s:%d query source through %s is forbidden because durable-table ownership cannot be statically attributed.',
                 $relativePath,
-                $this->lineNumber($source, $offset),
-                $match[1][0],
+                $this->lineNumber($source, $call['offset']),
+                $call['method'],
             );
         }
     }
@@ -2037,15 +2239,9 @@ final class ArchitectureBoundaryChecker
 
     private function mutationMethod(string $statement): ?string
     {
-        if (preg_match(
-            '/->\s*(insert|insertGetId|insertOrIgnore|insertOrIgnoreReturning|insertUsing|insertOrIgnoreUsing|update|updateFrom|delete|upsert|updateOrInsert|increment|incrementEach|decrement|decrementEach|truncate)\s*\(/',
-            $statement,
-            $match,
-        ) !== 1) {
-            return null;
-        }
+        $calls = $this->persistenceMethodInvocations($statement, self::PERSISTENCE_MUTATION_METHODS, false);
 
-        return $match[1];
+        return $calls[0]['method'] ?? null;
     }
 
     /**

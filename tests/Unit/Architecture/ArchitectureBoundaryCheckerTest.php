@@ -328,7 +328,7 @@ final class ReportCommand extends Command
     public function handle(): void
     {
         $payload = ['count' => 1];
-        $this->table(array_keys($payload), [array_values($payload)]);
+        $this /* output */ -> table /* render */ (array_keys($payload), [array_values($payload)]);
     }
 }
 PHP);
@@ -535,6 +535,135 @@ PHP);
         self::assertMatchesRegularExpression('/CompoundGuardLocalizationRead\\.php:\\d+ dynamic table read is forbidden/', $violations);
         self::assertMatchesRegularExpression('/TextualThrowGuardRead\\.php:\\d+ dynamic table read is forbidden/', $violations);
         self::assertMatchesRegularExpression('/CommentedGuardRead\\.php:\\d+ dynamic table read is forbidden/', $violations);
+    }
+
+    public function test_query_builder_invocation_trivia_cannot_bypass_persistence_attribution(): void
+    {
+        $this->write('app/Modules/Payments/Application/WhitespaceLocalizationTableRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+final class WhitespaceLocalizationTableRead
+{
+    public function run($db): mixed
+    {
+        $table = 'localization_' . 'overrides';
+
+        return $db->table ($table)->first();
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/CommentLocalizationTableRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+final class CommentLocalizationTableRead
+{
+    public function run($db): mixed
+    {
+        $table = 'localization_' . 'overrides';
+
+        return $db-> /* receiver */ table /* boundary */ ($table)->first();
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/StaticDbLocalizationTableRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+final class StaticDbLocalizationTableRead
+{
+    public function run(): mixed
+    {
+        $table = 'localization_' . 'overrides';
+
+        return DB /* receiver */ :: table /* boundary */ ($table)->first();
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/CommentLocalizationFromRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+final class CommentLocalizationFromRead
+{
+    public function run($db): mixed
+    {
+        $table = 'localization_override_' . 'versions';
+
+        return $db->query()->from /* boundary */ ($table)->first();
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/CommentedLedgerMutation.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+final class CommentedLedgerMutation
+{
+    public function run($db): void
+    {
+        $db->table /* boundary */ ('ledger_entries')->update /* mutation */ (['amount_irr' => 1]);
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/DeferredCommentedLedgerMutation.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+final class DeferredCommentedLedgerMutation
+{
+    public function run($db): void
+    {
+        $query = $db->table /* source */ ('ledger_entries');
+        $query->update /* mutation */ (['amount_irr' => 1]);
+    }
+}
+PHP);
+        $this->write('app/Modules/Orders/Application/CommentedUnsupportedSource.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+final class CommentedUnsupportedSource
+{
+    public function run($db): mixed
+    {
+        return $db->query()->fromRaw /* boundary */ ('orders')->first();
+    }
+}
+PHP);
+        $this->write('app/Modules/Orders/Application/TextualInvocationNoise.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+final class TextualInvocationNoise
+{
+    public function run(): string
+    {
+        // $db->table /* not executable */ ($table)->first();
+        return '$db->from ($table)';
+    }
+}
+PHP);
+        $this->write('app/Modules/Orders/Application/BoundedTriviaRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+final class BoundedTriviaRead
+{
+    public function run($db, string $table): mixed
+    {
+        if (! in_array($table, ['orders'], true)) {
+            throw new \RuntimeException('Unsupported table.');
+        }
+
+        return $db->table /* reviewed boundary */ ($table)->first();
+    }
+}
+PHP);
+
+        $violations = implode("\n", $this->checker()->check()['violations']);
+
+        self::assertMatchesRegularExpression('/WhitespaceLocalizationTableRead\\.php:\\d+ dynamic table read is forbidden/', $violations);
+        self::assertMatchesRegularExpression('/CommentLocalizationTableRead\\.php:\\d+ dynamic table read is forbidden/', $violations);
+        self::assertMatchesRegularExpression('/StaticDbLocalizationTableRead\\.php:\\d+ dynamic table read is forbidden/', $violations);
+        self::assertMatchesRegularExpression('/CommentLocalizationFromRead\\.php:\\d+ dynamic table read is forbidden/', $violations);
+        self::assertStringContainsString('CommentedLedgerMutation.php:7 Payments mutation of durable table ledger_entries owned by Wallet is forbidden', $violations);
+        self::assertStringContainsString('DeferredCommentedLedgerMutation.php:7 deferred table mutation through $query is forbidden', $violations);
+        self::assertStringContainsString('CommentedUnsupportedSource.php:7 query source through fromRaw is forbidden', $violations);
+        self::assertStringNotContainsString('TextualInvocationNoise.php', $violations);
+        self::assertStringNotContainsString('BoundedTriviaRead.php', $violations);
     }
 
     public function test_raw_and_subquery_from_sources_fail_closed_for_reads_as_well_as_mutations(): void
