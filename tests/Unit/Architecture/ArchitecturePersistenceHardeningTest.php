@@ -312,7 +312,7 @@ PHP);
 
         self::assertStringContainsString('Customers mutation of durable table orders owned by Orders is forbidden', $violations);
         self::assertStringContainsString('dynamic table mutation is forbidden', $violations);
-        self::assertStringContainsString('query mutation through fromRaw is forbidden', $violations);
+        self::assertStringContainsString('query source through fromRaw is forbidden', $violations);
         self::assertStringContainsString('deferred table mutation through $deferred is forbidden', $violations);
     }
 
