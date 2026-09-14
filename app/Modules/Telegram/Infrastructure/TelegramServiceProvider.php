@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Telegram\Infrastructure;
 
 use App\Modules\AccessControl\Application\AdministratorPermissionAuthorizer;
+use App\Modules\Localization\Application\LocalizationResolver;
 use App\Modules\Telegram\Application\Contracts\ProtectedTelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\ProtectedTelegramMessageSender;
 use App\Modules\Telegram\Application\Contracts\TelegramBotApi;
@@ -50,7 +51,6 @@ use App\Shared\Application\OutboxEventHandler;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Contracts\Encryption\StringEncrypter;
 use Illuminate\Contracts\Foundation\Application;
-use Illuminate\Contracts\Translation\Translator;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Encryption\Encrypter;
 use Illuminate\Http\Client\Factory;
@@ -119,7 +119,7 @@ final class TelegramServiceProvider extends ServiceProvider
                 fn (): TelegramDeliveryQueueService => $application->make(TelegramDeliveryQueueService::class),
                 fn (): TelegramInteractionCallbackService => $application->make(TelegramInteractionCallbackService::class),
                 fn (): TelegramNavigationHandler => $application->make(TelegramNavigationHandler::class),
-                fn (): Translator => $application->make(Translator::class),
+                fn (): LocalizationResolver => $application->make(LocalizationResolver::class),
             ),
         );
         $this->app->singleton(TelegramNavigationHandler::class);
