@@ -849,6 +849,54 @@ final class PrivateRawSqlCommentNoise
     }
 }
 PHP);
+        $this->write('app/Modules/Payments/Application/PrivateRawSqlDashCommentNoise.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+use Illuminate\Support\Facades\DB;
+final class PrivateRawSqlDashCommentNoise
+{
+    public function run(): mixed
+    {
+        return DB::selectOne("SELECT 1 -- FROM localization_overrides\nAS ready");
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/PrivateExecutableMysqlCommentRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+use Illuminate\Support\Facades\DB;
+final class PrivateExecutableMysqlCommentRead
+{
+    public function run(): mixed
+    {
+        return DB::selectOne('SELECT 1 /*!50000 FROM localization_overrides */');
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/PrivateExecutableMariaDbCommentRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+use Illuminate\Support\Facades\DB;
+final class PrivateExecutableMariaDbCommentRead
+{
+    public function run(): mixed
+    {
+        return DB::selectOne('SELECT 1 /*M!100100 FROM localization_override_versions */');
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/PrivateDashArithmeticRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+use Illuminate\Support\Facades\DB;
+final class PrivateDashArithmeticRead
+{
+    public function run(): mixed
+    {
+        return DB::selectOne('SELECT 1--1 FROM localization_overrides');
+    }
+}
+PHP);
 
         $violations = implode("\n", $this->checker()->check()['violations']);
 
@@ -862,6 +910,10 @@ PHP);
         self::assertStringNotContainsString('OwnedPrivateRawRead.php', $violations);
         self::assertStringNotContainsString('PrivateRawSqlNoise.php', $violations);
         self::assertStringNotContainsString('PrivateRawSqlCommentNoise.php', $violations);
+        self::assertStringNotContainsString('PrivateRawSqlDashCommentNoise.php', $violations);
+        self::assertStringContainsString('PrivateExecutableMysqlCommentRead.php:8 durable table localization_overrides is private to the Localization Application boundary', $violations);
+        self::assertStringContainsString('PrivateExecutableMariaDbCommentRead.php:8 durable table localization_override_versions is private to the Localization Application boundary', $violations);
+        self::assertStringContainsString('PrivateDashArithmeticRead.php:8 durable table localization_overrides is private to the Localization Application boundary', $violations);
     }
 
     public function test_raw_and_subquery_from_sources_fail_closed_for_reads_as_well_as_mutations(): void

@@ -1346,17 +1346,25 @@ final class ArchitectureBoundaryChecker
                 continue;
             }
 
-            if ($char === '/' && $next === '*') {
+            $executableBlockComment = $char === '/'
+                && $next === '*'
+                && ($index + 2 < $length && $sql[$index + 2] === '!'
+                    || $index + 3 < $length && strncasecmp(substr($sql, $index, 4), '/*M!', 4) === 0);
+            if ($char === '/' && $next === '*' && ! $executableBlockComment) {
                 $blockComment = true;
                 $result .= '  ';
                 $index++;
 
                 continue;
             }
-            if ($char === '#' || ($char === '-' && $next === '-')) {
+
+            $dashComment = $char === '-'
+                && $next === '-'
+                && ($index + 2 >= $length || ord($sql[$index + 2]) <= 32);
+            if ($char === '#' || $dashComment) {
                 $lineComment = true;
-                $result .= $char === '-' ? '  ' : ' ';
-                if ($char === '-') {
+                $result .= $dashComment ? '  ' : ' ';
+                if ($dashComment) {
                     $index++;
                 }
 
