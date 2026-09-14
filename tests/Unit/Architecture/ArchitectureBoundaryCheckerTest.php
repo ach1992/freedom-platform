@@ -747,6 +747,35 @@ final class PrivateTableTextNoise
     }
 }
 PHP);
+        $this->write('app/Modules/Payments/Application/RawPersistenceTextNoise.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+final class RawPersistenceTextNoise
+{
+    public function run(): string
+    {
+        // DB::statement('DELETE FROM localization_overrides');
+        $statement = "DB::unprepared('DROP TABLE localization_override_versions')";
+        $connection = '$connection->selectOne(\'SELECT * FROM localization_overrides\')';
+
+        return $statement.$connection;
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/SpoofedConnectionTypeNoise.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+final class SpoofedConnectionTypeNoise
+{
+    public function run($fake): mixed
+    {
+        // Connection $fake
+        $example = 'Connection $fake';
+
+        return $fake->selectOne('SELECT * FROM localization_overrides');
+    }
+}
+PHP);
         $this->write('app/Modules/Payments/Application/PrivateVariableMutationNoise.php', <<<'PHP'
 <?php
 namespace App\Modules\Payments\Application;
@@ -901,6 +930,8 @@ PHP);
         $violations = implode("\n", $this->checker()->check()['violations']);
 
         self::assertStringNotContainsString('PrivateTableTextNoise.php', $violations);
+        self::assertStringNotContainsString('RawPersistenceTextNoise.php', $violations);
+        self::assertStringNotContainsString('SpoofedConnectionTypeNoise.php', $violations);
         self::assertMatchesRegularExpression('/PrivateVariableMutationNoise\\.php:\\d+ dynamic table read is forbidden/', $violations);
         self::assertDoesNotMatchRegularExpression('/PrivateVariableMutationNoise\\.php:\\d+ durable table .* private to/', $violations);
         self::assertStringContainsString('PrivateRawRead.php:8 durable table localization_overrides is private to the Localization Application boundary', $violations);

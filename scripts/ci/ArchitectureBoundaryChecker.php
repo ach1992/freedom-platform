@@ -1616,66 +1616,57 @@ final class ArchitectureBoundaryChecker
     private function scanOpaquePersistence(string $relativePath, string $source, array &$violations): void
     {
         $presentation = str_starts_with($relativePath, 'routes/') || $this->sourceLayer($relativePath) === 'Presentation';
+        foreach ($this->persistenceMethodInvocations(
+            $source,
+            ['statement', 'unprepared', 'affectingStatement', 'insert', 'update', 'delete'],
+        ) as $call) {
+            $method = $call['method'];
+            if (in_array($method, ['insert', 'update', 'delete'], true) && $call['receiver'] !== 'DB') {
+                continue;
+            }
 
-        $patterns = [
-            '/\bDB::\s*(statement|unprepared|insert|update|delete|affectingStatement)\s*\(/',
-            '/->\s*(statement|unprepared|affectingStatement)\s*\(/',
-        ];
-
-        foreach ($patterns as $pattern) {
-            preg_match_all($pattern, $source, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE);
-            foreach ($matches as $match) {
-                $method = $match[1][0] ?? 'raw';
-                $offset = $match[0][1];
-                $line = $this->lineNumber($source, $offset);
-
-                if ($presentation) {
-                    $violations[] = sprintf(
-                        '%s:%d opaque persistence API %s from %s is forbidden; call an Application boundary.',
-                        $relativePath,
-                        $line,
-                        $method,
-                        str_starts_with($relativePath, 'routes/') ? 'routes' : 'Presentation',
-                    );
-
-                    continue;
-                }
-
-                if (in_array($method, ['insert', 'update', 'delete', 'affectingStatement'], true)) {
-                    $violations[] = sprintf(
-                        '%s:%d opaque raw mutation API %s is forbidden because durable-table ownership cannot be attributed.',
-                        $relativePath,
-                        $line,
-                        $method,
-                    );
-
-                    continue;
-                }
-
-                $openParen = strpos($source, '(', $offset);
-                if ($openParen === false) {
-                    continue;
-                }
-
-                $sql = $this->literalRawSql($source, $openParen + 1);
-                $classification = $sql === null ? 'unknown' : $this->classifyRawStatement($sql);
-                if ($classification === 'session') {
-                    continue;
-                }
-
-                if ($classification === 'trigger_ddl' && $this->consumeMigrationTriggerDdlHelper($relativePath)) {
-                    continue;
-                }
-
+            $line = $this->lineNumber($source, $call['offset']);
+            if ($presentation) {
                 $violations[] = sprintf(
-                    '%s:%d opaque raw SQL %s is forbidden because durable-table ownership cannot be attributed.',
+                    '%s:%d opaque persistence API %s from %s is forbidden; call an Application boundary.',
                     $relativePath,
                     $line,
-                    in_array($classification, ['mutation', 'ddl', 'trigger_ddl'], true)
-                        ? 'mutation'
-                        : 'with a non-literal/unsupported statement',
+                    $method,
+                    str_starts_with($relativePath, 'routes/') ? 'routes' : 'Presentation',
                 );
+
+                continue;
             }
+
+            if (in_array($method, ['insert', 'update', 'delete', 'affectingStatement'], true)) {
+                $violations[] = sprintf(
+                    '%s:%d opaque raw mutation API %s is forbidden because durable-table ownership cannot be attributed.',
+                    $relativePath,
+                    $line,
+                    $method,
+                );
+
+                continue;
+            }
+
+            $sql = $this->literalRawSqlArgument($call['argument']);
+            $classification = $sql === null ? 'unknown' : $this->classifyRawStatement($sql);
+            if ($classification === 'session') {
+                continue;
+            }
+
+            if ($classification === 'trigger_ddl' && $this->consumeMigrationTriggerDdlHelper($relativePath)) {
+                continue;
+            }
+
+            $violations[] = sprintf(
+                '%s:%d opaque raw SQL %s is forbidden because durable-table ownership cannot be attributed.',
+                $relativePath,
+                $line,
+                in_array($classification, ['mutation', 'ddl', 'trigger_ddl'], true)
+                    ? 'mutation'
+                    : 'with a non-literal/unsupported statement',
+            );
         }
     }
 
@@ -1720,85 +1711,40 @@ final class ArchitectureBoundaryChecker
     /** @param list<string> $violations */
     private function scanConnectionRawSql(string $relativePath, string $source, array &$violations): void
     {
-        $readMethods = '(?:select|selectOne|selectFromWriteConnection|selectResultSets|scalar|cursor)';
-        $writeMethods = '(?:insert|update|delete)';
-        $methods = '(?:'.$readMethods.'|'.$writeMethods.')';
-        $memberOperator = '(?:\\?->|->)';
+        $readMethods = ['select', 'selectOne', 'selectFromWriteConnection', 'selectResultSets', 'scalar', 'cursor'];
+        $writeMethods = ['insert', 'update', 'delete'];
 
-        $receiverPatterns = [
-            '/\\bDB\\s*::/',
-            '/\\bDB\\s*::\\s*connection\\s*\\([^)]*\\)\\s*'.$memberOperator.'/',
-        ];
-
-        foreach ([
-            'Illuminate\\Database\\Connection',
-            'Illuminate\\Database\\ConnectionInterface',
-        ] as $connectionType) {
-            foreach ($this->typedPersistenceReceivers($source, $connectionType) as $receiver) {
-                $receiverPatterns[] = '/'.preg_quote($receiver, '/').'\\s*'.$memberOperator.'/';
+        foreach ($this->rawSqlPersistenceInvocations($source) as $call) {
+            $method = $call['method'];
+            if (! in_array($method, [...$readMethods, ...$writeMethods], true)) {
+                continue;
             }
-        }
 
-        $databaseManagers = $this->typedPersistenceReceivers($source, 'Illuminate\\Database\\DatabaseManager');
-        foreach ($databaseManagers as $receiver) {
-            $receiverPatterns[] = '/'.preg_quote($receiver, '/').'\\s*'.$memberOperator.'/';
-            $receiverPatterns[] = '/'.preg_quote($receiver, '/').'\\s*'.$memberOperator.'\\s*connection\\s*\\([^)]*\\)\\s*'.$memberOperator.'/';
-        }
-
-        foreach ($databaseManagers as $manager) {
-            preg_match_all(
-                '/(\\$[A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*'.preg_quote($manager, '/').'\\s*'.$memberOperator.'\\s*connection\\s*\\([^)]*\\)\\s*;/',
-                $source,
-                $assignedConnections,
-                PREG_SET_ORDER,
-            );
-            foreach ($assignedConnections as $assigned) {
-                $receiverPatterns[] = '/'.preg_quote($assigned[1], '/').'\\s*'.$memberOperator.'/';
-            }
-        }
-        preg_match_all(
-            '/(\\$[A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*DB\\s*::\\s*connection\\s*\\([^)]*\\)\\s*;/',
-            $source,
-            $assignedFacadeConnections,
-            PREG_SET_ORDER,
-        );
-        foreach ($assignedFacadeConnections as $assigned) {
-            $receiverPatterns[] = '/'.preg_quote($assigned[1], '/').'\\s*'.$memberOperator.'/';
-        }
-
-        $receiverPatterns = array_values(array_unique($receiverPatterns));
-        foreach ($receiverPatterns as $receiverPattern) {
-            $pattern = substr($receiverPattern, 0, -1).'\\s*('.$methods.')\\s*\\(/';
-            preg_match_all($pattern, $source, $calls, PREG_SET_ORDER | PREG_OFFSET_CAPTURE);
-            foreach ($calls as $call) {
-                $method = $call[1][0];
-                $offset = $call[0][1];
-                if (preg_match('/^'.$writeMethods.'$/', $method) === 1) {
-                    $violations[] = sprintf(
-                        '%s:%d raw Connection mutation API %s is forbidden because durable-table ownership cannot be attributed.',
-                        $relativePath,
-                        $this->lineNumber($source, $offset),
-                        $method,
-                    );
-
-                    continue;
-                }
-
-                $openParen = $offset + strlen($call[0][0]) - 1;
-                $sql = $this->literalRawSql($source, $openParen + 1);
-                if ($sql !== null
-                    && ($this->isLiteralReadOnlySql($sql)
-                        || $this->isReviewedMetadataIntrospection($relativePath, $sql))) {
-                    continue;
-                }
-
+            $offset = $call['offset'];
+            if (in_array($method, $writeMethods, true)) {
                 $violations[] = sprintf(
-                    '%s:%d raw Connection read API %s must receive one literal read-only SELECT statement or the exact reviewed metadata introspection; mutation/DDL/dynamic SQL is forbidden.',
+                    '%s:%d raw Connection mutation API %s is forbidden because durable-table ownership cannot be attributed.',
                     $relativePath,
                     $this->lineNumber($source, $offset),
                     $method,
                 );
+
+                continue;
             }
+
+            $sql = $this->literalRawSqlArgument($call['argument']);
+            if ($sql !== null
+                && ($this->isLiteralReadOnlySql($sql)
+                    || $this->isReviewedMetadataIntrospection($relativePath, $sql))) {
+                continue;
+            }
+
+            $violations[] = sprintf(
+                '%s:%d raw Connection read API %s must receive one literal read-only SELECT statement or the exact reviewed metadata introspection; mutation/DDL/dynamic SQL is forbidden.',
+                $relativePath,
+                $this->lineNumber($source, $offset),
+                $method,
+            );
         }
     }
 
@@ -1806,38 +1752,150 @@ final class ArchitectureBoundaryChecker
     private function typedPersistenceReceivers(string $source, string $fqcn): array
     {
         $short = substr($fqcn, strrpos($fqcn, '\\') + 1);
-        $typeNames = [$short, '\\'.$fqcn];
-        $importPattern = preg_quote($fqcn, '/');
-        if (preg_match('/\\buse\\s+'.$importPattern.'\\s+as\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*;/', $source, $alias) === 1) {
-            $typeNames[] = $alias[1];
+        $typeNames = [strtolower($short) => true, strtolower(ltrim($fqcn, '\\')) => true];
+        foreach ($this->importAliasesForType($source, $fqcn) as $alias) {
+            $typeNames[strtolower($alias)] = true;
         }
 
+        $tokens = $this->sourceTokens($source);
         $receivers = [];
-        foreach (array_values(array_unique($typeNames)) as $typeName) {
-            $typePattern = preg_quote($typeName, '/');
-            $typeUsePattern = '(?:\\?'.$typePattern.'|'.$typePattern.'(?:\\s*\\|\\s*null)?|null\\s*\\|\\s*'.$typePattern.')';
-            preg_match_all(
-                '/(?<![A-Za-z0-9_\\\\])'.$typeUsePattern.'\\s+\\$([A-Za-z_][A-Za-z0-9_]*)/',
-                $source,
-                $variables,
-                PREG_SET_ORDER,
-            );
-            foreach ($variables as $variable) {
-                $receivers[] = '$'.$variable[1];
+        foreach ($tokens as $index => $entry) {
+            $token = $entry['token'];
+            if (! is_array($token) || $token[0] !== T_VARIABLE) {
+                continue;
+            }
+            if (! $this->variableHasDeclaredType($tokens, $index, $typeNames)) {
+                continue;
             }
 
-            preg_match_all(
-                '/\\b(?:public|protected|private)(?:\\s+readonly)?\\s+'.$typeUsePattern.'\\s+\\$([A-Za-z_][A-Za-z0-9_]*)/',
-                $source,
-                $properties,
-                PREG_SET_ORDER,
-            );
-            foreach ($properties as $property) {
-                $receivers[] = '$this->'.$property[1];
+            $receivers[] = $token[1];
+            if ($this->variableDeclarationHasVisibility($tokens, $index)) {
+                $receivers[] = '$this->'.substr($token[1], 1);
             }
         }
 
         return array_values(array_unique($receivers));
+    }
+
+    /** @return list<string> */
+    private function importAliasesForType(string $source, string $fqcn): array
+    {
+        $tokens = $this->sourceTokens($source);
+        $aliases = [];
+        $target = strtolower(ltrim($fqcn, '\\'));
+
+        foreach ($tokens as $index => $entry) {
+            $token = $entry['token'];
+            if (! is_array($token) || $token[0] !== T_USE) {
+                continue;
+            }
+
+            $nameIndex = $this->nextSignificantTokenIndex($tokens, $index + 1);
+            if ($nameIndex === null) {
+                continue;
+            }
+            $nameToken = $tokens[$nameIndex]['token'];
+            if (! is_array($nameToken)
+                || ! in_array($nameToken[0], [T_STRING, T_NAME_QUALIFIED, T_NAME_FULLY_QUALIFIED], true)
+                || strtolower(ltrim($nameToken[1], '\\')) !== $target
+            ) {
+                continue;
+            }
+
+            $asIndex = $this->nextSignificantTokenIndex($tokens, $nameIndex + 1);
+            if ($asIndex === null) {
+                continue;
+            }
+            $asToken = $tokens[$asIndex]['token'];
+            if (! is_array($asToken) || $asToken[0] !== T_AS) {
+                continue;
+            }
+
+            $aliasIndex = $this->nextSignificantTokenIndex($tokens, $asIndex + 1);
+            if ($aliasIndex === null) {
+                continue;
+            }
+            $aliasToken = $tokens[$aliasIndex]['token'];
+            if (is_array($aliasToken) && $aliasToken[0] === T_STRING) {
+                $aliases[] = $aliasToken[1];
+            }
+        }
+
+        return array_values(array_unique($aliases));
+    }
+
+    /**
+     * @param  list<array{token:array|string,offset:int}>  $tokens
+     * @param  array<string,true>  $typeNames
+     */
+    private function variableHasDeclaredType(array $tokens, int $variableIndex, array $typeNames): bool
+    {
+        $typeIndex = $this->previousSignificantTokenIndex($tokens, $variableIndex - 1);
+        if ($typeIndex === null) {
+            return false;
+        }
+
+        $typeToken = $tokens[$typeIndex]['token'];
+        if ($this->tokenNamesDeclaredType($typeToken, $typeNames)) {
+            return true;
+        }
+
+        if (! is_array($typeToken) || $typeToken[0] !== T_STRING || strtolower($typeToken[1]) !== 'null') {
+            return false;
+        }
+
+        $pipeIndex = $this->previousSignificantTokenIndex($tokens, $typeIndex - 1);
+        if ($pipeIndex === null || $tokens[$pipeIndex]['token'] !== '|') {
+            return false;
+        }
+
+        $otherTypeIndex = $this->previousSignificantTokenIndex($tokens, $pipeIndex - 1);
+        if ($otherTypeIndex === null) {
+            return false;
+        }
+
+        return $this->tokenNamesDeclaredType($tokens[$otherTypeIndex]['token'], $typeNames);
+    }
+
+    /** @param array<string,true> $typeNames */
+    private function tokenNamesDeclaredType(array|string $token, array $typeNames): bool
+    {
+        if (! is_array($token)
+            || ! in_array($token[0], [T_STRING, T_NAME_QUALIFIED, T_NAME_FULLY_QUALIFIED], true)
+        ) {
+            return false;
+        }
+
+        return isset($typeNames[strtolower(ltrim($token[1], '\\'))]);
+    }
+
+    /** @param list<array{token:array|string,offset:int}> $tokens */
+    private function variableDeclarationHasVisibility(array $tokens, int $variableIndex): bool
+    {
+        for ($index = $variableIndex - 1; $index >= 0; $index--) {
+            $token = $tokens[$index]['token'];
+            if ($this->isTriviaToken($token) || $token === '?' || $token === '|') {
+                continue;
+            }
+            if (is_array($token) && $token[0] === T_STRING && strtolower($token[1]) === 'null') {
+                continue;
+            }
+            if (is_array($token)
+                && in_array($token[0], [T_STRING, T_NAME_QUALIFIED, T_NAME_FULLY_QUALIFIED, T_READONLY], true)
+            ) {
+                continue;
+            }
+            if (is_array($token) && in_array($token[0], [T_PUBLIC, T_PROTECTED, T_PRIVATE], true)) {
+                return true;
+            }
+            if (in_array($token, ['(', ',', ';', '{', '}'], true)
+                || is_array($token) && in_array($token[0], [T_FUNCTION, T_FN], true)
+            ) {
+                return false;
+            }
+        }
+
+        return false;
     }
 
     private function isLiteralReadOnlySql(string $sql): bool
