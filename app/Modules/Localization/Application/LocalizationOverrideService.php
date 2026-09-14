@@ -242,13 +242,6 @@ final readonly class LocalizationOverrideService
             $overrideId = (int) $current->id;
             $currentVersion = (int) $current->version;
             $currentValue = $current->override_value === null ? null : (string) $current->override_value;
-            if ($currentValue === $restoreValue) {
-                $receipt = new LocalizationOverrideReceipt($action, $overrideId, $key, $locale, $currentVersion, false);
-                $this->recordAudit($connection, $receipt, $context, $payloadHash, $currentValue, $currentValue);
-
-                return $receipt;
-            }
-
             $nextVersion = $currentVersion + 1;
             $now = $this->clock->now()->format('Y-m-d H:i:s.u');
             $connection->table('localization_overrides')->where('id', $overrideId)->update([

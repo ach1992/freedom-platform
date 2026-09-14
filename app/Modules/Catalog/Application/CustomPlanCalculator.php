@@ -346,6 +346,10 @@ final readonly class CustomPlanCalculator
     /** @return list<string> */
     private function policyStrings(Connection $connection, string $table, string $column, int $policyId): array
     {
+        if (! in_array($table, ['custom_plan_policy_separators', 'custom_plan_policy_reserved_words'], true)) {
+            throw new RuntimeException('Custom-plan policy string table is invalid.');
+        }
+
         /** @var list<int|string> $rows */
         $rows = $connection->table($table)
             ->where('custom_plan_policy_id', $policyId)

@@ -229,7 +229,7 @@ final class ArchitectureBoundaryChecker
     {
         $this->scanApplicationPrivateTableReferences($relativePath, $source, $violations);
         $this->scanDeferredTableMutations($relativePath, $source, $violations);
-        $this->scanDynamicTableMutations($relativePath, $source, $violations);
+        $this->scanDynamicTableAccess($relativePath, $source, $violations);
         $this->scanUnsupportedQuerySources($relativePath, $source, $violations);
 
         preg_match_all(
@@ -359,68 +359,219 @@ final class ArchitectureBoundaryChecker
     }
 
     /** @param list<string> $violations */
-    private function scanDynamicTableMutations(string $relativePath, string $source, array &$violations): void
+    private function scanDynamicTableAccess(string $relativePath, string $source, array &$violations): void
     {
         preg_match_all(
-            '/(?:\bDB::|->)\s*(?:table|from)\(\s*(?![\'\"])([^)]*)\)/',
+            '/(?:\bDB::|->)\s*(?:table|from)\(\s*([^)]*)\)/',
             $source,
             $matches,
             PREG_SET_ORDER | PREG_OFFSET_CAPTURE,
         );
 
         foreach ($matches as $match) {
+            $expression = trim($match[1][0]);
+            if ($this->literalTableName($expression) !== null) {
+                continue;
+            }
+
             $offset = $match[0][1];
             $statement = substr($source, $offset, $this->statementLength($source, $offset));
             $mutation = $this->mutationMethod($statement);
-            if ($mutation === null) {
+            $tables = $this->boundedDynamicTables($source, $offset, $expression);
+            if ($tables === null) {
+                $violations[] = sprintf(
+                    '%s:%d dynamic table %s is forbidden because durable-table ownership cannot be statically attributed; use a literal or statically bounded reviewed table boundary.',
+                    $relativePath,
+                    $this->lineNumber($source, $offset),
+                    $mutation === null ? 'read' : 'mutation',
+                );
+
                 continue;
             }
 
-            $tables = $this->boundedDynamicTables($source, $offset, trim($match[1][0]));
-            if ($tables !== null && $this->boundedTablesAreAllowed($relativePath, $tables, $mutation)) {
+            $sourceOwner = $this->sourcePersistenceOwner($relativePath);
+            $privateViolation = false;
+            foreach ($tables as $table) {
+                $owner = $this->applicationPrivateTableOwner($table);
+                if ($owner === null || $owner === $sourceOwner) {
+                    continue;
+                }
+
+                // The literal private-table scanner already owns contiguous source references.
+                // This path closes dynamically constructed identities without double-reporting.
+                if (preg_match('/\b'.preg_quote($table, '/').'\b/', $source) === 1) {
+                    continue;
+                }
+
+                $violations[] = sprintf(
+                    '%s:%d durable table %s is private to the %s Application boundary; cross-module direct persistence access is forbidden.',
+                    $relativePath,
+                    $this->lineNumber($source, $offset),
+                    $table,
+                    $owner,
+                );
+                $privateViolation = true;
+            }
+
+            if ($privateViolation || $mutation === null) {
                 continue;
             }
 
-            $violations[] = sprintf(
-                '%s:%d dynamic table mutation is forbidden because durable-table ownership cannot be attributed; use a literal or statically bounded reviewed table boundary.',
-                $relativePath,
-                $this->lineNumber($source, $offset),
-            );
+            if (! $this->boundedTablesAreAllowed($relativePath, $tables, $mutation)) {
+                $violations[] = sprintf(
+                    '%s:%d dynamic table mutation is forbidden because durable-table ownership cannot be attributed; use a literal or statically bounded reviewed table boundary.',
+                    $relativePath,
+                    $this->lineNumber($source, $offset),
+                );
+            }
         }
+    }
+
+    private function literalTableName(string $expression): ?string
+    {
+        if (preg_match('/\A([\'\"])([A-Za-z0-9_.]+(?:\s+as\s+[A-Za-z_][A-Za-z0-9_]*)?)\1\z/i', $expression, $match) !== 1) {
+            return null;
+        }
+
+        $parts = preg_split('/\s+as\s+/i', $match[2]);
+        $table = is_array($parts) && isset($parts[0]) ? trim($parts[0]) : '';
+
+        return preg_match('/\A[A-Za-z0-9_.]+\z/', $table) === 1 ? $table : null;
     }
 
     /** @return list<string>|null */
     private function boundedDynamicTables(string $source, int $offset, string $expression): ?array
     {
+        $aliasBase = $this->dynamicAliasBaseTable($expression);
+        if ($aliasBase !== null) {
+            return [$aliasBase];
+        }
+
         if (preg_match('/^\$([A-Za-z_][A-Za-z0-9_]*)$/', $expression, $variableMatch) !== 1) {
             return null;
         }
 
+        $functionStart = $this->enclosingFunctionStart($source, $offset);
+        if ($functionStart === null) {
+            return null;
+        }
+
         $variable = $variableMatch[1];
-        $prefix = substr($source, 0, $offset);
-        $pattern = '/foreach\s*\(\s*\[((?:\s*[\'\"][A-Za-z0-9_]+[\'\"]\s*,)*\s*[\'\"][A-Za-z0-9_]+[\'\"]\s*,?\s*)\]\s+as\s+\$'.preg_quote($variable, '/').'\s*\)/s';
-        preg_match_all($pattern, $prefix, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE);
+        $prefix = substr($source, $functionStart, $offset - $functionStart);
+        $assignmentPattern = '/\$'.preg_quote($variable, '/').'\s*=(?![=>])\s*[^;]+;/';
+
+        $guardPattern = '/if\s*\(\s*!\s*in_array\s*\(\s*\$'.preg_quote($variable, '/').'\s*,\s*\[([^\]]+)\]\s*,\s*true\s*\)\s*\)\s*\{[^{}]*\bthrow\b[^{}]*\}/s';
+        preg_match_all($guardPattern, $prefix, $guards, PREG_SET_ORDER | PREG_OFFSET_CAPTURE);
+        if ($guards !== []) {
+            $guard = $guards[array_key_last($guards)];
+            $guardOffset = $functionStart + $guard[0][1];
+            $guardEnd = $guard[0][1] + strlen($guard[0][0]);
+            $afterGuard = substr($prefix, $guardEnd);
+            if ($this->braceDepthBetween($source, $functionStart, $guardOffset) === 1
+                && preg_match($assignmentPattern, $afterGuard) !== 1
+            ) {
+                $tables = $this->literalTableList($guard[1][0]);
+                if ($tables !== null) {
+                    return $tables;
+                }
+            }
+        }
+
+        $foreachPattern = '/foreach\s*\(\s*\[((?:\s*[\'\"][A-Za-z0-9_.]+[\'\"]\s*,)*\s*[\'\"][A-Za-z0-9_.]+[\'\"]\s*,?\s*)\]\s+as\s+\$'.preg_quote($variable, '/').'\s*\)/s';
+        preg_match_all($foreachPattern, $prefix, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE);
         if ($matches === []) {
             return null;
         }
 
         $match = $matches[array_key_last($matches)];
-        $fullMatch = $match[0][0];
         $fullOffset = $match[0][1];
-        $lastAs = strrpos($prefix, 'as $'.$variable);
-        if ($lastAs === false || $lastAs < $fullOffset || $lastAs > $fullOffset + strlen($fullMatch)) {
+        $headerEnd = $fullOffset + strlen($match[0][0]);
+        $absoluteHeaderEnd = $functionStart + $headerEnd;
+        if (! $this->blockFromHeaderContainsOffset($source, $absoluteHeaderEnd, $offset)) {
             return null;
         }
 
-        $between = substr($prefix, $fullOffset + strlen($fullMatch));
-        if (preg_match('/\$'.preg_quote($variable, '/').'\s*=/', $between) === 1) {
+        $afterBinding = substr($prefix, $headerEnd);
+        if (preg_match($assignmentPattern, $afterBinding) === 1) {
             return null;
         }
 
-        preg_match_all('/[\'\"]([A-Za-z0-9_]+)[\'\"]/', $match[1][0], $tableMatches);
-        $tables = array_values(array_unique($tableMatches[1] ?? []));
+        return $this->literalTableList($match[1][0]);
+    }
+
+    private function braceDepthBetween(string $source, int $start, int $end): int
+    {
+        if ($end <= $start) {
+            return 0;
+        }
+
+        $tokens = token_get_all('<?php '.substr($source, $start, $end - $start));
+        $depth = 0;
+        foreach ($tokens as $token) {
+            if ($token === '{') {
+                $depth++;
+            } elseif ($token === '}') {
+                $depth--;
+            }
+        }
+
+        return $depth;
+    }
+
+    private function blockFromHeaderContainsOffset(string $source, int $headerEnd, int $offset): bool
+    {
+        if ($offset <= $headerEnd) {
+            return false;
+        }
+
+        $tokens = token_get_all('<?php '.substr($source, $headerEnd, $offset - $headerEnd));
+        $depth = 0;
+        $seenOpen = false;
+        foreach ($tokens as $token) {
+            if ($token === '{') {
+                $seenOpen = true;
+                $depth++;
+            } elseif ($token === '}' && $seenOpen) {
+                $depth--;
+                if ($depth === 0) {
+                    return false;
+                }
+            }
+        }
+
+        return $seenOpen && $depth > 0;
+    }
+
+    private function dynamicAliasBaseTable(string $expression): ?string
+    {
+        if (preg_match('/\A([\'\"])([A-Za-z0-9_.]+)\s+as\s+\1\s*\.\s*\$[A-Za-z_][A-Za-z0-9_]*\z/i', $expression, $match) !== 1) {
+            return null;
+        }
+
+        return $match[2];
+    }
+
+    /** @return list<string>|null */
+    private function literalTableList(string $source): ?array
+    {
+        if (preg_match('/\A\s*(?:[\'\"][A-Za-z0-9_.]+[\'\"]\s*,\s*)*[\'\"][A-Za-z0-9_.]+[\'\"]\s*,?\s*\z/', $source) !== 1) {
+            return null;
+        }
+
+        preg_match_all('/[\'\"]([A-Za-z0-9_.]+)[\'\"]/', $source, $matches);
+        $tables = array_values(array_unique($matches[1] ?? []));
 
         return $tables === [] ? null : $tables;
+    }
+
+    private function applicationPrivateTableOwner(string $table): ?string
+    {
+        $tables = $this->config['application_private_tables'] ?? [];
+        if (! is_array($tables) || ! in_array($table, $tables, true)) {
+            return null;
+        }
+
+        return $this->durableTableOwner($table);
     }
 
     /** @param list<string> $tables */
@@ -513,12 +664,8 @@ final class ArchitectureBoundaryChecker
         );
         foreach ($matches as $match) {
             $offset = $match[0][1];
-            $statement = substr($source, $offset, $this->statementLength($source, $offset));
-            if ($this->mutationMethod($statement) === null) {
-                continue;
-            }
             $violations[] = sprintf(
-                '%s:%d query mutation through %s is forbidden because durable-table ownership cannot be statically attributed.',
+                '%s:%d query source through %s is forbidden because durable-table ownership cannot be statically attributed.',
                 $relativePath,
                 $this->lineNumber($source, $offset),
                 $match[1][0],
@@ -579,6 +726,20 @@ final class ArchitectureBoundaryChecker
         }
 
         return $bestEnd;
+    }
+
+    private function enclosingFunctionStart(string $source, int $offset): ?int
+    {
+        $bestStart = null;
+        foreach ($this->functionRanges($source) as $range) {
+            if ($range['start'] <= $offset && $offset <= $range['end']
+                && ($bestStart === null || $range['start'] > $bestStart)
+            ) {
+                $bestStart = $range['start'];
+            }
+        }
+
+        return $bestStart;
     }
 
     /** @param list<string> $violations */

@@ -112,6 +112,10 @@ final class LocalizationOverrideAuthorityTest extends TestCase
             self::assertSame('برگ Ada', $resolver->resolve('probe.section.leaf', ['name' => 'Ada'], 'fa'));
             self::assertSame(['name'], $catalog->placeholders('Visit https://example.com — :name'));
             self::assertSame('Visit https://example.com — Ada', $catalog->render('Visit https://example.com — :name', ['name' => 'Ada']));
+            self::assertSame('Value :code', $catalog->render('Value :name', ['name' => ':code']));
+            self::assertSame('Value 2001:db8::1', $catalog->render('Value :name', ['name' => '2001:db8::1']));
+            self::assertSame('Value prefix: value', $catalog->render('Value :name', ['name' => 'prefix: value']));
+            self::assertSame('Case Éclair / ÉCLAIR', $catalog->render('Case :Name / :NAME', ['name' => 'éclair']));
         } finally {
             $files->deleteDirectory($root);
         }
@@ -153,6 +157,33 @@ final class LocalizationOverrideAuthorityTest extends TestCase
             'Repeated abc / Abc / ABC / abc',
             $resolver->resolve($key, ['code' => 'abc'], 'en'),
         );
+    }
+
+    public function test_replacement_data_is_not_reparsed_as_localization_grammar_for_file_and_database_templates(): void
+    {
+        $ownerId = $this->administrator(true);
+        $service = $this->app->make(LocalizationOverrideService::class);
+        $resolver = $this->app->make(LocalizationResolver::class);
+        $key = 'identity.otp.sms_message';
+
+        foreach ([':code', '2001:db8::1', 'prefix: value'] as $replacement) {
+            self::assertSame(
+                $this->app->make('translator')->get($key, ['code' => $replacement], 'en'),
+                $resolver->resolve($key, ['code' => $replacement], 'en'),
+            );
+        }
+
+        $service->set(
+            $key,
+            'en',
+            'Override payload: :code',
+            null,
+            $this->context($ownerId, 'localization-replacement-data-set-0001'),
+        );
+
+        foreach ([':code', '2001:db8::1', 'prefix: value'] as $replacement) {
+            self::assertSame('Override payload: '.$replacement, $resolver->resolve($key, ['code' => $replacement], 'en'));
+        }
     }
 
     public function test_runtime_added_translation_is_not_eligible_for_override_or_preview(): void
@@ -228,6 +259,36 @@ final class LocalizationOverrideAuthorityTest extends TestCase
         self::assertStringNotContainsString($firstValue, $auditText);
         self::assertStringNotContainsString($secondValue, $auditText);
         self::assertStringContainsString(hash('sha256', $firstValue), $auditText);
+    }
+
+    public function test_fresh_same_value_restore_appends_one_restore_version_and_replay_does_not_append_again(): void
+    {
+        $ownerId = $this->administrator(true);
+        $service = $this->app->make(LocalizationOverrideService::class);
+        $key = 'identity.otp.sms_message';
+        $valueA = 'Verification A: :code';
+        $valueB = 'Verification B: :code';
+
+        $created = $service->set($key, 'en', $valueA, null, $this->context($ownerId, 'localization-same-restore-set-0001'));
+        $service->set($key, 'en', $valueB, 1, $this->context($ownerId, 'localization-same-restore-set-0002'));
+        $service->set($key, 'en', $valueA, 2, $this->context($ownerId, 'localization-same-restore-set-0003'));
+
+        $context = $this->context($ownerId, 'localization-same-restore-0001');
+        $restored = $service->restore($key, 'en', 1, 3, $context);
+        self::assertTrue($restored->changed);
+        self::assertFalse($restored->replayed);
+        self::assertSame(4, $restored->version);
+        self::assertSame(4, (int) DB::table('localization_overrides')->where('id', $created->overrideId)->value('version'));
+        self::assertSame(4, DB::table('localization_override_versions')->where('localization_override_id', $created->overrideId)->count());
+        self::assertSame('restore', DB::table('localization_override_versions')->where('localization_override_id', $created->overrideId)->where('version', 4)->value('action'));
+
+        $replayed = $service->restore($key, 'en', 1, 3, $context);
+        self::assertTrue($replayed->changed);
+        self::assertTrue($replayed->replayed);
+        self::assertSame(4, $replayed->version);
+        self::assertSame(4, (int) DB::table('localization_overrides')->where('id', $created->overrideId)->value('version'));
+        self::assertSame(4, DB::table('localization_override_versions')->where('localization_override_id', $created->overrideId)->count());
+        self::assertSame([4, 3, 2, 1], array_column($service->history($ownerId, $key, 'en'), 'version'));
     }
 
     public function test_authorization_placeholder_and_optimistic_version_validation_fail_closed(): void

@@ -222,7 +222,7 @@ PHP);
         self::assertStringContainsString('Payments mutation of durable table ledger_entries owned by Wallet is forbidden', implode("\n", $result['violations']));
     }
 
-    public function test_application_boundary_private_tables_reject_cross_module_reads_and_literal_aliases(): void
+    public function test_application_boundary_private_tables_reject_cross_module_reads_literal_aliases_and_constructed_names(): void
     {
         $this->write('app/Modules/Payments/Application/UnsafeLocalizationRead.php', <<<'PHP'
 <?php
@@ -237,6 +237,20 @@ final class UnsafeLocalizationRead
     public function indirect($db): mixed
     {
         $table = 'localization_override_versions';
+
+        return $db->table($table)->first();
+    }
+
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/ConstructedLocalizationRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+final class ConstructedLocalizationRead
+{
+    public function run($db): mixed
+    {
+        $table = 'localization_' . 'overrides';
 
         return $db->table($table)->first();
     }
@@ -257,6 +271,7 @@ PHP);
         $violations = implode("\n", $this->checker()->check()['violations']);
 
         self::assertSame(2, substr_count($violations, 'cross-module direct persistence access is forbidden'));
+        self::assertStringContainsString('ConstructedLocalizationRead.php:9 dynamic table read is forbidden', $violations);
         self::assertStringContainsString('localization_overrides is private to the Localization Application boundary', $violations);
         self::assertStringContainsString('localization_override_versions is private to the Localization Application boundary', $violations);
         self::assertStringNotContainsString('OwnedLocalizationRead.php', $violations);
@@ -295,7 +310,7 @@ PHP);
         self::assertStringContainsString('mutation update is forbidden', $violations);
     }
 
-    public function test_dynamic_table_mutation_fails_closed_but_dynamic_read_is_not_misclassified(): void
+    public function test_unbounded_dynamic_table_reads_and_mutations_fail_closed_while_reviewed_bounds_remain_allowed(): void
     {
         $this->write('app/Modules/Orders/Application/DynamicWrite.php', <<<'PHP'
 <?php
@@ -307,12 +322,109 @@ PHP);
 namespace App\Modules\Orders\Application;
 final class DynamicRead { public function run($db, string $table): mixed { return $db->table($table)->first(); } }
 PHP);
+        $this->write('app/Modules/Orders/Application/ConditionallyAssignedRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+final class ConditionallyAssignedRead
+{
+    public function run($db, string $table, bool $forceOrders): mixed
+    {
+        if ($forceOrders) {
+            $table = 'orders';
+        }
 
-        $result = $this->checker()->check();
-        $violations = implode("\n", $result['violations']);
+        return $db->table($table)->first();
+    }
+}
+PHP);
+        $this->write('app/Modules/Orders/Application/NestedGuardRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+final class NestedGuardRead
+{
+    public function run($db, string $table, bool $validate): mixed
+    {
+        if ($validate) {
+            if (! in_array($table, ['orders'], true)) {
+                throw new \RuntimeException('Unsupported table.');
+            }
+        }
 
-        self::assertStringContainsString('dynamic table mutation is forbidden because durable-table ownership cannot be attributed', $violations);
-        self::assertSame(1, substr_count($violations, 'dynamic table mutation is forbidden'));
+        return $db->table($table)->first();
+    }
+}
+PHP);
+        $this->write('app/Modules/Orders/Application/LoopEndedRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+final class LoopEndedRead
+{
+    public function run($db, string $table): mixed
+    {
+        foreach (['orders'] as $table) {
+            $db->table($table)->first();
+        }
+
+        return $db->table($table)->first();
+    }
+}
+PHP);
+        $this->write('app/Modules/Orders/Application/BoundedDynamicReads.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+final class BoundedDynamicReads
+{
+    public function guarded($db, string $table): mixed
+    {
+        if (! in_array($table, ['orders'], true)) {
+            throw new \RuntimeException('Unsupported table.');
+        }
+
+        return $db->table($table)->first();
+    }
+
+    public function looped($db): void
+    {
+        foreach (['orders'] as $table) {
+            $db->table($table)->first();
+        }
+    }
+}
+PHP);
+
+        $violations = implode("\n", $this->checker()->check()['violations']);
+
+        self::assertStringContainsString('DynamicWrite.php:3 dynamic table mutation is forbidden', $violations);
+        self::assertStringContainsString('DynamicRead.php:3 dynamic table read is forbidden', $violations);
+        self::assertStringContainsString('ConditionallyAssignedRead.php:11 dynamic table read is forbidden', $violations);
+        self::assertStringContainsString('NestedGuardRead.php:13 dynamic table read is forbidden', $violations);
+        self::assertStringContainsString('LoopEndedRead.php:11 dynamic table read is forbidden', $violations);
+        self::assertStringNotContainsString('BoundedDynamicReads.php', $violations);
+    }
+
+    public function test_raw_and_subquery_from_sources_fail_closed_for_reads_as_well_as_mutations(): void
+    {
+        $this->write('app/Modules/Orders/Application/UnsupportedReadSources.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+final class UnsupportedReadSources
+{
+    public function raw($db): mixed
+    {
+        return $db->query()->fromRaw('orders')->first();
+    }
+
+    public function sub($db, $query): mixed
+    {
+        return $db->query()->fromSub($query, 'source')->first();
+    }
+}
+PHP);
+
+        $violations = implode("\n", $this->checker()->check()['violations']);
+
+        self::assertStringContainsString('query source through fromRaw is forbidden', $violations);
+        self::assertStringContainsString('query source through fromSub is forbidden', $violations);
     }
 
     public function test_eloquent_persistence_is_explicitly_prohibited_in_modules_and_shared_code(): void

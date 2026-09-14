@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Localization\Application;
 
 use Illuminate\Filesystem\Filesystem;
+use Illuminate\Support\Str;
 use InvalidArgumentException;
 use RuntimeException;
 
@@ -132,17 +133,12 @@ final class LocalizationTemplateCatalog
             }
 
             $string = (string) $value;
+            $replace[':'.Str::ucfirst($key)] = Str::ucfirst($string);
+            $replace[':'.Str::upper($key)] = Str::upper($string);
             $replace[':'.$key] = $string;
-            $replace[':'.ucfirst($key)] = ucfirst($string);
-            $replace[':'.strtoupper($key)] = strtoupper($string);
         }
 
-        $rendered = strtr($template, $replace);
-        if ($this->placeholders($rendered) !== []) {
-            throw new RuntimeException('Localization rendering left unresolved placeholders.');
-        }
-
-        return $rendered;
+        return strtr($template, $replace);
     }
 
     /** @return array<string, mixed>|null */
