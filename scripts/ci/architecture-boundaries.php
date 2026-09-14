@@ -15,7 +15,7 @@ return [
         'Payments' => ['AccessControl', 'Orders', 'Telegram', 'Wallet'],
         'Promotions' => ['AccessControl', 'Wallet'],
         'Provisioning' => ['AccessControl', 'Catalog', 'Orders', 'Panels', 'Payments', 'Telegram', 'Wallet'],
-        'Telegram' => ['AccessControl', 'Agents', 'Customers', 'Identity', 'Promotions', 'Wallet'],
+        'Telegram' => ['AccessControl', 'Agents', 'Customers', 'Identity', 'Localization', 'Promotions', 'Wallet'],
         'Wallet' => ['AccessControl'],
     ],
     // Exact dependency-inversion seams where an owning module implements a
