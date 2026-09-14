@@ -2588,15 +2588,62 @@ SQL);
         self::assertStringContainsString(str_pad('01J', 26, '0'), $ready);
         self::assertStringNotContainsString('credential', mb_strtolower($ready));
         self::assertSame($before, $this->trialDiscoveryMutationCounts());
+        $oldServicesToken = $this->callbackToken('navigation.trial.my_services', $accountId);
+        $oldBackToken = $this->callbackToken('navigation.back', $accountId);
 
-        $servicesToken = $this->callbackToken('navigation.trial.my_services', $accountId);
-        $this->accept($this->callbackPayload(7059, 9701, 'navigation_trial_status', 'en', $servicesToken));
+        // Re-render queued controls at the same version, then resolve the same success at the next version.
+        $this->accept($this->payload(7059, 9701, 'navigation_trial_status', 'en', 'check again'));
         $processor->process('123456789', 7059);
+        self::assertCount(2, $status->calls);
+        self::assertSame($before, $this->trialDiscoveryMutationCounts());
+        $statusToken = $this->callbackToken('navigation.trial.status', $accountId);
+
+        $this->accept($this->callbackPayload(7060, 9701, 'navigation_trial_status', 'en', $statusToken));
+        $processor->process('123456789', 7060);
         self::assertCount(3, $status->calls);
+        self::assertStringContainsString('Trial service is ready', $this->latestConfidentialPresentation());
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'telegram_account_id' => $accountId,
+            'state' => 'trial_claim_queued',
+            'version' => 9,
+        ]);
+        self::assertSame($before, $this->trialDiscoveryMutationCounts());
+        $freshServicesToken = $this->callbackToken('navigation.trial.my_services', $accountId);
+        $freshBackToken = $this->callbackToken('navigation.back', $accountId);
+        self::assertNotSame($oldServicesToken, $freshServicesToken);
+        self::assertNotSame($oldBackToken, $freshBackToken);
+
+        $processor->process('123456789', 7060);
+        self::assertCount(3, $status->calls, 'Exact status-update replay must not re-resolve provisioning status.');
+        self::assertSame($before, $this->trialDiscoveryMutationCounts());
+
+        $this->accept($this->callbackPayload(7061, 9701, 'navigation_trial_status', 'en', $oldServicesToken));
+        $processor->process('123456789', 7061);
+        self::assertCount(3, $status->calls, 'A prior-version success My Services callback must fail closed.');
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'telegram_account_id' => $accountId,
+            'state' => 'trial_claim_queued',
+            'version' => 9,
+        ]);
+        self::assertSame($before, $this->trialDiscoveryMutationCounts());
+
+        $this->accept($this->callbackPayload(7062, 9701, 'navigation_trial_status', 'en', $oldBackToken));
+        $processor->process('123456789', 7062);
+        self::assertCount(3, $status->calls, 'A prior-version success Back callback must fail closed.');
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'telegram_account_id' => $accountId,
+            'state' => 'trial_claim_queued',
+            'version' => 9,
+        ]);
+        self::assertSame($before, $this->trialDiscoveryMutationCounts());
+
+        $this->accept($this->callbackPayload(7063, 9701, 'navigation_trial_status', 'en', $freshServicesToken));
+        $processor->process('123456789', 7063);
+        self::assertCount(4, $status->calls);
         $this->assertDatabaseHas('telegram_interaction_sessions', [
             'telegram_account_id' => $accountId,
             'state' => 'my_services',
-            'version' => 10,
+            'version' => 11,
             'payload' => '{"page":1}',
         ]);
         self::assertStringContainsString('My Services', $this->latestConfidentialPresentation());
@@ -2651,6 +2698,66 @@ SQL);
                 'version' => 7,
             ]);
         }
+    }
+
+    /** @requirement PRV-002 PRV-003 CHN-001 DAT-002 SEC-002 LOC-001 QUA-001 QUA-004 */
+    public function test_customer_trial_terminal_status_callbacks_are_version_scoped_across_refreshes(): void
+    {
+        $status = new TelegramNavigationCustomerTrialProvisioningStatus;
+        $status->status = TelegramCustomerTrialProvisioningStatusSnapshot::NEEDS_REVIEW;
+        [$processor, $accountId] = $this->reachQueuedTrial(
+            9741,
+            'navigation_trial_terminal_versioned',
+            7400,
+            'en',
+            $status,
+        );
+        $before = $this->trialDiscoveryMutationCounts();
+        $statusToken = $this->callbackToken('navigation.trial.status', $accountId);
+
+        $this->accept($this->callbackPayload(7405, 9741, 'navigation_trial_terminal_versioned', 'en', $statusToken));
+        $processor->process('123456789', 7405);
+        self::assertCount(1, $status->calls);
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'telegram_account_id' => $accountId,
+            'state' => 'trial_claim_queued',
+            'version' => 7,
+        ]);
+        self::assertSame($before, $this->trialDiscoveryMutationCounts());
+        $oldBackToken = $this->callbackToken('navigation.back', $accountId);
+
+        // Re-render queued controls at V7, then resolve the same terminal state at V8.
+        $this->accept($this->payload(7406, 9741, 'navigation_trial_terminal_versioned', 'en', 'check again'));
+        $processor->process('123456789', 7406);
+        self::assertCount(1, $status->calls);
+        self::assertSame($before, $this->trialDiscoveryMutationCounts());
+        $statusToken = $this->callbackToken('navigation.trial.status', $accountId);
+
+        $this->accept($this->callbackPayload(7407, 9741, 'navigation_trial_terminal_versioned', 'en', $statusToken));
+        $processor->process('123456789', 7407);
+        self::assertCount(2, $status->calls);
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'telegram_account_id' => $accountId,
+            'state' => 'trial_claim_queued',
+            'version' => 8,
+        ]);
+        self::assertSame($before, $this->trialDiscoveryMutationCounts());
+        $freshBackToken = $this->callbackToken('navigation.back', $accountId);
+        self::assertNotSame($oldBackToken, $freshBackToken);
+
+        $processor->process('123456789', 7407);
+        self::assertCount(2, $status->calls, 'Exact terminal status-update replay must not re-resolve provisioning status.');
+        self::assertSame($before, $this->trialDiscoveryMutationCounts());
+
+        $this->accept($this->callbackPayload(7408, 9741, 'navigation_trial_terminal_versioned', 'en', $oldBackToken));
+        $processor->process('123456789', 7408);
+        self::assertCount(2, $status->calls, 'A prior-version terminal Back callback must fail closed.');
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'telegram_account_id' => $accountId,
+            'state' => 'trial_claim_queued',
+            'version' => 8,
+        ]);
+        self::assertSame($before, $this->trialDiscoveryMutationCounts());
     }
 
     /** @requirement CAT-006 BUY-001 CHN-001 DAT-003 SEC-002 QUA-001 QUA-004 */

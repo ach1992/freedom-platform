@@ -1051,14 +1051,14 @@ final readonly class TelegramTrialNavigationHandler
             $sessionVersion,
             self::ACTION_MY_SERVICES,
             [],
-            'tg-trial-ready-services:'.hash('sha256', $state['operation_key']),
+            'tg-trial-ready-services:'.hash('sha256', $state['operation_key'].':'.$sessionVersion),
         );
         $back = $this->callbacks->issue(
             $action->sessionPublicId,
             $sessionVersion,
             self::ACTION_BACK,
             [],
-            'tg-trial-ready-back:'.hash('sha256', $state['operation_key']),
+            'tg-trial-ready-back:'.hash('sha256', $state['operation_key'].':'.$sessionVersion),
         );
         $this->queueConfidential(
             $action,
@@ -1098,7 +1098,7 @@ final readonly class TelegramTrialNavigationHandler
             $sessionVersion,
             self::ACTION_BACK,
             [],
-            'tg-trial-status-back:'.hash('sha256', $state['operation_key'].':'.$surface),
+            'tg-trial-status-back:'.hash('sha256', $state['operation_key'].':'.$surface.':'.$sessionVersion),
         );
         $this->queueConfidential(
             $action,
