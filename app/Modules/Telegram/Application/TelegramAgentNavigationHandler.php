@@ -7,6 +7,7 @@ namespace App\Modules\Telegram\Application;
 use App\Modules\Agents\Application\AgentApplicationService;
 use App\Modules\Agents\Application\AgentApplicationSubmissionRejected;
 use App\Modules\Agents\Application\AgentChangeContext;
+use App\Modules\Localization\Application\LocalizationResolver;
 use App\Modules\Customers\Application\CustomerAccountSummary;
 use App\Modules\Customers\Application\CustomerAccountSummaryService;
 use App\Modules\Telegram\Application\Contracts\TelegramAgentPurchaseCount;
@@ -15,7 +16,6 @@ use DateTimeImmutable;
 use DateTimeZone;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
-use Illuminate\Contracts\Translation\Translator;
 use Illuminate\Database\DatabaseManager;
 use RuntimeException;
 
@@ -48,7 +48,7 @@ final readonly class TelegramAgentNavigationHandler
     private const ACTION_BACK = 'navigation.back';
 
     public function __construct(
-        private Translator $translator,
+        private LocalizationResolver $localization,
         private ConfidentialTelegramPresentationFactory $confidentialPresentations,
         private TelegramConfidentialDeliveryQueue $delivery,
         private TelegramInteractionSessionService $sessions,
@@ -598,11 +598,8 @@ final readonly class TelegramAgentNavigationHandler
     /** @param array<string,int|string> $replace */
     private function translation(string $key, string $locale, array $replace = []): string
     {
-        $value = $this->translator->get($key, $replace, $locale);
-        if (! is_string($value) || $value === '' || $value === $key) {
-            $value = $this->translator->get($key, $replace, 'en');
-        }
-        if (! is_string($value) || $value === '' || $value === $key) {
+        $value = $this->localization->resolve($key, $replace, $locale);
+        if ($value === '' || $value === '['.$key.']') {
             throw new RuntimeException('Telegram Agent translation is unavailable.');
         }
         if (preg_match('/:[A-Za-z_][A-Za-z0-9_]*/', $value) === 1) {
