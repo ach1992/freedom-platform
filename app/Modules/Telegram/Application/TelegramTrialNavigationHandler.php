@@ -7,6 +7,7 @@ namespace App\Modules\Telegram\Application;
 use App\Modules\Customers\Application\CustomerAccountSummaryService;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerTrialCatalog;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerTrialClaim;
+use App\Modules\Telegram\Application\Contracts\TelegramCustomerTrialProvisioningStatus;
 use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
 use DateTimeImmutable;
 use DomainException;
@@ -58,6 +59,10 @@ final readonly class TelegramTrialNavigationHandler
 
     private const ACTION_CONFIRM = 'navigation.trial.confirm';
 
+    private const ACTION_STATUS = 'navigation.trial.status';
+
+    private const ACTION_MY_SERVICES = 'navigation.trial.my_services';
+
     private const ACTION_BACK = 'navigation.back';
 
     private const PAGE_SIZE = 6;
@@ -71,6 +76,7 @@ final readonly class TelegramTrialNavigationHandler
         private CustomerAccountSummaryService $customers,
         private TelegramCustomerTrialCatalog $catalog,
         private TelegramCustomerTrialClaim $claims,
+        private TelegramCustomerTrialProvisioningStatus $provisioningStatus,
         private TelegramNavigationHandler $navigation,
     ) {}
 
@@ -333,12 +339,26 @@ final readonly class TelegramTrialNavigationHandler
     {
         $state = $this->queuedState($action->sessionPayload);
         if ($action->kind === TelegramInteractionActionKind::Callback) {
-            if ($action->callbackAction !== self::ACTION_BACK || $action->callbackPayload !== []) {
-                throw new RuntimeException('Telegram Trial queued callback action is unsupported.');
+            if ($action->callbackPayload !== []) {
+                throw new RuntimeException('Telegram Trial queued callback payload is unsupported.');
             }
-            $this->returnHome($action);
+            if ($action->callbackAction === self::ACTION_STATUS) {
+                $this->refreshQueuedStatus($action, $state);
 
-            return;
+                return;
+            }
+            if ($action->callbackAction === self::ACTION_MY_SERVICES) {
+                $this->openMyServices($action, $state);
+
+                return;
+            }
+            if ($action->callbackAction === self::ACTION_BACK) {
+                $this->returnHome($action);
+
+                return;
+            }
+
+            throw new RuntimeException('Telegram Trial queued callback action is unsupported.');
         }
         if ($action->kind === TelegramInteractionActionKind::Back || $this->isEntryCommand($action->messageText)) {
             $this->returnHome($action);
@@ -624,6 +644,117 @@ final readonly class TelegramTrialNavigationHandler
         );
     }
 
+    /** @param QueuedState $state */
+    private function refreshQueuedStatus(TelegramInteractionAction $action, array $state): void
+    {
+        $status = $this->provisioningStatus->statusForSelf(
+            $action->userId,
+            $action->userId,
+            $state['provisioning_public_id'],
+            $state['service_public_id'],
+        );
+        try {
+            $session = $this->sessions->transition(
+                $action->sessionPublicId,
+                $action->sessionVersion,
+                self::STATE_QUEUED,
+                $state,
+                'tg-trial-status-refresh:'.hash('sha256', $action->requestKey),
+            );
+        } catch (DomainException) {
+            return;
+        }
+        $this->assertActor($action, $session->userId);
+        $locale = $this->locale($action->userId);
+
+        match ($status->status) {
+            TelegramCustomerTrialProvisioningStatusSnapshot::PENDING => $this->renderQueuedState(
+                $action,
+                $session->version,
+                $state,
+                $locale,
+            ),
+            TelegramCustomerTrialProvisioningStatusSnapshot::SUCCEEDED => $this->renderProvisioningSucceeded(
+                $action,
+                $session->version,
+                $state,
+                $locale,
+            ),
+            TelegramCustomerTrialProvisioningStatusSnapshot::FAILED_FINAL => $this->renderProvisioningTerminal(
+                $action,
+                $session->version,
+                $state,
+                $locale,
+                'failed_final',
+            ),
+            TelegramCustomerTrialProvisioningStatusSnapshot::NEEDS_REVIEW => $this->renderProvisioningTerminal(
+                $action,
+                $session->version,
+                $state,
+                $locale,
+                'needs_review',
+            ),
+            TelegramCustomerTrialProvisioningStatusSnapshot::UNAVAILABLE => $this->renderProvisioningTerminal(
+                $action,
+                $session->version,
+                $state,
+                $locale,
+                'unavailable',
+            ),
+            default => throw new RuntimeException('Telegram Trial provisioning status is unsupported.'),
+        };
+    }
+
+    /** @param QueuedState $state */
+    private function openMyServices(TelegramInteractionAction $action, array $state): void
+    {
+        $status = $this->provisioningStatus->statusForSelf(
+            $action->userId,
+            $action->userId,
+            $state['provisioning_public_id'],
+            $state['service_public_id'],
+        );
+        if ($status->status !== TelegramCustomerTrialProvisioningStatusSnapshot::SUCCEEDED) {
+            $this->refreshQueuedStatus($action, $state);
+
+            return;
+        }
+
+        try {
+            $session = $this->sessions->transition(
+                $action->sessionPublicId,
+                $action->sessionVersion,
+                TelegramNavigationEntryGateway::STATE,
+                [],
+                'tg-trial-services-entry:'.hash('sha256', $action->requestKey),
+            );
+        } catch (DomainException) {
+            return;
+        }
+        $this->assertActor($action, $session->userId);
+        $this->navigation->handle(new TelegramInteractionAction(
+            TelegramInteractionActionKind::Callback,
+            $action->requestKey.':trial-services',
+            $action->botId,
+            $action->updateId,
+            $action->telegramAccountId,
+            $action->userId,
+            $action->telegramUserId,
+            $session->publicId,
+            $session->flow,
+            $session->state,
+            $session->version,
+            $session->payload,
+            null,
+            null,
+            'navigation.my_services',
+            [],
+            $action->replayed,
+            $action->callbackAcceptedAt,
+            $action->messageAcceptedAt,
+        ));
+    }
+
     private function returnHome(TelegramInteractionAction $action): void
     {
         try {
@@ -857,19 +988,26 @@ final readonly class TelegramTrialNavigationHandler
         );
     }
 
-    /** @param array<string,mixed> $state */
+    /** @param QueuedState $state */
     private function renderQueuedState(
         TelegramInteractionAction $action,
         int $sessionVersion,
         array $state,
         string $locale,
     ): void {
+        $status = $this->callbacks->issue(
+            $action->sessionPublicId,
+            $sessionVersion,
+            self::ACTION_STATUS,
+            [],
+            'tg-trial-queued-status:'.hash('sha256', $state['operation_key'].':'.$sessionVersion),
+        );
         $back = $this->callbacks->issue(
             $action->sessionPublicId,
             $sessionVersion,
             self::ACTION_BACK,
             [],
-            'tg-trial-queued-back:'.hash('sha256', $state['operation_key']),
+            'tg-trial-queued-back:'.hash('sha256', $state['operation_key'].':'.$sessionVersion),
         );
         $fallback = $state['fallback_used']
             ? ($locale === 'en' && $state['fallback_disclosure_en'] !== null
@@ -887,6 +1025,87 @@ final readonly class TelegramTrialNavigationHandler
                 'fallback' => $fallback,
             ]),
             'queued',
+            new TelegramInlineKeyboardSnapshot([
+                [new TelegramInlineCallbackButton(
+                    $this->translation('telegram_trial.status_check', $locale),
+                    $status->publicId,
+                    TelegramInlineButtonStyle::Primary,
+                )],
+                [new TelegramInlineCallbackButton(
+                    $this->translation('telegram.navigation.buttons.back', $locale),
+                    $back->publicId,
+                )],
+            ]),
+        );
+    }
+
+    /** @param QueuedState $state */
+    private function renderProvisioningSucceeded(
+        TelegramInteractionAction $action,
+        int $sessionVersion,
+        array $state,
+        string $locale,
+    ): void {
+        $services = $this->callbacks->issue(
+            $action->sessionPublicId,
+            $sessionVersion,
+            self::ACTION_MY_SERVICES,
+            [],
+            'tg-trial-ready-services:'.hash('sha256', $state['operation_key'].':'.$sessionVersion),
+        );
+        $back = $this->callbacks->issue(
+            $action->sessionPublicId,
+            $sessionVersion,
+            self::ACTION_BACK,
+            [],
+            'tg-trial-ready-back:'.hash('sha256', $state['operation_key'].':'.$sessionVersion),
+        );
+        $this->queueConfidential(
+            $action,
+            $this->translation('telegram_trial.status.succeeded', $locale, [
+                'service' => $state['service_public_id'],
+                'data' => $this->formatBytes($state['data_bytes']),
+                'duration' => $state['duration_days'],
+            ]),
+            'status-succeeded',
+            new TelegramInlineKeyboardSnapshot([
+                [new TelegramInlineCallbackButton(
+                    $this->translation('telegram_trial.status.my_services', $locale),
+                    $services->publicId,
+                    TelegramInlineButtonStyle::Primary,
+                )],
+                [new TelegramInlineCallbackButton(
+                    $this->translation('telegram.navigation.buttons.back', $locale),
+                    $back->publicId,
+                )],
+            ]),
+        );
+    }
+
+    /** @param QueuedState $state */
+    private function renderProvisioningTerminal(
+        TelegramInteractionAction $action,
+        int $sessionVersion,
+        array $state,
+        string $locale,
+        string $surface,
+    ): void {
+        if (! in_array($surface, ['failed_final', 'needs_review', 'unavailable'], true)) {
+            throw new RuntimeException('Telegram Trial provisioning terminal surface is invalid.');
+        }
+        $back = $this->callbacks->issue(
+            $action->sessionPublicId,
+            $sessionVersion,
+            self::ACTION_BACK,
+            [],
+            'tg-trial-status-back:'.hash('sha256', $state['operation_key'].':'.$surface.':'.$sessionVersion),
+        );
+        $this->queueConfidential(
+            $action,
+            $this->translation('telegram_trial.status.'.$surface, $locale, [
+                'service' => $state['service_public_id'],
+            ]),
+            'status-'.$surface,
             new TelegramInlineKeyboardSnapshot([[new TelegramInlineCallbackButton(
                 $this->translation('telegram.navigation.buttons.back', $locale),
                 $back->publicId,
