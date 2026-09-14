@@ -4,11 +4,11 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Application;
 
+use App\Modules\Localization\Application\LocalizationResolver;
 use App\Modules\Telegram\Domain\TelegramDeliveryAction;
 use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
 use Closure;
 use DomainException;
-use Illuminate\Contracts\Translation\Translator;
 use Illuminate\Database\DatabaseManager;
 use RuntimeException;
 
@@ -30,7 +30,7 @@ final readonly class TelegramNavigationEntryGateway
      * @param  Closure(): TelegramDeliveryQueueService  $delivery
      * @param  Closure(): TelegramInteractionCallbackService  $callbacks
      * @param  Closure(): TelegramNavigationHandler  $navigation
-     * @param  Closure(): Translator  $translator
+     * @param  Closure(): LocalizationResolver  $localization
      */
     public function __construct(
         private TelegramInteractionSessionService $sessions,
@@ -41,7 +41,7 @@ final readonly class TelegramNavigationEntryGateway
         private Closure $delivery,
         private Closure $callbacks,
         private Closure $navigation,
-        private Closure $translator,
+        private Closure $localization,
     ) {}
 
     /** @param array<string, mixed> $message */
@@ -573,12 +573,8 @@ final readonly class TelegramNavigationEntryGateway
 
     private function translation(string $key, string $locale): string
     {
-        $translator = ($this->translator)();
-        $text = $translator->get($key, [], $locale);
-        if (! is_string($text) || $text === '' || $text === $key) {
-            $text = $translator->get($key, [], 'en');
-        }
-        if (! is_string($text) || $text === '' || $text === $key) {
+        $text = ($this->localization)()->resolve($key, [], $locale);
+        if ($text === '' || $text === '['.$key.']') {
             throw new DomainException('Telegram bot-entry membership feedback is unavailable.');
         }
 
