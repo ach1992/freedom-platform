@@ -10,6 +10,7 @@ use Closure;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use ReflectionMethod;
 use ReflectionProperty;
 use Tests\TestCase;
 
@@ -25,12 +26,12 @@ final class TelegramBotEntryLocalizationResolverTest extends TestCase
         $factory = $property->getValue($gateway);
 
         self::assertInstanceOf(Closure::class, $factory);
+        self::assertInstanceOf(LocalizationResolver::class, $factory());
 
-        $resolver = $factory();
-        self::assertInstanceOf(LocalizationResolver::class, $resolver);
+        $translation = new ReflectionMethod($gateway, 'translation');
         self::assertSame(
             trans('telegram_membership.entry_unavailable', locale: 'fa'),
-            $resolver->resolve('telegram_membership.entry_unavailable', [], 'fa'),
+            $translation->invoke($gateway, 'telegram_membership.entry_unavailable', 'fa'),
         );
 
         $administratorId = $this->administrator();
@@ -47,11 +48,11 @@ final class TelegramBotEntryLocalizationResolverTest extends TestCase
 
         self::assertSame(
             'پیام سفارشی عضویت',
-            $resolver->resolve('telegram_membership.entry_unavailable', [], 'fa'),
+            $translation->invoke($gateway, 'telegram_membership.entry_unavailable', 'fa'),
         );
         self::assertSame(
             trans('telegram_membership.entry_unavailable', locale: 'en'),
-            $resolver->resolve('telegram_membership.entry_unavailable', [], 'en'),
+            $translation->invoke($gateway, 'telegram_membership.entry_unavailable', 'en'),
         );
     }
 
