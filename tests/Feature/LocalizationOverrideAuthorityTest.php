@@ -7,10 +7,13 @@ namespace Tests\Feature;
 use App\Modules\Localization\Application\LocalizationChangeContext;
 use App\Modules\Localization\Application\LocalizationOverrideService;
 use App\Modules\Localization\Application\LocalizationResolver;
+use App\Modules\Localization\Application\LocalizationTemplateCatalog;
 use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\LocalizationAccessFoundationSeeder;
 use Illuminate\Auth\Access\AuthorizationException;
+use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\QueryException;
+use Illuminate\Filesystem\Filesystem;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -44,13 +47,26 @@ final class LocalizationOverrideAuthorityTest extends TestCase
             $resolver->resolve('identity.otp.sms_message', ['code' => '123456'], 'en'),
         );
 
-        $translator->addLines(['localization_probe.english_only' => 'English fallback :name'], 'en');
         self::assertSame(
-            'English fallback Ada',
-            $resolver->resolve('localization_probe.english_only', ['name' => 'Ada'], 'fa'),
+            $resolver->resolve('identity.otp.sms_message', ['code' => '123456'], 'fa'),
+            $resolver->resolve('identity.otp.sms_message', ['code' => '123456']),
+        );
+
+        $translator->addLines(['localization_probe.runtime_only' => 'Runtime-only :name'], 'en');
+        self::assertSame(
+            '[localization_probe.runtime_only]',
+            $resolver->resolve('localization_probe.runtime_only', ['name' => 'Ada'], 'fa'),
         );
         self::assertSame('[localization_probe.missing]', $resolver->resolve('localization_probe.missing', [], 'fa'));
 
+        try {
+            $resolver->resolve('identity.otp.sms_message', ['code' => '123456'], 'de');
+            self::fail('Explicit unsupported resolver locale must fail closed.');
+        } catch (InvalidArgumentException) {
+            self::assertTrue(true);
+        }
+
+        $catalog = $this->app->make(LocalizationTemplateCatalog::class);
         $faFiles = array_map('basename', glob(resource_path('lang/fa/*.php')) ?: []);
         $enFiles = array_map('basename', glob(resource_path('lang/en/*.php')) ?: []);
         sort($faFiles);
@@ -61,13 +77,107 @@ final class LocalizationOverrideAuthorityTest extends TestCase
             $fa = $this->flatten(require resource_path('lang/fa/'.$file));
             $en = $this->flatten(require resource_path('lang/en/'.$file));
             self::assertSame(array_keys($fa), array_keys($en), 'Translation-key parity failed for '.$file);
+            $group = pathinfo($file, PATHINFO_FILENAME);
 
             foreach ($fa as $key => $value) {
+                $qualifiedKey = $group.'.'.$key;
+                self::assertSame($value, $catalog->template($qualifiedKey, 'fa'));
+                self::assertSame($en[$key], $catalog->template($qualifiedKey, 'en'));
                 self::assertSame(
-                    $this->placeholders($value),
-                    $this->placeholders($en[$key]),
+                    $catalog->placeholders($value),
+                    $catalog->placeholders($en[$key]),
                     'Placeholder parity failed for '.$file.':'.$key,
                 );
+            }
+        }
+    }
+
+    public function test_file_catalog_uses_application_resources_for_english_fallback_and_ignores_runtime_translator_lines(): void
+    {
+        $root = storage_path('framework/testing/localization-catalog-'.Str::lower((string) Str::ulid()));
+        $files = $this->app->make(Filesystem::class);
+        $files->ensureDirectoryExists($root.'/fa');
+        $files->ensureDirectoryExists($root.'/en');
+        $files->put($root.'/fa/probe.php', "<?php\nreturn ['fa_only' => 'فارسی :name', 'section' => ['leaf' => 'برگ :name']];\n");
+        $files->put($root.'/en/probe.php', "<?php\nreturn ['fa_only' => 'English :name', 'english_only' => 'English fallback :name', 'section' => ['leaf' => 'Leaf :name']];\n");
+
+        try {
+            $catalog = new LocalizationTemplateCatalog($files, $root);
+            $resolver = new LocalizationResolver($this->app->make(DatabaseManager::class), $catalog);
+
+            self::assertSame('فارسی Ada', $resolver->resolve('probe.fa_only', ['name' => 'Ada'], 'fa'));
+            self::assertSame('English fallback Ada', $resolver->resolve('probe.english_only', ['name' => 'Ada'], 'fa'));
+            self::assertSame('[probe.missing]', $resolver->resolve('probe.missing', [], 'fa'));
+            self::assertNull($catalog->templateOrNull('probe.section', 'fa'));
+            self::assertSame('برگ Ada', $resolver->resolve('probe.section.leaf', ['name' => 'Ada'], 'fa'));
+            self::assertSame(['name'], $catalog->placeholders('Visit https://example.com — :name'));
+            self::assertSame('Visit https://example.com — Ada', $catalog->render('Visit https://example.com — :name', ['name' => 'Ada']));
+        } finally {
+            $files->deleteDirectory($root);
+        }
+    }
+
+    public function test_placeholder_grammar_rejects_malformed_forms_before_persistence_and_renders_supported_case_forms(): void
+    {
+        $ownerId = $this->administrator(true);
+        $service = $this->app->make(LocalizationOverrideService::class);
+        $resolver = $this->app->make(LocalizationResolver::class);
+        $key = 'identity.otp.sms_message';
+
+        foreach (['Broken ::code', 'Broken :::code', 'Broken :cOdE'] as $invalidValue) {
+            try {
+                $service->set(
+                    $key,
+                    'en',
+                    $invalidValue,
+                    null,
+                    $this->context($ownerId, 'localization-malformed-'.substr(hash('sha256', $invalidValue), 0, 20)),
+                );
+                self::fail('Malformed placeholder syntax must fail before persistence.');
+            } catch (InvalidArgumentException) {
+                self::assertSame(0, DB::table('localization_overrides')->count());
+                self::assertSame(0, DB::table('localization_override_versions')->count());
+            }
+        }
+
+        $receipt = $service->set(
+            $key,
+            'en',
+            'Repeated :code / :Code / :CODE / :code',
+            null,
+            $this->context($ownerId, 'localization-placeholder-valid-0001'),
+        );
+
+        self::assertSame(1, $receipt->version);
+        self::assertSame(
+            'Repeated abc / Abc / ABC / abc',
+            $resolver->resolve($key, ['code' => 'abc'], 'en'),
+        );
+    }
+
+    public function test_runtime_added_translation_is_not_eligible_for_override_or_preview(): void
+    {
+        $ownerId = $this->administrator(true);
+        $service = $this->app->make(LocalizationOverrideService::class);
+        $translator = $this->app->make('translator');
+        $translator->addLines(['localization_probe.runtime_only' => 'Runtime-only :name'], 'en');
+
+        foreach (['preview', 'set'] as $operation) {
+            try {
+                if ($operation === 'preview') {
+                    $service->preview($ownerId, 'localization_probe.runtime_only', 'en', 'Override :name');
+                } else {
+                    $service->set(
+                        'localization_probe.runtime_only',
+                        'en',
+                        'Override :name',
+                        null,
+                        $this->context($ownerId, 'localization-runtime-only-0001'),
+                    );
+                }
+                self::fail('Runtime-added translations must not establish file-backed override eligibility.');
+            } catch (InvalidArgumentException) {
+                self::assertSame(0, DB::table('localization_overrides')->count());
             }
         }
     }
@@ -268,16 +378,6 @@ final class LocalizationOverrideAuthorityTest extends TestCase
         ksort($flat);
 
         return $flat;
-    }
-
-    /** @return list<string> */
-    private function placeholders(string $template): array
-    {
-        preg_match_all('/:([A-Za-z_][A-Za-z0-9_]*)/', $template, $matches);
-        $placeholders = array_values(array_unique(array_map('strtolower', $matches[1])));
-        sort($placeholders);
-
-        return $placeholders;
     }
 
     private function administrator(bool $owner = false): int

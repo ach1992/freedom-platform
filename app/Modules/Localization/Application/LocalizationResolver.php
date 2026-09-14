@@ -16,8 +16,9 @@ final readonly class LocalizationResolver
     /** @param array<string, bool|float|int|string> $replacements */
     public function resolve(string $key, array $replacements = [], ?string $locale = null): string
     {
-        $resolvedLocale = $locale === 'en' ? 'en' : 'fa';
+        $resolvedLocale = $locale ?? 'fa';
         $this->templates->assertKey($key);
+        $this->templates->assertLocale($resolvedLocale);
 
         $override = $this->database->connection()->table('localization_overrides')
             ->where('translation_key', $key)

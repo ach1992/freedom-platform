@@ -4,15 +4,21 @@ declare(strict_types=1);
 
 namespace App\Modules\Localization\Application;
 
-use Illuminate\Translation\Translator;
+use Illuminate\Filesystem\Filesystem;
 use InvalidArgumentException;
 use RuntimeException;
 
-final readonly class LocalizationTemplateCatalog
+final class LocalizationTemplateCatalog
 {
     private const MAX_TEMPLATE_LENGTH = 4096;
 
-    public function __construct(private Translator $translator) {}
+    /** @var array<string, array<string, mixed>|null> */
+    private array $loadedGroups = [];
+
+    public function __construct(
+        private readonly Filesystem $files,
+        private readonly ?string $resourceRoot = null,
+    ) {}
 
     public function assertKey(string $key): void
     {
@@ -43,16 +49,26 @@ final readonly class LocalizationTemplateCatalog
         $this->assertKey($key);
         $this->assertLocale($locale);
 
-        if (! $this->translator->hasForLocale($key, $locale)) {
+        $segments = explode('.', $key);
+        $group = array_shift($segments);
+        if ($group === null || $group === '' || $segments === []) {
             return null;
         }
 
-        $value = $this->translator->get($key, [], $locale, false);
-        if (! is_string($value)) {
+        $values = $this->fileGroup($locale, $group);
+        if ($values === null) {
             return null;
         }
 
-        return $value;
+        $value = $values;
+        foreach ($segments as $segment) {
+            if (! is_array($value) || ! array_key_exists($segment, $value)) {
+                return null;
+            }
+            $value = $value[$segment];
+        }
+
+        return is_string($value) ? $value : null;
     }
 
     public function validateOverride(string $key, string $locale, string $value): string
@@ -76,8 +92,20 @@ final readonly class LocalizationTemplateCatalog
     /** @return list<string> */
     public function placeholders(string $template): array
     {
+        if (preg_match('/:{2,}[A-Za-z_]/', $template) === 1) {
+            throw new InvalidArgumentException('Localization template contains malformed placeholder syntax.');
+        }
+
         preg_match_all('/:([A-Za-z_][A-Za-z0-9_]*)/', $template, $matches);
-        $placeholders = array_map(static fn (string $value): string => strtolower($value), $matches[1]);
+        $placeholders = [];
+        foreach ($matches[1] as $rawPlaceholder) {
+            $placeholder = strtolower($rawPlaceholder);
+            if (! in_array($rawPlaceholder, [$placeholder, ucfirst($placeholder), strtoupper($placeholder)], true)) {
+                throw new InvalidArgumentException('Localization template contains unsupported placeholder casing.');
+            }
+            $placeholders[] = $placeholder;
+        }
+
         $placeholders = array_values(array_unique($placeholders));
         sort($placeholders);
 
@@ -115,5 +143,27 @@ final readonly class LocalizationTemplateCatalog
         }
 
         return $rendered;
+    }
+
+    /** @return array<string, mixed>|null */
+    private function fileGroup(string $locale, string $group): ?array
+    {
+        $cacheKey = $locale.'|'.$group;
+        if (array_key_exists($cacheKey, $this->loadedGroups)) {
+            return $this->loadedGroups[$cacheKey];
+        }
+
+        $root = $this->resourceRoot ?? resource_path('lang');
+        $path = rtrim($root, '/').'/'.$locale.'/'.$group.'.php';
+        if (! $this->files->isFile($path)) {
+            return $this->loadedGroups[$cacheKey] = null;
+        }
+
+        $values = $this->files->getRequire($path);
+        if (! is_array($values)) {
+            return $this->loadedGroups[$cacheKey] = null;
+        }
+
+        return $this->loadedGroups[$cacheKey] = $values;
     }
 }

@@ -570,6 +570,13 @@ return [
         'zarinpal_verified_unsettled_evidence' => 'Payments',
     ],
 
+    // Feature-private durable tables whose physical persistence identity may only be referenced by
+    // their owning module. Other modules must use the owner's public Application boundary.
+    'application_private_tables' => [
+        'localization_override_versions',
+        'localization_overrides',
+    ],
+
     // Exact migration-local durable rename lifecycle only. Temporary identities are not general
     // durable owners: CI requires literal from/to pairs, the owning migration path, same owner,
     // observed usage, and a reciprocal path whenever one endpoint is only a temporary identity.

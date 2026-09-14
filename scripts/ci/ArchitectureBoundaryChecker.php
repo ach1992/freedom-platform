@@ -73,6 +73,7 @@ final class ArchitectureBoundaryChecker
         array_push($violations, ...$this->cycleViolations($edges));
         array_push($violations, ...$this->moduleDependencyReferenceExceptionViolations());
         array_push($violations, ...$this->persistenceExceptionViolations());
+        array_push($violations, ...$this->applicationPrivateTableViolations());
         array_push($violations, ...$this->migrationTriggerDdlHelperViolations());
         array_push($violations, ...$this->telegramPresentationSourceViolations());
         array_push($violations, ...$this->telegramConfidentialPresentationSourceViolations());
@@ -226,6 +227,7 @@ final class ArchitectureBoundaryChecker
     /** @param list<string> $violations */
     private function scanPersistence(string $relativePath, string $source, array &$violations): void
     {
+        $this->scanApplicationPrivateTableReferences($relativePath, $source, $violations);
         $this->scanDeferredTableMutations($relativePath, $source, $violations);
         $this->scanDynamicTableMutations($relativePath, $source, $violations);
         $this->scanUnsupportedQuerySources($relativePath, $source, $violations);
@@ -248,6 +250,39 @@ final class ArchitectureBoundaryChecker
             }
 
             $this->recordTableMutationViolation($relativePath, $source, $offset, $table, $mutation, $violations);
+        }
+    }
+
+    /** @param list<string> $violations */
+    private function scanApplicationPrivateTableReferences(string $relativePath, string $source, array &$violations): void
+    {
+        $tables = $this->config['application_private_tables'] ?? [];
+        if (! is_array($tables)) {
+            return;
+        }
+
+        $sourceOwner = $this->sourcePersistenceOwner($relativePath);
+        foreach ($tables as $table) {
+            if (! is_string($table)) {
+                continue;
+            }
+
+            $owner = $this->durableTableOwner($table);
+            if ($owner !== null && $sourceOwner === $owner) {
+                continue;
+            }
+
+            if (preg_match('/\b'.preg_quote($table, '/').'\b/', $source, $match, PREG_OFFSET_CAPTURE) !== 1) {
+                continue;
+            }
+
+            $violations[] = sprintf(
+                '%s:%d durable table %s is private to the %s Application boundary; cross-module direct persistence access is forbidden.',
+                $relativePath,
+                $this->lineNumber($source, $match[0][1]),
+                $table,
+                $owner ?? 'declared',
+            );
         }
     }
 
@@ -1626,6 +1661,38 @@ final class ArchitectureBoundaryChecker
 
             if (! isset($this->usedPersistenceExceptions[$exception])) {
                 $violations[] = 'persistence_exceptions contains stale/unused entry '.$exception.'.';
+            }
+        }
+
+        return $violations;
+    }
+
+    /** @return list<string> */
+    private function applicationPrivateTableViolations(): array
+    {
+        $tables = $this->config['application_private_tables'] ?? [];
+        if (! is_array($tables)) {
+            return ['application_private_tables must be a list of exact durable table names.'];
+        }
+
+        $violations = [];
+        $seen = [];
+        foreach ($tables as $table) {
+            if (! is_string($table) || preg_match('/\A[A-Za-z0-9_]+\z/', $table) !== 1) {
+                $violations[] = 'application_private_tables contains an invalid table name.';
+
+                continue;
+            }
+            if (isset($seen[$table])) {
+                $violations[] = 'application_private_tables contains duplicate entry '.$table.'.';
+
+                continue;
+            }
+            $seen[$table] = true;
+
+            $owner = $this->durableTableOwner($table);
+            if ($owner === null || in_array($owner, ['Framework', 'Shared', 'SharedAppendOnly'], true)) {
+                $violations[] = 'application_private_tables entry '.$table.' must map to one feature-module durable owner.';
             }
         }
 

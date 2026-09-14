@@ -222,6 +222,46 @@ PHP);
         self::assertStringContainsString('Payments mutation of durable table ledger_entries owned by Wallet is forbidden', implode("\n", $result['violations']));
     }
 
+    public function test_application_boundary_private_tables_reject_cross_module_reads_and_literal_aliases(): void
+    {
+        $this->write('app/Modules/Payments/Application/UnsafeLocalizationRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+final class UnsafeLocalizationRead
+{
+    public function direct($db): mixed
+    {
+        return $db->table('localization_overrides')->where('locale', 'fa')->first();
+    }
+
+    public function indirect($db): mixed
+    {
+        $table = 'localization_override_versions';
+
+        return $db->table($table)->first();
+    }
+}
+PHP);
+        $this->write('app/Modules/Localization/Application/OwnedLocalizationRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Localization\Application;
+final class OwnedLocalizationRead
+{
+    public function run($db): mixed
+    {
+        return $db->table('localization_overrides')->first();
+    }
+}
+PHP);
+
+        $violations = implode("\n", $this->checker()->check()['violations']);
+
+        self::assertSame(2, substr_count($violations, 'cross-module direct persistence access is forbidden'));
+        self::assertStringContainsString('localization_overrides is private to the Localization Application boundary', $violations);
+        self::assertStringContainsString('localization_override_versions is private to the Localization Application boundary', $violations);
+        self::assertStringNotContainsString('OwnedLocalizationRead.php', $violations);
+    }
+
     public function test_shared_persistence_is_checked_against_the_same_owner_map(): void
     {
         $this->write('app/Shared/Infrastructure/OutboxStore.php', <<<'PHP'
@@ -655,9 +695,15 @@ PHP);
             'durable_table_owners' => [
                 'audit_logs' => 'SharedAppendOnly',
                 'ledger_entries' => 'Wallet',
+                'localization_override_versions' => 'Localization',
+                'localization_overrides' => 'Localization',
                 'orders' => 'Orders',
                 'outbox_messages' => 'Shared',
                 'worker_heartbeats' => 'Operations',
+            ],
+            'application_private_tables' => [
+                'localization_override_versions',
+                'localization_overrides',
             ],
             'persistence_exceptions' => [],
         ]);
