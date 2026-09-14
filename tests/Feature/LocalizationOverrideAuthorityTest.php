@@ -139,6 +139,19 @@ final class LocalizationOverrideAuthorityTest extends TestCase
             self::assertSame(0, DB::table('localization_overrides')->count());
         }
 
+        try {
+            $service->set(
+                $key,
+                'en',
+                'New code: :code',
+                null,
+                $this->context($unauthorizedId, 'localization-unauth-set-0001'),
+            );
+            self::fail('Unauthorized administrator must not mutate localization overrides.');
+        } catch (AuthorizationException) {
+            self::assertSame(0, DB::table('localization_overrides')->count());
+        }
+
         foreach (['Missing placeholder', 'Unknown :code and :other'] as $invalidValue) {
             try {
                 $service->set($key, 'en', $invalidValue, null, $this->context($salesId, 'localization-invalid-'.substr(hash('sha256', $invalidValue), 0, 20)));
@@ -194,6 +207,28 @@ final class LocalizationOverrideAuthorityTest extends TestCase
             self::assertSame(1, (int) DB::table('localization_overrides')->where('id', $receipt->overrideId)->value('version'));
         }
 
+        $now = now('UTC');
+        $invalidRows = [
+            ['translation_key' => 'bad key', 'locale' => 'en', 'override_value' => 'Invalid key'],
+            ['translation_key' => 'schema.locale', 'locale' => 'de', 'override_value' => 'Invalid locale'],
+            ['translation_key' => 'schema.empty', 'locale' => 'en', 'override_value' => ''],
+            ['translation_key' => 'schema.too_long', 'locale' => 'en', 'override_value' => str_repeat('x', 4097)],
+        ];
+
+        foreach ($invalidRows as $invalidRow) {
+            try {
+                DB::table('localization_overrides')->insert($invalidRow + [
+                    'version' => 1,
+                    'updated_by_administrator_id' => $ownerId,
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ]);
+                self::fail('MariaDB localization schema constraints must fail closed.');
+            } catch (QueryException) {
+                self::assertSame(0, DB::table('localization_overrides')->where('translation_key', $invalidRow['translation_key'])->count());
+            }
+        }
+
         $historyId = (int) DB::table('localization_override_versions')->where('localization_override_id', $receipt->overrideId)->value('id');
         foreach (['update', 'delete'] as $operation) {
             try {
@@ -239,7 +274,7 @@ final class LocalizationOverrideAuthorityTest extends TestCase
     private function placeholders(string $template): array
     {
         preg_match_all('/:([A-Za-z_][A-Za-z0-9_]*)/', $template, $matches);
-        $placeholders = array_values(array_unique(array_map('strtolower', $matches[1] ?? [])));
+        $placeholders = array_values(array_unique(array_map('strtolower', $matches[1])));
         sort($placeholders);
 
         return $placeholders;
