@@ -463,6 +463,80 @@ PHP);
         self::assertStringNotContainsString('BoundedDynamicReads.php', $violations);
     }
 
+    public function test_bounded_dynamic_table_proof_rejects_post_bound_mutation_and_textual_throw_guards(): void
+    {
+        $this->write('app/Modules/Payments/Application/CompoundForeachLocalizationRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+final class CompoundForeachLocalizationRead
+{
+    public function run($db): mixed
+    {
+        foreach (['localization_'] as $table) {
+            $table .= 'overrides';
+
+            return $db->table($table)->first();
+        }
+
+        return null;
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/CompoundGuardLocalizationRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+final class CompoundGuardLocalizationRead
+{
+    public function run($db, string $table): mixed
+    {
+        if (! in_array($table, ['localization_'], true)) {
+            throw new \RuntimeException('Unsupported table.');
+        }
+
+        $table .= 'overrides';
+
+        return $db->table($table)->first();
+    }
+}
+PHP);
+        $this->write('app/Modules/Orders/Application/TextualThrowGuardRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+final class TextualThrowGuardRead
+{
+    public function run($db, string $table): mixed
+    {
+        if (! in_array($table, ['orders'], true)) {
+            // throw new \RuntimeException('Not executable.');
+            $message = 'throw only';
+        }
+
+        return $db->table($table)->first();
+    }
+}
+PHP);
+        $this->write('app/Modules/Orders/Application/CommentedGuardRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+final class CommentedGuardRead
+{
+    public function run($db, string $table): mixed
+    {
+        // if (! in_array($table, ['orders'], true)) { throw new \RuntimeException('Not executable.'); }
+
+        return $db->table($table)->first();
+    }
+}
+PHP);
+
+        $violations = implode("\n", $this->checker()->check()['violations']);
+
+        self::assertMatchesRegularExpression('/CompoundForeachLocalizationRead\\.php:\\d+ dynamic table read is forbidden/', $violations);
+        self::assertMatchesRegularExpression('/CompoundGuardLocalizationRead\\.php:\\d+ dynamic table read is forbidden/', $violations);
+        self::assertMatchesRegularExpression('/TextualThrowGuardRead\\.php:\\d+ dynamic table read is forbidden/', $violations);
+        self::assertMatchesRegularExpression('/CommentedGuardRead\\.php:\\d+ dynamic table read is forbidden/', $violations);
+    }
+
     public function test_raw_and_subquery_from_sources_fail_closed_for_reads_as_well_as_mutations(): void
     {
         $this->write('app/Modules/Orders/Application/UnsupportedReadSources.php', <<<'PHP'

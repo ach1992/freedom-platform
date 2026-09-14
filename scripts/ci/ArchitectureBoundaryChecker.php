@@ -467,17 +467,20 @@ final class ArchitectureBoundaryChecker
 
         $variable = $variableMatch[1];
         $prefix = substr($source, $functionStart, $offset - $functionStart);
-        $assignmentPattern = '/\$'.preg_quote($variable, '/').'\s*=(?![=>])\s*[^;]+;/';
 
-        $guardPattern = '/if\s*\(\s*!\s*in_array\s*\(\s*\$'.preg_quote($variable, '/').'\s*,\s*\[([^\]]+)\]\s*,\s*true\s*\)\s*\)\s*\{[^{}]*\bthrow\b[^{}]*\}/s';
+        $guardPattern = '/if\s*\(\s*!\s*in_array\s*\(\s*\$'.preg_quote($variable, '/').'\s*,\s*\[([^\]]+)\]\s*,\s*true\s*\)\s*\)\s*\{([^{}]*)\}/s';
         preg_match_all($guardPattern, $prefix, $guards, PREG_SET_ORDER | PREG_OFFSET_CAPTURE);
         if ($guards !== []) {
             $guard = $guards[array_key_last($guards)];
             $guardOffset = $functionStart + $guard[0][1];
             $guardEnd = $guard[0][1] + strlen($guard[0][0]);
+            $guardBodyStart = $functionStart + $guard[2][1];
+            $guardBodyEnd = $guardBodyStart + strlen($guard[2][0]);
             $afterGuard = substr($prefix, $guardEnd);
-            if ($this->braceDepthBetween($source, $functionStart, $guardOffset) === 1
-                && preg_match($assignmentPattern, $afterGuard) !== 1
+            if ($this->tokenIdAtOffset($source, $guardOffset) === T_IF
+                && $this->braceDepthBetween($source, $functionStart, $guardOffset) === 1
+                && $this->firstSignificantTokenIdInRange($source, $guardBodyStart, $guardBodyEnd) === T_THROW
+                && ! $this->containsVariableCodeUse($afterGuard, $variable)
             ) {
                 $tables = $this->literalTableList($guard[1][0]);
                 if ($tables !== null) {
@@ -495,17 +498,82 @@ final class ArchitectureBoundaryChecker
         $match = $matches[array_key_last($matches)];
         $fullOffset = $match[0][1];
         $headerEnd = $fullOffset + strlen($match[0][0]);
+        $absoluteHeaderStart = $functionStart + $fullOffset;
         $absoluteHeaderEnd = $functionStart + $headerEnd;
-        if (! $this->blockFromHeaderContainsOffset($source, $absoluteHeaderEnd, $offset)) {
+        if ($this->tokenIdAtOffset($source, $absoluteHeaderStart) !== T_FOREACH
+            || ! $this->blockFromHeaderContainsOffset($source, $absoluteHeaderEnd, $offset)
+        ) {
             return null;
         }
 
         $afterBinding = substr($prefix, $headerEnd);
-        if (preg_match($assignmentPattern, $afterBinding) === 1) {
+        if ($this->containsVariableCodeUse($afterBinding, $variable)) {
             return null;
         }
 
         return $this->literalTableList($match[1][0]);
+    }
+
+    private function tokenIdAtOffset(string $source, int $targetOffset): ?int
+    {
+        $offset = 0;
+        foreach (token_get_all($source) as $token) {
+            $text = is_array($token) ? $token[1] : $token;
+            $end = $offset + strlen($text);
+            if ($targetOffset >= $offset && $targetOffset < $end) {
+                return is_array($token) ? $token[0] : null;
+            }
+            $offset = $end;
+        }
+
+        return null;
+    }
+
+    private function firstSignificantTokenIdInRange(string $source, int $start, int $end): ?int
+    {
+        if ($end <= $start) {
+            return null;
+        }
+
+        $offset = 0;
+        foreach (token_get_all($source) as $token) {
+            $text = is_array($token) ? $token[1] : $token;
+            $tokenEnd = $offset + strlen($text);
+            if ($tokenEnd <= $start) {
+                $offset = $tokenEnd;
+
+                continue;
+            }
+            if ($offset >= $end) {
+                break;
+            }
+            if (is_array($token) && in_array($token[0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true)) {
+                $offset = $tokenEnd;
+
+                continue;
+            }
+            if (is_string($token) && trim($token) === '') {
+                $offset = $tokenEnd;
+
+                continue;
+            }
+
+            return is_array($token) ? $token[0] : null;
+        }
+
+        return null;
+    }
+
+    private function containsVariableCodeUse(string $source, string $variable): bool
+    {
+        $target = '$'.$variable;
+        foreach (token_get_all('<?php '.$source) as $token) {
+            if (is_array($token) && $token[0] === T_VARIABLE && $token[1] === $target) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function braceDepthBetween(string $source, int $start, int $end): int
