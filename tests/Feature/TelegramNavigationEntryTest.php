@@ -16,6 +16,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseQuote;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseWalletPayment;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerTrialCatalog;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerTrialClaim;
+use App\Modules\Telegram\Application\Contracts\TelegramCustomerTrialProvisioningStatus;
 use App\Modules\Telegram\Application\Contracts\TelegramMembershipLookup;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceDeliveryResender;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceProjection;
@@ -40,6 +41,7 @@ use App\Modules\Telegram\Application\TelegramCustomerTrialClaimReceipt;
 use App\Modules\Telegram\Application\TelegramCustomerTrialFallbackDisclosure;
 use App\Modules\Telegram\Application\TelegramCustomerTrialOffering;
 use App\Modules\Telegram\Application\TelegramCustomerTrialProtocolOption;
+use App\Modules\Telegram\Application\TelegramCustomerTrialProvisioningStatusSnapshot;
 use App\Modules\Telegram\Application\TelegramCustomerTrialRouteOption;
 use App\Modules\Telegram\Application\TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1;
 use App\Modules\Telegram\Application\TelegramDeliveryInteractivePresentationDatabaseSurfaceV1;
@@ -410,6 +412,33 @@ final class TelegramNavigationCustomerTrialClaim implements TelegramCustomerTria
         }
 
         return $this->claimCalls[array_key_last($this->claimCalls)];
+    }
+}
+
+final class TelegramNavigationCustomerTrialProvisioningStatus implements TelegramCustomerTrialProvisioningStatus
+{
+    /** @var list<array{actor_user_id:int,subject_user_id:int,provisioning_public_id:string,service_public_id:string}> */
+    public array $calls = [];
+
+    public string $status = TelegramCustomerTrialProvisioningStatusSnapshot::PENDING;
+
+    public function statusForSelf(
+        int $actorUserId,
+        int $subjectUserId,
+        string $provisioningPublicId,
+        string $servicePublicId,
+    ): TelegramCustomerTrialProvisioningStatusSnapshot {
+        if ($actorUserId !== $subjectUserId) {
+            throw new AuthorizationException('Unexpected Telegram Trial provisioning status cross-actor request.');
+        }
+        $this->calls[] = [
+            'actor_user_id' => $actorUserId,
+            'subject_user_id' => $subjectUserId,
+            'provisioning_public_id' => $provisioningPublicId,
+            'service_public_id' => $servicePublicId,
+        ];
+
+        return new TelegramCustomerTrialProvisioningStatusSnapshot($this->status);
     }
 }
 
@@ -2514,6 +2543,114 @@ SQL);
         self::assertCount(1, $claims->claimCalls);
         $processor->process('123456789', 6948);
         self::assertCount(1, $claims->claimCalls);
+    }
+
+    /** @requirement PRV-002 PRV-003 CHN-001 DAT-002 DAT-003 SEC-002 LOC-001 QUA-001 QUA-004 */
+    public function test_customer_trial_queued_status_is_read_only_replay_safe_and_hands_success_to_my_services(): void
+    {
+        $status = new TelegramNavigationCustomerTrialProvisioningStatus;
+        [$processor, $accountId] = $this->reachQueuedTrial(9701, 'navigation_trial_status', 7050, 'en', $status);
+        $before = $this->trialDiscoveryMutationCounts();
+        $statusToken = $this->callbackToken('navigation.trial.status', $accountId);
+
+        $this->accept($this->callbackPayload(7055, 9701, 'navigation_trial_status', 'en', $statusToken));
+        $processor->process('123456789', 7055);
+        self::assertCount(1, $status->calls);
+        self::assertStringContainsString('queued for provisioning', $this->latestConfidentialPresentation());
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'telegram_account_id' => $accountId,
+            'state' => 'trial_claim_queued',
+            'version' => 7,
+        ]);
+        self::assertSame($before, $this->trialDiscoveryMutationCounts());
+
+        $processor->process('123456789', 7055);
+        self::assertCount(1, $status->calls);
+        self::assertSame($before, $this->trialDiscoveryMutationCounts());
+
+        $this->accept($this->callbackPayload(7056, 9701, 'navigation_trial_status', 'en', $statusToken));
+        $processor->process('123456789', 7056);
+        self::assertCount(1, $status->calls, 'A prior-version status callback must fail closed before the status projection.');
+        self::assertSame($before, $this->trialDiscoveryMutationCounts());
+
+        $statusToken = $this->callbackToken('navigation.trial.status', $accountId);
+        $this->accept($this->callbackPayload(7057, 9702, 'navigation_trial_status_other', 'en', $statusToken));
+        $processor->process('123456789', 7057);
+        self::assertCount(1, $status->calls, 'A cross-actor callback must not reach the status projection.');
+        self::assertSame($before, $this->trialDiscoveryMutationCounts());
+
+        $status->status = TelegramCustomerTrialProvisioningStatusSnapshot::SUCCEEDED;
+        $this->accept($this->callbackPayload(7058, 9701, 'navigation_trial_status', 'en', $statusToken));
+        $processor->process('123456789', 7058);
+        self::assertCount(2, $status->calls);
+        $ready = $this->latestConfidentialPresentation();
+        self::assertStringContainsString('Trial service is ready', $ready);
+        self::assertStringContainsString(str_pad('01J', 26, '0'), $ready);
+        self::assertStringNotContainsString('credential', mb_strtolower($ready));
+        self::assertSame($before, $this->trialDiscoveryMutationCounts());
+
+        $servicesToken = $this->callbackToken('navigation.trial.my_services', $accountId);
+        $this->accept($this->callbackPayload(7059, 9701, 'navigation_trial_status', 'en', $servicesToken));
+        $processor->process('123456789', 7059);
+        self::assertCount(3, $status->calls);
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'telegram_account_id' => $accountId,
+            'state' => 'my_services',
+            'version' => 10,
+            'payload' => '{"page":1}',
+        ]);
+        self::assertStringContainsString('My Services', $this->latestConfidentialPresentation());
+        self::assertSame($before, $this->trialDiscoveryMutationCounts());
+    }
+
+    /** @requirement PRV-002 PRV-003 CHN-001 DAT-002 SEC-002 LOC-001 QUA-001 */
+    public function test_customer_trial_terminal_and_unavailable_statuses_are_bounded_without_provider_retry(): void
+    {
+        $cases = [
+            [TelegramCustomerTrialProvisioningStatusSnapshot::FAILED_FINAL, 9711, 7100, 'fa', 'قابل تکمیل نبود'],
+            [TelegramCustomerTrialProvisioningStatusSnapshot::NEEDS_REVIEW, 9721, 7200, 'fa', 'نیازمند بررسی دستی'],
+            [TelegramCustomerTrialProvisioningStatusSnapshot::UNAVAILABLE, 9731, 7300, 'en', 'cannot be safely resolved'],
+        ];
+
+        $status = new TelegramNavigationCustomerTrialProvisioningStatus;
+        foreach ($cases as [$resolvedStatus, $telegramUserId, $baseUpdateId, $locale, $expectedText]) {
+            $status->status = $resolvedStatus;
+            $callsBefore = count($status->calls);
+            [$processor, $accountId] = $this->reachQueuedTrial(
+                $telegramUserId,
+                'navigation_trial_terminal_'.$baseUpdateId,
+                $baseUpdateId,
+                $locale,
+                $status,
+            );
+            $before = $this->trialDiscoveryMutationCounts();
+            $statusToken = $this->callbackToken('navigation.trial.status', $accountId);
+            $this->accept($this->callbackPayload(
+                $baseUpdateId + 5,
+                $telegramUserId,
+                'navigation_trial_terminal_'.$baseUpdateId,
+                $locale,
+                $statusToken,
+            ));
+            $processor->process('123456789', $baseUpdateId + 5);
+
+            self::assertCount($callsBefore + 1, $status->calls);
+            self::assertStringContainsString($expectedText, $this->latestConfidentialPresentation());
+            self::assertSame($before, $this->trialDiscoveryMutationCounts());
+            $sessionId = DB::table('telegram_interaction_sessions')
+                ->where('telegram_account_id', $accountId)
+                ->value('id');
+            self::assertIsNumeric($sessionId);
+            self::assertSame(0, DB::table('telegram_interaction_callbacks')
+                ->where('telegram_interaction_session_id', (int) $sessionId)
+                ->where('action', 'navigation.trial.my_services')
+                ->count());
+            $this->assertDatabaseHas('telegram_interaction_sessions', [
+                'telegram_account_id' => $accountId,
+                'state' => 'trial_claim_queued',
+                'version' => 7,
+            ]);
+        }
     }
 
     /** @requirement CAT-006 BUY-001 CHN-001 DAT-003 SEC-002 QUA-001 QUA-004 */
@@ -5520,6 +5657,58 @@ SQL);
         return $administratorId;
     }
 
+    /**
+     * @return array{0:TelegramUpdateProcessor,1:int}
+     */
+    private function reachQueuedTrial(
+        int $telegramUserId,
+        string $flow,
+        int $baseUpdateId,
+        string $locale,
+        TelegramNavigationCustomerTrialProvisioningStatus $status,
+    ): array {
+        $catalog = new TelegramNavigationCustomerTrialCatalog;
+        $claims = new TelegramNavigationCustomerTrialClaim;
+        $this->app->instance(TelegramCustomerTrialCatalog::class, $catalog);
+        $this->app->instance(TelegramCustomerTrialClaim::class, $claims);
+        $this->app->instance(TelegramCustomerTrialProvisioningStatus::class, $status);
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+
+        $this->accept($this->payload($baseUpdateId, $telegramUserId, $flow, $locale, '/start'));
+        $processor->process('123456789', $baseUpdateId);
+        $accountId = DB::table('telegram_accounts')->where('telegram_user_id', $telegramUserId)->value('id');
+        self::assertIsNumeric($accountId);
+        $accountId = (int) $accountId;
+
+        foreach ([
+            [$baseUpdateId + 1, 'navigation.trial'],
+            [$baseUpdateId + 2, 'navigation.trial.'.str_repeat('e', 40)],
+            [$baseUpdateId + 3, 'navigation.trial.claim'],
+        ] as [$updateId, $actionName]) {
+            $token = $this->callbackToken($actionName, $accountId);
+            $this->accept($this->callbackPayload($updateId, $telegramUserId, $flow, $locale, $token));
+            $processor->process('123456789', $updateId);
+        }
+
+        $confirmToken = $this->callbackToken('navigation.trial.confirm', $accountId);
+        $this->accept($this->callbackPayload($baseUpdateId + 4, $telegramUserId, $flow, $locale, $confirmToken));
+        $processor->process('123456789', $baseUpdateId + 4);
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'telegram_account_id' => $accountId,
+            'state' => 'trial_claim_queued',
+            'version' => 6,
+        ]);
+        self::assertStringContainsString(
+            $locale === 'en' ? 'Check status' : 'بررسی وضعیت',
+            $this->navigationCommonDurableEvidence(
+                (int) DB::table('telegram_interaction_sessions')->where('telegram_account_id', $accountId)->value('id'),
+                $telegramUserId,
+            ),
+        );
+
+        return [$processor, $accountId];
+    }
+
     private function callbackToken(string $action, int $telegramAccountId, string $expectedActionPayload = '{}'): string
     {
         $sessionId = DB::table('telegram_interaction_sessions')
@@ -5595,6 +5784,8 @@ SQL);
             'orders' => DB::table('orders')->count(),
             'provisioning_operations' => DB::table('provisioning_operations')->count(),
             'services' => DB::table('service_subscriptions')->count(),
+            'provisioning_remote_effect_events' => DB::table('provisioning_remote_effect_events')->count(),
+            'service_delivery_attempts' => DB::table('service_delivery_attempts')->count(),
         ];
     }
 

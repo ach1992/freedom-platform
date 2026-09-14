@@ -44,7 +44,9 @@ use App\Modules\Provisioning\Application\InitialProvisioningQueueService;
 use App\Modules\Provisioning\Application\InitialProvisioningRecoveryService;
 use App\Modules\Provisioning\Application\ProvisioningQueueReceipt;
 use App\Modules\Provisioning\Domain\ProvisioningState;
+use App\Modules\Telegram\Application\Contracts\TelegramCustomerTrialProvisioningStatus;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceProjection;
+use App\Modules\Telegram\Application\TelegramCustomerTrialProvisioningStatusSnapshot;
 use App\Modules\Telegram\Application\TelegramOwnedServiceSearchResult;
 use App\Shared\Application\OutboxDispatchOutcome;
 use App\Shared\Application\OutboxMessage;
@@ -56,6 +58,7 @@ use Database\Seeders\PanelsAccessFoundationSeeder;
 use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
 use DateTimeImmutable;
 use DomainException;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\Crypt;
@@ -375,6 +378,72 @@ final class InitialProvisioningRemoteEffectTest extends TestCase
         self::assertSame($providerCallCount, count($scenario['adapter']->calls), 'Search must consume durable username authority without a provider read.');
     }
 
+    public function test_telegram_trial_provisioning_status_reads_exact_local_authority_without_provider_effects(): void
+    {
+        $scenario = $this->scenario('telegram-trial-status-local');
+        $service = DB::table('service_subscriptions')
+            ->where('id', $scenario['queue']->serviceSubscriptionId)
+            ->first(['public_id', 'user_id']);
+        self::assertNotNull($service);
+        $userId = (int) $service->user_id;
+        $status = $this->app->make(TelegramCustomerTrialProvisioningStatus::class);
+        $providerCalls = count($scenario['adapter']->calls);
+
+        $pending = $status->statusForSelf(
+            $userId,
+            $userId,
+            $scenario['queue']->provisioningOperationPublicId,
+            $scenario['queue']->serviceSubscriptionPublicId,
+        );
+        self::assertSame(TelegramCustomerTrialProvisioningStatusSnapshot::PENDING, $pending->status);
+        self::assertSame($providerCalls, count($scenario['adapter']->calls));
+
+        $malformed = $status->statusForSelf(
+            $userId,
+            $userId,
+            'not-a-provisioning-ulid',
+            $scenario['queue']->serviceSubscriptionPublicId,
+        );
+        self::assertSame(TelegramCustomerTrialProvisioningStatusSnapshot::UNAVAILABLE, $malformed->status);
+        self::assertSame($providerCalls, count($scenario['adapter']->calls));
+
+        $otherActorId = $this->quoteUser('customer');
+        try {
+            $status->statusForSelf(
+                $otherActorId,
+                $userId,
+                $scenario['queue']->provisioningOperationPublicId,
+                $scenario['queue']->serviceSubscriptionPublicId,
+            );
+            self::fail('Cross-actor Trial provisioning status lookup must fail closed.');
+        } catch (AuthorizationException) {
+            // Expected: actor/subject mismatch is rejected before local state disclosure.
+        }
+        self::assertSame($providerCalls, count($scenario['adapter']->calls));
+
+        $receipt = $this->executor()->execute($scenario['queue']->provisioningOperationPublicId);
+        self::assertSame(ProvisioningState::Succeeded, $receipt->state);
+        $providerCalls = count($scenario['adapter']->calls);
+        $succeeded = $status->statusForSelf(
+            $userId,
+            $userId,
+            $scenario['queue']->provisioningOperationPublicId,
+            $scenario['queue']->serviceSubscriptionPublicId,
+        );
+        self::assertSame(TelegramCustomerTrialProvisioningStatusSnapshot::SUCCEEDED, $succeeded->status);
+        self::assertSame($providerCalls, count($scenario['adapter']->calls), 'Status resolution must never call the provider.');
+
+        $other = $this->scenario('telegram-trial-status-mismatch');
+        $mismatched = $status->statusForSelf(
+            $userId,
+            $userId,
+            $scenario['queue']->provisioningOperationPublicId,
+            $other['queue']->serviceSubscriptionPublicId,
+        );
+        self::assertSame(TelegramCustomerTrialProvisioningStatusSnapshot::UNAVAILABLE, $mismatched->status);
+        self::assertSame([], $other['adapter']->calls, 'A mismatched local binding must not trigger provider work.');
+    }
+
     public function test_retryable_attempt_reuses_durable_route_and_adopts_exact_preexisting_remote_without_create(): void
     {
         $scenario = $this->scenario('retry-adopt');
@@ -387,6 +456,13 @@ final class InitialProvisioningRemoteEffectTest extends TestCase
 
         $first = $this->executor()->execute($scenario['queue']->provisioningOperationPublicId);
         self::assertSame(ProvisioningState::RetryScheduled, $first->state);
+        $retryStatus = $this->app->make(TelegramCustomerTrialProvisioningStatus::class)->statusForSelf(
+            (int) DB::table('service_subscriptions')->where('id', $scenario['queue']->serviceSubscriptionId)->value('user_id'),
+            (int) DB::table('service_subscriptions')->where('id', $scenario['queue']->serviceSubscriptionId)->value('user_id'),
+            $scenario['queue']->provisioningOperationPublicId,
+            $scenario['queue']->serviceSubscriptionPublicId,
+        );
+        self::assertSame(TelegramCustomerTrialProvisioningStatusSnapshot::PENDING, $retryStatus->status);
         self::assertNotNull($scenario['adapter']->lastCreateRequest);
         self::assertNotNull($first->routeSelectionId);
         $routeSelectionId = $first->routeSelectionId;
@@ -501,6 +577,13 @@ final class InitialProvisioningRemoteEffectTest extends TestCase
         $retry = $this->executor()->execute($scenario['queue']->provisioningOperationPublicId);
 
         self::assertSame(ProvisioningState::NeedsReview, $retry->state);
+        $reviewStatus = $this->app->make(TelegramCustomerTrialProvisioningStatus::class)->statusForSelf(
+            (int) DB::table('service_subscriptions')->where('id', $scenario['queue']->serviceSubscriptionId)->value('user_id'),
+            (int) DB::table('service_subscriptions')->where('id', $scenario['queue']->serviceSubscriptionId)->value('user_id'),
+            $scenario['queue']->provisioningOperationPublicId,
+            $scenario['queue']->serviceSubscriptionPublicId,
+        );
+        self::assertSame(TelegramCustomerTrialProvisioningStatusSnapshot::NEEDS_REVIEW, $reviewStatus->status);
         self::assertSame('capacity_authority_lost', $retry->resultCode);
         self::assertSame([], $scenario['adapter']->calls);
         self::assertSame($remoteCount, $scenario['adapter']->serviceCount());
@@ -560,6 +643,15 @@ final class InitialProvisioningRemoteEffectTest extends TestCase
 
         $uncertain = $this->executor()->execute($scenario['queue']->provisioningOperationPublicId);
         self::assertSame(ProvisioningState::UncertainRemoteResult, $uncertain->state);
+        $providerCallsBeforeStatus = count($scenario['adapter']->calls);
+        $uncertainStatus = $this->app->make(TelegramCustomerTrialProvisioningStatus::class)->statusForSelf(
+            (int) DB::table('service_subscriptions')->where('id', $scenario['queue']->serviceSubscriptionId)->value('user_id'),
+            (int) DB::table('service_subscriptions')->where('id', $scenario['queue']->serviceSubscriptionId)->value('user_id'),
+            $scenario['queue']->provisioningOperationPublicId,
+            $scenario['queue']->serviceSubscriptionPublicId,
+        );
+        self::assertSame(TelegramCustomerTrialProvisioningStatusSnapshot::NEEDS_REVIEW, $uncertainStatus->status);
+        self::assertSame($providerCallsBeforeStatus, count($scenario['adapter']->calls));
         $request = $scenario['adapter']->lastCreateRequest;
         self::assertNotNull($request);
         $expectedHash = $scenario['adapter']->createEquivalenceHash($request);
