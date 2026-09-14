@@ -730,6 +730,103 @@ PHP);
         self::assertStringContainsString('BoundedFromLedgerMutation.php:11 dynamic table mutation is forbidden', $violations);
     }
 
+    public function test_parenthesized_fluent_builder_grouping_preserves_mutation_attribution(): void
+    {
+        $this->write('app/Modules/Payments/Application/GroupedLedgerMutation.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+final class GroupedLedgerMutation
+{
+    public function run($db): void
+    {
+        ($db->table('ledger_entries'))->update(['amount_irr' => 1]);
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/NestedGroupedLedgerMutation.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+final class NestedGroupedLedgerMutation
+{
+    public function run($db): void
+    {
+        ((($db->table('ledger_entries')->where('id', 1))))->delete();
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/GroupedFromLedgerMutation.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+final class GroupedFromLedgerMutation
+{
+    public function run($db): void
+    {
+        ($db->query()->from('ledger_entries'))->delete();
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/GroupedBoundedLedgerMutation.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+final class GroupedBoundedLedgerMutation
+{
+    public function run($db, string $table): void
+    {
+        if (! in_array($table, ['ledger_entries'], true)) {
+            throw new \RuntimeException('Unsupported table.');
+        }
+
+        ($db->table($table) /** ; */) // ;
+            ->update(['amount_irr' => 1]);
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/GroupedTriviaLedgerMutation.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+final class GroupedTriviaLedgerMutation
+{
+    public function run($db): void
+    {
+        (/* ( ; */ $db->table('ledger_entries') /** ) ; */)
+            /* ; */ ->update(['amount_irr' => 1]);
+    }
+}
+PHP);
+        $this->write('app/Modules/Orders/Application/GroupedOwnedMutation.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+final class GroupedOwnedMutation
+{
+    public function run($db): void
+    {
+        ($db->table('orders'))->update(['state' => 'paid']);
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/GroupedReadOnlyLedger.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+final class GroupedReadOnlyLedger
+{
+    public function run($db): mixed
+    {
+        return ($db->table('ledger_entries'))->first();
+    }
+}
+PHP);
+
+        $violations = implode("\n", $this->checker()->check()['violations']);
+
+        self::assertStringContainsString('GroupedLedgerMutation.php:7 Payments mutation of durable table ledger_entries owned by Wallet is forbidden', $violations);
+        self::assertStringContainsString('NestedGroupedLedgerMutation.php:7 Payments mutation of durable table ledger_entries owned by Wallet is forbidden', $violations);
+        self::assertStringContainsString('GroupedFromLedgerMutation.php:7 Payments mutation of durable table ledger_entries owned by Wallet is forbidden', $violations);
+        self::assertStringContainsString('GroupedBoundedLedgerMutation.php:11 dynamic table mutation is forbidden', $violations);
+        self::assertStringContainsString('GroupedTriviaLedgerMutation.php:7 Payments mutation of durable table ledger_entries owned by Wallet is forbidden', $violations);
+        self::assertStringNotContainsString('GroupedOwnedMutation.php', $violations);
+        self::assertStringNotContainsString('GroupedReadOnlyLedger.php', $violations);
+    }
+
     public function test_application_private_table_isolation_ignores_php_text_noise_but_catches_real_query_and_raw_sql_access(): void
     {
         $this->write('app/Modules/Payments/Application/PrivateTableTextNoise.php', <<<'PHP'

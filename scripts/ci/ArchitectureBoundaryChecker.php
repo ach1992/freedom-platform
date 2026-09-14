@@ -587,6 +587,7 @@ final class ArchitectureBoundaryChecker
         }
 
         $tokens = $this->sourceTokens($source);
+        $imports = $this->classImportMap($source);
         $calls = [];
         $count = count($tokens);
         for ($index = 0; $index < $count; $index++) {
@@ -618,8 +619,11 @@ final class ArchitectureBoundaryChecker
                     continue;
                 }
                 $staticReceiver = ltrim($receiver, '\\');
+                $resolvedReceiver = $this->resolveImportedClassReference($staticReceiver, $imports);
                 $segments = explode('\\', $staticReceiver);
-                if (strtoupper((string) end($segments)) !== 'DB') {
+                if (strcasecmp($resolvedReceiver ?? '', 'Illuminate\\Support\\Facades\\DB') !== 0
+                    && strtoupper((string) end($segments)) !== 'DB'
+                ) {
                     continue;
                 }
                 $receiver = 'DB';
@@ -703,6 +707,15 @@ final class ArchitectureBoundaryChecker
         if ($openParenIndex === null) {
             return null;
         }
+        if ($this->isTransparentGroupingClose($tokens, $index)) {
+            $innerIndex = $this->previousSignificantTokenIndex($tokens, $index - 1);
+            if ($innerIndex === null || $innerIndex <= $openParenIndex) {
+                return null;
+            }
+
+            return $this->receiverExpressionEndingAt($tokens, $innerIndex);
+        }
+
         $methodIndex = $this->previousSignificantTokenIndex($tokens, $openParenIndex - 1);
         if ($methodIndex === null) {
             return null;
@@ -816,14 +829,8 @@ final class ArchitectureBoundaryChecker
         }
 
         while (true) {
-            $operatorIndex = $this->nextSignificantTokenIndex($tokens, $index);
+            $operatorIndex = $this->nextFluentOperatorIndex($tokens, $index);
             if ($operatorIndex === null) {
-                return null;
-            }
-            $operator = $tokens[$operatorIndex]['token'];
-            if (! is_array($operator)
-                || ! in_array($operator[0], [T_OBJECT_OPERATOR, T_NULLSAFE_OBJECT_OPERATOR], true)
-            ) {
                 return null;
             }
 
@@ -852,6 +859,61 @@ final class ArchitectureBoundaryChecker
 
             $index = $closeParenIndex + 1;
         }
+    }
+
+    /** @param list<array{token:array|string,offset:int}> $tokens */
+    private function nextFluentOperatorIndex(array $tokens, int $index): ?int
+    {
+        while (true) {
+            $nextIndex = $this->nextSignificantTokenIndex($tokens, $index);
+            if ($nextIndex === null) {
+                return null;
+            }
+
+            $token = $tokens[$nextIndex]['token'];
+            if (is_array($token)
+                && in_array($token[0], [T_OBJECT_OPERATOR, T_NULLSAFE_OBJECT_OPERATOR], true)
+            ) {
+                return $nextIndex;
+            }
+
+            if ($token !== ')' || ! $this->isTransparentGroupingClose($tokens, $nextIndex)) {
+                return null;
+            }
+
+            $index = $nextIndex + 1;
+        }
+    }
+
+    /** @param list<array{token:array|string,offset:int}> $tokens */
+    private function isTransparentGroupingClose(array $tokens, int $closeParenIndex): bool
+    {
+        $openParenIndex = $this->matchingOpenParenIndex($tokens, $closeParenIndex);
+        if ($openParenIndex === null) {
+            return false;
+        }
+
+        $beforeOpenIndex = $this->previousSignificantTokenIndex($tokens, $openParenIndex - 1);
+        if ($beforeOpenIndex === null) {
+            return true;
+        }
+
+        return ! $this->tokenCanEndCallableExpression($tokens[$beforeOpenIndex]['token']);
+    }
+
+    private function tokenCanEndCallableExpression(array|string $token): bool
+    {
+        if (! is_array($token)) {
+            return in_array($token, [')', ']'], true);
+        }
+
+        return in_array($token[0], [
+            T_STRING,
+            T_VARIABLE,
+            T_NAME_QUALIFIED,
+            T_NAME_FULLY_QUALIFIED,
+            T_NAME_RELATIVE,
+        ], true);
     }
 
     /**
@@ -1104,29 +1166,9 @@ final class ArchitectureBoundaryChecker
             return ltrim($reference, '\\');
         }
 
-        preg_match_all(
-            '/^use\s+(?!function\b|const\b)([^;]+);/mi',
-            $source,
-            $useStatements,
-        );
-        foreach ($useStatements[1] ?? [] as $statement) {
-            $statement = trim($statement);
-            if (preg_match(
-                '/\A([A-Za-z_][A-Za-z0-9_]*(?:\\\\[A-Za-z_][A-Za-z0-9_]*)*)(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?\z/',
-                $statement,
-                $import,
-            ) !== 1) {
-                continue;
-            }
-
-            $imported = $import[1];
-            $alias = $import[2] ?? basename(str_replace('\\', '/', $imported));
-            if ($reference === $alias) {
-                return $imported;
-            }
-            if (str_starts_with($reference, $alias.'\\')) {
-                return $imported.substr($reference, strlen($alias));
-            }
+        $imported = $this->resolveImportedClassReference($reference, $this->classImportMap($source));
+        if ($imported !== null) {
+            return $imported;
         }
 
         if (preg_match('/^namespace\s+([^;]+);/m', $source, $namespace) !== 1
@@ -1673,23 +1715,19 @@ final class ArchitectureBoundaryChecker
     /** @param list<string> $violations */
     private function scanUnattributablePersistenceMechanisms(string $relativePath, string $source, array &$violations): void
     {
-        $dbFacade = preg_quote('Illuminate\\Support\\Facades\\DB', '/');
-        preg_match_all(
-            '/\buse\s+'.$dbFacade.'\s+as\s+([A-Za-z_][A-Za-z0-9_]*)\s*;/',
-            $source,
-            $aliases,
-            PREG_SET_ORDER | PREG_OFFSET_CAPTURE,
-        );
-        foreach ($aliases as $alias) {
-            if ($this->tokenIdAtOffset($source, $alias[0][1]) !== T_USE) {
+        $imports = $this->classImports($source);
+        foreach ($imports as $import) {
+            if (strcasecmp($import['fqcn'], 'Illuminate\\Support\\Facades\\DB') !== 0
+                || strcasecmp($import['alias'], 'DB') === 0
+            ) {
                 continue;
             }
 
             $violations[] = sprintf(
                 '%s:%d aliasing the DB facade as %s is forbidden because static persistence attribution must remain syntax-stable.',
                 $relativePath,
-                $this->lineNumber($source, $alias[0][1]),
-                $alias[1][0],
+                $this->lineNumber($source, $import['offset']),
+                $import['alias'],
             );
         }
 
@@ -1704,6 +1742,7 @@ final class ArchitectureBoundaryChecker
             );
         }
 
+        $importMap = $this->classImportMap($source);
         $tokens = $this->sourceTokens($source);
         foreach ($tokens as $index => $entry) {
             $token = $entry['token'];
@@ -1717,9 +1756,16 @@ final class ArchitectureBoundaryChecker
             }
             $classToken = $tokens[$classIndex]['token'];
             if (! is_array($classToken)
-                || ! in_array($classToken[0], [T_STRING, T_NAME_FULLY_QUALIFIED], true)
-                || strtoupper(ltrim($classToken[1], '\\')) !== 'PDO'
+                || ! in_array($classToken[0], [T_STRING, T_NAME_QUALIFIED, T_NAME_FULLY_QUALIFIED, T_NAME_RELATIVE], true)
             ) {
+                continue;
+            }
+
+            $className = $classToken[1];
+            $resolvedClass = str_starts_with($className, '\\')
+                ? ltrim($className, '\\')
+                : $this->resolveImportedClassReference($className, $importMap);
+            if (strcasecmp($resolvedClass ?? $className, 'PDO') !== 0) {
                 continue;
             }
 
@@ -1803,48 +1849,175 @@ final class ArchitectureBoundaryChecker
     /** @return list<string> */
     private function importAliasesForType(string $source, string $fqcn): array
     {
-        $tokens = $this->sourceTokens($source);
         $aliases = [];
         $target = strtolower(ltrim($fqcn, '\\'));
-
-        foreach ($tokens as $index => $entry) {
-            $token = $entry['token'];
-            if (! is_array($token) || $token[0] !== T_USE) {
-                continue;
-            }
-
-            $nameIndex = $this->nextSignificantTokenIndex($tokens, $index + 1);
-            if ($nameIndex === null) {
-                continue;
-            }
-            $nameToken = $tokens[$nameIndex]['token'];
-            if (! is_array($nameToken)
-                || ! in_array($nameToken[0], [T_STRING, T_NAME_QUALIFIED, T_NAME_FULLY_QUALIFIED], true)
-                || strtolower(ltrim($nameToken[1], '\\')) !== $target
-            ) {
-                continue;
-            }
-
-            $asIndex = $this->nextSignificantTokenIndex($tokens, $nameIndex + 1);
-            if ($asIndex === null) {
-                continue;
-            }
-            $asToken = $tokens[$asIndex]['token'];
-            if (! is_array($asToken) || $asToken[0] !== T_AS) {
-                continue;
-            }
-
-            $aliasIndex = $this->nextSignificantTokenIndex($tokens, $asIndex + 1);
-            if ($aliasIndex === null) {
-                continue;
-            }
-            $aliasToken = $tokens[$aliasIndex]['token'];
-            if (is_array($aliasToken) && $aliasToken[0] === T_STRING) {
-                $aliases[] = $aliasToken[1];
+        foreach ($this->classImports($source) as $import) {
+            if (strtolower($import['fqcn']) === $target) {
+                $aliases[] = $import['alias'];
             }
         }
 
         return array_values(array_unique($aliases));
+    }
+
+    /** @return list<array{fqcn:string,alias:string,offset:int}> */
+    private function classImports(string $source): array
+    {
+        $tokens = $this->sourceTokens($source);
+        $imports = [];
+        $braceDepth = 0;
+        $namespaceDepth = 0;
+        $count = count($tokens);
+
+        for ($index = 0; $index < $count; $index++) {
+            $token = $tokens[$index]['token'];
+
+            if (is_array($token) && $token[0] === T_NAMESPACE) {
+                $cursor = $index + 1;
+                while (($cursor = $this->nextSignificantTokenIndex($tokens, $cursor)) !== null) {
+                    $delimiter = $tokens[$cursor]['token'];
+                    if ($delimiter === ';') {
+                        $namespaceDepth = 0;
+                        break;
+                    }
+                    if ($delimiter === '{') {
+                        $namespaceDepth = $braceDepth + 1;
+                        break;
+                    }
+                    $cursor++;
+                }
+
+                continue;
+            }
+
+            if ($token === '{') {
+                $braceDepth++;
+
+                continue;
+            }
+            if ($token === '}') {
+                $braceDepth = max(0, $braceDepth - 1);
+                if ($namespaceDepth > 0 && $braceDepth < $namespaceDepth) {
+                    $namespaceDepth = 0;
+                }
+
+                continue;
+            }
+
+            if (! is_array($token) || $token[0] !== T_USE || $braceDepth !== $namespaceDepth) {
+                continue;
+            }
+
+            $firstIndex = $this->nextSignificantTokenIndex($tokens, $index + 1);
+            if ($firstIndex === null) {
+                continue;
+            }
+            $firstToken = $tokens[$firstIndex]['token'];
+            if ($firstToken === '(' || (is_array($firstToken) && in_array($firstToken[0], [T_FUNCTION, T_CONST], true))) {
+                continue;
+            }
+
+            $statement = '';
+            for ($cursor = $firstIndex; $cursor < $count; $cursor++) {
+                $part = $tokens[$cursor]['token'];
+                if ($part === ';') {
+                    break;
+                }
+                if ($this->isTriviaToken($part)) {
+                    continue;
+                }
+                if (is_array($part) && $part[0] === T_AS) {
+                    $statement .= ' as ';
+
+                    continue;
+                }
+                if (is_array($part) && in_array($part[0], [T_FUNCTION, T_CONST], true)) {
+                    $statement .= strtolower($part[1]).' ';
+
+                    continue;
+                }
+                $statement .= is_array($part) ? $part[1] : $part;
+            }
+
+            array_push(
+                $imports,
+                ...$this->parseClassImportStatement($statement, $tokens[$index]['offset']),
+            );
+        }
+
+        return $imports;
+    }
+
+    /** @return list<array{fqcn:string,alias:string,offset:int}> */
+    private function parseClassImportStatement(string $statement, int $offset): array
+    {
+        $statement = trim($statement);
+        if ($statement === '') {
+            return [];
+        }
+
+        $prefix = '';
+        $specification = $statement;
+        if (preg_match('/\A(.+\\\\)\{(.+)\}\z/s', $statement, $group) === 1) {
+            $prefix = rtrim($group[1], '\\').'\\';
+            $specification = $group[2];
+        }
+
+        $imports = [];
+        foreach (explode(',', $specification) as $entry) {
+            if (preg_match('/\A(?:function|const)\s+/i', trim($entry)) === 1) {
+                continue;
+            }
+
+            $parts = preg_split('/\s+as\s+/i', trim($entry), 2);
+            if ($parts === false || $parts === [] || $parts[0] === '') {
+                continue;
+            }
+
+            $name = ltrim($prefix.trim($parts[0]), '\\');
+            if (! $this->isClassReference($name)) {
+                continue;
+            }
+
+            $alias = $parts[1] ?? basename(str_replace('\\', '/', $name));
+            if (preg_match('/\A[A-Za-z_][A-Za-z0-9_]*\z/', $alias) !== 1) {
+                continue;
+            }
+
+            $imports[] = ['fqcn' => $name, 'alias' => $alias, 'offset' => $offset];
+        }
+
+        return $imports;
+    }
+
+    /** @return array<string,string> */
+    private function classImportMap(string $source): array
+    {
+        $map = [];
+        foreach ($this->classImports($source) as $import) {
+            $map[strtolower($import['alias'])] = $import['fqcn'];
+        }
+
+        return $map;
+    }
+
+    /** @param array<string,string> $imports */
+    private function resolveImportedClassReference(string $reference, array $imports): ?string
+    {
+        if ($reference === '') {
+            return null;
+        }
+        if (str_starts_with($reference, '\\')) {
+            return ltrim($reference, '\\');
+        }
+
+        $segments = explode('\\', $reference);
+        $alias = strtolower(array_shift($segments) ?? '');
+        if ($alias === '' || ! isset($imports[$alias])) {
+            return null;
+        }
+
+        return $imports[$alias].($segments === [] ? '' : '\\'.implode('\\', $segments));
     }
 
     /**
@@ -1949,19 +2122,18 @@ final class ArchitectureBoundaryChecker
     private function scanRuntimeSchemaMutations(string $relativePath, string $source, array &$violations): void
     {
         $mutations = '(?:createDatabase|dropDatabaseIfExists|table|create|drop|dropIfExists|dropColumns|dropAllTables|dropAllViews|dropAllTypes|rename|enableForeignKeyConstraints|disableForeignKeyConstraints|withoutForeignKeyConstraints|ensureVectorExtensionExists|ensureExtensionExists|whenTableHasColumn|whenTableDoesntHaveColumn|whenTableHasIndex|whenTableDoesntHaveIndex|getConnection|blueprintResolver)';
-        $schemaFacade = preg_quote('Illuminate\\Support\\Facades\\Schema', '/');
-        preg_match_all(
-            '/\buse\s+'.$schemaFacade.'\s+as\s+([A-Za-z_][A-Za-z0-9_]*)\s*;/',
-            $source,
-            $aliases,
-            PREG_SET_ORDER | PREG_OFFSET_CAPTURE,
-        );
-        foreach ($aliases as $alias) {
+        foreach ($this->classImports($source) as $import) {
+            if (strcasecmp($import['fqcn'], 'Illuminate\\Support\\Facades\\Schema') !== 0
+                || strcasecmp($import['alias'], 'Schema') === 0
+            ) {
+                continue;
+            }
+
             $violations[] = sprintf(
                 '%s:%d aliasing the Schema facade as %s is forbidden because runtime DDL attribution must remain syntax-stable.',
                 $relativePath,
-                $this->lineNumber($source, $alias[0][1]),
-                $alias[1][0],
+                $this->lineNumber($source, $import['offset']),
+                $import['alias'],
             );
         }
 

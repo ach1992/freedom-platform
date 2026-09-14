@@ -343,12 +343,26 @@ namespace App\Modules\Orders\Application;
 use Illuminate\Support\Facades\Schema as DatabaseSchema;
 final class AliasedRuntimeSchema { public function run(): void { DatabaseSchema::dropIfExists('orders'); } }
 PHP);
+        $this->write('app/Modules/Orders/Application/TriviaAliasedRuntimeSchema.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+use Illuminate\Support\Facades\Schema /* reviewed trivia */ as TriviaSchema;
+final class TriviaAliasedRuntimeSchema { public function run(): void { TriviaSchema::dropIfExists('orders'); } }
+PHP);
+        $this->write('app/Modules/Orders/Application/GroupedAliasedRuntimeSchema.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+use Illuminate\Support\Facades\{Schema as GroupSchema};
+final class GroupedAliasedRuntimeSchema { public function run(): void { GroupSchema::dropIfExists('orders'); } }
+PHP);
 
         $violations = implode("\n", $this->checker()->check()['violations']);
 
         self::assertSame(4, substr_count($violations, 'runtime schema mutation or escape surface is forbidden'));
         self::assertSame(1, substr_count($violations, 'deferred runtime schema mutation or escape through $schema is forbidden'));
         self::assertStringContainsString('aliasing the Schema facade as DatabaseSchema is forbidden', $violations);
+        self::assertStringContainsString('aliasing the Schema facade as TriviaSchema is forbidden', $violations);
+        self::assertStringContainsString('aliasing the Schema facade as GroupSchema is forbidden', $violations);
     }
 
     public function test_raw_connection_sql_surface_is_read_only_or_fails_closed(): void
@@ -390,7 +404,9 @@ final class RawConnectionReads
     public function safe(Connection $parameter): void
     {
         $this->connection->selectOne('SELECT 1 AS ready');
+        ($this->connection)->selectOne('SELECT 1 AS grouped_ready');
         $this->database->select('SELECT COUNT(*) AS total FROM orders');
+        ($this->database->connection())->selectOne('SELECT 1');
         $this->database->connection()->selectOne('SELECT 1');
         $parameter->scalar('SELECT COUNT(*) FROM orders');
         DB::selectOne('SELECT 1');
@@ -404,6 +420,7 @@ final class RawConnectionReads
         $parameter->cursor($sql);
         $parameter->selectOne("SELECT 1 INTO OUTFILE '/tmp/architecture-bypass'");
         $this->connection->update('UPDATE orders SET state = "paid"');
+        ($this->connection)->update('UPDATE orders SET state = "paid"');
         $this->database->delete('DELETE FROM orders');
         DB::selectOne('DROP TABLE orders');
         $local = $this->database->connection();
@@ -456,7 +473,7 @@ PHP);
         $violations = implode("\n", $this->checker()->check()['violations']);
 
         self::assertSame(11, substr_count($violations, 'raw Connection read API'));
-        self::assertSame(3, substr_count($violations, 'raw Connection mutation API'));
+        self::assertSame(4, substr_count($violations, 'raw Connection mutation API'));
         self::assertStringContainsString('read API cursor must receive one literal read-only SELECT statement', $violations);
         self::assertStringContainsString('read API selectOne must receive one literal read-only SELECT statement', $violations);
     }
@@ -527,6 +544,83 @@ PHP);
         $violations = implode("\n", $this->checker()->check()['violations']);
 
         self::assertStringNotContainsString('PersistenceEscapeNoise.php', $violations);
+    }
+
+    public function test_executable_db_and_pdo_import_aliases_are_token_resolved(): void
+    {
+        $this->write('app/Modules/Customers/Application/TriviaDbAlias.php', <<<'PHP'
+<?php
+namespace App\Modules\Customers\Application;
+use Illuminate\Support\Facades\DB /* reviewed trivia */ as Database;
+final class TriviaDbAlias
+{
+    public function run(): void
+    {
+        Database::table('orders')->update(['state' => 'paid']);
+    }
+}
+PHP);
+        $this->write('app/Modules/Customers/Application/DocDbAlias.php', <<<'PHP'
+<?php
+namespace App\Modules\Customers\Application;
+use Illuminate\Support\Facades\DB /** reviewed trivia */ as DocDatabase;
+final class DocDbAlias
+{
+    public function run(): void
+    {
+        DocDatabase::table('orders')->delete();
+    }
+}
+PHP);
+        $this->write('app/Modules/Customers/Application/LineDbAlias.php', <<<'PHP'
+<?php
+namespace App\Modules\Customers\Application;
+use Illuminate\Support\Facades\DB // reviewed trivia
+    as LineDatabase;
+final class LineDbAlias
+{
+    public function run(): void
+    {
+        LineDatabase::table('orders')->update(['state' => 'paid']);
+    }
+}
+PHP);
+        $this->write('app/Modules/Customers/Application/GroupedDbAlias.php', <<<'PHP'
+<?php
+namespace App\Modules\Customers\Application;
+use Illuminate\Support\Facades\{DB as GroupDatabase};
+final class GroupedDbAlias
+{
+    public function run(): void
+    {
+        GroupDatabase::table('orders')->update(['state' => 'paid']);
+    }
+}
+PHP);
+        $this->write('app/Modules/Orders/Application/AliasedPdo.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+use PDO as Driver;
+final class AliasedPdo
+{
+    public function open(): void
+    {
+        new Driver('sqlite::memory:');
+    }
+}
+PHP);
+
+        $violations = implode("\n", $this->checker()->check()['violations']);
+
+        self::assertStringContainsString('aliasing the DB facade as Database is forbidden', $violations);
+        self::assertStringContainsString('aliasing the DB facade as DocDatabase is forbidden', $violations);
+        self::assertStringContainsString('aliasing the DB facade as LineDatabase is forbidden', $violations);
+        self::assertStringContainsString('aliasing the DB facade as GroupDatabase is forbidden', $violations);
+        self::assertStringContainsString('TriviaDbAlias.php:8 Customers mutation of durable table orders owned by Orders is forbidden', $violations);
+        self::assertStringContainsString('DocDbAlias.php:8 Customers mutation of durable table orders owned by Orders is forbidden', $violations);
+        self::assertStringContainsString('LineDbAlias.php:9 Customers mutation of durable table orders owned by Orders is forbidden', $violations);
+        self::assertStringContainsString('GroupedDbAlias.php:8 Customers mutation of durable table orders owned by Orders is forbidden', $violations);
+        self::assertStringContainsString('AliasedPdo.php:8 direct PDO access is forbidden', $violations);
     }
 
     public function test_db_facade_alias_and_direct_runtime_pdo_access_fail_closed(): void
