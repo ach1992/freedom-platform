@@ -222,6 +222,122 @@ PHP);
         self::assertStringContainsString('Payments mutation of durable table ledger_entries owned by Wallet is forbidden', implode("\n", $result['violations']));
     }
 
+    public function test_application_boundary_private_tables_reject_cross_module_reads_literal_aliases_and_constructed_names(): void
+    {
+        $this->write('app/Modules/Payments/Application/UnsafeLocalizationRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+final class UnsafeLocalizationRead
+{
+    public function direct($db): mixed
+    {
+        return $db->table('localization_overrides')->where('locale', 'fa')->first();
+    }
+
+    public function indirect($db): mixed
+    {
+        $table = 'localization_override_versions';
+
+        return $db->table($table)->first();
+    }
+
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/ConstructedLocalizationRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+final class ConstructedLocalizationRead
+{
+    public function run($db): mixed
+    {
+        $table = 'localization_' . 'overrides';
+
+        return $db->table($table)->first();
+    }
+}
+PHP);
+        $this->write('app/Modules/Localization/Application/OwnedLocalizationRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Localization\Application;
+final class OwnedLocalizationRead
+{
+    public function run($db): mixed
+    {
+        return $db->table('localization_overrides')->first();
+    }
+}
+PHP);
+
+        $violations = implode("\n", $this->checker()->check()['violations']);
+
+        self::assertSame(2, substr_count($violations, 'cross-module direct persistence access is forbidden'));
+        self::assertStringContainsString('ConstructedLocalizationRead.php:9 dynamic table read is forbidden', $violations);
+        self::assertStringContainsString('localization_overrides is private to the Localization Application boundary', $violations);
+        self::assertStringContainsString('localization_override_versions is private to the Localization Application boundary', $violations);
+        self::assertStringNotContainsString('OwnedLocalizationRead.php', $violations);
+    }
+
+    public function test_resolved_table_constants_preserve_private_ownership_and_owner_access(): void
+    {
+        $this->write('app/Modules/Localization/Application/LocalizationTableSurface.php', <<<'PHP'
+<?php
+namespace App\Modules\Localization\Application;
+final class LocalizationTableSurface { public const TABLE = 'localization_overrides'; }
+PHP);
+        $this->write('app/Modules/Localization/Application/OwnedConstantRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Localization\Application;
+final class OwnedConstantRead
+{
+    public function run($db): mixed
+    {
+        return $db->table(LocalizationTableSurface::TABLE)->first();
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/CrossModuleConstantRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+use App\Modules\Localization\Application\LocalizationTableSurface;
+final class CrossModuleConstantRead
+{
+    public function run($db): mixed
+    {
+        return $db->table(LocalizationTableSurface::TABLE)->first();
+    }
+}
+PHP);
+
+        $violations = implode("\n", $this->checker()->check()['violations']);
+
+        self::assertStringContainsString(
+            'CrossModuleConstantRead.php:8 durable table localization_overrides is private to the Localization Application boundary',
+            $violations,
+        );
+        self::assertStringNotContainsString('OwnedConstantRead.php', $violations);
+    }
+
+    public function test_console_command_table_renderer_is_not_classified_as_database_persistence(): void
+    {
+        $this->write('app/Modules/Payments/Presentation/Console/ReportCommand.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Presentation\Console;
+use Illuminate\Console\Command;
+final class ReportCommand extends Command
+{
+    public function handle(): void
+    {
+        $payload = ['count' => 1];
+        $this /* output */ -> table /* render */ (array_keys($payload), [array_values($payload)]);
+    }
+}
+PHP);
+
+        $violations = implode("\n", $this->checker()->check()['violations']);
+
+        self::assertStringNotContainsString('ReportCommand.php', $violations);
+    }
+
     public function test_shared_persistence_is_checked_against_the_same_owner_map(): void
     {
         $this->write('app/Shared/Infrastructure/OutboxStore.php', <<<'PHP'
@@ -255,7 +371,7 @@ PHP);
         self::assertStringContainsString('mutation update is forbidden', $violations);
     }
 
-    public function test_dynamic_table_mutation_fails_closed_but_dynamic_read_is_not_misclassified(): void
+    public function test_unbounded_dynamic_table_reads_and_mutations_fail_closed_while_reviewed_bounds_remain_allowed(): void
     {
         $this->write('app/Modules/Orders/Application/DynamicWrite.php', <<<'PHP'
 <?php
@@ -267,12 +383,762 @@ PHP);
 namespace App\Modules\Orders\Application;
 final class DynamicRead { public function run($db, string $table): mixed { return $db->table($table)->first(); } }
 PHP);
+        $this->write('app/Modules/Orders/Application/ConditionallyAssignedRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+final class ConditionallyAssignedRead
+{
+    public function run($db, string $table, bool $forceOrders): mixed
+    {
+        if ($forceOrders) {
+            $table = 'orders';
+        }
 
-        $result = $this->checker()->check();
-        $violations = implode("\n", $result['violations']);
+        return $db->table($table)->first();
+    }
+}
+PHP);
+        $this->write('app/Modules/Orders/Application/NestedGuardRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+final class NestedGuardRead
+{
+    public function run($db, string $table, bool $validate): mixed
+    {
+        if ($validate) {
+            if (! in_array($table, ['orders'], true)) {
+                throw new \RuntimeException('Unsupported table.');
+            }
+        }
 
-        self::assertStringContainsString('dynamic table mutation is forbidden because durable-table ownership cannot be attributed', $violations);
-        self::assertSame(1, substr_count($violations, 'dynamic table mutation is forbidden'));
+        return $db->table($table)->first();
+    }
+}
+PHP);
+        $this->write('app/Modules/Orders/Application/LoopEndedRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+final class LoopEndedRead
+{
+    public function run($db, string $table): mixed
+    {
+        foreach (['orders'] as $table) {
+            $db->table($table)->first();
+        }
+
+        return $db->table($table)->first();
+    }
+}
+PHP);
+        $this->write('app/Modules/Orders/Application/BoundedDynamicReads.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+final class BoundedDynamicReads
+{
+    public function guarded($db, string $table): mixed
+    {
+        if (! in_array($table, ['orders'], true)) {
+            throw new \RuntimeException('Unsupported table.');
+        }
+
+        return $db->table($table)->first();
+    }
+
+    public function looped($db): void
+    {
+        foreach (['orders'] as $table) {
+            $db->table($table)->first();
+        }
+    }
+}
+PHP);
+
+        $violations = implode("\n", $this->checker()->check()['violations']);
+
+        self::assertStringContainsString('DynamicWrite.php:3 dynamic table mutation is forbidden', $violations);
+        self::assertStringContainsString('DynamicRead.php:3 dynamic table read is forbidden', $violations);
+        self::assertStringContainsString('ConditionallyAssignedRead.php:11 dynamic table read is forbidden', $violations);
+        self::assertStringContainsString('NestedGuardRead.php:13 dynamic table read is forbidden', $violations);
+        self::assertStringContainsString('LoopEndedRead.php:11 dynamic table read is forbidden', $violations);
+        self::assertStringNotContainsString('BoundedDynamicReads.php', $violations);
+    }
+
+    public function test_bounded_dynamic_table_proof_rejects_post_bound_mutation_and_textual_throw_guards(): void
+    {
+        $this->write('app/Modules/Payments/Application/CompoundForeachLocalizationRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+final class CompoundForeachLocalizationRead
+{
+    public function run($db): mixed
+    {
+        foreach (['localization_'] as $table) {
+            $table .= 'overrides';
+
+            return $db->table($table)->first();
+        }
+
+        return null;
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/CompoundGuardLocalizationRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+final class CompoundGuardLocalizationRead
+{
+    public function run($db, string $table): mixed
+    {
+        if (! in_array($table, ['localization_'], true)) {
+            throw new \RuntimeException('Unsupported table.');
+        }
+
+        $table .= 'overrides';
+
+        return $db->table($table)->first();
+    }
+}
+PHP);
+        $this->write('app/Modules/Orders/Application/TextualThrowGuardRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+final class TextualThrowGuardRead
+{
+    public function run($db, string $table): mixed
+    {
+        if (! in_array($table, ['orders'], true)) {
+            // throw new \RuntimeException('Not executable.');
+            $message = 'throw only';
+        }
+
+        return $db->table($table)->first();
+    }
+}
+PHP);
+        $this->write('app/Modules/Orders/Application/CommentedGuardRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+final class CommentedGuardRead
+{
+    public function run($db, string $table): mixed
+    {
+        // if (! in_array($table, ['orders'], true)) { throw new \RuntimeException('Not executable.'); }
+
+        return $db->table($table)->first();
+    }
+}
+PHP);
+
+        $violations = implode("\n", $this->checker()->check()['violations']);
+
+        self::assertMatchesRegularExpression('/CompoundForeachLocalizationRead\\.php:\\d+ dynamic table read is forbidden/', $violations);
+        self::assertMatchesRegularExpression('/CompoundGuardLocalizationRead\\.php:\\d+ dynamic table read is forbidden/', $violations);
+        self::assertMatchesRegularExpression('/TextualThrowGuardRead\\.php:\\d+ dynamic table read is forbidden/', $violations);
+        self::assertMatchesRegularExpression('/CommentedGuardRead\\.php:\\d+ dynamic table read is forbidden/', $violations);
+    }
+
+    public function test_query_builder_invocation_trivia_cannot_bypass_persistence_attribution(): void
+    {
+        $this->write('app/Modules/Payments/Application/WhitespaceLocalizationTableRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+final class WhitespaceLocalizationTableRead
+{
+    public function run($db): mixed
+    {
+        $table = 'localization_' . 'overrides';
+
+        return $db->table ($table)->first();
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/CommentLocalizationTableRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+final class CommentLocalizationTableRead
+{
+    public function run($db): mixed
+    {
+        $table = 'localization_' . 'overrides';
+
+        return $db-> /* receiver */ table /* boundary */ ($table)->first();
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/StaticDbLocalizationTableRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+final class StaticDbLocalizationTableRead
+{
+    public function run(): mixed
+    {
+        $table = 'localization_' . 'overrides';
+
+        return DB /* receiver */ :: table /* boundary */ ($table)->first();
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/CommentLocalizationFromRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+final class CommentLocalizationFromRead
+{
+    public function run($db): mixed
+    {
+        $table = 'localization_override_' . 'versions';
+
+        return $db->query()->from /* boundary */ ($table)->first();
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/CommentedLedgerMutation.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+final class CommentedLedgerMutation
+{
+    public function run($db): void
+    {
+        $db->table /* boundary */ ('ledger_entries')->update /* mutation */ (['amount_irr' => 1]);
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/DeferredCommentedLedgerMutation.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+final class DeferredCommentedLedgerMutation
+{
+    public function run($db): void
+    {
+        $query = $db->table /* source */ ('ledger_entries');
+        $query->update /* mutation */ (['amount_irr' => 1]);
+    }
+}
+PHP);
+        $this->write('app/Modules/Orders/Application/CommentedUnsupportedSource.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+final class CommentedUnsupportedSource
+{
+    public function run($db): mixed
+    {
+        return $db->query()->fromRaw /* boundary */ ('orders')->first();
+    }
+}
+PHP);
+        $this->write('app/Modules/Orders/Application/TextualInvocationNoise.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+final class TextualInvocationNoise
+{
+    public function run(): string
+    {
+        // $db->table /* not executable */ ($table)->first();
+        return '$db->from ($table)';
+    }
+}
+PHP);
+        $this->write('app/Modules/Orders/Application/BoundedTriviaRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+final class BoundedTriviaRead
+{
+    public function run($db, string $table): mixed
+    {
+        if (! in_array($table, ['orders'], true)) {
+            throw new \RuntimeException('Unsupported table.');
+        }
+
+        return $db->table /* reviewed boundary */ ($table)->first();
+    }
+}
+PHP);
+
+        $violations = implode("\n", $this->checker()->check()['violations']);
+
+        self::assertMatchesRegularExpression('/WhitespaceLocalizationTableRead\\.php:\\d+ dynamic table read is forbidden/', $violations);
+        self::assertMatchesRegularExpression('/CommentLocalizationTableRead\\.php:\\d+ dynamic table read is forbidden/', $violations);
+        self::assertMatchesRegularExpression('/StaticDbLocalizationTableRead\\.php:\\d+ dynamic table read is forbidden/', $violations);
+        self::assertMatchesRegularExpression('/CommentLocalizationFromRead\\.php:\\d+ dynamic table read is forbidden/', $violations);
+        self::assertStringContainsString('CommentedLedgerMutation.php:7 Payments mutation of durable table ledger_entries owned by Wallet is forbidden', $violations);
+        self::assertStringContainsString('DeferredCommentedLedgerMutation.php:7 deferred table mutation through $query is forbidden', $violations);
+        self::assertStringContainsString('CommentedUnsupportedSource.php:7 query source through fromRaw is forbidden', $violations);
+        self::assertStringNotContainsString('TextualInvocationNoise.php', $violations);
+        self::assertStringNotContainsString('BoundedTriviaRead.php', $violations);
+    }
+
+    public function test_punctuation_bearing_php_trivia_cannot_terminate_mutation_attribution(): void
+    {
+        $this->write('app/Modules/Payments/Application/BlockCommentLedgerMutation.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+final class BlockCommentLedgerMutation
+{
+    public function run($db): void
+    {
+        $db->table /* ; */ (/* ; , ) */ 'ledger_entries')->update(['amount_irr' => 1]);
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/DocCommentLedgerMutation.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+final class DocCommentLedgerMutation
+{
+    public function run($db): void
+    {
+        $db /** ; */ -> table('ledger_entries') /** ; */ -> update /* ; */ (['amount_irr' => 1]);
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/LineCommentLedgerMutation.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+final class LineCommentLedgerMutation
+{
+    public function run($db): void
+    {
+        $db->table // ;
+        (
+            'ledger_entries'
+        )->update // ;
+        (['amount_irr' => 1]);
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/BoundedFromLedgerMutation.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+final class BoundedFromLedgerMutation
+{
+    public function run($db, string $table): void
+    {
+        if (! in_array($table, ['ledger_entries'], true)) {
+            throw new \RuntimeException('Unsupported table.');
+        }
+
+        $db->query()->from /* ; */ (/** ; , ) */ $table)
+            /** ; */ -> update /* ; */ (['amount_irr' => 1]);
+    }
+}
+PHP);
+
+        $violations = implode("\n", $this->checker()->check()['violations']);
+
+        self::assertStringContainsString('BlockCommentLedgerMutation.php:7 Payments mutation of durable table ledger_entries owned by Wallet is forbidden', $violations);
+        self::assertStringContainsString('DocCommentLedgerMutation.php:7 Payments mutation of durable table ledger_entries owned by Wallet is forbidden', $violations);
+        self::assertStringContainsString('LineCommentLedgerMutation.php:7 Payments mutation of durable table ledger_entries owned by Wallet is forbidden', $violations);
+        self::assertStringContainsString('BoundedFromLedgerMutation.php:11 dynamic table mutation is forbidden', $violations);
+    }
+
+    public function test_parenthesized_fluent_builder_grouping_preserves_mutation_attribution(): void
+    {
+        $this->write('app/Modules/Payments/Application/GroupedLedgerMutation.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+final class GroupedLedgerMutation
+{
+    public function run($db): void
+    {
+        ($db->table('ledger_entries'))->update(['amount_irr' => 1]);
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/NestedGroupedLedgerMutation.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+final class NestedGroupedLedgerMutation
+{
+    public function run($db): void
+    {
+        ((($db->table('ledger_entries')->where('id', 1))))->delete();
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/GroupedFromLedgerMutation.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+final class GroupedFromLedgerMutation
+{
+    public function run($db): void
+    {
+        ($db->query()->from('ledger_entries'))->delete();
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/GroupedBoundedLedgerMutation.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+final class GroupedBoundedLedgerMutation
+{
+    public function run($db, string $table): void
+    {
+        if (! in_array($table, ['ledger_entries'], true)) {
+            throw new \RuntimeException('Unsupported table.');
+        }
+
+        ($db->table($table) /** ; */) // ;
+            ->update(['amount_irr' => 1]);
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/GroupedTriviaLedgerMutation.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+final class GroupedTriviaLedgerMutation
+{
+    public function run($db): void
+    {
+        (/* ( ; */ $db->table('ledger_entries') /** ) ; */)
+            /* ; */ ->update(['amount_irr' => 1]);
+    }
+}
+PHP);
+        $this->write('app/Modules/Orders/Application/GroupedOwnedMutation.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+final class GroupedOwnedMutation
+{
+    public function run($db): void
+    {
+        ($db->table('orders'))->update(['state' => 'paid']);
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/GroupedReadOnlyLedger.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+final class GroupedReadOnlyLedger
+{
+    public function run($db): mixed
+    {
+        return ($db->table('ledger_entries'))->first();
+    }
+}
+PHP);
+
+        $violations = implode("\n", $this->checker()->check()['violations']);
+
+        self::assertStringContainsString('GroupedLedgerMutation.php:7 Payments mutation of durable table ledger_entries owned by Wallet is forbidden', $violations);
+        self::assertStringContainsString('NestedGroupedLedgerMutation.php:7 Payments mutation of durable table ledger_entries owned by Wallet is forbidden', $violations);
+        self::assertStringContainsString('GroupedFromLedgerMutation.php:7 Payments mutation of durable table ledger_entries owned by Wallet is forbidden', $violations);
+        self::assertStringContainsString('GroupedBoundedLedgerMutation.php:11 dynamic table mutation is forbidden', $violations);
+        self::assertStringContainsString('GroupedTriviaLedgerMutation.php:7 Payments mutation of durable table ledger_entries owned by Wallet is forbidden', $violations);
+        self::assertStringNotContainsString('GroupedOwnedMutation.php', $violations);
+        self::assertStringNotContainsString('GroupedReadOnlyLedger.php', $violations);
+    }
+
+    public function test_application_private_table_isolation_ignores_php_text_noise_but_catches_real_query_and_raw_sql_access(): void
+    {
+        $this->write('app/Modules/Payments/Application/PrivateTableTextNoise.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+final class PrivateTableTextNoise
+{
+    public function run(): string
+    {
+        // $db->table('localization_overrides')->first();
+        $example = "DB::table('localization_override_versions')->first();";
+        $sqlExample = 'SELECT * FROM localization_overrides';
+
+        return $example.$sqlExample;
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/RawPersistenceTextNoise.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+final class RawPersistenceTextNoise
+{
+    public function run(): string
+    {
+        // DB::statement('DELETE FROM localization_overrides');
+        $statement = "DB::unprepared('DROP TABLE localization_override_versions')";
+        $connection = '$connection->selectOne(\'SELECT * FROM localization_overrides\')';
+
+        return $statement.$connection;
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/SpoofedConnectionTypeNoise.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+final class SpoofedConnectionTypeNoise
+{
+    public function run($fake): mixed
+    {
+        // Connection $fake
+        $example = 'Connection $fake';
+
+        return $fake->selectOne('SELECT * FROM localization_overrides');
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/PrivateVariableMutationNoise.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+final class PrivateVariableMutationNoise
+{
+    public function run($db): mixed
+    {
+        $table = 'localization_overrides';
+        $table .= '_archive';
+
+        return $db->table($table)->first();
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/PrivateRawRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+use Illuminate\Support\Facades\DB;
+final class PrivateRawRead
+{
+    public function run(): mixed
+    {
+        return DB::selectOne('SELECT * FROM localization_overrides');
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/PrivateRawWrite.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+use Illuminate\Support\Facades\DB;
+final class PrivateRawWrite
+{
+    public function run(): void
+    {
+        DB::statement('UPDATE localization_override_versions SET action = action');
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/PrivateConnectionRawRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+use Illuminate\Database\Connection;
+final class PrivateConnectionRawRead
+{
+    public function __construct(private Connection $connection) {}
+
+    public function run(): mixed
+    {
+        return $this->connection->selectOne('SELECT * FROM localization_overrides');
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/PrivateManagerRawRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+use Illuminate\Database\DatabaseManager;
+final class PrivateManagerRawRead
+{
+    public function __construct(private DatabaseManager $database) {}
+
+    public function run(): mixed
+    {
+        return $this->database->connection()->selectOne('SELECT * FROM localization_override_versions');
+    }
+}
+PHP);
+        $this->write('app/Modules/Localization/Application/OwnedPrivateRawRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Localization\Application;
+use Illuminate\Support\Facades\DB;
+final class OwnedPrivateRawRead
+{
+    public function run(): mixed
+    {
+        return DB::selectOne('SELECT * FROM localization_overrides');
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/PrivateRawSqlNoise.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+use Illuminate\Support\Facades\DB;
+final class PrivateRawSqlNoise
+{
+    public function run(): mixed
+    {
+        return DB::selectOne("SELECT 'FROM localization_overrides' AS example");
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/PrivateRawSqlCommentNoise.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+use Illuminate\Support\Facades\DB;
+final class PrivateRawSqlCommentNoise
+{
+    public function run(): mixed
+    {
+        return DB::selectOne('SELECT 1 /* FROM localization_overrides */ AS ready');
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/PrivateRawSqlDashCommentNoise.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+use Illuminate\Support\Facades\DB;
+final class PrivateRawSqlDashCommentNoise
+{
+    public function run(): mixed
+    {
+        return DB::selectOne("SELECT 1 -- FROM localization_overrides\nAS ready");
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/PrivateExecutableMysqlCommentRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+use Illuminate\Support\Facades\DB;
+final class PrivateExecutableMysqlCommentRead
+{
+    public function run(): mixed
+    {
+        return DB::selectOne('SELECT 1 /*!50000 FROM localization_overrides */');
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/PrivateExecutableMariaDbCommentRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+use Illuminate\Support\Facades\DB;
+final class PrivateExecutableMariaDbCommentRead
+{
+    public function run(): mixed
+    {
+        return DB::selectOne('SELECT 1 /*M!100100 FROM localization_override_versions */');
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/PrivateDashArithmeticRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+use Illuminate\Support\Facades\DB;
+final class PrivateDashArithmeticRead
+{
+    public function run(): mixed
+    {
+        return DB::selectOne('SELECT 1--1 FROM localization_overrides');
+    }
+}
+PHP);
+
+        $violations = implode("\n", $this->checker()->check()['violations']);
+
+        self::assertStringNotContainsString('PrivateTableTextNoise.php', $violations);
+        self::assertStringNotContainsString('RawPersistenceTextNoise.php', $violations);
+        self::assertStringNotContainsString('SpoofedConnectionTypeNoise.php', $violations);
+        self::assertMatchesRegularExpression('/PrivateVariableMutationNoise\\.php:\\d+ dynamic table read is forbidden/', $violations);
+        self::assertDoesNotMatchRegularExpression('/PrivateVariableMutationNoise\\.php:\\d+ durable table .* private to/', $violations);
+        self::assertStringContainsString('PrivateRawRead.php:8 durable table localization_overrides is private to the Localization Application boundary', $violations);
+        self::assertStringContainsString('PrivateRawWrite.php:8 durable table localization_override_versions is private to the Localization Application boundary', $violations);
+        self::assertStringContainsString('PrivateConnectionRawRead.php:10 durable table localization_overrides is private to the Localization Application boundary', $violations);
+        self::assertStringContainsString('PrivateManagerRawRead.php:10 durable table localization_override_versions is private to the Localization Application boundary', $violations);
+        self::assertStringNotContainsString('OwnedPrivateRawRead.php', $violations);
+        self::assertStringNotContainsString('PrivateRawSqlNoise.php', $violations);
+        self::assertStringNotContainsString('PrivateRawSqlCommentNoise.php', $violations);
+        self::assertStringNotContainsString('PrivateRawSqlDashCommentNoise.php', $violations);
+        self::assertStringContainsString('PrivateExecutableMysqlCommentRead.php:8 durable table localization_overrides is private to the Localization Application boundary', $violations);
+        self::assertStringContainsString('PrivateExecutableMariaDbCommentRead.php:8 durable table localization_override_versions is private to the Localization Application boundary', $violations);
+        self::assertStringContainsString('PrivateDashArithmeticRead.php:8 durable table localization_overrides is private to the Localization Application boundary', $violations);
+    }
+
+    public function test_interpolated_raw_sql_is_dynamic_even_when_runtime_value_could_name_private_table(): void
+    {
+        $this->write('app/Modules/Payments/Application/PrivateInterpolatedFacadeRawRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+use Illuminate\Support\Facades\DB;
+final class PrivateInterpolatedFacadeRawRead
+{
+    public function run(): mixed
+    {
+        $table = 'localization_overrides';
+
+        return DB::selectOne("SELECT * FROM {$table}");
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/PrivateInterpolatedSimpleFacadeRawRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+use Illuminate\Support\Facades\DB;
+final class PrivateInterpolatedSimpleFacadeRawRead
+{
+    public function run(): mixed
+    {
+        $table = 'localization_override_versions';
+
+        return DB::selectOne("SELECT * FROM $table");
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/PrivateInterpolatedConnectionRawRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+use Illuminate\Database\Connection;
+final class PrivateInterpolatedConnectionRawRead
+{
+    public function __construct(private Connection $connection) {}
+
+    public function run(): mixed
+    {
+        $table = 'localization_overrides';
+
+        return $this->connection->selectOne("SELECT * FROM {$table}");
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/PrivateInterpolatedManagerRawRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+use Illuminate\Database\DatabaseManager;
+final class PrivateInterpolatedManagerRawRead
+{
+    public function __construct(private DatabaseManager $database) {}
+
+    public function run(): mixed
+    {
+        $table = 'localization_override_versions';
+
+        return $this->database->connection()->selectOne("SELECT * FROM $table");
+    }
+}
+PHP);
+
+        $violations = implode("\n", $this->checker()->check()['violations']);
+
+        self::assertSame(4, substr_count($violations, 'raw Connection read API selectOne must receive one literal read-only SELECT statement'));
+        self::assertMatchesRegularExpression('/PrivateInterpolatedFacadeRawRead\.php:\d+ raw Connection read API selectOne/', $violations);
+        self::assertMatchesRegularExpression('/PrivateInterpolatedSimpleFacadeRawRead\.php:\d+ raw Connection read API selectOne/', $violations);
+        self::assertMatchesRegularExpression('/PrivateInterpolatedConnectionRawRead\.php:\d+ raw Connection read API selectOne/', $violations);
+        self::assertMatchesRegularExpression('/PrivateInterpolatedManagerRawRead\.php:\d+ raw Connection read API selectOne/', $violations);
+    }
+
+    public function test_raw_and_subquery_from_sources_fail_closed_for_reads_as_well_as_mutations(): void
+    {
+        $this->write('app/Modules/Orders/Application/UnsupportedReadSources.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+final class UnsupportedReadSources
+{
+    public function raw($db): mixed
+    {
+        return $db->query()->fromRaw('orders')->first();
+    }
+
+    public function sub($db, $query): mixed
+    {
+        return $db->query()->fromSub($query, 'source')->first();
+    }
+}
+PHP);
+
+        $violations = implode("\n", $this->checker()->check()['violations']);
+
+        self::assertStringContainsString('query source through fromRaw is forbidden', $violations);
+        self::assertStringContainsString('query source through fromSub is forbidden', $violations);
     }
 
     public function test_eloquent_persistence_is_explicitly_prohibited_in_modules_and_shared_code(): void
@@ -655,9 +1521,15 @@ PHP);
             'durable_table_owners' => [
                 'audit_logs' => 'SharedAppendOnly',
                 'ledger_entries' => 'Wallet',
+                'localization_override_versions' => 'Localization',
+                'localization_overrides' => 'Localization',
                 'orders' => 'Orders',
                 'outbox_messages' => 'Shared',
                 'worker_heartbeats' => 'Operations',
+            ],
+            'application_private_tables' => [
+                'localization_override_versions',
+                'localization_overrides',
             ],
             'persistence_exceptions' => [],
         ]);

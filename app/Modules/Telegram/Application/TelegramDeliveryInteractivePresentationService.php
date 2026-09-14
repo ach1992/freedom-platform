@@ -72,11 +72,7 @@ final readonly class TelegramDeliveryInteractivePresentationService
             throw new RuntimeException('Telegram interactive presentation resolution requires the provider-boundary transaction.');
         }
         try {
-            $connection->selectOne(
-                'SELECT 1 AS surface_pin FROM '.TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE.' LIMIT 1',
-                [],
-                false,
-            );
+            $connection->table(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)->useWritePdo()->exists();
         } catch (Throwable $exception) {
             throw new RuntimeException('Telegram interactive presentation database surface is unavailable.', 0, $exception);
         }
@@ -105,11 +101,7 @@ final readonly class TelegramDeliveryInteractivePresentationService
             throw new DomainException('Telegram callback keyboards are restricted to the bound private actor chat.');
         }
         try {
-            $connection->selectOne(
-                'SELECT 1 AS surface_pin FROM '.TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE.' LIMIT 1',
-                [],
-                false,
-            );
+            $connection->table(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)->useWritePdo()->exists();
         } catch (Throwable $exception) {
             throw new RuntimeException('Telegram interactive presentation database surface is unavailable.', 0, $exception);
         }

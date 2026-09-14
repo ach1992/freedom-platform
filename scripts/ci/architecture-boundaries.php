@@ -9,6 +9,7 @@ return [
         'Customers' => ['AccessControl', 'Identity'],
         'Identity' => ['AccessControl'],
         'Installer' => ['Operations'],
+        'Localization' => ['AccessControl'],
         'Orders' => ['AccessControl', 'Agents', 'Telegram'],
         'Panels' => ['AccessControl'],
         'Payments' => ['AccessControl', 'Orders', 'Telegram', 'Wallet'],
@@ -406,6 +407,8 @@ return [
         'ledger_entries' => 'Wallet',
         'ledger_refundability' => 'Wallet',
         'ledger_transactions' => 'Wallet',
+        'localization_override_versions' => 'Localization',
+        'localization_overrides' => 'Localization',
         'nowpayments_payment_authorities' => 'Payments',
         'nowpayments_payment_observations' => 'Payments',
         'nowpayments_reconciliation_findings' => 'Payments',
@@ -565,6 +568,13 @@ return [
         'zarinpal_provider_evidence_claims' => 'Payments',
         'zarinpal_reconciliation_findings' => 'Payments',
         'zarinpal_verified_unsettled_evidence' => 'Payments',
+    ],
+
+    // Feature-private durable tables whose physical persistence identity may only be referenced by
+    // their owning module. Other modules must use the owner's public Application boundary.
+    'application_private_tables' => [
+        'localization_override_versions',
+        'localization_overrides',
     ],
 
     // Exact migration-local durable rename lifecycle only. Temporary identities are not general

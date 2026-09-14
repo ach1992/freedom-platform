@@ -65,11 +65,7 @@ SQL);
     private function pinSurface(Connection $connection): void
     {
         try {
-            $connection->selectOne(
-                'SELECT 1 AS surface_pin FROM '.TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE.' LIMIT 1',
-                [],
-                false,
-            );
+            $connection->table(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)->useWritePdo()->exists();
         } catch (Throwable $exception) {
             throw new RuntimeException('Telegram interactive presentation database surface is unavailable.', 0, $exception);
         }

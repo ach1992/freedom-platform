@@ -22,6 +22,7 @@ final class DatabaseSeeder extends Seeder
             PromotionAccessFoundationSeeder::class,
             AgentPricingAccessFoundationSeeder::class,
             TelegramMembershipAccessFoundationSeeder::class,
+            LocalizationAccessFoundationSeeder::class,
         ]);
     }
 }
