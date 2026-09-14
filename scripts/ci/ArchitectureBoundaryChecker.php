@@ -1681,6 +1681,10 @@ final class ArchitectureBoundaryChecker
             PREG_SET_ORDER | PREG_OFFSET_CAPTURE,
         );
         foreach ($aliases as $alias) {
+            if ($this->tokenIdAtOffset($source, $alias[0][1]) !== T_USE) {
+                continue;
+            }
+
             $violations[] = sprintf(
                 '%s:%d aliasing the DB facade as %s is forbidden because static persistence attribution must remain syntax-stable.',
                 $relativePath,
@@ -1692,19 +1696,38 @@ final class ArchitectureBoundaryChecker
         $this->scanConnectionRawSql($relativePath, $source, $violations);
         $this->scanRuntimeSchemaMutations($relativePath, $source, $violations);
 
-        $pdoPatterns = [
-            '/(?:->\s*(?:getPdo|getRawPdo)\s*\(|\bDB::\s*(?:getPdo|getRawPdo)\s*\()/',
-            '/\bnew\s+(?:'.preg_quote('\\PDO', '/').'|PDO)\b/',
-        ];
-        foreach ($pdoPatterns as $pattern) {
-            preg_match_all($pattern, $source, $pdoCalls, PREG_SET_ORDER | PREG_OFFSET_CAPTURE);
-            foreach ($pdoCalls as $call) {
-                $violations[] = sprintf(
-                    '%s:%d direct PDO access is forbidden in runtime source because durable persistence ownership cannot be statically attributed.',
-                    $relativePath,
-                    $this->lineNumber($source, $call[0][1]),
-                );
+        foreach ($this->persistenceMethodInvocations($source, ['getPdo', 'getRawPdo']) as $call) {
+            $violations[] = sprintf(
+                '%s:%d direct PDO access is forbidden in runtime source because durable persistence ownership cannot be statically attributed.',
+                $relativePath,
+                $this->lineNumber($source, $call['offset']),
+            );
+        }
+
+        $tokens = $this->sourceTokens($source);
+        foreach ($tokens as $index => $entry) {
+            $token = $entry['token'];
+            if (! is_array($token) || $token[0] !== T_NEW) {
+                continue;
             }
+
+            $classIndex = $this->nextSignificantTokenIndex($tokens, $index + 1);
+            if ($classIndex === null) {
+                continue;
+            }
+            $classToken = $tokens[$classIndex]['token'];
+            if (! is_array($classToken)
+                || ! in_array($classToken[0], [T_STRING, T_NAME_FULLY_QUALIFIED], true)
+                || strtoupper(ltrim($classToken[1], '\\')) !== 'PDO'
+            ) {
+                continue;
+            }
+
+            $violations[] = sprintf(
+                '%s:%d direct PDO access is forbidden in runtime source because durable persistence ownership cannot be statically attributed.',
+                $relativePath,
+                $this->lineNumber($source, $entry['offset']),
+            );
         }
     }
 
@@ -1900,15 +1923,15 @@ final class ArchitectureBoundaryChecker
 
     private function isLiteralReadOnlySql(string $sql): bool
     {
-        $sql = trim($sql);
-        if ($sql === '' || preg_match('/;\\s*\\S/s', $sql) === 1) {
+        $code = trim($this->sqlCodeWithoutCommentsAndStrings($sql));
+        if ($code === '' || preg_match('/;\s*\S/s', $code) === 1) {
             return false;
         }
-        if (preg_match('/^SELECT\\b/is', $sql) !== 1) {
+        if (preg_match('/^SELECT\b/is', $code) !== 1) {
             return false;
         }
 
-        return preg_match('/\\bINTO\\s+(?:OUTFILE|DUMPFILE)\\b/i', $sql) !== 1;
+        return preg_match('/\bINTO\s+(?:OUTFILE|DUMPFILE)\b/i', $code) !== 1;
     }
 
     private function isReviewedMetadataIntrospection(string $relativePath, string $sql): bool
@@ -2073,7 +2096,7 @@ final class ArchitectureBoundaryChecker
 
     private function classifyRawStatement(string $sql): string
     {
-        $sql = trim($sql);
+        $sql = trim($this->sqlCodeWithoutCommentsAndStrings($sql));
         if ($sql === '') {
             return 'unknown';
         }

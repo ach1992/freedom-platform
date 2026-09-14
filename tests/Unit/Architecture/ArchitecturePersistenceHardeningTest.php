@@ -474,6 +474,61 @@ PHP);
         self::assertStringContainsString('mutation of unmapped durable table candidate orphan_table', $violations);
     }
 
+    public function test_raw_sql_lexing_ignores_inert_strings_and_comments_but_preserves_executable_sql(): void
+    {
+        $this->write('app/Modules/Orders/Application/SqlLexing.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+use Illuminate\Support\Facades\DB;
+final class SqlLexing
+{
+    public function safe(): void
+    {
+        DB::selectOne("SELECT 'INTO OUTFILE /tmp/example' AS note");
+        DB::selectOne('SELECT 1 /* ; DELETE FROM orders */ AS ready');
+        DB::statement("SET @freedom_test = 'GLOBAL; DELETE FROM orders'");
+    }
+
+    public function unsafe(): void
+    {
+        DB::selectOne("SELECT 1 /*!50000 INTO OUTFILE '/tmp/example' */");
+        DB::statement('SET @freedom_test = 1 /*!50000 ; DELETE FROM orders */');
+    }
+}
+PHP);
+
+        $violations = implode("\n", $this->checker()->check()['violations']);
+
+        self::assertSame(1, substr_count($violations, 'raw Connection read API selectOne'));
+        self::assertSame(1, substr_count($violations, 'opaque raw SQL with a non-literal/unsupported statement'));
+    }
+
+    public function test_persistence_escape_text_noise_does_not_create_alias_or_pdo_evidence(): void
+    {
+        $this->write('app/Modules/Orders/Application/PersistenceEscapeNoise.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+final class PersistenceEscapeNoise
+{
+    public function run(): string
+    {
+        // use Illuminate\Support\Facades\DB as Database;
+        // $db->getPdo();
+        // new \PDO('sqlite::memory:');
+        $alias = 'use Illuminate\\Support\\Facades\\DB as Database;';
+        $pdoCall = '$db->getRawPdo();';
+        $pdoNew = "new PDO('sqlite::memory:');";
+
+        return $alias.$pdoCall.$pdoNew;
+    }
+}
+PHP);
+
+        $violations = implode("\n", $this->checker()->check()['violations']);
+
+        self::assertStringNotContainsString('PersistenceEscapeNoise.php', $violations);
+    }
+
     public function test_db_facade_alias_and_direct_runtime_pdo_access_fail_closed(): void
     {
         $this->write('app/Modules/Orders/Application/OpaqueAccess.php', <<<'PHP'
