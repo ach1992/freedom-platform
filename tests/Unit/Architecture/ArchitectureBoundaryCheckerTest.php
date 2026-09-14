@@ -277,6 +277,67 @@ PHP);
         self::assertStringNotContainsString('OwnedLocalizationRead.php', $violations);
     }
 
+    public function test_resolved_table_constants_preserve_private_ownership_and_owner_access(): void
+    {
+        $this->write('app/Modules/Localization/Application/LocalizationTableSurface.php', <<<'PHP'
+<?php
+namespace App\Modules\Localization\Application;
+final class LocalizationTableSurface { public const TABLE = 'localization_overrides'; }
+PHP);
+        $this->write('app/Modules/Localization/Application/OwnedConstantRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Localization\Application;
+final class OwnedConstantRead
+{
+    public function run($db): mixed
+    {
+        return $db->table(LocalizationTableSurface::TABLE)->first();
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/CrossModuleConstantRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+use App\Modules\Localization\Application\LocalizationTableSurface;
+final class CrossModuleConstantRead
+{
+    public function run($db): mixed
+    {
+        return $db->table(LocalizationTableSurface::TABLE)->first();
+    }
+}
+PHP);
+
+        $violations = implode("\n", $this->checker()->check()['violations']);
+
+        self::assertStringContainsString(
+            'CrossModuleConstantRead.php:8 durable table localization_overrides is private to the Localization Application boundary',
+            $violations,
+        );
+        self::assertStringNotContainsString('OwnedConstantRead.php', $violations);
+    }
+
+    public function test_console_command_table_renderer_is_not_classified_as_database_persistence(): void
+    {
+        $this->write('app/Modules/Payments/Presentation/Console/ReportCommand.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Presentation\Console;
+use Illuminate\Console\Command;
+final class ReportCommand extends Command
+{
+    public function handle(): void
+    {
+        $payload = ['count' => 1];
+        $this->table(array_keys($payload), [array_values($payload)]);
+    }
+}
+PHP);
+
+        $violations = implode("\n", $this->checker()->check()['violations']);
+
+        self::assertStringNotContainsString('ReportCommand.php', $violations);
+    }
+
     public function test_shared_persistence_is_checked_against_the_same_owner_map(): void
     {
         $this->write('app/Shared/Infrastructure/OutboxStore.php', <<<'PHP'

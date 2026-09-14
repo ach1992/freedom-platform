@@ -369,12 +369,16 @@ final class ArchitectureBoundaryChecker
         );
 
         foreach ($matches as $match) {
+            $offset = $match[0][1];
+            if ($this->isConsoleTableRenderer($relativePath, $source, $offset)) {
+                continue;
+            }
+
             $expression = trim($match[1][0]);
             if ($this->literalTableName($expression) !== null) {
                 continue;
             }
 
-            $offset = $match[0][1];
             $statement = substr($source, $offset, $this->statementLength($source, $offset));
             $mutation = $this->mutationMethod($statement);
             $tables = $this->boundedDynamicTables($source, $offset, $expression);
@@ -445,6 +449,11 @@ final class ArchitectureBoundaryChecker
         $aliasBase = $this->dynamicAliasBaseTable($expression);
         if ($aliasBase !== null) {
             return [$aliasBase];
+        }
+
+        $tableConstant = $this->resolvedTableConstant($source, $expression);
+        if ($tableConstant !== null) {
+            return [$tableConstant];
         }
 
         if (preg_match('/^\$([A-Za-z_][A-Za-z0-9_]*)$/', $expression, $variableMatch) !== 1) {
@@ -540,6 +549,104 @@ final class ArchitectureBoundaryChecker
         }
 
         return $seenOpen && $depth > 0;
+    }
+
+    private function isConsoleTableRenderer(string $relativePath, string $source, int $offset): bool
+    {
+        if (! str_contains($relativePath, '/Presentation/Console/')
+            || preg_match('/\bextends\s+Command\b/', $source) !== 1
+        ) {
+            return false;
+        }
+
+        $prefix = substr($source, max(0, $offset - 24), min(24, $offset));
+
+        return preg_match('/\$this\s*\z/', $prefix) === 1;
+    }
+
+    private function resolvedTableConstant(string $source, string $expression): ?string
+    {
+        if (preg_match('/\A(.+)::TABLE\z/', $expression, $match) !== 1
+            || ! $this->isClassReference($match[1])
+        ) {
+            return null;
+        }
+
+        $class = $this->resolvedClassName($source, $match[1]);
+        if ($class === null || ! str_starts_with($class, 'App\\')) {
+            return null;
+        }
+
+        $relativePath = 'app/'.str_replace('\\', '/', substr($class, strlen('App\\'))).'.php';
+        $absolutePath = $this->root.'/'.$relativePath;
+        if (! is_file($absolutePath)) {
+            return null;
+        }
+
+        $classSource = file_get_contents($absolutePath);
+        if (! is_string($classSource)
+            || preg_match('/\b(?:public\s+)?const\s+TABLE\s*=\s*([\'\"])([A-Za-z0-9_.]+)\1\s*;/', $classSource, $constant) !== 1
+        ) {
+            return null;
+        }
+
+        return $constant[2];
+    }
+
+    private function isClassReference(string $reference): bool
+    {
+        $normalized = ltrim($reference, '\\');
+        if ($normalized === '' || str_starts_with($normalized, '\\')) {
+            return false;
+        }
+
+        foreach (explode('\\', $normalized) as $segment) {
+            if (preg_match('/\A[A-Za-z_][A-Za-z0-9_]*\z/', $segment) !== 1) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function resolvedClassName(string $source, string $reference): ?string
+    {
+        if (str_starts_with($reference, '\\')) {
+            return ltrim($reference, '\\');
+        }
+
+        preg_match_all(
+            '/^use\s+(?!function\b|const\b)([^;]+);/mi',
+            $source,
+            $useStatements,
+        );
+        foreach ($useStatements[1] ?? [] as $statement) {
+            $statement = trim($statement);
+            if (preg_match(
+                '/\A([A-Za-z_][A-Za-z0-9_]*(?:\\\\[A-Za-z_][A-Za-z0-9_]*)*)(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?\z/',
+                $statement,
+                $import,
+            ) !== 1) {
+                continue;
+            }
+
+            $imported = $import[1];
+            $alias = $import[2] ?? basename(str_replace('\\', '/', $imported));
+            if ($reference === $alias) {
+                return $imported;
+            }
+            if (str_starts_with($reference, $alias.'\\')) {
+                return $imported.substr($reference, strlen($alias));
+            }
+        }
+
+        if (preg_match('/^namespace\s+([^;]+);/m', $source, $namespace) !== 1
+            || ! $this->isClassReference(trim($namespace[1]))
+        ) {
+            return null;
+        }
+
+        return trim($namespace[1]).'\\'.$reference;
     }
 
     private function dynamicAliasBaseTable(string $expression): ?string

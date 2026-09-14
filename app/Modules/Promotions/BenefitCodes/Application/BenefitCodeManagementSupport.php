@@ -194,10 +194,15 @@ trait BenefitCodeManagementSupport
                 'version' => $this->positive($row->version, 'Benefit code offering version'),
             ];
         }
-        foreach ([['products', $definition->productId, 'product'], ['sales_servers', $definition->salesServerId, 'sales server']] as [$table, $id, $label]) {
-            if ($id !== null && ! $db->table($table)->where('id', $id)->exists()) {
-                throw new DomainException('Benefit code '.$label.' scope does not exist.');
-            }
+        if ($definition->productId !== null
+            && ! $db->table('products')->where('id', $definition->productId)->exists()
+        ) {
+            throw new DomainException('Benefit code product scope does not exist.');
+        }
+        if ($definition->salesServerId !== null
+            && ! $db->table('sales_servers')->where('id', $definition->salesServerId)->exists()
+        ) {
+            throw new DomainException('Benefit code sales server scope does not exist.');
         }
 
         $rule = null;
