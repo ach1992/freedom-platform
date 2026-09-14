@@ -1044,6 +1044,78 @@ PHP);
         self::assertStringContainsString('PrivateDashArithmeticRead.php:8 durable table localization_overrides is private to the Localization Application boundary', $violations);
     }
 
+    public function test_interpolated_raw_sql_is_dynamic_even_when_runtime_value_could_name_private_table(): void
+    {
+        $this->write('app/Modules/Payments/Application/PrivateInterpolatedFacadeRawRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+use Illuminate\Support\Facades\DB;
+final class PrivateInterpolatedFacadeRawRead
+{
+    public function run(): mixed
+    {
+        $table = 'localization_overrides';
+
+        return DB::selectOne("SELECT * FROM {$table}");
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/PrivateInterpolatedSimpleFacadeRawRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+use Illuminate\Support\Facades\DB;
+final class PrivateInterpolatedSimpleFacadeRawRead
+{
+    public function run(): mixed
+    {
+        $table = 'localization_override_versions';
+
+        return DB::selectOne("SELECT * FROM $table");
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/PrivateInterpolatedConnectionRawRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+use Illuminate\Database\Connection;
+final class PrivateInterpolatedConnectionRawRead
+{
+    public function __construct(private Connection $connection) {}
+
+    public function run(): mixed
+    {
+        $table = 'localization_overrides';
+
+        return $this->connection->selectOne("SELECT * FROM {$table}");
+    }
+}
+PHP);
+        $this->write('app/Modules/Payments/Application/PrivateInterpolatedManagerRawRead.php', <<<'PHP'
+<?php
+namespace App\Modules\Payments\Application;
+use Illuminate\Database\DatabaseManager;
+final class PrivateInterpolatedManagerRawRead
+{
+    public function __construct(private DatabaseManager $database) {}
+
+    public function run(): mixed
+    {
+        $table = 'localization_override_versions';
+
+        return $this->database->connection()->selectOne("SELECT * FROM $table");
+    }
+}
+PHP);
+
+        $violations = implode("\n", $this->checker()->check()['violations']);
+
+        self::assertSame(4, substr_count($violations, 'raw Connection read API selectOne must receive one literal read-only SELECT statement'));
+        self::assertMatchesRegularExpression('/PrivateInterpolatedFacadeRawRead\.php:\d+ raw Connection read API selectOne/', $violations);
+        self::assertMatchesRegularExpression('/PrivateInterpolatedSimpleFacadeRawRead\.php:\d+ raw Connection read API selectOne/', $violations);
+        self::assertMatchesRegularExpression('/PrivateInterpolatedConnectionRawRead\.php:\d+ raw Connection read API selectOne/', $violations);
+        self::assertMatchesRegularExpression('/PrivateInterpolatedManagerRawRead\.php:\d+ raw Connection read API selectOne/', $violations);
+    }
+
     public function test_raw_and_subquery_from_sources_fail_closed_for_reads_as_well_as_mutations(): void
     {
         $this->write('app/Modules/Orders/Application/UnsupportedReadSources.php', <<<'PHP'

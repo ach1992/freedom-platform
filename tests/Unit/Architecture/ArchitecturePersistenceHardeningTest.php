@@ -520,6 +520,46 @@ PHP);
         self::assertSame(1, substr_count($violations, 'opaque raw SQL with a non-literal/unsupported statement'));
     }
 
+    public function test_raw_sql_literalness_rejects_interpolation_and_preserves_compile_time_literals(): void
+    {
+        $this->write('app/Modules/Orders/Application/RawSqlLiteralness.php', <<<'PHP'
+<?php
+namespace App\Modules\Orders\Application;
+use Illuminate\Database\Connection;
+use Illuminate\Database\DatabaseManager;
+use Illuminate\Support\Facades\DB;
+final class RawSqlLiteralness
+{
+    public function __construct(
+        private Connection $connection,
+        private DatabaseManager $database,
+    ) {}
+
+    public function safe(): void
+    {
+        DB::selectOne('SELECT 1 AS single_literal');
+        DB::selectOne("SELECT 1 AS double_literal");
+        DB::selectOne(<<<'SQL'
+SELECT 1 AS nowdoc_literal
+SQL);
+    }
+
+    public function unsafe(): void
+    {
+        $column = 'id';
+        DB::selectOne("SELECT {$column} FROM orders");
+        $this->connection->selectOne("SELECT $column FROM orders");
+        $this->database->connection()->selectOne("SELECT {$column} FROM orders");
+    }
+}
+PHP);
+
+        $violations = implode("\n", $this->checker()->check()['violations']);
+
+        self::assertSame(3, substr_count($violations, 'RawSqlLiteralness.php'));
+        self::assertSame(3, substr_count($violations, 'raw Connection read API selectOne must receive one literal read-only SELECT statement'));
+    }
+
     public function test_persistence_escape_text_noise_does_not_create_alias_or_pdo_evidence(): void
     {
         $this->write('app/Modules/Orders/Application/PersistenceEscapeNoise.php', <<<'PHP'

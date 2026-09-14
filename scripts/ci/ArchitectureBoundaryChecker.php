@@ -2204,10 +2204,10 @@ final class ArchitectureBoundaryChecker
 
     private function literalRawSqlArgument(string $argument): ?string
     {
-        $argument = $this->phpExpressionWithoutTrivia($argument);
+        $argumentWithoutTrivia = $this->phpExpressionWithoutTrivia($argument);
         if (preg_match(
             '/^<<<\'([A-Za-z_][A-Za-z0-9_]*)\'\R(.*?)\R\1\s*$/s',
-            $argument,
+            $argumentWithoutTrivia,
             $heredoc,
         ) === 1) {
             $sql = trim($heredoc[2]);
@@ -2215,13 +2215,171 @@ final class ArchitectureBoundaryChecker
             return $sql === '' ? null : $sql;
         }
 
-        if (preg_match('/^([\'\"])(.*)\1$/s', $argument, $match) !== 1) {
+        $literalTokens = [];
+        foreach ($this->sourceTokens($argument) as $entry) {
+            if ($entry['offset'] < 0 || $this->isTriviaToken($entry['token'])) {
+                continue;
+            }
+            $literalTokens[] = $entry['token'];
+        }
+
+        if (count($literalTokens) !== 1
+            || ! is_array($literalTokens[0])
+            || $literalTokens[0][0] !== T_CONSTANT_ENCAPSED_STRING
+        ) {
             return null;
         }
 
-        $sql = trim(stripcslashes($match[2]));
+        $decoded = $this->decodePhpConstantStringLiteral($literalTokens[0][1]);
+        if ($decoded === null) {
+            return null;
+        }
+
+        $sql = trim($decoded);
 
         return $sql === '' ? null : $sql;
+    }
+
+    private function decodePhpConstantStringLiteral(string $literal): ?string
+    {
+        $length = strlen($literal);
+        if ($length < 2) {
+            return null;
+        }
+
+        $quote = $literal[0];
+        if (($quote !== '\'' && $quote !== '"') || $literal[$length - 1] !== $quote) {
+            return null;
+        }
+
+        $body = substr($literal, 1, -1);
+        $decoded = '';
+        $bodyLength = strlen($body);
+        for ($index = 0; $index < $bodyLength; $index++) {
+            $character = $body[$index];
+            if ($character !== '\\') {
+                $decoded .= $character;
+
+                continue;
+            }
+
+            if ($index + 1 >= $bodyLength) {
+                return null;
+            }
+
+            $next = $body[$index + 1];
+            if ($quote === '\'') {
+                if ($next === '\\' || $next === '\'') {
+                    $decoded .= $next;
+                    $index++;
+                } else {
+                    $decoded .= '\\';
+                }
+
+                continue;
+            }
+
+            $simpleEscapes = [
+                'n' => "\n",
+                'r' => "\r",
+                't' => "\t",
+                'v' => "\v",
+                'e' => "\e",
+                'f' => "\f",
+                '\\' => '\\',
+                '$' => '$',
+                '"' => '"',
+            ];
+            if (isset($simpleEscapes[$next])) {
+                $decoded .= $simpleEscapes[$next];
+                $index++;
+
+                continue;
+            }
+
+            if ($next >= '0' && $next <= '7') {
+                $digits = $next;
+                $index++;
+                for ($digit = 0; $digit < 2 && $index + 1 < $bodyLength; $digit++) {
+                    $candidate = $body[$index + 1];
+                    if ($candidate < '0' || $candidate > '7') {
+                        break;
+                    }
+                    $digits .= $candidate;
+                    $index++;
+                }
+                $decoded .= chr(octdec($digits) & 0xFF);
+
+                continue;
+            }
+
+            if ($next === 'x' || $next === 'X') {
+                $digits = '';
+                $index++;
+                for ($digit = 0; $digit < 2 && $index + 1 < $bodyLength; $digit++) {
+                    $candidate = $body[$index + 1];
+                    if (! ctype_xdigit($candidate)) {
+                        break;
+                    }
+                    $digits .= $candidate;
+                    $index++;
+                }
+                if ($digits === '') {
+                    $decoded .= '\\'.$next;
+                } else {
+                    $decoded .= chr(hexdec($digits));
+                }
+
+                continue;
+            }
+
+            if ($next === 'u' && $index + 2 < $bodyLength && $body[$index + 2] === '{') {
+                $closingBrace = strpos($body, '}', $index + 3);
+                if ($closingBrace === false) {
+                    return null;
+                }
+                $digits = substr($body, $index + 3, $closingBrace - ($index + 3));
+                if ($digits === '' || ! ctype_xdigit($digits)) {
+                    return null;
+                }
+                $encoded = $this->utf8CodePoint(hexdec($digits));
+                if ($encoded === null) {
+                    return null;
+                }
+                $decoded .= $encoded;
+                $index = $closingBrace;
+
+                continue;
+            }
+
+            $decoded .= '\\'.$next;
+            $index++;
+        }
+
+        return $decoded;
+    }
+
+    private function utf8CodePoint(int $codePoint): ?string
+    {
+        if ($codePoint < 0 || $codePoint > 0x10FFFF || ($codePoint >= 0xD800 && $codePoint <= 0xDFFF)) {
+            return null;
+        }
+        if ($codePoint <= 0x7F) {
+            return chr($codePoint);
+        }
+        if ($codePoint <= 0x7FF) {
+            return chr(0xC0 | ($codePoint >> 6)).chr(0x80 | ($codePoint & 0x3F));
+        }
+        if ($codePoint <= 0xFFFF) {
+            return chr(0xE0 | ($codePoint >> 12))
+                .chr(0x80 | (($codePoint >> 6) & 0x3F))
+                .chr(0x80 | ($codePoint & 0x3F));
+        }
+
+        return chr(0xF0 | ($codePoint >> 18))
+            .chr(0x80 | (($codePoint >> 12) & 0x3F))
+            .chr(0x80 | (($codePoint >> 6) & 0x3F))
+            .chr(0x80 | ($codePoint & 0x3F));
     }
 
     private function firstCallArgument(string $source, int $offset): string

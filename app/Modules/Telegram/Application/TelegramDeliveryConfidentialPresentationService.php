@@ -129,11 +129,7 @@ final readonly class TelegramDeliveryConfidentialPresentationService
     private function pinReadySurface(Connection $connection): void
     {
         try {
-            $connection->selectOne(
-                'SELECT 1 AS surface_pin FROM '.TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1::TABLE.' LIMIT 1',
-                [],
-                false,
-            );
+            $connection->table(TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1::TABLE)->useWritePdo()->exists();
         } catch (Throwable $exception) {
             throw new RuntimeException('Telegram confidential presentation database surface is unavailable.', 0, $exception);
         }
