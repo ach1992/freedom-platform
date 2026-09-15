@@ -133,7 +133,7 @@ jobs:
           done < "$plan"
 
           # Independent self-modifying-CI guard: these surfaces may not suppress their own control validation.
-          if grep -Eq '^(\.github/workflows/ci\.yml|\.github/workflows/staging-readiness\.yml|scripts/ci/(classify-validation-plan|test-validation-plan|scan-git-secrets|test-secret-scan|verify-project-control|verify-readonly-staging-workflow)\.sh)$' "$changed"; then
+          if grep -Eq '^(\.github/workflows/ci\.yml|\.github/workflows/staging-readiness\.yml|scripts/ci/(classify-validation-plan|test-validation-plan|select-feature-integration-scope|test-feature-integration-scope|scan-git-secrets|test-secret-scan|verify-project-control|verify-readonly-staging-workflow)\.sh)$' "$changed"; then
             project_control=true
             control_plane=true
           fi
@@ -169,6 +169,8 @@ jobs:
             docker-compose.ci.yml
             scripts/ci/classify-validation-plan.sh
             scripts/ci/test-validation-plan.sh
+            scripts/ci/select-feature-integration-scope.sh
+            scripts/ci/test-feature-integration-scope.sh
             scripts/ci/scan-git-secrets.sh
             scripts/ci/test-secret-scan.sh
             scripts/ci/verify-readonly-staging-workflow.sh
@@ -179,7 +181,7 @@ jobs:
             test -s "$path" || { echo "Required repository control file is missing or empty: $path" >&2; exit 1; }
           done
 
-          for script in scripts/ci/classify-validation-plan.sh scripts/ci/test-validation-plan.sh scripts/ci/scan-git-secrets.sh scripts/ci/test-secret-scan.sh scripts/ci/verify-readonly-staging-workflow.sh scripts/ci/verify-planning.sh scripts/ci/verify-project-control.sh; do
+          for script in scripts/ci/classify-validation-plan.sh scripts/ci/test-validation-plan.sh scripts/ci/select-feature-integration-scope.sh scripts/ci/test-feature-integration-scope.sh scripts/ci/scan-git-secrets.sh scripts/ci/test-secret-scan.sh scripts/ci/verify-readonly-staging-workflow.sh scripts/ci/verify-planning.sh scripts/ci/verify-project-control.sh; do
             bash -n "$script"
           done
 
@@ -232,8 +234,9 @@ jobs:
         run: |
           set -euo pipefail
           changed=build/evidence/preflight/changed-files.txt
-          if [[ ! -s "$changed" ]] || grep -Eq '^(\.github/workflows/(ci|staging-readiness)\.yml|scripts/ci/(classify-validation-plan|test-validation-plan|scan-git-secrets|test-secret-scan|verify-project-control|verify-readonly-staging-workflow)\.sh)$' "$changed"; then
+          if [[ ! -s "$changed" ]] || grep -Eq '^(\.github/workflows/(ci|staging-readiness)\.yml|scripts/ci/(classify-validation-plan|test-validation-plan|select-feature-integration-scope|test-feature-integration-scope|scan-git-secrets|test-secret-scan|verify-project-control|verify-readonly-staging-workflow)\.sh)$' "$changed"; then
             bash scripts/ci/test-validation-plan.sh
+            bash scripts/ci/test-feature-integration-scope.sh
             bash scripts/ci/test-secret-scan.sh
             bash scripts/ci/verify-readonly-staging-workflow.sh
           fi
@@ -367,6 +370,8 @@ jobs:
       PHPUNIT_FILTER: ${{ inputs.phpunit_filter }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
 
       - name: Set up PHP 8.4 with PCOV
         uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
@@ -420,17 +425,63 @@ jobs:
           test -f .env || cp .env.example .env
           php artisan config:clear --ansi
 
+          integration_scope=FULL
+          targeted_tests=()
+          if [[ "$GITHUB_EVENT_NAME" == 'pull_request' ]] && git rev-parse --verify HEAD^1 >/dev/null 2>&1; then
+            while IFS='=' read -r key value; do
+              case "$key" in
+                scope)
+                  integration_scope=$value
+                  ;;
+                target)
+                  [[ -n "$value" ]] || { echo 'Focused integration selector returned an empty target.' >&2; exit 1; }
+                  targeted_tests+=("$value")
+                  ;;
+                *)
+                  echo "Focused integration selector returned an unknown key: $key" >&2
+                  exit 1
+                  ;;
+              esac
+            done < <(bash scripts/ci/select-feature-integration-scope.sh HEAD^1 HEAD)
+          elif [[ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' && -n "$PHPUNIT_FILTER" ]]; then
+            integration_scope=DIAGNOSTIC
+          fi
+
+          case "$integration_scope" in
+            FULL|DIAGNOSTIC)
+              ;;
+            TARGETED)
+              ((${#targeted_tests[@]} > 0)) || { echo 'TARGETED integration scope requires at least one Feature test.' >&2; exit 1; }
+              ;;
+            *)
+              echo "Invalid integration scope: $integration_scope" >&2
+              exit 1
+              ;;
+          esac
+
+          {
+            echo "scope=$integration_scope"
+            printf 'target=%s\n' "${targeted_tests[@]}"
+          } > build/evidence/tests/integration-scope.txt
+
           phpunit_args=(
             --configuration phpunit.xml
             --display-warnings
             --fail-on-warning
             --log-junit build/evidence/tests/junit.xml
           )
+
           if [[ "$GITHUB_EVENT_NAME" != 'workflow_dispatch' ]]; then
-            phpunit_args+=(--testsuite Feature)
+            phpunit_args+=(--stop-on-error --stop-on-failure)
+            if [[ "$integration_scope" == 'TARGETED' ]]; then
+              phpunit_args+=("${targeted_tests[@]}")
+            else
+              phpunit_args+=(--testsuite Feature)
+            fi
           fi
+
           if [[ -n "$PHPUNIT_FILTER" ]]; then
-            phpunit_args+=(--filter "$PHPUNIT_FILTER")
+            phpunit_args+=(--filter "$PHPUNIT_FILTER" --stop-on-error --stop-on-failure)
           elif [[ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' ]]; then
             phpunit_args+=(--coverage-clover build/evidence/coverage/clover.xml)
           fi
