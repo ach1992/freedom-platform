@@ -40,7 +40,7 @@ detect_filtered_diagnostic() {
     command -v jq >/dev/null 2>&1 || return 0
 
     filter=$(jq -r '.inputs.phpunit_filter // empty' "$event_path" 2>/dev/null || true)
-    [[ "$filter" =~ [^[:space:]] ]] || return 0
+    [[ -n "$filter" ]] || return 0
 
     diagnostic=true
     integration=true
@@ -83,7 +83,7 @@ hydrate_push_paths() {
 
 # A filtered workflow dispatch is an explicit troubleshooting route, not merge
 # acceptance. It needs the real integration/runtime surface only. If the event
-# payload or filter is unavailable/blank, normal empty-input fail-safe FULL wins.
+# payload is unavailable or the input is empty, empty-input fail-safe FULL wins.
 detect_filtered_diagnostic
 
 if [[ "$diagnostic" != 'true' ]]; then
