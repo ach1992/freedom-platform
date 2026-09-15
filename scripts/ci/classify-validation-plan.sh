@@ -177,6 +177,10 @@ else
                 static_analysis=true
                 ;;
 
+            .editorconfig|pint.json)
+                style=true
+                ;;
+
             docker-compose.ci.yml|docker/mariadb/ci-init.sql)
                 runtime=true
                 integration=true
@@ -184,10 +188,6 @@ else
 
             deploy/*)
                 operations=true
-                ;;
-
-            .editorconfig)
-                style=true
                 ;;
 
             artisan)
