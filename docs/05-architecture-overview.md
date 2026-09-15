@@ -26,6 +26,7 @@ app/Modules/<Module>/
 
 Rules:
 
+- Layer directories are optional: create `Domain`, `Application`, `Infrastructure`, or `Presentation` only when they contain real behavior; do not create empty DDD ceremony.
 - Domain does not depend on Laravel/framework infrastructure.
 - Application owns use-case orchestration and declared ports.
 - Infrastructure implements persistence/provider/framework ports.
