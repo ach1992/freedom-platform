@@ -31,7 +31,7 @@ required_files=(
     README.md
     AGENTS.md
     CONTRIBUTING.md
-    docs/README.md
+    docs/index.md
     docs/specification/master-execution-prompt.md
     docs/01-authoritative-requirements.md
     docs/03-risk-register.md
@@ -60,13 +60,16 @@ for path in "${required_files[@]}"; do
     test -s "$path" || fail "required canonical file is missing or empty: $path"
 done
 
-# Recovery must start from durable repository rules and live GitHub, not mutable status/inventory snapshots.
-for entry in AGENTS.md CONTRIBUTING.md docs/README.md; do
-    grep -F "$entry" README.md >/dev/null \
-        || fail "README.md does not link required entry point: $entry"
+# Recovery must start from durable repository rules and live GitHub, while the root README stays user-facing.
+for entry in AGENTS.md CONTRIBUTING.md docs/index.md; do
+    grep -F "$entry" docs/index.md AGENTS.md CONTRIBUTING.md >/dev/null \
+        || fail "canonical development documentation does not route to required entry point: $entry"
 done
-grep -F 'Program Issue #3' README.md >/dev/null \
-    || fail 'README.md must route replacement maintainers to the live Version 1 program'
+if grep -F 'Program Issue #3' README.md >/dev/null || grep -F 'project recovery' README.md >/dev/null; then
+    fail 'README.md must remain user-facing and must not own project recovery/current-state routing'
+fi
+grep -F 'The root `README.md` is deliberately user-facing' AGENTS.md >/dev/null \
+    || fail 'AGENTS.md must keep README outside project recovery/governance authority'
 grep -F 'Chat history is optional context, never project state.' AGENTS.md >/dev/null \
     || fail 'AGENTS.md must make repository/GitHub state recoverable without Chat'
 grep -F '`main` is the only long-lived branch' AGENTS.md >/dev/null \
@@ -81,7 +84,7 @@ grep -F 'not a per-task archive' evidence/README.md >/dev/null \
     || fail 'evidence policy must reject per-task repository evidence'
 
 # Execution infrastructure has one canonical owner; surrounding docs must route to it instead of copying lifecycle rules.
-for entry in README.md AGENTS.md CONTRIBUTING.md docs/06-test-strategy.md docs/09-deployment-runbook.md docs/README.md docs/development/repository-map.md; do
+for entry in AGENTS.md CONTRIBUTING.md docs/06-test-strategy.md docs/09-deployment-runbook.md docs/index.md docs/development/repository-map.md; do
     grep -F 'execution-infrastructure.md' "$entry" >/dev/null \
         || fail "$entry does not route execution/tool/runner questions to the canonical execution-infrastructure document"
 done
@@ -101,7 +104,11 @@ for label in 'Parent / requirements' 'Goal / outcome' 'Dependencies / base rule'
 done
 grep -F 'Material constraints / impacts (optional)' .github/ISSUE_TEMPLATE/task.yml >/dev/null \
     || fail 'task template must keep risk-specific detail conditional'
-for heading in '## Owning Issue' '## Summary' '## Risk / material impact' '## Verification' '## Review gates'; do
+grep -F 'Bounded Low/Medium FAST-path work' .github/ISSUE_TEMPLATE/task.yml >/dev/null \
+    || fail 'task template must state when a dedicated Issue is unnecessary'
+grep -F 'Do not create a ceremonial Issue' CONTRIBUTING.md >/dev/null \
+    || fail 'contribution guide must preserve the bounded FAST path without ceremonial Issues'
+for heading in '## Authority / owning Issue' '## Summary' '## Risk / material impact' '## Verification' '## Review gates'; do
     grep -F "$heading" .github/pull_request_template.md >/dev/null \
         || fail "PR template lacks review-useful section: $heading"
 done
@@ -138,7 +145,7 @@ done
 # The active documentation tree is allowlisted. Historical task records belong in Git/GitHub history.
 while IFS= read -r path; do
     case "$path" in
-        docs/README.md|\
+        docs/index.md|\
         docs/01-authoritative-requirements.md|\
         docs/03-risk-register.md|\
         docs/04-domain-glossary.md|\
@@ -168,7 +175,7 @@ shopt -u nullglob
 # Canonical navigation must not point back to retired status/traceability/evidence material.
 if grep -RIE --include='*.md' \
     'PROJECT_STATUS\.md|docs/project-status\.json|current-traceability-overlay|continuation-handoff|phase-[0-9].*traceability|evidence/0\.[0-9]|docs/(00|02|10|11|12|13|14|15|16|17|18|19)-' \
-    README.md AGENTS.md CONTRIBUTING.md docs/README.md docs/0[1-9]-*.md docs/development/*.md \
+    README.md AGENTS.md CONTRIBUTING.md docs/index.md docs/0[1-9]-*.md docs/development/*.md \
     >/dev/null; then
     fail 'canonical documentation references retired status/planning/traceability/evidence material'
 fi

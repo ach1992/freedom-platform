@@ -1,6 +1,6 @@
 # Repository Map
 
-This file is source/module/runtime navigation only. Project recovery order is owned by [`../../README.md`](../../README.md); durable documentation ownership/indexing is owned by [`../README.md`](../README.md). Do not duplicate those lists here.
+This file is source/module/runtime navigation only. Repository operating/recovery rules are owned by [`../../AGENTS.md`](../../AGENTS.md) and [`../../CONTRIBUTING.md`](../../CONTRIBUTING.md); durable documentation ownership/indexing is owned by [`../index.md`](../index.md). The root `README.md` is user-facing and is not a recovery or engineering-policy authority. Do not duplicate those contracts here.
 
 Live task, branch, CI, runner, host, review, and implementation-status data belongs in GitHub or the system that owns it.
 

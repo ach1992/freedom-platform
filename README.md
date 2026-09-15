@@ -1,75 +1,46 @@
 # Freedom Platform
 
-Telegram-first commerce and lifecycle-management platform for VPN/proxy subscriptions.
+Freedom Platform is a Telegram-first commerce and lifecycle-management platform for VPN/proxy subscription businesses.
 
-## Start here
+It is designed to support customers, agents/resellers, administrators, product catalog, orders, payments, wallet accounting, service provisioning, renewals, trials, support, content, broadcasts, reporting, and operational workflows from one system.
 
-For development or project recovery, use this order:
+## Product shape
 
-1. [`AGENTS.md`](AGENTS.md) — repository authority, safety rules, branch/PR policy, and delivery model.
-2. [`CONTRIBUTING.md`](CONTRIBUTING.md) — development workflow, Issue/PR/review conventions, and links to the owning execution/validation references.
-3. [Program Issue #3](https://github.com/ach1992/freedom-platform/issues/3) — live Version 1 phase/backlog/dependency state.
-4. [`docs/README.md`](docs/README.md) — index of durable product, architecture, security, testing, execution-infrastructure, and operations references.
+Version 1 is designed as a Laravel modular monolith with Telegram as the primary product surface. The architecture keeps financial, provisioning, authorization, and provider behavior behind explicit application/domain boundaries so additional interfaces and adapters can be added without redefining core business rules.
 
-GitHub is authoritative for current phase/task priority, dependencies, blockers, branches, PRs, reviews, CI, repository source, and live runner inventory. Do not maintain repository status or infrastructure-inventory snapshots that duplicate this state. A replacement manager or developer should be able to recover current work from the sources above without chat history.
+The Version 1 product scope includes:
 
-## Branch model
+- Persian-first Telegram UX with English fallback;
+- customer, agent/reseller, and administrator journeys;
+- wallet and multiple payment-method integrations;
+- Marzban and PasarGuard service-panel adapters;
+- transaction-safe and idempotent financial/provisioning effects;
+- Redis-backed queues, cache, throttling, and coordination;
+- MariaDB-backed durable business state;
+- controlled backup, restore, update, rollback, and operational tooling.
 
-`main` is the only long-lived branch and is both the default branch and the primary integration branch. Normal work uses temporary task branches created from the current `main` head and merged back to `main` through reviewed PRs. Production release, deployment, and other consequential delivery actions remain separate from ordinary integration and keep their own approval/validation gates.
+## Runtime baseline
 
-## Execution model
+- PHP 8.4
+- Laravel 13.x
+- MariaDB 10.11 compatible baseline
+- Redis with authentication
+- Telegram Bot API
+- aaPanel / OpenLiteSpeed deployment target
 
-The project is maintained from GitHub. No Owner-managed local checkout or server checkout is assumed to exist or to contain project truth.
+## Getting started
 
-- Durable changes and current delivery state live in GitHub.
-- Real runtime/CI commands execute through supported execution capabilities rather than an invented local environment.
-- Execution workspaces, runner checkouts, and deployed trees are never alternative project sources of truth.
-- Every repository mutation is verified against live GitHub state after the write.
-- Branch cleanup remains Owner-operated.
+For development setup and contribution workflow, see [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
-The canonical map for GitHub integration, `AI_Server_Agent`, standard GitHub-hosted CI, optional private/trusted self-hosted runners, external Workers, toolchain ownership, and runner lifecycle is [`docs/development/execution-infrastructure.md`](docs/development/execution-infrastructure.md). Required test/CI semantics are in [`docs/06-test-strategy.md`](docs/06-test-strategy.md); deployment/live operations are in [`docs/09-deployment-runbook.md`](docs/09-deployment-runbook.md).
+For the technical documentation index, architecture, security, testing, execution infrastructure, and operations guidance, see [`docs/index.md`](docs/index.md).
 
-## Product authority
+Repository and AI-agent working rules are in [`AGENTS.md`](AGENTS.md).
 
-The Version `1.0.0` product contract is [`docs/specification/master-execution-prompt.md`](docs/specification/master-execution-prompt.md). Stable requirement IDs are indexed in [`docs/01-authoritative-requirements.md`](docs/01-authoritative-requirements.md).
+Production use should be based on an accepted release and its release/deployment instructions rather than an arbitrary development commit.
 
-The master specification owns product scope, product/security/correctness invariants, and final acceptance requirements. Repository execution rules are defined by `AGENTS.md`, `CONTRIBUTING.md`, canonical engineering references, and live GitHub state. Historical process instructions must not recreate retired status, traceability, handoff, or per-task evidence documents.
+## Security
 
-A task, implementation shortcut, old design note, or governance cleanup cannot silently remove or redefine a Version 1 product/security/correctness requirement.
-
-## Technical baseline
-
-- PHP 8.4 / Laravel 13.x
-- MariaDB 10.11 as the primary required compatibility/CI target; newer compatible lines are checked when materially useful
-- authenticated Redis for queues, cache, throttling, and coordination
-- modular monolith with Domain / Application / Infrastructure / Presentation boundaries
-- Telegram-first product surface
-- integer IRR for fiat; fixed-precision decimal for crypto
-- transactional and idempotent financial/remote effects
-- Persian default UI with English fallback
-- aaPanel/OpenLiteSpeed atomic-release deployment target
-
-## Engineering direction
-
-- optimize for understandable module boundaries and low coupling rather than file-count or line-count targets;
-- do not refactor solely because a class/file is large;
-- add new capabilities behind the owning module/Application contract instead of spreading cross-module Domain dependencies;
-- no new architecture-boundary exception is accepted merely to make a task easier;
-- keep task contracts, validation, documentation, and tooling proportional to the value/risk they control; do not create ceremony or duplicated knowledge that slows future work.
-
-## Non-negotiable invariants
-
-- no paid provisioning before authoritative payment capture;
-- no duplicate financial, provisioning, Telegram, or provider effect;
-- uncertain external mutation is reconciled before retry;
-- database transactions, locks, uniqueness, and immutable history are final correctness barriers;
-- browser/customer assertions never prove payment;
-- TLS verification is never disabled;
-- secrets and sensitive data never enter Git, Issues/PRs, logs, CI artifacts, or repository evidence.
-
-## Evidence policy
-
-Git commits, PRs, Issues, reviews, workflow checks, tags, and releases are the history of implementation work. The repository `evidence/` directory is reserved for release-candidate/release records that have a real retention need; it is not a per-task archive.
+Never commit or publish production credentials, private provider payloads, customer secrets, payment instruments, subscription URLs, or other sensitive production data.
 
 ## License
 

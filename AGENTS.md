@@ -9,10 +9,12 @@ Do not use one document as authority for every kind of truth:
 1. **Version 1 product scope and non-negotiable product/security/correctness requirements:** `docs/specification/master-execution-prompt.md`, with stable IDs indexed in `docs/01-authoritative-requirements.md`.
 2. **Repository execution, branch, review, and Agent rules:** this file and `CONTRIBUTING.md`.
 3. **Current phase, backlog, priority, dependency, blocker, PR/review, and CI state:** live GitHub, starting from Program Issue `#3` and the active Phase/task Issues and PRs.
-4. **Durable architecture/security/testing/execution-infrastructure/operations rules:** canonical references linked from `docs/README.md`.
+4. **Durable architecture/security/testing/execution-infrastructure/operations rules:** canonical references linked from `docs/index.md`.
 5. **Historical implementation context:** Git/PR/Issue/workflow history.
 
 The master specification is not a live task board. Historical instructions in it to create execution ledgers, mutable traceability matrices, per-phase status/evidence files, or similar coordination artifacts are superseded by this repository operating model; they must not be used to recreate retired documentation. This does **not** weaken any product, security, financial-integrity, provider, runtime, testing, restore, or release requirement.
+
+The root `README.md` is deliberately user-facing: product overview, getting-started/use guidance, supported runtime baseline, security notice, and links to deeper material. It is not project-state, recovery, governance, architecture, or engineering-policy authority.
 
 When two sources of the same kind conflict, correct the stale/lower source instead of maintaining both.
 
@@ -47,9 +49,16 @@ Detailed development routing is in `CONTRIBUTING.md`; test/CI semantics are in `
 
 ## Task contract
 
-Every bounded implementation task needs one GitHub Issue. Keep the contract as small as correctness allows.
+Persist a dedicated GitHub Task Contract Issue when it materially improves implementation, review, coordination, recovery, or risk control. It is required for substantive product behavior, High/Critical work, delegated or cross-session work, material dependency/decision sequencing, or work whose acceptance/state must remain independently recoverable.
 
-Required information:
+Do **not** create a ceremonial Issue for bounded Low/Medium-risk self-executed FAST work when all of these are true:
+
+- authority can be linked to an existing requirement, Phase/Program Issue, or other durable source;
+- scope, acceptance, risk, and validation fit clearly in one reviewable PR;
+- the work is reversible and introduces no material schema, security/authorization, provider, deployment/release, secret, or production boundary;
+- no separate coordination state is needed beyond the PR/Git history.
+
+When a Task Contract Issue is warranted, keep it as small as correctness allows and record:
 
 - parent/requirement or durable authority;
 - observable goal/outcome;
@@ -61,7 +70,7 @@ Required information:
 
 Add protected areas, security/privacy, financial/provider, schema/migration, compatibility, runtime/operations, performance, or release constraints **only when they materially affect the task**. Do not require headings filled with `N/A`, repeated handoff prose, copied CI logs, or a separate completion report.
 
-PRs use `.github/pull_request_template.md`. Sensitive paths are assigned in `.github/CODEOWNERS`; CODEOWNERS expresses intended ownership but does not by itself prove branch/ruleset enforcement.
+Every PR still names its authority and review boundary. When there is no dedicated Task Issue, the PR links the existing requirement/Phase/Program authority and carries the bounded scope, risk, and verification needed to review the change safely. PRs use `.github/pull_request_template.md`. Sensitive paths are assigned in `.github/CODEOWNERS`; CODEOWNERS expresses intended ownership but does not by itself prove branch/ruleset enforcement.
 
 High/Critical financial, authorization, security, provider, schema, deployment/release, secret, or irreversible work requires independent review and explicit Owner approval before merge unless that exact action was explicitly pre-authorized. The applicable CI tier must pass on the final candidate; merge style never substitutes for review or validation.
 
@@ -140,7 +149,7 @@ Reuse green evidence when the tested resulting tree has not materially changed. 
 
 ## Documentation and evidence
 
-Documentation topology and ownership are canonical in `docs/README.md`. One kind of durable truth has one owner; other files link to it instead of copying it.
+Documentation topology and ownership are canonical in `docs/index.md`. One kind of durable truth has one owner; other files link to it instead of copying it.
 
 Do not create per-task handoff, overlay, current-state, risk, traceability, infrastructure-inventory, or evidence documents. Dynamic task/runner/CI state belongs in GitHub and operational systems; task history belongs in commits, PRs, Issues, reviews, and CI.
 

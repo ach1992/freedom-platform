@@ -40,7 +40,7 @@ else
                 planning=true
                 ;;
 
-            README.md|AGENTS.md|CONTRIBUTING.md|CHANGELOG.md|LICENSE|.gitignore|.gitattributes|.github/pull_request_template.md|.github/ISSUE_TEMPLATE/*|docs/README.md|docs/development/*|docs/adr/*|evidence/README.md)
+            README.md|AGENTS.md|CONTRIBUTING.md|CHANGELOG.md|LICENSE|.gitignore|.gitattributes|.github/pull_request_template.md|.github/ISSUE_TEMPLATE/*|docs/index.md|docs/development/*|docs/adr/*|evidence/README.md)
                 project_control=true
                 ;;
 

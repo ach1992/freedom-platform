@@ -8,7 +8,7 @@
 **Product UI language:** Persian by default, multilingual-ready  
 **Execution model:** ChatGPT Work, a coordinated multi-agent engineering team, or a human software team  
 **Authoritative rule:** This document is the normative Version 1 product, security, correctness, runtime, integration, testing, deployment, and final-acceptance specification. Implement its capabilities, invariants, and delivery boundaries; do not invent business integrations or silently omit a defined requirement. Repository execution mechanics and live delivery state are governed by `AGENTS.md`, `CONTRIBUTING.md`, the canonical engineering references, and live GitHub.
-**Repository governance reconciliation:** `2026-08-11` — process-only instructions that required duplicate status, traceability, handoff, or per-task evidence artifacts are superseded; Version 1 product/security/correctness scope is unchanged.
+**Repository governance reconciliation:** `2026-09-15` — repository execution/recovery/task-persistence rules are delegated to `AGENTS.md`, `CONTRIBUTING.md`, `docs/index.md`, and live GitHub; process-only instructions that required duplicate status, traceability, handoff, per-task evidence, or a standing historical PR pointer are superseded. Version 1 product/security/correctness scope is unchanged.
 
 ---
 
@@ -20,7 +20,7 @@ Complete the production-ready `1.0.0` product defined by this specification from
 
 1. Read the owning requirements and relevant canonical references before changing product behavior.
 2. Use the existing stable requirement IDs in `docs/01-authoritative-requirements.md`; do not create a second requirement ledger or mutable traceability matrix. Link implementation work to requirement IDs through GitHub Issues, PRs, code/tests where useful, and review history.
-3. Use live GitHub as the delivery system: Program Issue `#3` -> active phase Issue -> bounded task Issue -> PR/checks. Every independently reviewable task has one owning Issue that records its authority, outcome, dependencies, bounded scope, acceptance criteria, validation strategy, and material risk. Dynamic priority, status, blockers, decisions, branches, SHAs, reviews, and CI results do not belong in repository status files or Chat.
+3. Use live GitHub as the delivery system: Program Issue `#3` -> active phase Issue -> current bounded work -> PR/checks. Persist a dedicated Task Contract Issue when substantive product behavior, risk, delegation/cross-session recovery, dependency/decision sequencing, or other coordination needs require durable task identity. Repository rules may use a bounded Low/Medium FAST path without a new Task Issue when authority already exists and the complete reversible scope/acceptance/risk/validation remains self-contained and reviewable in one PR. Dynamic priority, status, blockers, decisions, branches, SHAs, reviews, and CI results do not belong in repository status files or Chat.
 4. Work in outcome-based phases. A phase closes when its GitHub exit criteria and applicable product/security/financial/operational validation are satisfied, not when a ceremonial report is produced.
 5. Ask the Owner only for decisions that cannot safely be derived from the specification/current repository, or that require real credentials/accounts, privileged infrastructure action, business/legal policy, production rollout, irreversible action, or explicit High/Critical approval.
 6. Never place credentials or sensitive customer/provider/payment data in Chat, commits, fixtures, screenshots, logs, PR/Issue text, or retained evidence.
@@ -34,7 +34,7 @@ Complete the production-ready `1.0.0` product defined by this specification from
 
 ## 0.2 State retention and handover
 
-A new human developer or AI agent with no Chat history must be able to continue from `README.md`, `AGENTS.md`, `CONTRIBUTING.md`, Program Issue `#3`, Draft integration PR `#6`, the active task, and only the relevant canonical references. The GitHub Program/phase/task/PR chain owns live progress and decisions; recovery must not depend on private context, a previous operator, or a synchronized status document.
+A new human developer or AI agent with no Chat history must be able to continue from `AGENTS.md`, `CONTRIBUTING.md`, `docs/index.md`, Program Issue `#3`, the active Phase, the current bounded task/PR when one exists, and only the relevant canonical references. The root `README.md` is user-facing product/use information and is not a recovery or project-governance authority. The GitHub Program/phase/task/PR chain owns live progress and decisions; recovery must not depend on private context, a previous operator, a historical standing PR pointer, or a synchronized status document.
 
 Do not create or restore `PROJECT_STATUS.md`, execution ledgers, mutable traceability matrices, per-task handoff files, per-task risk/evidence reports, or phase evidence directories merely for coordination. Git/GitHub/CI already preserve that history. Release-candidate/release records may be retained only when they have a real future operational or acceptance consumer.
 ---
