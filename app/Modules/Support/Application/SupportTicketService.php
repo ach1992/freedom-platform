@@ -256,6 +256,38 @@ final readonly class SupportTicketService
     }
 
     /** @requirement SUP-001 SEC-002 */
+    public function closeForCustomer(int $ticketId, int $requesterUserId, string $closeReason): SupportTicketSnapshot
+    {
+        $this->assertPositiveId($ticketId);
+        $this->assertPositiveId($requesterUserId);
+
+        return $this->database->connection()->transaction(function (Connection $connection) use ($ticketId, $requesterUserId, $closeReason): SupportTicketSnapshot {
+            /** @var object{id:int|string,state:string}|null $ticket */
+            $ticket = $connection->table('support_tickets')
+                ->where('id', $ticketId)
+                ->where('requester_user_id', $requesterUserId)
+                ->lockForUpdate()
+                ->first(['id', 'state']);
+            if ($ticket === null) {
+                throw new RuntimeException('Support ticket is unavailable for this customer.');
+            }
+
+            $this->applyTransition(
+                $connection,
+                $ticketId,
+                SupportTicketState::from($ticket->state),
+                SupportTicketState::Closed,
+                $requesterUserId,
+                'customer_closed',
+                $closeReason,
+                self::DEFAULT_REOPEN_HOURS,
+            );
+
+            return $this->snapshot($connection, $ticketId);
+        });
+    }
+
+    /** @requirement SUP-001 SEC-002 */
     public function reopenForCustomer(int $ticketId, int $requesterUserId): SupportTicketSnapshot
     {
         $this->assertPositiveId($ticketId);
@@ -272,10 +304,15 @@ final readonly class SupportTicketService
                 throw new RuntimeException('Support ticket is unavailable for this customer.');
             }
 
+            $state = SupportTicketState::from($ticket->state);
+            if ($state !== SupportTicketState::Closed) {
+                throw new DomainException('Only a closed support ticket can be reopened by the customer.');
+            }
+
             $this->applyTransition(
                 $connection,
                 $ticketId,
-                SupportTicketState::from($ticket->state),
+                $state,
                 SupportTicketState::AwaitingSupport,
                 $requesterUserId,
                 'customer_reopen',
@@ -326,6 +363,7 @@ final readonly class SupportTicketService
         }
         if ($from === SupportTicketState::Closed && $to === SupportTicketState::AwaitingSupport) {
             $updates['close_reason'] = null;
+            $updates['resolved_at'] = null;
             $updates['closed_at'] = null;
             $updates['reopen_until'] = null;
         }
