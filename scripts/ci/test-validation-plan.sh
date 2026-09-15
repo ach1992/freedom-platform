@@ -167,7 +167,11 @@ GITHUB_EVENT_NAME=workflow_dispatch GITHUB_EVENT_PATH="$diagnostic_event" GITHUB
 bash "$classifier" "$diagnostic_paths" > "$diagnostic_plan"
 grep -Fx 'profile=DIAGNOSTIC' "$diagnostic_plan" >/dev/null || fail 'non-empty filter semantics must match workflow diagnostic conditions'
 
-printf '%s\n' 'Filtered diagnostic-plan tests passed.'
+phpunit_config="$root/phpunit.xml"
+grep -F 'failOnEmptyTestSuite="true"' "$phpunit_config" >/dev/null \
+    || fail 'PHPUnit must fail when a diagnostic filter selects zero tests'
+
+printf '%s\n' 'Filtered diagnostic-plan and zero-test safety tests passed.'
 
 ci_workflow="$root/.github/workflows/ci.yml"
 python3 - "$ci_workflow" <<'PY_CI_GATE'
