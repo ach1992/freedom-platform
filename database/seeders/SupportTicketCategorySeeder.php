@@ -24,7 +24,7 @@ final class SupportTicketCategorySeeder extends Seeder
         ]);
     }
 
-    /** @return array<string, bool|int|string|Carbon> */
+    /** @return array<string, bool|int|string|Carbon|null> */
     private function category(string $code, string $nameFa, string $nameEn, int $sortOrder, Carbon $now): array
     {
         return [
