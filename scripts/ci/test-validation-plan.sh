@@ -40,7 +40,7 @@ assert_plan() {
                 ;;
             *) fail "$name returned unexpected key: $key" ;;
         esac
-    done < <(bash "$classifier" "$paths_file")
+    done < <(GITHUB_EVENT_NAME= GITHUB_EVENT_PATH= GITHUB_SHA= bash "$classifier" "$paths_file")
 
     [[ "$profile" == "$expected_profile" ]] || fail "$name profile expected $expected_profile, got $profile"
     [[ "$project_control" == "$expected_project_control" ]] || fail "$name project_control expected $expected_project_control, got $project_control"
