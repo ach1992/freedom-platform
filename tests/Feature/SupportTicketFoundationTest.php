@@ -17,6 +17,7 @@ use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use RuntimeException;
 use Tests\TestCase;
 
 /** @requirement SUP-001 SUP-002 SEC-002 DAT-003 QUA-001 QUA-004 */
@@ -71,6 +72,14 @@ final class SupportTicketFoundationTest extends TestCase
         self::assertTrue($replay->replayed);
         self::assertSame($firstReply->messageId, $replay->messageId);
         self::assertSame(2, DB::table('support_ticket_messages')->where('ticket_id', $first->id)->count());
+
+        try {
+            $service->closeForCustomer($first->id, $secondUser, 'Not mine');
+            self::fail('A customer must not close another customer ticket.');
+        } catch (RuntimeException) {
+            self::assertTrue(true);
+        }
+        self::assertSame(SupportTicketState::New->value, DB::table('support_tickets')->where('id', $first->id)->value('state'));
     }
 
     public function test_idempotency_key_cannot_replay_a_different_message_payload(): void
@@ -119,14 +128,17 @@ final class SupportTicketFoundationTest extends TestCase
         $user = $this->user();
         $ticket = $service->create(new SupportTicketCreateRequest($user, 'other', 'Reopen', 'Need help', 'create:reopen'));
 
-        $closed = $service->transition($ticket->id, SupportTicketState::Closed, $user, 'customer_closed', 'Solved');
+        $service->transition($ticket->id, SupportTicketState::Resolved, $user, 'support_resolved');
+        $closed = $service->closeForCustomer($ticket->id, $user, 'Solved');
         self::assertSame('2026-09-19 00:00:00.000000', $closed->reopenUntil);
+        self::assertNotNull(DB::table('support_tickets')->where('id', $ticket->id)->value('resolved_at'));
 
         $clock->set(new DateTimeImmutable('2026-09-18T23:59:59+00:00'));
         $reopened = $service->reopenForCustomer($ticket->id, $user);
         self::assertSame(SupportTicketState::AwaitingSupport, $reopened->state);
+        self::assertNull(DB::table('support_tickets')->where('id', $ticket->id)->value('resolved_at'));
 
-        $service->transition($ticket->id, SupportTicketState::Closed, $user, 'customer_closed_again', 'Solved again');
+        $service->closeForCustomer($ticket->id, $user, 'Solved again');
         $clock->set(new DateTimeImmutable('2026-09-22T00:00:00+00:00'));
 
         $this->expectException(DomainException::class);
