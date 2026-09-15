@@ -287,6 +287,10 @@ grep -F 'scripts/ci/bootstrap-ci-toolchain.sh' "$ci" >/dev/null \
 if grep -F 'bootstrap-self-hosted-toolchain.sh' "$ci" >/dev/null; then
     fail 'generic CI retains the retired self-hosted-only toolchain entrypoint'
 fi
+for retired_path in scripts/ci/run-php-container.sh docker/ci/php84.Dockerfile; do
+    [[ ! -e "$retired_path" ]] \
+        || fail "retired self-hosted CI container artifact remains in the active tree: $retired_path"
+done
 setup_php_ref=$(grep -Eo 'shivammathur/setup-php@[0-9a-f]+' "$ci" | head -n 1 || true)
 [[ "$setup_php_ref" =~ ^shivammathur/setup-php@[0-9a-f]{40}$ ]] \
     || fail 'generic CI must pin setup-php to an immutable full commit SHA'
