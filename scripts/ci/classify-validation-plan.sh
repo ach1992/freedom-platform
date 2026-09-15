@@ -7,6 +7,7 @@ paths_file=${1:-}
 project_control=false
 planning=false
 control_plane=false
+unit=false
 style=false
 static_analysis=false
 dependencies=false
@@ -19,6 +20,7 @@ mark_full() {
     project_control=true
     planning=true
     control_plane=true
+    unit=true
     style=true
     static_analysis=true
     dependencies=true
@@ -109,6 +111,7 @@ else
             scripts/ci/forbidden-patterns.sh|scripts/ci/architecture.sh|scripts/ci/ArchitectureBoundaryChecker.php|scripts/ci/architecture-boundaries.php|scripts/ci/run-architecture-check.php)
                 project_control=true
                 control_plane=true
+                unit=true
                 static_analysis=true
                 ;;
 
@@ -128,6 +131,7 @@ else
             scripts/ci/bootstrap-ci-toolchain.sh)
                 project_control=true
                 control_plane=true
+                unit=true
                 style=true
                 static_analysis=true
                 dependencies=true
@@ -140,23 +144,41 @@ else
                 ;;
 
             app/*|bootstrap/*|config/*|database/*|routes/*)
+                unit=true
                 style=true
                 static_analysis=true
                 integration=true
                 ;;
 
+            tests/Unit/*)
+                unit=true
+                style=true
+                ;;
+
+            tests/Feature/*)
+                style=true
+                integration=true
+                ;;
+
             tests/*)
+                unit=true
                 style=true
                 integration=true
                 ;;
 
             composer.json|composer.lock)
+                unit=true
                 static_analysis=true
                 dependencies=true
                 integration=true
                 ;;
 
-            .env.example|phpunit.xml)
+            phpunit.xml)
+                unit=true
+                integration=true
+                ;;
+
+            .env.example)
                 integration=true
                 ;;
 
@@ -178,6 +200,7 @@ else
                 ;;
 
             artisan)
+                unit=true
                 style=true
                 integration=true
                 ;;
@@ -192,11 +215,11 @@ fi
 
 if [[ "$unknown" == 'true' ]]; then
     profile=FULL
-elif [[ "$operations" == 'true' && ( "$style" == 'true' || "$static_analysis" == 'true' || "$dependencies" == 'true' || "$integration" == 'true' || "$runtime" == 'true' ) ]]; then
+elif [[ "$operations" == 'true' && ( "$unit" == 'true' || "$style" == 'true' || "$static_analysis" == 'true' || "$dependencies" == 'true' || "$integration" == 'true' || "$runtime" == 'true' ) ]]; then
     profile=FULL
 elif [[ "$operations" == 'true' ]]; then
     profile=OPERATIONS
-elif [[ "$style" == 'true' || "$static_analysis" == 'true' || "$dependencies" == 'true' || "$integration" == 'true' || "$runtime" == 'true' ]]; then
+elif [[ "$unit" == 'true' || "$style" == 'true' || "$static_analysis" == 'true' || "$dependencies" == 'true' || "$integration" == 'true' || "$runtime" == 'true' ]]; then
     profile=APPLICATION
 elif [[ "$control_plane" == 'true' ]]; then
     profile=CONTROL_PLANE
@@ -209,6 +232,7 @@ profile=$profile
 project_control=$project_control
 planning=$planning
 control_plane=$control_plane
+unit=$unit
 style=$style
 static_analysis=$static_analysis
 dependencies=$dependencies
