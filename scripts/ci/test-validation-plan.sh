@@ -174,7 +174,7 @@ for command in (
     "require_success 'Secret scan'",
     "require_planned 'PHP quality and unit tests'",
     "require_planned 'Dependency and license policy'",
-    "require_planned 'MariaDB 10.11 and Redis Feature tests'",
+    "require_planned 'MariaDB 10.11 and Redis tests'",
     "require_planned 'Operational syntax and entrypoints'",
 ):
     if command not in required:
