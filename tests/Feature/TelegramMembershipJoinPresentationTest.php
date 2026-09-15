@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Modules\Localization\Application\LocalizationResolver;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCardToCardPayment;
 use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\TelegramMutationTransport;
@@ -830,7 +831,7 @@ final class TelegramMembershipJoinPresentationTest extends TestCase
             ),
             new TelegramProtectedPresentationResolver(
                 new TelegramMembershipJoinPresentationNeverCardToCard,
-                $this->app->make(Translator::class),
+                $this->app->make(LocalizationResolver::class),
                 $this->membershipResolver(),
             ),
         );
