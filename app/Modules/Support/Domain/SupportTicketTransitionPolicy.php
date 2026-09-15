@@ -61,7 +61,6 @@ final readonly class SupportTicketTransitionPolicy
                 SupportTicketState::AwaitingSupport,
                 SupportTicketState::Closed,
             ],
-            SupportTicketState::Closed => [],
         };
 
         if (! in_array($to, $allowed, true)) {
