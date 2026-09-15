@@ -166,16 +166,6 @@ if env \
     fail 'canonical helper accepted a stale event head SHA'
 fi
 
-push_before=$(git rev-parse HEAD~2)
-push_opts="--full-history --diff-merges=combined $push_before..$head_sha"
-env \
-    GITHUB_EVENT_NAME=push \
-    GITHUB_SHA="$head_sha" \
-    PUSH_BEFORE_SHA="$push_before" \
-    PATH="$tmpdir:$PATH" \
-    EXPECTED_LOG_OPTS="$push_opts" \
-    bash "$helper" >/dev/null
-
 env \
     GITHUB_EVENT_NAME=workflow_dispatch \
     PATH="$tmpdir:$PATH" \

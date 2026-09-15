@@ -63,48 +63,6 @@ if emit_filtered_diagnostic_plan; then
     exit 0
 fi
 
-hydrate_push_paths() {
-    local target=$1
-    local event_path=${GITHUB_EVENT_PATH:-}
-    local current_sha=${GITHUB_SHA:-}
-    local before after forced candidate
-    local zero_sha=0000000000000000000000000000000000000000
-
-    [[ "${GITHUB_EVENT_NAME:-}" == 'push' ]] || return 0
-    [[ -n "$event_path" && -f "$event_path" ]] || return 0
-    command -v jq >/dev/null 2>&1 || return 0
-
-    before=$(jq -r '.before // empty' "$event_path" 2>/dev/null || true)
-    after=$(jq -r '.after // empty' "$event_path" 2>/dev/null || true)
-    forced=$(jq -r 'if has("forced") then .forced else empty end' "$event_path" 2>/dev/null || true)
-
-    [[ "$forced" == 'false' ]] || return 0
-    [[ "$before" =~ ^[0-9a-f]{40}$ && "$before" != "$zero_sha" ]] || return 0
-    [[ "$after" =~ ^[0-9a-f]{40}$ && "$after" != "$zero_sha" ]] || return 0
-    [[ "$current_sha" == "$after" ]] || return 0
-    git cat-file -e "${after}^{commit}" 2>/dev/null || return 0
-
-    if ! git cat-file -e "${before}^{commit}" 2>/dev/null; then
-        git fetch --no-tags --depth=1 origin "$before" >/dev/null 2>&1 || return 0
-    fi
-
-    candidate="${target}.push.$$"
-    if git diff --name-only "$before" "$after" 2>/dev/null | sort -u > "$candidate" && [[ -s "$candidate" ]]; then
-        mv "$candidate" "$target"
-        return 0
-    fi
-
-    rm -f "$candidate"
-}
-
-# Pull-request CI already writes its exact merge-candidate diff into this file.
-# A normal push to main instead arrives with an initially empty file; hydrate it
-# from the authoritative push event. Ambiguous/forced/created/unavailable push
-# baselines deliberately remain empty so the existing fail-safe FULL plan wins.
-if [[ -n "$paths_file" && -f "$paths_file" && ! -s "$paths_file" ]]; then
-    hydrate_push_paths "$paths_file"
-fi
-
 if [[ -z "$paths_file" || ! -f "$paths_file" || ! -s "$paths_file" ]]; then
     mark_full
 else
