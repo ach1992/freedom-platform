@@ -70,7 +70,7 @@ git push -q origin feature
 head_sha=$(git rev-parse HEAD)
 expected_count=$(git rev-list --count "$base_sha..$head_sha")
 ((expected_count > 25)) || fail "synthetic candidate must exceed 25 commits, got $expected_count"
-expected_log_opts="--full-history --diff-merges=separate $base_sha..$head_sha"
+expected_log_opts="--full-history --diff-merges=combined $base_sha..$head_sha"
 if git log -p -U0 "$base_sha..$head_sha" | grep -F "$merge_secret" >/dev/null; then
     fail 'synthetic merge secret is not merge-resolution-only'
 fi
@@ -167,7 +167,7 @@ if env \
 fi
 
 push_before=$(git rev-parse HEAD~2)
-push_opts="--full-history --diff-merges=separate $push_before..$head_sha"
+push_opts="--full-history --diff-merges=combined $push_before..$head_sha"
 env \
     GITHUB_EVENT_NAME=push \
     GITHUB_SHA="$head_sha" \

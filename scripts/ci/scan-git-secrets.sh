@@ -28,7 +28,7 @@ run_gitleaks() {
 
     case "$mode" in
         range)
-            [[ "$log_opts" == --full-history\ --diff-merges=separate\ *..* ]] \
+            [[ "$log_opts" == --full-history\ --diff-merges=combined\ *..* ]] \
                 || fail "Range mode received unexpected Git log options: ${log_opts:-missing}"
             args+=(--log-opts="$log_opts")
             ;;
@@ -72,7 +72,7 @@ case "${GITHUB_EVENT_NAME:-}" in
         echo "Secret-scan base SHA: $PR_BASE_SHA"
         echo "Secret-scan head SHA: $PR_HEAD_SHA"
         echo "Secret-scan candidate commits: $commit_count"
-        log_opts="--full-history --diff-merges=separate $scan_range"
+        log_opts="--full-history --diff-merges=combined $scan_range"
         run_gitleaks range "$log_opts"
         ;;
 
@@ -88,7 +88,7 @@ case "${GITHUB_EVENT_NAME:-}" in
             commit_count=$(git rev-list --count "$scan_range")
             ((commit_count > 0)) || fail 'Push secret-scan range contains no commits.'
             echo "Secret-scan push commits: $commit_count"
-            log_opts="--full-history --diff-merges=separate $scan_range"
+            log_opts="--full-history --diff-merges=combined $scan_range"
             run_gitleaks range "$log_opts"
         else
             run_gitleaks single
