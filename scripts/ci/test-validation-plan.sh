@@ -121,6 +121,18 @@ run_push_plan "$push_before" "$push_after" true
 [[ ! -s "$push_paths" ]] || fail 'forced push must not trust a targeted changed-path plan'
 grep -Fx 'profile=FULL' "$push_plan" >/dev/null || fail 'forced push must fail safe to FULL'
 
+printf '{"before":"%s","after":"%s"}\n' "$push_before" "$push_after" > "$push_event"
+: > "$push_paths"
+(
+    cd "$push_repo"
+    GITHUB_EVENT_NAME=push \
+    GITHUB_EVENT_PATH="$push_event" \
+    GITHUB_SHA="$push_after" \
+    bash "$classifier" "$push_paths"
+) > "$push_plan"
+[[ ! -s "$push_paths" ]] || fail 'push with missing forced marker must not trust a targeted changed-path plan'
+grep -Fx 'profile=FULL' "$push_plan" >/dev/null || fail 'push with missing forced marker must fail safe to FULL'
+
 zero_sha=0000000000000000000000000000000000000000
 run_push_plan "$zero_sha" "$push_after" false
 [[ ! -s "$push_paths" ]] || fail 'zero-baseline push must not trust a targeted changed-path plan'
