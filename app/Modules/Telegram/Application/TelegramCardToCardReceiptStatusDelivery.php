@@ -4,13 +4,13 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Application;
 
-use Illuminate\Contracts\Translation\Translator;
+use App\Modules\Localization\Application\LocalizationResolver;
 use RuntimeException;
 
 final readonly class TelegramCardToCardReceiptStatusDelivery
 {
     public function __construct(
-        private Translator $translator,
+        private LocalizationResolver $localization,
         private ConfidentialTelegramPresentationFactory $presentations,
         private TelegramConfidentialDeliveryQueue $delivery,
     ) {}
@@ -35,11 +35,8 @@ final readonly class TelegramCardToCardReceiptStatusDelivery
 
     private function translation(string $key, string $locale): string
     {
-        $text = $this->translator->get($key, [], $locale);
-        if (! is_string($text) || $text === '' || $text === $key) {
-            $text = $this->translator->get($key, [], 'en');
-        }
-        if (! is_string($text) || $text === '' || $text === $key) {
+        $text = $this->localization->resolve($key, [], $locale);
+        if ($text === '' || $text === '['.$key.']') {
             throw new RuntimeException('Telegram card-to-card receipt translation is unavailable.');
         }
 
