@@ -69,6 +69,8 @@ assert_plan dependency_lockfile APPLICATION false false false true false true tr
 assert_plan schema_migration APPLICATION false false false true true true false true false false database/migrations/2026_08_20_000001_example.php
 assert_plan docker_runtime APPLICATION false false false false false false false true true false docker-compose.ci.yml
 assert_plan docker_mariadb_init APPLICATION false false false false false false false true true false docker/mariadb/ci-init.sql
+assert_plan global_pint_policy APPLICATION false false false false true false false false false false pint.json
+assert_plan editor_style_policy APPLICATION false false false false true false false false false false .editorconfig
 assert_plan deployment_mutation_workflow FULL true true true true true true true true true true .github/workflows/deploy-production.yml
 assert_plan security_sensitive APPLICATION false false false true true true false true false false app/Modules/AccessControl/Application/AuthorizationService.php
 assert_plan ci_policy CONTROL_PLANE true false true false false false false false false false .github/workflows/ci.yml scripts/ci/classify-validation-plan.sh
