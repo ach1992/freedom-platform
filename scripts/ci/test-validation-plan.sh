@@ -40,7 +40,7 @@ assert_plan() {
                 ;;
             *) fail "$name returned unexpected key: $key" ;;
         esac
-    done < <(bash "$classifier" "$paths_file")
+    done < <(GITHUB_EVENT_NAME= GITHUB_EVENT_PATH= GITHUB_SHA= bash "$classifier" "$paths_file")
 
     [[ "$profile" == "$expected_profile" ]] || fail "$name profile expected $expected_profile, got $profile"
     [[ "$project_control" == "$expected_project_control" ]] || fail "$name project_control expected $expected_project_control, got $project_control"
@@ -74,6 +74,75 @@ assert_plan mixed_application APPLICATION true true false true true false true f
 assert_plan empty_diff FULL true true true true true true true true true
 
 printf '%s\n' 'Validation-plan classifier tests passed.'
+
+# Normal push events must classify the exact before..after tree change instead of
+# treating the initially empty workflow path file as FULL. Unsafe/ambiguous push
+# baselines deliberately retain the empty-file FULL fallback.
+push_repo="$tmpdir/push-repo"
+mkdir -p "$push_repo"
+git -C "$push_repo" init -q
+git -C "$push_repo" config user.name 'CI Test'
+git -C "$push_repo" config user.email 'ci@example.invalid'
+printf '%s\n' 'before' > "$push_repo/README.md"
+git -C "$push_repo" add README.md
+git -C "$push_repo" commit -qm 'before'
+push_before=$(git -C "$push_repo" rev-parse HEAD)
+printf '%s\n' 'after' > "$push_repo/README.md"
+git -C "$push_repo" add README.md
+git -C "$push_repo" commit -qm 'after'
+push_after=$(git -C "$push_repo" rev-parse HEAD)
+push_event="$tmpdir/push-event.json"
+push_paths="$tmpdir/push.paths"
+push_plan="$tmpdir/push.plan"
+
+run_push_plan() {
+    local before=$1
+    local after=$2
+    local forced=$3
+    local github_sha=${4:-$after}
+
+    printf '{"before":"%s","after":"%s","forced":%s}\n' "$before" "$after" "$forced" > "$push_event"
+    : > "$push_paths"
+    (
+        cd "$push_repo"
+        GITHUB_EVENT_NAME=push \
+        GITHUB_EVENT_PATH="$push_event" \
+        GITHUB_SHA="$github_sha" \
+        bash "$classifier" "$push_paths"
+    ) > "$push_plan"
+}
+
+run_push_plan "$push_before" "$push_after" false
+grep -Fx 'README.md' "$push_paths" >/dev/null || fail 'normal push did not hydrate its exact changed path'
+grep -Fx 'profile=CONTROL' "$push_plan" >/dev/null || fail 'normal documentation push did not classify as CONTROL'
+grep -Fx 'integration=false' "$push_plan" >/dev/null || fail 'normal documentation push incorrectly required integration'
+
+run_push_plan "$push_before" "$push_after" true
+[[ ! -s "$push_paths" ]] || fail 'forced push must not trust a targeted changed-path plan'
+grep -Fx 'profile=FULL' "$push_plan" >/dev/null || fail 'forced push must fail safe to FULL'
+
+printf '{"before":"%s","after":"%s"}\n' "$push_before" "$push_after" > "$push_event"
+: > "$push_paths"
+(
+    cd "$push_repo"
+    GITHUB_EVENT_NAME=push \
+    GITHUB_EVENT_PATH="$push_event" \
+    GITHUB_SHA="$push_after" \
+    bash "$classifier" "$push_paths"
+) > "$push_plan"
+[[ ! -s "$push_paths" ]] || fail 'push with missing forced marker must not trust a targeted changed-path plan'
+grep -Fx 'profile=FULL' "$push_plan" >/dev/null || fail 'push with missing forced marker must fail safe to FULL'
+
+zero_sha=0000000000000000000000000000000000000000
+run_push_plan "$zero_sha" "$push_after" false
+[[ ! -s "$push_paths" ]] || fail 'zero-baseline push must not trust a targeted changed-path plan'
+grep -Fx 'profile=FULL' "$push_plan" >/dev/null || fail 'zero-baseline push must fail safe to FULL'
+
+run_push_plan "$push_before" "$push_after" false "$push_before"
+[[ ! -s "$push_paths" ]] || fail 'event/head mismatch must not trust a targeted changed-path plan'
+grep -Fx 'profile=FULL' "$push_plan" >/dev/null || fail 'event/head mismatch must fail safe to FULL'
+
+printf '%s\n' 'Push validation-path hydration tests passed.'
 
 # The required GitHub status context must be the final aggregate gate, not the early planning job.
 ci_workflow="$root/.github/workflows/ci.yml"
