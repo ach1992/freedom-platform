@@ -112,6 +112,8 @@ if 'Pull request revision drifted after validation; a fresh CI run is required.'
     raise SystemExit('final required gate must revalidate PR head/base freshness after dependent jobs')
 if '      - name: Summarize slow tests\n' not in text:
     raise SystemExit('integration CI must retain low-overhead successful-run timing visibility')
+if '            [[ -e "$changed_path" ]] || continue\n' not in text:
+    raise SystemExit('repository preflight must ignore deleted changed paths before syntax validation')
 PY_CI_GATE
 
 printf '%s\n' 'Required CI gate contract tests passed.'

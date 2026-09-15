@@ -189,6 +189,7 @@ jobs:
           done
 
           while IFS= read -r changed_path; do
+            [[ -e "$changed_path" ]] || continue
             case "$changed_path" in
               scripts/ci/*.sh) bash -n "$changed_path" ;;
               *) : ;;
