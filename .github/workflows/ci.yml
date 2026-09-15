@@ -3,9 +3,6 @@ name: CI
 # Requirements: ARCH-001 ARCH-002 QUA-001 QUA-002 QUA-004 QUA-012 QUA-013
 
 on:
-  push:
-    branches:
-      - main
   pull_request:
     branches:
       - main
@@ -614,7 +611,6 @@ jobs:
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
           PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
           PR_HEAD_REPO_URL: ${{ github.event.pull_request.head.repo.clone_url }}
-          PUSH_BEFORE_SHA: ${{ github.event.before }}
         run: bash scripts/ci/scan-git-secrets.sh
 
   required:
