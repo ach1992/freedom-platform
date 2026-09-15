@@ -9,10 +9,13 @@ For development or project recovery, use this order:
 1. [`AGENTS.md`](AGENTS.md) — repository authority, safety rules, branch/PR policy, and delivery model.
 2. [`CONTRIBUTING.md`](CONTRIBUTING.md) — development workflow, Issue/PR/review conventions, and links to the owning execution/validation references.
 3. [Program Issue #3](https://github.com/ach1992/freedom-platform/issues/3) — live Version 1 phase/backlog/dependency state.
-4. [Draft integration PR #6](https://github.com/ach1992/freedom-platform/pull/6) — live integration head toward `main`.
-5. [`docs/README.md`](docs/README.md) — index of durable product, architecture, security, testing, execution-infrastructure, and operations references.
+4. [`docs/README.md`](docs/README.md) — index of durable product, architecture, security, testing, execution-infrastructure, and operations references.
 
 GitHub is authoritative for current phase/task priority, dependencies, blockers, branches, PRs, reviews, CI, repository source, and live runner inventory. Do not maintain repository status or infrastructure-inventory snapshots that duplicate this state. A replacement manager or developer should be able to recover current work from the sources above without chat history.
+
+## Branch model
+
+`main` is the only long-lived branch and is both the default branch and the primary integration branch. Normal work uses temporary task branches created from the current `main` head and merged back to `main` through reviewed PRs. Production release, deployment, and other consequential delivery actions remain separate from ordinary integration and keep their own approval/validation gates.
 
 ## Execution model
 

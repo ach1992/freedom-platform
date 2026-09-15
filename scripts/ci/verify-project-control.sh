@@ -67,12 +67,10 @@ for entry in AGENTS.md CONTRIBUTING.md docs/README.md; do
 done
 grep -F 'Program Issue #3' README.md >/dev/null \
     || fail 'README.md must route replacement maintainers to the live Version 1 program'
-grep -F 'Draft integration PR #6' README.md >/dev/null \
-    || fail 'README.md must route replacement maintainers to the live integration PR'
 grep -F 'Chat history is optional context, never project state.' AGENTS.md >/dev/null \
     || fail 'AGENTS.md must make repository/GitHub state recoverable without Chat'
-grep -F 'Only two branches are long-lived' AGENTS.md >/dev/null \
-    || fail 'AGENTS.md must define the two long-lived branch policy'
+grep -F '`main` is the only long-lived branch' AGENTS.md >/dev/null \
+    || fail 'AGENTS.md must define main as the only long-lived branch'
 grep -F 'MariaDB `10.11` is the mandatory normal integration target when' AGENTS.md >/dev/null \
     || fail 'AGENTS.md must define when the primary MariaDB integration target applies'
 grep -F 'does not track implementation status' docs/05-architecture-overview.md >/dev/null \
@@ -221,8 +219,8 @@ done
 # Generic CI uses ephemeral GitHub-hosted runners, keeps Drafts quiet, validates same-repository and fork PRs,
 # computes a fail-safe validation plan, cancels superseded PR work, and uses MariaDB 10.11 only when applicable.
 ci=.github/workflows/ci.yml
-grep -A16 -F 'pull_request:' "$ci" | grep -F 'develop/v1.0.0-completion' >/dev/null \
-    || fail 'generic CI does not validate Worker PRs targeting the integration branch'
+grep -A16 -F 'pull_request:' "$ci" | grep -F 'main' >/dev/null \
+    || fail 'generic CI does not validate Worker PRs targeting main'
 grep -A16 -F 'pull_request:' "$ci" | grep -F 'ready_for_review' >/dev/null \
     || fail 'generic CI does not trigger validation when a Draft becomes review-ready'
 grep -A16 -F 'pull_request:' "$ci" | grep -F 'converted_to_draft' >/dev/null \

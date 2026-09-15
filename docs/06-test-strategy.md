@@ -14,7 +14,7 @@ The exact `runs-on` selector in each workflow revision is authoritative for runn
 
 ## Using CI
 
-- A non-Draft PR targeting `develop/v1.0.0-completion` triggers the applicable CI tier.
+- A non-Draft PR targeting `main` triggers the applicable CI tier.
 - Draft PRs stay quiet until marked Ready for review.
 - `.github/workflows/ci.yml` defines intentional manual validation through `workflow_dispatch`, but a definition is callable only when current GitHub/default-branch registration exposes that workflow.
 - A workflow file that exists only on an integration/task branch is code under review, not proof of a standing execution entrypoint.

@@ -22,7 +22,7 @@ concurrency:
 jobs:
   pasarguard:
     name: PasarGuard v5.2.1 guarded live acceptance
-    if: ${{ github.ref_name == 'develop/v1.0.0-completion' && inputs.confirm == 'MUTATE_DISPOSABLE_PASARGUARD_V5_2_1' }}
+    if: ${{ github.ref_name == 'main' && inputs.confirm == 'MUTATE_DISPOSABLE_PASARGUARD_V5_2_1' }}
     environment:
       name: provider-live-acceptance
     runs-on: [self-hosted, Linux, X64, freedom-provider-acceptance]

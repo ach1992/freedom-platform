@@ -5,13 +5,13 @@ This file owns the repository's **development workflow**: branches, Issues/PRs, 
 ## Workflow
 
 1. Read `AGENTS.md`, Program Issue `#3`, and the GitHub Issue for the task.
-2. Confirm the task's parent phase/dependencies and inspect the current head of `develop/v1.0.0-completion` / Draft PR `#6` from GitHub.
+2. Confirm the task's parent phase/dependencies and inspect the current `main` head from GitHub.
 3. Work on one temporary task branch unless the active Phase explicitly owns one cumulative implementation branch/PR.
-4. Open the PR against `develop/v1.0.0-completion`.
+4. Open the PR against `main`.
 5. Keep the PR Draft while it is changing; mark it Ready only when the intended validation should run.
 6. Do not merge your own Worker PR.
 
-`main` is the release/default branch, not a normal development target. Current project state and source live in GitHub; there is no Owner-maintained local/server project checkout to synchronize and no repository status snapshot to maintain.
+`main` is the default and primary integration branch. Normal product work reaches it through reviewed PRs rather than direct pushes. Current project state and source live in GitHub; there is no Owner-maintained local/server project checkout to synchronize and no repository status snapshot to maintain.
 
 When a temporary branch appears no longer needed, the Master reports its name to the Owner. Branch cleanup is Owner-operated; do not delete branches automatically or add branch-deletion automation unless the Owner explicitly changes this policy later.
 

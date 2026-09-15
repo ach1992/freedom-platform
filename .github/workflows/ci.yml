@@ -9,7 +9,6 @@ on:
   pull_request:
     branches:
       - main
-      - develop/v1.0.0-completion
     types:
       - opened
       - synchronize
@@ -103,7 +102,7 @@ jobs:
           plan=build/evidence/preflight/validation-plan.txt
           : > "$changed"
 
-          if [[ "$GITHUB_EVENT_NAME" == 'pull_request' && "${{ github.base_ref }}" == 'develop/v1.0.0-completion' ]]; then
+          if [[ "$GITHUB_EVENT_NAME" == 'pull_request' && "${{ github.base_ref }}" == 'main' ]]; then
             if git rev-parse --verify HEAD^1 >/dev/null 2>&1; then
               git diff --name-only HEAD^1 HEAD | sort -u > "$changed"
             fi
@@ -481,7 +480,7 @@ jobs:
           files=$(mktemp)
           trap 'rm -f "$files"' EXIT
 
-          if [[ "$GITHUB_EVENT_NAME" == 'pull_request' && "${{ github.base_ref }}" == 'develop/v1.0.0-completion' ]] && git rev-parse --verify HEAD^1 >/dev/null 2>&1; then
+          if [[ "$GITHUB_EVENT_NAME" == 'pull_request' && "${{ github.base_ref }}" == 'main' ]] && git rev-parse --verify HEAD^1 >/dev/null 2>&1; then
             git diff --name-only HEAD^1 HEAD | grep -E '^(deploy/|scripts/ci/(PasarGuardLiveAcceptance\.php|pasarguard-live-acceptance\.php|pasarguard-readonly-probe\.php)$)' > "$files" || true
           else
             find deploy -type f -print > "$files"

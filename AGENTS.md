@@ -8,7 +8,7 @@ Do not use one document as authority for every kind of truth:
 
 1. **Version 1 product scope and non-negotiable product/security/correctness requirements:** `docs/specification/master-execution-prompt.md`, with stable IDs indexed in `docs/01-authoritative-requirements.md`.
 2. **Repository execution, branch, review, and Agent rules:** this file and `CONTRIBUTING.md`.
-3. **Current phase, backlog, priority, dependency, blocker, PR/review, and CI state:** live GitHub, starting from Program Issue `#3` and Draft integration PR `#6`.
+3. **Current phase, backlog, priority, dependency, blocker, PR/review, and CI state:** live GitHub, starting from Program Issue `#3` and the active Phase/task Issues and PRs.
 4. **Durable architecture/security/testing/execution-infrastructure/operations rules:** canonical references linked from `docs/README.md`.
 5. **Historical implementation context:** Git/PR/Issue/workflow history.
 
@@ -18,18 +18,15 @@ When two sources of the same kind conflict, correct the stale/lower source inste
 
 ## Branch and PR model
 
-Only two branches are long-lived:
+`main` is the only long-lived branch. It is both the GitHub default branch and the primary integration branch.
 
-- `main` — release/default branch;
-- `develop/v1.0.0-completion` — Version 1 integration branch.
+Normal implementation/maintenance work uses a temporary task branch from the current `main` head and a PR targeting `main`. An active Phase may explicitly own one cumulative temporary implementation branch/PR; when it does, continue on that branch instead of creating parallel task branches.
 
-Draft PR `#6` integrates `develop/v1.0.0-completion` into `main` and remains Draft until explicit final release acceptance.
-
-Normal implementation/maintenance work uses a temporary task branch from the current integration head and a PR targeting `develop/v1.0.0-completion`. An active Phase may explicitly own one cumulative implementation branch/PR; when it does, continue on that branch instead of creating parallel task branches.
+Merging normal work to `main` is integration, not a production release or deployment. Version/release acceptance and production actions remain separately gated by their owning Issues, release rules, and deployment controls.
 
 When a temporary branch appears no longer needed, the Master reports the branch name to the Owner. Branch cleanup is Owner-operated; the Master does not remove branches automatically or create branch-cleanup automation unless the Owner explicitly changes this policy later.
 
-Never push product work directly to `main` or `develop/v1.0.0-completion`, rewrite shared history, force-push shared branches, self-merge a Worker PR, or enable auto-merge for high-risk work. An exceptional control-plane bootstrap on a protected/default branch must be explicitly Owner-authorized and documented in its GitHub Issue.
+Never push product work directly to `main`, rewrite shared history, force-push shared branches, self-merge a Worker PR, or enable auto-merge for high-risk work. An exceptional direct protected-branch change must be explicitly Owner-authorized and documented in its GitHub Issue.
 
 ## Execution access
 
@@ -138,7 +135,6 @@ CI is risk-based and signal-driven. `.github/workflows/ci.yml` computes independ
 - MariaDB `10.11` is the mandatory normal integration target when application/database semantics are affected. It is not started for a change that independent validation proves cannot affect those semantics.
 - Unknown/ambiguous paths fail safely to the strongest validation plan. Removing an application/control prerequisite never downgrades validation.
 - Draft PRs stay quiet. Marking a PR Ready triggers validation on the current revision. Superseded safe runs are cancelled; guarded external-effect workflows retain non-cancellation where interruption would itself be unsafe.
-- Draft integration PR `#6` stays quiet during normal development and receives intentional release validation at the final review boundary.
 
 Reuse green evidence when the tested resulting tree has not materially changed. Rerun only clearly transient failed jobs where possible. Never rerun a deterministic failure hoping for green; fix the cause first.
 
