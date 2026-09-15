@@ -6,6 +6,7 @@ namespace Tests\Feature;
 
 use App\Modules\Support\Application\SupportTicketCreateRequest;
 use App\Modules\Support\Application\SupportTicketService;
+use App\Modules\Support\Domain\SupportTicketPriority;
 use App\Modules\Support\Domain\SupportTicketState;
 use App\Shared\Application\Clock;
 use Database\Seeders\SupportTicketCategorySeeder;
@@ -70,6 +71,44 @@ final class SupportTicketFoundationTest extends TestCase
         self::assertTrue($replay->replayed);
         self::assertSame($firstReply->messageId, $replay->messageId);
         self::assertSame(2, DB::table('support_ticket_messages')->where('ticket_id', $first->id)->count());
+    }
+
+    public function test_idempotency_key_cannot_replay_a_different_message_payload(): void
+    {
+        $this->seed(SupportTicketCategorySeeder::class);
+        $clock = new MutableSupportClock(new DateTimeImmutable('2026-09-16T00:00:00+00:00'));
+        $service = new SupportTicketService($this->app->make(DatabaseManager::class), $clock);
+        $user = $this->user();
+        $ticket = $service->create(new SupportTicketCreateRequest($user, 'other', 'Strict replay', 'Initial body', 'create:strict'));
+
+        $service->replyAsCustomer($ticket->id, $user, 'First body', 'reply:strict');
+
+        try {
+            $service->replyAsCustomer($ticket->id, $user, 'Different body', 'reply:strict');
+            self::fail('Support ticket idempotency keys must bind to one exact message payload.');
+        } catch (DomainException) {
+            self::assertTrue(true);
+        }
+
+        self::assertSame(2, DB::table('support_ticket_messages')->where('ticket_id', $ticket->id)->count());
+        self::assertSame('First body', DB::table('support_ticket_messages')->where('ticket_id', $ticket->id)->where('idempotency_key', 'reply:strict')->value('body'));
+    }
+
+    public function test_triage_updates_assignment_and_priority(): void
+    {
+        $this->seed(SupportTicketCategorySeeder::class);
+        $clock = new MutableSupportClock(new DateTimeImmutable('2026-09-16T00:00:00+00:00'));
+        $service = new SupportTicketService($this->app->make(DatabaseManager::class), $clock);
+        $customer = $this->user();
+        $assignee = $this->user();
+        $ticket = $service->create(new SupportTicketCreateRequest($customer, 'other', 'Triage', 'Needs review', 'create:triage'));
+
+        $triaged = $service->triage($ticket->id, $assignee, SupportTicketPriority::High);
+
+        self::assertSame($assignee, $triaged->assignedUserId);
+        self::assertSame(SupportTicketPriority::High, $triaged->priority);
+        self::assertSame($assignee, (int) DB::table('support_tickets')->where('id', $ticket->id)->value('assigned_user_id'));
+        self::assertSame('high', DB::table('support_tickets')->where('id', $ticket->id)->value('priority'));
     }
 
     public function test_close_sets_default_72_hour_window_and_customer_reopen_fails_after_expiry(): void
