@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Telegram\Application;
 
 use App\Modules\Customers\Application\CustomerAccountSummaryService;
+use App\Modules\Localization\Application\LocalizationResolver;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseGiftCardPayment;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseOrder;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchasePaymentMethods;
@@ -12,7 +13,6 @@ use App\Modules\Telegram\Domain\TelegramDeliveryAction;
 use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
-use Illuminate\Contracts\Translation\Translator;
 use Illuminate\Database\DatabaseManager;
 use InvalidArgumentException;
 use RuntimeException;
@@ -47,7 +47,7 @@ final readonly class TelegramGiftCardNavigationHandler
     private const ACTION_BACK = 'navigation.back';
 
     public function __construct(
-        private Translator $translator,
+        private LocalizationResolver $localization,
         private ConfidentialTelegramPresentationFactory $confidentialPresentations,
         private TelegramDeliveryQueueService $delivery,
         private TelegramInteractionSessionService $sessions,
@@ -950,9 +950,12 @@ final readonly class TelegramGiftCardNavigationHandler
     /** @param array<string,int|string> $replace */
     private function translation(string $key, string $locale, array $replace = []): string
     {
-        $value = $this->translator->get($key, $replace, $locale);
-        if (! is_string($value)) {
-            throw new RuntimeException('Telegram Gift Card translation is invalid.');
+        $value = $this->localization->resolve($key, $replace, $locale);
+        if ($value === '' || $value === '['.$key.']') {
+            throw new RuntimeException('Telegram Gift Card translation is unavailable.');
+        }
+        if (preg_match('/:[A-Za-z_][A-Za-z0-9_]*/', $value) === 1) {
+            throw new RuntimeException('Telegram Gift Card translation has an unresolved placeholder.');
         }
 
         return $value;
