@@ -17,6 +17,7 @@ use Illuminate\Database\DatabaseManager;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
 use RuntimeException;
+use stdClass;
 
 final readonly class SupportTicketService
 {
@@ -455,23 +456,7 @@ final readonly class SupportTicketService
         return $this->snapshotFromRow($row);
     }
 
-    /**
-     * @param object{
-     *   id:int|string,
-     *   tracking_number:string,
-     *   requester_user_id:int|string,
-     *   category_id:int|string,
-     *   state:string,
-     *   priority:string,
-     *   assigned_user_id:int|string|null,
-     *   title:string,
-     *   closed_at:?string,
-     *   reopen_until:?string,
-     *   created_at:string,
-     *   updated_at:string
-     * } $row
-     */
-    private function snapshotFromRow(object $row): SupportTicketSnapshot
+    private function snapshotFromRow(stdClass $row): SupportTicketSnapshot
     {
         return new SupportTicketSnapshot(
             (int) $row->id,
