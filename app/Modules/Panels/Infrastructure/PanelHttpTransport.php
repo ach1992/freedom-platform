@@ -270,10 +270,16 @@ final readonly class PanelHttpTransport
     {
         for ($current = $throwable; $current !== null; $current = $current->getPrevious()) {
             if ($current instanceof GuzzleConnectException || $current instanceof GuzzleRequestException) {
-                $context = $current->getHandlerContext();
-                $errno = $context['errno'] ?? null;
-                if (is_int($errno)) {
-                    return $errno;
+                if (preg_match('/^cURL error (\d+):/', $current->getMessage(), $matches) === 1) {
+                    return (int) $matches[1];
+                }
+
+                if (
+                    $current instanceof GuzzleConnectException
+                    && preg_match('/\b(?:timeout|timed out)\b/i', $current->getMessage()) === 1
+                    && defined('CURLE_OPERATION_TIMEDOUT')
+                ) {
+                    return (int) constant('CURLE_OPERATION_TIMEDOUT');
                 }
             }
 
