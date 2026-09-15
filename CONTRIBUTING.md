@@ -35,11 +35,9 @@ Secret values are write-only operational state. Never request or paste a PAT, SS
 
 ## Task and PR contracts
 
-Use `.github/ISSUE_TEMPLATE/task.yml` when a dedicated Task Contract is warranted by the rules in `AGENTS.md`: substantive product behavior, High/Critical risk, delegation/cross-session recovery, material dependency/decision sequencing, or another real coordination need. The Issue contains only what is needed to implement and review safely: parent/requirements, outcome, dependencies, bounded scope, objective acceptance criteria, validation strategy, risk, and initial state.
+Task-contract persistence is owned by `AGENTS.md`. Use `.github/ISSUE_TEMPLATE/task.yml` whenever those rules require a dedicated Task Contract; use the bounded FAST path only when the exact `AGENTS.md` criteria are satisfied. Do not create a ceremonial Issue merely to satisfy process, and do not broaden the FAST path by copying or reinterpreting its criteria here.
 
-A dedicated Task Issue is optional for bounded Low/Medium-risk self-executed FAST work when authority already exists, the complete scope/acceptance/risk/verification fits clearly in one PR, the work is reversible, and no material schema/security/provider/release/production boundary or separate coordination state is introduced. Do not create a ceremonial Issue merely to satisfy process.
-
-Add security/data/financial/provider/schema/runtime/compatibility/protected-area detail only when it matters. Do not create fields or documents merely to say `N/A`, repeat GitHub state, or preserve test logs already available from CI.
+When a Task Issue exists, keep it limited to the implementation/review facts required by `AGENTS.md`. Add security/data/financial/provider/schema/runtime/compatibility/protected-area detail only when it matters. Do not create fields or documents merely to say `N/A`, repeat GitHub state, or preserve test logs already available from CI.
 
 After verified integration/closure, reconcile any acceptance checklist or explicit mutable current-state text in an owning Issue when one exists. Keep exact commit/run/review receipts in GitHub comments, PRs, and CI rather than copying them into repository status documents; an `Initial state` field remains historical contract input and does not need rewriting.
 
