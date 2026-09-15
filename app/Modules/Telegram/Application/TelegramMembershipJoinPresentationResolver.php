@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Application;
 
+use App\Modules\Localization\Application\LocalizationResolver;
 use DomainException;
 use Illuminate\Contracts\Encryption\StringEncrypter;
-use Illuminate\Contracts\Translation\Translator;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
 use InvalidArgumentException;
@@ -24,7 +24,7 @@ final readonly class TelegramMembershipJoinPresentationResolver
         private DatabaseManager $database,
         private StringEncrypter $encrypter,
         private TelegramChannelMembershipRuleResolver $rules,
-        private Translator $translator,
+        private LocalizationResolver $localization,
         private TelegramMembershipConfigurationFence $configurationFence,
     ) {}
 
@@ -192,11 +192,8 @@ final readonly class TelegramMembershipJoinPresentationResolver
     /** @param array<string,int|string> $replace */
     private function translation(string $key, string $locale, array $replace = []): string
     {
-        $text = $this->translator->get($key, $replace, $locale);
-        if (! is_string($text) || $text === '' || $text === $key) {
-            $text = $this->translator->get($key, $replace, 'en');
-        }
-        if (! is_string($text) || $text === '' || $text === $key) {
+        $text = $this->localization->resolve($key, $replace, $locale);
+        if ($text === '' || $text === '['.$key.']') {
             throw new RuntimeException('Protected Telegram membership translation is unavailable.');
         }
 
