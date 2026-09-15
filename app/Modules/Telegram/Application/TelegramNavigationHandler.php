@@ -6,6 +6,7 @@ namespace App\Modules\Telegram\Application;
 
 use App\Modules\Customers\Application\CustomerAccountSummary;
 use App\Modules\Customers\Application\CustomerAccountSummaryService;
+use App\Modules\Localization\Application\LocalizationResolver;
 use App\Modules\Promotions\Application\ReferralSelfSummary;
 use App\Modules\Promotions\Application\ReferralSelfSummaryService;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCardToCardPayment;
@@ -26,7 +27,6 @@ use App\Modules\Wallet\Application\WalletSelfBalanceSummary;
 use DateTimeImmutable;
 use DateTimeZone;
 use Illuminate\Auth\Access\AuthorizationException;
-use Illuminate\Contracts\Translation\Translator;
 use Illuminate\Database\DatabaseManager;
 use RuntimeException;
 
@@ -137,7 +137,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
     private const SERVICE_PAGE_SIZE = 6;
 
     public function __construct(
-        private Translator $translator,
+        private LocalizationResolver $localization,
         private NonRestrictedTelegramPresentationFactory $presentations,
         private ConfidentialTelegramPresentationFactory $confidentialPresentations,
         private TelegramDeliveryQueueService $delivery,
@@ -3627,12 +3627,12 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
     /** @param array<string, int|string> $replace */
     private function translation(string $key, string $locale, array $replace = []): string
     {
-        $text = $this->translator->get($key, $replace, $locale);
-        if (! is_string($text) || $text === '' || $text === $key) {
-            $text = $this->translator->get($key, $replace, 'en');
-        }
-        if (! is_string($text) || $text === '' || $text === $key) {
+        $text = $this->localization->resolve($key, $replace, $locale);
+        if ($text === '' || $text === '['.$key.']') {
             throw new RuntimeException('Telegram navigation translation is unavailable.');
+        }
+        if (preg_match('/:[A-Za-z_][A-Za-z0-9_]*/', $text) === 1) {
+            throw new RuntimeException('Telegram navigation translation has an unresolved placeholder.');
         }
 
         return $text;
