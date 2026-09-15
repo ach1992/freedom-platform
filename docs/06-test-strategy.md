@@ -29,6 +29,8 @@ Delegate to an external Worker only when that materially improves execution or r
 
 CI classifies the complete effective change into independent validation needs. The profile name is only a summary; the job flags are authoritative. Unit, style, static/architecture, dependency/license, real-engine integration, runtime and operations are separate validation dimensions. Secret scanning remains mandatory for every executing merge-acceptance CI revision.
 
+**Validation proportionality is a repository invariant.** Normal CI must select the narrowest high-signal validation that can falsify the behavior affected by the exact candidate. A broader job or test scope is justified only when the changed surface is cross-cutting, engine-dependent, changes the validation/toolchain contract, is ambiguous/unclassified, or is entering an explicit FULL/release backstop. Unknown evidence always fails closed to broader validation; known narrow surfaces must not fan out merely because a broader check exists. New CI jobs, path rules, matrices or automatic triggers must include a concrete assurance reason and regression coverage preventing accidental fan-out.
+
 For a PR, the changed-path source is the exact checked-out merge candidate against its base parent. Manual `workflow_dispatch` without a diagnostic filter is an intentional FULL-validation route. Generic CI does not automatically rerun an already accepted integration after merge to protected `main`: the required PR gate validates the exact merge candidate and revalidates current head/base freshness after all applicable jobs, while the active branch ruleset prevents bypass integration. If that protection model changes, the no-rerun assumption must be re-evaluated before relying on it.
 
 A `workflow_dispatch` with a non-empty `phpunit_filter` is different: it is an explicit troubleshooting route, not merge/release acceptance. Its validation plan is limited to the runtime contract plus the filtered real MariaDB/Redis integration execution and diagnostic evidence. It does not manufacture unrelated Unit/static/dependency/operations work, and its existing Secret scan/final required merge gate remain intentionally disabled so a successful diagnostic run cannot be mistaken for acceptance. A diagnostic filter that selects zero tests fails under the shared PHPUnit `failOnEmptyTestSuite` policy. An empty/missing filter falls back to the intentional manual FULL route.
@@ -40,7 +42,9 @@ Normal automated CI separates two questions that must not be conflated:
 1. **Does this change require the real MariaDB/Redis engine?** Migrations, constraints, triggers, locking/concurrency and other engine-dependent behavior still require real-engine acceptance.
 2. **How much Feature coverage is required for this exact PR?** Real-engine necessity does not automatically mean the complete unrelated Feature corpus must run.
 
-The quality runner owns Unit tests together with applicable Pint/static/architecture checks so PHP setup and dependency installation are not duplicated in the real-engine job. When integration is required, the MariaDB/Redis job uses one of these scopes:
+The quality runner owns Unit tests together with applicable Pint/static/architecture checks so PHP setup and dependency installation are not duplicated in the real-engine job. Normal PR Pint validation uses Pint's Git diff scope against the merge candidate base so unchanged PHP files are not rescanned. FULL profiles, unfiltered manual FULL validation, unavailable/ambiguous PR ancestry, and global style-policy changes such as `.editorconfig` or `pint.json` retain whole-repository Pint. PHPStan, forbidden-pattern and architecture checks remain repository-wide when selected because their cross-module dependency surface has not been proven safe to narrow.
+
+When integration is required, the MariaDB/Redis job uses one of these scopes:
 
 - **TARGETED** — only when the repository selector can prove a bounded relationship from the candidate itself. Current accepted shapes are Feature-test-only changes and an entirely additive new module (the module does not exist in the base tree, its product files/migrations are additive, and changed Feature tests explicitly reference that new module). The exact changed Feature file(s) run against MariaDB 10.11 + authenticated Redis.
 - **FULL** — the fail-safe fallback for existing-module product changes, modified/deleted migrations, global/config/runtime/dependency surfaces, ambiguous relationships, missing Feature evidence, or anything the selector does not explicitly understand. The complete Feature suite runs against MariaDB 10.11 + authenticated Redis.
@@ -53,16 +57,17 @@ The selector is deliberately conservative. It must not infer safety merely from 
 | Changed behavior | Material validation |
 |---|---|
 | canonical docs / governance | affected planning/project-control checks |
-| bounded read-only control plane | project/control contract + dedicated read-only workflow verifier |
-| PHP application/config/schema | Unit + Pint + PHPStan/forbidden/architecture + MariaDB 10.11/Redis integration; TARGETED only when the conservative selector proves the candidate shape, otherwise FULL Feature |
-| Unit tests only | Unit + Pint; no MariaDB/Redis provisioning |
-| Feature tests only | Pint + the changed Feature file(s) on MariaDB 10.11/Redis; unrelated Feature files are not rerun solely because a test file changed |
+| readiness/provider workflow definitions | project/control contract + mandatory Secret scan; privileged provider execution remains separately manual/gated and is never implied by CI |
+| PHP application/config/schema | Unit + changed-PHP Pint + PHPStan/forbidden/architecture + MariaDB 10.11/Redis integration; TARGETED only when the conservative selector proves the candidate shape, otherwise FULL Feature |
+| localization catalogs under `resources/lang/**` | Unit catalog contract + changed-PHP Pint; no MariaDB/Redis solely for localization data |
+| Unit tests only | Unit + changed-PHP Pint; no MariaDB/Redis provisioning |
+| Feature tests only | changed-PHP Pint + the changed Feature file(s) on MariaDB 10.11/Redis; unrelated Feature files are not rerun solely because a test file changed |
 | Composer manifest/lock | Unit + Composer validation/audit/license + static/architecture + FULL real-engine Feature integration |
-| Docker CI/runtime | Docker Compose contract + FULL MariaDB 10.11/Redis Feature integration |
+| `docker-compose.ci.yml` or `docker/mariadb/ci-init.sql` | Docker/runtime contract + FULL MariaDB 10.11/Redis Feature integration; unrelated Unit/static/dependency/operations jobs are not implied |
 | operational/deployment entrypoints | shell/PHP operational syntax/entrypoint validation; separate High/Critical review/release gates still apply |
 | unknown/unclassified | fail safe to every normal validation domain and FULL real-engine scope when integration applies |
 
-`.github/workflows/staging-readiness.yml` is the only current workflow intentionally classified as bounded read-only control plane. Its verifier requires manual dispatch, read-only token permissions, no secrets/protected environment, the current repository runner selector, an allowlisted action surface and no known runtime/host mutation commands. The verifier itself has adversarial tests. No wildcard `.github/workflows/*` downgrade exists.
+Readiness/provider workflow definitions are control-plane surfaces, not application behavior. `staging-readiness.yml` retains its dedicated adversarial read-only verifier; provider workflow guards, runner selectors, concurrency and protected-operation constraints are enforced by the canonical project-control verifier. `provider-live-acceptance.yml` remains a privileged manual capability with its separate High/Critical review/Owner gates; classifying a YAML definition change as control-plane validation does not authorize or execute the live workflow. No wildcard `.github/workflows/*` downgrade exists.
 
 Changes to the CI classifier/workflow/real-engine selector are self-modifying control-plane changes: representative classifier, selector and verifier-abuse cases run independently of the application integration result. A CI-policy change does not manufacture a MariaDB run when the effective diff cannot affect application/database behavior. Conversely, application/schema/database semantics that need the engine still require MariaDB 10.11 acceptance, but that acceptance may be TARGETED when the conservative selector proves a bounded candidate; engine requirement no longer implies an unconditional full Feature run.
 
