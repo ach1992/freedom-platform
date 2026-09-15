@@ -4,8 +4,8 @@ This file owns the repository's **development workflow**: branches, Issues/PRs, 
 
 ## Workflow
 
-1. Read `AGENTS.md`, Program Issue `#3`, and the GitHub Issue for the task.
-2. Confirm the task's parent phase/dependencies and inspect the current `main` head from GitHub.
+1. Read `AGENTS.md`, Program Issue `#3`, and the owning Task Issue when one is required/present. For a bounded FAST-path change without a dedicated Task Issue, identify the existing requirement/Phase/Program authority in the PR.
+2. Confirm the relevant parent phase/dependencies and inspect the current `main` head from GitHub.
 3. Work on one temporary task branch unless the active Phase explicitly owns one cumulative implementation branch/PR.
 4. Open the PR against `main`.
 5. Keep the PR Draft while it is changing; mark it Ready only when the intended validation should run.
@@ -35,13 +35,13 @@ Secret values are write-only operational state. Never request or paste a PAT, SS
 
 ## Task and PR contracts
 
-Use `.github/ISSUE_TEMPLATE/task.yml` for bounded engineering work. The Issue needs enough information to implement and review safely: parent/requirements, outcome, dependencies, bounded scope, objective acceptance criteria, validation strategy, risk, and initial state.
+Task-contract persistence is owned by `AGENTS.md`. Use `.github/ISSUE_TEMPLATE/task.yml` whenever those rules require a dedicated Task Contract; use the bounded FAST path only when the exact `AGENTS.md` criteria are satisfied. Do not create a ceremonial Issue merely to satisfy process, and do not broaden the FAST path by copying or reinterpreting its criteria here.
 
-Add security/data/financial/provider/schema/runtime/compatibility/protected-area detail only when it matters. Do not create fields or documents merely to say `N/A`, repeat GitHub state, or preserve test logs already available from CI.
+When a Task Issue exists, keep it limited to the implementation/review facts required by `AGENTS.md`. Add security/data/financial/provider/schema/runtime/compatibility/protected-area detail only when it matters. Do not create fields or documents merely to say `N/A`, repeat GitHub state, or preserve test logs already available from CI.
 
-After verified integration/closure, reconcile any acceptance checklist or explicit mutable current-state text in the owning Issue. Keep exact commit/run/review receipts in GitHub comments, PRs, and CI rather than copying them into repository status documents; an `Initial state` field remains historical contract input and does not need rewriting.
+After verified integration/closure, reconcile any acceptance checklist or explicit mutable current-state text in an owning Issue when one exists. Keep exact commit/run/review receipts in GitHub comments, PRs, and CI rather than copying them into repository status documents; an `Initial state` field remains historical contract input and does not need rewriting.
 
-Pull requests use `.github/pull_request_template.md`: link the Issue, summarize the change, state material risk/impact, and provide the focused verification or applicable CI result. Record a nonclaim only when adjacent scope could otherwise be misunderstood.
+Pull requests use `.github/pull_request_template.md`: identify the durable authority (and owning Issue when one exists), summarize the change, state material risk/impact, and provide the focused verification or applicable CI result. Record a nonclaim only when adjacent scope could otherwise be misunderstood.
 
 Sensitive paths are assigned in `.github/CODEOWNERS`. CODEOWNERS identifies intended ownership; actual merge enforcement depends on repository protection/rulesets. Verify live repository settings before relying on protection as an enforced fact.
 
@@ -102,4 +102,4 @@ Repository architecture/correctness rules are canonical in `AGENTS.md` and `docs
 
 ## Documentation
 
-Durable documentation ownership and the intentionally small documentation set are defined by [`docs/README.md`](docs/README.md). Live state belongs in GitHub; task history belongs in Git/Issues/PRs/CI. Update the canonical owner of a rule instead of adding a compensating copy elsewhere.
+Durable documentation ownership and the intentionally small documentation set are defined by [`docs/index.md`](docs/index.md). The root `README.md` remains user-facing and is not a development-state or engineering-policy authority. Live state belongs in GitHub; task history belongs in Git/Issues/PRs/CI. Update the canonical owner of a rule instead of adding a compensating copy elsewhere.

@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Live task state belongs in GitHub. Keep this contract concise; add conditional risk detail only when it materially affects the work. Do not create per-task handoff, status, traceability, or evidence documents.
+        Use this template only when a dedicated Task Contract materially improves implementation, review, coordination, recovery, or risk control. Bounded Low/Medium FAST-path work may use existing durable authority plus one self-contained PR when AGENTS.md permits it. Live task state belongs in GitHub. Keep this contract concise; add conditional risk detail only when it materially affects the work. Do not create per-task handoff, status, traceability, or evidence documents.
 
         Task sizing: choose the minimum meaningful reviewable slice before opening the Issue. Do not create one task merely per file, handler, seam, or mechanically similar sibling when accepted behavior, acceptance boundary, dependencies, ownership, risk, rollback/release boundary, and validation materially align and one cohesive change remains reviewable. Split work when those boundaries differ or combining it would create a mixed-purpose, unsafe, or hard-to-review change. Do not optimize for Issue/PR count in either direction.
 

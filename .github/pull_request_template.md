@@ -1,6 +1,8 @@
-## Owning Issue
+## Authority / owning Issue
 
-Closes/Refs #
+Authority: requirement / Phase / Program / Issue
+
+Closes/Refs # (when applicable)
 
 ## Summary
 
@@ -31,7 +33,7 @@ If prior green evidence is being reused, state only why the tested resulting tre
 
 ## Review gates
 
-- [ ] The diff remains inside the owning Issue scope and acceptance criteria.
+- [ ] The diff remains inside the declared authority, scope, and acceptance boundary.
 - [ ] The applicable validation passes on the final candidate, or a valid unchanged result is explicitly reused.
 - [ ] Required independent/Owner review is complete when risk requires it.
 - [ ] No per-task handoff/status/traceability/evidence document was added.

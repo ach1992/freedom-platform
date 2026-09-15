@@ -57,6 +57,7 @@ assert_plan() {
 # Required representative classes. These assertions are deliberately independent of the workflow conditions that consume the plan.
 assert_plan docs_only CONTROL true true false false false false false false false docs/06-test-strategy.md
 assert_plan governance_only CONTROL true false false false false false false false false AGENTS.md .github/ISSUE_TEMPLATE/task.yml
+assert_plan documentation_index_migration CONTROL true false false false false false false false false docs/README.md docs/index.md
 assert_plan read_only_workflow CONTROL_PLANE true false true false false false false false false .github/workflows/staging-readiness.yml
 assert_plan application_source APPLICATION false false false true true false true false false app/Modules/Orders/Application/OrderService.php
 assert_plan application_tests APPLICATION false false false true false false true false false tests/Feature/OrderTest.php
