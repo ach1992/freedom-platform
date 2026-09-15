@@ -76,6 +76,47 @@ assert_plan empty_diff FULL true true true true true true true true true
 
 printf '%s\n' 'Validation-plan classifier tests passed.'
 
+# The required GitHub status context must be the final aggregate gate, not the early planning job.
+ci_workflow="$root/.github/workflows/ci.yml"
+python3 - "$ci_workflow" <<'PY_CI_GATE'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+def require(fragment: str, message: str) -> None:
+    if fragment not in text:
+        raise SystemExit(message)
+
+if text.count('    name: Repository preflight\n') != 1:
+    raise SystemExit('CI must expose exactly one Repository preflight status context')
+
+require('  preflight:\n    name: Validation plan and repository control\n', 'early preflight job must not satisfy the required final status context')
+require('  required:\n    name: Repository preflight\n', 'final aggregate required gate is missing')
+required = text.split('\n  required:\n', 1)[1]
+for dependency in ('preflight', 'quality', 'dependencies', 'integration', 'operations', 'secrets'):
+    require(f'      - {dependency}\n', f'final required gate does not depend on {dependency}')
+for command in (
+    "require_success 'Validation plan and repository control'",
+    "require_success 'Secret scan'",
+    "require_planned 'PHP style and static architecture'",
+    "require_planned 'Dependency and license policy'",
+    "require_planned 'MariaDB 10.11 and Redis tests'",
+    "require_planned 'Operational syntax and entrypoints'",
+):
+    if command not in required:
+        raise SystemExit(f'final required gate does not enforce: {command}')
+if "if: ${{ always()" not in required:
+    raise SystemExit('final required gate must evaluate after failed/skipped dependencies')
+if 'Pull request revision drifted after validation; a fresh CI run is required.' not in required:
+    raise SystemExit('final required gate must revalidate PR head/base freshness after dependent jobs')
+if '      - name: Summarize slow tests\n' not in text:
+    raise SystemExit('integration CI must retain low-overhead successful-run timing visibility')
+PY_CI_GATE
+
+printf '%s\n' 'Required CI gate contract tests passed.'
+
 readonly_verifier="$root/scripts/ci/verify-readonly-staging-workflow.sh"
 readonly_source="$root/.github/workflows/staging-readiness.yml"
 
