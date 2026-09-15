@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Unit\Shared\Infrastructure\Logging;
 
+use App\Shared\Application\RestrictedValue;
 use App\Shared\Infrastructure\Logging\RedactSensitiveDataProcessor;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
@@ -25,6 +26,22 @@ final class RedactSensitiveDataProcessorTest extends TestCase
         self::assertSame('[REDACTED]', $result['provider']['api_token']);
         self::assertSame('healthy', $result['provider']['status']);
         self::assertSame('[REDACTED]', $result['subscription_link']);
+    }
+
+    public function test_it_redacts_restricted_markers_under_generic_keys_without_leaking_values(): void
+    {
+        $processor = new RedactSensitiveDataProcessor;
+        $result = $processor->sanitize([
+            'data' => [
+                'value' => RestrictedValue::fromString('synthetic-sensitive-value'),
+            ],
+        ]);
+
+        self::assertSame('[REDACTED]', $result['data']['value']);
+        self::assertStringNotContainsString(
+            'synthetic-sensitive-value',
+            json_encode($result, JSON_THROW_ON_ERROR),
+        );
     }
 
     public function test_it_handles_numeric_keys_and_sanitizes_messages_and_throwables(): void

@@ -1,173 +1,172 @@
-# aaPanel/OpenLiteSpeed Deployment Runbook
+# Deployment, Backup, Update, and Rollback
 
-Target: Ubuntu 22.04 LTS, aaPanel, OpenLiteSpeed, PHP 8.4, MariaDB, authenticated Redis
+Target environment: Ubuntu/aaPanel/OpenLiteSpeed, PHP 8.4, MariaDB, authenticated Redis.
 
-Domain: `hell.hellpservice.ir`
+This document is the canonical safety contract for **deployment and privileged/live runtime operations**. It is not the owner of development tooling, self-hosted runner lifecycle, or CI semantics.
 
-Root: `/www/acdomains/hell.hellpservice.ir`
+- Development execution tools, `AI_Server_Agent`, self-hosted runners and their lifecycle: [`development/execution-infrastructure.md`](development/execution-infrastructure.md).
+- Required CI/testing semantics: [`06-test-strategy.md`](06-test-strategy.md).
+- Current source/task/PR/run state: live GitHub.
 
-Run as: `root` only for host configuration; application commands as `www`
+A deployed tree, staging host, persistent execution workspace, or Actions checkout is never a second project source of truth. Execute operational actions only when the owning task/release authorizes them and the implementation exists on the exact GitHub revision.
 
-This runbook is executable only after the release manifest, checksums/signature, installer, health command, and release package exist. Replace `<RELEASE>` and `<PACKAGE>` with values from the signed release. Never paste a credential into a shell command or chat.
+## GitHub repository Environments
 
-## 1. Change controls and backup
+GitHub repository Environments are operational approval/secret boundaries consumed by workflows using `environment:`. They are separate from Actions runner infrastructure and from transient checkouts.
 
-Before touching production:
+A workflow referencing an Environment does not prove that reviewers, wait timers, or deployment-branch restrictions are configured. Immediately before privileged/live use, verify both the exact workflow source and the live Environment protection settings. Missing/unreadable protection settings must be treated as unknown or absent for the decision that depends on them, not silently assumed safe.
 
-- approved release and maintenance window;
-- successful CI, staging install, restore, and update/rollback evidence for the same Git SHA;
-- no active financial capture/provisioning/reconciliation operation;
-- current queue state recorded;
-- a successful encrypted current-state backup copied to an independent destination;
-- tested previous release path and rollback compatibility recorded.
+The guarded provider mutation definition references GitHub Environment `provider-live-acceptance`. Its workflow source and live GitHub settings are jointly authoritative for current branch/approval restrictions.
 
-Verify the last backup and current release as `root`:
+## Secret and credential rules
 
-```bash
-readlink -f /www/acdomains/hell.hellpservice.ir/current
-sudo -u www /www/server/php/84/bin/php /www/acdomains/hell.hellpservice.ir/current/artisan backup:status --latest --redact
-sudo -u www /www/server/php/84/bin/php /www/acdomains/hell.hellpservice.ir/current/artisan operations:pending-financial --fail-if-active
+Secret values are write-only operational state. Never paste them into Chat, Git, Issues, PRs, logs, screenshots, or repository evidence.
+
+Known workflow/configuration identifiers include:
+
+- `PASARGUARD_TEST_ORIGIN`
+- `PASARGUARD_TEST_API_KEY`
+- `PASARGUARD_TEST_USERNAME`
+- `PASARGUARD_TEST_PASSWORD`
+- `STAGING_DOMAIN`
+- `STAGING_HOST`
+- `STAGING_PORT`
+- `STAGING_USER`
+- `STAGING_PASSWORD`
+- `STAGING_SSH_PRIVATE_KEY`
+- `STAGING_KNOWN_HOSTS`
+- `TELEGRAM_TEST_BOT_TOKEN`
+
+The current workflow/source revision is authoritative for whether an identifier is actively consumed. A configured identifier that source does not use is reserved/unconsumed, not permission to invent a new execution path.
+
+Prefer repository-scoped `GITHUB_TOKEN` for repository-local Actions operations. Introduce another credential type only when a concrete capability cannot be provided safely by `GITHUB_TOKEN`.
+
+## Operational workflow definitions and activation state
+
+Workflow source on the exact revision plus current GitHub registration/state are jointly authoritative. **A workflow file existing only on `develop` or a task branch is code under review, not proof of a standing dispatchable capability.** Historical registry entries whose source is absent from the current default-branch tree are history/navigation only.
+
+Normal repository CI is owned by `.github/workflows/ci.yml` and `docs/06-test-strategy.md`; this runbook does not duplicate its validation tiers or runner selector.
+
+### Staging Readiness
+
+`.github/workflows/staging-readiness.yml` defines a manual read-only runtime readiness path where/when it is registered. It must remain bounded, non-mutating, and must not become a general remote shell or project checkout.
+
+### Provider Readiness - Read Only
+
+`.github/workflows/provider-readiness.yml` defines the manual read-only PasarGuard readiness path where/when it is registered and uses only the provider test secret identifiers required by that exact workflow revision.
+
+### Provider Live Acceptance - PasarGuard
+
+`.github/workflows/provider-live-acceptance.yml` defines a privileged disposable provider-mutation path where/when it is deliberately registered for a controlled acceptance task. It is not normal CI. The definition uses GitHub Environment `provider-live-acceptance`, explicit confirmation, branch guards, and only the current workflow-defined inputs/credentials.
+
+Do not promote/enable a privileged provider workflow merely to discover whether credentials exist. Do not run a mutation workflow merely to discover whether credentials exist.
+
+## Production layout
+
+A release target should follow the immutable-release pattern:
+
+```text
+<root>/
+├── releases/<version>/
+├── shared/
+│   ├── .env
+│   ├── storage/
+│   ├── backups/
+│   └── update-packages/
+└── current -> releases/<version>
 ```
 
-Expected: an absolute release path, a verified encrypted backup, and no unsafe active operation. Stop if any command fails.
+Only `current/public` is web-exposed. Runtime secrets/private storage/backups must remain outside the public root.
 
-## 2. Host preflight
+## Deployment preflight
 
-Run through SSH as `root`:
+Before installation or release activation verify:
 
-```bash
-/www/server/php/84/bin/php -v
-/usr/local/lsws/lsphp84/bin/lsphp -v
-/usr/local/bin/composer --version
-systemctl is-active cron
-command -v redis-cli
-supervisorctl version
-timedatectl show --property=Timezone --value
-```
+- compatible PHP 8.4 runtimes and required extensions;
+- MariaDB and authenticated Redis reachability with least privilege;
+- when the generic outbound Telegram delivery authority is present or will be installed, MariaDB is `>=10.11.9` and exposes a non-empty `@@server_uid`; older or identity-ambiguous servers are incompatible with that authority surface;
+- the Telegram metadata-attestation account is provisioned through the protected database-administration path as a principal distinct from `DB_USERNAME`, with only global `PROCESS`/`USAGE` and no grant option, role/PUBLIC grant, routine `EXECUTE`, schema/table/column privilege, or application DML/DDL authority;
+- `TELEGRAM_METADATA_DB_USERNAME` / `TELEGRAM_METADATA_DB_PASSWORD` and, when needed, `TELEGRAM_METADATA_DB_URL` are supplied through protected deployment secrets and resolve to the exact same MariaDB server as the runtime connection; never reuse the ordinary runtime database credentials for this path;
+- before installing/decommissioning the Telegram delivery authority, provision the fixed `telegram_lifecycle` account externally on that same MariaDB server with exactly global `USAGE` plus `SELECT, UPDATE` on the application schema and no `INSERT`, `DELETE`, DDL, `PROCESS`, role/PUBLIC/proxy/routine/grant-option or other privilege; this account must be distinct from both `DB_USERNAME` and the metadata principal;
+- the lifecycle grant is intentionally schema-scoped only for `SELECT, UPDATE`: the account must exist before the migration creates `telegram_delivery_authority_capability`, and MariaDB 10.11 rejects table-specific grants for a table that does not yet exist. Do not compensate by granting any additional privilege; the lifecycle secret is short-lived deployment input and the database trigger still limits lifecycle-state transitions to the fixed authenticated principal plus capability secret plus installation-lock ownership;
+- inject `TELEGRAM_LIFECYCLE_DB_PASSWORD` only into the protected migration/decommission process. When HTTP installer finalization is used, provide the value only through the dedicated top-level `lifecycle_database_password` input: the finalizer maps it to `TELEGRAM_LIFECYCLE_DB_PASSWORD` for the `migrate` child only and never writes it into the installer `environment` map, `.env`, result contract, command arguments, or later child processes. Missing/wrong-server/same-principal/under-privileged/over-privileged lifecycle authority must fail before Telegram authority DDL or lifecycle state changes;
+- `config:clear` and `config:cache` finalization children explicitly remove `TELEGRAM_LIFECYCLE_DB_PASSWORD` even if the installer parent environment contains it. Installer environment persistence also fails before snapshot/write/migration when the existing application `.env` contains any non-empty configured lifecycle password (including a later duplicate after an empty placeholder); remove that stale deployment-only value first. For manual migration/decommission, remove the variable immediately afterward and rebuild any production configuration cache without that secret before starting web/worker/scheduler runtime; never run `config:cache` while the lifecycle password is injected;
+- the deterministic Telegram installation `GET_LOCK` is a serialization primitive only, not an identity proof; database lifecycle triggers independently require the authenticated `telegram_lifecycle` username, capability secret and exact lock ownership for activation/deactivation;
+- the Telegram authority migration preflight succeeds before any Telegram authority DDL; missing/under-privileged/over-privileged/wrong-server metadata authority is a deployment failure, not a reason to weaken grants or fall back to the runtime principal;
+- the ordinary application/migration database principal (`DB_USERNAME`) must retain the schema-local `LOCK TABLES` privilege in addition to the DDL authority already required to install/remove this migration. The exact decommission session must also report `@@SESSION.innodb_table_locks = 1`; the migration re-attests that dynamic prerequisite immediately before relying on `LOCK TABLES`. Galera-configured MariaDB is unsupported for this reference-fence primitive and must fail closed before lifecycle deactivation/reference-fence DDL when the exact session has `wsrep_on` enabled or a non-`none` Galera `wsrep_provider` is loaded. Decommission uses the lock only on the two Telegram authority tables to keep competing parent DDL excluded while an atomic no-reference-index barrier is attested and dropped; no global `RELOAD`/backup-lock privilege is required. Missing `LOCK TABLES`, disabled InnoDB table locking, or enabled Galera/wsrep fails closed before the reference-fenced `DROP`; do not bypass these checks;
+- filesystem ownership/permissions without `0777`;
+- valid HTTPS;
+- exactly one Scheduler Cron entry;
+- reviewed Supervisor worker configuration;
+- `php artisan health:check --critical --json --redact` passes on the candidate runtime before protected work is reopened. This shared readiness path fails closed on incompatible MariaDB family/version/`@@server_uid`, connection charset/collation/strict-mode drift, missing authentication on required Redis connections, Redis queue `after_commit` drift, or `retry_after` that does not exceed every reviewed Supervisor worker timeout; the atomic release-switch consumes this same check after activation;
+- no secret is exposed in command arguments, Chat, Git, or screenshots.
 
-Both PHP binaries must report PHP 8.4; Cron must be active; the Redis client and Supervisor controller must be available; the host operational timezone should be UTC. aaPanel may manage Redis outside the distro's `redis-server.service`, so authenticated Redis readiness is verified through the installer instead of assuming a systemd unit name. The installer must separately inspect extensions, `php.ini`, `disable_functions`, limits, OPcache, MariaDB, authenticated Redis, HTTPS, outbound connectivity, disk, and permissions.
+## Release gate
 
-Create the fixed layout once:
+Do not deploy unless the exact release candidate has:
 
-```bash
-install -d -o www -g www -m 0750 /www/acdomains/hell.hellpservice.ir/releases
-install -d -o www -g www -m 0750 /www/acdomains/hell.hellpservice.ir/shared/storage
-install -d -o www -g www -m 0700 /www/acdomains/hell.hellpservice.ir/shared/backups
-install -d -o www -g www -m 0700 /www/acdomains/hell.hellpservice.ir/shared/update-packages
-install -d -o www -g www -m 0700 /www/acdomains/hell.hellpservice.ir/shared/restore-work
-install -d -o www -g www -m 0700 /www/acdomains/hell.hellpservice.ir/shared/provider-certificates
-```
+- mandatory CI success;
+- reviewed migration/schema compatibility;
+- verified package integrity metadata;
+- applicable install/update/rollback rehearsal;
+- current backup/restore confidence;
+- no unresolved Critical/High release blocker;
+- explicit Owner release approval.
 
-Do not create `.env` manually with credentials on the command line. The browser installer or a hidden-input Artisan command writes it atomically with mode `0600`.
+## Package and activation
 
-## 3. Verify and stage a release
+A release package must contain source, lockfile, migrations, release metadata, compatibility metadata, and integrity material without secrets.
 
-Place the package, detached signature when used, and published checksum file in `/www/acdomains/hell.hellpservice.ir/shared/update-packages/`. Run as `root`:
+Verify package integrity and compatibility before extraction/activation. Reject path traversal, symlink escape, incompatible runtime/schema, and unverified content.
 
-```bash
-cd /www/acdomains/hell.hellpservice.ir/shared/update-packages
-sha256sum --check SHA256SUMS
-```
+Use the repository's guarded atomic release-switch implementation when available. Do not replace it with ad-hoc edits to an existing deployed release.
 
-Expected: every listed file reports `OK`. If release signing is enabled, verify with the public key and exact command stated in the release manifest. A checksum copied from the same untrusted package location is insufficient; compare it to the authenticated GitHub Release metadata.
+## Scheduler and workers
 
-Extract only with the version-controlled bootstrap tool supplied by the release; it must reject path traversal, symlink escape, wrong manifest, incompatible PHP/schema, existing release destination, and unsigned/unchecked content. Expected interface:
+- exactly one Cron invokes Laravel Scheduler;
+- Supervisor manages workers;
+- critical queues remain isolated from bulk/report/broadcast work as configured;
+- worker timeouts remain below retry-after bounds;
+- worker/scheduler health is observable without exposing secrets.
 
-```bash
-cd /www/acdomains/hell.hellpservice.ir
-sudo -u www ./shared/update-packages/bootstrap-release --package "shared/update-packages/<PACKAGE>" --release "<RELEASE>"
-```
+## Backups
 
-The tool creates `/www/acdomains/hell.hellpservice.ir/releases/<RELEASE>`, links `storage` and the shared `.env`, installs locked production dependencies as `www`, and writes a redacted journal. Do not substitute an ad-hoc `unzip` on production.
+Production backups must be consistent, authenticated-encrypted, checksummed/manifested, stored outside the public root, retained according to policy, and periodically restored in an isolated target-like environment.
 
-## 4. First installation
+A backup that has never been restored is not sufficient release evidence.
 
-For a new installation only:
+## Restore
 
-1. In aaPanel, create the site `hell.hellpservice.ir` and enable HTTPS.
-2. Set the site document root to `/www/acdomains/hell.hellpservice.ir/current/public`.
-3. Select PHP 8.4 and enable URL rewrite/front-controller handling for `public/index.php`.
-4. Deny access to hidden files and ensure no alias exposes the project or shared root.
-5. Activate the staged release only through the bootstrap's atomic symlink operation.
-6. Open the one-time installer URL using its short-lived setup token.
-7. Enter MariaDB, Redis, Telegram, Owner, and optional integration secrets into protected secret fields.
-8. Complete preflight, migrations, seed, webhook registration, health checks, and lock creation.
+Restore is privileged and explicit. It must validate backup integrity/compatibility, preserve a safety copy before destructive replacement, restore through an isolated/staged boundary where possible, and reconcile financial/remote state before reopening.
 
-The installer must end by creating `/www/acdomains/hell.hellpservice.ir/shared/installer.lock`; subsequent installer requests return `404` or `410`. Never share the setup URL or capture it in screenshots.
+Never edit ledger/payment history manually to make a restore appear consistent.
 
-Raw OpenLiteSpeed configuration is intentionally not shipped: aaPanel owns/regenerates the vhost file. The approved source of truth is the document root above plus an exported, redacted aaPanel vhost snapshot stored with deployment evidence.
+## Update and rollback
 
-## 5. Scheduler and workers
+An updater must verify package and compatibility before mutation, quiesce unsafe work, create a verified pre-update backup, stage code separately, apply reviewed migrations, run health/smoke checks, and atomically activate.
 
-Install exactly one Scheduler Cron entry from `deploy/cron/freedom-platform.cron` using aaPanel Cron or the system crontab. Verify:
+Database migrations should use expand/contract compatibility. A code rollback is forbidden when the current schema is incompatible with the previous release.
 
-```bash
-crontab -l | grep -F '/www/acdomains/hell.hellpservice.ir/current' | wc -l
-```
+If activation fails, preserve diagnostics, prevent unsafe new effects, and use the guarded rollback/restore path appropriate to the proven schema state. Never run `migrate:rollback` blindly on production.
 
-Expected: `1`.
+For the generic outbound Telegram delivery authority, quiesce queue workers and effect consumers before rollback, but do not rely on quiescence as the only race barrier. The migration-owned rollback path must acquire the capability-row exclusive lifecycle fence, wait out runtime transactions that already hold the shared fence, refuse without deactivation if any operation or `telegram.delivery.requested` Outbox authority then exists, and persist the capability as inactive before destructive DDL. New queue/effect transactions must fail closed after that point; a rollback blocked by an external FK must leave the surviving authority tables guarded and inactive. Do not manually edit the capability row, lifecycle session variables, installation lock, or Telegram Outbox guards to force rollback progress. If durable authority exists, retain the schema and use the reviewed forward-fix/restore decision instead of bypassing the refusal.
 
-Copy `deploy/supervisor/freedom-platform.conf` to `/etc/supervisor/conf.d/freedom-platform.conf`, then run as `root`:
+### Paid Service package authority migrations
 
-```bash
-supervisorctl reread
-supervisorctl update
-supervisorctl status 'freedom-platform-workers:*'
-```
+The Service package quote and paid-mutation authority changes are a single financial-schema release unit. Their ordered migrations are [`2026_08_20_000100_enable_service_package_quotes.php`](../database/migrations/2026_08_20_000100_enable_service_package_quotes.php) followed by [`2026_08_20_000110_enable_paid_service_mutation_authority.php`](../database/migrations/2026_08_20_000110_enable_paid_service_mutation_authority.php). Apply them only through the reviewed, exact-release migration mechanism after the release gate in this document has passed. Do not apply either migration ad hoc, out of timestamp order, or against an unknown partial schema.
 
-Expected: all configured processes become `RUNNING`; critical payments/provisioning are isolated from broadcast/report queues.
+| Release stage | Required operator evidence and action | Unsafe shortcut prohibited by the contract |
+|---|---|---|
+| **Preflight** | Confirm exact-revision FULL CI, including MariaDB and Redis, is green; verify that the prerequisite non-paid and operational Service authority migrations are already applied; quiesce workers and entrypoints that can create paid Service operations; take a verified database backup and identify the release owner who can authorize restoration. | Do not infer migration compatibility from a green quick test, a fake provider, or source presence alone. |
+| **Apply** | Apply the ordinary timestamped migration sequence while paid mutation creation remains unavailable. The second migration deliberately installs `provisioning_operations_paid_mutation_upgrade_fence` before composing its table, constraints, and guards, and removes that fence only after its final paid-operation insert guard is installed. | Do not manually create, alter, or drop the paid upgrade fence, trigger guards, check constraints, or authority table to accelerate the release. |
+| **Postflight** | Verify that the two migrations are recorded, the paid authority table and expected guards exist, `provisioning_operations_paid_mutation_upgrade_fence` is absent, and guarded smoke checks prove that unauthorized paid operations remain rejected. Reopen workers only after those checks succeed and the release owner accepts the result. | Do not reopen paid mutation processing merely because DDL completed; the completed authoritative guard surface is the acceptance condition. |
+| **Interrupted or failed apply** | Keep paid creation fail-closed, preserve the database and release diagnostics, and resume only the approved migration path on the same reviewed release revision after establishing the actual schema state. Escalate to restore when the state cannot be proven. | Never delete the fence or run an unreviewed partial rollback to make traffic appear healthy. |
 
-## 6. Permissions
+A rollback is exceptional, not a routine release operation. The paid-mutation migration itself refuses rollback while a paid authority row or paid provisioning-operation evidence exists; it also refuses when Service-operation Quote or combined-action pricing/eligibility evidence would be stranded. The preceding quote migration similarly refuses rollback while non-purchase Service-operation Quotes or combined-action evidence exist. When any of those guards reject rollback, retain the current schema, stop unsafe new effects, and use the approved forward-fix or backup/restore decision rather than bypassing the guard. [1] [2]
 
-Application source is immutable to the web process except shared runtime paths. Run as `root` after staging:
+## Operational evidence
 
-```bash
-chown -R www:www /www/acdomains/hell.hellpservice.ir/releases/<RELEASE>
-find /www/acdomains/hell.hellpservice.ir/releases/<RELEASE> -type d -exec chmod 0750 {} \;
-find /www/acdomains/hell.hellpservice.ir/releases/<RELEASE> -type f -exec chmod 0640 {} \;
-chmod 0750 /www/acdomains/hell.hellpservice.ir/releases/<RELEASE>/artisan
-chmod 0600 /www/acdomains/hell.hellpservice.ir/shared/.env
-```
+Keep detailed operational evidence in protected target storage. Repository release records contain only sanitized metadata needed for release audit. Never commit credentials, private provider payloads, customer data, subscription URLs, or private backup contents.
 
-Writable runtime directories live under shared `storage`; do not grant `0777`. Confirm the HTTP/queue user is `www` before applying ownership.
-
-## 7. Activation and verification
-
-Before activation, production `.env` must set `APP_ENV=production`, `APP_DEBUG=false`, `SESSION_SECURE_COOKIE=true`, `SESSION_HTTP_ONLY=true`, `SESSION_SAME_SITE=lax`, `SESSION_ENCRYPT=true`, and `REDIS_QUEUE_RETRY_AFTER=420` or a larger reviewed value. The Redis retry interval must remain greater than every Supervisor worker timeout.
-
-For upgrades use the application updater described in `docs/18-update-rollback-runbook.md`. For first activation, the supplied bootstrap performs an atomic relative symlink switch. Then run:
-
-```bash
-sudo -u www /www/server/php/84/bin/php /www/acdomains/hell.hellpservice.ir/current/artisan optimize
-sudo -u www /www/server/php/84/bin/php /www/acdomains/hell.hellpservice.ir/current/artisan queue:restart
-supervisorctl status 'freedom-platform-workers:*'
-curl --fail --silent --show-error https://hell.hellpservice.ir/health/live
-curl --fail --silent --show-error https://hell.hellpservice.ir/health/ready
-sudo -u www /www/server/php/84/bin/php /www/acdomains/hell.hellpservice.ir/current/artisan health:check --redact
-sudo -u www /www/server/php/84/bin/php /www/acdomains/hell.hellpservice.ir/current/artisan reconciliation:critical --fail-on-difference
-```
-
-Verify webhook secret validation with the application smoke command; do not send a forged public request containing the real secret:
-
-```bash
-sudo -u www /www/server/php/84/bin/php /www/acdomains/hell.hellpservice.ir/current/artisan telegram:webhook:verify --redact
-sudo -u www /www/server/php/84/bin/php /www/acdomains/hell.hellpservice.ir/current/artisan scheduler:heartbeat:verify
-sudo -u www /www/server/php/84/bin/php /www/acdomains/hell.hellpservice.ir/current/artisan workers:heartbeat:verify
-```
-
-Expected: all exit `0`, readiness is healthy, reconciliation has no unexplained difference, and Scheduler/worker heartbeats are current. Execute a test-bot onboarding and a Fake-provider purchase/provision/delivery journey before enabling live gateways.
-
-Store redacted evidence under `storage/app/private/operations/evidence/<RELEASE>/deployment/<UTC timestamp>/` and export a sanitized copy for the release record.
-
-## 8. Failure and rollback
-
-If failure occurs before the symlink switch, leave `current` unchanged and delete nothing until the staged journal is reviewed. If failure occurs after activation:
-
-1. Enter maintenance mode if customer/financial safety is affected.
-2. Stop new provider captures/provisioning through the Operations Center.
-3. Preserve logs and update journal.
-4. Follow `docs/18-update-rollback-runbook.md`; switch code back only when schema compatibility permits.
-5. If schema is incompatible, restore the verified pre-update backup and explicitly accept the documented data-loss window.
-6. Re-run health, reconciliation, webhook, queue, and Scheduler checks before reopening.
-
-Never run `migrate:rollback` blindly and never edit financial rows to make a deployment appear healthy.
+[1]: ../database/migrations/2026_08_20_000110_enable_paid_service_mutation_authority.php "Paid Service mutation authority migration"
+[2]: ../database/migrations/2026_08_20_000100_enable_service_package_quotes.php "Service package Quote authority migration"

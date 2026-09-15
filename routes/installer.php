@@ -11,5 +11,6 @@ Route::middleware(['installer.https', 'installer.available', 'throttle:installer
 
     Route::middleware('installer.unlocked')->group(function (): void {
         Route::get('/preflight', [InstallerAccessController::class, 'preflight'])->name('installer.preflight');
+        Route::post('/finalize', [InstallerAccessController::class, 'finalize'])->name('installer.finalize');
     });
 });

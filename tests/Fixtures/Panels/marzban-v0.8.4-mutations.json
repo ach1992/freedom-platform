@@ -1,0 +1,47 @@
+{
+  "provider": "marzban",
+  "version": "0.8.4",
+  "remote_id": "fp_provider_001",
+  "target_reference": "marzban-inbound-eyJwcm90b2NvbCI6InZsZXNzIiwidGFnIjoiVkxFU1MgVENQIFJFQUxJVFkifQ",
+  "requests": {
+    "create_service": {
+      "method": "POST",
+      "path": "/api/user",
+      "payload": {
+        "username": "fp_provider_001",
+        "status": "active",
+        "proxies": {"vless": {}},
+        "inbounds": {"vless": ["VLESS TCP REALITY"]},
+        "expire": 1800000000,
+        "data_limit": 1073741824,
+        "data_limit_reset_strategy": "no_reset"
+      }
+    },
+    "update_expiry": {"method": "PUT", "path": "/api/user/fp_provider_001", "payload": {"expire": 1800003600}},
+    "set_data_allowance": {"method": "PUT", "path": "/api/user/fp_provider_001", "payload": {"data_limit": 2147483648}},
+    "add_data_allowance": {"method": "PUT", "path": "/api/user/fp_provider_001", "payload": {"data_limit": 1610612736}},
+    "reset_usage": {"method": "POST", "path": "/api/user/fp_provider_001/reset", "payload": null},
+    "suspend": {"method": "PUT", "path": "/api/user/fp_provider_001", "payload": {"status": "disabled"}},
+    "activate": {"method": "PUT", "path": "/api/user/fp_provider_001", "payload": {"status": "active"}},
+    "delete": {"method": "DELETE", "path": "/api/user/fp_provider_001", "payload": null},
+    "rotate_subscription_link": {"method": "POST", "path": "/api/user/fp_provider_001/revoke_sub", "payload": null}
+  },
+  "create_response": {
+    "username": "fp_provider_001",
+    "status": "active",
+    "used_traffic": 0,
+    "lifetime_used_traffic": 0,
+    "created_at": "2026-08-07T00:00:00+00:00",
+    "links": ["vless://00000000-0000-4000-8000-000000000001@example.invalid:443?security=reality#fixture"],
+    "subscription_url": "https://example.invalid/sub/fixture-marzban",
+    "proxies": {"vless": {"id": "00000000-0000-4000-8000-000000000001"}},
+    "inbounds": {"vless": ["VLESS TCP REALITY"]},
+    "expire": 1800000000,
+    "data_limit": 1073741824,
+    "data_limit_reset_strategy": "no_reset",
+    "note": null,
+    "on_hold_timeout": null,
+    "on_hold_expire_duration": null,
+    "next_plan": null
+  }
+}

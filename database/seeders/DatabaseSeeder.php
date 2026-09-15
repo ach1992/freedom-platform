@@ -10,6 +10,19 @@ final class DatabaseSeeder extends Seeder
 {
     public function run(): void
     {
-        // Business seeders are introduced with their owning modules.
+        $this->call([
+            IdentityAccessFoundationSeeder::class,
+            OrderAccessFoundationSeeder::class,
+            UsdtAccessFoundationSeeder::class,
+            PaymentEligibilityAccessFoundationSeeder::class,
+            CatalogAccessFoundationSeeder::class,
+            PanelsAccessFoundationSeeder::class,
+            WalletAccessFoundationSeeder::class,
+            WalletFinancialFoundationSeeder::class,
+            PromotionAccessFoundationSeeder::class,
+            AgentPricingAccessFoundationSeeder::class,
+            TelegramMembershipAccessFoundationSeeder::class,
+            LocalizationAccessFoundationSeeder::class,
+        ]);
     }
 }

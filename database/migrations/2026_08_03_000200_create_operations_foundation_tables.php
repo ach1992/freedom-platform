@@ -34,8 +34,8 @@ return new class extends Migration
             $table->string('task_name', 191);
             $table->uuid('run_id')->unique();
             $table->string('state', 32);
-            $table->timestamp('started_at', 6);
-            $table->timestamp('finished_at', 6)->nullable();
+            $table->dateTime('started_at', 6);
+            $table->dateTime('finished_at', 6)->nullable();
             $table->unsignedInteger('duration_ms')->nullable();
             $table->json('metrics')->nullable();
             $table->string('error_class', 191)->nullable();
@@ -49,7 +49,7 @@ return new class extends Migration
             $table->string('queue', 64);
             $table->string('host_hash', 64);
             $table->string('release_version', 64)->nullable();
-            $table->timestamp('last_seen_at', 6);
+            $table->dateTime('last_seen_at', 6);
             $table->timestamps(6);
             $table->index(['queue', 'last_seen_at']);
         });
@@ -62,10 +62,10 @@ return new class extends Migration
             $table->string('correlation_id', 64);
             $table->json('safe_context')->nullable();
             $table->unsignedInteger('occurrence_count')->default(1);
-            $table->timestamp('first_seen_at', 6);
-            $table->timestamp('last_seen_at', 6);
-            $table->timestamp('acknowledged_at', 6)->nullable();
-            $table->timestamp('resolved_at', 6)->nullable();
+            $table->dateTime('first_seen_at', 6);
+            $table->dateTime('last_seen_at', 6);
+            $table->dateTime('acknowledged_at', 6)->nullable();
+            $table->dateTime('resolved_at', 6)->nullable();
             $table->timestamps(6);
             $table->unique(['event_name', 'deduplication_key'], 'alert_event_dedup_unique');
             $table->index(['severity', 'resolved_at']);

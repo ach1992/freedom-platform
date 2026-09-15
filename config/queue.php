@@ -10,8 +10,8 @@ return [
     |--------------------------------------------------------------------------
     |
     | Laravel's queue supports a variety of backends via a single, unified
-    | API, giving you convenient access to each backend using identical
-    | syntax for each. The default queue connection is defined below.
+    | API, giving you convenient access to each backend. The default queue
+    | connection is defined below.
     |
     */
 
@@ -24,7 +24,7 @@ return [
     |
     | Here you may configure the connection options for every queue backend
     | used by your application. An example configuration is provided for
-    | each backend supported by Laravel. You're also free to add more.
+    | each backend supported by Laravel.
     |
     | Drivers: "sync", "database", "beanstalkd", "sqs", "redis",
     |          "deferred", "background", "failover", "null"
@@ -72,7 +72,9 @@ return [
             'queue' => env('REDIS_QUEUE', 'default'),
             // Must exceed the longest worker timeout in deploy/supervisor.
             'retry_after' => (int) env('REDIS_QUEUE_RETRY_AFTER', 420),
-            'block_for' => null,
+            // Finite blocking guarantees idle workers return to the loop so
+            // per-process heartbeats and signal handling continue to run.
+            'block_for' => (int) env('REDIS_QUEUE_BLOCK_FOR', 5),
             'after_commit' => true,
         ],
 
@@ -101,7 +103,7 @@ return [
     |
     | The following options configure the database and table that store job
     | batching information. These options can be updated to any database
-    | connection and table which has been defined by your application.
+    | connection which has been defined by your application.
     |
     */
 
@@ -115,9 +117,8 @@ return [
     | Failed Queue Jobs
     |--------------------------------------------------------------------------
     |
-    | These options configure the behavior of failed queue job logging so you
-    | can control how and where failed jobs are stored. Laravel ships with
-    | support for storing failed jobs in a simple file or in a database.
+    | These options configure the behavior of failed queue job logging so
+    | you can control how and where failed jobs are stored.
     |
     | Supported drivers: "database-uuids", "dynamodb", "file", "null"
     |

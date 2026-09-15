@@ -32,7 +32,7 @@ body:
     attributes:
       label: Dependencies / base rule
       description: List prerequisite Issues/PRs/decisions and the base-branch rule. Resolve the live SHA when work starts instead of preserving a stale SHA here.
-      placeholder: "Depends on: none\nBranch from the current develop/v1.0.0-completion head."
+      placeholder: "Depends on: none\nBranch from the current main head."
     validations:
       required: true
 
@@ -59,7 +59,7 @@ body:
     attributes:
       label: Validation strategy
       description: Define how correctness will be demonstrated before implementation starts. Name focused tests/checks and expected CI tier when relevant; do not require ceremonial tests.
-      placeholder: "Focused validation: ...\nExpected CI tier: FULL"
+      placeholder: "Focused validation: ...\nExpected validation profile/checks: APPLICATION; MariaDB/Redis + static"
     validations:
       required: true
 
@@ -80,7 +80,7 @@ body:
     id: constraints
     attributes:
       label: Material constraints / impacts (optional)
-      description: Add only constraints that matter: protected/high-conflict areas, security/privacy, financial/provider effects, schema/migration, compatibility, runtime/operations, performance, or release impact. Leave empty when none apply.
+      description: "Add only constraints that matter: protected/high-conflict areas, security/privacy, financial/provider effects, schema/migration, compatibility, runtime/operations, performance, or release impact. Leave empty when none apply."
       placeholder: "Example: Payments/Wallet are protected; no schema change; preserve provider idempotency."
     validations:
       required: false

@@ -1,142 +1,119 @@
-# Test Strategy
+# Testing and CI Contract
 
-Status: planning baseline
+This document defines durable verification requirements: which checks are required, what they prove, and when evidence must be refreshed. Live run IDs, test counts, current failures, runner inventory, and repository setting state belong in GitHub.
 
-Applies to: `0.1.0` through `1.0.0`
+Execution tools, standard GitHub-hosted CI routing, and optional self-hosted runner provisioning/qualification/lifecycle are owned by [`development/execution-infrastructure.md`](development/execution-infrastructure.md).
 
-Primary requirements: `QUA-001`, `SEC-001`, `OPS-003`, `BAK-001`, `BAK-002`, `INS-001`, `UPD-001`
+## Execution model
 
-## Purpose
+GitHub is the project source of truth. No Owner-maintained local or server checkout is assumed.
 
-Testing proves the product invariants; it is not a claim that defects cannot exist. A release is blocked whenever a mandatory test fails, required evidence is missing, or a Critical/High security finding remains unresolved.
+Ordinary runtime/CI commands execute through reviewed GitHub Actions on standard GitHub-hosted Linux runners. An Actions checkout is transient execution state for an exact GitHub revision, not a second source repository.
 
-The traceability matrix in `docs/02-requirement-traceability-matrix.md` is the authoritative mapping from requirement to design, implementation, test, command, result, and evidence. Test names must include the relevant requirement ID, for example `PAY_003_duplicate_callback_captures_once`.
+The exact `runs-on` selector in each workflow revision is authoritative for runner routing. Generic CI must use the pinned standard GitHub-hosted runner defined by `.github/workflows/ci.yml`; manual staging/provider workflows may retain explicit self-hosted selectors only as dormant/trusted operational contracts. Workflow/toolchain checks must validate the effective environment rather than assuming host-specific paths.
 
-## Test environments
+## Using CI
 
-Evidence paths have distinct purposes: `build/evidence/` is transient local/CI output and is uploaded as a GitHub Actions artifact; `evidence/<phase>/` contains reviewed repository manifests that point to immutable runs; `storage/app/private/operations/evidence/` retains redacted staging/production operational evidence outside the public web root.
+- A non-Draft PR targeting `main` triggers the applicable CI tier.
+- Draft PRs stay quiet until marked Ready for review.
+- `.github/workflows/ci.yml` defines intentional manual validation through `workflow_dispatch`, but a definition is callable only when current GitHub/default-branch registration exposes that workflow.
+- A workflow file that exists only on an integration/task branch is code under review, not proof of a standing execution entrypoint.
+- Historical Actions registry entries or old successful runs do not prove that a workflow is currently callable. Verify the current default-branch workflow tree/registration before depending on an invocation path.
+- Runtime/readiness/provider workflow definitions remain narrow operational capabilities and are not substitutes for normal CI.
 
-| Environment | Purpose | Database/Redis | External systems | Evidence |
-|---|---|---|---|---|
-| Local | Fast unit and focused integration work | Disposable MariaDB and authenticated Redis from `docker-compose.ci.yml` | Fakes only | `build/evidence/local/<UTC timestamp>/` |
-| GitHub Actions | Mandatory repeatable merge gates | Disposable MariaDB and authenticated Redis | Fakes and deterministic contract fixtures | Workflow artifact `ci-evidence-<run id>` |
-| Staging | Target-like acceptance | Dedicated non-production MariaDB/Redis | Sandbox or controlled test accounts | `storage/app/private/operations/evidence/<release>/staging/` |
-| Production | Deployment verification only | Production | Live providers | `storage/app/private/operations/evidence/<release>/production/`; redacted export |
+If the Master cannot execute MariaDB/Docker/shell work directly, that is not itself a blocker. Persist reversible work on GitHub and use the standard GitHub-hosted Actions path for authoritative generic runtime evidence when the current GitHub capability can invoke it. If the current Chat connector cannot invoke a required validation run, continue independent reversible implementation/review work and surface that invocation boundary before the decision that actually consumes exact-head evidence. Do not weaken Draft/merge/release policy merely to work around a tool limitation.
 
-Production data, tokens, customer identifiers, subscription links, receipts, and provider payloads must never be copied to CI fixtures. Test credentials are scoped and revoked before release.
+Delegate to an external Worker only when that materially improves execution or review.
 
-## Determinism and test architecture
+## CI validation plan
 
-- PHP 8.4 and Laravel 13 are the baseline.
-- CI integration tests run against real MariaDB and authenticated Redis; SQLite is not accepted as migration or financial-integrity evidence.
-- Time, randomness, HTTP clients, Telegram, SMS, panels, payment providers, and storage destinations use injectable contracts.
-- Fake adapters are deterministic and model success, definitive failure, retryable failure, timeout-before-effect, timeout-after-effect, duplicate events, and out-of-order events.
-- Tests isolate state and are parallel-safe. A test requiring serialization states why.
-- Money uses integer IRR or fixed-precision decimals; floating-point monetary tests are forbidden.
-- Database uniqueness and transactions are tested as the final duplicate-effect barrier. Redis locks alone do not satisfy an idempotency test.
-- Logs and generated evidence are passed through secret/PII redaction checks.
+CI classifies the complete PR diff into independent validation needs. The profile name is only a summary; the job flags are authoritative. Secret scanning remains mandatory for every executing CI revision.
 
-## Required suites
-
-| Suite | Minimum scope | Runs |
-|---|---|---|
-| Unit | Money conversion/rounding, policies, state machines, pricing, permissions, matching, mappings, masks | PR and push |
-| Database integration | Migrations, constraints, ledger balance, holds, reservations, Outbox, encryption casts | PR and push |
-| Contract | Fake and Generic REST adapters; signed webhook fixtures; provider version notes | PR; live/sandbox on staging |
-| Concurrency/property | Wallet, exact amount, discount/capacity reservations, callbacks, receipt decisions, redemption, provisioning | PR and nightly/staging stress |
-| Telegram E2E | Onboarding, purchase, all payment paths, delivery, support, broadcast, Back/Cancel/replay | PR with fake API; staging with test bot |
-| Security | Authentication, authorization, IDOR, CSRF, SSRF/DNS rebinding, upload, injection, replay, rate limit, redaction | PR; full before RC |
-| Performance | Agreed workload, webhook bursts, purchases, ingestion, broadcasts, sync, reports, recovery | Staging before RC |
-| Chaos | Redis restart, deadlock, killed worker, provider/panel timeout, disk pressure, interrupted backup/deploy | Staging before RC |
-| Install/update/restore | Fresh install, installer lock, update, failed migration/smoke, symlink rollback, encrypted restore | Target-like staging |
-
-The detailed cases mandated by Master Prompt sections 30.2–30.15 are copied into the traceability matrix as test IDs; omission is a release blocker.
-
-## Non-negotiable invariant tests
-
-These tests cannot be quarantined or waived for a production release:
-
-1. No provisioning before authoritative capture, except typed trial/gift/admin-grant sources.
-2. A provider transaction, gift-card redemption, wallet capture, refund, callback, Telegram update, or manual decision creates at most one financial effect.
-3. One paid order item creates at most one active remote service identity, including timeout-after-create and worker-crash cases.
-4. Every ledger transaction balances; available balance never becomes negative; reconciliation finds no unexplained mismatch.
-5. Explicit administrator deny overrides role grants and every action re-authorizes server-side.
-6. A backup is encrypted and checksummed, and a full restore rehearsal passes.
-7. An update package is verified, activated atomically, and rollback compatibility is enforced.
-
-## CI command contract
-
-Once `composer.json` exists, the following Composer scripts are mandatory. CI fails if any is absent; a missing script is never treated as a skipped pass.
-
-```bash
-composer ci:static
-composer ci:test
-composer ci:forbidden-patterns
-composer ci:licenses
-```
-
-Expected responsibilities:
-
-- `ci:static`: `pint --test`, Larastan/PHPStan at the configured strict level, and architecture tests.
-- `ci:test`: complete automated suite, JUnit at `build/evidence/tests/junit.xml`, and Clover at `build/evidence/coverage/clover.xml`.
-- `ci:forbidden-patterns`: fail on disabled TLS verification, monetary floats, unsafe raw SQL concatenation, direct `env()` outside config, unlocalized presentation strings, and known secret patterns.
-- `ci:licenses`: create `build/evidence/dependencies/licenses.json` and fail on abandoned, unknown, or policy-incompatible packages.
-
-Exact CI commands are in `.github/workflows/ci.yml`. To reproduce locally from repository root:
-
-```bash
-docker compose -f docker-compose.ci.yml up -d --wait
-composer validate --strict --no-check-publish
-composer install --no-interaction --prefer-dist --no-progress
-composer audit --locked
-composer ci:static
-composer ci:forbidden-patterns
-composer ci:test
-composer ci:licenses
-docker compose -f docker-compose.ci.yml down --volumes
-```
-
-Expected result: every command exits `0`; MariaDB and Redis health checks report healthy; JUnit, coverage, dependency, and command logs exist under `build/evidence/`. Send the first failing command, exit code, and its redacted log when troubleshooting.
-
-## Coverage policy
-
-Coverage percentage is diagnostic, not a substitute for scenario coverage. The release gate checks:
-
-- every requirement row has at least one automated test and current evidence;
-- every financial/authorization/provisioning invariant has branch and failure-path coverage;
-- changed code has meaningful tests;
-- uncovered high-risk paths are release blockers regardless of aggregate percentage.
-
-An initial numeric baseline is recorded at `0.2.0`. Raising or lowering a threshold requires an ADR and cannot remove an invariant test.
-
-## Performance certification
-
-Final throughput and latency targets require the owner's realistic volume before `0.9.0`. Until then, CI runs only a documented smoke baseline. Staging evidence must record workload model, dataset size, concurrency, duration, p50/p95/p99 latency, error rate, queue recovery time, database connections, and host specifications. Invented targets are prohibited.
-
-## Evidence and defect handling
-
-Each run records:
-
-- Git SHA, release, UTC time, runner image/PHP/Composer/MariaDB/Redis versions;
-- exact command and exit code;
-- JUnit and coverage outputs;
-- migration/schema and reconciliation results;
-- dependency audit, license inventory, and secret scan;
-- sanitized logs and environment manifest.
-
-Evidence is immutable for the release candidate. Failed tests create a defect linked to requirement/test IDs. Flaky tests are defects: they remain blocking unless the test is proven irrelevant by documented specialist review. Financial, authorization, provisioning-idempotency, restore, and Critical/High security tests cannot be quarantined.
-
-## Phase gates
-
-| Phase | Exit evidence |
+| Changed behavior | Material validation |
 |---|---|
-| `0.1.0` | Complete requirement mapping, architecture/test/security review, no unresolved Critical business ambiguity |
-| `0.2.0` | Clean target-like install; migrations on MariaDB; authenticated Redis; static gates and foundation tests pass |
-| `0.3.0` | Authorization matrix, OTP abuse, and identity privacy tests pass |
-| `0.4.0` | Panel adapter contracts and remote idempotency tests pass |
-| `0.5.0` | Payment, matching, redemption, wallet, concurrency, and no-provision-before-capture tests pass |
-| `0.6.0` | Failure/uncertain-result matrix and duplicate-service prevention pass |
-| `0.7.0` | Telegram E2E and broadcast idempotency pass |
-| `0.8.0` | Restore, update/rollback, and operations failure rehearsals pass |
-| `0.9.0` | Full regression/security/performance/chaos; no open Critical/High; signed RC evidence |
-| `1.0.0` | Production package/checksum, final reports, deployment and post-deployment checks accepted |
+| canonical docs / governance | affected planning/project-control checks |
+| bounded read-only control plane | project/control contract + dedicated read-only workflow verifier |
+| PHP application/config/schema | Pint + PHPStan/forbidden/architecture + MariaDB 10.11/Redis integration |
+| PHP tests only | Pint + MariaDB 10.11/Redis integration |
+| Composer manifest/lock | Composer validation/audit/license + static/application integration affected by dependency changes |
+| Docker CI/runtime | Docker Compose contract + MariaDB 10.11/Redis integration |
+| operational/deployment entrypoints | shell/PHP operational syntax/entrypoint validation; separate High/Critical review/release gates still apply |
+| unknown/unclassified | fail safe to every normal validation domain |
+
+`.github/workflows/staging-readiness.yml` is the only current workflow intentionally classified as bounded read-only control plane. Its verifier requires manual dispatch, read-only token permissions, no secrets/protected environment, the current repository runner selector, an allowlisted action surface and no known runtime/host mutation commands. The verifier itself has adversarial tests. No wildcard `.github/workflows/*` downgrade exists.
+
+Changes to the CI classifier/workflow are self-modifying control-plane changes: representative classifier cases and verifier-abuse cases run independently of the classifier result. A CI-policy change does not manufacture a MariaDB run when the effective diff cannot affect application/database behavior; conversely any application/schema/database-affecting diff still requires MariaDB 10.11.
+
+The normal integration target is MariaDB 10.11 with authenticated Redis. Other compatible MariaDB lines are explicit task/release compatibility evidence, not an automatic matrix on every PR.
+
+## Workflow permissions
+
+Each workflow's explicit `permissions:` block is authoritative for its `GITHUB_TOKEN` access. Grant only the capability the workflow requires. Repository-local automation should prefer repository-scoped `GITHUB_TOKEN`; do not introduce a PAT merely to replace a capability that `GITHUB_TOKEN` already provides.
+
+Repository settings/protection endpoints that the connected GitHub App cannot read must be treated as **unknown**, not as enabled or disabled by assumption. Use observable branch/API state, workflow source, actual run/job evidence, and Owner-visible settings when a decision truly depends on those controls.
+
+## Evidence reuse and reruns
+
+A green applicable validation plan proves the tested PR revision while the resulting tree remains materially unchanged. Revalidate after a base advance, conflict resolution, post-test edit, dependency/runtime change, or other material difference. PR concurrency cancels superseded safe runs, and preflight rejects a run that starts after the event's exact base/head has already drifted. Integration still refreshes exact candidate, target, mergeability and applicable checks immediately before merge.
+
+For an unchanged revision:
+
+- rerun a clearly transient failed job only when appropriate;
+- do not rerun successful jobs without a concrete reason;
+- fix deterministic failures instead of repeatedly rerunning them.
+
+Routine successful checks are GitHub evidence. Do not manufacture per-task evidence files or large success artifacts.
+
+## Reproducible verification commands
+
+These commands may run in a reviewed Actions checkout or an explicitly delegated Worker environment. They do not imply an Owner local checkout.
+
+```bash
+composer install --no-interaction --prefer-dist --no-progress --no-scripts
+php artisan package:discover --ansi
+bash scripts/ci/verify-planning.sh
+bash scripts/ci/verify-project-control.sh
+php vendor/bin/pint --test
+php -d memory_limit=1G vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+composer validate --strict --no-check-publish
+bash scripts/ci/forbidden-patterns.sh
+bash scripts/ci/architecture.sh
+composer audit --locked --abandoned=fail
+bash scripts/ci/licenses.sh
+composer test:quick
+composer test:integration
+```
+
+Additional MariaDB compatibility can be requested explicitly, for example:
+
+```bash
+MARIADB_VERSION=11.4 composer test:integration
+```
+
+`composer test:quick` is fast feedback only. MariaDB is required for migrations, constraints, triggers, locking, and concurrency acceptance.
+
+The executable PHP/Composer runner contract is enforced by `scripts/ci/bootstrap-ci-toolchain.sh`; do not duplicate its exact extension/version checks here.
+
+## Test design rules
+
+- Redis coordination loss must not violate durable correctness.
+- Time, randomness, external I/O, and providers should be deterministic/injectable in tests.
+- Critical paths cover success, validation, authorization, exact replay, conflicting replay, concurrency/database conflict, and failure/uncertainty boundaries as applicable.
+- Monetary tests use integer IRR or fixed-precision decimal, never floating-point money.
+- Fakes prove local orchestration semantics only; they do not prove live provider compatibility.
+
+## Required invariant coverage
+
+When applicable, tests must prove:
+
+- no paid provisioning before authoritative capture;
+- duplicate callbacks/jobs/actions create no second durable effect;
+- one provider transaction/redeemable value cannot settle twice;
+- uncertain remote mutation is reconciled before retry;
+- financial posting remains balanced and append-only;
+- authorization is checked server-side at execution time;
+- restricted data is not exposed through repository evidence.
+
+## Failure policy
+
+Do not suppress, weaken, quarantine, or repeatedly rerun a genuine deterministic failure until green. Financial, authorization, idempotency, schema, security, backup/restore, and release-integrity failures are blocking.

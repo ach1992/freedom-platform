@@ -1,0 +1,25 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Tests\Feature;
+
+use App\Modules\Panels\Application\Contracts\PanelAdapter;
+use App\Modules\Panels\Application\Contracts\PanelAdapterFactory;
+use App\Modules\Panels\Application\PanelAdapterSession;
+use App\Modules\Panels\Domain\PanelProviderType;
+
+final readonly class AutoRenewTestPanelAdapterFactory implements PanelAdapterFactory
+{
+    public function __construct(private AutoRenewTestPanelAdapter $adapter) {}
+
+    public function providerType(): PanelProviderType
+    {
+        return PanelProviderType::Fake;
+    }
+
+    public function make(PanelAdapterSession $session): PanelAdapter
+    {
+        return $this->adapter;
+    }
+}

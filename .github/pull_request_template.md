@@ -15,9 +15,11 @@ State an adjacent nonclaim only when the scope could otherwise be misunderstood.
 
 High/Critical financial, authorization, security, provider, schema, deployment/release, secret, or irreversible work requires independent review and explicit Owner approval unless the exact action was already authorized.
 
+When independent review is required, follow the Owner-relayed fresh-ChatGPT workflow in `CONTRIBUTING.md`; do not request GitHub/Copilot/external reviewers.
+
 ## Verification
 
-Expected CI tier: CONTROL / FULL
+Expected validation profile/checks: CONTROL / CONTROL_PLANE / APPLICATION / OPERATIONS / FULL; list only material job domains when useful
 
 Focused commands/tests/results or applicable CI reference:
 

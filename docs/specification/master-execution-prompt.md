@@ -7,53 +7,36 @@
 **Target release:** `1.0.0` production release  
 **Product UI language:** Persian by default, multilingual-ready  
 **Execution model:** ChatGPT Work, a coordinated multi-agent engineering team, or a human software team  
-**Authoritative rule:** This document is the complete product, engineering, security, testing, deployment, and acceptance specification. Implement exactly the capabilities, workflows, invariants, and delivery boundaries defined here. Do not invent additional business integrations or silently omit a defined requirement.
+**Authoritative rule:** This document is the normative Version 1 product, security, correctness, runtime, integration, testing, deployment, and final-acceptance specification. Implement its capabilities, invariants, and delivery boundaries; do not invent business integrations or silently omit a defined requirement. Repository execution mechanics and live delivery state are governed by `AGENTS.md`, `CONTRIBUTING.md`, the canonical engineering references, and live GitHub.
+**Repository governance reconciliation:** `2026-08-11` — process-only instructions that required duplicate status, traceability, handoff, or per-task evidence artifacts are superseded; Version 1 product/security/correctness scope is unchanged.
 
 ---
 
-# 0. Primary Command to the Lead Agent
+# 0. Product Delivery Command
 
-You are the Lead Agent, Program Manager, Principal Architect, and final delivery owner for this project. Build the entire application from zero and deliver a production-ready `1.0.0` release. You may create and coordinate specialist agents, but you remain responsible for scope control, architecture, integration, security, tests, release quality, documentation, deployment readiness, and final acceptance.
+Complete the production-ready `1.0.0` product defined by this specification from the repository's current accepted state. Do not restart the project, recreate retired planning artifacts, or treat historical process instructions as current project state.
 
-## 0.1 Mandatory operating behavior
+## 0.1 Repository execution model
 
-1. Read this entire document before writing application code.
-2. Treat every requirement in this document as authoritative.
-3. Create a requirement ledger and assign a stable requirement ID to every functional, security, operational, and testing requirement.
-4. Maintain a bidirectional traceability matrix: requirement -> design -> code -> tests -> evidence.
-5. Work in versioned phases. Do not close a phase until its Quality Gate passes.
-6. Do not ask the owner questions that can be resolved safely through documented defaults, local fakes, stubs, contract tests, or official documentation.
-7. Ask the owner only when a real secret, real account, root-level server action, legally relevant business policy, or irreversible production decision is required.
-8. Never place credentials in chat, commits, fixtures, screenshots, logs, test reports, artifacts, or issue descriptions.
-9. Every claim that something was tested must include the exact command, environment, result, and generated evidence path.
-10. Do not claim absolute zero defects. The production criterion is: no known Critical or High defect, all mandatory tests pass, all financial and authorization invariants are proven by automated tests, and remaining accepted risks are documented.
-11. Use a Laravel modular monolith with the minimum infrastructure required for reliable operation, deployment, recovery, and observability.
-12. Preserve modularity so a future web administration interface can use the same Application Services without duplicating business logic.
-13. Never build a paid service before authoritative payment success, and never create two services for one paid order.
-14. Never allow a duplicate callback, webhook, receipt approval, queue retry, or repeated Telegram update to create a second financial effect.
-15. Stop and raise a release blocker when a financial invariant, authorization boundary, restore test, or provisioning idempotency test fails.
+1. Read the owning requirements and relevant canonical references before changing product behavior.
+2. Use the existing stable requirement IDs in `docs/01-authoritative-requirements.md`; do not create a second requirement ledger or mutable traceability matrix. Link implementation work to requirement IDs through GitHub Issues, PRs, code/tests where useful, and review history.
+3. Use live GitHub as the delivery system: Program Issue `#3` -> active phase Issue -> bounded task Issue -> PR/checks. Every independently reviewable task has one owning Issue that records its authority, outcome, dependencies, bounded scope, acceptance criteria, validation strategy, and material risk. Dynamic priority, status, blockers, decisions, branches, SHAs, reviews, and CI results do not belong in repository status files or Chat.
+4. Work in outcome-based phases. A phase closes when its GitHub exit criteria and applicable product/security/financial/operational validation are satisfied, not when a ceremonial report is produced.
+5. Ask the Owner only for decisions that cannot safely be derived from the specification/current repository, or that require real credentials/accounts, privileged infrastructure action, business/legal policy, production rollout, irreversible action, or explicit High/Critical approval.
+6. Never place credentials or sensitive customer/provider/payment data in Chat, commits, fixtures, screenshots, logs, PR/Issue text, or retained evidence.
+7. Testing claims must be reviewable from focused commands/results and applicable CI/checks. Run risk-proportionate checks only when they can inform a decision; keep draft PRs quiet, reuse valid green evidence when the resulting tree is materially unchanged, and never weaken or rerun deterministic checks merely to manufacture a pass. Do not create a per-task evidence document or artifact merely to restate a successful workflow run.
+8. Update an existing canonical document only when a durable product, architecture, security, testing, compatibility, or operations rule changes. Keep the repository clean: give each durable concept one canonical home, keep dynamic delivery history in Git/GitHub, and remove obsolete coordination artifacts rather than preserving parallel accounts of state.
+9. Production acceptance does not mean absolute zero defects. It requires no known unresolved Critical/High release defect, all mandatory acceptance checks, proven financial/authorization/idempotency/restore/release invariants where applicable, and explicit treatment of remaining accepted risks.
+10. Keep development fast without lowering safeguards: prefer the smallest safe, cohesive, independently reviewable change; use CI tiers and focused tests in proportion to change risk; avoid work, checks, or documents that do not improve implementation, review, recovery, or release safety.
+11. Keep a Laravel modular monolith with the minimum infrastructure needed for reliable operation. Optimize boundaries for future features/adapters/UI surfaces; do not refactor solely because a file is large or split cohesive behavior merely to reduce line count.
+12. Never provision a paid service before authoritative payment settlement, never create two services for one paid item, and never allow duplicate callbacks/webhooks/retries/operator actions to create a second financial or irreversible remote effect.
+13. Stop acceptance when a financial invariant, authorization boundary, restore/release integrity check, or provisioning idempotency requirement fails.
 
-## 0.2 First artifacts to create
+## 0.2 State retention and handover
 
-Before feature implementation, create:
+A new human developer or AI agent with no Chat history must be able to continue from `README.md`, `AGENTS.md`, `CONTRIBUTING.md`, Program Issue `#3`, Draft integration PR `#6`, the active task, and only the relevant canonical references. The GitHub Program/phase/task/PR chain owns live progress and decisions; recovery must not depend on private context, a previous operator, or a synchronized status document.
 
-- `docs/00-execution-ledger.md`
-- `docs/01-authoritative-requirements.md`
-- `docs/02-requirement-traceability-matrix.md`
-- `docs/03-risk-register.md`
-- `docs/04-domain-glossary.md`
-- `docs/05-architecture-overview.md`
-- `docs/06-test-strategy.md`
-- `docs/07-security-threat-model.md`
-- `docs/08-data-classification.md`
-- `docs/09-deployment-runbook.md`
-- `docs/10-release-checklist.md`
-- `docs/adr/`
-- an initialized Git repository
-- initial tag `v0.1.0-planning-start`
-
-Every artifact must be updated during implementation, not created as empty ceremony.
-
+Do not create or restore `PROJECT_STATUS.md`, execution ledgers, mutable traceability matrices, per-task handoff files, per-task risk/evidence reports, or phase evidence directories merely for coordination. Git/GitHub/CI already preserve that history. Release-candidate/release records may be retained only when they have a real future operational or acceptance consumer.
 ---
 
 # 1. Project Mission
@@ -314,13 +297,12 @@ Responsibilities:
 
 ## 3.11 Team workflow rules
 
-- No author approves their own security-sensitive or financial change alone.
-- Every module requires at least one code review by a different specialist.
-- Financial, authorization, installer, updater, backup, and provider-integration changes require specialist review.
-- All merge requests reference requirement IDs and tests.
-- Use small, reviewable commits.
-- Every phase ends with a written Quality Gate report.
-
+- One bounded GitHub Issue owns each independently reviewable task; one PR should normally implement that task.
+- PRs link the owning Issue/requirements and the validation that proves the change. Do not require duplicate traceability/evidence documents.
+- No author alone approves High/Critical financial, authorization, security, provider, schema, deployment/release, secret, or irreversible work unless that exact action was explicitly pre-authorized by the Owner.
+- Use independent/specialist review when risk requires it. Do not add reviewers or checklists that provide no decision value.
+- Prefer small, cohesive, independently reviewable changes; do not split tightly coupled work or create tasks merely to increase task count.
+- A phase ends when its GitHub exit criteria and applicable quality/security/financial/operations gates pass. Create a durable phase/release report only when a release, audit, or operations consumer actually needs it.
 ---
 
 # 4. Architecture
@@ -1503,10 +1485,12 @@ Requirements:
 
 Version 1 supports:
 
-- manual rate;
-- Nobitex public market data;
-- Tetherland price data;
+- managed Manual IRR-per-USDT rate;
+- Nobitex public USDT/RLS market data;
+- Wallex public `USDTTMN` spot-market data;
 - future adapters.
+
+Runtime selection is deterministic: `Nobitex -> Wallex -> Manual`. The Manual rate is a protected DB-backed, versioned, audited product setting. Deployment configuration is bootstrap fallback only before a managed value exists; it is not a second runtime authority.
 
 Configuration:
 
@@ -1550,6 +1534,9 @@ Use fixed-precision decimal and configurable round-up, default up to 6 decimal p
 - separate API key and IPN secret;
 - verify IPN signature according to current official canonicalization rules;
 - invalid signature changes no financial state;
+- use the same selected IRR-per-USDT authority as direct USDT pricing (`Nobitex -> Wallex -> Manual`) as the explicit Version 1 business pricing proxy required for `price_currency=usd`; this is a pricing policy, not a claim that USD and USDT are economically identical;
+- snapshot the selected rate source, exact rate, provider evidence identity, pricing-policy identity, derived USD `price_amount`, pay currency, and rounding policy immutably for each payment;
+- do not introduce a separate USD/IRR provider or Manual USD rate in Version 1;
 - compare payment ID, order ID, amount, pay currency, price currency, and status;
 - re-query authoritative status for sensitive transitions;
 - duplicate and out-of-order IPNs are idempotent;
@@ -3379,7 +3366,7 @@ Block release on:
 
 Deliver:
 
-- requirement ledger;
+- stable requirement-ID index in `docs/01-authoritative-requirements.md`;
 - domain glossary;
 - use cases;
 - state machines;
@@ -3390,7 +3377,7 @@ Deliver:
 - module boundaries;
 - ADRs;
 - risk register;
-- traceability matrix.
+- GitHub-linked requirement coverage through owning Issues/PRs, code/tests, review, and applicable CI.
 
 Gate: every requirement in this prompt is mapped and no unresolved Critical business ambiguity remains.
 
@@ -3664,20 +3651,20 @@ Use the following official sources to verify current endpoint schemas, signature
 - Melli Payamak API: `https://www.melipayamak.com/api/`
 - Kavenegar REST API: `https://kavenegar.com/rest.html`
 - Nobitex API: `https://apidocs.nobitex.ir/`
-- Tetherland public price endpoint: `https://api.tetherland.com/currencies`
+- Wallex public markets endpoint: `https://api.wallex.ir/hector/web/v1/markets`
 - PHP 8.4 manual: `https://www.php.net/manual/en/`
 - MariaDB documentation: `https://mariadb.com/docs/`
 - Redis documentation: `https://redis.io/docs/latest/`
 - OpenLiteSpeed documentation: `https://docs.openlitespeed.org/`
 - OWASP ASVS, API Security, and Cheat Sheet Series: `https://owasp.org/`
 
-For each integration, commit a dated contract note containing the tested version, endpoint base URL, authentication method, request/response samples with secrets removed, timeout/retry policy, status mapping, rate limits, webhook signature verification, and contract-test evidence.
+For each integration that enters Version 1, maintain or refresh the smallest applicable canonical contract reference containing the tested version, endpoint base URL, authentication method, request/response samples with secrets removed, timeout/retry policy, status mapping, rate limits, webhook signature verification, and contract-test evidence. Keep task-specific progress, review discussion, and CI history in GitHub; do not create a separate note merely to duplicate that dynamic state.
 
 ---
 
 # 36. Functional Requirement and Workflow Catalogue
 
-The team must copy these IDs into the traceability matrix. Every item requires design, implementation, automated tests, and acceptance evidence.
+The team must use these stable IDs in the owning GitHub Issue/PR, code/tests, and acceptance review where useful; do not copy them into a mutable traceability matrix. Every item requires design, implementation, automated tests, and acceptance evidence.
 
 | ID | Required capability and canonical acceptance workflow |
 |---|---|
@@ -3722,10 +3709,10 @@ The team must copy these IDs into the traceability matrix. Every item requires d
 | `GFT-003` | Automatic gift-card verification works through Fake and Generic REST providers and separates validate, reserve, redeem/capture, release, and balance/status checks. |
 | `GFT-004` | A code or external redemption cannot fund two payments. Unknown, already-used, wrong-value, wrong-region, pending, or provider-error responses never auto-capture and are reconciled/manual-reviewed. |
 | `USDT-001` | Direct USDT displays BEP20 clearly, locks an IRR-to-USDT quote, destination address, exact decimal amount, source rate, margin, and expiration. |
-| `USDT-002` | Rate providers include manual, Nobitex, and Tetherland with priority/fallback, stale-rate limits, min/max sanity checks, divergence guard, and test connection. |
+| `USDT-002` | Rate providers include managed Manual IRR-per-USDT, Nobitex public USDT/RLS, and Wallex public `USDTTMN`, with deterministic `Nobitex -> Wallex -> Manual` selection, stale-rate limits, min/max sanity checks, divergence guard, circuit breaking, protected managed-setting history, and test connection. |
 | `USDT-003` | Customer submits TXID and optional evidence; TXID uniqueness, network, destination, amount, confirmations, and time are reviewed manually and remain adapter-ready for automatic chain verification. |
 | `IPG-001` | Zarinpal request, redirect, callback, server-side verify, amount/authority matching, duplicate verify handling, refund capability detection, and reconciliation are implemented against official docs. |
-| `IPG-002` | NOWPayments create-payment, IPN signature verification, server-side status lookup, amount/currency/order matching, partial/over/under payment policy, expiration, and reconciliation are implemented. |
+| `IPG-002` | NOWPayments implements create-payment, IPN signature verification, server-side status lookup, amount/currency/order matching, partial/over/under payment policy, expiration, and reconciliation. Version 1 pricing uses the same snapshotted IRR-per-USDT authority as direct USDT as the explicit `price_currency=usd` pricing proxy; no separate USD/IRR provider or Manual USD authority exists. |
 | `WAL-001` | Wallet top-up uses a normal Payment Intent; a successful external settlement creates one balanced ledger transaction and updates the cash balance. |
 | `WAL-002` | Cash and promotional-credit buckets use append-only double-entry ledger transactions, holds, capture/release, balance snapshots, and reconciliation. |
 | `WAL-003` | User-to-user transfer validates recipient, limits, status, transferable bucket, fee, and confirmation, then posts debit/credit atomically. |

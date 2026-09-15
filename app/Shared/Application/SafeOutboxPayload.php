@@ -67,6 +67,10 @@ final readonly class SafeOutboxPayload
                 }
             }
 
+            if ($value instanceof RestrictedData) {
+                throw new InvalidArgumentException('Restricted data is forbidden in outbox payloads.');
+            }
+
             if (is_array($value)) {
                 $this->validate($value);
             } elseif (! is_scalar($value) && $value !== null) {

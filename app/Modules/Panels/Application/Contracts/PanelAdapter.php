@@ -14,6 +14,12 @@ interface PanelAdapter
 
     public function findByDeterministicUsername(string $username): ?RemoteServiceSnapshot;
 
+    /**
+     * Return the provider-specific canonical hash of create intent fields that
+     * the provider preserves and can later prove through authoritative lookup.
+     */
+    public function createEquivalenceHash(PanelCreateServiceRequest $request): string;
+
     public function createService(PanelCreateServiceRequest $request): PanelOperationResult;
 
     public function fetchStatus(string $remoteId): PanelOperationResult;

@@ -11,6 +11,7 @@
         "ext-curl": "*",
         "ext-dom": "*",
         "ext-fileinfo": "*",
+        "ext-gd": "*",
         "ext-intl": "*",
         "ext-json": "*",
         "ext-mbstring": "*",
@@ -22,6 +23,7 @@
         "ext-sodium": "*",
         "ext-tokenizer": "*",
         "ext-xml": "*",
+        "endroid/qr-code": "^6.1",
         "laravel/framework": "^13.8",
         "laravel/tinker": "^3.0"
     },
@@ -53,13 +55,18 @@
             "composer install",
             "@php -r \"file_exists('.env') || copy('.env.example', '.env');\"",
             "@php artisan key:generate",
-            "@php artisan migrate --force"
+            "@php artisan migrate --force --isolated=1"
         ],
         "dev": "@php artisan serve",
         "test": [
             "@php artisan config:clear --ansi @no_additional_args",
             "@php artisan test"
         ],
+        "test:quick": [
+            "@php artisan config:clear --ansi @no_additional_args",
+            "@php artisan test"
+        ],
+        "test:integration": "bash scripts/ci/test-integration.sh",
         "ci:static": [
             "@php vendor/bin/pint --test",
             "@php vendor/bin/phpstan analyse --no-progress --memory-limit=1G",

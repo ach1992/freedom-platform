@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Shared\Infrastructure\Logging;
 
+use App\Shared\Application\RestrictedData;
 use Monolog\LogRecord;
 use Throwable;
 
@@ -55,6 +56,7 @@ final class RedactSensitiveDataProcessor
             }
 
             $sanitized[$key] = match (true) {
+                $value instanceof RestrictedData => self::REDACTED,
                 is_array($value) => $this->sanitize($value),
                 $value instanceof Throwable => [
                     'class' => $value::class,

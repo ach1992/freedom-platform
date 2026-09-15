@@ -1,0 +1,37 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Modules\Telegram\Application\Contracts;
+
+use App\Modules\Telegram\Application\TelegramCustomerPurchaseMembershipPreflight;
+use App\Modules\Telegram\Application\TelegramCustomerPurchaseQuotePreview;
+use DateTimeImmutable;
+
+interface TelegramCustomerPurchaseQuote
+{
+    public function membershipForSelf(
+        int $actorUserId,
+        int $subjectUserId,
+        string $offeringSelectionToken,
+        string $locale,
+    ): TelegramCustomerPurchaseMembershipPreflight;
+
+    public function previewForSelf(
+        int $actorUserId,
+        int $subjectUserId,
+        string $offeringSelectionToken,
+        string $quotePublicId,
+        string $quoteConfigurationHash,
+    ): TelegramCustomerPurchaseQuotePreview;
+
+    public function quoteForSelf(
+        int $actorUserId,
+        int $subjectUserId,
+        string $offeringSelectionToken,
+        DateTimeImmutable $acceptedAt,
+        string $quoteKey,
+        string $correlationId,
+        ?TelegramCustomerPurchaseMembershipPreflight $membership = null,
+    ): TelegramCustomerPurchaseQuotePreview;
+}

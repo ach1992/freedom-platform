@@ -2,45 +2,74 @@
 
 Telegram-first commerce and lifecycle-management platform for VPN/proxy subscriptions.
 
-## Default branch landing
+## Start here
 
-`main` is the **release/default branch**. It is intentionally not the active Version 1 development branch, so source and historical documentation on `main` may lag accepted work on the integration line until release.
+For development or project recovery, use this order:
 
-For current development or project recovery, do **not** infer project state from old files/commits on `main`. Use this order:
+1. [`AGENTS.md`](AGENTS.md) — repository authority, safety rules, branch/PR policy, and delivery model.
+2. [`CONTRIBUTING.md`](CONTRIBUTING.md) — development workflow, Issue/PR/review conventions, and links to the owning execution/validation references.
+3. [Program Issue #3](https://github.com/ach1992/freedom-platform/issues/3) — live Version 1 phase/backlog/dependency state.
+4. [`docs/README.md`](docs/README.md) — index of durable product, architecture, security, testing, execution-infrastructure, and operations references.
 
-1. [Program Issue #3](https://github.com/ach1992/freedom-platform/issues/3) — live Version 1 phase, priority, dependencies, and next work.
-2. [Draft integration PR #6](https://github.com/ach1992/freedom-platform/pull/6) — live `develop/v1.0.0-completion` integration line toward `main`.
-3. [`README.md` on `develop/v1.0.0-completion`](https://github.com/ach1992/freedom-platform/blob/develop/v1.0.0-completion/README.md) — current project/development entry point.
-4. [`AGENTS.md` on `develop/v1.0.0-completion`](https://github.com/ach1992/freedom-platform/blob/develop/v1.0.0-completion/AGENTS.md) — current authority, branch/PR, architecture, safety, and CI rules.
-5. [`CONTRIBUTING.md` on `develop/v1.0.0-completion`](https://github.com/ach1992/freedom-platform/blob/develop/v1.0.0-completion/CONTRIBUTING.md) — current setup and verification commands.
-6. [`master-execution-prompt.md` on `develop/v1.0.0-completion`](https://github.com/ach1992/freedom-platform/blob/develop/v1.0.0-completion/docs/specification/master-execution-prompt.md) — normative Version 1 product/security/correctness specification.
-
-GitHub is authoritative for mutable task/phase priority, dependencies, blockers, PR/review state, and CI. There is no repository project-status snapshot to synchronize, and Chat history is not required to continue the project.
+GitHub is authoritative for current phase/task priority, dependencies, blockers, branches, PRs, reviews, CI, repository source, and live runner inventory. Do not maintain repository status or infrastructure-inventory snapshots that duplicate this state. A replacement manager or developer should be able to recover current work from the sources above without chat history.
 
 ## Branch model
 
-- `main` — release/default branch; normal feature development does not start here.
-- `develop/v1.0.0-completion` — active Version 1 integration branch.
-- temporary task branches — branch from the current integration head and target `develop/v1.0.0-completion`.
+`main` is the only long-lived branch and is both the default branch and the primary integration branch. Normal work uses temporary task branches created from the current `main` head and merged back to `main` through reviewed PRs. Production release, deployment, and other consequential delivery actions remain separate from ordinary integration and keep their own approval/validation gates.
 
-Draft PR #6 remains the cumulative release path and must not be merged to `main` without explicit Owner release acceptance.
+## Execution model
 
-## Default-branch controls
+The project is maintained from GitHub. No Owner-managed local checkout or server checkout is assumed to exist or to contain project truth.
 
-- Default-branch CI uses ephemeral standard GitHub-hosted Linux runners; any future self-hosted route is a separate trusted/private operational decision and is not an automatic fallback.
-- Dependabot version-update PRs target `develop/v1.0.0-completion` during Version 1 development.
-- GitHub Issue/PR templates on this default branch define the lean risk-based task/review contract used by the repository.
-- `AGENTS.md` and `CONTRIBUTING.md` on this branch are guards/routers for zero-context entry; current implementation rules live on the active integration branch linked above.
+- Durable changes and current delivery state live in GitHub.
+- Real runtime/CI commands execute through supported execution capabilities rather than an invented local environment.
+- Execution workspaces, runner checkouts, and deployed trees are never alternative project sources of truth.
+- Every repository mutation is verified against live GitHub state after the write.
+- Branch cleanup remains Owner-operated.
 
-## Non-negotiable product invariants
+The canonical map for GitHub integration, `AI_Server_Agent`, standard GitHub-hosted CI, optional private/trusted self-hosted runners, external Workers, toolchain ownership, and runner lifecycle is [`docs/development/execution-infrastructure.md`](docs/development/execution-infrastructure.md). Required test/CI semantics are in [`docs/06-test-strategy.md`](docs/06-test-strategy.md); deployment/live operations are in [`docs/09-deployment-runbook.md`](docs/09-deployment-runbook.md).
+
+## Product authority
+
+The Version `1.0.0` product contract is [`docs/specification/master-execution-prompt.md`](docs/specification/master-execution-prompt.md). Stable requirement IDs are indexed in [`docs/01-authoritative-requirements.md`](docs/01-authoritative-requirements.md).
+
+The master specification owns product scope, product/security/correctness invariants, and final acceptance requirements. Repository execution rules are defined by `AGENTS.md`, `CONTRIBUTING.md`, canonical engineering references, and live GitHub state. Historical process instructions must not recreate retired status, traceability, handoff, or per-task evidence documents.
+
+A task, implementation shortcut, old design note, or governance cleanup cannot silently remove or redefine a Version 1 product/security/correctness requirement.
+
+## Technical baseline
+
+- PHP 8.4 / Laravel 13.x
+- MariaDB 10.11 as the primary required compatibility/CI target; newer compatible lines are checked when materially useful
+- authenticated Redis for queues, cache, throttling, and coordination
+- modular monolith with Domain / Application / Infrastructure / Presentation boundaries
+- Telegram-first product surface
+- integer IRR for fiat; fixed-precision decimal for crypto
+- transactional and idempotent financial/remote effects
+- Persian default UI with English fallback
+- aaPanel/OpenLiteSpeed atomic-release deployment target
+
+## Engineering direction
+
+- optimize for understandable module boundaries and low coupling rather than file-count or line-count targets;
+- do not refactor solely because a class/file is large;
+- add new capabilities behind the owning module/Application contract instead of spreading cross-module Domain dependencies;
+- no new architecture-boundary exception is accepted merely to make a task easier;
+- keep task contracts, validation, documentation, and tooling proportional to the value/risk they control; do not create ceremony or duplicated knowledge that slows future work.
+
+## Non-negotiable invariants
 
 - no paid provisioning before authoritative payment capture;
-- no duplicate financial or remote effect;
+- no duplicate financial, provisioning, Telegram, or provider effect;
 - uncertain external mutation is reconciled before retry;
 - database transactions, locks, uniqueness, and immutable history are final correctness barriers;
 - browser/customer assertions never prove payment;
 - TLS verification is never disabled;
 - secrets and sensitive data never enter Git, Issues/PRs, logs, CI artifacts, or repository evidence.
+
+## Evidence policy
+
+Git commits, PRs, Issues, reviews, workflow checks, tags, and releases are the history of implementation work. The repository `evidence/` directory is reserved for release-candidate/release records that have a real retention need; it is not a per-task archive.
 
 ## License
 
