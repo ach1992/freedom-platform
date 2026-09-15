@@ -17,6 +17,7 @@ fail() {
 reset_repo() {
     git -C "$repo" reset --hard "$base" >/dev/null
     git -C "$repo" clean -fdx >/dev/null
+    mkdir -p "$repo/tests/Unit"
 }
 
 commit_case() {
