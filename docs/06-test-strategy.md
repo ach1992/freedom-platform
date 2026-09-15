@@ -35,23 +35,36 @@ A `workflow_dispatch` with a non-empty `phpunit_filter` is different: it is an e
 
 The ruleset-required `Repository preflight` check is the final aggregate CI gate, not the early classifier job. It succeeds only after `Validation plan and repository control`, `Secret scan`, and every validation domain selected by the computed plan have succeeded; non-applicable jobs may be skipped. This keeps documentation/control-only changes fast while preventing an application PR from becoming merge-eligible before its required Unit/PHP/MariaDB/dependency/operations checks finish successfully.
 
-Normal automated CI separates cheap Unit feedback from real-engine Feature acceptance. The existing quality runner owns Unit tests together with applicable Pint/static/architecture checks so PHP setup and dependency installation are not duplicated in another job. When real-engine integration is required, normal PR CI runs the Feature suite on MariaDB 10.11 + authenticated Redis while Unit runs independently in the quality job. This preserves Unit + Feature coverage for application changes while removing Unit tests from the expensive database job. Unfiltered manual FULL validation intentionally keeps the complete PHPUnit suite and coverage path as a backstop.
+Normal automated CI separates two questions that must not be conflated:
+
+1. **Does this change require the real MariaDB/Redis engine?** Migrations, constraints, triggers, locking/concurrency and other engine-dependent behavior still require real-engine acceptance.
+2. **How much Feature coverage is required for this exact PR?** Real-engine necessity does not automatically mean the complete unrelated Feature corpus must run.
+
+The quality runner owns Unit tests together with applicable Pint/static/architecture checks so PHP setup and dependency installation are not duplicated in the real-engine job. When integration is required, the MariaDB/Redis job uses one of these scopes:
+
+- **TARGETED** — only when the repository selector can prove a bounded relationship from the candidate itself. Current accepted shapes are Feature-test-only changes and an entirely additive new module (the module does not exist in the base tree, its product files/migrations are additive, and changed Feature tests explicitly reference that new module). The exact changed Feature file(s) run against MariaDB 10.11 + authenticated Redis.
+- **FULL** — the fail-safe fallback for existing-module product changes, modified/deleted migrations, global/config/runtime/dependency surfaces, ambiguous relationships, missing Feature evidence, or anything the selector does not explicitly understand. The complete Feature suite runs against MariaDB 10.11 + authenticated Redis.
+- **DIAGNOSTIC** — an explicit filtered manual troubleshooting run. It is evidence for the selected diagnostic only and never merge acceptance by itself.
+
+Normal PR and filtered diagnostic integration fail fast on the first PHPUnit error/failure. This changes only failed-run latency and diagnostics: a green TARGETED or FULL run still executes every test in its selected scope. Unfiltered manual FULL validation intentionally keeps the complete PHPUnit + coverage path as the explicit regression backstop.
+
+The selector is deliberately conservative. It must not infer safety merely from similar filenames or module proximity, and it must fall back to FULL whenever the relationship is not directly evidenced. Narrowing the selector to additional product shapes requires regression tests proving both the new targeted case and representative fail-safe fallbacks.
 
 | Changed behavior | Material validation |
 |---|---|
 | canonical docs / governance | affected planning/project-control checks |
 | bounded read-only control plane | project/control contract + dedicated read-only workflow verifier |
-| PHP application/config/schema | Unit + Pint + PHPStan/forbidden/architecture + MariaDB 10.11/Redis Feature integration |
+| PHP application/config/schema | Unit + Pint + PHPStan/forbidden/architecture + MariaDB 10.11/Redis integration; TARGETED only when the conservative selector proves the candidate shape, otherwise FULL Feature |
 | Unit tests only | Unit + Pint; no MariaDB/Redis provisioning |
-| Feature tests only | Pint + MariaDB 10.11/Redis Feature integration |
-| Composer manifest/lock | Unit + Composer validation/audit/license + static/architecture + real-engine Feature integration |
-| Docker CI/runtime | Docker Compose contract + MariaDB 10.11/Redis Feature integration |
+| Feature tests only | Pint + the changed Feature file(s) on MariaDB 10.11/Redis; unrelated Feature files are not rerun solely because a test file changed |
+| Composer manifest/lock | Unit + Composer validation/audit/license + static/architecture + FULL real-engine Feature integration |
+| Docker CI/runtime | Docker Compose contract + FULL MariaDB 10.11/Redis Feature integration |
 | operational/deployment entrypoints | shell/PHP operational syntax/entrypoint validation; separate High/Critical review/release gates still apply |
-| unknown/unclassified | fail safe to every normal validation domain |
+| unknown/unclassified | fail safe to every normal validation domain and FULL real-engine scope when integration applies |
 
 `.github/workflows/staging-readiness.yml` is the only current workflow intentionally classified as bounded read-only control plane. Its verifier requires manual dispatch, read-only token permissions, no secrets/protected environment, the current repository runner selector, an allowlisted action surface and no known runtime/host mutation commands. The verifier itself has adversarial tests. No wildcard `.github/workflows/*` downgrade exists.
 
-Changes to the CI classifier/workflow are self-modifying control-plane changes: representative classifier cases and verifier-abuse cases run independently of the classifier result. A CI-policy change does not manufacture a MariaDB run when the effective diff cannot affect application/database behavior; conversely any application/schema/database-affecting diff still requires MariaDB 10.11 Feature acceptance.
+Changes to the CI classifier/workflow/real-engine selector are self-modifying control-plane changes: representative classifier, selector and verifier-abuse cases run independently of the application integration result. A CI-policy change does not manufacture a MariaDB run when the effective diff cannot affect application/database behavior. Conversely, application/schema/database semantics that need the engine still require MariaDB 10.11 acceptance, but that acceptance may be TARGETED when the conservative selector proves a bounded candidate; engine requirement no longer implies an unconditional full Feature run.
 
 The normal integration target is MariaDB 10.11 with authenticated Redis. Other compatible MariaDB lines are explicit task/release compatibility evidence, not an automatic matrix on every PR.
 
@@ -71,6 +84,13 @@ For an unchanged revision:
 - do not rerun successful jobs without a concrete reason;
 - fix deterministic failures instead of repeatedly rerunning them.
 
+For an evolving candidate after a deterministic failure:
+
+- return/keep the PR Draft while remediation is still changing the candidate;
+- reproduce the failure with the narrowest authoritative test or filtered diagnostic that can distinguish the fix;
+- do not launch broad merge-acceptance validation after every mechanical/style/static correction;
+- mark the PR Ready again only when the candidate is stable enough for its applicable exact-head acceptance plan.
+
 Routine successful checks are GitHub evidence. Do not manufacture per-task evidence files or large success artifacts.
 
 ## Reproducible verification commands
@@ -82,6 +102,8 @@ composer install --no-interaction --prefer-dist --no-progress --no-scripts
 php artisan package:discover --ansi
 bash scripts/ci/verify-planning.sh
 bash scripts/ci/verify-project-control.sh
+bash scripts/ci/test-validation-plan.sh
+bash scripts/ci/test-feature-integration-scope.sh
 php vendor/bin/pint --test
 php -d memory_limit=1G vendor/bin/phpstan analyse --no-progress --memory-limit=1G
 composer validate --strict --no-check-publish
@@ -99,7 +121,7 @@ Additional MariaDB compatibility can be requested explicitly, for example:
 MARIADB_VERSION=11.4 composer test:integration
 ```
 
-`composer test:quick` runs the Unit suite only and is fast feedback, not real-engine acceptance. `composer test` aliases `composer test:integration`; both provision disposable MariaDB/Redis dependencies and run the local full Unit + Feature suite. CI may execute the same coverage as separate Unit and Feature validation dimensions to shorten the normal feedback path. MariaDB remains required for migrations, constraints, triggers, locking, concurrency and other engine-dependent acceptance.
+`composer test:quick` runs the Unit suite only and is fast feedback, not real-engine acceptance. `composer test` aliases `composer test:integration`; both provision disposable MariaDB/Redis dependencies and run the local full Unit + Feature suite. Normal PR CI may run a conservative TARGETED Feature set on the same real engine when the candidate itself proves that scope; otherwise it runs FULL Feature. Unfiltered manual FULL remains the complete regression/coverage backstop. MariaDB remains required for migrations, constraints, triggers, locking, concurrency and other engine-dependent acceptance.
 
 The executable PHP/Composer runner contract is enforced by `scripts/ci/bootstrap-ci-toolchain.sh`; do not duplicate its exact extension/version checks here.
 
@@ -126,4 +148,4 @@ When applicable, tests must prove:
 
 ## Failure policy
 
-Do not suppress, weaken, quarantine, or repeatedly rerun a genuine deterministic failure until green. Financial, authorization, idempotency, schema, security, backup/restore, and release-integrity failures are blocking.
+Do not suppress, weaken, quarantine, or repeatedly rerun a genuine deterministic failure until green. Financial, authorization, idempotency, schema, security, backup/restore, and release-integrity failures are blocking. Normal PR/filtered integration stops on the first error/failure so the actionable root cause is surfaced promptly instead of consuming the full timeout on cascading errors; this does not reduce successful-run coverage.
