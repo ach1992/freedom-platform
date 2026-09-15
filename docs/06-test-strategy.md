@@ -27,26 +27,29 @@ Delegate to an external Worker only when that materially improves execution or r
 
 ## CI validation plan
 
-CI classifies the complete effective change into independent validation needs. The profile name is only a summary; the job flags are authoritative. Secret scanning remains mandatory for every executing CI revision.
+CI classifies the complete effective change into independent validation needs. The profile name is only a summary; the job flags are authoritative. Unit, style, static/architecture, dependency/license, real-engine integration, runtime and operations are separate validation dimensions. Secret scanning remains mandatory for every executing merge-acceptance CI revision.
 
 For a PR, the changed-path source is the exact checked-out merge candidate against its base parent. For a normal non-forced `push` to `main`, an initially empty path list is hydrated from the authoritative GitHub event `before..after` commits so post-merge validation follows the actual integrated change rather than defaulting to FULL. A forced push, zero/created baseline, event/head mismatch, unavailable commit, unreadable event payload, or any other ambiguous push baseline deliberately leaves the path list unresolved and therefore fails safe to FULL. Manual `workflow_dispatch` without a diagnostic filter is also an intentional FULL-validation route.
 
-The ruleset-required `Repository preflight` check is the final aggregate CI gate, not the early classifier job. It succeeds only after `Validation plan and repository control`, `Secret scan`, and every validation domain selected by the computed plan have succeeded; non-applicable jobs may be skipped. This keeps documentation/control-only changes fast while preventing an application PR from becoming merge-eligible before its required PHP/MariaDB/dependency/operations checks finish successfully.
+The ruleset-required `Repository preflight` check is the final aggregate CI gate, not the early classifier job. It succeeds only after `Validation plan and repository control`, `Secret scan`, and every validation domain selected by the computed plan have succeeded; non-applicable jobs may be skipped. This keeps documentation/control-only changes fast while preventing an application PR from becoming merge-eligible before its required Unit/PHP/MariaDB/dependency/operations checks finish successfully.
+
+Normal automated CI separates cheap Unit feedback from real-engine Feature acceptance. The existing quality runner owns Unit tests together with applicable Pint/static/architecture checks so PHP setup and dependency installation are not duplicated in another job. When real-engine integration is required, normal PR/push CI runs the Feature suite on MariaDB 10.11 + authenticated Redis while Unit runs independently in the quality job. This preserves Unit + Feature coverage for application changes while removing Unit tests from the expensive database job. Unfiltered manual FULL validation intentionally keeps the complete PHPUnit suite and coverage path as a backstop.
 
 | Changed behavior | Material validation |
 |---|---|
 | canonical docs / governance | affected planning/project-control checks |
 | bounded read-only control plane | project/control contract + dedicated read-only workflow verifier |
-| PHP application/config/schema | Pint + PHPStan/forbidden/architecture + MariaDB 10.11/Redis integration |
-| PHP tests only | Pint + MariaDB 10.11/Redis integration |
-| Composer manifest/lock | Composer validation/audit/license + static/application integration affected by dependency changes |
-| Docker CI/runtime | Docker Compose contract + MariaDB 10.11/Redis integration |
+| PHP application/config/schema | Unit + Pint + PHPStan/forbidden/architecture + MariaDB 10.11/Redis Feature integration |
+| Unit tests only | Unit + Pint; no MariaDB/Redis provisioning |
+| Feature tests only | Pint + MariaDB 10.11/Redis Feature integration |
+| Composer manifest/lock | Unit + Composer validation/audit/license + static/architecture + real-engine Feature integration |
+| Docker CI/runtime | Docker Compose contract + MariaDB 10.11/Redis Feature integration |
 | operational/deployment entrypoints | shell/PHP operational syntax/entrypoint validation; separate High/Critical review/release gates still apply |
 | unknown/unclassified | fail safe to every normal validation domain |
 
 `.github/workflows/staging-readiness.yml` is the only current workflow intentionally classified as bounded read-only control plane. Its verifier requires manual dispatch, read-only token permissions, no secrets/protected environment, the current repository runner selector, an allowlisted action surface and no known runtime/host mutation commands. The verifier itself has adversarial tests. No wildcard `.github/workflows/*` downgrade exists.
 
-Changes to the CI classifier/workflow are self-modifying control-plane changes: representative classifier cases and verifier-abuse cases run independently of the classifier result. A CI-policy change does not manufacture a MariaDB run when the effective diff cannot affect application/database behavior; conversely any application/schema/database-affecting diff still requires MariaDB 10.11.
+Changes to the CI classifier/workflow are self-modifying control-plane changes: representative classifier cases and verifier-abuse cases run independently of the classifier result. A CI-policy change does not manufacture a MariaDB run when the effective diff cannot affect application/database behavior; conversely any application/schema/database-affecting diff still requires MariaDB 10.11 Feature acceptance.
 
 The normal integration target is MariaDB 10.11 with authenticated Redis. Other compatible MariaDB lines are explicit task/release compatibility evidence, not an automatic matrix on every PR.
 
@@ -94,7 +97,7 @@ Additional MariaDB compatibility can be requested explicitly, for example:
 MARIADB_VERSION=11.4 composer test:integration
 ```
 
-`composer test:quick` runs the Unit suite only and is fast local feedback, not acceptance. `composer test` aliases `composer test:integration`; both provision disposable MariaDB/Redis dependencies and run the local full suite. MariaDB is required for migrations, constraints, triggers, locking, and concurrency acceptance.
+`composer test:quick` runs the Unit suite only and is fast feedback, not real-engine acceptance. `composer test` aliases `composer test:integration`; both provision disposable MariaDB/Redis dependencies and run the local full Unit + Feature suite. CI may execute the same coverage as separate Unit and Feature validation dimensions to shorten the normal feedback path. MariaDB remains required for migrations, constraints, triggers, locking, concurrency and other engine-dependent acceptance.
 
 The executable PHP/Composer runner contract is enforced by `scripts/ci/bootstrap-ci-toolchain.sh`; do not duplicate its exact extension/version checks here.
 
@@ -105,6 +108,7 @@ The executable PHP/Composer runner contract is enforced by `scripts/ci/bootstrap
 - Critical paths cover success, validation, authorization, exact replay, conflicting replay, concurrency/database conflict, and failure/uncertainty boundaries as applicable.
 - Monetary tests use integer IRR or fixed-precision decimal, never floating-point money.
 - Fakes prove local orchestration semantics only; they do not prove live provider compatibility.
+- A test belongs in Unit only when it does not require real database/Redis semantics. Engine-dependent behavior belongs in Feature or an equally explicit real-engine acceptance surface.
 
 ## Required invariant coverage
 

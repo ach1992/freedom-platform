@@ -18,13 +18,14 @@ assert_plan() {
     local expected_project_control=$3
     local expected_planning=$4
     local expected_control_plane=$5
-    local expected_style=$6
-    local expected_static=$7
-    local expected_dependencies=$8
-    local expected_integration=$9
-    local expected_runtime=${10}
-    local expected_operations=${11}
-    shift 11
+    local expected_unit=$6
+    local expected_style=$7
+    local expected_static=$8
+    local expected_dependencies=$9
+    local expected_integration=${10}
+    local expected_runtime=${11}
+    local expected_operations=${12}
+    shift 12
 
     local paths_file="$tmpdir/$name.paths"
     : > "$paths_file"
@@ -32,10 +33,10 @@ assert_plan() {
         printf '%s\n' "$@" > "$paths_file"
     fi
 
-    local profile project_control planning control_plane style static_analysis dependencies integration runtime operations
+    local profile project_control planning control_plane unit style static_analysis dependencies integration runtime operations
     while IFS='=' read -r key value; do
         case "$key" in
-            profile|project_control|planning|control_plane|style|static_analysis|dependencies|integration|runtime|operations)
+            profile|project_control|planning|control_plane|unit|style|static_analysis|dependencies|integration|runtime|operations)
                 printf -v "$key" '%s' "$value"
                 ;;
             *) fail "$name returned unexpected key: $key" ;;
@@ -46,6 +47,7 @@ assert_plan() {
     [[ "$project_control" == "$expected_project_control" ]] || fail "$name project_control expected $expected_project_control, got $project_control"
     [[ "$planning" == "$expected_planning" ]] || fail "$name planning expected $expected_planning, got $planning"
     [[ "$control_plane" == "$expected_control_plane" ]] || fail "$name control_plane expected $expected_control_plane, got $control_plane"
+    [[ "$unit" == "$expected_unit" ]] || fail "$name unit expected $expected_unit, got $unit"
     [[ "$style" == "$expected_style" ]] || fail "$name style expected $expected_style, got $style"
     [[ "$static_analysis" == "$expected_static" ]] || fail "$name static_analysis expected $expected_static, got $static_analysis"
     [[ "$dependencies" == "$expected_dependencies" ]] || fail "$name dependencies expected $expected_dependencies, got $dependencies"
@@ -55,23 +57,24 @@ assert_plan() {
 }
 
 # Required representative classes. These assertions are deliberately independent of the workflow conditions that consume the plan.
-assert_plan docs_only CONTROL true true false false false false false false false docs/06-test-strategy.md
-assert_plan governance_only CONTROL true false false false false false false false false AGENTS.md .github/ISSUE_TEMPLATE/task.yml
-assert_plan read_only_workflow CONTROL_PLANE true false true false false false false false false .github/workflows/staging-readiness.yml
-assert_plan application_source APPLICATION false false false true true false true false false app/Modules/Orders/Application/OrderService.php
-assert_plan application_tests APPLICATION false false false true false false true false false tests/Feature/OrderTest.php
-assert_plan dependency_lockfile APPLICATION false false false false true true true false false composer.lock
-assert_plan schema_migration APPLICATION false false false true true false true false false database/migrations/2026_08_20_000001_example.php
-assert_plan docker_runtime APPLICATION false false false false false false true true false docker-compose.ci.yml
-assert_plan deployment_mutation_workflow FULL true true true true true true true true true .github/workflows/deploy-production.yml
-assert_plan provider_mutation_workflow FULL true true true true true true true true true .github/workflows/provider-live-acceptance.yml
-assert_plan security_sensitive APPLICATION false false false true true false true false false app/Modules/AccessControl/Application/AuthorizationService.php
-assert_plan ci_policy CONTROL_PLANE true false true false false false false false false .github/workflows/ci.yml scripts/ci/classify-validation-plan.sh
-assert_plan secret_scan_control CONTROL_PLANE true false true false false false false false false scripts/ci/scan-git-secrets.sh scripts/ci/test-secret-scan.sh
-assert_plan operations_only OPERATIONS false false false false false false false false true deploy/bin/queue-worker-with-heartbeat.sh
-assert_plan unknown_path FULL true true true true true true true true true mystery/unclassified.file
-assert_plan mixed_application APPLICATION true true false true true false true false false docs/06-test-strategy.md app/Modules/Orders/Application/OrderService.php
-assert_plan empty_diff FULL true true true true true true true true true
+assert_plan docs_only CONTROL true true false false false false false false false false docs/06-test-strategy.md
+assert_plan governance_only CONTROL true false false false false false false false false false AGENTS.md .github/ISSUE_TEMPLATE/task.yml
+assert_plan read_only_workflow CONTROL_PLANE true false true false false false false false false false .github/workflows/staging-readiness.yml
+assert_plan application_source APPLICATION false false false true true true false true false false app/Modules/Orders/Application/OrderService.php
+assert_plan feature_tests APPLICATION false false false false true false false true false false tests/Feature/OrderTest.php
+assert_plan unit_tests APPLICATION false false false true true false false false false false tests/Unit/OrderTest.php
+assert_plan dependency_lockfile APPLICATION false false false true false true true true false false composer.lock
+assert_plan schema_migration APPLICATION false false false true true true false true false false database/migrations/2026_08_20_000001_example.php
+assert_plan docker_runtime APPLICATION false false false false false false false true true false docker-compose.ci.yml
+assert_plan deployment_mutation_workflow FULL true true true true true true true true true true .github/workflows/deploy-production.yml
+assert_plan provider_mutation_workflow FULL true true true true true true true true true true .github/workflows/provider-live-acceptance.yml
+assert_plan security_sensitive APPLICATION false false false true true true false true false false app/Modules/AccessControl/Application/AuthorizationService.php
+assert_plan ci_policy CONTROL_PLANE true false true false false false false false false false .github/workflows/ci.yml scripts/ci/classify-validation-plan.sh
+assert_plan secret_scan_control CONTROL_PLANE true false true false false false false false false false scripts/ci/scan-git-secrets.sh scripts/ci/test-secret-scan.sh
+assert_plan operations_only OPERATIONS false false false false false false false false false true deploy/bin/queue-worker-with-heartbeat.sh
+assert_plan unknown_path FULL true true true true true true true true true true mystery/unclassified.file
+assert_plan mixed_application APPLICATION true true false true true true false true false false docs/06-test-strategy.md app/Modules/Orders/Application/OrderService.php
+assert_plan empty_diff FULL true true true true true true true true true true
 
 printf '%s\n' 'Validation-plan classifier tests passed.'
 
@@ -115,6 +118,7 @@ run_push_plan() {
 run_push_plan "$push_before" "$push_after" false
 grep -Fx 'README.md' "$push_paths" >/dev/null || fail 'normal push did not hydrate its exact changed path'
 grep -Fx 'profile=CONTROL' "$push_plan" >/dev/null || fail 'normal documentation push did not classify as CONTROL'
+grep -Fx 'unit=false' "$push_plan" >/dev/null || fail 'normal documentation push incorrectly required Unit validation'
 grep -Fx 'integration=false' "$push_plan" >/dev/null || fail 'normal documentation push incorrectly required integration'
 
 run_push_plan "$push_before" "$push_after" true
@@ -168,13 +172,23 @@ for dependency in ('preflight', 'quality', 'dependencies', 'integration', 'opera
 for command in (
     "require_success 'Validation plan and repository control'",
     "require_success 'Secret scan'",
-    "require_planned 'PHP style and static architecture'",
+    "require_planned 'PHP quality and unit tests'",
     "require_planned 'Dependency and license policy'",
     "require_planned 'MariaDB 10.11 and Redis tests'",
     "require_planned 'Operational syntax and entrypoints'",
 ):
     if command not in required:
         raise SystemExit(f'final required gate does not enforce: {command}')
+if "UNIT_REQUIRED: ${{ needs.preflight.outputs.unit }}" not in required:
+    raise SystemExit('final required gate must consume the Unit validation plan')
+if "needs.preflight.outputs.unit == 'true'" not in text:
+    raise SystemExit('quality job must run when Unit validation is planned')
+if '      - name: Unit tests\n' not in text or '        run: composer test:quick\n' not in text:
+    raise SystemExit('quality job must execute the canonical fast Unit suite')
+if '            phpunit_args+=(--testsuite Feature)\n' not in text:
+    raise SystemExit('normal real-engine CI must own the Feature suite after Unit separation')
+if "if [[ \"$GITHUB_EVENT_NAME\" != 'workflow_dispatch' ]]; then" not in text:
+    raise SystemExit('Feature-only CI selection must preserve intentional manual full-suite validation')
 if "if: ${{ always()" not in required:
     raise SystemExit('final required gate must evaluate after failed/skipped dependencies')
 if 'Pull request revision drifted after validation; a fresh CI run is required.' not in required:
