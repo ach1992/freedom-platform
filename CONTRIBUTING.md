@@ -94,7 +94,7 @@ Use development-only database, Redis, Telegram, SMS, panel, and payment values. 
 
 Select the narrowest safe verification plan from [`docs/06-test-strategy.md`](docs/06-test-strategy.md). That document and the current workflow/source own executable commands and CI semantics; do not maintain another copied command matrix here.
 
-`composer test:quick` is fast feedback only and does not prove migrations, constraints, triggers, locking, or concurrency. MariaDB 10.11 remains the mandatory normal integration target when application/database semantics are affected; additional versions are explicit compatibility evidence, not an automatic per-PR matrix.
+`composer test:quick` runs the Unit suite for fast local feedback only; it does not prove migrations, constraints, triggers, locking, or concurrency. Use focused tests while iterating, then the applicable MariaDB-backed validation. `composer test` aliases the full `composer test:integration` path. MariaDB 10.11 remains the mandatory normal integration target when application/database semantics are affected; additional versions are explicit compatibility evidence, not an automatic per-PR matrix.
 
 ## Coding and architecture
 

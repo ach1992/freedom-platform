@@ -29,6 +29,8 @@ Delegate to an external Worker only when that materially improves execution or r
 
 CI classifies the complete PR diff into independent validation needs. The profile name is only a summary; the job flags are authoritative. Secret scanning remains mandatory for every executing CI revision.
 
+The ruleset-required `Repository preflight` check is the final aggregate CI gate, not the early classifier job. It succeeds only after `Validation plan and repository control`, `Secret scan`, and every validation domain selected by the computed plan have succeeded; non-applicable jobs may be skipped. This keeps documentation/control-only changes fast while preventing an application PR from becoming merge-eligible before its required PHP/MariaDB/dependency/operations checks finish successfully.
+
 | Changed behavior | Material validation |
 |---|---|
 | canonical docs / governance | affected planning/project-control checks |
@@ -90,7 +92,7 @@ Additional MariaDB compatibility can be requested explicitly, for example:
 MARIADB_VERSION=11.4 composer test:integration
 ```
 
-`composer test:quick` is fast feedback only. MariaDB is required for migrations, constraints, triggers, locking, and concurrency acceptance.
+`composer test:quick` runs the Unit suite only and is fast local feedback, not acceptance. `composer test` aliases `composer test:integration`; both provision disposable MariaDB/Redis dependencies and run the local full suite. MariaDB is required for migrations, constraints, triggers, locking, and concurrency acceptance.
 
 The executable PHP/Composer runner contract is enforced by `scripts/ci/bootstrap-ci-toolchain.sh`; do not duplicate its exact extension/version checks here.
 

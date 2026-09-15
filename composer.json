@@ -58,10 +58,10 @@
             "@php artisan migrate --force --isolated=1"
         ],
         "dev": "@php artisan serve",
-        "test": "@test:quick",
+        "test": "@test:integration",
         "test:quick": [
             "@php artisan config:clear --ansi @no_additional_args",
-            "@php artisan test"
+            "@php artisan test --testsuite=Unit"
         ],
         "test:integration": "bash scripts/ci/test-integration.sh",
         "ci:static": [

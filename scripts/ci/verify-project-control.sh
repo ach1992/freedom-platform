@@ -48,6 +48,8 @@ required_files=(
     .github/ISSUE_TEMPLATE/task.yml
     .github/pull_request_template.md
     .github/workflows/ci.yml
+    docker-compose.ci.yml
+    scripts/ci/test-integration.sh
     scripts/ci/classify-validation-plan.sh
     scripts/ci/test-validation-plan.sh
     scripts/ci/verify-readonly-staging-workflow.sh
@@ -82,6 +84,21 @@ grep -F 'no implementation status' docs/01-authoritative-requirements.md >/dev/n
     || fail 'requirement index must not contain mutable implementation status'
 grep -F 'not a per-task archive' evidence/README.md >/dev/null \
     || fail 'evidence policy must reject per-task repository evidence'
+
+# The local integration harness must be portable across restrictive development-workspace umasks and concurrent runs.
+integration_harness=scripts/ci/test-integration.sh
+for contract in \
+    'install -m 0644 docker/mariadb/ci-init.sql' \
+    'MARIADB_HOST_PORT=0' \
+    'MARIADB_SHADOW_HOST_PORT=0' \
+    'REDIS_HOST_PORT=0' \
+    'COMPOSE_PROJECT_NAME=' \
+    'docker compose -f "${compose_file}" port mariadb-shadow 3306'; do
+    grep -F "$contract" "$integration_harness" >/dev/null \
+        || fail "local integration harness lost portability/isolation contract: $contract"
+done
+grep -F 'MARIADB_INIT_SQL_PATH' docker-compose.ci.yml >/dev/null \
+    || fail 'Docker CI composition must accept the readable MariaDB init-fixture path supplied by the integration harness'
 
 # Execution infrastructure has one canonical owner; surrounding docs must route to it instead of copying lifecycle rules.
 for entry in AGENTS.md CONTRIBUTING.md docs/06-test-strategy.md docs/09-deployment-runbook.md docs/index.md docs/development/repository-map.md; do
