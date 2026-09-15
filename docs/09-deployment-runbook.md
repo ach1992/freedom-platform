@@ -43,7 +43,7 @@ Prefer repository-scoped `GITHUB_TOKEN` for repository-local Actions operations.
 
 ## Operational workflow definitions and activation state
 
-Workflow source on the exact revision plus current GitHub registration/state are jointly authoritative. **A workflow file existing only on `develop` or a task branch is code under review, not proof of a standing dispatchable capability.** Historical registry entries whose source is absent from the current default-branch tree are history/navigation only.
+Workflow source on the exact revision plus current GitHub registration/state are jointly authoritative. **A workflow file existing only on a non-default task branch is code under review, not proof of a standing dispatchable capability.** Historical registry entries whose source is absent from the current default-branch tree are history/navigation only.
 
 Normal repository CI is owned by `.github/workflows/ci.yml` and `docs/06-test-strategy.md`; this runbook does not duplicate its validation tiers or runner selector.
 
