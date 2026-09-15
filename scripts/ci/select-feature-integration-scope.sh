@@ -133,7 +133,7 @@ fi
 # Every selected Feature test must explicitly reference the new module. This is
 # intentionally stricter than filename matching and fails closed when the
 # relationship is not directly evidenced by the candidate itself.
-module_reference="App\\\\Modules\\\\${module}\\\\"
+module_reference="App\\Modules\\${module}\\"
 for target in "${feature_targets[@]}"; do
     git show "$head:$target" | grep -F "$module_reference" >/dev/null || emit_full
 done
