@@ -56,6 +56,7 @@ assert_plan() {
     [[ "$operations" == "$expected_operations" ]] || fail "$name operations expected $expected_operations, got $operations"
 }
 
+# Required representative classes. These assertions are deliberately independent of the workflow conditions that consume the plan.
 assert_plan docs_only CONTROL true true false false false false false false false false docs/06-test-strategy.md
 assert_plan governance_only CONTROL true false false false false false false false false false AGENTS.md .github/ISSUE_TEMPLATE/task.yml
 assert_plan read_only_workflow CONTROL_PLANE true false true false false false false false false false .github/workflows/staging-readiness.yml
@@ -77,6 +78,9 @@ assert_plan empty_diff FULL true true true true true true true true true true
 
 printf '%s\n' 'Validation-plan classifier tests passed.'
 
+# Normal push events must classify the exact before..after tree change instead of
+# treating the initially empty workflow path file as FULL. Unsafe/ambiguous push
+# baselines deliberately retain the empty-file FULL fallback.
 push_repo="$tmpdir/push-repo"
 mkdir -p "$push_repo"
 git -C "$push_repo" init -q
@@ -99,11 +103,14 @@ run_push_plan() {
     local after=$2
     local forced=$3
     local github_sha=${4:-$after}
+
     printf '{"before":"%s","after":"%s","forced":%s}\n' "$before" "$after" "$forced" > "$push_event"
     : > "$push_paths"
     (
         cd "$push_repo"
-        GITHUB_EVENT_NAME=push GITHUB_EVENT_PATH="$push_event" GITHUB_SHA="$github_sha" \
+        GITHUB_EVENT_NAME=push \
+        GITHUB_EVENT_PATH="$push_event" \
+        GITHUB_SHA="$github_sha" \
         bash "$classifier" "$push_paths"
     ) > "$push_plan"
 }
@@ -122,7 +129,9 @@ printf '{"before":"%s","after":"%s"}\n' "$push_before" "$push_after" > "$push_ev
 : > "$push_paths"
 (
     cd "$push_repo"
-    GITHUB_EVENT_NAME=push GITHUB_EVENT_PATH="$push_event" GITHUB_SHA="$push_after" \
+    GITHUB_EVENT_NAME=push \
+    GITHUB_EVENT_PATH="$push_event" \
+    GITHUB_SHA="$push_after" \
     bash "$classifier" "$push_paths"
 ) > "$push_plan"
 [[ ! -s "$push_paths" ]] || fail 'push with missing forced marker must not trust a targeted changed-path plan'
@@ -139,40 +148,55 @@ grep -Fx 'profile=FULL' "$push_plan" >/dev/null || fail 'event/head mismatch mus
 
 printf '%s\n' 'Push validation-path hydration tests passed.'
 
+# A filtered workflow_dispatch is diagnostic-only. It needs the real runtime +
+# integration path, but must not manufacture unrelated merge-acceptance domains.
 diagnostic_event="$tmpdir/diagnostic-event.json"
 diagnostic_paths="$tmpdir/diagnostic.paths"
 diagnostic_plan="$tmpdir/diagnostic.plan"
 printf '{"inputs":{"phpunit_filter":"PaymentAuthorizationTest"}}\n' > "$diagnostic_event"
 : > "$diagnostic_paths"
-GITHUB_EVENT_NAME=workflow_dispatch GITHUB_EVENT_PATH="$diagnostic_event" GITHUB_SHA= \
+GITHUB_EVENT_NAME=workflow_dispatch \
+GITHUB_EVENT_PATH="$diagnostic_event" \
+GITHUB_SHA= \
 bash "$classifier" "$diagnostic_paths" > "$diagnostic_plan"
 [[ ! -s "$diagnostic_paths" ]] || fail 'filtered diagnostic dispatch must not invent a changed-path set'
 grep -Fx 'profile=DIAGNOSTIC' "$diagnostic_plan" >/dev/null || fail 'filtered diagnostic dispatch did not use DIAGNOSTIC profile'
 for expected in \
-    'project_control=false' 'planning=false' 'control_plane=false' 'unit=false' \
-    'style=false' 'static_analysis=false' 'dependencies=false' 'integration=true' \
-    'runtime=true' 'operations=false'; do
+    'project_control=false' \
+    'planning=false' \
+    'control_plane=false' \
+    'unit=false' \
+    'style=false' \
+    'static_analysis=false' \
+    'dependencies=false' \
+    'integration=true' \
+    'runtime=true' \
+    'operations=false'; do
     grep -Fx "$expected" "$diagnostic_plan" >/dev/null || fail "filtered diagnostic dispatch missing expected plan value: $expected"
 done
 
 printf '{"inputs":{"phpunit_filter":""}}\n' > "$diagnostic_event"
 : > "$diagnostic_paths"
-GITHUB_EVENT_NAME=workflow_dispatch GITHUB_EVENT_PATH="$diagnostic_event" GITHUB_SHA= \
+GITHUB_EVENT_NAME=workflow_dispatch \
+GITHUB_EVENT_PATH="$diagnostic_event" \
+GITHUB_SHA= \
 bash "$classifier" "$diagnostic_paths" > "$diagnostic_plan"
 grep -Fx 'profile=FULL' "$diagnostic_plan" >/dev/null || fail 'empty diagnostic filter must retain the intentional FULL manual plan'
 
 printf '{"inputs":{"phpunit_filter":" "}}\n' > "$diagnostic_event"
 : > "$diagnostic_paths"
-GITHUB_EVENT_NAME=workflow_dispatch GITHUB_EVENT_PATH="$diagnostic_event" GITHUB_SHA= \
+GITHUB_EVENT_NAME=workflow_dispatch \
+GITHUB_EVENT_PATH="$diagnostic_event" \
+GITHUB_SHA= \
 bash "$classifier" "$diagnostic_paths" > "$diagnostic_plan"
 grep -Fx 'profile=DIAGNOSTIC' "$diagnostic_plan" >/dev/null || fail 'non-empty filter semantics must match workflow diagnostic conditions'
 
-phpunit_config="$root/phpunit.xml"
-grep -F 'failOnEmptyTestSuite="true"' "$phpunit_config" >/dev/null \
+grep -F 'failOnEmptyTestSuite="true"' "$root/phpunit.xml" >/dev/null \
     || fail 'PHPUnit must fail when a diagnostic filter selects zero tests'
 
 printf '%s\n' 'Filtered diagnostic-plan and zero-test safety tests passed.'
 
+# The required GitHub status context must be the final aggregate gate, not the early planning job.
 ci_workflow="$root/.github/workflows/ci.yml"
 python3 - "$ci_workflow" <<'PY_CI_GATE'
 from pathlib import Path
@@ -187,6 +211,7 @@ def require(fragment: str, message: str) -> None:
 
 if text.count('    name: Repository preflight\n') != 1:
     raise SystemExit('CI must expose exactly one Repository preflight status context')
+
 require('  preflight:\n    name: Validation plan and repository control\n', 'early preflight job must not satisfy the required final status context')
 require('  required:\n    name: Repository preflight\n', 'final aggregate required gate is missing')
 required = text.split('\n  required:\n', 1)[1]
@@ -239,6 +264,7 @@ import sys
 path = Path(sys.argv[1])
 mutation = sys.argv[2]
 text = path.read_text()
+
 mutations = {
     'automatic_trigger': lambda s: s.replace('on:\n  workflow_dispatch:', 'on:\n  push:\n  workflow_dispatch:', 1),
     'write_permission': lambda s: s.replace('contents: read', 'contents: write', 1),
@@ -249,6 +275,7 @@ mutations = {
     'docker_mutation': lambda s: s.replace('set -euo pipefail', 'set -euo pipefail\n          docker compose up -d', 1),
     'systemctl_mutation': lambda s: s.replace('state=$(systemctl is-active "$service" 2>/dev/null || true)', 'state=$(systemctl restart "$service" 2>/dev/null || true)', 1),
 }
+
 try:
     changed = mutations[mutation](text)
 except KeyError as exc:
@@ -257,6 +284,7 @@ if changed == text:
     raise SystemExit(f'mutation did not alter workflow: {mutation}')
 path.write_text(changed)
 PY_MUTATION
+
     if bash "$readonly_verifier" "$candidate" >/dev/null 2>&1; then
         fail "read-only verifier accepted mutation: $name"
     fi
