@@ -84,14 +84,9 @@ else
                 control_plane=true
                 ;;
 
-            .github/workflows/ci.yml|.github/workflows/staging-readiness.yml|.github/workflows/provider-readiness.yml)
+            .github/workflows/ci.yml|.github/workflows/staging-readiness.yml|.github/workflows/provider-readiness.yml|.github/workflows/provider-live-acceptance.yml)
                 project_control=true
                 control_plane=true
-                ;;
-
-            .github/workflows/provider-live-acceptance.yml)
-                mark_full
-                break
                 ;;
 
             scripts/ci/classify-validation-plan.sh|scripts/ci/test-validation-plan.sh|scripts/ci/select-feature-integration-scope.sh|scripts/ci/test-feature-integration-scope.sh|scripts/ci/scan-git-secrets.sh|scripts/ci/test-secret-scan.sh|scripts/ci/verify-project-control.sh|scripts/ci/verify-planning.sh|scripts/ci/verify-readonly-staging-workflow.sh)
@@ -141,6 +136,11 @@ else
                 integration=true
                 ;;
 
+            resources/lang/*)
+                unit=true
+                style=true
+                ;;
+
             tests/Unit/*)
                 unit=true
                 style=true
@@ -177,7 +177,7 @@ else
                 static_analysis=true
                 ;;
 
-            docker-compose.ci.yml)
+            docker-compose.ci.yml|docker/mariadb/ci-init.sql)
                 runtime=true
                 integration=true
                 ;;
