@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Database\Seeders;
 
 use Illuminate\Database\Seeder;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 
 final class SupportTicketCategorySeeder extends Seeder
@@ -23,8 +24,8 @@ final class SupportTicketCategorySeeder extends Seeder
         ]);
     }
 
-    /** @return array<string, bool|int|string|\Illuminate\Support\Carbon> */
-    private function category(string $code, string $nameFa, string $nameEn, int $sortOrder, \Illuminate\Support\Carbon $now): array
+    /** @return array<string, bool|int|string|Carbon> */
+    private function category(string $code, string $nameFa, string $nameEn, int $sortOrder, Carbon $now): array
     {
         return [
             'code' => $code,
