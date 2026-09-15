@@ -148,6 +148,54 @@ grep -Fx 'profile=FULL' "$push_plan" >/dev/null || fail 'event/head mismatch mus
 
 printf '%s\n' 'Push validation-path hydration tests passed.'
 
+# A filtered workflow_dispatch is diagnostic-only. It needs the real runtime +
+# integration path, but must not manufacture unrelated merge-acceptance domains.
+diagnostic_event="$tmpdir/diagnostic-event.json"
+diagnostic_paths="$tmpdir/diagnostic.paths"
+diagnostic_plan="$tmpdir/diagnostic.plan"
+printf '{"inputs":{"phpunit_filter":"PaymentAuthorizationTest"}}\n' > "$diagnostic_event"
+: > "$diagnostic_paths"
+GITHUB_EVENT_NAME=workflow_dispatch \
+GITHUB_EVENT_PATH="$diagnostic_event" \
+GITHUB_SHA= \
+bash "$classifier" "$diagnostic_paths" > "$diagnostic_plan"
+[[ ! -s "$diagnostic_paths" ]] || fail 'filtered diagnostic dispatch must not invent a changed-path set'
+grep -Fx 'profile=DIAGNOSTIC' "$diagnostic_plan" >/dev/null || fail 'filtered diagnostic dispatch did not use DIAGNOSTIC profile'
+for expected in \
+    'project_control=false' \
+    'planning=false' \
+    'control_plane=false' \
+    'unit=false' \
+    'style=false' \
+    'static_analysis=false' \
+    'dependencies=false' \
+    'integration=true' \
+    'runtime=true' \
+    'operations=false'; do
+    grep -Fx "$expected" "$diagnostic_plan" >/dev/null || fail "filtered diagnostic dispatch missing expected plan value: $expected"
+done
+
+printf '{"inputs":{"phpunit_filter":""}}\n' > "$diagnostic_event"
+: > "$diagnostic_paths"
+GITHUB_EVENT_NAME=workflow_dispatch \
+GITHUB_EVENT_PATH="$diagnostic_event" \
+GITHUB_SHA= \
+bash "$classifier" "$diagnostic_paths" > "$diagnostic_plan"
+grep -Fx 'profile=FULL' "$diagnostic_plan" >/dev/null || fail 'empty diagnostic filter must retain the intentional FULL manual plan'
+
+printf '{"inputs":{"phpunit_filter":" "}}\n' > "$diagnostic_event"
+: > "$diagnostic_paths"
+GITHUB_EVENT_NAME=workflow_dispatch \
+GITHUB_EVENT_PATH="$diagnostic_event" \
+GITHUB_SHA= \
+bash "$classifier" "$diagnostic_paths" > "$diagnostic_plan"
+grep -Fx 'profile=DIAGNOSTIC' "$diagnostic_plan" >/dev/null || fail 'non-empty filter semantics must match workflow diagnostic conditions'
+
+grep -F 'failOnEmptyTestSuite="true"' "$root/phpunit.xml" >/dev/null \
+    || fail 'PHPUnit must fail when a diagnostic filter selects zero tests'
+
+printf '%s\n' 'Filtered diagnostic-plan and zero-test safety tests passed.'
+
 # The required GitHub status context must be the final aggregate gate, not the early planning job.
 ci_workflow="$root/.github/workflows/ci.yml"
 python3 - "$ci_workflow" <<'PY_CI_GATE'

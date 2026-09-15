@@ -30,6 +30,39 @@ mark_full() {
     unknown=true
 }
 
+emit_filtered_diagnostic_plan() {
+    local event_path=${GITHUB_EVENT_PATH:-}
+    local filter
+
+    [[ "${GITHUB_EVENT_NAME:-}" == 'workflow_dispatch' ]] || return 1
+    [[ -n "$event_path" && -f "$event_path" ]] || return 1
+    command -v jq >/dev/null 2>&1 || return 1
+
+    filter=$(jq -r '.inputs.phpunit_filter // empty' "$event_path" 2>/dev/null || true)
+    [[ -n "$filter" ]] || return 1
+
+    cat <<'EOF_DIAGNOSTIC'
+profile=DIAGNOSTIC
+project_control=false
+planning=false
+control_plane=false
+unit=false
+style=false
+static_analysis=false
+dependencies=false
+integration=true
+runtime=true
+operations=false
+EOF_DIAGNOSTIC
+}
+
+# A filtered workflow dispatch is an explicit troubleshooting route, not merge
+# acceptance. It needs the real integration/runtime surface only. Missing or
+# empty input falls through to the existing empty-input fail-safe FULL plan.
+if emit_filtered_diagnostic_plan; then
+    exit 0
+fi
+
 hydrate_push_paths() {
     local target=$1
     local event_path=${GITHUB_EVENT_PATH:-}
