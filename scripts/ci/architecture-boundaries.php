@@ -15,6 +15,7 @@ return [
         'Payments' => ['AccessControl', 'Orders', 'Telegram', 'Wallet'],
         'Promotions' => ['AccessControl', 'Wallet'],
         'Provisioning' => ['AccessControl', 'Catalog', 'Orders', 'Panels', 'Payments', 'Telegram', 'Wallet'],
+        'Support' => ['Shared'],
         'Telegram' => ['AccessControl', 'Agents', 'Customers', 'Identity', 'Localization', 'Promotions', 'Wallet'],
         'Wallet' => ['AccessControl'],
     ],
@@ -276,7 +277,8 @@ return [
                     ]],
                 ],
             ],
-        ],        'service_operational_authority_v1' => [
+        ],
+        'service_operational_authority_v1' => [
             'migration' => 'database/migrations/2026_08_19_000140_enable_service_operational_authority.php',
             'rules' => [
                 'metadata_evidence' => [
@@ -465,7 +467,6 @@ return [
         'pricing_rule_versions' => 'Promotions',
         'pricing_rules' => 'Promotions',
         'processed_telegram_updates' => 'Telegram',
-        'required_channels' => 'Telegram',
         'product_categories' => 'Catalog',
         'product_category_histories' => 'Catalog',
         'product_histories' => 'Catalog',
@@ -491,6 +492,7 @@ return [
         'referral_rewards' => 'Promotions',
         'refund_allocations' => 'Wallet',
         'refunds' => 'Wallet',
+        'required_channels' => 'Telegram',
         'role_permissions' => 'AccessControl',
         'roles' => 'AccessControl',
         'sales_server_histories' => 'Panels',
@@ -526,6 +528,10 @@ return [
         'service_username_registry' => 'Catalog',
         'sessions' => 'Framework',
         'sms_delivery_attempts' => 'Identity',
+        'support_ticket_categories' => 'Support',
+        'support_ticket_messages' => 'Support',
+        'support_ticket_state_histories' => 'Support',
+        'support_tickets' => 'Support',
         'telegram_accounts' => 'Identity',
         'telegram_delivery_authority_capability' => 'Telegram',
         'telegram_delivery_confidential_presentations' => 'Telegram',
@@ -575,6 +581,10 @@ return [
     'application_private_tables' => [
         'localization_override_versions',
         'localization_overrides',
+        'support_ticket_categories',
+        'support_ticket_messages',
+        'support_ticket_state_histories',
+        'support_tickets',
     ],
 
     // Exact migration-local durable rename lifecycle only. Temporary identities are not general
