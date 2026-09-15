@@ -109,7 +109,7 @@ final class LocalizationTemplateCatalog
 
         sort($keys);
 
-        return $this->mandatoryKeys = array_values($keys);
+        return $this->mandatoryKeys = $keys;
     }
 
     /**
@@ -350,7 +350,7 @@ final class LocalizationTemplateCatalog
             throw new RuntimeException('Mandatory localization metadata key list contains duplicates.');
         }
 
-        return array_values($keys);
+        return $keys;
     }
 
     private function resourceRoot(): string
