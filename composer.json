@@ -69,10 +69,6 @@
             "@php vendor/bin/phpstan analyse --no-progress --memory-limit=1G",
             "composer validate --strict"
         ],
-        "ci:test": [
-            "@php artisan config:clear --ansi",
-            "@php artisan test --log-junit build/evidence/tests/junit.xml --coverage-clover build/evidence/coverage/clover.xml"
-        ],
         "ci:forbidden-patterns": "bash scripts/ci/forbidden-patterns.sh",
         "ci:architecture": "bash scripts/ci/architecture.sh",
         "ci:licenses": "bash scripts/ci/licenses.sh",

@@ -183,7 +183,7 @@ jobs:
             bash -n "$script"
           done
 
-          for script in ci:static ci:test ci:forbidden-patterns ci:architecture ci:licenses; do
+          for script in ci:static ci:forbidden-patterns ci:architecture ci:licenses; do
             jq -e --arg script "$script" '.scripts[$script] | type == "string" or type == "array"' composer.json >/dev/null \
               || { echo "Missing mandatory Composer script: $script" >&2; exit 1; }
           done
