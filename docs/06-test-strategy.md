@@ -27,7 +27,9 @@ Delegate to an external Worker only when that materially improves execution or r
 
 ## CI validation plan
 
-CI classifies the complete PR diff into independent validation needs. The profile name is only a summary; the job flags are authoritative. Secret scanning remains mandatory for every executing CI revision.
+CI classifies the complete effective change into independent validation needs. The profile name is only a summary; the job flags are authoritative. Secret scanning remains mandatory for every executing CI revision.
+
+For a PR, the changed-path source is the exact checked-out merge candidate against its base parent. For a normal non-forced `push` to `main`, an initially empty path list is hydrated from the authoritative GitHub event `before..after` commits so post-merge validation follows the actual integrated change rather than defaulting to FULL. A forced push, zero/created baseline, event/head mismatch, unavailable commit, unreadable event payload, or any other ambiguous push baseline deliberately leaves the path list unresolved and therefore fails safe to FULL. Manual `workflow_dispatch` without a diagnostic filter is also an intentional FULL-validation route.
 
 The ruleset-required `Repository preflight` check is the final aggregate CI gate, not the early classifier job. It succeeds only after `Validation plan and repository control`, `Secret scan`, and every validation domain selected by the computed plan have succeeded; non-applicable jobs may be skipped. This keeps documentation/control-only changes fast while preventing an application PR from becoming merge-eligible before its required PHP/MariaDB/dependency/operations checks finish successfully.
 
