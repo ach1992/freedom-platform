@@ -15,3 +15,9 @@ d93d105eb087ce3a3077be9503752df74a3d1b22:tests/Feature/TrialPolicyReservationTes
 
 # Historical requirements-table prose matched generic-api-key heuristics; the line contains no credential value.
 4b24ece04dd17d0440e985b4416db74a7b5b4a2d:docs/01-authoritative-requirements.md:generic-api-key:121
+
+# Exact branch-reconciliation false positives: merge commit eb9f991 reintroduced three already-reviewed
+# historical fixtures/placeholders under a new merge fingerprint. Keep these commit/path/rule/line scoped.
+eb9f991837954f511e1a097c869eef1cb583ae05:.env.example:generic-api-key:132
+eb9f991837954f511e1a097c869eef1cb583ae05:tests/Feature/PaymentMethodEligibilitySubjectFactConcurrencyTest.php:generic-api-key:217
+eb9f991837954f511e1a097c869eef1cb583ae05:tests/Feature/TrialPolicyReservationTest.php:generic-api-key:1627
