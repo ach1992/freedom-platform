@@ -193,8 +193,15 @@ grep -Fx 'profile=DIAGNOSTIC' "$diagnostic_plan" >/dev/null || fail 'non-empty f
 
 grep -F 'failOnEmptyTestSuite="true"' "$root/phpunit.xml" >/dev/null \
     || fail 'PHPUnit must fail when a diagnostic filter selects zero tests'
+grep -F 'failOnWarning="true"' "$root/phpunit.xml" >/dev/null \
+    || fail 'PHPUnit warning policy must remain fail closed'
+grep -F '"@php vendor/bin/phpunit --configuration phpunit.xml --testsuite Unit --display-warnings --fail-on-warning"' "$root/composer.json" >/dev/null \
+    || fail 'canonical fast Unit runner must use direct PHPUnit with fail-on-warning'
+if grep -F '"@php artisan test --testsuite=Unit' "$root/composer.json" >/dev/null; then
+    fail 'canonical fast Unit runner must not use the warning-producing Artisan test wrapper'
+fi
 
-printf '%s\n' 'Filtered diagnostic-plan and zero-test safety tests passed.'
+printf '%s\n' 'Filtered diagnostic, zero-test, and Unit warning-policy tests passed.'
 
 # The required GitHub status context must be the final aggregate gate, not the early planning job.
 ci_workflow="$root/.github/workflows/ci.yml"

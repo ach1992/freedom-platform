@@ -61,7 +61,7 @@
         "test": "@test:integration",
         "test:quick": [
             "@php artisan config:clear --ansi @no_additional_args",
-            "@php artisan test --testsuite=Unit"
+            "@php vendor/bin/phpunit --configuration phpunit.xml --testsuite Unit --display-warnings --fail-on-warning"
         ],
         "test:integration": "bash scripts/ci/test-integration.sh",
         "ci:static": [
