@@ -39,7 +39,6 @@ use DateTimeImmutable;
 use DomainException;
 use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Contracts\Encryption\StringEncrypter;
-use Illuminate\Contracts\Translation\Translator;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\Events\QueryExecuted;
@@ -775,7 +774,7 @@ final class TelegramMembershipJoinPresentationTest extends TestCase
             $this->app->make(DatabaseManager::class),
             $this->app->make(StringEncrypter::class),
             $this->rules(),
-            $this->app->make(Translator::class),
+            $this->app->make(LocalizationResolver::class),
             new TelegramMembershipConfigurationFence,
         );
     }
