@@ -29,10 +29,12 @@ There is intentionally no repository project-status or infrastructure-inventory 
 
 Recover current delivery state from live GitHub:
 
-1. Program Issue `#3` for Version 1 phase/backlog/dependencies;
-2. Draft integration PR `#6` for the current integration line toward `main`;
-3. the active phase Issue and specific task/PR;
+1. Program Issue `#3` for Version 1 phase/dependency state;
+2. the active Phase Issue for current phase scope and remaining work;
+3. the specific task/PR when one exists;
 4. exact-head workflow checks for validation/review state.
+
+Historical Issues and PRs are evidence, not standing pointers to the current integration line.
 
 `README.md` and `AGENTS.md` provide stable navigation and rules. GitHub owns mutable priority, status, blockers, assignments, SHAs, PR/review state, CI state, and live runner inventory.
 
