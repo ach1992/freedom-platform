@@ -98,6 +98,38 @@ final readonly class SupportTicketService
         return $tickets;
     }
 
+    /** @requirement SUP-001 */
+    public function triage(
+        int $ticketId,
+        ?int $assignedUserId,
+        SupportTicketPriority $priority,
+    ): SupportTicketSnapshot {
+        $this->assertPositiveId($ticketId);
+        if ($assignedUserId !== null) {
+            $this->assertPositiveId($assignedUserId);
+        }
+
+        return $this->database->connection()->transaction(function (Connection $connection) use ($ticketId, $assignedUserId, $priority): SupportTicketSnapshot {
+            /** @var object{id:int|string}|null $ticket */
+            $ticket = $connection->table('support_tickets')->where('id', $ticketId)->lockForUpdate()->first(['id']);
+            if ($ticket === null) {
+                throw new RuntimeException('Support ticket does not exist.');
+            }
+
+            if ($assignedUserId !== null && ! $connection->table('users')->where('id', $assignedUserId)->exists()) {
+                throw new InvalidArgumentException('Support ticket assignee does not exist.');
+            }
+
+            $connection->table('support_tickets')->where('id', $ticketId)->update([
+                'assigned_user_id' => $assignedUserId,
+                'priority' => $priority->value,
+                'updated_at' => $this->timestamp(),
+            ]);
+
+            return $this->snapshot($connection, $ticketId);
+        });
+    }
+
     /** @requirement SUP-001 SEC-002 QUA-003 */
     public function replyAsCustomer(
         int $ticketId,
@@ -315,26 +347,30 @@ final readonly class SupportTicketService
         bool $customerVisible,
         string $createdAt,
     ): SupportTicketMessageReceipt {
+        $normalizedBody = trim($body);
         $inserted = $connection->table('support_ticket_messages')->insertOrIgnore([
             'ticket_id' => $ticketId,
             'actor_user_id' => $actorUserId,
             'kind' => $kind->value,
-            'body' => trim($body),
+            'body' => $normalizedBody,
             'idempotency_key' => $idempotencyKey,
             'customer_visible' => $customerVisible ? 1 : 0,
             'created_at' => $createdAt,
         ]);
 
-        /** @var object{id:int|string,kind:string}|null $message */
+        /** @var object{id:int|string,kind:string,actor_user_id:int|string,body:string,customer_visible:int|string|bool}|null $message */
         $message = $connection->table('support_ticket_messages')
             ->where('ticket_id', $ticketId)
             ->where('idempotency_key', $idempotencyKey)
-            ->first(['id', 'kind']);
+            ->first(['id', 'kind', 'actor_user_id', 'body', 'customer_visible']);
         if ($message === null) {
             throw new RuntimeException('Support ticket message could not be persisted.');
         }
-        if ($message->kind !== $kind->value) {
-            throw new DomainException('Support ticket idempotency key was reused for a different message kind.');
+        if ($message->kind !== $kind->value
+            || (int) $message->actor_user_id !== $actorUserId
+            || $message->body !== $normalizedBody
+            || (int) $message->customer_visible !== ($customerVisible ? 1 : 0)) {
+            throw new DomainException('Support ticket idempotency key was reused for a different message payload.');
         }
 
         return new SupportTicketMessageReceipt((int) $message->id, $ticketId, $kind, $inserted === 0);
@@ -381,6 +417,22 @@ final readonly class SupportTicketService
         return $this->snapshotFromRow($row);
     }
 
+    /**
+     * @param object{
+     *   id:int|string,
+     *   tracking_number:string,
+     *   requester_user_id:int|string,
+     *   category_id:int|string,
+     *   state:string,
+     *   priority:string,
+     *   assigned_user_id:int|string|null,
+     *   title:string,
+     *   closed_at:?string,
+     *   reopen_until:?string,
+     *   created_at:string,
+     *   updated_at:string
+     * } $row
+     */
     private function snapshotFromRow(object $row): SupportTicketSnapshot
     {
         return new SupportTicketSnapshot(
