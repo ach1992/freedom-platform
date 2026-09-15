@@ -60,18 +60,24 @@ assert_plan() {
 assert_plan docs_only CONTROL true true false false false false false false false false docs/06-test-strategy.md
 assert_plan governance_only CONTROL true false false false false false false false false false AGENTS.md .github/ISSUE_TEMPLATE/task.yml
 assert_plan read_only_workflow CONTROL_PLANE true false true false false false false false false false .github/workflows/staging-readiness.yml
+assert_plan provider_mutation_workflow CONTROL_PLANE true false true false false false false false false false .github/workflows/provider-live-acceptance.yml
 assert_plan application_source APPLICATION false false false true true true false true false false app/Modules/Orders/Application/OrderService.php
+assert_plan localization_catalog APPLICATION false false false true true false false false false false resources/lang/fa/telegram.php
 assert_plan feature_tests APPLICATION false false false false true false false true false false tests/Feature/OrderTest.php
 assert_plan unit_tests APPLICATION false false false true true false false false false false tests/Unit/OrderTest.php
 assert_plan dependency_lockfile APPLICATION false false false true false true true true false false composer.lock
 assert_plan schema_migration APPLICATION false false false true true true false true false false database/migrations/2026_08_20_000001_example.php
 assert_plan docker_runtime APPLICATION false false false false false false false true true false docker-compose.ci.yml
+assert_plan docker_mariadb_init APPLICATION false false false false false false false true true false docker/mariadb/ci-init.sql
+assert_plan global_pint_policy APPLICATION false false false false true false false false false false pint.json
+assert_plan editor_style_policy APPLICATION false false false false true false false false false false .editorconfig
 assert_plan deployment_mutation_workflow FULL true true true true true true true true true true .github/workflows/deploy-production.yml
-assert_plan provider_mutation_workflow FULL true true true true true true true true true true .github/workflows/provider-live-acceptance.yml
 assert_plan security_sensitive APPLICATION false false false true true true false true false false app/Modules/AccessControl/Application/AuthorizationService.php
 assert_plan ci_policy CONTROL_PLANE true false true false false false false false false false .github/workflows/ci.yml scripts/ci/classify-validation-plan.sh
 assert_plan secret_scan_control CONTROL_PLANE true false true false false false false false false false scripts/ci/scan-git-secrets.sh scripts/ci/test-secret-scan.sh
 assert_plan operations_only OPERATIONS false false false false false false false false false true deploy/bin/queue-worker-with-heartbeat.sh
+assert_plan unknown_view FULL true true true true true true true true true true resources/views/home.blade.php
+assert_plan unknown_public_asset FULL true true true true true true true true true true public/example.txt
 assert_plan unknown_path FULL true true true true true true true true true true mystery/unclassified.file
 assert_plan mixed_application APPLICATION true true false true true true false true false false docs/06-test-strategy.md app/Modules/Orders/Application/OrderService.php
 assert_plan empty_diff FULL true true true true true true true true true true
@@ -186,6 +192,12 @@ if '            phpunit_args+=(--testsuite Feature)\n' not in text:
     raise SystemExit('normal real-engine CI must own the Feature suite after Unit separation')
 if "if [[ \"$GITHUB_EVENT_NAME\" != 'workflow_dispatch' ]]; then" not in text:
     raise SystemExit('Feature-only CI selection must preserve intentional manual full-suite validation')
+if text.count('--diff=HEAD^1') < 2:
+    raise SystemExit('normal PR Pint validation must use changed-file diff scope in both style execution paths')
+if text.count("VALIDATION_PROFILE: ${{ needs.preflight.outputs.profile }}") < 2:
+    raise SystemExit('Pint diff scope must consume the fail-safe validation profile in both style execution paths')
+if "grep -Eq '^(\\.editorconfig|pint\\.json)$'" not in text:
+    raise SystemExit('global style-policy changes must force full-repository Pint validation')
 if "if: ${{ always()" not in required:
     raise SystemExit('final required gate must evaluate after failed/skipped dependencies')
 if 'Pull request revision drifted after validation; a fresh CI run is required.' not in required:

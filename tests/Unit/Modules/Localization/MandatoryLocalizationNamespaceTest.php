@@ -60,6 +60,31 @@ final class MandatoryLocalizationNamespaceTest extends TestCase
         self::assertSame(['amount', 'currency'], $catalog->metadata('quote.final_price')['placeholders']);
     }
 
+    public function test_all_locale_catalog_files_are_loadable_arrays_with_locale_file_parity(): void
+    {
+        $root = dirname(__DIR__, 4).'/resources/lang';
+        $catalogFiles = [];
+
+        foreach (['en', 'fa'] as $locale) {
+            $paths = glob($root.'/'.$locale.'/*.php') ?: [];
+            sort($paths);
+
+            self::assertNotEmpty($paths, "Localization locale [{$locale}] must contain catalog files.");
+            $catalogFiles[$locale] = array_map('basename', $paths);
+
+            foreach ($paths as $path) {
+                $catalog = require $path;
+                self::assertIsArray($catalog, "Localization catalog [{$path}] must return an array.");
+            }
+        }
+
+        self::assertSame($catalogFiles['en'], $catalogFiles['fa'], 'English and Persian locale catalogs must expose the same file set.');
+
+        $mandatoryContract = require $root.'/_mandatory.php';
+        self::assertIsArray($mandatoryContract, 'Mandatory localization metadata must return an array.');
+        self::assertNotEmpty($mandatoryContract['families'] ?? [], 'Mandatory localization metadata must declare families.');
+    }
+
     public function test_mandatory_button_override_respects_documented_length_and_placeholders(): void
     {
         $catalog = new LocalizationTemplateCatalog(new Filesystem, dirname(__DIR__, 4).'/resources/lang');

@@ -259,6 +259,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
 
       - name: Set up PHP 8.4
         uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
@@ -285,13 +287,25 @@ jobs:
       - name: Code style
         if: ${{ needs.preflight.outputs.style == 'true' }}
         shell: bash
+        env:
+          VALIDATION_PROFILE: ${{ needs.preflight.outputs.profile }}
         run: |
-          set -o pipefail
+          set -euo pipefail
           mkdir -p build/evidence/static
-          if php vendor/bin/pint --test --format=json 2>&1 | tee build/evidence/static/pint.json; then
+
+          pint_args=(--test --format=json)
+          repair_args=()
+          if [[ "$GITHUB_EVENT_NAME" == 'pull_request' && "$VALIDATION_PROFILE" != 'FULL' ]] && git rev-parse --verify HEAD^1 >/dev/null 2>&1; then
+            if ! git diff --name-only HEAD^1 HEAD | grep -Eq '^(\.editorconfig|pint\.json)$'; then
+              pint_args+=(--diff=HEAD^1)
+              repair_args+=(--diff=HEAD^1)
+            fi
+          fi
+
+          if php vendor/bin/pint "${pint_args[@]}" 2>&1 | tee build/evidence/static/pint.json; then
             exit 0
           fi
-          php vendor/bin/pint
+          php vendor/bin/pint "${repair_args[@]}"
           git diff -- . | tee build/evidence/static/pint.diff
           exit 1
 
@@ -399,7 +413,17 @@ jobs:
       - name: Code style for integration-only PHP changes
         if: ${{ needs.preflight.outputs.style == 'true' && needs.preflight.outputs.static_analysis != 'true' }}
         shell: bash
-        run: php vendor/bin/pint --test
+        env:
+          VALIDATION_PROFILE: ${{ needs.preflight.outputs.profile }}
+        run: |
+          set -euo pipefail
+          pint_args=(--test)
+          if [[ "$GITHUB_EVENT_NAME" == 'pull_request' && "$VALIDATION_PROFILE" != 'FULL' ]] && git rev-parse --verify HEAD^1 >/dev/null 2>&1; then
+            if ! git diff --name-only HEAD^1 HEAD | grep -Eq '^(\.editorconfig|pint\.json)$'; then
+              pint_args+=(--diff=HEAD^1)
+            fi
+          fi
+          php vendor/bin/pint "${pint_args[@]}"
 
       - name: Start disposable dependencies
         timeout-minutes: 5
