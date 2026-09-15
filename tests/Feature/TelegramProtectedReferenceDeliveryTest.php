@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Modules\Localization\Application\LocalizationResolver;
 use App\Modules\Telegram\Application\Contracts\ProtectedTelegramMessageSender;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCardToCardPayment;
 use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
@@ -30,7 +31,6 @@ use App\Shared\Application\RestrictedValue;
 use App\Shared\Infrastructure\DatabaseOutboxPublisher;
 use DateTimeImmutable;
 use DomainException;
-use Illuminate\Contracts\Translation\Translator;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\DB;
@@ -433,7 +433,7 @@ final class TelegramProtectedReferenceDeliveryTest extends TestCase
             $sender,
             new TelegramProtectedPresentationResolver(
                 $cardToCard,
-                $this->app->make(Translator::class),
+                $this->app->make(LocalizationResolver::class),
             ),
         );
     }

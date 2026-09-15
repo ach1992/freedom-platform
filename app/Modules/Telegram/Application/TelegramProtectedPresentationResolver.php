@@ -4,17 +4,17 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Application;
 
+use App\Modules\Localization\Application\LocalizationResolver;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCardToCardPayment;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
-use Illuminate\Contracts\Translation\Translator;
 use RuntimeException;
 
 final readonly class TelegramProtectedPresentationResolver
 {
     public function __construct(
         private TelegramCustomerPurchaseCardToCardPayment $cardToCardPayments,
-        private Translator $translator,
+        private LocalizationResolver $localization,
         private ?TelegramMembershipJoinPresentationResolver $membershipJoinPresentations = null,
     ) {}
 
@@ -71,11 +71,8 @@ final readonly class TelegramProtectedPresentationResolver
     /** @param array<string,int|string> $replace */
     private function translation(string $key, string $locale, array $replace = []): string
     {
-        $text = $this->translator->get($key, $replace, $locale);
-        if (! is_string($text) || $text === '' || $text === $key) {
-            $text = $this->translator->get($key, $replace, 'en');
-        }
-        if (! is_string($text) || $text === '' || $text === $key) {
+        $text = $this->localization->resolve($key, $replace, $locale);
+        if ($text === '' || $text === '['.$key.']') {
             throw new RuntimeException('Protected Telegram translation is unavailable.');
         }
 
