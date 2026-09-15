@@ -50,7 +50,7 @@ env:
 
 jobs:
   preflight:
-    name: Repository preflight
+    name: Validation plan and repository control
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     runs-on: ubuntu-24.04
     outputs:
@@ -183,12 +183,13 @@ jobs:
             bash -n "$script"
           done
 
-          for script in ci:static ci:test ci:forbidden-patterns ci:architecture ci:licenses; do
+          for script in ci:static ci:forbidden-patterns ci:architecture ci:licenses; do
             jq -e --arg script "$script" '.scripts[$script] | type == "string" or type == "array"' composer.json >/dev/null \
               || { echo "Missing mandatory Composer script: $script" >&2; exit 1; }
           done
 
           while IFS= read -r changed_path; do
+            [[ -e "$changed_path" ]] || continue
             case "$changed_path" in
               scripts/ci/*.sh) bash -n "$changed_path" ;;
               *) : ;;
@@ -433,6 +434,47 @@ jobs:
             test -s build/evidence/coverage/clover.xml
           fi
 
+      - name: Summarize slow tests
+        if: ${{ success() }}
+        shell: bash
+        run: |
+          php <<'PHP'
+          <?php
+          $path = 'build/evidence/tests/junit.xml';
+          if (! is_file($path)) {
+              exit(0);
+          }
+          libxml_use_internal_errors(true);
+          $xml = simplexml_load_file($path);
+          if ($xml === false) {
+              fwrite(STDERR, "Unable to parse PHPUnit JUnit timing data; continuing without a timing summary.\n");
+              exit(0);
+          }
+          $rows = [];
+          foreach ($xml->xpath('//testcase') ?: [] as $case) {
+              $seconds = (float) $case['time'];
+              $class = (string) $case['class'];
+              if ($class === '') {
+                  $class = (string) $case['classname'];
+              }
+              $name = (string) $case['name'];
+              $label = trim($class.'::'.$name, ':');
+              $label = preg_replace('/\s+/', ' ', $label) ?: $label;
+              $rows[] = [$seconds, $label];
+          }
+          usort($rows, static fn (array $a, array $b): int => $b[0] <=> $a[0]);
+          $summary = getenv('GITHUB_STEP_SUMMARY');
+          if (! is_string($summary) || $summary === '') {
+              exit(0);
+          }
+          $lines = ['## Slowest PHPUnit test cases', '', '```text'];
+          foreach (array_slice($rows, 0, 20) as [$seconds, $label]) {
+              $lines[] = sprintf('%8.3fs  %s', $seconds, $label);
+          }
+          $lines[] = '```';
+          file_put_contents($summary, implode(PHP_EOL, $lines).PHP_EOL, FILE_APPEND);
+          PHP
+
       - name: Capture dependency service logs
         if: ${{ failure() || github.event_name == 'workflow_dispatch' }}
         run: |
@@ -497,19 +539,19 @@ jobs:
                 php -l "$file" >/dev/null
                 ;;
               *.conf)
-                awk '''
+                awk '
                   /^[[:space:]]*($|;|#)/ { next }
                   /^\[[^][]+\]$/ { next }
                   /^[A-Za-z0-9_.-]+=.*/ { next }
                   { print "Invalid supervisor-style config line " NR ": " $0 > "/dev/stderr"; exit 1 }
-                ''' "$file"
+                ' "$file"
                 ;;
               *.cron)
-                awk '''
+                awk '
                   /^[[:space:]]*($|#)/ { next }
                   NF >= 6 { next }
                   { print "Invalid cron entry line " NR ": " $0 > "/dev/stderr"; exit 1 }
-                ''' "$file"
+                ' "$file"
                 ;;
               *)
                 echo "No operational validator exists for changed file: $file" >&2
@@ -564,3 +606,97 @@ jobs:
           PR_HEAD_REPO_URL: ${{ github.event.pull_request.head.repo.clone_url }}
           PUSH_BEFORE_SHA: ${{ github.event.before }}
         run: bash scripts/ci/scan-git-secrets.sh
+
+  required:
+    name: Repository preflight
+    needs:
+      - preflight
+      - quality
+      - dependencies
+      - integration
+      - operations
+      - secrets
+    if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && !(github.event_name == 'workflow_dispatch' && inputs.phpunit_filter != '') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Enforce applicable validation and final freshness
+        shell: bash
+        env:
+          PREFLIGHT_RESULT: ${{ needs.preflight.result }}
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          DEPENDENCIES_RESULT: ${{ needs.dependencies.result }}
+          INTEGRATION_RESULT: ${{ needs.integration.result }}
+          OPERATIONS_RESULT: ${{ needs.operations.result }}
+          SECRETS_RESULT: ${{ needs.secrets.result }}
+          STYLE_REQUIRED: ${{ needs.preflight.outputs.style }}
+          STATIC_REQUIRED: ${{ needs.preflight.outputs.static_analysis }}
+          DEPENDENCIES_REQUIRED: ${{ needs.preflight.outputs.dependencies }}
+          INTEGRATION_REQUIRED: ${{ needs.preflight.outputs.integration }}
+          OPERATIONS_REQUIRED: ${{ needs.preflight.outputs.operations }}
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EXPECTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_REPO_URL: ${{ github.event.pull_request.head.repo.clone_url }}
+          BASE_REPO_URL: https://github.com/${{ github.repository }}.git
+        run: |
+          set -euo pipefail
+
+          require_success() {
+            local name=$1
+            local actual=$2
+            [[ "$actual" == 'success' ]] || {
+              echo "$name must succeed; observed result: ${actual:-missing}" >&2
+              exit 1
+            }
+          }
+
+          require_planned() {
+            local name=$1
+            local required=$2
+            local actual=$3
+            if [[ "$required" == 'true' ]]; then
+              require_success "$name" "$actual"
+              return
+            fi
+            [[ "$actual" == 'skipped' || "$actual" == 'success' ]] || {
+              echo "$name was not required but ended in an unsafe state: ${actual:-missing}" >&2
+              exit 1
+            }
+          }
+
+          require_success 'Validation plan and repository control' "$PREFLIGHT_RESULT"
+          require_success 'Secret scan' "$SECRETS_RESULT"
+
+          quality_required=false
+          if [[ "$STATIC_REQUIRED" == 'true' || ( "$STYLE_REQUIRED" == 'true' && "$INTEGRATION_REQUIRED" != 'true' ) ]]; then
+            quality_required=true
+          fi
+
+          require_planned 'PHP style and static architecture' "$quality_required" "$QUALITY_RESULT"
+          require_planned 'Dependency and license policy' "$DEPENDENCIES_REQUIRED" "$DEPENDENCIES_RESULT"
+          require_planned 'MariaDB 10.11 and Redis tests' "$INTEGRATION_REQUIRED" "$INTEGRATION_RESULT"
+          require_planned 'Operational syntax and entrypoints' "$OPERATIONS_REQUIRED" "$OPERATIONS_RESULT"
+
+          if [[ "$GITHUB_EVENT_NAME" == 'pull_request' ]]; then
+            current_head=$(git ls-remote --refs "$HEAD_REPO_URL" "refs/heads/$HEAD_REF" | awk 'NR == 1 {print $1}')
+            current_base=$(git ls-remote --refs "$BASE_REPO_URL" "refs/heads/$BASE_REF" | awk 'NR == 1 {print $1}')
+            test -n "$current_head" || { echo "Current PR head ref is unavailable: $HEAD_REF" >&2; exit 1; }
+            test -n "$current_base" || { echo "Current PR base ref is unavailable: $BASE_REF" >&2; exit 1; }
+            if [[ "$current_head" != "$EXPECTED_HEAD_SHA" || "$current_base" != "$EXPECTED_BASE_SHA" ]]; then
+              echo 'Pull request revision drifted after validation; a fresh CI run is required.' >&2
+              echo "Expected head/base: $EXPECTED_HEAD_SHA / $EXPECTED_BASE_SHA" >&2
+              echo "Current head/base: $current_head / $current_base" >&2
+              exit 1
+            fi
+          fi
+
+          {
+            echo '## Required CI gate'
+            echo
+            echo '- Applicable validation jobs completed successfully.'
+            echo '- Secret scan completed successfully.'
+            if [[ "$GITHUB_EVENT_NAME" == 'pull_request' ]]; then
+              echo '- PR head/base freshness revalidated after dependent jobs completed.'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

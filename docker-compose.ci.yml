@@ -26,7 +26,7 @@ services:
     security_opt:
       - no-new-privileges:true
     volumes:
-      - ./docker/mariadb/ci-init.sql:/docker-entrypoint-initdb.d/10-freedom-ci.sql:ro
+      - ${MARIADB_INIT_SQL_PATH:-./docker/mariadb/ci-init.sql}:/docker-entrypoint-initdb.d/10-freedom-ci.sql:ro
     tmpfs:
       - /var/lib/mysql
       - /tmp
@@ -57,7 +57,7 @@ services:
     security_opt:
       - no-new-privileges:true
     volumes:
-      - ./docker/mariadb/ci-init.sql:/docker-entrypoint-initdb.d/10-freedom-ci.sql:ro
+      - ${MARIADB_INIT_SQL_PATH:-./docker/mariadb/ci-init.sql}:/docker-entrypoint-initdb.d/10-freedom-ci.sql:ro
     tmpfs:
       - /var/lib/mysql
       - /tmp

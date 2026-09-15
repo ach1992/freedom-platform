@@ -58,23 +58,16 @@
             "@php artisan migrate --force --isolated=1"
         ],
         "dev": "@php artisan serve",
-        "test": [
-            "@php artisan config:clear --ansi @no_additional_args",
-            "@php artisan test"
-        ],
+        "test": "@test:integration",
         "test:quick": [
             "@php artisan config:clear --ansi @no_additional_args",
-            "@php artisan test"
+            "@php artisan test --testsuite=Unit"
         ],
         "test:integration": "bash scripts/ci/test-integration.sh",
         "ci:static": [
             "@php vendor/bin/pint --test",
             "@php vendor/bin/phpstan analyse --no-progress --memory-limit=1G",
             "composer validate --strict"
-        ],
-        "ci:test": [
-            "@php artisan config:clear --ansi",
-            "@php artisan test --log-junit build/evidence/tests/junit.xml --coverage-clover build/evidence/coverage/clover.xml"
         ],
         "ci:forbidden-patterns": "bash scripts/ci/forbidden-patterns.sh",
         "ci:architecture": "bash scripts/ci/architecture.sh",
