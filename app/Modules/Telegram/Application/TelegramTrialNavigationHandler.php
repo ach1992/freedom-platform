@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Telegram\Application;
 
 use App\Modules\Customers\Application\CustomerAccountSummaryService;
+use App\Modules\Localization\Application\LocalizationResolver;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerTrialCatalog;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerTrialClaim;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerTrialProvisioningStatus;
@@ -12,7 +13,6 @@ use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
 use DateTimeImmutable;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
-use Illuminate\Contracts\Translation\Translator;
 use RuntimeException;
 
 /**
@@ -68,7 +68,7 @@ final readonly class TelegramTrialNavigationHandler
     private const PAGE_SIZE = 6;
 
     public function __construct(
-        private Translator $translator,
+        private LocalizationResolver $localization,
         private ConfidentialTelegramPresentationFactory $confidentialPresentations,
         private TelegramConfidentialDeliveryQueue $delivery,
         private TelegramInteractionSessionService $sessions,
@@ -1577,11 +1577,8 @@ final readonly class TelegramTrialNavigationHandler
     /** @param array<string,int|string> $replace */
     private function translation(string $key, string $locale, array $replace = []): string
     {
-        $value = $this->translator->get($key, $replace, $locale);
-        if (! is_string($value) || $value === '' || $value === $key) {
-            $value = $this->translator->get($key, $replace, 'en');
-        }
-        if (! is_string($value) || $value === '' || $value === $key) {
+        $value = $this->localization->resolve($key, $replace, $locale);
+        if ($value === '' || $value === '['.$key.']') {
             throw new RuntimeException('Telegram Trial translation is unavailable.');
         }
         if (preg_match('/:[A-Za-z_][A-Za-z0-9_]*/', $value) === 1) {
