@@ -19,6 +19,23 @@ final class TelegramAgentLocalizationResolverTest extends TestCase
 {
     use RefreshDatabase;
 
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        config([
+            'app.url' => 'https://bot.example.test',
+            'telegram.bot_token' => '123456789:abcdefghijklmnopqrstuvwxyz_ABCDE',
+            'telegram.webhook_secret' => 'telegram_webhook_secret_1234567890_safe',
+            'telegram.webhook_path' => 'api/telegram/webhook',
+            'telegram.max_body_bytes' => 1_048_576,
+            'telegram.queue' => 'critical',
+            'telegram.processing_lease_seconds' => 120,
+            'telegram.api_base_url' => 'https://api.telegram.org',
+            'telegram.api_timeout_seconds' => 15,
+        ]);
+    }
+
     public function test_agent_handler_uses_canonical_resolver_and_observes_placeholder_override(): void
     {
         $handler = $this->app->make(TelegramAgentNavigationHandler::class);
