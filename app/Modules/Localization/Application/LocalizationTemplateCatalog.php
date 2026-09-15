@@ -16,6 +16,12 @@ final class LocalizationTemplateCatalog
     /** @var array<string, array<string, mixed>|null> */
     private array $loadedGroups = [];
 
+    /** @var array<string, mixed>|null */
+    private ?array $mandatoryContract = null;
+
+    /** @var list<string>|null */
+    private ?array $mandatoryKeys = null;
+
     public function __construct(
         private readonly Filesystem $files,
         private readonly ?string $resourceRoot = null,
@@ -56,34 +62,129 @@ final class LocalizationTemplateCatalog
             return null;
         }
 
-        $values = $this->fileGroup($locale, $group);
-        if ($values === null) {
-            return null;
+        $template = $this->nestedString($this->fileGroup($locale, $group), $segments);
+        if ($template !== null) {
+            return $template;
         }
 
-        $value = $values;
-        foreach ($segments as $segment) {
-            if (! is_array($value) || ! array_key_exists($segment, $value)) {
-                return null;
+        return $this->nestedString($this->mandatoryFileGroup($locale, $group), $segments);
+    }
+
+    /** @return list<string> */
+    public function mandatoryKeys(): array
+    {
+        if ($this->mandatoryKeys !== null) {
+            return $this->mandatoryKeys;
+        }
+
+        $contract = $this->mandatoryContract();
+        $families = $contract['families'] ?? null;
+        if (! is_array($families) || $families === []) {
+            throw new RuntimeException('Mandatory localization contract must define namespace families.');
+        }
+
+        $keys = [];
+        foreach ($families as $family => $relativeKeys) {
+            if (! is_string($family) || preg_match('/\A[A-Za-z0-9_][A-Za-z0-9_-]*\z/', $family) !== 1) {
+                throw new RuntimeException('Mandatory localization contract contains an invalid namespace family.');
             }
-            $value = $value[$segment];
+            if (! is_array($relativeKeys) || $relativeKeys === []) {
+                throw new RuntimeException('Mandatory localization namespace family must contain keys.');
+            }
+
+            foreach ($relativeKeys as $relativeKey) {
+                if (! is_string($relativeKey) || preg_match('/\A[A-Za-z0-9_][A-Za-z0-9_.-]*\z/', $relativeKey) !== 1) {
+                    throw new RuntimeException('Mandatory localization contract contains an invalid relative key.');
+                }
+
+                $key = $family.'.'.$relativeKey;
+                $this->assertKey($key);
+                $keys[] = $key;
+            }
         }
 
-        return is_string($value) ? $value : null;
+        if (count($keys) !== count(array_unique($keys))) {
+            throw new RuntimeException('Mandatory localization contract contains duplicate keys.');
+        }
+
+        sort($keys);
+
+        return $this->mandatoryKeys = array_values($keys);
+    }
+
+    /**
+     * @return array{placeholders: list<string>, parse_mode: string, max_length: int, contexts: list<string>}
+     */
+    public function metadata(string $key): array
+    {
+        $this->assertKey($key);
+        if (! in_array($key, $this->mandatoryKeys(), true)) {
+            throw new InvalidArgumentException('Localization key is not part of the mandatory metadata contract.');
+        }
+
+        $contract = $this->mandatoryContract();
+        $parseMode = $contract['parse_mode'] ?? null;
+        $messageMaxLength = $contract['message_max_length'] ?? null;
+        $buttonMaxLength = $contract['button_max_length'] ?? null;
+        if ($parseMode !== 'plain_text'
+            || ! is_int($messageMaxLength) || $messageMaxLength < 1 || $messageMaxLength > self::MAX_TEMPLATE_LENGTH
+            || ! is_int($buttonMaxLength) || $buttonMaxLength < 1 || $buttonMaxLength > $messageMaxLength) {
+            throw new RuntimeException('Mandatory localization metadata limits are invalid.');
+        }
+
+        $buttonKeys = $this->contractKeyList('button_keys');
+        $mediaCaptionKeys = $this->contractKeyList('media_caption_keys');
+        foreach (array_merge($buttonKeys, $mediaCaptionKeys) as $configuredKey) {
+            if (! in_array($configuredKey, $this->mandatoryKeys(), true)) {
+                throw new RuntimeException('Mandatory localization metadata references an undeclared key.');
+            }
+        }
+
+        if (in_array($key, $buttonKeys, true) && in_array($key, $mediaCaptionKeys, true)) {
+            throw new RuntimeException('Mandatory localization key cannot be both button-only and media-caption capable.');
+        }
+
+        $english = $this->template($key, 'en');
+        $persian = $this->template($key, 'fa');
+        $placeholders = $this->placeholders($english);
+        if ($this->placeholders($persian) !== $placeholders) {
+            throw new RuntimeException('Mandatory localization locale placeholders do not match.');
+        }
+
+        $isButton = in_array($key, $buttonKeys, true);
+        $maxLength = $isButton ? $buttonMaxLength : $messageMaxLength;
+        if (mb_strlen($english) > $maxLength || mb_strlen($persian) > $maxLength) {
+            throw new RuntimeException('Mandatory localization default exceeds its documented maximum length.');
+        }
+
+        $contexts = $isButton ? ['button'] : ['message'];
+        if (in_array($key, $mediaCaptionKeys, true)) {
+            $contexts[] = 'media_caption';
+        }
+
+        return [
+            'placeholders' => $placeholders,
+            'parse_mode' => $parseMode,
+            'max_length' => $maxLength,
+            'contexts' => $contexts,
+        ];
     }
 
     public function validateOverride(string $key, string $locale, string $value): string
     {
         $default = $this->template($key, $locale);
+        $metadata = in_array($key, $this->mandatoryKeys(), true) ? $this->metadata($key) : null;
+        $maxLength = $metadata['max_length'] ?? self::MAX_TEMPLATE_LENGTH;
 
-        if ($value === '' || trim($value) === '' || mb_strlen($value) > self::MAX_TEMPLATE_LENGTH) {
+        if ($value === '' || trim($value) === '' || mb_strlen($value) > $maxLength) {
             throw new InvalidArgumentException('Localization override value is invalid.');
         }
         if (preg_match('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/', $value) === 1) {
             throw new InvalidArgumentException('Localization override value contains unsupported control characters.');
         }
 
-        if ($this->placeholders($value) !== $this->placeholders($default)) {
+        $expectedPlaceholders = $metadata['placeholders'] ?? $this->placeholders($default);
+        if ($this->placeholders($value) !== $expectedPlaceholders) {
             throw new InvalidArgumentException('Localization override placeholders must exactly match the file-backed template.');
         }
 
@@ -141,6 +242,27 @@ final class LocalizationTemplateCatalog
         return strtr($template, $replace);
     }
 
+    /**
+     * @param  array<string, mixed>|null  $values
+     * @param  list<string>  $segments
+     */
+    private function nestedString(?array $values, array $segments): ?string
+    {
+        if ($values === null) {
+            return null;
+        }
+
+        $value = $values;
+        foreach ($segments as $segment) {
+            if (! is_array($value) || ! array_key_exists($segment, $value)) {
+                return null;
+            }
+            $value = $value[$segment];
+        }
+
+        return is_string($value) ? $value : null;
+    }
+
     /** @return array<string, mixed>|null */
     private function fileGroup(string $locale, string $group): ?array
     {
@@ -149,8 +271,7 @@ final class LocalizationTemplateCatalog
             return $this->loadedGroups[$cacheKey];
         }
 
-        $root = $this->resourceRoot ?? resource_path('lang');
-        $path = rtrim($root, '/').'/'.$locale.'/'.$group.'.php';
+        $path = $this->resourceRoot().'/'.$locale.'/'.$group.'.php';
         if (! $this->files->isFile($path)) {
             return $this->loadedGroups[$cacheKey] = null;
         }
@@ -161,5 +282,79 @@ final class LocalizationTemplateCatalog
         }
 
         return $this->loadedGroups[$cacheKey] = $values;
+    }
+
+    /** @return array<string, mixed>|null */
+    private function mandatoryFileGroup(string $locale, string $group): ?array
+    {
+        $cacheKey = $locale.'|_mandatory|'.$group;
+        if (array_key_exists($cacheKey, $this->loadedGroups)) {
+            return $this->loadedGroups[$cacheKey];
+        }
+
+        $path = $this->resourceRoot().'/'.$locale.'/_mandatory.php';
+        if (! $this->files->isFile($path)) {
+            return $this->loadedGroups[$cacheKey] = null;
+        }
+
+        $values = $this->files->getRequire($path);
+        if (! is_array($values)) {
+            throw new RuntimeException('Mandatory localization defaults must return an array.');
+        }
+
+        $groupValues = $values[$group] ?? null;
+        if ($groupValues !== null && ! is_array($groupValues)) {
+            throw new RuntimeException('Mandatory localization namespace default must be an array.');
+        }
+
+        return $this->loadedGroups[$cacheKey] = $groupValues;
+    }
+
+    /** @return array<string, mixed> */
+    private function mandatoryContract(): array
+    {
+        if ($this->mandatoryContract !== null) {
+            return $this->mandatoryContract;
+        }
+
+        $path = $this->resourceRoot().'/_mandatory.php';
+        if (! $this->files->isFile($path)) {
+            throw new RuntimeException('Mandatory localization contract is missing.');
+        }
+
+        $contract = $this->files->getRequire($path);
+        if (! is_array($contract)) {
+            throw new RuntimeException('Mandatory localization contract must return an array.');
+        }
+
+        return $this->mandatoryContract = $contract;
+    }
+
+    /** @return list<string> */
+    private function contractKeyList(string $name): array
+    {
+        $value = $this->mandatoryContract()[$name] ?? null;
+        if (! is_array($value)) {
+            throw new RuntimeException('Mandatory localization metadata key list is missing.');
+        }
+
+        $keys = [];
+        foreach ($value as $key) {
+            if (! is_string($key)) {
+                throw new RuntimeException('Mandatory localization metadata key list is invalid.');
+            }
+            $keys[] = $key;
+        }
+
+        if (count($keys) !== count(array_unique($keys))) {
+            throw new RuntimeException('Mandatory localization metadata key list contains duplicates.');
+        }
+
+        return array_values($keys);
+    }
+
+    private function resourceRoot(): string
+    {
+        return rtrim($this->resourceRoot ?? resource_path('lang'), '/');
     }
 }
