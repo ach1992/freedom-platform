@@ -4,6 +4,7 @@
          bootstrap="vendor/autoload.php"
          colors="true"
          failOnEmptyTestSuite="true"
+         failOnWarning="true"
          failOnPhpunitNotice="true"
          displayDetailsOnPhpunitNotices="true"
 >
