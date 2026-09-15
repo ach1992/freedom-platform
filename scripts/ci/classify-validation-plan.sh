@@ -41,7 +41,7 @@ hydrate_push_paths() {
 
     before=$(jq -r '.before // empty' "$event_path" 2>/dev/null || true)
     after=$(jq -r '.after // empty' "$event_path" 2>/dev/null || true)
-    forced=$(jq -r '.forced // false' "$event_path" 2>/dev/null || true)
+    forced=$(jq -r 'if has("forced") then .forced else empty end' "$event_path" 2>/dev/null || true)
 
     [[ "$forced" == 'false' ]] || return 0
     [[ "$before" =~ ^[0-9a-f]{40}$ && "$before" != "$zero_sha" ]] || return 0
