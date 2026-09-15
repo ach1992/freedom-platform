@@ -111,14 +111,16 @@ cat > "$repo/database/seeders/NewThingSeeder.php" <<'PHP'
 <?php
 final class NewThingSeeder {}
 PHP
-python3 - "$repo/database/seeders/DatabaseSeeder.php" <<'PY'
-from pathlib import Path
-import sys
-p = Path(sys.argv[1])
-s = p.read_text()
-s = s.replace('    }\n}', '        NewThingSeeder::class;\n    }\n}')
-p.write_text(s)
-PY
+cat > "$repo/database/seeders/DatabaseSeeder.php" <<'PHP'
+<?php
+final class DatabaseSeeder
+{
+    public function run(): void
+    {
+        NewThingSeeder::class;
+    }
+}
+PHP
 printf '%s\n' '<?php return ["NewThing"];' > "$repo/scripts/ci/architecture-boundaries.php"
 cat > "$repo/tests/Feature/NewThingFoundationTest.php" <<'PHP'
 <?php
