@@ -32,9 +32,6 @@ run_gitleaks() {
                 || fail "Range mode received unexpected Git log options: ${log_opts:-missing}"
             args+=(--log-opts="$log_opts")
             ;;
-        single)
-            args+=(--log-opts=-1)
-            ;;
         all)
             ;;
         *)
@@ -74,25 +71,6 @@ case "${GITHUB_EVENT_NAME:-}" in
         echo "Secret-scan candidate commits: $commit_count"
         log_opts="--full-history --diff-merges=combined $scan_range"
         run_gitleaks range "$log_opts"
-        ;;
-
-    push)
-        [[ -n "${GITHUB_SHA:-}" ]] || fail 'Missing GITHUB_SHA for push secret scan.'
-        git cat-file -e "${GITHUB_SHA}^{commit}"
-
-        if [[ -n "${PUSH_BEFORE_SHA:-}" && ! "$PUSH_BEFORE_SHA" =~ ^0+$ && "$PUSH_BEFORE_SHA" != "$GITHUB_SHA" ]]; then
-            git cat-file -e "${PUSH_BEFORE_SHA}^{commit}"
-            git merge-base --is-ancestor "$PUSH_BEFORE_SHA" "$GITHUB_SHA" \
-                || fail 'Push secret-scan head is not a descendant of the before SHA.'
-            scan_range="$PUSH_BEFORE_SHA..$GITHUB_SHA"
-            commit_count=$(git rev-list --count "$scan_range")
-            ((commit_count > 0)) || fail 'Push secret-scan range contains no commits.'
-            echo "Secret-scan push commits: $commit_count"
-            log_opts="--full-history --diff-merges=combined $scan_range"
-            run_gitleaks range "$log_opts"
-        else
-            run_gitleaks single
-        fi
         ;;
 
     workflow_dispatch)
