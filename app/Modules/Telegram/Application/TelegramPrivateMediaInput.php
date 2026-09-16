@@ -15,7 +15,7 @@ final readonly class TelegramPrivateMediaInput
         public RestrictedValue $fileUniqueId,
         public ?int $reportedFileSize,
     ) {
-        if (! in_array($sourceKind, ['photo', 'document'], true)) {
+        if (! in_array($sourceKind, ['photo', 'video', 'document'], true)) {
             throw new InvalidArgumentException('Telegram private-media source kind is invalid.');
         }
         if ($reportedFileSize !== null && $reportedFileSize < 1) {
