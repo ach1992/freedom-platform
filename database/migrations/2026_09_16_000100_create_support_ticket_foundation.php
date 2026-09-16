@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+use Illuminate\Database\Connection;
+use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
@@ -37,15 +39,231 @@ return new class extends Migration
     public function down(): void
     {
         $this->withInstallationLock(function (): void {
-            $this->assertRollbackSafe();
-            $this->assertNoUnexpectedIncomingForeignKeys();
-            $this->dropGuards();
+            $connection = DB::connection();
+            if ($connection->getDriverName() !== 'mysql') {
+                $this->dropGuards();
+                Schema::dropIfExists('support_ticket_state_histories');
+                Schema::dropIfExists('support_ticket_messages');
+                Schema::dropIfExists('support_tickets');
+                Schema::dropIfExists('support_ticket_categories');
 
-            Schema::dropIfExists('support_ticket_state_histories');
-            Schema::dropIfExists('support_ticket_messages');
-            Schema::dropIfExists('support_tickets');
-            Schema::dropIfExists('support_ticket_categories');
+                return;
+            }
+
+            $this->rollbackMysql($connection);
         });
+    }
+
+    /**
+     * Each destructive boundary is protected by an explicit InnoDB WRITE fence
+     * over every Support table that still exists. The fence drains entered DML,
+     * excludes later DML/DDL, then repeats durable-row and dependency attestation
+     * immediately before dropping exactly one child-first table. Surviving tables
+     * retain their triggers; an interrupted/dependency-blocked rollback is therefore
+     * fail-closed and can be repaired to the exact ready surface before retry.
+     *
+     * @param  null|Closure(string):void  $afterFinalPreflight
+     * @param  null|Closure(string):void  $afterDrop
+     * @param  null|Closure():void  $afterInitialPreflight
+     */
+    private function rollbackMysql(
+        Connection $connection,
+        ?Closure $afterFinalPreflight = null,
+        ?Closure $afterDrop = null,
+        ?Closure $afterInitialPreflight = null,
+    ): void {
+        $this->prepareRollbackSurface();
+
+        if ($afterInitialPreflight !== null) {
+            $afterInitialPreflight();
+        }
+
+        $this->assertRollbackFenceLockingPrerequisites($connection);
+
+        foreach (array_reverse(self::TABLES) as $table) {
+            if (! $connection->getSchemaBuilder()->hasTable($table)) {
+                continue;
+            }
+
+            $this->dropTableWithRollbackWriteFence(
+                $connection,
+                $table,
+                $afterFinalPreflight,
+                $afterDrop,
+            );
+        }
+    }
+
+    private function prepareRollbackSurface(): void
+    {
+        $this->assertRecognizedPartialSurface();
+        $this->assertRollbackSafe();
+
+        $present = 0;
+        foreach (self::TABLES as $table) {
+            if (Schema::hasTable($table)) {
+                $present++;
+            }
+        }
+        if ($present === 0) {
+            return;
+        }
+
+        if (! $this->isReady()) {
+            // A previous child-first DROP may have committed before a later
+            // dependency/interruption stopped rollback. Empty recognized partial
+            // surfaces are safe to rebuild; no durable evidence is overwritten.
+            $this->createTables();
+            $this->ensureConstraints();
+            $this->createGuards();
+        }
+
+        if (! $this->isReady()) {
+            throw new RuntimeException('Support ticket rollback cannot repair the recognized partial surface to exact readiness.');
+        }
+
+        $this->assertNoUnexpectedIncomingForeignKeys();
+    }
+
+    /**
+     * @param  null|Closure(string):void  $afterFinalPreflight
+     * @param  null|Closure(string):void  $afterDrop
+     */
+    private function dropTableWithRollbackWriteFence(
+        Connection $connection,
+        string $table,
+        ?Closure $afterFinalPreflight = null,
+        ?Closure $afterDrop = null,
+    ): void {
+        if (! in_array($table, self::TABLES, true)) {
+            throw new RuntimeException('Unsupported Support rollback write-fence table.');
+        }
+        if ($connection->transactionLevel() !== 0) {
+            throw new RuntimeException('Support rollback write fence requires no active runtime transaction.');
+        }
+
+        $existingTables = array_values(array_filter(
+            self::TABLES,
+            static fn (string $candidate): bool => $connection->getSchemaBuilder()->hasTable($candidate),
+        ));
+        if (! in_array($table, $existingTables, true)) {
+            return;
+        }
+
+        $this->assertRollbackFenceLockingPrerequisites($connection);
+        $autocommit = $connection->selectOne('SELECT @@SESSION.autocommit AS autocommit', [], false);
+        if ($autocommit === null) {
+            throw new RuntimeException('Support rollback write fence could not read autocommit state.');
+        }
+        $autocommitValue = (int) ($autocommit->autocommit ?? -1);
+        if (! in_array($autocommitValue, [0, 1], true)) {
+            throw new RuntimeException('Support rollback write fence found an invalid autocommit state.');
+        }
+        $restoreAutocommit = $autocommitValue === 1;
+
+        $lockSql = 'LOCK TABLES '.implode(', ', array_map(
+            static fn (string $candidate): string => '`'.$candidate.'` WRITE',
+            $existingTables,
+        ));
+        $locked = false;
+        try {
+            if ($restoreAutocommit) {
+                $connection->statement('SET autocommit = 0');
+            }
+            $connection->statement($lockSql);
+            $locked = true;
+
+            $this->assertRollbackSafeForLockedTables($connection, $existingTables);
+            $this->assertNoUnexpectedIncomingForeignKeys($connection);
+
+            if ($afterFinalPreflight !== null) {
+                $afterFinalPreflight($table);
+            }
+
+            $this->assertRollbackSafeForLockedTables($connection, $existingTables);
+            $this->assertNoUnexpectedIncomingForeignKeys($connection);
+            $dropSql = match ($table) {
+                'support_ticket_state_histories' => 'DROP TABLE `support_ticket_state_histories`',
+                'support_ticket_messages' => 'DROP TABLE `support_ticket_messages`',
+                'support_tickets' => 'DROP TABLE `support_tickets`',
+                'support_ticket_categories' => 'DROP TABLE `support_ticket_categories`',
+            };
+            $connection->statement($dropSql);
+
+            if ($afterDrop !== null) {
+                $afterDrop($table);
+            }
+        } finally {
+            if ($locked) {
+                try {
+                    $connection->statement('UNLOCK TABLES');
+                } catch (Throwable $exception) {
+                    $this->disconnect($connection);
+                    throw new RuntimeException('Support rollback write-fence lock cleanup failed.', 0, $exception);
+                }
+            }
+
+            if ($restoreAutocommit) {
+                try {
+                    $connection->statement('SET autocommit = 1');
+                } catch (Throwable $exception) {
+                    $this->disconnect($connection);
+                    throw new RuntimeException('Support rollback write-fence autocommit restoration failed.', 0, $exception);
+                }
+            }
+        }
+    }
+
+    /** @param list<string> $tables */
+    private function assertRollbackSafeForLockedTables(Connection $connection, array $tables): void
+    {
+        foreach ($tables as $table) {
+            if ($connection->table($table)->exists()) {
+                throw new RuntimeException("Support ticket foundation cannot be removed while {$table} contains durable rows.");
+            }
+        }
+    }
+
+    private function assertRollbackFenceLockingPrerequisites(Connection $connection): void
+    {
+        if ($connection->transactionLevel() !== 0) {
+            throw new RuntimeException('Support rollback write fence requires no active runtime transaction.');
+        }
+
+        $locking = $connection->selectOne(
+            'SELECT @@SESSION.innodb_table_locks AS innodb_table_locks',
+            [],
+            false,
+        );
+        if ($locking === null || (int) ($locking->innodb_table_locks ?? -1) !== 1) {
+            throw new RuntimeException('Support rollback write fence requires @@SESSION.innodb_table_locks = 1.');
+        }
+
+        $wsrepRows = $connection->select("SHOW SESSION VARIABLES LIKE 'wsrep_on'", [], false);
+        if (count($wsrepRows) > 1) {
+            throw new RuntimeException('Support rollback write fence found ambiguous Galera/wsrep state.');
+        }
+        if ($wsrepRows !== []) {
+            $wsrepOn = strtoupper(trim((string) ($wsrepRows[0]->Value ?? '')));
+            if (! in_array($wsrepOn, ['OFF', '0'], true)) {
+                if (! in_array($wsrepOn, ['ON', '1'], true)) {
+                    throw new RuntimeException('Support rollback write fence found an invalid Galera/wsrep state.');
+                }
+
+                throw new RuntimeException('Support rollback write fence is not supported while Galera/wsrep is enabled.');
+            }
+        }
+
+        $providerRows = $connection->select("SHOW GLOBAL VARIABLES LIKE 'wsrep_provider'", [], false);
+        if (count($providerRows) > 1) {
+            throw new RuntimeException('Support rollback write fence found ambiguous Galera provider state.');
+        }
+        if ($providerRows !== []) {
+            $provider = strtolower(trim((string) ($providerRows[0]->Value ?? '')));
+            if (! in_array($provider, ['', 'none'], true)) {
+                throw new RuntimeException('Support rollback write fence is not supported with a loaded Galera provider.');
+            }
+        }
     }
 
     private function createTables(): void
@@ -574,9 +792,10 @@ SQL);
         }
     }
 
-    private function assertNoUnexpectedIncomingForeignKeys(): void
+    private function assertNoUnexpectedIncomingForeignKeys(?Connection $connection = null): void
     {
-        if (DB::connection()->getDriverName() !== 'mysql') {
+        $connection ??= DB::connection();
+        if ($connection->getDriverName() !== 'mysql') {
             return;
         }
 
@@ -585,15 +804,15 @@ SQL);
             'support_ticket_messages|support_tickets',
             'support_ticket_state_histories|support_tickets',
         ];
-        $rows = DB::table('information_schema.KEY_COLUMN_USAGE')
-            ->where('CONSTRAINT_SCHEMA', DB::connection()->getDatabaseName())
-            ->where('REFERENCED_TABLE_SCHEMA', DB::connection()->getDatabaseName())
+        $rows = $connection->table('information_schema.KEY_COLUMN_USAGE')
+            ->where('REFERENCED_TABLE_SCHEMA', $connection->getDatabaseName())
             ->whereIn('REFERENCED_TABLE_NAME', self::TABLES)
             ->whereNotNull('REFERENCED_TABLE_NAME')
-            ->get(['TABLE_NAME', 'REFERENCED_TABLE_NAME']);
+            ->get(['TABLE_SCHEMA', 'TABLE_NAME', 'REFERENCED_TABLE_NAME']);
         foreach ($rows as $row) {
+            $childSchema = (string) ($row->TABLE_SCHEMA ?? '');
             $edge = (string) $row->TABLE_NAME.'|'.(string) $row->REFERENCED_TABLE_NAME;
-            if (! in_array($edge, $allowed, true)) {
+            if ($childSchema !== $connection->getDatabaseName() || ! in_array($edge, $allowed, true)) {
                 throw new RuntimeException('Support ticket foundation has an unexpected incoming foreign-key dependency.');
             }
         }
@@ -601,21 +820,69 @@ SQL);
 
     private function withInstallationLock(callable $callback): void
     {
-        if (DB::connection()->getDriverName() !== 'mysql') {
+        $connection = DB::connection();
+        if ($connection->getDriverName() !== 'mysql') {
             $callback();
 
             return;
         }
 
-        $row = DB::selectOne('SELECT GET_LOCK(?, 15) AS acquired', [self::LOCK_NAME]);
-        if ($row === null || (int) $row->acquired !== 1) {
+        $row = $connection->selectOne('SELECT GET_LOCK(?, 15) AS acquired', [self::LOCK_NAME], false);
+        if ($row === null || (int) ($row->acquired ?? 0) !== 1) {
             throw new RuntimeException('Support ticket foundation installation lock could not be acquired.');
         }
 
+        $connection->setReconnector(static function (Connection $connection): never {
+            throw new RuntimeException('Support ticket foundation database session was lost while the installation lock was held.');
+        });
+
         try {
-            $callback();
+            try {
+                $callback();
+            } finally {
+                try {
+                    $released = $connection->selectOne('SELECT RELEASE_LOCK(?) AS released', [self::LOCK_NAME], false);
+                } catch (Throwable $exception) {
+                    $this->disconnect($connection);
+                    throw new RuntimeException('Support ticket foundation installation lock cleanup failed.', 0, $exception);
+                }
+
+                if ($released === null || (int) ($released->released ?? 0) !== 1) {
+                    $this->disconnect($connection);
+                    throw new RuntimeException('Support ticket foundation installation lock cleanup failed.');
+                }
+            }
         } finally {
-            DB::selectOne('SELECT RELEASE_LOCK(?) AS released', [self::LOCK_NAME]);
+            $this->restoreDefaultReconnector($connection);
+        }
+    }
+
+    private function restoreDefaultReconnector(Connection $connection): void
+    {
+        $database = app(DatabaseManager::class);
+        $connection->setReconnector(static function (Connection $connection) use ($database): void {
+            $name = $connection->getNameWithReadWriteType();
+            if (! is_string($name) || $name === '') {
+                throw new RuntimeException('Support ticket database connection name is unavailable for reconnect.');
+            }
+
+            $reconnected = $database->reconnect($name);
+            if (! $reconnected instanceof Connection) {
+                throw new RuntimeException('Support ticket database connection could not be restored.');
+            }
+
+            $connection->setPdo($reconnected->getRawPdo());
+        });
+    }
+
+    private function disconnect(Connection $connection): void
+    {
+        try {
+            $connection->disconnect();
+        } catch (Throwable) {
+            $connection->setPdo(null);
+            $connection->setReadPdo(null);
+            $connection->setDirectPdo(null);
         }
     }
 };

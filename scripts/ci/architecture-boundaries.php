@@ -88,28 +88,46 @@ return [
                     ]],
                 ],
                 'interrupted_reentry' => [
-                    'strategy' => 'recognized_partial_reentry_fail_closed',
-                    'evidence' => [[
-                        'file' => 'tests/Feature/SupportTicketMigrationSafetyTest.php',
-                        'symbol' => 'test_migration_reenters_partial_surface_and_restores_readiness',
-                    ]],
+                    'strategy' => 'recognized_partial_reentry_with_guard_preservation',
+                    'evidence' => [
+                        [
+                            'file' => 'tests/Feature/SupportTicketMigrationSafetyTest.php',
+                            'symbol' => 'test_migration_reenters_partial_surface_and_restores_readiness',
+                        ],
+                        [
+                            'file' => 'tests/Feature/SupportTicketMigrationSafetyTest.php',
+                            'symbol' => 'test_interruption_after_child_drop_retains_guards_and_down_reenters_cleanly',
+                        ],
+                    ],
                 ],
                 'rollback_preflight' => [
-                    'strategy' => 'all_durable_rows_preflight',
-                    'evidence' => [[
-                        'file' => 'tests/Feature/SupportTicketMigrationSafetyTest.php',
-                        'symbol' => 'test_rollback_refuses_category_rows_and_preserves_data',
-                    ]],
+                    'strategy' => 'write_fenced_final_durable_row_attestation',
+                    'evidence' => [
+                        [
+                            'file' => 'tests/Feature/SupportTicketMigrationSafetyTest.php',
+                            'symbol' => 'test_rollback_refuses_category_rows_and_preserves_data',
+                        ],
+                        [
+                            'file' => 'tests/Feature/SupportTicketMigrationSafetyTest.php',
+                            'symbol' => 'test_inflight_ticket_and_message_commit_is_observed_before_any_destructive_drop',
+                        ],
+                    ],
                 ],
                 'ddl_toctou' => [
-                    'strategy' => 'serialized_dependency_preflight',
-                    'evidence' => [[
-                        'file' => 'database/migrations/2026_09_16_000100_create_support_ticket_foundation.php',
-                        'symbol' => 'assertNoUnexpectedIncomingForeignKeys',
-                    ]],
+                    'strategy' => 'child_first_full_surface_write_fence',
+                    'evidence' => [
+                        [
+                            'file' => 'database/migrations/2026_09_16_000100_create_support_ticket_foundation.php',
+                            'symbol' => 'dropTableWithRollbackWriteFence',
+                        ],
+                        [
+                            'file' => 'tests/Feature/SupportTicketMigrationSafetyTest.php',
+                            'symbol' => 'test_rollback_write_fence_excludes_concurrent_incoming_foreign_key_ddl',
+                        ],
+                    ],
                 ],
                 'dependency_checks' => [
-                    'strategy' => 'exact_reference_and_incoming_dependency_attestation',
+                    'strategy' => 'visible_preflight_plus_dependency_sensitive_locked_drop',
                     'evidence' => [
                         [
                             'file' => 'database/migrations/2026_09_16_000100_create_support_ticket_foundation.php',
@@ -118,6 +136,10 @@ return [
                         [
                             'file' => 'database/migrations/2026_09_16_000100_create_support_ticket_foundation.php',
                             'symbol' => 'assertNoUnexpectedIncomingForeignKeys',
+                        ],
+                        [
+                            'file' => 'tests/Feature/SupportTicketMigrationSafetyTest.php',
+                            'symbol' => 'test_hidden_incoming_fk_failure_keeps_surviving_surface_guarded_and_up_repairs',
                         ],
                     ],
                 ],
