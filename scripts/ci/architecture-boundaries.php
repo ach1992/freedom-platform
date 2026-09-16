@@ -15,6 +15,7 @@ return [
         'Payments' => ['AccessControl', 'Orders', 'Telegram', 'Wallet'],
         'Promotions' => ['AccessControl', 'Wallet'],
         'Provisioning' => ['AccessControl', 'Catalog', 'Orders', 'Panels', 'Payments', 'Telegram', 'Wallet'],
+        'Support' => ['Shared'],
         'Telegram' => ['AccessControl', 'Agents', 'Customers', 'Identity', 'Localization', 'Promotions', 'Wallet'],
         'Wallet' => ['AccessControl'],
     ],
@@ -69,6 +70,66 @@ return [
     // that CI executes or production readiness code exposes. Evidence is resolved by PHP tokens,
     // so comments/string mentions cannot satisfy the contract.
     'critical_mariadb_authority_surfaces' => [
+        'support_ticket_foundation_v1' => [
+            'migration' => 'database/migrations/2026_09_16_000100_create_support_ticket_foundation.php',
+            'rules' => [
+                'metadata_evidence' => [
+                    'strategy' => 'semantic_surface_attestation',
+                    'evidence' => [[
+                        'file' => 'database/migrations/2026_09_16_000100_create_support_ticket_foundation.php',
+                        'symbol' => 'isReady',
+                    ]],
+                ],
+                'install_upgrade_fencing' => [
+                    'strategy' => 'serialized_installation_lock',
+                    'evidence' => [[
+                        'file' => 'database/migrations/2026_09_16_000100_create_support_ticket_foundation.php',
+                        'symbol' => 'withInstallationLock',
+                    ]],
+                ],
+                'interrupted_reentry' => [
+                    'strategy' => 'recognized_partial_reentry_fail_closed',
+                    'evidence' => [[
+                        'file' => 'tests/Feature/SupportTicketMigrationSafetyTest.php',
+                        'symbol' => 'test_migration_reenters_partial_surface_and_restores_readiness',
+                    ]],
+                ],
+                'rollback_preflight' => [
+                    'strategy' => 'all_durable_rows_preflight',
+                    'evidence' => [[
+                        'file' => 'tests/Feature/SupportTicketMigrationSafetyTest.php',
+                        'symbol' => 'test_rollback_refuses_category_rows_and_preserves_data',
+                    ]],
+                ],
+                'ddl_toctou' => [
+                    'strategy' => 'serialized_dependency_preflight',
+                    'evidence' => [[
+                        'file' => 'database/migrations/2026_09_16_000100_create_support_ticket_foundation.php',
+                        'symbol' => 'assertNoUnexpectedIncomingForeignKeys',
+                    ]],
+                ],
+                'dependency_checks' => [
+                    'strategy' => 'exact_reference_and_incoming_dependency_attestation',
+                    'evidence' => [
+                        [
+                            'file' => 'database/migrations/2026_09_16_000100_create_support_ticket_foundation.php',
+                            'symbol' => 'referenceForeignKeysReady',
+                        ],
+                        [
+                            'file' => 'database/migrations/2026_09_16_000100_create_support_ticket_foundation.php',
+                            'symbol' => 'assertNoUnexpectedIncomingForeignKeys',
+                        ],
+                    ],
+                ],
+                'postflight_readiness' => [
+                    'strategy' => 'semantic_surface_readiness',
+                    'evidence' => [[
+                        'file' => 'database/migrations/2026_09_16_000100_create_support_ticket_foundation.php',
+                        'symbol' => 'isReady',
+                    ]],
+                ],
+            ],
+        ],
         'telegram_outbound_delivery_v1' => [
             'migration' => 'database/migrations/2026_08_25_000200_enable_telegram_outbound_delivery_authority.php',
             'rules' => [
@@ -276,7 +337,8 @@ return [
                     ]],
                 ],
             ],
-        ],        'service_operational_authority_v1' => [
+        ],
+        'service_operational_authority_v1' => [
             'migration' => 'database/migrations/2026_08_19_000140_enable_service_operational_authority.php',
             'rules' => [
                 'metadata_evidence' => [
@@ -465,7 +527,6 @@ return [
         'pricing_rule_versions' => 'Promotions',
         'pricing_rules' => 'Promotions',
         'processed_telegram_updates' => 'Telegram',
-        'required_channels' => 'Telegram',
         'product_categories' => 'Catalog',
         'product_category_histories' => 'Catalog',
         'product_histories' => 'Catalog',
@@ -491,6 +552,7 @@ return [
         'referral_rewards' => 'Promotions',
         'refund_allocations' => 'Wallet',
         'refunds' => 'Wallet',
+        'required_channels' => 'Telegram',
         'role_permissions' => 'AccessControl',
         'roles' => 'AccessControl',
         'sales_server_histories' => 'Panels',
@@ -526,6 +588,10 @@ return [
         'service_username_registry' => 'Catalog',
         'sessions' => 'Framework',
         'sms_delivery_attempts' => 'Identity',
+        'support_ticket_categories' => 'Support',
+        'support_ticket_messages' => 'Support',
+        'support_ticket_state_histories' => 'Support',
+        'support_tickets' => 'Support',
         'telegram_accounts' => 'Identity',
         'telegram_delivery_authority_capability' => 'Telegram',
         'telegram_delivery_confidential_presentations' => 'Telegram',
@@ -575,6 +641,10 @@ return [
     'application_private_tables' => [
         'localization_override_versions',
         'localization_overrides',
+        'support_ticket_categories',
+        'support_ticket_messages',
+        'support_ticket_state_histories',
+        'support_tickets',
     ],
 
     // Exact migration-local durable rename lifecycle only. Temporary identities are not general
