@@ -24,6 +24,12 @@ final readonly class TelegramPrivateMediaIngestor
 
     private const MAX_PROVIDER_DOWNLOAD_BYTES = 20_000_000;
 
+    /** @var list<string> */
+    private const ASSOCIATION_TYPES = [
+        'c2c_manual_submission',
+        'support_ticket_attachment',
+    ];
+
     public function __construct(
         private DatabaseManager $database,
         private StringEncrypter $encrypter,
@@ -32,7 +38,7 @@ final readonly class TelegramPrivateMediaIngestor
         private Clock $clock,
     ) {}
 
-    /** @requirement C2C-002 DAT-002 DAT-003 DAT-004 SEC-002 SEC-003 SEC-009 QUA-001 QUA-004 */
+    /** @requirement C2C-002 SUP-001 SUP-002 DAT-002 DAT-003 DAT-004 SEC-002 SEC-003 SEC-009 QUA-001 QUA-004 */
     public function ingest(
         string $botId,
         int $updateId,
@@ -111,7 +117,7 @@ final readonly class TelegramPrivateMediaIngestor
         string $associationPublicId,
     ): void {
         if ($userId < 1
-            || $associationType !== 'c2c_manual_submission'
+            || ! in_array($associationType, self::ASSOCIATION_TYPES, true)
             || ! Str::isUlid($associationPublicId)) {
             throw new RuntimeException('Telegram private-media association identity is invalid.');
         }
@@ -395,34 +401,7 @@ final readonly class TelegramPrivateMediaIngestor
     /** @return array{0:string,1:string,2:int} */
     private function validatedContent(#[SensitiveParameter] string $content, int $maximumBytes): array
     {
-        $size = strlen($content);
-        if ($size < 1) {
-            throw new TelegramPrivateMediaRejected('empty_file');
-        }
-        if ($size > $maximumBytes) {
-            throw new TelegramPrivateMediaRejected('file_too_large');
-        }
-
-        $finfo = new \finfo(FILEINFO_MIME_TYPE);
-        $mime = $finfo->buffer($content);
-        if (! is_string($mime) || ! in_array($mime, ['image/jpeg', 'image/png', 'image/webp'], true)) {
-            throw new TelegramPrivateMediaRejected('unsupported_image_type');
-        }
-
-        $image = @getimagesizefromstring($content);
-        if (! is_array($image)
-            || $image[0] < 1
-            || $image[1] < 1
-            || $image[0] > 50_000
-            || $image[1] > 50_000
-            || image_type_to_mime_type($image[2]) !== $mime
-            || TelegramImagePayloadIntegrity::inspect($content) !== TelegramImagePayloadIntegrity::COMPLETE) {
-            throw new TelegramPrivateMediaRejected('malformed_image');
-        }
-
-        TelegramImagePayloadDecoder::assertDecodable($content);
-
-        return [$mime, hash('sha256', $content), $size];
+        return TelegramPrivateMediaContentValidator::validate($content, $maximumBytes);
     }
 
     private function receipt(stdClass $row, bool $replayed): TelegramPrivateMediaReceipt
