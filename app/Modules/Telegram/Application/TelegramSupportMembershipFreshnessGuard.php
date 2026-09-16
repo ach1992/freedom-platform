@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Telegram\Application;
 
 use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
+use Closure;
 use Illuminate\Auth\Access\AuthorizationException;
 
 /**
@@ -21,8 +22,9 @@ final readonly class TelegramSupportMembershipFreshnessGuard
 
     private const ACTION_BACK = 'navigation.back';
 
+    /** @param Closure(): TelegramChannelMembershipEvaluator $membership */
     public function __construct(
-        private TelegramChannelMembershipEvaluator $membership,
+        private Closure $membership,
         private TelegramInteractionSessionService $sessions,
         private TelegramNavigationEntryGateway $navigationEntry,
     ) {}
@@ -92,7 +94,7 @@ final readonly class TelegramSupportMembershipFreshnessGuard
 
     private function assertMembership(int $userId, string $membershipAction): void
     {
-        $result = $this->membership->evaluate(
+        $result = ($this->membership)()->evaluate(
             new TelegramChannelMembershipResolutionRequest($userId, $membershipAction),
         );
 
