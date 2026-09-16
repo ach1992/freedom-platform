@@ -23,6 +23,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use RuntimeException;
 use Tests\TestCase;
 
 final class TelegramSupportAttachmentDispatchFetcher implements TelegramPrivateMediaFetcher
@@ -98,8 +99,8 @@ final class TelegramSupportAttachmentDispatchTest extends TestCase
         $fileUniqueId = 'support-private-provider-document-unique-1';
         $this->accept($this->documentPayload(99101, $telegramUserId, $fileId, $fileUniqueId, strlen($fetcher->content)));
         $processor = $this->app->make(TelegramUpdateProcessor::class);
-        $processor->process('123456789', 99101);
-        $processor->process('123456789', 99101);
+        $this->processWithPersistedFailureDiagnostics($processor, 99101);
+        $this->processWithPersistedFailureDiagnostics($processor, 99101);
 
         self::assertSame(1, $fetcher->calls);
         self::assertSame(1, DB::table('support_ticket_attachments')->where('ticket_id', $ticket->id)->count());
@@ -129,7 +130,7 @@ final class TelegramSupportAttachmentDispatchTest extends TestCase
         $this->bindFetcher($fetcher);
         $this->accept($this->videoPayload(99102, $telegramUserId, 'support-private-provider-video-1', 'support-private-provider-video-unique-1', strlen($fetcher->content)));
         $processor = $this->app->make(TelegramUpdateProcessor::class);
-        $processor->process('123456789', 99102);
+        $this->processWithPersistedFailureDiagnostics($processor, 99102);
 
         self::assertSame(2, $fetcher->calls);
         self::assertSame(2, DB::table('support_ticket_attachments')->where('ticket_id', $ticket->id)->count());
@@ -167,7 +168,7 @@ final class TelegramSupportAttachmentDispatchTest extends TestCase
             'support-customer-foreign-ticket-unique',
             strlen($fetcher->content),
         ));
-        $this->app->make(TelegramUpdateProcessor::class)->process('123456789', 99401);
+        $this->processWithPersistedFailureDiagnostics($this->app->make(TelegramUpdateProcessor::class), 99401);
 
         self::assertSame(1, $fetcher->calls);
         self::assertSame(0, DB::table('support_ticket_attachments')->where('ticket_id', $ticket->id)->count());
@@ -203,7 +204,7 @@ final class TelegramSupportAttachmentDispatchTest extends TestCase
         $this->bindFetcher($fetcher);
         $this->accept($this->documentPayload(99211, $staffTelegramUserId, 'support-staff-file-1', 'support-staff-unique-1', strlen($fetcher->content)));
         $processor = $this->app->make(TelegramUpdateProcessor::class);
-        $processor->process('123456789', 99211);
+        $this->processWithPersistedFailureDiagnostics($processor, 99211);
 
         self::assertSame(1, DB::table('support_ticket_attachments')->where('ticket_id', $ticket->id)->count());
         $message = DB::table('support_ticket_messages')->where('ticket_id', $ticket->id)->orderByDesc('id')->first();
@@ -221,7 +222,7 @@ final class TelegramSupportAttachmentDispatchTest extends TestCase
         $this->bindFetcher($fetcher);
         $this->accept($this->documentPayload(99212, $staffTelegramUserId, 'support-staff-file-denied', 'support-staff-unique-denied', strlen($fetcher->content)));
         $processor = $this->app->make(TelegramUpdateProcessor::class);
-        $processor->process('123456789', 99212);
+        $this->processWithPersistedFailureDiagnostics($processor, 99212);
 
         self::assertSame(1, DB::table('support_ticket_attachments')->where('ticket_id', $ticket->id)->count());
         self::assertSame(2, DB::table('support_ticket_messages')->where('ticket_id', $ticket->id)->count());
@@ -249,7 +250,7 @@ final class TelegramSupportAttachmentDispatchTest extends TestCase
         $this->bindFetcher($fetcher);
 
         $this->accept($this->documentPayload(99301, $staffTelegramUserId, 'support-note-file', 'support-note-unique', strlen($fetcher->content)));
-        $this->app->make(TelegramUpdateProcessor::class)->process('123456789', 99301);
+        $this->processWithPersistedFailureDiagnostics($this->app->make(TelegramUpdateProcessor::class), 99301);
 
         self::assertSame(0, $fetcher->calls);
         self::assertSame(0, DB::table('telegram_private_media')->where('update_id', 99301)->count());
@@ -299,6 +300,27 @@ final class TelegramSupportAttachmentDispatchTest extends TestCase
             TelegramUpdateProcessor::class,
         ] as $service) {
             $this->app->forgetInstance($service);
+        }
+    }
+
+    private function processWithPersistedFailureDiagnostics(TelegramUpdateProcessor $processor, int $updateId): void
+    {
+        try {
+            $processor->process('123456789', $updateId);
+        } catch (RuntimeException $exception) {
+            if ($exception->getMessage() !== 'Telegram update processing failed.') {
+                throw $exception;
+            }
+
+            $update = DB::table('processed_telegram_updates')
+                ->where('bot_id', '123456789')
+                ->where('update_id', $updateId)
+                ->first(['last_error_class', 'last_error_code']);
+            self::fail(sprintf(
+                'Telegram update processing failed with persisted error class %s (code %s).',
+                (string) ($update->last_error_class ?? 'unknown'),
+                (string) ($update->last_error_code ?? 'unknown'),
+            ));
         }
     }
 
