@@ -23,7 +23,6 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
-use RuntimeException;
 use Tests\TestCase;
 
 final class TelegramSupportAttachmentDispatchFetcher implements TelegramPrivateMediaFetcher

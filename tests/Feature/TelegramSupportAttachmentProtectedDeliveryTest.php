@@ -12,6 +12,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaFetcher;
 use App\Modules\Telegram\Application\TelegramPrivateMediaDownload;
 use App\Modules\Telegram\Application\TelegramPrivateMediaIngestor;
 use App\Modules\Telegram\Application\TelegramPrivateMediaInput;
+use App\Modules\Telegram\Application\TelegramPrivateMediaReceipt;
 use App\Modules\Telegram\Application\TelegramProtectedPresentationReference;
 use App\Modules\Telegram\Application\TelegramProtectedPresentationResolver;
 use App\Shared\Application\RestrictedValue;
@@ -148,7 +149,7 @@ final class TelegramSupportAttachmentProtectedDeliveryTest extends TestCase
     }
 
     /**
-     * @return array{0:\App\Modules\Telegram\Application\TelegramPrivateMediaReceipt,1:string}
+     * @return array{0:TelegramPrivateMediaReceipt,1:string}
      */
     private function storeCustomerAttachment(
         int $userId,
