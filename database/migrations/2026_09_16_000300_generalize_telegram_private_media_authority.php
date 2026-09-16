@@ -15,8 +15,8 @@ return new class extends Migration
             return;
         }
 
-        DB::statement('ALTER TABLE telegram_private_media DROP CONSTRAINT telegram_private_media_source_chk');
-        DB::statement('ALTER TABLE telegram_private_media DROP CONSTRAINT telegram_private_media_payload_chk');
+        $this->dropCheckIfExists('telegram_private_media_source_chk');
+        $this->dropCheckIfExists('telegram_private_media_payload_chk');
         DB::statement("ALTER TABLE telegram_private_media ADD CONSTRAINT telegram_private_media_source_chk CHECK (`source_kind` IN ('photo','video','document'))");
         DB::statement(<<<'SQL'
 ALTER TABLE telegram_private_media
@@ -85,8 +85,8 @@ SQL);
             throw new RuntimeException('Cannot restore image-only Telegram private-media constraints while generalized media records exist.');
         }
 
-        DB::statement('ALTER TABLE telegram_private_media DROP CONSTRAINT telegram_private_media_source_chk');
-        DB::statement('ALTER TABLE telegram_private_media DROP CONSTRAINT telegram_private_media_payload_chk');
+        $this->dropCheckIfExists('telegram_private_media_source_chk');
+        $this->dropCheckIfExists('telegram_private_media_payload_chk');
         DB::statement("ALTER TABLE telegram_private_media ADD CONSTRAINT telegram_private_media_source_chk CHECK (`source_kind` IN ('photo','document'))");
         DB::statement(<<<'SQL'
 ALTER TABLE telegram_private_media
@@ -125,5 +125,28 @@ ADD CONSTRAINT telegram_private_media_payload_chk CHECK (
         AND `rejection_code` REGEXP '^[a-z][a-z0-9_]{2,63}$')
 )
 SQL);
+    }
+
+    private function dropCheckIfExists(string $constraintName): void
+    {
+        if (! $this->checkConstraintExists($constraintName)) {
+            return;
+        }
+
+        DB::statement('ALTER TABLE telegram_private_media DROP CONSTRAINT '.$constraintName);
+    }
+
+    private function checkConstraintExists(string $constraintName): bool
+    {
+        $row = DB::selectOne(<<<'SQL'
+SELECT COUNT(*) AS aggregate
+FROM information_schema.TABLE_CONSTRAINTS
+WHERE CONSTRAINT_SCHEMA = DATABASE()
+  AND TABLE_NAME = 'telegram_private_media'
+  AND CONSTRAINT_NAME = ?
+  AND CONSTRAINT_TYPE = 'CHECK'
+SQL, [$constraintName]);
+
+        return (int) ($row->aggregate ?? 0) === 1;
     }
 };
