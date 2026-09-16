@@ -119,6 +119,124 @@ final class SupportTicketMigrationSafetyTest extends TestCase
         }
     }
 
+    public function test_rollback_rejects_disabled_foreign_key_checks_before_destructive_ddl(): void
+    {
+        if (DB::connection()->getDriverName() !== 'mysql') {
+            self::markTestSkipped('Support rollback foreign-key prerequisite regression requires MariaDB/MySQL.');
+        }
+
+        $connection = DB::connection();
+        $connection->statement('SET SESSION foreign_key_checks = 0');
+
+        try {
+            try {
+                $this->migration()->down();
+                self::fail('Support rollback must fail closed while FOREIGN_KEY_CHECKS is disabled.');
+            } catch (RuntimeException $exception) {
+                self::assertStringContainsString('@@SESSION.foreign_key_checks = 1', $exception->getMessage());
+            }
+
+            foreach (['support_ticket_categories', 'support_tickets', 'support_ticket_messages', 'support_ticket_state_histories'] as $table) {
+                self::assertTrue(Schema::hasTable($table));
+            }
+            self::assertSame(1, $this->triggerCount('support_tickets_insert_guard'));
+            self::assertSame(1, $this->triggerCount('support_ticket_messages_delete_guard'));
+        } finally {
+            $connection->statement('SET SESSION foreign_key_checks = 1');
+        }
+    }
+
+    public function test_partial_rollback_reentry_rejects_active_transaction_before_repair_ddl(): void
+    {
+        if (DB::connection()->getDriverName() !== 'mysql') {
+            self::markTestSkipped('Support rollback transaction prerequisite regression requires MariaDB/MySQL.');
+        }
+
+        Schema::drop('support_ticket_state_histories');
+        $connection = DB::connection();
+        $observer = $this->database->connection('support_writer');
+        $this->assertDistinctDatabaseSessions($connection, $observer);
+        $publicId = (string) Str::ulid();
+        $now = now('UTC');
+
+        $connection->beginTransaction();
+        try {
+            $connection->table('users')->insert([
+                'public_id' => $publicId,
+                'account_type' => 'customer',
+                'account_status' => 'active',
+                'locale' => 'fa',
+                'first_seen_at' => $now,
+                'last_seen_at' => $now,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+
+            try {
+                $this->migration()->down();
+                self::fail('Partial rollback re-entry must reject an active caller transaction before repair DDL.');
+            } catch (RuntimeException $exception) {
+                self::assertStringContainsString('requires no active runtime transaction', $exception->getMessage());
+            }
+
+            self::assertFalse(Schema::hasTable('support_ticket_state_histories'));
+            self::assertTrue(Schema::hasTable('support_ticket_messages'));
+            self::assertTrue(Schema::hasTable('support_tickets'));
+            self::assertTrue(Schema::hasTable('support_ticket_categories'));
+            self::assertSame(1, $this->triggerCount('support_tickets_insert_guard'));
+            self::assertSame(1, $connection->transactionLevel());
+            $serverTransaction = $connection->selectOne('SELECT @@in_transaction AS in_transaction', [], false);
+            self::assertNotNull($serverTransaction);
+            self::assertSame(1, (int) ($serverTransaction->in_transaction ?? 0));
+            self::assertSame(1, $connection->table('users')->where('public_id', $publicId)->count());
+            self::assertSame(0, $observer->table('users')->where('public_id', $publicId)->count());
+
+            $connection->rollBack();
+            self::assertSame(0, $connection->transactionLevel());
+            self::assertSame(0, $observer->table('users')->where('public_id', $publicId)->count());
+        } finally {
+            if ($connection->transactionLevel() > 0) {
+                $connection->rollBack();
+            }
+        }
+
+        $this->migration()->up();
+        self::assertTrue(Schema::hasTable('support_ticket_state_histories'));
+        self::assertSame(1, $this->triggerCount('support_ticket_state_histories_insert_guard'));
+    }
+
+    public function test_partial_rollback_reentry_rejects_invalid_locking_prerequisite_before_repair_ddl(): void
+    {
+        if (DB::connection()->getDriverName() !== 'mysql') {
+            self::markTestSkipped('Support rollback locking prerequisite regression requires MariaDB/MySQL.');
+        }
+
+        Schema::drop('support_ticket_state_histories');
+        $connection = DB::connection();
+        $connection->statement('SET SESSION innodb_table_locks = 0');
+
+        try {
+            try {
+                $this->migration()->down();
+                self::fail('Partial rollback re-entry must reject invalid locking prerequisites before repair DDL.');
+            } catch (RuntimeException $exception) {
+                self::assertStringContainsString('@@SESSION.innodb_table_locks = 1', $exception->getMessage());
+            }
+
+            self::assertFalse(Schema::hasTable('support_ticket_state_histories'));
+            self::assertTrue(Schema::hasTable('support_ticket_messages'));
+            self::assertTrue(Schema::hasTable('support_tickets'));
+            self::assertTrue(Schema::hasTable('support_ticket_categories'));
+            self::assertSame(1, $this->triggerCount('support_tickets_insert_guard'));
+            self::assertSame(1, $this->triggerCount('support_ticket_messages_delete_guard'));
+        } finally {
+            $connection->statement('SET SESSION innodb_table_locks = 1');
+        }
+
+        $this->migration()->up();
+        self::assertTrue(Schema::hasTable('support_ticket_state_histories'));
+    }
+
     public function test_rollback_refuses_unexpected_incoming_foreign_key_and_empty_surface_reinstalls_cleanly(): void
     {
         $migration = $this->migration();
@@ -217,9 +335,14 @@ final class SupportTicketMigrationSafetyTest extends TestCase
                             file_put_contents($barrier, 'ready');
                             usleep(250000);
                             $writer->commit();
-                            exit(0);
+                            // Replace the forked PHP process without running inherited PDO destructors.
+                            // A normal exit can send COM_QUIT on the parent's inherited installation-lock socket.
+                            pcntl_exec('/bin/true');
+                            file_put_contents($barrier, 'error|pcntl_exec|success-process-replacement-failed');
+                            exit(1);
                         } catch (Throwable $exception) {
                             file_put_contents($barrier, 'error|'.$exception::class.'|'.$exception->getMessage());
+                            pcntl_exec('/bin/false');
                             exit(1);
                         }
                     }
@@ -379,11 +502,29 @@ CREATE TABLE support_ticket_hidden_reference_probe (
 SQL, $databaseName));
 
         $migration = $this->migration();
+        $ordinaryConnection = DB::connection();
+        self::assertSame(0, $ordinaryConnection->table('information_schema.KEY_COLUMN_USAGE')
+            ->where('CONSTRAINT_SCHEMA', 'freedom_platform_hidden_fk')
+            ->where('CONSTRAINT_NAME', 'support_ticket_hidden_reference_fk')
+            ->count(), 'The normal migration principal must not see the hidden-FK test dependency.');
+        self::assertSame(1, $builder->table('information_schema.KEY_COLUMN_USAGE')
+            ->where('CONSTRAINT_SCHEMA', 'freedom_platform_hidden_fk')
+            ->where('CONSTRAINT_NAME', 'support_ticket_hidden_reference_fk')
+            ->count(), 'The builder principal must prove that the hidden-FK test dependency exists.');
+        $dropped = [];
         try {
             try {
-                $migration->down();
+                $this->invokeRollback(afterDrop: static function (string $table) use (&$dropped): void {
+                    $dropped[] = $table;
+                });
                 self::fail('A hidden incoming foreign key must prevent dropping its Support parent.');
-            } catch (Throwable) {
+            } catch (QueryException $exception) {
+                self::assertContains((int) ($exception->errorInfo[1] ?? 0), [1217, 1451]);
+                self::assertSame(
+                    ['support_ticket_state_histories', 'support_ticket_messages'],
+                    $dropped,
+                    'Rollback must pass visible preflight and fail at the hidden dependency-sensitive parent DROP.',
+                );
                 self::assertTrue(Schema::hasTable('support_tickets'));
                 self::assertTrue(Schema::hasTable('support_ticket_categories'));
                 self::assertSame(1, $this->triggerCount('support_tickets_insert_guard'));

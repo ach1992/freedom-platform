@@ -101,8 +101,12 @@ return [
                     ],
                 ],
                 'rollback_preflight' => [
-                    'strategy' => 'write_fenced_final_durable_row_attestation',
+                    'strategy' => 'pre_repair_session_prereqs_and_write_fenced_attestation',
                     'evidence' => [
+                        [
+                            'file' => 'database/migrations/2026_09_16_000100_create_support_ticket_foundation.php',
+                            'symbol' => 'assertRollbackFenceLockingPrerequisites',
+                        ],
                         [
                             'file' => 'tests/Feature/SupportTicketMigrationSafetyTest.php',
                             'symbol' => 'test_rollback_refuses_category_rows_and_preserves_data',
@@ -110,6 +114,14 @@ return [
                         [
                             'file' => 'tests/Feature/SupportTicketMigrationSafetyTest.php',
                             'symbol' => 'test_inflight_ticket_and_message_commit_is_observed_before_any_destructive_drop',
+                        ],
+                        [
+                            'file' => 'tests/Feature/SupportTicketMigrationSafetyTest.php',
+                            'symbol' => 'test_partial_rollback_reentry_rejects_active_transaction_before_repair_ddl',
+                        ],
+                        [
+                            'file' => 'tests/Feature/SupportTicketMigrationSafetyTest.php',
+                            'symbol' => 'test_partial_rollback_reentry_rejects_invalid_locking_prerequisite_before_repair_ddl',
                         ],
                     ],
                 ],
@@ -127,8 +139,12 @@ return [
                     ],
                 ],
                 'dependency_checks' => [
-                    'strategy' => 'visible_preflight_plus_dependency_sensitive_locked_drop',
+                    'strategy' => 'fk_checks_attested_dependency_sensitive_locked_drop',
                     'evidence' => [
+                        [
+                            'file' => 'database/migrations/2026_09_16_000100_create_support_ticket_foundation.php',
+                            'symbol' => 'assertRollbackFenceLockingPrerequisites',
+                        ],
                         [
                             'file' => 'database/migrations/2026_09_16_000100_create_support_ticket_foundation.php',
                             'symbol' => 'referenceForeignKeysReady',
@@ -140,6 +156,10 @@ return [
                         [
                             'file' => 'tests/Feature/SupportTicketMigrationSafetyTest.php',
                             'symbol' => 'test_hidden_incoming_fk_failure_keeps_surviving_surface_guarded_and_up_repairs',
+                        ],
+                        [
+                            'file' => 'tests/Feature/SupportTicketMigrationSafetyTest.php',
+                            'symbol' => 'test_rollback_rejects_disabled_foreign_key_checks_before_destructive_ddl',
                         ],
                     ],
                 ],

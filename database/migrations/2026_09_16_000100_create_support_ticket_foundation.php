@@ -72,6 +72,7 @@ return new class extends Migration
         ?Closure $afterDrop = null,
         ?Closure $afterInitialPreflight = null,
     ): void {
+        $this->assertRollbackFenceLockingPrerequisites($connection);
         $this->prepareRollbackSurface();
 
         if ($afterInitialPreflight !== null) {
@@ -228,6 +229,15 @@ return new class extends Migration
     {
         if ($connection->transactionLevel() !== 0) {
             throw new RuntimeException('Support rollback write fence requires no active runtime transaction.');
+        }
+
+        $foreignKeyChecks = $connection->selectOne(
+            'SELECT @@SESSION.foreign_key_checks AS foreign_key_checks',
+            [],
+            false,
+        );
+        if ($foreignKeyChecks === null || (int) ($foreignKeyChecks->foreign_key_checks ?? -1) !== 1) {
+            throw new RuntimeException('Support rollback write fence requires @@SESSION.foreign_key_checks = 1.');
         }
 
         $locking = $connection->selectOne(
