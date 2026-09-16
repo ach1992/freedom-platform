@@ -19,6 +19,8 @@ final readonly class TelegramSupportMembershipFreshnessGuard
 
     private const STATE_CREATE_DESCRIPTION = 'support_create_description';
 
+    private const ACTION_BACK = 'navigation.back';
+
     public function __construct(
         private TelegramChannelMembershipEvaluator $membership,
         private TelegramInteractionSessionService $sessions,
@@ -46,8 +48,11 @@ final readonly class TelegramSupportMembershipFreshnessGuard
 
     private function exitsSupport(TelegramInteractionAction $action): bool
     {
-        if ($action->kind === TelegramInteractionActionKind::Back
-            && $action->sessionState === self::STATE_HOME) {
+        if ($action->sessionState === self::STATE_HOME
+            && ($action->kind === TelegramInteractionActionKind::Back
+                || ($action->kind === TelegramInteractionActionKind::Callback
+                    && $action->callbackAction === self::ACTION_BACK
+                    && $action->callbackPayload === []))) {
             return true;
         }
 

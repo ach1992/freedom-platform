@@ -12,6 +12,7 @@ use App\Modules\Telegram\Application\TelegramMembershipEvidence;
 use App\Modules\Telegram\Application\TelegramMembershipLookupResult;
 use App\Modules\Telegram\Application\TelegramUpdateProcessor;
 use Closure;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Contracts\Encryption\StringEncrypter;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\DB;
@@ -80,6 +81,33 @@ final class TelegramSupportMembershipFreshnessTest extends TestCase
         ]);
     }
 
+    public function test_support_home_inline_back_remains_available_after_membership_loss(): void
+    {
+        $lookup = new TelegramSupportFreshnessMembershipLookup;
+        $this->app->instance(TelegramMembershipLookup::class, $lookup);
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $telegramUserId = 9859;
+
+        $this->accept($this->payload(8590, $telegramUserId, 'support_back_freshness', 'fa', '/start'));
+        $processor->process('123456789', 8590);
+        $account = $this->account($telegramUserId);
+        $this->installMembershipRule('support_view', 'support-view-back-freshness', -1005000000859);
+
+        $support = $this->callbackToken('navigation.support', $account['account_id']);
+        $this->accept($this->callbackPayload(8591, $telegramUserId, 'support_back_freshness', 'fa', $support));
+        $processor->process('123456789', 8591);
+        self::assertSame('support_home', $this->supportSession($account['account_id'])['state']);
+        $back = $this->callbackToken('navigation.back', $account['account_id']);
+        $membershipCalls = $lookup->calls;
+
+        $lookup->evidence = TelegramMembershipEvidence::NotMember;
+        $this->accept($this->callbackPayload(8592, $telegramUserId, 'support_back_freshness', 'fa', $back));
+        $processor->process('123456789', 8592);
+
+        self::assertSame('home', $this->supportSession($account['account_id'])['state']);
+        self::assertSame($membershipCalls, $lookup->calls, 'Leaving Support from its home must not require fresh Support membership.');
+    }
+
     public function test_ticket_creation_reauthorizes_before_commit_and_failed_update_retries_exactly_once(): void
     {
         $lookup = new TelegramSupportFreshnessMembershipLookup;
@@ -111,7 +139,7 @@ final class TelegramSupportMembershipFreshnessTest extends TestCase
 
         $lookup->evidence = TelegramMembershipEvidence::NotMember;
         $this->accept($this->payload(8605, $telegramUserId, 'support_create_freshness', 'fa', 'Must not create while membership is stale.'));
-        $this->assertProcessingFails($processor, 8605);
+        $this->assertMembershipProcessingFails($processor, 8605);
 
         self::assertSame('support_create_description', $this->supportSession($account['account_id'])['state']);
         self::assertSame(0, DB::table('support_tickets')->where('requester_user_id', $account['user_id'])->count());
@@ -163,7 +191,7 @@ final class TelegramSupportMembershipFreshnessTest extends TestCase
         $lookup->evidence = TelegramMembershipEvidence::NotMember;
         $deliveryCount = $this->deliveryCount($telegramUserId);
         $this->accept($this->callbackPayload(8612, $telegramUserId, 'support_customer_freshness', 'fa', $ticketButton));
-        $this->assertProcessingFails($processor, 8612);
+        $this->assertMembershipProcessingFails($processor, 8612);
         self::assertSame('support_home', $this->supportSession($account['account_id'])['state']);
         self::assertSame($deliveryCount, $this->deliveryCount($telegramUserId));
 
@@ -174,7 +202,7 @@ final class TelegramSupportMembershipFreshnessTest extends TestCase
         $reply = $this->callbackToken('navigation.support.reply', $account['account_id']);
         $lookup->evidence = TelegramMembershipEvidence::NotMember;
         $this->accept($this->callbackPayload(8613, $telegramUserId, 'support_customer_freshness', 'fa', $reply));
-        $this->assertProcessingFails($processor, 8613);
+        $this->assertMembershipProcessingFails($processor, 8613);
         self::assertSame('support_ticket', $this->supportSession($account['account_id'])['state']);
 
         $lookup->evidence = TelegramMembershipEvidence::Member;
@@ -184,7 +212,7 @@ final class TelegramSupportMembershipFreshnessTest extends TestCase
 
         $lookup->evidence = TelegramMembershipEvidence::NotMember;
         $this->accept($this->payload(8614, $telegramUserId, 'support_customer_freshness', 'fa', 'Blocked reply'));
-        $this->assertProcessingFails($processor, 8614);
+        $this->assertMembershipProcessingFails($processor, 8614);
         self::assertSame($messageCount, DB::table('support_ticket_messages')->where('ticket_id', $ticket->id)->count());
         self::assertSame('support_reply', $this->supportSession($account['account_id'])['state']);
 
@@ -200,7 +228,7 @@ final class TelegramSupportMembershipFreshnessTest extends TestCase
 
         $lookup->evidence = TelegramMembershipEvidence::NotMember;
         $this->accept($this->payload(8616, $telegramUserId, 'support_customer_freshness', 'fa', 'Blocked close'));
-        $this->assertProcessingFails($processor, 8616);
+        $this->assertMembershipProcessingFails($processor, 8616);
         self::assertNotSame(SupportTicketState::Closed->value, DB::table('support_tickets')->where('id', $ticket->id)->value('state'));
         self::assertSame('support_close', $this->supportSession($account['account_id'])['state']);
 
@@ -211,7 +239,7 @@ final class TelegramSupportMembershipFreshnessTest extends TestCase
 
         $lookup->evidence = TelegramMembershipEvidence::NotMember;
         $this->accept($this->callbackPayload(8617, $telegramUserId, 'support_customer_freshness', 'fa', $reopen));
-        $this->assertProcessingFails($processor, 8617);
+        $this->assertMembershipProcessingFails($processor, 8617);
         self::assertSame(SupportTicketState::Closed->value, DB::table('support_tickets')->where('id', $ticket->id)->value('state'));
 
         $lookup->evidence = TelegramMembershipEvidence::Member;
@@ -252,7 +280,7 @@ final class TelegramSupportMembershipFreshnessTest extends TestCase
         $lookup->evidence = TelegramMembershipEvidence::NotMember;
         $deliveryCount = $this->deliveryCount($supportTelegramId);
         $this->accept($this->callbackPayload(8623, $supportTelegramId, 'support_queue_staff_freshness', 'fa', $queue));
-        $this->assertProcessingFails($processor, 8623);
+        $this->assertMembershipProcessingFails($processor, 8623);
         self::assertSame('support_home', $this->supportSession($staff['account_id'])['state']);
         self::assertSame($deliveryCount, $this->deliveryCount($supportTelegramId));
 
@@ -268,7 +296,7 @@ final class TelegramSupportMembershipFreshnessTest extends TestCase
         $lookup->evidence = TelegramMembershipEvidence::NotMember;
         $deliveryCount = $this->deliveryCount($supportTelegramId);
         $this->accept($this->callbackPayload(8624, $supportTelegramId, 'support_queue_staff_freshness', 'fa', $detail));
-        $this->assertProcessingFails($processor, 8624);
+        $this->assertMembershipProcessingFails($processor, 8624);
         self::assertSame('support_queue', $this->supportSession($staff['account_id'])['state']);
         self::assertSame($deliveryCount, $this->deliveryCount($supportTelegramId));
 
@@ -279,7 +307,7 @@ final class TelegramSupportMembershipFreshnessTest extends TestCase
 
         $lookup->evidence = TelegramMembershipEvidence::NotMember;
         $this->accept($this->callbackPayload(8625, $supportTelegramId, 'support_queue_staff_freshness', 'fa', $claim));
-        $this->assertProcessingFails($processor, 8625);
+        $this->assertMembershipProcessingFails($processor, 8625);
         self::assertNull(DB::table('support_tickets')->where('id', $ticket->id)->value('assigned_user_id'));
 
         $lookup->evidence = TelegramMembershipEvidence::Member;
@@ -322,15 +350,15 @@ final class TelegramSupportMembershipFreshnessTest extends TestCase
             }
             $drifted = true;
             DB::table('channel_membership_rules')->where('id', $ruleId)->update([
-                'effective_until' => now('UTC')->subSecond()->format('Y-m-d H:i:s.u'),
-                'version' => DB::raw('version + 1'),
+                'state' => 'disabled',
+                'version' => 3,
                 'updated_at' => now('UTC'),
             ]);
         };
 
         $deliveryCount = $this->deliveryCount($telegramUserId);
         $this->accept($this->callbackPayload(8642, $telegramUserId, 'support_config_drift', 'fa', $ticketButton));
-        $this->assertProcessingFails($processor, 8642);
+        $this->assertMembershipProcessingFails($processor, 8642);
         self::assertTrue($drifted);
         self::assertSame('support_home', $this->supportSession($account['account_id'])['state']);
         self::assertSame($deliveryCount, $this->deliveryCount($telegramUserId));
@@ -403,7 +431,7 @@ final class TelegramSupportMembershipFreshnessTest extends TestCase
             ]);
         $lookup->evidence = TelegramMembershipEvidence::NotMember;
         $deliveryCount = $this->deliveryCount($telegramUserId);
-        $this->assertProcessingFails($processor, 8654);
+        $this->assertMembershipProcessingFails($processor, 8654);
         self::assertSame($messageCount + 1, DB::table('support_ticket_messages')->where('ticket_id', $ticket->id)->count());
         self::assertSame($deliveryCount, $this->deliveryCount($telegramUserId));
 
@@ -554,6 +582,17 @@ final class TelegramSupportMembershipFreshnessTest extends TestCase
         } catch (RuntimeException $exception) {
             self::assertSame('Telegram update processing failed.', $exception->getMessage());
         }
+    }
+
+    private function assertMembershipProcessingFails(TelegramUpdateProcessor $processor, int $updateId): void
+    {
+        $this->assertProcessingFails($processor, $updateId);
+        $this->assertDatabaseHas('processed_telegram_updates', [
+            'bot_id' => '123456789',
+            'update_id' => $updateId,
+            'state' => 'failed',
+            'last_error_class' => AuthorizationException::class,
+        ]);
     }
 
     /** @param array<string,mixed> $payload */
