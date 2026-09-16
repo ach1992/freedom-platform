@@ -358,14 +358,14 @@ final readonly class SupportTicketAttachmentService
             ->where('id', $ticketId)
             ->where('requester_user_id', $requesterUserId)
             ->exists()) {
-            throw new RuntimeException('Support ticket is unavailable for this customer.');
+            throw new DomainException('Support ticket is unavailable for this customer.');
         }
     }
 
     private function assertTicketExists(Connection $connection, int $ticketId): void
     {
         if (! $connection->table('support_tickets')->where('id', $ticketId)->exists()) {
-            throw new RuntimeException('Support ticket does not exist.');
+            throw new DomainException('Support ticket does not exist.');
         }
     }
 
