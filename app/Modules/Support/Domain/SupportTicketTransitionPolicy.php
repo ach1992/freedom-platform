@@ -9,29 +9,19 @@ use DomainException;
 
 final readonly class SupportTicketTransitionPolicy
 {
-    /** @requirement SUP-001 */
-    public function assertAllowed(
+    /** @return list<SupportTicketState> */
+    public function allowedTargets(
         SupportTicketState $from,
-        SupportTicketState $to,
         DateTimeImmutable $now,
         ?DateTimeImmutable $reopenUntil,
-    ): void {
-        if ($from === $to) {
-            throw new DomainException('Support ticket state transition must change state.');
-        }
-
+    ): array {
         if ($from === SupportTicketState::Closed) {
-            if ($to !== SupportTicketState::AwaitingSupport) {
-                throw new DomainException('Closed support ticket can only be reopened to awaiting support.');
-            }
-            if ($reopenUntil === null || $now > $reopenUntil) {
-                throw new DomainException('Support ticket reopen window has expired.');
-            }
-
-            return;
+            return $reopenUntil !== null && $now <= $reopenUntil
+                ? [SupportTicketState::AwaitingSupport]
+                : [];
         }
 
-        $allowed = match ($from) {
+        return match ($from) {
             SupportTicketState::New => [
                 SupportTicketState::AwaitingSupport,
                 SupportTicketState::AwaitingCustomer,
@@ -62,8 +52,31 @@ final readonly class SupportTicketTransitionPolicy
                 SupportTicketState::Closed,
             ],
         };
+    }
 
-        if (! in_array($to, $allowed, true)) {
+    /** @requirement SUP-001 */
+    public function assertAllowed(
+        SupportTicketState $from,
+        SupportTicketState $to,
+        DateTimeImmutable $now,
+        ?DateTimeImmutable $reopenUntil,
+    ): void {
+        if ($from === $to) {
+            throw new DomainException('Support ticket state transition must change state.');
+        }
+
+        if ($from === SupportTicketState::Closed) {
+            if ($to !== SupportTicketState::AwaitingSupport) {
+                throw new DomainException('Closed support ticket can only be reopened to awaiting support.');
+            }
+            if (! in_array($to, $this->allowedTargets($from, $now, $reopenUntil), true)) {
+                throw new DomainException('Support ticket reopen window has expired.');
+            }
+
+            return;
+        }
+
+        if (! in_array($to, $this->allowedTargets($from, $now, $reopenUntil), true)) {
             throw new DomainException('Support ticket state transition is invalid.');
         }
     }

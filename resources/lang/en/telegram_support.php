@@ -1,0 +1,52 @@
+<?php
+
+declare(strict_types=1);
+
+return [
+    'home' => "Support\n\nChoose an existing ticket or create a new one.",
+    'empty' => 'You do not have any support tickets yet.',
+    'detail' => "Ticket :tracking\n:title\nState: :state · Priority: :priority\n\nHistory:\n:messages",
+    'message_customer' => 'Customer: :body',
+    'message_support' => 'Support: :body',
+    'message_internal' => 'Internal note: :body',
+    'history_empty' => 'No messages.',
+    'history_older_omitted' => 'Earlier messages are omitted from this Telegram view.',
+    'title_prompt' => 'Send a short title for the support ticket.',
+    'description_prompt' => 'Send the ticket description.',
+    'queue' => "Support queue\n\n:items",
+    'queue_empty' => 'The support queue is empty.',
+    'queue_item' => ':tracking — :title\n:state · :priority · :assignment',
+    'assigned_none' => 'unassigned',
+    'assigned_self' => 'assigned',
+    'support_detail' => "Support ticket :tracking\n:title\nState: :state · Priority: :priority\nAssignment: :assignment\n\nHistory:\n:messages",
+    'support_reply_prompt' => 'Send the customer-visible support reply.',
+    'internal_note_prompt' => 'Send the internal note. It will not be visible to the customer.',
+    'priority_prompt' => 'Choose a priority.',
+    'state_prompt' => 'Choose the target ticket state.',
+    'buttons' => [
+        'create' => 'New ticket',
+        'queue' => 'Support queue',
+        'reply' => 'Reply',
+        'close' => 'Close',
+        'reopen' => 'Reopen',
+        'claim' => 'Claim',
+        'priority' => 'Priority',
+        'state' => 'State',
+        'internal_note' => 'Internal note',
+        'back' => 'Back',
+    ],
+    'states' => [
+        'new' => 'New',
+        'awaiting_support' => 'Awaiting support',
+        'awaiting_customer' => 'Awaiting customer',
+        'investigating' => 'Investigating',
+        'resolved' => 'Resolved',
+        'closed' => 'Closed',
+    ],
+    'priorities' => [
+        'low' => 'Low',
+        'normal' => 'Normal',
+        'high' => 'High',
+        'urgent' => 'Urgent',
+    ],
+];

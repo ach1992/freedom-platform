@@ -53,6 +53,11 @@ final class SupportTicketTransitionPolicyTest extends TestCase
         ];
 
         foreach (SupportTicketState::cases() as $from) {
+            self::assertSame(
+                $allowed[$from->value],
+                $policy->allowedTargets($from, $now, $now->modify('+1 hour')),
+                "Allowed target projection drifted for {$from->value}",
+            );
             foreach (SupportTicketState::cases() as $to) {
                 $expectedAllowed = in_array($to, $allowed[$from->value], true);
                 try {
@@ -94,5 +99,14 @@ final class SupportTicketTransitionPolicyTest extends TestCase
         } catch (DomainException) {
             self::assertTrue(true);
         }
+
+        self::assertSame(
+            [SupportTicketState::AwaitingSupport],
+            $policy->allowedTargets(SupportTicketState::Closed, $deadline, $deadline),
+        );
+        self::assertSame(
+            [],
+            $policy->allowedTargets(SupportTicketState::Closed, $deadline->modify('+1 microsecond'), $deadline),
+        );
     }
 }

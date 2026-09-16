@@ -8,7 +8,7 @@ use InvalidArgumentException;
 
 final readonly class TelegramInlineCallbackButton
 {
-    private const MAXIMUM_TEXT_CHARACTERS = 64;
+    public const MAXIMUM_TEXT_CHARACTERS = 64;
 
     public function __construct(
         public string $text,

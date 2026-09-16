@@ -10,6 +10,7 @@ return [
             'buy_service' => 'خرید سرویس',
             'trial_service' => 'سرویس آزمایشی',
             'my_services' => 'سرویس‌های من',
+            'support' => 'پشتیبانی',
             'request_cooperation' => 'درخواست همکاری',
             'agent_status' => 'وضعیت درخواست همکاری',
             'agent_menu' => 'منوی نماینده',

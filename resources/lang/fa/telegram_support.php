@@ -1,0 +1,52 @@
+<?php
+
+declare(strict_types=1);
+
+return [
+    'home' => "پشتیبانی\n\nیک تیکت موجود را انتخاب کنید یا تیکت جدید بسازید.",
+    'empty' => 'هنوز تیکت پشتیبانی ندارید.',
+    'detail' => "تیکت :tracking\n:title\nوضعیت: :state · اولویت: :priority\n\nتاریخچه:\n:messages",
+    'message_customer' => 'مشتری: :body',
+    'message_support' => 'پشتیبانی: :body',
+    'message_internal' => 'یادداشت داخلی: :body',
+    'history_empty' => 'پیامی ثبت نشده است.',
+    'history_older_omitted' => 'پیام‌های قدیمی‌تر در این نمایش تلگرام نشان داده نشده‌اند.',
+    'title_prompt' => 'یک عنوان کوتاه برای تیکت ارسال کنید.',
+    'description_prompt' => 'شرح تیکت را ارسال کنید.',
+    'queue' => "صف پشتیبانی\n\n:items",
+    'queue_empty' => 'صف پشتیبانی خالی است.',
+    'queue_item' => ':tracking — :title\n:state · :priority · :assignment',
+    'assigned_none' => 'بدون مسئول',
+    'assigned_self' => 'دارای مسئول',
+    'support_detail' => "تیکت پشتیبانی :tracking\n:title\nوضعیت: :state · اولویت: :priority\nمسئول: :assignment\n\nتاریخچه:\n:messages",
+    'support_reply_prompt' => 'پاسخ قابل‌مشاهده برای مشتری را ارسال کنید.',
+    'internal_note_prompt' => 'یادداشت داخلی را ارسال کنید. این متن برای مشتری نمایش داده نمی‌شود.',
+    'priority_prompt' => 'اولویت را انتخاب کنید.',
+    'state_prompt' => 'وضعیت مقصد تیکت را انتخاب کنید.',
+    'buttons' => [
+        'create' => 'تیکت جدید',
+        'queue' => 'صف پشتیبانی',
+        'reply' => 'پاسخ',
+        'close' => 'بستن',
+        'reopen' => 'بازگشایی',
+        'claim' => 'قبول تیکت',
+        'priority' => 'اولویت',
+        'state' => 'وضعیت',
+        'internal_note' => 'یادداشت داخلی',
+        'back' => 'بازگشت',
+    ],
+    'states' => [
+        'new' => 'جدید',
+        'awaiting_support' => 'در انتظار پشتیبانی',
+        'awaiting_customer' => 'در انتظار مشتری',
+        'investigating' => 'در حال بررسی',
+        'resolved' => 'حل‌شده',
+        'closed' => 'بسته',
+    ],
+    'priorities' => [
+        'low' => 'کم',
+        'normal' => 'عادی',
+        'high' => 'زیاد',
+        'urgent' => 'فوری',
+    ],
+];
