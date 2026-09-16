@@ -44,6 +44,7 @@ use App\Modules\Telegram\Application\TelegramProtectedPresentationResolver;
 use App\Modules\Telegram\Application\TelegramProtectedReferenceDeliveryOutboxHandler;
 use App\Modules\Telegram\Application\TelegramReferralDeepLink;
 use App\Modules\Telegram\Application\TelegramRequiredChannelService;
+use App\Modules\Telegram\Application\TelegramSupportMembershipFreshnessGuard;
 use App\Modules\Telegram\Application\TelegramSupportNavigationHandler;
 use App\Modules\Telegram\Application\TelegramTrialNavigationHandler;
 use App\Modules\Telegram\Application\TelegramUsdtNavigationHandler;
@@ -121,6 +122,14 @@ final class TelegramServiceProvider extends ServiceProvider
                 fn (): TelegramInteractionCallbackService => $application->make(TelegramInteractionCallbackService::class),
                 fn (): TelegramNavigationHandler => $application->make(TelegramNavigationHandler::class),
                 fn (): LocalizationResolver => $application->make(LocalizationResolver::class),
+            ),
+        );
+        $this->app->singleton(
+            TelegramSupportMembershipFreshnessGuard::class,
+            fn (Application $application): TelegramSupportMembershipFreshnessGuard => new TelegramSupportMembershipFreshnessGuard(
+                fn (): TelegramChannelMembershipEvaluator => $application->make(TelegramChannelMembershipEvaluator::class),
+                $application->make(TelegramInteractionSessionService::class),
+                $application->make(TelegramNavigationEntryGateway::class),
             ),
         );
         $this->app->singleton(TelegramNavigationHandler::class);
