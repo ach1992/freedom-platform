@@ -17,6 +17,8 @@ use WeakMap;
  */
 final class ConfidentialTelegramPresentation implements Stringable
 {
+    public const MAXIMUM_TEXT_CHARACTERS = 4096;
+
     /** @var WeakMap<self,string>|null */
     private static ?WeakMap $plaintextByInstance = null;
 
@@ -104,7 +106,7 @@ final class ConfidentialTelegramPresentation implements Stringable
 
     private static function validated(#[SensitiveParameter] string $text): self
     {
-        if ($text === '' || mb_strlen($text) > 4096 || str_contains($text, "\0")) {
+        if ($text === '' || mb_strlen($text) > self::MAXIMUM_TEXT_CHARACTERS || str_contains($text, "\0")) {
             throw new InvalidArgumentException('Confidential Telegram presentation text must contain 1-4096 safe characters.');
         }
         if (! mb_check_encoding($text, 'UTF-8')) {

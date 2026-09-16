@@ -10,6 +10,7 @@ return [
             'buy_service' => 'Buy Service',
             'trial_service' => 'Trial Service',
             'my_services' => 'My Services',
+            'support' => 'Support',
             'request_cooperation' => 'Request Cooperation',
             'agent_status' => 'Cooperation Status',
             'agent_menu' => 'Agent Menu',

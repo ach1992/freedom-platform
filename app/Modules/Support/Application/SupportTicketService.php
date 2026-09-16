@@ -101,6 +101,157 @@ final readonly class SupportTicketService
         return $tickets;
     }
 
+    /** @return list<SupportTicketCategorySnapshot> */
+    public function activeCategories(): array
+    {
+        $rows = $this->database->connection()->table('support_ticket_categories')
+            ->where('is_active', 1)
+            ->orderBy('sort_order')
+            ->orderBy('id')
+            ->get(['id', 'code', 'name_fa', 'name_en', 'sort_order']);
+
+        $categories = [];
+        foreach ($rows as $row) {
+            $categories[] = new SupportTicketCategorySnapshot(
+                (int) $row->id,
+                (string) $row->code,
+                (string) $row->name_fa,
+                (string) $row->name_en,
+                (int) $row->sort_order,
+            );
+        }
+
+        return $categories;
+    }
+
+    /** @requirement SUP-001 SEC-002 */
+    public function ticketForCustomer(int $ticketId, int $requesterUserId): SupportTicketDetailSnapshot
+    {
+        $this->assertPositiveId($ticketId);
+        $this->assertPositiveId($requesterUserId);
+        $connection = $this->database->connection();
+        $ticket = $connection->table('support_tickets')
+            ->where('id', $ticketId)
+            ->where('requester_user_id', $requesterUserId)
+            ->first();
+        if (! $ticket instanceof stdClass) {
+            throw new RuntimeException('Support ticket is unavailable for this customer.');
+        }
+
+        return $this->detailFromRow($connection, $ticket, true);
+    }
+
+    /** @return list<SupportTicketSnapshot> */
+    public function ticketsForSupport(int $limit = 50): array
+    {
+        if ($limit < 1 || $limit > 100) {
+            throw new InvalidArgumentException('Support ticket queue query is invalid.');
+        }
+
+        $rows = $this->database->connection()->table('support_tickets')
+            ->where('state', '<>', SupportTicketState::Closed->value)
+            ->orderByRaw("CASE priority WHEN 'urgent' THEN 1 WHEN 'high' THEN 2 WHEN 'normal' THEN 3 ELSE 4 END")
+            ->orderBy('created_at')
+            ->orderBy('id')
+            ->limit($limit)
+            ->get();
+
+        $tickets = [];
+        foreach ($rows as $row) {
+            $tickets[] = $this->snapshotFromRow($row);
+        }
+
+        return $tickets;
+    }
+
+    public function ticketForSupport(int $ticketId): SupportTicketDetailSnapshot
+    {
+        $this->assertPositiveId($ticketId);
+        $connection = $this->database->connection();
+        $ticket = $connection->table('support_tickets')->where('id', $ticketId)->first();
+        if (! $ticket instanceof stdClass) {
+            throw new RuntimeException('Support ticket does not exist.');
+        }
+
+        return $this->detailFromRow($connection, $ticket, false);
+    }
+
+    /** @return list<SupportTicketState> */
+    public function allowedTransitions(int $ticketId): array
+    {
+        $this->assertPositiveId($ticketId);
+        $ticket = $this->database->connection()->table('support_tickets')
+            ->where('id', $ticketId)
+            ->first(['state', 'reopen_until']);
+        if (! $ticket instanceof stdClass) {
+            throw new RuntimeException('Support ticket does not exist.');
+        }
+
+        return $this->transitionPolicy->allowedTargets(
+            SupportTicketState::from((string) $ticket->state),
+            $this->clock->now(),
+            $this->parseTimestamp($ticket->reopen_until === null ? null : (string) $ticket->reopen_until),
+        );
+    }
+
+    /** @requirement SUP-002 SEC-002 QUA-003 */
+    public function claim(int $ticketId, int $assignedUserId): SupportTicketSnapshot
+    {
+        $this->assertPositiveId($ticketId);
+        $this->assertPositiveId($assignedUserId);
+
+        return $this->database->connection()->transaction(function (Connection $connection) use ($ticketId, $assignedUserId): SupportTicketSnapshot {
+            /** @var object{id:int|string,assigned_user_id:int|string|null,state:string}|null $ticket */
+            $ticket = $connection->table('support_tickets')
+                ->where('id', $ticketId)
+                ->lockForUpdate()
+                ->first(['id', 'assigned_user_id', 'state']);
+            if ($ticket === null) {
+                throw new RuntimeException('Support ticket does not exist.');
+            }
+            if (SupportTicketState::from($ticket->state) === SupportTicketState::Closed) {
+                throw new DomainException('Closed support ticket cannot be claimed.');
+            }
+            if (! $connection->table('users')->where('id', $assignedUserId)->exists()) {
+                throw new InvalidArgumentException('Support ticket assignee does not exist.');
+            }
+            if ($ticket->assigned_user_id !== null && (int) $ticket->assigned_user_id !== $assignedUserId) {
+                throw new DomainException('Support ticket is already assigned to another user.');
+            }
+            if ($ticket->assigned_user_id === null) {
+                $connection->table('support_tickets')->where('id', $ticketId)->update([
+                    'assigned_user_id' => $assignedUserId,
+                    'updated_at' => $this->timestamp(),
+                ]);
+            }
+
+            return $this->snapshot($connection, $ticketId);
+        });
+    }
+
+    /** @requirement SUP-002 */
+    public function setPriority(int $ticketId, SupportTicketPriority $priority): SupportTicketSnapshot
+    {
+        $this->assertPositiveId($ticketId);
+
+        return $this->database->connection()->transaction(function (Connection $connection) use ($ticketId, $priority): SupportTicketSnapshot {
+            /** @var object{id:int|string,state:string}|null $ticket */
+            $ticket = $connection->table('support_tickets')->where('id', $ticketId)->lockForUpdate()->first(['id', 'state']);
+            if ($ticket === null) {
+                throw new RuntimeException('Support ticket does not exist.');
+            }
+            if (SupportTicketState::from($ticket->state) === SupportTicketState::Closed) {
+                throw new DomainException('Closed support ticket priority cannot change.');
+            }
+            $connection->table('support_tickets')->where('id', $ticketId)->update([
+                'priority' => $priority->value,
+                'updated_at' => $this->timestamp(),
+            ]);
+
+            return $this->snapshot($connection, $ticketId);
+        });
+    }
+
     /** @requirement SUP-001 */
     public function triage(
         int $ticketId,
@@ -477,6 +628,31 @@ final readonly class SupportTicketService
             || (int) $message->customer_visible !== ($customerVisible ? 1 : 0)) {
             throw new DomainException('Support ticket idempotency key was reused for a different message payload.');
         }
+    }
+
+    private function detailFromRow(Connection $connection, stdClass $ticket, bool $customerOnly): SupportTicketDetailSnapshot
+    {
+        $query = $connection->table('support_ticket_messages')
+            ->where('ticket_id', (int) $ticket->id)
+            ->orderBy('id');
+        if ($customerOnly) {
+            $query->where('customer_visible', 1);
+        }
+
+        $messages = [];
+        foreach ($query->get(['id', 'ticket_id', 'actor_user_id', 'kind', 'body', 'customer_visible', 'created_at']) as $message) {
+            $messages[] = new SupportTicketMessageSnapshot(
+                (int) $message->id,
+                (int) $message->ticket_id,
+                (int) $message->actor_user_id,
+                SupportTicketMessageKind::from((string) $message->kind),
+                (string) $message->body,
+                (bool) $message->customer_visible,
+                (string) $message->created_at,
+            );
+        }
+
+        return new SupportTicketDetailSnapshot($this->snapshotFromRow($ticket), $messages);
     }
 
     private function uniqueTrackingNumber(Connection $connection): string

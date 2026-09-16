@@ -44,6 +44,7 @@ use App\Modules\Telegram\Application\TelegramProtectedPresentationResolver;
 use App\Modules\Telegram\Application\TelegramProtectedReferenceDeliveryOutboxHandler;
 use App\Modules\Telegram\Application\TelegramReferralDeepLink;
 use App\Modules\Telegram\Application\TelegramRequiredChannelService;
+use App\Modules\Telegram\Application\TelegramSupportNavigationHandler;
 use App\Modules\Telegram\Application\TelegramTrialNavigationHandler;
 use App\Modules\Telegram\Application\TelegramUsdtNavigationHandler;
 use App\Shared\Application\Clock;
@@ -125,6 +126,7 @@ final class TelegramServiceProvider extends ServiceProvider
         $this->app->singleton(TelegramNavigationHandler::class);
         $this->app->singleton(TelegramAgentNavigationHandler::class);
         $this->app->singleton(TelegramTrialNavigationHandler::class);
+        $this->app->singleton(TelegramSupportNavigationHandler::class);
         $this->app->singleton(TelegramGiftCardNavigationHandler::class);
         $this->app->singleton(TelegramUsdtNavigationHandler::class);
         $this->app->singleton(TelegramNavigationCompositeHandler::class);

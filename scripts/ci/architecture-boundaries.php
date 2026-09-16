@@ -15,8 +15,8 @@ return [
         'Payments' => ['AccessControl', 'Orders', 'Telegram', 'Wallet'],
         'Promotions' => ['AccessControl', 'Wallet'],
         'Provisioning' => ['AccessControl', 'Catalog', 'Orders', 'Panels', 'Payments', 'Telegram', 'Wallet'],
-        'Support' => ['Shared'],
-        'Telegram' => ['AccessControl', 'Agents', 'Customers', 'Identity', 'Localization', 'Promotions', 'Wallet'],
+        'Support' => ['AccessControl', 'Shared'],
+        'Telegram' => ['AccessControl', 'Agents', 'Customers', 'Identity', 'Localization', 'Promotions', 'Support', 'Wallet'],
         'Wallet' => ['AccessControl'],
     ],
     // Exact dependency-inversion seams where an owning module implements a
@@ -52,6 +52,7 @@ return [
         'app/Modules/Telegram/Application/TelegramCardToCardReceiptStatusPresentation.php',
         'app/Modules/Telegram/Application/TelegramGiftCardNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramNavigationHandler.php',
+        'app/Modules/Telegram/Application/TelegramSupportNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramTrialNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramUsdtNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramZarinpalNavigationHandler.php',

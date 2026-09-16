@@ -124,6 +124,8 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
 
     private const ACTION_TRIAL = 'navigation.trial';
 
+    private const ACTION_SUPPORT = 'navigation.support';
+
     private const ACTION_ADMIN_USDT_RATE = 'navigation.admin.usdt_rate';
 
     private const ACTION_ADMIN_USDT_RATE_EDIT = 'navigation.admin.usdt_rate.edit';
@@ -3134,6 +3136,18 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         $rows[] = [new TelegramInlineCallbackButton(
             $this->translation('telegram.navigation.buttons.my_services', $locale),
             $services->publicId,
+            TelegramInlineButtonStyle::Primary,
+        )];
+        $support = $this->callbacks->issue(
+            $action->sessionPublicId,
+            $sessionVersion,
+            self::ACTION_SUPPORT,
+            [],
+            'nav-home-support:'.$requestKey,
+        );
+        $rows[] = [new TelegramInlineCallbackButton(
+            $this->translation('telegram.navigation.buttons.support', $locale),
+            $support->publicId,
             TelegramInlineButtonStyle::Primary,
         )];
         if (($customer->accountType === 'customer' && $customer->accountStatus === 'active')
