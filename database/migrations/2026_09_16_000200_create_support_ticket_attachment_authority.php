@@ -41,7 +41,7 @@ return new class extends Migration
             return;
         }
 
-        DB::statement(<<<'SQL'
+        $this->addCheckIfMissing('support_ticket_attachment_identity_chk', <<<'SQL'
 ALTER TABLE support_ticket_attachments
 ADD CONSTRAINT support_ticket_attachment_identity_chk CHECK (
     `public_id` REGEXP '^[0-9A-HJKMNP-TV-Z]{26}$'
@@ -52,7 +52,7 @@ ADD CONSTRAINT support_ticket_attachment_identity_chk CHECK (
     AND `private_media_reference` NOT REGEXP '[[:cntrl:]]'
 )
 SQL);
-        DB::statement(<<<'SQL'
+        $this->addCheckIfMissing('support_ticket_attachment_payload_chk', <<<'SQL'
 ALTER TABLE support_ticket_attachments
 ADD CONSTRAINT support_ticket_attachment_payload_chk CHECK (
     (`kind` = 'image' AND `detected_mime` IN ('image/jpeg','image/png','image/webp'))
@@ -60,7 +60,7 @@ ADD CONSTRAINT support_ticket_attachment_payload_chk CHECK (
     OR (`kind` = 'file' AND `detected_mime` IN ('application/pdf','text/plain'))
 )
 SQL);
-        DB::statement(<<<'SQL'
+        $this->addCheckIfMissing('support_ticket_attachment_safety_chk', <<<'SQL'
 ALTER TABLE support_ticket_attachments
 ADD CONSTRAINT support_ticket_attachment_safety_chk CHECK (
     `byte_size` BETWEEN 1 AND 20000000
@@ -101,5 +101,28 @@ SQL);
             DB::unprepared('DROP TRIGGER IF EXISTS support_ticket_attachments_update_guard');
         }
         Schema::drop('support_ticket_attachments');
+    }
+
+    private function addCheckIfMissing(string $constraintName, string $ddl): void
+    {
+        if ($this->checkConstraintExists($constraintName)) {
+            return;
+        }
+
+        DB::statement($ddl);
+    }
+
+    private function checkConstraintExists(string $constraintName): bool
+    {
+        $row = DB::selectOne(<<<'SQL'
+SELECT COUNT(*) AS aggregate
+FROM information_schema.TABLE_CONSTRAINTS
+WHERE CONSTRAINT_SCHEMA = DATABASE()
+  AND TABLE_NAME = 'support_ticket_attachments'
+  AND CONSTRAINT_NAME = ?
+  AND CONSTRAINT_TYPE = 'CHECK'
+SQL, [$constraintName]);
+
+        return (int) ($row->aggregate ?? 0) === 1;
     }
 };
