@@ -14,7 +14,7 @@ use DateTimeImmutable;
 use DomainException;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\QueryException;
-use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use RuntimeException;
@@ -23,7 +23,7 @@ use Tests\TestCase;
 /** @requirement SUP-001 SUP-002 SEC-002 DAT-003 QUA-001 QUA-004 */
 final class SupportTicketFoundationTest extends TestCase
 {
-    use RefreshDatabase;
+    use DatabaseTruncation;
 
     public function test_categories_seed_idempotently_without_overwriting_operator_edits(): void
     {
@@ -169,6 +169,233 @@ final class SupportTicketFoundationTest extends TestCase
 
         self::assertSame('Original body', DB::table('support_ticket_messages')->where('ticket_id', $ticket->id)->value('body'));
         self::assertSame(1, DB::table('support_ticket_state_histories')->where('ticket_id', $ticket->id)->count());
+    }
+
+    public function test_exact_reply_replay_survives_later_terminal_state(): void
+    {
+        $this->seed(SupportTicketCategorySeeder::class);
+        $clock = new MutableSupportClock(new DateTimeImmutable('2026-09-16T00:00:00+00:00'));
+        $service = new SupportTicketService($this->app->make(DatabaseManager::class), $clock);
+        $customer = $this->user();
+        $support = $this->user();
+
+        $customerTicket = $service->create(new SupportTicketCreateRequest(
+            $customer,
+            'other',
+            'Customer replay',
+            'Initial body',
+            'create:customer-terminal-replay',
+        ));
+        $firstCustomerReply = $service->replyAsCustomer(
+            $customerTicket->id,
+            $customer,
+            'Committed customer reply',
+            'reply:customer-terminal-replay',
+        );
+        $service->transition($customerTicket->id, SupportTicketState::Resolved, $support, 'support_resolved');
+
+        $customerReplay = $service->replyAsCustomer(
+            $customerTicket->id,
+            $customer,
+            'Committed customer reply',
+            'reply:customer-terminal-replay',
+        );
+        self::assertTrue($customerReplay->replayed);
+        self::assertSame($firstCustomerReply->messageId, $customerReplay->messageId);
+        self::assertSame(2, DB::table('support_ticket_messages')->where('ticket_id', $customerTicket->id)->count());
+        self::assertSame(2, DB::table('support_ticket_state_histories')->where('ticket_id', $customerTicket->id)->count());
+
+        try {
+            $service->replyAsCustomer(
+                $customerTicket->id,
+                $customer,
+                'Conflicting delayed retry',
+                'reply:customer-terminal-replay',
+            );
+            self::fail('Conflicting delayed replay must remain rejected after terminal transition.');
+        } catch (DomainException) {
+            self::assertTrue(true);
+        }
+
+        $supportTicket = $service->create(new SupportTicketCreateRequest(
+            $customer,
+            'other',
+            'Support replay',
+            'Initial support case',
+            'create:support-terminal-replay',
+        ));
+        $firstSupportReply = $service->addSupportMessage(
+            $supportTicket->id,
+            $support,
+            'Committed support reply',
+            'reply:support-terminal-replay',
+        );
+        $service->transition($supportTicket->id, SupportTicketState::Closed, $support, 'support_closed', 'Resolved by support');
+
+        $supportReplay = $service->addSupportMessage(
+            $supportTicket->id,
+            $support,
+            'Committed support reply',
+            'reply:support-terminal-replay',
+        );
+        self::assertTrue($supportReplay->replayed);
+        self::assertSame($firstSupportReply->messageId, $supportReplay->messageId);
+        self::assertSame(2, DB::table('support_ticket_messages')->where('ticket_id', $supportTicket->id)->count());
+        self::assertSame(3, DB::table('support_ticket_state_histories')->where('ticket_id', $supportTicket->id)->count());
+    }
+
+    public function test_database_transition_guard_keeps_state_and_history_one_atomic_chain(): void
+    {
+        $this->seed(SupportTicketCategorySeeder::class);
+        $clock = new MutableSupportClock(new DateTimeImmutable('2026-09-16T00:00:00+00:00'));
+        $service = new SupportTicketService($this->app->make(DatabaseManager::class), $clock);
+        $customer = $this->user();
+        $support = $this->user();
+        $ticket = $service->create(new SupportTicketCreateRequest(
+            $customer,
+            'other',
+            'Database authority',
+            'Initial body',
+            'create:database-authority',
+        ));
+
+        self::assertSame(1, (int) DB::table('support_tickets')->where('id', $ticket->id)->value('state_version'));
+        self::assertSame([1], DB::table('support_ticket_state_histories')->where('ticket_id', $ticket->id)->orderBy('to_version')->pluck('to_version')->map(static fn (mixed $value): int => (int) $value)->all());
+
+        try {
+            DB::table('support_tickets')->where('id', $ticket->id)->update([
+                'state' => SupportTicketState::Closed->value,
+                'updated_at' => '2026-09-16 00:01:00.000000',
+            ]);
+            self::fail('Direct lifecycle mutation without exact versioned transition metadata must fail.');
+        } catch (QueryException) {
+            self::assertSame(SupportTicketState::New->value, DB::table('support_tickets')->where('id', $ticket->id)->value('state'));
+        }
+
+        $clock->set(new DateTimeImmutable('2026-09-16T00:02:00+00:00'));
+        $service->transition($ticket->id, SupportTicketState::Investigating, $support, 'support_investigating');
+
+        self::assertSame(2, (int) DB::table('support_tickets')->where('id', $ticket->id)->value('state_version'));
+        self::assertSame(
+            [
+                [null, SupportTicketState::New->value, null, 1],
+                [SupportTicketState::New->value, SupportTicketState::Investigating->value, 1, 2],
+            ],
+            DB::table('support_ticket_state_histories')
+                ->where('ticket_id', $ticket->id)
+                ->orderBy('to_version')
+                ->get(['from_state', 'to_state', 'from_version', 'to_version'])
+                ->map(static fn (object $row): array => [
+                    $row->from_state === null ? null : (string) $row->from_state,
+                    (string) $row->to_state,
+                    $row->from_version === null ? null : (int) $row->from_version,
+                    (int) $row->to_version,
+                ])
+                ->all(),
+        );
+
+        try {
+            DB::table('support_ticket_state_histories')->insert([
+                'ticket_id' => $ticket->id,
+                'from_state' => SupportTicketState::Investigating->value,
+                'to_state' => SupportTicketState::AwaitingSupport->value,
+                'from_version' => 2,
+                'to_version' => 3,
+                'actor_user_id' => $support,
+                'reason_code' => 'forged_history',
+                'created_at' => '2026-09-16 00:03:00.000000',
+            ]);
+            self::fail('History cannot advance independently of the authoritative ticket state.');
+        } catch (QueryException) {
+            self::assertSame(2, DB::table('support_ticket_state_histories')->where('ticket_id', $ticket->id)->count());
+        }
+    }
+
+    public function test_concurrent_same_key_customer_replies_converge_to_one_message_and_transition(): void
+    {
+        if (! function_exists('pcntl_fork')) {
+            self::markTestSkipped('pcntl is required for Support reply concurrency verification.');
+        }
+
+        $this->seed(SupportTicketCategorySeeder::class);
+        $clock = new MutableSupportClock(new DateTimeImmutable('2026-09-16T00:00:00+00:00'));
+        $service = new SupportTicketService($this->app->make(DatabaseManager::class), $clock);
+        $customer = $this->user();
+        $support = $this->user();
+        $ticket = $service->create(new SupportTicketCreateRequest(
+            $customer,
+            'other',
+            'Concurrent reply',
+            'Initial body',
+            'create:concurrent-reply',
+        ));
+        $service->addSupportMessage($ticket->id, $support, 'Please reply', 'support:concurrent-reply');
+        self::assertSame(SupportTicketState::AwaitingCustomer->value, DB::table('support_tickets')->where('id', $ticket->id)->value('state'));
+
+        $prefix = sys_get_temp_dir().'/support-reply-'.bin2hex(random_bytes(8));
+        $barrier = $prefix.'-go';
+        $results = [$prefix.'-1', $prefix.'-2'];
+        DB::disconnect();
+
+        $children = [];
+        foreach ([0, 1] as $index) {
+            $pid = pcntl_fork();
+            self::assertNotSame(-1, $pid);
+            if ($pid === 0) {
+                $outcome = ['error' => 'unknown'];
+                try {
+                    while (! file_exists($barrier)) {
+                        usleep(1000);
+                    }
+                    DB::reconnect();
+                    $childService = new SupportTicketService(
+                        $this->app->make(DatabaseManager::class),
+                        new MutableSupportClock(new DateTimeImmutable('2026-09-16T00:01:00+00:00')),
+                    );
+                    $receipt = $childService->replyAsCustomer(
+                        $ticket->id,
+                        $customer,
+                        'One concurrent payload',
+                        'reply:concurrent-same-key',
+                    );
+                    $outcome = ['message_id' => $receipt->messageId, 'replayed' => $receipt->replayed];
+                } catch (\Throwable $throwable) {
+                    $outcome = ['error' => $throwable::class.':'.$throwable->getMessage()];
+                }
+                file_put_contents($results[$index], json_encode($outcome, JSON_THROW_ON_ERROR));
+                exit(0);
+            }
+            $children[] = $pid;
+        }
+
+        touch($barrier);
+        foreach ($children as $pid) {
+            pcntl_waitpid($pid, $status);
+            self::assertSame(0, pcntl_wexitstatus($status));
+        }
+        DB::reconnect();
+
+        $outcomes = array_map(static function (string $file): array {
+            $decoded = json_decode((string) file_get_contents($file), true, flags: JSON_THROW_ON_ERROR);
+            self::assertIsArray($decoded);
+
+            return $decoded;
+        }, $results);
+        foreach ($outcomes as $outcome) {
+            self::assertArrayNotHasKey('error', $outcome, (string) ($outcome['error'] ?? ''));
+        }
+        self::assertSame($outcomes[0]['message_id'], $outcomes[1]['message_id']);
+        $replayed = [(bool) $outcomes[0]['replayed'], (bool) $outcomes[1]['replayed']];
+        sort($replayed);
+        self::assertSame([false, true], $replayed);
+        self::assertSame(3, DB::table('support_ticket_messages')->where('ticket_id', $ticket->id)->count());
+        self::assertSame(3, DB::table('support_ticket_state_histories')->where('ticket_id', $ticket->id)->count());
+        self::assertSame(SupportTicketState::AwaitingSupport->value, DB::table('support_tickets')->where('id', $ticket->id)->value('state'));
+
+        @unlink($barrier);
+        foreach ($results as $file) {
+            @unlink($file);
+        }
     }
 
     private function user(): int

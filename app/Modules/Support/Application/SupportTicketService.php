@@ -48,6 +48,7 @@ final readonly class SupportTicketService
                 'requester_user_id' => $request->requesterUserId,
                 'category_id' => (int) $category->id,
                 'state' => SupportTicketState::New->value,
+                'state_version' => 1,
                 'priority' => $request->priority->value,
                 'assigned_user_id' => null,
                 'order_id' => $request->orderId,
@@ -58,6 +59,8 @@ final readonly class SupportTicketService
                 'resolved_at' => null,
                 'closed_at' => null,
                 'reopen_until' => null,
+                'last_transition_actor_user_id' => $request->requesterUserId,
+                'last_transition_reason_code' => 'ticket_created',
                 'created_at' => $now,
                 'updated_at' => $now,
             ]);
@@ -72,7 +75,6 @@ final readonly class SupportTicketService
                 true,
                 $now,
             );
-            $this->recordStateChange($connection, $ticketId, null, SupportTicketState::New, $request->requesterUserId, 'ticket_created', $now);
 
             return $this->snapshot($connection, $ticketId);
         });
@@ -153,6 +155,19 @@ final readonly class SupportTicketService
                 throw new RuntimeException('Support ticket is unavailable for this customer.');
             }
 
+            $replay = $this->existingMessageReceipt(
+                $connection,
+                $ticketId,
+                $requesterUserId,
+                SupportTicketMessageKind::CustomerReply,
+                $body,
+                $idempotencyKey,
+                true,
+            );
+            if ($replay !== null) {
+                return $replay;
+            }
+
             $state = SupportTicketState::from($ticket->state);
             if (in_array($state, [SupportTicketState::Resolved, SupportTicketState::Closed], true)) {
                 throw new DomainException('Resolved or closed support ticket must be reopened before replying.');
@@ -200,13 +215,26 @@ final readonly class SupportTicketService
                 throw new RuntimeException('Support ticket does not exist.');
             }
 
+            $kind = $internalNote ? SupportTicketMessageKind::InternalNote : SupportTicketMessageKind::SupportReply;
+            $replay = $this->existingMessageReceipt(
+                $connection,
+                $ticketId,
+                $actorUserId,
+                $kind,
+                $body,
+                $idempotencyKey,
+                ! $internalNote,
+            );
+            if ($replay !== null) {
+                return $replay;
+            }
+
             $state = SupportTicketState::from($ticket->state);
             if (! $internalNote && in_array($state, [SupportTicketState::Resolved, SupportTicketState::Closed], true)) {
                 throw new DomainException('Resolved or closed support ticket must be reopened before a public support reply.');
             }
 
             $now = $this->timestamp();
-            $kind = $internalNote ? SupportTicketMessageKind::InternalNote : SupportTicketMessageKind::SupportReply;
             $receipt = $this->insertMessage($connection, $ticketId, $actorUserId, $kind, $body, $idempotencyKey, ! $internalNote, $now);
             if ($receipt->replayed || $internalNote || $state === SupportTicketState::AwaitingCustomer) {
                 return $receipt;
@@ -335,8 +363,8 @@ final readonly class SupportTicketService
         ?string $closeReason,
         ?int $reopenHours,
     ): void {
-        /** @var object{reopen_until:?string,resolved_at:?string,closed_at:?string}|null $current */
-        $current = $connection->table('support_tickets')->where('id', $ticketId)->first(['reopen_until', 'resolved_at', 'closed_at']);
+        /** @var object{state_version:int|string,reopen_until:?string,resolved_at:?string,closed_at:?string}|null $current */
+        $current = $connection->table('support_tickets')->where('id', $ticketId)->first(['state_version', 'reopen_until', 'resolved_at', 'closed_at']);
         if ($current === null) {
             throw new RuntimeException('Support ticket disappeared during transition.');
         }
@@ -347,6 +375,9 @@ final readonly class SupportTicketService
 
         $updates = [
             'state' => $to->value,
+            'state_version' => (int) $current->state_version + 1,
+            'last_transition_actor_user_id' => $actorUserId,
+            'last_transition_reason_code' => $reasonCode,
             'updated_at' => $now,
         ];
 
@@ -373,7 +404,29 @@ final readonly class SupportTicketService
         }
 
         $connection->table('support_tickets')->where('id', $ticketId)->update($updates);
-        $this->recordStateChange($connection, $ticketId, $from, $to, $actorUserId, $reasonCode, $now);
+    }
+
+    private function existingMessageReceipt(
+        Connection $connection,
+        int $ticketId,
+        int $actorUserId,
+        SupportTicketMessageKind $kind,
+        string $body,
+        string $idempotencyKey,
+        bool $customerVisible,
+    ): ?SupportTicketMessageReceipt {
+        /** @var object{id:int|string,kind:string,actor_user_id:int|string,body:string,customer_visible:int|string|bool}|null $message */
+        $message = $connection->table('support_ticket_messages')
+            ->where('ticket_id', $ticketId)
+            ->where('idempotency_key', $idempotencyKey)
+            ->first(['id', 'kind', 'actor_user_id', 'body', 'customer_visible']);
+        if ($message === null) {
+            return null;
+        }
+
+        $this->assertStoredMessageMatches($message, $actorUserId, $kind, trim($body), $customerVisible);
+
+        return new SupportTicketMessageReceipt((int) $message->id, $ticketId, $kind, true);
     }
 
     private function insertMessage(
@@ -405,33 +458,25 @@ final readonly class SupportTicketService
         if ($message === null) {
             throw new RuntimeException('Support ticket message could not be persisted.');
         }
+        $this->assertStoredMessageMatches($message, $actorUserId, $kind, $normalizedBody, $customerVisible);
+
+        return new SupportTicketMessageReceipt((int) $message->id, $ticketId, $kind, $inserted === 0);
+    }
+
+    /** @param object{kind:string,actor_user_id:int|string,body:string,customer_visible:int|string|bool} $message */
+    private function assertStoredMessageMatches(
+        object $message,
+        int $actorUserId,
+        SupportTicketMessageKind $kind,
+        string $normalizedBody,
+        bool $customerVisible,
+    ): void {
         if ($message->kind !== $kind->value
             || (int) $message->actor_user_id !== $actorUserId
             || $message->body !== $normalizedBody
             || (int) $message->customer_visible !== ($customerVisible ? 1 : 0)) {
             throw new DomainException('Support ticket idempotency key was reused for a different message payload.');
         }
-
-        return new SupportTicketMessageReceipt((int) $message->id, $ticketId, $kind, $inserted === 0);
-    }
-
-    private function recordStateChange(
-        Connection $connection,
-        int $ticketId,
-        ?SupportTicketState $from,
-        SupportTicketState $to,
-        int $actorUserId,
-        string $reasonCode,
-        string $createdAt,
-    ): void {
-        $connection->table('support_ticket_state_histories')->insert([
-            'ticket_id' => $ticketId,
-            'from_state' => $from?->value,
-            'to_state' => $to->value,
-            'actor_user_id' => $actorUserId,
-            'reason_code' => $reasonCode,
-            'created_at' => $createdAt,
-        ]);
     }
 
     private function uniqueTrackingNumber(Connection $connection): string
