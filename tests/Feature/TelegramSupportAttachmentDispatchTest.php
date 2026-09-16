@@ -137,6 +137,52 @@ final class TelegramSupportAttachmentDispatchTest extends TestCase
         self::assertSame('video/mp4', DB::table('support_ticket_attachments')->where('ticket_id', $ticket->id)->orderByDesc('id')->value('detected_mime'));
     }
 
+    public function test_customer_media_for_another_customer_ticket_is_discarded_without_support_effect(): void
+    {
+        $telegramUserId = 9935;
+        [$customerId, $accountId, $sessionPublicId] = $this->startActor($telegramUserId, 99400);
+        $otherCustomerId = $this->user();
+        $ticket = $this->app->make(SupportTicketService::class)->create(new SupportTicketCreateRequest(
+            $otherCustomerId,
+            'other',
+            'Foreign attachment target',
+            'Initial customer body',
+            'tg-attachment:create:foreign-target',
+        ));
+        self::assertNotSame($customerId, $otherCustomerId);
+        $this->moveToState(
+            $accountId,
+            $sessionPublicId,
+            'support_reply',
+            ['ticket_id' => $ticket->id],
+            'customer-foreign-ticket',
+        );
+
+        $fetcher = new TelegramSupportAttachmentDispatchFetcher("Must be discarded after authorization denial\n");
+        $this->bindFetcher($fetcher);
+        $this->accept($this->documentPayload(
+            99401,
+            $telegramUserId,
+            'support-customer-foreign-ticket-file',
+            'support-customer-foreign-ticket-unique',
+            strlen($fetcher->content),
+        ));
+        $this->app->make(TelegramUpdateProcessor::class)->process('123456789', 99401);
+
+        self::assertSame(1, $fetcher->calls);
+        self::assertSame(0, DB::table('support_ticket_attachments')->where('ticket_id', $ticket->id)->count());
+        self::assertSame(1, DB::table('support_ticket_messages')->where('ticket_id', $ticket->id)->count());
+        self::assertSame('discarded', DB::table('telegram_private_media')->where('update_id', 99401)->value('state'));
+        self::assertSame('discarded_unassociated', DB::table('telegram_private_media')->where('update_id', 99401)->value('rejection_code'));
+        $discardedPath = (string) DB::table('telegram_private_media')->where('update_id', 99401)->value('storage_path');
+        Storage::disk('telegram_private_media')->assertMissing($discardedPath);
+
+        $active = $this->app->make(TelegramInteractionSessionService::class)->activeForAccount($accountId);
+        self::assertNotNull($active);
+        self::assertSame('support_reply', $active->state);
+        self::assertSame(['ticket_id' => $ticket->id], $active->payload);
+    }
+
     public function test_staff_media_is_public_permission_checked_and_failed_authorization_discards_unassociated_bytes(): void
     {
         [$customerId] = $this->startActor(9932, 99200);
