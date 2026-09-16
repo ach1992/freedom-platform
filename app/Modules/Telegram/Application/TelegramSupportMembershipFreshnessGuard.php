@@ -39,11 +39,16 @@ final readonly class TelegramSupportMembershipFreshnessGuard
             return;
         }
 
-        $this->assertMembership($action->userId, 'support_view');
+        $this->assertSupportView($action->userId);
 
         if ($this->requiresCurrentTicketCreation($action)) {
             $this->assertMembership($action->userId, 'ticket_creation');
         }
+    }
+
+    public function assertSupportView(int $userId): void
+    {
+        $this->assertMembership($userId, 'support_view');
     }
 
     private function exitsSupport(TelegramInteractionAction $action): bool
