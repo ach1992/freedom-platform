@@ -27,9 +27,18 @@ final class SupportTicketMigrationSafetyTest extends TestCase
 
     private DatabaseManager $database;
 
+    private ?Migration $supportAttachmentMigration = null;
+
+    private ?Migration $privateMediaGeneralizationMigration = null;
+
     protected function setUp(): void
     {
         parent::setUp();
+
+        $this->supportAttachmentMigration = $this->supportAttachmentMigration();
+        $this->privateMediaGeneralizationMigration = $this->privateMediaGeneralizationMigration();
+        $this->privateMediaGeneralizationMigration->down();
+        $this->supportAttachmentMigration->down();
 
         $this->database = app(DatabaseManager::class);
         if (DB::connection()->getDriverName() === 'mysql') {
@@ -63,7 +72,13 @@ final class SupportTicketMigrationSafetyTest extends TestCase
                 }
             }
         } finally {
-            parent::tearDown();
+            try {
+                $this->migration()->up();
+                $this->supportAttachmentMigration?->up();
+                $this->privateMediaGeneralizationMigration?->up();
+            } finally {
+                parent::tearDown();
+            }
         }
     }
 
@@ -678,6 +693,22 @@ SQL, $databaseName));
     {
         /** @var Migration $migration */
         $migration = require database_path('migrations/2026_09_16_000100_create_support_ticket_foundation.php');
+
+        return $migration;
+    }
+
+    private function supportAttachmentMigration(): Migration
+    {
+        /** @var Migration $migration */
+        $migration = require database_path('migrations/2026_09_16_000200_create_support_ticket_attachment_authority.php');
+
+        return $migration;
+    }
+
+    private function privateMediaGeneralizationMigration(): Migration
+    {
+        /** @var Migration $migration */
+        $migration = require database_path('migrations/2026_09_16_000300_generalize_telegram_private_media_authority.php');
 
         return $migration;
     }
