@@ -132,7 +132,18 @@ SQL);
             return;
         }
 
-        DB::statement('ALTER TABLE telegram_private_media DROP CONSTRAINT '.$constraintName);
+        if ($constraintName === 'telegram_private_media_source_chk') {
+            DB::statement('ALTER TABLE telegram_private_media DROP CONSTRAINT telegram_private_media_source_chk');
+
+            return;
+        }
+        if ($constraintName === 'telegram_private_media_payload_chk') {
+            DB::statement('ALTER TABLE telegram_private_media DROP CONSTRAINT telegram_private_media_payload_chk');
+
+            return;
+        }
+
+        throw new RuntimeException('Unexpected Telegram private-media check constraint.');
     }
 
     private function checkConstraintExists(string $constraintName): bool
