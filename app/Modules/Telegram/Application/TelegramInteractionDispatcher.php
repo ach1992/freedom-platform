@@ -14,14 +14,18 @@ use RuntimeException;
 final readonly class TelegramInteractionDispatcher
 {
     /**
-     * Telegram sets these supported-looking compatibility fields for distinct
-     * media classes. They must be rejected before photo/document parsing.
+     * Telegram media classes outside the exact private-media contract must be
+     * rejected instead of falling through as textless messages.
      *
      * @var list<string>
      */
     private const UNSUPPORTED_COMPATIBILITY_MEDIA_FIELDS = [
         'animation',
         'live_photo',
+        'audio',
+        'voice',
+        'video_note',
+        'sticker',
     ];
 
     /** @requirement ARCH-003 DAT-003 SEC-002 SEC-003 QUA-001 */
@@ -72,7 +76,9 @@ final readonly class TelegramInteractionDispatcher
         }
         $text = $message['text'] ?? null;
         if ($privateMedia !== null) {
-            if (is_string($text) || ! $this->isPrivateActorChat($message, (int) $account->telegram_user_id)) {
+            if (is_string($text)
+                || array_key_exists('caption', $message)
+                || ! $this->isPrivateActorChat($message, (int) $account->telegram_user_id)) {
                 return new TelegramInteractionDispatchResult(TelegramInteractionDispatchStatus::Rejected);
             }
 
@@ -322,8 +328,9 @@ final readonly class TelegramInteractionDispatcher
         }
 
         $photoPresent = array_key_exists('photo', $message);
+        $videoPresent = array_key_exists('video', $message);
         $documentPresent = array_key_exists('document', $message);
-        if ($photoPresent && $documentPresent) {
+        if (($photoPresent ? 1 : 0) + ($videoPresent ? 1 : 0) + ($documentPresent ? 1 : 0) > 1) {
             throw new TelegramPrivateMediaRejected('ambiguous_media');
         }
 
@@ -360,6 +367,15 @@ final readonly class TelegramInteractionDispatcher
             }
 
             return $this->mediaInput('photo', $selected);
+        }
+
+        if ($videoPresent) {
+            $video = $message['video'];
+            if (! is_array($video) || array_is_list($video)) {
+                throw new TelegramPrivateMediaRejected('malformed_video');
+            }
+
+            return $this->mediaInput('video', $video);
         }
 
         if ($documentPresent) {
