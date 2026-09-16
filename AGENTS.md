@@ -132,6 +132,18 @@ For every change:
 8. capture future-useful follow-up work as an actionable Issue rather than burying it in completion prose;
 9. verify the live GitHub object/ref after every repository mutation.
 
+## Development and validation cadence
+
+Development cadence is **outcome-driven, not edit- or commit-driven**. Do not fragment one cohesive outcome into a convoy of tiny `change -> broad CI -> review` cycles merely because each intermediate edit can be tested independently.
+
+- Accumulate the smallest **meaningful, acceptance-bounded slice** that can be reviewed and evaluated as a coherent outcome before paying for broad merge-acceptance CI or independent review.
+- While the candidate is evolving, use reasoning, static checks, and focused/high-signal tests when they can cheaply falsify the work. Do not defer a safety-critical or highly discriminating check merely to make the batch larger.
+- Broad CI and independent review are **earned checkpoints**: run/request them when the candidate is stable enough that a pass or failure will materially inform an integration/review decision, not after every mechanical correction or small follow-up edit.
+- After a deterministic failure, keep the PR Draft, analyze the root cause and adjacent same-cause risks, batch the related remediation, use the narrowest discriminating verification when useful, and return to broad acceptance only when that remediation forms another meaningful checkpoint.
+- A cross-cutting, security-sensitive, schema, concurrency, provider, or otherwise high-risk change may justify earlier/broader validation when the risk itself makes that evidence valuable.
+
+This rule changes **cadence, not assurance**: it never removes required coverage, exact-head CI, independent review, or Owner gates. Detailed validation selection and evidence freshness remain owned by `docs/06-test-strategy.md`.
+
 ## CI
 
 Ordinary repository CI runs on standard GitHub-hosted Linux runners. Manual staging/provider workflows may retain explicit self-hosted selectors only as trusted operational contracts and must not have a connected public-repository runner unless that boundary is deliberately re-authorized. The exact workflow `runs-on` selector is the routing authority; execution boundaries live in `docs/development/execution-infrastructure.md` and test/CI semantics live in `docs/06-test-strategy.md`.
