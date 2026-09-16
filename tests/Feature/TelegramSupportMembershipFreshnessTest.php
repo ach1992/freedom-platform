@@ -395,7 +395,12 @@ final class TelegramSupportMembershipFreshnessTest extends TestCase
         DB::table('localization_overrides')
             ->where('translation_key', 'telegram_support.detail')
             ->where('locale', 'fa')
-            ->delete();
+            ->update([
+                'override_value' => null,
+                'version' => 2,
+                'updated_by_administrator_id' => $administratorId,
+                'updated_at' => now('UTC'),
+            ]);
         $lookup->evidence = TelegramMembershipEvidence::NotMember;
         $deliveryCount = $this->deliveryCount($telegramUserId);
         $this->assertProcessingFails($processor, 8654);
