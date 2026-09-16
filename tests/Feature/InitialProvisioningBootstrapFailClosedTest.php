@@ -110,9 +110,13 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
         $serviceNotificationMigration = require database_path('migrations/2026_08_23_000200_enable_service_notification_threshold_authority.php');
         /** @var Migration $serviceNotificationCursorMigration */
         $serviceNotificationCursorMigration = require database_path('migrations/2026_08_23_000210_enable_service_notification_scan_cursor.php');
+        /** @var Migration $supportTicketMigration */
+        $supportTicketMigration = require database_path('migrations/2026_09_16_000100_create_support_ticket_foundation.php');
 
         try {
             // Remove newer descendant authorities before replaying the historical provisioning bootstrap chain.
+            // Support is a cross-domain descendant because its ticket FK can reference service_subscriptions.
+            $supportTicketMigration->down();
             $serviceNotificationCursorMigration->down();
             $serviceNotificationMigration->down();
             $serviceSyncMigration->down();
@@ -333,6 +337,7 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
             $serviceSyncMigration->up();
             $serviceNotificationMigration->up();
             $serviceNotificationCursorMigration->up();
+            $supportTicketMigration->up();
         }
     }
 
