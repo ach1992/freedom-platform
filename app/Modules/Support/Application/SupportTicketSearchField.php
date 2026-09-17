@@ -22,9 +22,4 @@ enum SupportTicketSearchField: string
             self::Service => 'service_subscription_id',
         };
     }
-
-    public function isNumeric(): bool
-    {
-        return $this !== self::Tracking;
-    }
 }
