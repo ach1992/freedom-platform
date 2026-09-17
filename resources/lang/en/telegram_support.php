@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 return [
-    'home' => "Support\n\nChoose an existing ticket or create a new one.",
+    'home' => "Support\n\nChoose an existing ticket or create a new one. To rate a closed ticket, open that ticket and send /support-rate <1-5>.",
     'empty' => 'You do not have any support tickets yet.',
     'detail' => "Ticket :tracking\n:title\nState: :state · Priority: :priority\n\nHistory:\n:messages",
     'message_customer' => 'Customer: :body',
@@ -23,6 +23,7 @@ return [
     'search_results' => "Exact search results\n\n:items",
     'search_empty' => 'No support tickets matched that exact value.',
     'assignment_updated' => 'Ticket :tracking is assigned to user #:user_id.',
+    'rating_recorded' => 'A :score out of 5 rating was recorded for this ticket.',
     'support_reply_prompt' => 'Send reply text or one approved attachment (JPEG/PNG/WEBP, MP4, PDF, or plain text). The attachment will be visible to the customer.',
     'internal_note_prompt' => 'Send the internal note. It will not be visible to the customer.',
     'priority_prompt' => 'Choose a priority.',
