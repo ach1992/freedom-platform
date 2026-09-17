@@ -22,8 +22,6 @@ use stdClass;
 
 final readonly class SupportTicketService
 {
-    private const DEFAULT_REOPEN_HOURS = 72;
-
     public function __construct(
         private DatabaseManager $database,
         private Clock $clock,
@@ -421,22 +419,21 @@ final readonly class SupportTicketService
         int $actorUserId,
         string $reasonCode,
         ?string $closeReason = null,
-        int $reopenHours = self::DEFAULT_REOPEN_HOURS,
     ): SupportTicketSnapshot {
         $this->assertPositiveId($ticketId);
         $this->assertPositiveId($actorUserId);
         $this->assertReason($reasonCode);
-        if ($reopenHours < 1 || $reopenHours > 24 * 30) {
-            throw new InvalidArgumentException('Support ticket reopen window is invalid.');
-        }
 
-        return $this->database->connection()->transaction(function (Connection $connection) use ($ticketId, $target, $actorUserId, $reasonCode, $closeReason, $reopenHours): SupportTicketSnapshot {
+        return $this->database->connection()->transaction(function (Connection $connection) use ($ticketId, $target, $actorUserId, $reasonCode, $closeReason): SupportTicketSnapshot {
             /** @var object{id:int|string,state:string,reopen_until:?string}|null $ticket */
             $ticket = $connection->table('support_tickets')->where('id', $ticketId)->lockForUpdate()->first(['id', 'state', 'reopen_until']);
             if ($ticket === null) {
                 throw new RuntimeException('Support ticket does not exist.');
             }
 
+            $reopenHours = $target === SupportTicketState::Closed
+                ? $this->configuredReopenWindowHours()
+                : null;
             $this->applyTransition(
                 $connection,
                 $ticketId,
@@ -469,6 +466,7 @@ final readonly class SupportTicketService
                 throw new RuntimeException('Support ticket is unavailable for this customer.');
             }
 
+            $reopenHours = $this->configuredReopenWindowHours();
             $this->applyTransition(
                 $connection,
                 $ticketId,
@@ -477,7 +475,7 @@ final readonly class SupportTicketService
                 $requesterUserId,
                 'customer_closed',
                 $closeReason,
-                self::DEFAULT_REOPEN_HOURS,
+                $reopenHours,
             );
 
             return $this->snapshot($connection, $ticketId);
@@ -556,10 +554,12 @@ final readonly class SupportTicketService
             if ($closeReason === null || trim($closeReason) === '' || mb_strlen($closeReason) > 500) {
                 throw new InvalidArgumentException('Closing a support ticket requires a valid close reason.');
             }
-            $hours = $reopenHours ?? self::DEFAULT_REOPEN_HOURS;
+            if ($reopenHours === null) {
+                throw new RuntimeException('Support ticket reopen window was not resolved before close.');
+            }
             $updates['close_reason'] = trim($closeReason);
             $updates['closed_at'] = $now;
-            $updates['reopen_until'] = $this->formatTimestamp($nowObject->modify('+'.$hours.' hours'));
+            $updates['reopen_until'] = $this->formatTimestamp($nowObject->modify('+'.$reopenHours.' hours'));
         }
         if ($from === SupportTicketState::Closed && $to === SupportTicketState::AwaitingSupport) {
             $updates['close_reason'] = null;
@@ -710,6 +710,23 @@ final readonly class SupportTicketService
             (string) $row->created_at,
             (string) $row->updated_at,
         );
+    }
+
+    private function configuredReopenWindowHours(): int
+    {
+        $configured = config('support.reopen_window_hours');
+        if (is_int($configured)) {
+            $hours = $configured;
+        } elseif (is_string($configured) && preg_match('/\A[1-9][0-9]{0,2}\z/', $configured) === 1) {
+            $hours = (int) $configured;
+        } else {
+            throw new RuntimeException('Support ticket reopen window configuration is invalid.');
+        }
+        if ($hours < 1 || $hours > 24 * 30) {
+            throw new RuntimeException('Support ticket reopen window configuration is out of bounds.');
+        }
+
+        return $hours;
     }
 
     private function assertMessage(string $body, string $idempotencyKey): void
