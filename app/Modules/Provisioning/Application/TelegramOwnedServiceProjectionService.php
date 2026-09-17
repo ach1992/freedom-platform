@@ -5,18 +5,21 @@ declare(strict_types=1);
 namespace App\Modules\Provisioning\Application;
 
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceProjection;
+use App\Modules\Telegram\Application\Contracts\TelegramSupportOwnedServiceReferenceResolver;
 use App\Modules\Telegram\Application\TelegramOwnedServiceAction;
 use App\Modules\Telegram\Application\TelegramOwnedServiceDetail;
 use App\Modules\Telegram\Application\TelegramOwnedServiceListItem;
 use App\Modules\Telegram\Application\TelegramOwnedServicePage;
 use App\Modules\Telegram\Application\TelegramOwnedServiceSearchResult;
+use App\Modules\Telegram\Application\TelegramSupportBusinessReferenceResolution;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
+use Illuminate\Database\Query\Builder;
 use InvalidArgumentException;
 use RuntimeException;
 
-final readonly class TelegramOwnedServiceProjectionService implements TelegramOwnedServiceProjection
+final readonly class TelegramOwnedServiceProjectionService implements TelegramOwnedServiceProjection, TelegramSupportOwnedServiceReferenceResolver
 {
     private const MAXIMUM_PAGE_SIZE = 6;
 
@@ -75,6 +78,29 @@ final readonly class TelegramOwnedServiceProjectionService implements TelegramOw
         return new TelegramOwnedServicePage($items, $effectivePage, $totalPages, $totalItems);
     }
 
+    public function resolveForSelf(int $actorUserId, int $subjectUserId, string $selectionToken): TelegramSupportBusinessReferenceResolution
+    {
+        $this->assertSelf($actorUserId, $subjectUserId);
+        if (preg_match('/\\A[0-9a-f]{40}\\z/', $selectionToken) !== 1) {
+            throw new AuthorizationException('Telegram owned Service is unavailable for this actor.');
+        }
+
+        $service = $this->ownedServiceSelectionQuery(
+            $this->database->connection(),
+            $subjectUserId,
+            $selectionToken,
+        )->first(['service.id', 'service.public_id']);
+
+        if ($service === null) {
+            throw new AuthorizationException('Telegram owned Service is unavailable for this actor.');
+        }
+
+        return new TelegramSupportBusinessReferenceResolution(
+            $this->positiveDatabaseInt($service->id ?? null, 'Service ID'),
+            $this->databaseString($service->public_id ?? null, 'Service public ID'),
+        );
+    }
+
     public function detailForSelf(int $actorUserId, int $subjectUserId, string $selectionToken): TelegramOwnedServiceDetail
     {
         $this->assertSelf($actorUserId, $subjectUserId);
@@ -83,14 +109,12 @@ final readonly class TelegramOwnedServiceProjectionService implements TelegramOw
         }
 
         $connection = $this->database->connection();
-        $service = $connection->table('service_subscriptions as service')
+        $service = $this->ownedServiceSelectionQuery($connection, $subjectUserId, $selectionToken)
             ->join('order_items as item', 'item.id', '=', 'service.order_item_id')
             ->join('plan_offerings as offering', 'offering.id', '=', 'item.plan_offering_id')
             ->join('products as product', 'product.id', '=', 'offering.product_id')
             ->join('sales_servers as server', 'server.id', '=', 'offering.sales_server_id')
             ->leftJoin('product_variants as variant', 'variant.id', '=', 'offering.variant_id')
-            ->where('service.user_id', $subjectUserId)
-            ->whereRaw("LEFT(SHA2(CONCAT('telegram-owned-service-v1:', CAST(service.user_id AS CHAR), ':', service.public_id), 256), 40) = ?", [$selectionToken])
             ->first([
                 'service.id', 'service.public_id', 'service.lifecycle_state', 'service.lifecycle_version',
                 'service.remote_identity_generation', 'service.mutation_generation', 'service.provisioned_at',
@@ -337,6 +361,19 @@ final readonly class TelegramOwnedServiceProjectionService implements TelegramOw
         }
 
         return TelegramOwnedServiceSearchResult::matched($this->selectionToken($subjectUserId, $matchedPublicIds[0]));
+    }
+
+    private function ownedServiceSelectionQuery(
+        Connection $connection,
+        int $subjectUserId,
+        string $selectionToken,
+    ): Builder {
+        return $connection->table('service_subscriptions as service')
+            ->where('service.user_id', $subjectUserId)
+            ->whereRaw(
+                "LEFT(SHA2(CONCAT('telegram-owned-service-v1:', CAST(service.user_id AS CHAR), ':', service.public_id), 256), 40) = ?",
+                [$selectionToken],
+            );
     }
 
     private function assertSelf(int $actorUserId, int $subjectUserId): void
