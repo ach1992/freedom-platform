@@ -347,7 +347,7 @@ final readonly class TelegramSupportRoutingNavigationHandler
             $action->telegramUserId,
             $presentation,
             'tg-support-routing-delivery:'.hash('sha256', $action->requestKey.':'.$surface),
-            'tg-support-routing:'.substr(hash('sha256', $action->botId.':'.$action->updateId.':'.$surface), 0, 48),
+            'tg-support:'.substr(hash('sha256', $action->botId.':'.$action->updateId.':'.$surface), 0, 48),
             $keyboard,
         );
     }
