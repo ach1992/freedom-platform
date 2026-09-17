@@ -96,7 +96,7 @@ final readonly class TelegramSupportRoutingNavigationHandler
         $assigneeUserId = $this->assignmentTarget($text);
         $ticketId = $this->positivePayloadId($action->sessionPayload, 'ticket_id');
 
-        if ($action->replayed && $this->recoverAdvancedAssignment($action, $ticketId, $assigneeUserId)) {
+        if ($action->replayed && $this->recoverAdvancedAssignment($action, $ticketId)) {
             return;
         }
 
@@ -106,7 +106,7 @@ final readonly class TelegramSupportRoutingNavigationHandler
         }
         [$session, $ticket] = $committed;
 
-        $this->queueAssignmentConfirmation($action, $session->version, $ticket, $assigneeUserId);
+        $this->queueAssignmentConfirmation($action, $session->version, $ticket);
     }
 
     /** @param list<SupportTicketSnapshot> $tickets */
@@ -207,11 +207,8 @@ final readonly class TelegramSupportRoutingNavigationHandler
         return $completed;
     }
 
-    private function recoverAdvancedAssignment(
-        TelegramInteractionAction $action,
-        int $ticketId,
-        int $assigneeUserId,
-    ): bool {
+    private function recoverAdvancedAssignment(TelegramInteractionAction $action, int $ticketId): bool
+    {
         $session = $this->sessions->activeForAccount($action->telegramAccountId);
         if ($session === null
             || $session->publicId !== $action->sessionPublicId
@@ -227,7 +224,6 @@ final readonly class TelegramSupportRoutingNavigationHandler
                 $action,
                 $session->version,
                 $this->support->detail($action->userId, $ticketId)->ticket,
-                $assigneeUserId,
             );
         }
 
@@ -238,8 +234,11 @@ final readonly class TelegramSupportRoutingNavigationHandler
         TelegramInteractionAction $action,
         int $version,
         SupportTicketSnapshot $ticket,
-        int $assigneeUserId,
     ): void {
+        if ($ticket->assignedUserId === null) {
+            throw new RuntimeException('Assigned Support ticket has no assignee.');
+        }
+
         $locale = $this->locale($action->userId);
         $rows = [];
         $this->appendBack($action, $version, $rows, $locale);
@@ -247,7 +246,7 @@ final readonly class TelegramSupportRoutingNavigationHandler
             $action,
             $this->translation('telegram_support.assignment_updated', $locale, [
                 'tracking' => $ticket->trackingNumber,
-                'user_id' => $assigneeUserId,
+                'user_id' => $ticket->assignedUserId,
             ]),
             'assignment-updated',
             new TelegramInlineKeyboardSnapshot($rows),
