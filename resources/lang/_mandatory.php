@@ -41,7 +41,12 @@ return [
         'agent' => ['application', 'review', 'approval', 'rejection', 'pricing', 'single_purchase', 'bulk_purchase', 'reports'],
         'wallet' => ['top_up', 'balance', 'transfer', 'hold', 'debit', 'credit', 'refund', 'correction'],
         'promotion' => ['discount', 'gift_code', 'referral', 'reward.pending', 'reward.released', 'reward.reversed'],
-        'ticket' => ['create', 'category', 'assignment', 'reply', 'close', 'reopen', 'rating'],
+        'ticket' => [
+            'create', 'category', 'assignment', 'reply', 'close', 'reopen', 'rating',
+            'canned.acknowledge.label', 'canned.acknowledge.body',
+            'canned.details.label', 'canned.details.body',
+            'canned.recheck.label', 'canned.recheck.body',
+        ],
         'broadcast' => ['preview', 'schedule', 'progress', 'pause', 'resume', 'cancel', 'edit', 'pin', 'unpin', 'delete'],
         'admin' => ['user_search', 'receipt_review', 'service_repair', 'batch_grant', 'reports', 'configuration'],
         'alert' => ['customer_impacting', 'financial', 'security', 'integration', 'queue', 'backup', 'update'],
@@ -53,6 +58,9 @@ return [
     'button_keys' => [
         'menu.customer', 'menu.agent', 'menu.administrator', 'menu.back', 'menu.cancel', 'menu.confirm',
         'quote.confirm',
+        'ticket.canned.acknowledge.label',
+        'ticket.canned.details.label',
+        'ticket.canned.recheck.label',
     ],
     'media_caption_keys' => [
         'broadcast.preview',
