@@ -106,6 +106,7 @@ final class ConfidentialTelegramPresentationProvenanceTest extends TestCase
             'app/Modules/Telegram/Application/TelegramSupportAttachmentNavigationHandler.php',
             'app/Modules/Telegram/Application/TelegramSupportAttachmentStatusDelivery.php',
             'app/Modules/Telegram/Application/TelegramSupportNavigationHandler.php',
+            'app/Modules/Telegram/Application/TelegramSupportRoutingNavigationHandler.php',
             'app/Modules/Telegram/Application/TelegramTrialNavigationHandler.php',
             'app/Modules/Telegram/Application/TelegramUsdtNavigationHandler.php',
             'app/Modules/Telegram/Application/TelegramZarinpalNavigationHandler.php',
@@ -134,6 +135,14 @@ final class ConfidentialTelegramPresentationProvenanceTest extends TestCase
 
         self::assertContains($statusSource, TelegramConfidentialPresentationProvenanceGuard::REVIEWED_SOURCE_FILES);
         self::assertNotContains($statusSource, TelegramPresentationProvenanceGuard::REVIEWED_SOURCE_FILES);
+    }
+
+    public function test_support_routing_has_confidential_but_not_generic_delivery_provenance(): void
+    {
+        $routingSource = 'app/Modules/Telegram/Application/TelegramSupportRoutingNavigationHandler.php';
+
+        self::assertContains($routingSource, TelegramConfidentialPresentationProvenanceGuard::REVIEWED_SOURCE_FILES);
+        self::assertNotContains($routingSource, TelegramPresentationProvenanceGuard::REVIEWED_SOURCE_FILES);
     }
 
     public function test_trial_navigation_has_confidential_but_not_generic_delivery_provenance(): void
