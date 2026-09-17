@@ -8,13 +8,18 @@ use App\Modules\Support\Application\SupportTicketAttachmentService;
 use App\Modules\Support\Application\SupportTicketCreateRequest;
 use App\Modules\Support\Application\SupportTicketService;
 use App\Modules\Support\Application\SupportTicketSupportService;
+use App\Modules\Telegram\Application\Contracts\TelegramMembershipLookup;
 use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaFetcher;
+use App\Modules\Telegram\Application\TelegramChannelMembershipEvaluator;
+use App\Modules\Telegram\Application\TelegramMembershipEvidence;
+use App\Modules\Telegram\Application\TelegramMembershipLookupResult;
 use App\Modules\Telegram\Application\TelegramPrivateMediaDownload;
 use App\Modules\Telegram\Application\TelegramPrivateMediaIngestor;
 use App\Modules\Telegram\Application\TelegramPrivateMediaInput;
 use App\Modules\Telegram\Application\TelegramPrivateMediaReceipt;
 use App\Modules\Telegram\Application\TelegramProtectedPresentationReference;
 use App\Modules\Telegram\Application\TelegramProtectedPresentationResolver;
+use App\Modules\Telegram\Application\TelegramSupportMembershipFreshnessGuard;
 use App\Shared\Application\RestrictedValue;
 use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\SupportTicketAccessFoundationSeeder;
@@ -94,13 +99,14 @@ final class TelegramSupportAttachmentProtectedDeliveryTest extends TestCase
         self::assertStringContainsString($attachmentPublicId, $presentation->caption());
         self::assertStringNotContainsString($media->privateReference, $reference->durableText());
 
+        $crossCustomerDenied = false;
         try {
             $this->app->make(TelegramProtectedPresentationResolver::class)
                 ->resolveForSelf($otherCustomer['user_id'], $reference);
-            self::fail('Another customer must not resolve the protected Support attachment.');
         } catch (RuntimeException) {
-            self::assertTrue(true);
+            $crossCustomerDenied = true;
         }
+        self::assertTrue($crossCustomerDenied, 'Another customer must not resolve the protected Support attachment.');
 
         $path = (string) DB::table('telegram_private_media')
             ->where('public_id', substr($media->privateReference, strlen('telegram-private-media:')))
@@ -108,6 +114,53 @@ final class TelegramSupportAttachmentProtectedDeliveryTest extends TestCase
         Storage::disk('telegram_private_media')->put($path, "tampered\n");
 
         $this->expectException(RuntimeException::class);
+        $this->app->make(TelegramProtectedPresentationResolver::class)
+            ->resolveForSelf($customer['user_id'], $reference);
+    }
+
+    public function test_customer_protected_delivery_requires_current_support_view_membership(): void
+    {
+        $customer = $this->user(9945);
+        $ticket = $this->app->make(SupportTicketService::class)->create(new SupportTicketCreateRequest(
+            $customer['user_id'],
+            'other',
+            'Protected membership attachment',
+            'Initial body',
+            'protected-attachment:membership:create',
+        ));
+        [, $attachmentPublicId] = $this->storeCustomerAttachment(
+            $customer['user_id'],
+            $customer['account_id'],
+            $ticket->id,
+            "Attachment blocked after membership loss\n",
+            99451,
+        );
+        $reference = TelegramProtectedPresentationReference::supportAttachment(
+            $attachmentPublicId,
+            'customer',
+            'fa',
+        );
+        $this->installMembershipRule('support_view', 'support-attachment-protected-membership', -1005000000945);
+        $lookup = new readonly class implements TelegramMembershipLookup
+        {
+            public function lookup(int $chatId, int $telegramUserId): TelegramMembershipLookupResult
+            {
+                return new TelegramMembershipLookupResult(
+                    TelegramMembershipEvidence::NotMember,
+                    'telegram_membership_left',
+                );
+            }
+        };
+        $this->app->instance(TelegramMembershipLookup::class, $lookup);
+        foreach ([
+            TelegramChannelMembershipEvaluator::class,
+            TelegramSupportMembershipFreshnessGuard::class,
+            TelegramProtectedPresentationResolver::class,
+        ] as $service) {
+            $this->app->forgetInstance($service);
+        }
+
+        $this->expectException(DomainException::class);
         $this->app->make(TelegramProtectedPresentationResolver::class)
             ->resolveForSelf($customer['user_id'], $reference);
     }
@@ -246,6 +299,64 @@ final class TelegramSupportAttachmentProtectedDeliveryTest extends TestCase
             'granted_at' => $now,
             'revoked_at' => null,
             'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+    }
+
+    private function installMembershipRule(string $action, string $ruleKey, int $chatId): void
+    {
+        $now = now('UTC');
+        $channelId = (int) DB::table('required_channels')->insertGetId([
+            'channel_key' => $ruleKey.'-channel',
+            'telegram_chat_id' => $chatId,
+            'chat_type' => 'channel',
+            'visibility' => 'public',
+            'display_title' => $ruleKey,
+            'join_url_ciphertext' => str_repeat('c', 64),
+            'join_url_hash' => str_repeat('a', 64),
+            'sort_order' => 0,
+            'state' => 'draft',
+            'version' => 1,
+            'verified_bot_id' => null,
+            'verification_result_code' => null,
+            'verified_at' => null,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        DB::table('required_channels')->where('id', $channelId)->update([
+            'state' => 'active',
+            'version' => 2,
+            'verified_bot_id' => 123456789,
+            'verification_result_code' => 'telegram_membership_administrator',
+            'verified_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $ruleId = (int) DB::table('channel_membership_rules')->insertGetId([
+            'rule_key' => $ruleKey,
+            'action' => $action,
+            'audience' => 'customers',
+            'tier_code' => null,
+            'customer_tag_id' => null,
+            'plan_offering_id' => null,
+            'match_mode' => 'all',
+            'failure_policy' => 'fail_closed',
+            'priority' => 100,
+            'effective_from' => null,
+            'effective_until' => null,
+            'state' => 'draft',
+            'version' => 1,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        DB::table('channel_membership_rule_channels')->insert([
+            'channel_membership_rule_id' => $ruleId,
+            'required_channel_id' => $channelId,
+            'sort_order' => 0,
+            'created_at' => $now,
+        ]);
+        DB::table('channel_membership_rules')->where('id', $ruleId)->update([
+            'state' => 'active',
+            'version' => 2,
             'updated_at' => $now,
         ]);
     }
