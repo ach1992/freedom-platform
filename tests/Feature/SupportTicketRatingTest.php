@@ -89,6 +89,14 @@ final class SupportTicketRatingTest extends TestCase
         $preserved = $ratings->ratingForCustomer($ticket->id, $customer);
         self::assertNotNull($preserved);
         self::assertSame(5, $preserved->score);
+
+        try {
+            $ratings->rate($ticket->id, $customer, 5);
+            self::fail('A reopened Support ticket must not accept a new same-score rating request.');
+        } catch (DomainException) {
+            self::assertSame(1, DB::table('support_ticket_ratings')->where('ticket_id', $ticket->id)->count());
+            self::assertSame(5, (int) DB::table('support_ticket_ratings')->where('ticket_id', $ticket->id)->value('score'));
+        }
     }
 
     public function test_rating_requires_owned_currently_closed_ticket_and_valid_score(): void
