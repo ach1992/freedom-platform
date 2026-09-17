@@ -209,8 +209,8 @@ final class TelegramSupportAttachmentDispatchTest extends TestCase
         self::assertSame(1, DB::table('support_ticket_attachments')->where('ticket_id', $ticket->id)->count());
         $message = DB::table('support_ticket_messages')->where('ticket_id', $ticket->id)->orderByDesc('id')->first();
         self::assertNotNull($message);
-        self::assertSame('support', $message->message_kind);
-        self::assertSame(0, (int) $message->is_internal);
+        self::assertSame('support_reply', $message->kind);
+        self::assertSame(1, (int) $message->customer_visible);
         $customerDetail = $this->app->make(SupportTicketService::class)->ticketForCustomer($ticket->id, $customerId);
         self::assertStringContainsString('📎', $customerDetail->messages[1]->body);
 

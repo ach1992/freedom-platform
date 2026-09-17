@@ -21,6 +21,7 @@ final class TelegramPrivateMediaContentValidatorTest extends TestCase
         [$mime, $hash, $size] = TelegramPrivateMediaContentValidator::validate($content, 20_000_000);
 
         self::assertSame($expectedMime, $mime);
+        self::assertTrue(TelegramPrivateMediaContentValidator::isApprovedMime($mime));
         self::assertSame($expectedKind, TelegramPrivateMediaContentValidator::kindForMime($mime));
         self::assertSame(hash('sha256', $content), $hash);
         self::assertSame(strlen($content), $size);
@@ -37,6 +38,11 @@ final class TelegramPrivateMediaContentValidatorTest extends TestCase
         } catch (TelegramPrivateMediaRejected $exception) {
             self::assertSame($reasonCode, $exception->reasonCode);
         }
+    }
+
+    public function test_unknown_mime_is_not_approved(): void
+    {
+        self::assertFalse(TelegramPrivateMediaContentValidator::isApprovedMime('application/octet-stream'));
     }
 
     public function test_size_bound_is_enforced_before_content_acceptance(): void

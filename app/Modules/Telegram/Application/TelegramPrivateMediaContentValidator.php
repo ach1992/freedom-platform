@@ -53,6 +53,11 @@ final class TelegramPrivateMediaContentValidator
             ?? throw new InvalidArgumentException('Telegram private-media MIME type is not approved.');
     }
 
+    public static function isApprovedMime(string $mime): bool
+    {
+        return array_key_exists($mime, self::MIME_KINDS);
+    }
+
     public static function isImageMime(string $mime): bool
     {
         return (self::MIME_KINDS[$mime] ?? null) === 'image';
