@@ -31,12 +31,16 @@ final class SupportTicketMigrationSafetyTest extends TestCase
 
     private ?Migration $privateMediaGeneralizationMigration = null;
 
+    private ?Migration $supportRatingMigration = null;
+
     protected function setUp(): void
     {
         parent::setUp();
 
         $this->supportAttachmentMigration = $this->supportAttachmentMigration();
         $this->privateMediaGeneralizationMigration = $this->privateMediaGeneralizationMigration();
+        $this->supportRatingMigration = $this->supportRatingMigration();
+        $this->supportRatingMigration->down();
         $this->privateMediaGeneralizationMigration->down();
         $this->supportAttachmentMigration->down();
 
@@ -76,6 +80,7 @@ final class SupportTicketMigrationSafetyTest extends TestCase
                 $this->migration()->up();
                 $this->supportAttachmentMigration?->up();
                 $this->privateMediaGeneralizationMigration?->up();
+                $this->supportRatingMigration?->up();
             } finally {
                 parent::tearDown();
             }
@@ -709,6 +714,14 @@ SQL, $databaseName));
     {
         /** @var Migration $migration */
         $migration = require database_path('migrations/2026_09_16_000300_generalize_telegram_private_media_authority.php');
+
+        return $migration;
+    }
+
+    private function supportRatingMigration(): Migration
+    {
+        /** @var Migration $migration */
+        $migration = require database_path('migrations/2026_09_17_000100_create_support_ticket_rating_authority.php');
 
         return $migration;
     }
