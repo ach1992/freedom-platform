@@ -18,6 +18,7 @@ final readonly class TelegramNavigationCompositeHandler implements TelegramInter
         private TelegramTrialNavigationHandler $trial,
         private TelegramSupportNavigationHandler $support,
         private TelegramSupportRatingNavigationHandler $supportRating,
+        private TelegramSupportCategoryNavigationHandler $supportCategories,
         private TelegramSupportRoutingNavigationHandler $supportRouting,
         private TelegramSupportAttachmentNavigationHandler $supportAttachments,
         private TelegramSupportMembershipFreshnessGuard $supportMembership,
@@ -42,6 +43,12 @@ final readonly class TelegramNavigationCompositeHandler implements TelegramInter
         if ($this->supportRating->supports($action)) {
             $this->supportMembership->assertCurrent($action);
             $this->supportRating->handle($action);
+
+            return;
+        }
+        if ($this->supportCategories->supports($action)) {
+            $this->supportMembership->assertCurrent($action);
+            $this->supportCategories->handle($action);
 
             return;
         }
