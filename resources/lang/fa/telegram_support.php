@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 return [
-    'home' => "پشتیبانی\n\nیک تیکت موجود را انتخاب کنید یا تیکت جدید بسازید.",
+    'home' => "پشتیبانی\n\nیک تیکت موجود را انتخاب کنید یا تیکت جدید بسازید. برای امتیازدادن به تیکت بسته، داخل همان تیکت دستور /support-rate <1-5> را بفرستید.",
     'empty' => 'هنوز تیکت پشتیبانی ندارید.',
     'detail' => "تیکت :tracking\n:title\nوضعیت: :state · اولویت: :priority\n\nتاریخچه:\n:messages",
     'message_customer' => 'مشتری: :body',
@@ -23,6 +23,7 @@ return [
     'search_results' => "نتایج جست‌وجوی دقیق\n\n:items",
     'search_empty' => 'هیچ تیکتی با این مقدار دقیق پیدا نشد.',
     'assignment_updated' => 'تیکت :tracking به کاربر #:user_id تخصیص یافت.',
+    'rating_recorded' => 'امتیاز :score از ۵ برای این تیکت ثبت شد.',
     'support_reply_prompt' => 'متن پاسخ یا یک پیوست مجاز (JPEG/PNG/WEBP، MP4، PDF یا فایل متنی ساده) را ارسال کنید. پیوست برای مشتری قابل‌مشاهده خواهد بود.',
     'internal_note_prompt' => 'یادداشت داخلی را ارسال کنید. این متن برای مشتری نمایش داده نمی‌شود.',
     'priority_prompt' => 'اولویت را انتخاب کنید.',
