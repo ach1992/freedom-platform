@@ -134,13 +134,21 @@ final class TelegramSupportMembershipFreshnessTest extends TestCase
         );
         $this->accept($this->callbackPayload(8603, $telegramUserId, 'support_create_freshness', 'fa', $category));
         $processor->process('123456789', 8603);
-        $this->accept($this->payload(8604, $telegramUserId, 'support_create_freshness', 'fa', 'Membership freshness'));
+        self::assertSame('support_create_reference_type', $this->supportSession($account['account_id'])['state']);
+        $noReference = $this->callbackToken(
+            'navigation.support.reference.type',
+            $account['account_id'],
+            json_encode(['reference_type' => 'none'], JSON_THROW_ON_ERROR),
+        );
+        $this->accept($this->callbackPayload(8604, $telegramUserId, 'support_create_freshness', 'fa', $noReference));
         $processor->process('123456789', 8604);
+        $this->accept($this->payload(8605, $telegramUserId, 'support_create_freshness', 'fa', 'Membership freshness'));
+        $processor->process('123456789', 8605);
         self::assertSame('support_create_description', $this->supportSession($account['account_id'])['state']);
 
         $lookup->evidence = TelegramMembershipEvidence::NotMember;
-        $this->accept($this->payload(8605, $telegramUserId, 'support_create_freshness', 'fa', 'Must not create while membership is stale.'));
-        $this->assertMembershipProcessingFails($processor, 8605);
+        $this->accept($this->payload(8606, $telegramUserId, 'support_create_freshness', 'fa', 'Must not create while membership is stale.'));
+        $this->assertMembershipProcessingFails($processor, 8606);
 
         self::assertSame('support_create_description', $this->supportSession($account['account_id'])['state']);
         self::assertSame(0, DB::table('support_tickets')->where('requester_user_id', $account['user_id'])->count());
@@ -148,14 +156,14 @@ final class TelegramSupportMembershipFreshnessTest extends TestCase
         self::assertSame(0, DB::table('support_ticket_state_histories')->where('actor_user_id', $account['user_id'])->count());
 
         $lookup->evidence = TelegramMembershipEvidence::Member;
-        $processor->process('123456789', 8605);
+        $processor->process('123456789', 8606);
         self::assertSame('support_ticket', $this->supportSession($account['account_id'])['state']);
         self::assertSame(1, DB::table('support_tickets')->where('requester_user_id', $account['user_id'])->count());
         self::assertSame(1, DB::table('support_ticket_messages')->where('actor_user_id', $account['user_id'])->count());
         $historyCount = DB::table('support_ticket_state_histories')->where('actor_user_id', $account['user_id'])->count();
         self::assertGreaterThan(0, $historyCount);
 
-        $processor->process('123456789', 8605);
+        $processor->process('123456789', 8606);
         self::assertSame(1, DB::table('support_tickets')->where('requester_user_id', $account['user_id'])->count());
         self::assertSame(1, DB::table('support_ticket_messages')->where('actor_user_id', $account['user_id'])->count());
         self::assertSame($historyCount, DB::table('support_ticket_state_histories')->where('actor_user_id', $account['user_id'])->count());
