@@ -7,6 +7,8 @@ namespace App\Modules\Telegram\Application;
 use App\Modules\Localization\Application\LocalizationResolver;
 use App\Modules\Support\Application\SupportTicketCreateRequest;
 use App\Modules\Support\Application\SupportTicketDetailSnapshot;
+use App\Modules\Support\Application\SupportTicketRoutingService;
+use App\Modules\Support\Application\SupportTicketSearchField;
 use App\Modules\Support\Application\SupportTicketService;
 use App\Modules\Support\Application\SupportTicketSupportService;
 use App\Modules\Support\Domain\SupportTicketMessageKind;
@@ -118,6 +120,7 @@ final readonly class TelegramSupportNavigationHandler
         private TelegramChannelMembershipEvaluator $membership,
         private SupportTicketService $tickets,
         private SupportTicketSupportService $support,
+        private SupportTicketRoutingService $routing,
         private TelegramNavigationHandler $navigation,
         private DatabaseManager $database,
     ) {}
@@ -161,6 +164,9 @@ final readonly class TelegramSupportNavigationHandler
 
             return;
         }
+        if ($this->handleOperatorCommand($action)) {
+            return;
+        }
 
         match ($action->sessionState) {
             self::STATE_HOME => $this->handleHome($action),
@@ -180,6 +186,61 @@ final readonly class TelegramSupportNavigationHandler
             self::STATE_MUTATING => throw new RuntimeException('Telegram Support mutation state cannot be externally resumed.'),
             default => throw new RuntimeException('Telegram Support navigation state is unsupported.'),
         };
+    }
+
+    private function handleOperatorCommand(TelegramInteractionAction $action): bool
+    {
+        if ($action->kind !== TelegramInteractionActionKind::Message || $action->messageText === null) {
+            return false;
+        }
+
+        $text = trim($action->messageText);
+        if ($action->sessionState === self::STATE_QUEUE && str_starts_with($text, '/support-search')) {
+            if (preg_match('/\A\/support-search(?:@[A-Za-z0-9_]+)?\s+(tracking|user|order|payment|service)\s+(\S+)\z/u', $text, $matches) !== 1) {
+                throw new DomainException('Telegram Support search command is invalid.');
+            }
+            $field = SupportTicketSearchField::tryFrom($matches[1]);
+            if ($field === null) {
+                throw new DomainException('Telegram Support search field is invalid.');
+            }
+            $this->renderSearchResults(
+                $action,
+                $this->routing->search($action->userId, $field, $matches[2], 20),
+            );
+
+            return true;
+        }
+
+        if ($action->sessionState === self::STATE_QUEUE_TICKET && str_starts_with($text, '/support-assign')) {
+            if (! $this->isAssignCommand($text)) {
+                throw new DomainException('Telegram Support assignment command is invalid.');
+            }
+            preg_match('/\A\/support-assign(?:@[A-Za-z0-9_]+)?\s+([1-9][0-9]{0,18})\z/u', $text, $matches);
+            $assigneeUserId = filter_var($matches[1], FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+            if (! is_int($assigneeUserId)) {
+                throw new DomainException('Telegram Support assignee identity is invalid.');
+            }
+            $ticketId = $this->positivePayloadId($action->sessionPayload, 'ticket_id');
+            $session = $this->commitTicketMutation(
+                $action,
+                $ticketId,
+                self::STATE_QUEUE_TICKET,
+                'support-assign',
+                fn (): mixed => $this->routing->assign($action->userId, $ticketId, $assigneeUserId),
+            );
+            if ($session !== null) {
+                $this->renderQueueTicket(
+                    $action,
+                    $session->version,
+                    $this->support->detail($action->userId, $ticketId),
+                    'assigned',
+                );
+            }
+
+            return true;
+        }
+
+        return false;
     }
 
     private function handleHome(TelegramInteractionAction $action): void
@@ -294,7 +355,7 @@ final readonly class TelegramSupportNavigationHandler
             return;
         }
         if ($action->callbackAction === self::ACTION_REPLY && $action->callbackPayload === []) {
-            $detail = $this->tickets->ticketForCustomer($ticketId, $action->userId);
+            $this->tickets->ticketForCustomer($ticketId, $action->userId);
             $session = $this->transition($action, self::STATE_REPLY, ['ticket_id' => $ticketId], 'reply-prompt');
             if ($session !== null) {
                 $this->queue($action, $this->translation('ticket.reply', $this->locale($action->userId)), 'reply-prompt', $this->backKeyboard($action, $session->version));
@@ -303,7 +364,7 @@ final readonly class TelegramSupportNavigationHandler
             return;
         }
         if ($action->callbackAction === self::ACTION_CLOSE && $action->callbackPayload === []) {
-            $detail = $this->tickets->ticketForCustomer($ticketId, $action->userId);
+            $this->tickets->ticketForCustomer($ticketId, $action->userId);
             $session = $this->transition($action, self::STATE_CLOSE, ['ticket_id' => $ticketId], 'close-prompt');
             if ($session !== null) {
                 $this->queue($action, $this->translation('ticket.close', $this->locale($action->userId)), 'close-prompt', $this->backKeyboard($action, $session->version));
@@ -641,12 +702,41 @@ final readonly class TelegramSupportNavigationHandler
                 'title' => $ticket->title,
                 'state' => $this->stateLabel($ticket->state, $locale),
                 'priority' => $this->priorityLabel($ticket->priority, $locale),
-                'assignment' => $ticket->assignedUserId === null ? $this->translation('telegram_support.assigned_none', $locale) : $this->translation('telegram_support.assigned_self', $locale),
+                'assignment' => $this->assignmentText($ticket->assignedUserId, $locale),
             ]);
         }
         $this->appendBack($action, $session->version, $rows, $locale);
         $text = $tickets === [] ? $this->translation('telegram_support.queue_empty', $locale) : $this->translation('telegram_support.queue', $locale, ['items' => implode("\n\n", $items)]);
         $this->queue($action, $text, 'queue', new TelegramInlineKeyboardSnapshot($rows));
+    }
+
+    /** @param list<\App\Modules\Support\Application\SupportTicketSnapshot> $tickets */
+    private function renderSearchResults(TelegramInteractionAction $action, array $tickets): void
+    {
+        $locale = $this->locale($action->userId);
+        $rows = [];
+        $items = [];
+        foreach ($tickets as $ticket) {
+            $callback = $this->callbacks->issue(
+                $action->sessionPublicId,
+                $action->sessionVersion,
+                self::ACTION_QUEUE_TICKET,
+                ['ticket_id' => $ticket->id],
+                'tg-support-search-ticket:'.hash('sha256', $action->requestKey.':'.$ticket->id),
+            );
+            $rows[] = [new TelegramInlineCallbackButton($this->ticketButtonText($ticket->trackingNumber, $ticket->title), $callback->publicId)];
+            $items[] = $this->translation('telegram_support.queue_item', $locale, [
+                'tracking' => $ticket->trackingNumber,
+                'title' => $ticket->title,
+                'state' => $this->stateLabel($ticket->state, $locale),
+                'priority' => $this->priorityLabel($ticket->priority, $locale),
+                'assignment' => $this->assignmentText($ticket->assignedUserId, $locale),
+            ]);
+        }
+        $text = $tickets === []
+            ? $this->translation('telegram_support.search_empty', $locale)
+            : $this->translation('telegram_support.search_results', $locale, ['items' => implode("\n\n", $items)]);
+        $this->queue($action, $text, 'search-results', new TelegramInlineKeyboardSnapshot($rows));
     }
 
     private function showQueueTicket(TelegramInteractionAction $action, int $ticketId): void
@@ -743,9 +833,7 @@ final readonly class TelegramSupportNavigationHandler
                 'messages' => $messageText,
             ];
             if ($supportView) {
-                $replace['assignment'] = $detail->ticket->assignedUserId === null
-                    ? $this->translation('telegram_support.assigned_none', $locale)
-                    : $this->translation('telegram_support.assigned_self', $locale);
+                $replace['assignment'] = $this->assignmentText($detail->ticket->assignedUserId, $locale);
 
                 return $this->translation('telegram_support.support_detail', $locale, $replace);
             }
@@ -819,6 +907,13 @@ final readonly class TelegramSupportNavigationHandler
         }
 
         return $best;
+    }
+
+    private function assignmentText(?int $assignedUserId, string $locale): string
+    {
+        return $assignedUserId === null
+            ? $this->translation('telegram_support.assigned_none', $locale)
+            : $this->translation('telegram_support.assigned_user', $locale, ['user_id' => $assignedUserId]);
     }
 
     private function handleBack(TelegramInteractionAction $action): void
@@ -946,6 +1041,11 @@ final readonly class TelegramSupportNavigationHandler
             && $action->kind === TelegramInteractionActionKind::Callback
             && $action->callbackAction === self::ACTION_CLAIM) {
             return [self::STATE_QUEUE_TICKET, 'claimed', true];
+        }
+        if ($action->sessionState === self::STATE_QUEUE_TICKET
+            && $action->kind === TelegramInteractionActionKind::Message
+            && $this->isAssignCommand($action->messageText)) {
+            return [self::STATE_QUEUE_TICKET, 'assigned', true];
         }
         if ($action->sessionState === self::STATE_QUEUE_REPLY
             && $action->kind === TelegramInteractionActionKind::Message) {
@@ -1234,6 +1334,15 @@ final readonly class TelegramSupportNavigationHandler
     private function idempotencyKey(string $operation, string $requestKey): string
     {
         return 'tg-'.$operation.':'.hash('sha256', $requestKey);
+    }
+
+    private function isAssignCommand(?string $text): bool
+    {
+        if ($text === null) {
+            return false;
+        }
+
+        return preg_match('/\A\/support-assign(?:@[A-Za-z0-9_]+)?\s+[1-9][0-9]{0,18}\z/u', trim($text)) === 1;
     }
 
     private function isEntryCommand(?string $text): bool
