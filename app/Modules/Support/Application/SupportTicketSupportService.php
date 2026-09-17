@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Support\Application;
 
+use App\Modules\AccessControl\Application\AdministratorRoleContextReader;
 use App\Modules\AccessControl\Application\AdministratorUserPermissionAuthorizer;
 use App\Modules\Support\Domain\SupportTicketPriority;
 use App\Modules\Support\Domain\SupportTicketState;
@@ -15,6 +16,7 @@ final readonly class SupportTicketSupportService
     public function __construct(
         private SupportTicketService $tickets,
         private AdministratorUserPermissionAuthorizer $authorizer,
+        private AdministratorRoleContextReader $roles,
     ) {}
 
     public function availableFor(int $actorUserId): bool
@@ -25,9 +27,13 @@ final readonly class SupportTicketSupportService
     /** @return list<SupportTicketSnapshot> */
     public function queue(int $actorUserId, int $limit = 50): array
     {
-        $this->authorize($actorUserId);
+        $administratorId = $this->authorize($actorUserId);
+        $roleContext = $this->roles->forAdministrator($administratorId);
 
-        return $this->tickets->ticketsForSupport($limit);
+        return $this->tickets->ticketsForSupport(
+            $limit,
+            new SupportTicketQueueRouteFilter($actorUserId, $roleContext->isOwner, $roleContext->roleCodes),
+        );
     }
 
     public function detail(int $actorUserId, int $ticketId): SupportTicketDetailSnapshot
@@ -96,8 +102,8 @@ final readonly class SupportTicketSupportService
         return $this->tickets->transition($ticketId, $target, $actorUserId, $reasonCode, $closeReason);
     }
 
-    private function authorize(int $actorUserId): void
+    private function authorize(int $actorUserId): int
     {
-        $this->authorizer->authorizeUser($actorUserId, self::PERMISSION);
+        return $this->authorizer->authorizeUser($actorUserId, self::PERMISSION);
     }
 }

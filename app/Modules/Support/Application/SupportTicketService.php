@@ -14,6 +14,7 @@ use DateTimeZone;
 use DomainException;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
+use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
 use RuntimeException;
@@ -142,17 +143,33 @@ final readonly class SupportTicketService
     }
 
     /** @return list<SupportTicketSnapshot> */
-    public function ticketsForSupport(int $limit = 50): array
-    {
+    public function ticketsForSupport(
+        int $limit = 50,
+        ?SupportTicketQueueRouteFilter $routeFilter = null,
+    ): array {
         if ($limit < 1 || $limit > 100) {
             throw new InvalidArgumentException('Support ticket queue query is invalid.');
         }
 
-        $rows = $this->database->connection()->table('support_tickets')
-            ->where('state', '<>', SupportTicketState::Closed->value)
-            ->orderByRaw("CASE priority WHEN 'urgent' THEN 1 WHEN 'high' THEN 2 WHEN 'normal' THEN 3 ELSE 4 END")
-            ->orderBy('created_at')
-            ->orderBy('id')
+        $query = $this->database->connection()->table('support_tickets')
+            ->select('support_tickets.*')
+            ->where('support_tickets.state', '<>', SupportTicketState::Closed->value);
+
+        if ($routeFilter !== null && ! $routeFilter->allRoutes) {
+            $query->join('support_ticket_categories as categories', 'categories.id', '=', 'support_tickets.category_id')
+                ->where(function (Builder $routing) use ($routeFilter): void {
+                    $routing->whereNull('categories.route_role_code')
+                        ->orWhere('support_tickets.assigned_user_id', $routeFilter->actorUserId);
+                    if ($routeFilter->roleCodes !== []) {
+                        $routing->orWhereIn('categories.route_role_code', $routeFilter->roleCodes);
+                    }
+                });
+        }
+
+        $rows = $query
+            ->orderByRaw("CASE support_tickets.priority WHEN 'urgent' THEN 1 WHEN 'high' THEN 2 WHEN 'normal' THEN 3 ELSE 4 END")
+            ->orderBy('support_tickets.created_at')
+            ->orderBy('support_tickets.id')
             ->limit($limit)
             ->get();
 
