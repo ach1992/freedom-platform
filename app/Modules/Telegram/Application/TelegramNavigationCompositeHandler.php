@@ -8,7 +8,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramInteractionHandler;
 
 /**
  * Keeps the established navigation handler unchanged while routing bounded
- * payment and Support attachment journeys to their dedicated reviewed gateways.
+ * payment and Support extension journeys to their dedicated reviewed gateways.
  */
 final readonly class TelegramNavigationCompositeHandler implements TelegramInteractionHandler
 {
@@ -17,6 +17,7 @@ final readonly class TelegramNavigationCompositeHandler implements TelegramInter
         private TelegramAgentNavigationHandler $agent,
         private TelegramTrialNavigationHandler $trial,
         private TelegramSupportNavigationHandler $support,
+        private TelegramSupportRoutingNavigationHandler $supportRouting,
         private TelegramSupportAttachmentNavigationHandler $supportAttachments,
         private TelegramSupportMembershipFreshnessGuard $supportMembership,
         private TelegramGiftCardNavigationHandler $giftCards,
@@ -34,6 +35,12 @@ final readonly class TelegramNavigationCompositeHandler implements TelegramInter
         if ($this->supportAttachments->supports($action)) {
             $this->supportMembership->assertCurrent($action);
             $this->supportAttachments->handle($action);
+
+            return;
+        }
+        if ($this->supportRouting->supports($action)) {
+            $this->supportMembership->assertCurrent($action);
+            $this->supportRouting->handle($action);
 
             return;
         }
