@@ -129,6 +129,41 @@ final class TelegramSupportAttachmentProtectedDeliveryTest extends TestCase
             ->resolveForSelf($customer['user_id'], $reference);
     }
 
+    public function test_customer_protected_delivery_rejects_support_hash_mismatch(): void
+    {
+        $customer = $this->user(9946);
+        $ticket = $this->app->make(SupportTicketService::class)->create(new SupportTicketCreateRequest(
+            $customer['user_id'],
+            'other',
+            'Protected attachment hash binding',
+            'Initial body',
+            'protected-attachment:hash-binding:create',
+        ));
+        $content = "Support hash binding evidence\n";
+        [, $attachmentPublicId] = $this->storeCustomerAttachment(
+            $customer['user_id'],
+            $customer['account_id'],
+            $ticket->id,
+            $content,
+            99461,
+            str_repeat('0', 64),
+        );
+        $reference = TelegramProtectedPresentationReference::supportAttachment(
+            $attachmentPublicId,
+            'customer',
+            'fa',
+        );
+        $grant = $this->app->make(SupportTicketAttachmentService::class)
+            ->deliveryForCustomer($attachmentPublicId, $customer['user_id']);
+
+        self::assertSame('[REDACTED]', $grant->__debugInfo()['content_sha256']);
+        self::assertStringNotContainsString(str_repeat('0', 64), $reference->durableText());
+
+        $this->expectException(RuntimeException::class);
+        $this->app->make(TelegramProtectedPresentationResolver::class)
+            ->resolveForSelf($customer['user_id'], $reference);
+    }
+
     public function test_customer_protected_delivery_requires_current_support_view_membership(): void
     {
         $customer = $this->user(9945);
@@ -221,6 +256,7 @@ final class TelegramSupportAttachmentProtectedDeliveryTest extends TestCase
         int $ticketId,
         string $content,
         int $updateId,
+        ?string $supportContentSha256 = null,
     ): array {
         $this->app->instance(
             TelegramPrivateMediaFetcher::class,
@@ -246,7 +282,7 @@ final class TelegramSupportAttachmentProtectedDeliveryTest extends TestCase
             'file',
             $media->detectedMime,
             $media->byteSize,
-            $media->contentSha256,
+            $supportContentSha256 ?? $media->contentSha256,
             RestrictedValue::fromString($media->privateReference),
             'protected-delivery-attachment:'.$updateId,
         );

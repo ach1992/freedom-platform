@@ -283,6 +283,7 @@ final readonly class SupportTicketAttachmentService
         return new SupportTicketAttachmentDeliveryGrant(
             $this->snapshot($row),
             RestrictedValue::fromString((string) $row->private_media_reference),
+            RestrictedValue::fromString(strtolower((string) $row->content_sha256)),
         );
     }
 
@@ -431,6 +432,7 @@ final readonly class SupportTicketAttachmentService
             'attachment.customer_visible',
             'attachment.created_at',
             'attachment.private_media_reference',
+            'attachment.content_sha256',
         ];
     }
 

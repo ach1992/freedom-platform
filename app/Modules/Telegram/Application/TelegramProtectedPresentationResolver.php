@@ -98,8 +98,12 @@ final readonly class TelegramProtectedPresentationResolver
             $grant->privateMediaReference,
             $grant->attachment->publicId,
         );
+        $contents = $payload->bytes();
+        $contentSha256 = $grant->contentSha256->reveal();
         if ($payload->detectedMime !== $grant->attachment->detectedMime
-            || $payload->byteSize !== $grant->attachment->byteSize) {
+            || $payload->byteSize !== $grant->attachment->byteSize
+            || preg_match('/\A[0-9a-f]{64}\z/', $contentSha256) !== 1
+            || ! hash_equals($contentSha256, hash('sha256', $contents))) {
             throw new RuntimeException('Protected Telegram Support attachment metadata failed integrity verification.');
         }
 
@@ -115,7 +119,7 @@ final readonly class TelegramProtectedPresentationResolver
         );
 
         return ProtectedTelegramPresentation::binaryDocument(
-            $payload->bytes(),
+            $contents,
             'support-attachment-'.$grant->attachment->publicId.'.'.$this->extensionForMime($grant->attachment->detectedMime),
             $caption,
         );

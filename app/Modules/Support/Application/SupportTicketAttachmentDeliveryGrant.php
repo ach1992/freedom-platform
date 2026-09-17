@@ -11,6 +11,7 @@ final readonly class SupportTicketAttachmentDeliveryGrant
     public function __construct(
         public SupportTicketAttachmentSnapshot $attachment,
         public RestrictedValue $privateMediaReference,
+        public RestrictedValue $contentSha256,
     ) {}
 
     /** @return array<string,mixed> */
@@ -20,6 +21,7 @@ final readonly class SupportTicketAttachmentDeliveryGrant
             'attachment_public_id' => $this->attachment->publicId,
             'ticket_id' => $this->attachment->ticketId,
             'private_media_reference' => '[REDACTED]',
+            'content_sha256' => '[REDACTED]',
         ];
     }
 }
