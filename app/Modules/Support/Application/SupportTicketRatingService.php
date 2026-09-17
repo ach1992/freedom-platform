@@ -38,6 +38,10 @@ final readonly class SupportTicketRatingService
                 throw new RuntimeException('Support ticket is unavailable for this customer.');
             }
 
+            if (SupportTicketState::from((string) $ticket->state) !== SupportTicketState::Closed) {
+                throw new DomainException('Support ticket must be closed before rating.');
+            }
+
             $existing = $connection->table('support_ticket_ratings')
                 ->where('ticket_id', $ticketId)
                 ->first($this->snapshotColumns());
@@ -48,10 +52,6 @@ final readonly class SupportTicketRatingService
                 }
 
                 return new SupportTicketRatingReceipt($rating, true);
-            }
-
-            if (SupportTicketState::from((string) $ticket->state) !== SupportTicketState::Closed) {
-                throw new DomainException('Support ticket must be closed before rating.');
             }
 
             $ratingId = (int) $connection->table('support_ticket_ratings')->insertGetId([
