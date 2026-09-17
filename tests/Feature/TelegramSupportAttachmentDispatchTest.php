@@ -8,11 +8,13 @@ use App\Modules\Support\Application\SupportTicketCreateRequest;
 use App\Modules\Support\Application\SupportTicketService;
 use App\Modules\Support\Application\SupportTicketSupportService;
 use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaFetcher;
+use App\Modules\Telegram\Application\Contracts\TelegramSupportCustomerRateLimiter;
 use App\Modules\Telegram\Application\TelegramInteractionDispatcher;
 use App\Modules\Telegram\Application\TelegramInteractionSessionService;
 use App\Modules\Telegram\Application\TelegramPrivateMediaDownload;
 use App\Modules\Telegram\Application\TelegramPrivateMediaIngestor;
 use App\Modules\Telegram\Application\TelegramPrivateMediaInteractionGateway;
+use App\Modules\Telegram\Application\TelegramSupportCustomerRateLimitScope;
 use App\Modules\Telegram\Application\TelegramUpdateProcessor;
 use App\Shared\Application\RestrictedValue;
 use Database\Seeders\IdentityAccessFoundationSeeder;
@@ -67,6 +69,7 @@ final class TelegramSupportAttachmentDispatchTest extends TestCase
         Queue::fake();
         Storage::fake('telegram_private_media');
         config([
+            'support.rate_limits.prefix' => 'test:telegram-support-rate-limit:'.bin2hex(random_bytes(8)).':',
             'app.url' => 'https://bot.example.test',
             'telegram.bot_token' => '123456789:abcdefghijklmnopqrstuvwxyz_ABCDE',
             'telegram.webhook_secret' => self::SECRET,
@@ -136,6 +139,56 @@ final class TelegramSupportAttachmentDispatchTest extends TestCase
         self::assertSame(2, DB::table('support_ticket_attachments')->where('ticket_id', $ticket->id)->count());
         self::assertSame('video', DB::table('support_ticket_attachments')->where('ticket_id', $ticket->id)->orderByDesc('id')->value('kind'));
         self::assertSame('video/mp4', DB::table('support_ticket_attachments')->where('ticket_id', $ticket->id)->orderByDesc('id')->value('detected_mime'));
+    }
+
+    public function test_customer_attachment_shares_content_rate_limit_and_is_blocked_before_private_ingest(): void
+    {
+        config([
+            'support.rate_limits.customer_content.max_attempts' => 1,
+            'support.rate_limits.customer_content.window_seconds' => 600,
+        ]);
+        $telegramUserId = 9936;
+        [$userId, $accountId, $sessionPublicId] = $this->startActor($telegramUserId, 99500);
+        $ticket = $this->app->make(SupportTicketService::class)->create(new SupportTicketCreateRequest(
+            $userId,
+            'other',
+            'Rate-limited attachment',
+            'Initial customer body',
+            'tg-attachment:create:rate-limit',
+        ));
+        $this->moveToState($accountId, $sessionPublicId, 'support_reply', ['ticket_id' => $ticket->id], 'customer-rate-limit');
+
+        $first = $this->app->make(TelegramSupportCustomerRateLimiter::class)->consume(
+            $userId,
+            TelegramSupportCustomerRateLimitScope::CustomerContent,
+        );
+        self::assertTrue($first->allowed);
+
+        $fetcher = new TelegramSupportAttachmentDispatchFetcher("Must not be fetched\n");
+        $this->bindFetcher($fetcher);
+        $this->accept($this->documentPayload(
+            99501,
+            $telegramUserId,
+            'support-rate-limited-file',
+            'support-rate-limited-unique',
+            strlen($fetcher->content),
+        ));
+        $this->processWithPersistedFailureDiagnostics($this->app->make(TelegramUpdateProcessor::class), 99501);
+
+        self::assertSame(0, $fetcher->calls);
+        self::assertSame(0, DB::table('telegram_private_media')->where('update_id', 99501)->count());
+        self::assertSame(0, DB::table('support_ticket_attachments')->where('ticket_id', $ticket->id)->count());
+        self::assertSame(1, DB::table('support_ticket_messages')->where('ticket_id', $ticket->id)->count());
+        $active = $this->app->make(TelegramInteractionSessionService::class)->activeForAccount($accountId);
+        self::assertNotNull($active);
+        self::assertSame('support_reply', $active->state);
+        self::assertSame(['ticket_id' => $ticket->id], $active->payload);
+        $this->assertDatabaseHas('processed_telegram_updates', [
+            'bot_id' => '123456789',
+            'update_id' => 99501,
+            'state' => 'processed',
+            'last_error_class' => null,
+        ]);
     }
 
     public function test_customer_media_for_another_customer_ticket_is_discarded_without_support_effect(): void

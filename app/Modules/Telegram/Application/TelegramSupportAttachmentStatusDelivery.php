@@ -22,19 +22,26 @@ final readonly class TelegramSupportAttachmentStatusDelivery
         string $locale,
         string $status,
         ?string $attachmentPublicId = null,
+        ?int $retryAfterSeconds = null,
     ): void {
         if ($telegramUserId < 1
             || $requestKey === ''
-            || ! in_array($status, ['received', 'invalid', 'unavailable'], true)
+            || ! in_array($status, ['received', 'invalid', 'unavailable', 'rate_limited'], true)
             || ($status === 'received' && ($attachmentPublicId === null || ! Str::isUlid($attachmentPublicId)))
-            || ($status !== 'received' && $attachmentPublicId !== null)) {
+            || ($status !== 'received' && $attachmentPublicId !== null)
+            || ($status === 'rate_limited' && ($retryAfterSeconds === null || $retryAfterSeconds < 1 || $retryAfterSeconds > 86_400))
+            || ($status !== 'rate_limited' && $retryAfterSeconds !== null)) {
             throw new RuntimeException('Telegram Support attachment status delivery identity is invalid.');
         }
 
+        $replace = $attachmentPublicId === null ? [] : ['attachment' => strtoupper($attachmentPublicId)];
+        if ($retryAfterSeconds !== null) {
+            $replace = ['seconds' => $retryAfterSeconds];
+        }
         $text = $this->translation(
             'telegram_support.attachment_'.$status,
             $locale,
-            $attachmentPublicId === null ? [] : ['attachment' => strtoupper($attachmentPublicId)],
+            $replace,
         );
         $presentation = $this->presentations->fromSource(
             new TelegramSupportAttachmentStatusPresentation($text),

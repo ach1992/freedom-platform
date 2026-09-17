@@ -17,6 +17,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramMembershipLookup;
 use App\Modules\Telegram\Application\Contracts\TelegramMutationTransport;
 use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaFetcher;
 use App\Modules\Telegram\Application\Contracts\TelegramRuntime;
+use App\Modules\Telegram\Application\Contracts\TelegramSupportCustomerRateLimiter;
 use App\Modules\Telegram\Application\NonRestrictedTelegramPresentationFactory;
 use App\Modules\Telegram\Application\TelegramAgentNavigationHandler;
 use App\Modules\Telegram\Application\TelegramBotEntryMembershipGateHandler;
@@ -126,6 +127,10 @@ final class TelegramServiceProvider extends ServiceProvider
                 fn (): TelegramNavigationHandler => $application->make(TelegramNavigationHandler::class),
                 fn (): LocalizationResolver => $application->make(LocalizationResolver::class),
             ),
+        );
+        $this->app->singleton(
+            TelegramSupportCustomerRateLimiter::class,
+            RedisTelegramSupportCustomerRateLimiter::class,
         );
         $this->app->singleton(
             TelegramSupportMembershipFreshnessGuard::class,

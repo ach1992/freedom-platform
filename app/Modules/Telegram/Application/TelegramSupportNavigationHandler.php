@@ -13,6 +13,7 @@ use App\Modules\Support\Application\SupportTicketSupportService;
 use App\Modules\Support\Domain\SupportTicketMessageKind;
 use App\Modules\Support\Domain\SupportTicketPriority;
 use App\Modules\Support\Domain\SupportTicketState;
+use App\Modules\Telegram\Application\Contracts\TelegramSupportCustomerRateLimiter;
 use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
 use Closure;
 use DomainException;
@@ -125,6 +126,7 @@ final readonly class TelegramSupportNavigationHandler
         private TelegramInteractionSessionService $sessions,
         private TelegramInteractionCallbackService $callbacks,
         private TelegramChannelMembershipEvaluator $membership,
+        private TelegramSupportCustomerRateLimiter $rateLimiter,
         private SupportTicketService $tickets,
         private SupportTicketSupportService $support,
         private TelegramNavigationHandler $navigation,
@@ -277,6 +279,9 @@ final readonly class TelegramSupportNavigationHandler
         }
         $category = $this->stringPayload($action->sessionPayload, 'category');
         $title = $this->stringPayload($action->sessionPayload, 'title');
+        if (! $this->customerRateLimitAllows($action, TelegramSupportCustomerRateLimitScope::TicketCreation, 'creation-rate-limited')) {
+            return;
+        }
         $committed = $this->commitTicketCreation(
             $action,
             new SupportTicketCreateRequest(
@@ -345,6 +350,12 @@ final readonly class TelegramSupportNavigationHandler
             throw new RuntimeException('Telegram Support reply expects a message.');
         }
         $ticketId = $this->positivePayloadId($action->sessionPayload, 'ticket_id');
+        if (trim($action->messageText) === '' || mb_strlen($action->messageText) > 8000) {
+            throw new DomainException('Telegram Support reply is invalid.');
+        }
+        if (! $this->customerRateLimitAllows($action, TelegramSupportCustomerRateLimitScope::CustomerContent, 'reply-rate-limited')) {
+            return;
+        }
         $session = $this->commitTicketMutation(
             $action,
             $ticketId,
@@ -1269,6 +1280,30 @@ final readonly class TelegramSupportNavigationHandler
         }
 
         return mb_substr($text, 0, $limit - 1).'…';
+    }
+
+    private function customerRateLimitAllows(
+        TelegramInteractionAction $action,
+        TelegramSupportCustomerRateLimitScope $scope,
+        string $surface,
+    ): bool {
+        $decision = $this->rateLimiter->consume($action->userId, $scope);
+        if ($decision->allowed) {
+            return true;
+        }
+        if ($decision->retryAfterSeconds === null) {
+            throw new RuntimeException('Telegram Support rate-limit decision is incomplete.');
+        }
+        $this->queue(
+            $action,
+            $this->translation('telegram_support.rate_limited', $this->locale($action->userId), [
+                'seconds' => $decision->retryAfterSeconds,
+            ]),
+            $surface,
+            $this->backKeyboard($action, $action->sessionVersion),
+        );
+
+        return false;
     }
 
     private function queue(TelegramInteractionAction $action, string $text, string $surface, TelegramInlineKeyboardSnapshot $keyboard): void
