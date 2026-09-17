@@ -62,7 +62,18 @@ final class TelegramSupportAttachmentProtectedDeliveryTest extends TestCase
         $this->seed(SupportTicketAccessFoundationSeeder::class);
         $this->seed(SupportTicketCategorySeeder::class);
         Storage::fake('telegram_private_media');
-        config()->set('telegram.private_media_max_bytes', 1_048_576);
+        config([
+            'app.url' => 'https://bot.example.test',
+            'telegram.bot_token' => '123456789:abcdefghijklmnopqrstuvwxyz_ABCDE',
+            'telegram.webhook_secret' => 'telegram_webhook_secret_1234567890_safe',
+            'telegram.webhook_path' => 'api/telegram/webhook',
+            'telegram.max_body_bytes' => 1_048_576,
+            'telegram.queue' => 'critical',
+            'telegram.processing_lease_seconds' => 120,
+            'telegram.api_base_url' => 'https://api.telegram.org',
+            'telegram.api_timeout_seconds' => 15,
+            'telegram.private_media_max_bytes' => 1_048_576,
+        ]);
     }
 
     public function test_customer_protected_delivery_resolves_bytes_only_after_owner_and_integrity_checks(): void
