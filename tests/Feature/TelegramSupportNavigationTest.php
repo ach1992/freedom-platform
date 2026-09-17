@@ -12,6 +12,7 @@ use App\Modules\Telegram\Application\ConfidentialTelegramPresentation;
 use App\Modules\Telegram\Application\Contracts\TelegramMembershipLookup;
 use App\Modules\Telegram\Application\TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1;
 use App\Modules\Telegram\Application\TelegramInteractionCallbackService;
+use App\Modules\Telegram\Application\TelegramInteractionPayload;
 use App\Modules\Telegram\Application\TelegramInteractionRejected;
 use App\Modules\Telegram\Application\TelegramInteractionSessionService;
 use App\Modules\Telegram\Application\TelegramMembershipEvidence;
@@ -435,10 +436,10 @@ final class TelegramSupportNavigationTest extends TestCase
 
         $defaultBody = trans('_mandatory.ticket.canned.acknowledge.body', [], 'fa');
         self::assertIsString($defaultBody);
-        $stalePayload = json_encode([
+        $stalePayload = (new TelegramInteractionPayload([
             'template' => 'acknowledge',
             'body_hash' => hash('sha256', $defaultBody),
-        ], JSON_THROW_ON_ERROR);
+        ]))->json();
         $staleSend = $this->callbackToken('navigation.support.queue.canned.send', $staff['account_id'], $stalePayload);
         self::assertStringNotContainsString($defaultBody, $stalePayload);
 
@@ -478,10 +479,10 @@ final class TelegramSupportNavigationTest extends TestCase
         $this->accept($this->callbackPayload(8239, $supportTelegramId, 'support_canned_staff', 'en', $canned));
         $processor->process('123456789', 8239);
 
-        $freshPayload = json_encode([
+        $freshPayload = (new TelegramInteractionPayload([
             'template' => 'acknowledge',
             'body_hash' => hash('sha256', $overrideBody),
-        ], JSON_THROW_ON_ERROR);
+        ]))->json();
         $freshSend = $this->callbackToken('navigation.support.queue.canned.send', $staff['account_id'], $freshPayload);
         self::assertStringNotContainsString($overrideBody, $freshPayload);
 
