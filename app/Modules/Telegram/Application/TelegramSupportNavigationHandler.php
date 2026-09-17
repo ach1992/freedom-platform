@@ -13,7 +13,11 @@ use App\Modules\Support\Application\SupportTicketSupportService;
 use App\Modules\Support\Domain\SupportTicketMessageKind;
 use App\Modules\Support\Domain\SupportTicketPriority;
 use App\Modules\Support\Domain\SupportTicketState;
+use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceProjection;
 use App\Modules\Telegram\Application\Contracts\TelegramSupportCustomerRateLimiter;
+use App\Modules\Telegram\Application\Contracts\TelegramSupportOwnedOrderProjection;
+use App\Modules\Telegram\Application\Contracts\TelegramSupportOwnedPaymentIntentProjection;
+use App\Modules\Telegram\Application\Contracts\TelegramSupportOwnedServiceReferenceResolver;
 use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
 use Closure;
 use DomainException;
@@ -31,6 +35,10 @@ final readonly class TelegramSupportNavigationHandler
     private const STATE_HOME = 'support_home';
 
     private const STATE_CREATE_CATEGORY = 'support_create_category';
+
+    private const STATE_CREATE_REFERENCE_TYPE = 'support_create_reference_type';
+
+    private const STATE_CREATE_REFERENCE_LIST = 'support_create_reference_list';
 
     private const STATE_CREATE_TITLE = 'support_create_title';
 
@@ -68,6 +76,12 @@ final readonly class TelegramSupportNavigationHandler
 
     private const ACTION_CATEGORY = 'navigation.support.category';
 
+    private const ACTION_REFERENCE_TYPE = 'navigation.support.reference.type';
+
+    private const ACTION_REFERENCE_SELECT = 'navigation.support.reference.select';
+
+    private const ACTION_REFERENCE_PAGE = 'navigation.support.reference.page';
+
     private const ACTION_REPLY = 'navigation.support.reply';
 
     private const ACTION_CLOSE = 'navigation.support.close';
@@ -98,10 +112,22 @@ final readonly class TelegramSupportNavigationHandler
 
     private const ACTION_BACK = 'navigation.back';
 
+    private const REFERENCE_NONE = 'none';
+
+    private const REFERENCE_ORDER = 'order';
+
+    private const REFERENCE_PAYMENT_INTENT = 'payment_intent';
+
+    private const REFERENCE_SERVICE = 'service';
+
+    private const REFERENCE_PAGE_SIZE = 6;
+
     /** @var list<string> */
     private const STATES = [
         self::STATE_HOME,
         self::STATE_CREATE_CATEGORY,
+        self::STATE_CREATE_REFERENCE_TYPE,
+        self::STATE_CREATE_REFERENCE_LIST,
         self::STATE_CREATE_TITLE,
         self::STATE_CREATE_DESCRIPTION,
         self::STATE_TICKET,
@@ -127,6 +153,10 @@ final readonly class TelegramSupportNavigationHandler
         private TelegramInteractionCallbackService $callbacks,
         private TelegramChannelMembershipEvaluator $membership,
         private TelegramSupportCustomerRateLimiter $rateLimiter,
+        private TelegramSupportOwnedOrderProjection $ownedOrders,
+        private TelegramSupportOwnedPaymentIntentProjection $ownedPaymentIntents,
+        private TelegramOwnedServiceProjection $ownedServices,
+        private TelegramSupportOwnedServiceReferenceResolver $ownedServiceReferences,
         private SupportTicketService $tickets,
         private SupportTicketSupportService $support,
         private TelegramNavigationHandler $navigation,
@@ -176,6 +206,8 @@ final readonly class TelegramSupportNavigationHandler
         match ($action->sessionState) {
             self::STATE_HOME => $this->handleHome($action),
             self::STATE_CREATE_CATEGORY => $this->handleCreateCategory($action),
+            self::STATE_CREATE_REFERENCE_TYPE => $this->handleCreateReferenceType($action),
+            self::STATE_CREATE_REFERENCE_LIST => $this->handleCreateReferenceList($action),
             self::STATE_CREATE_TITLE => $this->handleCreateTitle($action),
             self::STATE_CREATE_DESCRIPTION => $this->handleCreateDescription($action),
             self::STATE_TICKET => $this->handleTicket($action),
@@ -244,11 +276,67 @@ final readonly class TelegramSupportNavigationHandler
         if (! $available) {
             throw new AuthorizationException('Telegram Support category is stale or unavailable.');
         }
-        $session = $this->transition($action, self::STATE_CREATE_TITLE, ['category' => $category], 'create-title');
-        if ($session === null) {
+        $this->showReferenceTypes($action, $category);
+    }
+
+    private function handleCreateReferenceType(TelegramInteractionAction $action): void
+    {
+        $this->requireCallback($action);
+        if ($action->callbackAction !== self::ACTION_REFERENCE_TYPE) {
+            throw new RuntimeException('Telegram Support business-reference type callback is unsupported.');
+        }
+
+        $category = $this->stringPayload($action->sessionPayload, 'category');
+        $referenceType = $this->referenceTypePayload($action->callbackPayload);
+        if ($referenceType === self::REFERENCE_NONE) {
+            $this->beginCreateTitle($action, $category, $referenceType, null);
+
             return;
         }
-        $this->queue($action, $this->translation('telegram_support.title_prompt', $this->locale($action->userId)), 'title-prompt', $this->backKeyboard($action, $session->version));
+
+        $this->showReferenceList($action, $category, $referenceType, 1);
+    }
+
+    private function handleCreateReferenceList(TelegramInteractionAction $action): void
+    {
+        $this->requireCallback($action);
+        $category = $this->stringPayload($action->sessionPayload, 'category');
+        $referenceType = $this->referenceTypePayload($action->sessionPayload);
+
+        if ($action->callbackAction === self::ACTION_REFERENCE_PAGE) {
+            $callbackType = $this->referenceTypePayload($action->callbackPayload);
+            if (! hash_equals($referenceType, $callbackType)) {
+                throw new AuthorizationException('Telegram Support business-reference page is unavailable.');
+            }
+            $this->showReferenceList(
+                $action,
+                $category,
+                $referenceType,
+                $this->positivePayloadId($action->callbackPayload, 'page'),
+            );
+
+            return;
+        }
+
+        if ($action->callbackAction !== self::ACTION_REFERENCE_SELECT) {
+            throw new RuntimeException('Telegram Support business-reference selection callback is unsupported.');
+        }
+
+        $callbackType = $this->referenceTypePayload($action->callbackPayload);
+        if (! hash_equals($referenceType, $callbackType)) {
+            throw new AuthorizationException('Telegram Support business-reference selection is unavailable.');
+        }
+        $selectionToken = $this->selectionTokenPayload($action->callbackPayload);
+
+        try {
+            $this->resolveBusinessReference($action->userId, $referenceType, $selectionToken);
+        } catch (AuthorizationException) {
+            $this->showReferenceTypes($action, $category, 'telegram_support.business_reference.unavailable');
+
+            return;
+        }
+
+        $this->beginCreateTitle($action, $category, $referenceType, $selectionToken);
     }
 
     private function handleCreateTitle(TelegramInteractionAction $action): void
@@ -261,7 +349,11 @@ final readonly class TelegramSupportNavigationHandler
             throw new DomainException('Telegram Support title is invalid.');
         }
         $category = $this->stringPayload($action->sessionPayload, 'category');
-        $session = $this->transition($action, self::STATE_CREATE_DESCRIPTION, ['category' => $category, 'title' => $title], 'create-description');
+        $referenceType = $this->referenceTypePayload($action->sessionPayload);
+        $referenceToken = $referenceType === self::REFERENCE_NONE ? null : $this->selectionTokenPayload($action->sessionPayload);
+        $payload = $this->creationReferencePayload($category, $referenceType, $referenceToken);
+        $payload['title'] = $title;
+        $session = $this->transition($action, self::STATE_CREATE_DESCRIPTION, $payload, 'create-description');
         if ($session === null) {
             return;
         }
@@ -279,6 +371,17 @@ final readonly class TelegramSupportNavigationHandler
         }
         $category = $this->stringPayload($action->sessionPayload, 'category');
         $title = $this->stringPayload($action->sessionPayload, 'title');
+        $referenceType = $this->referenceTypePayload($action->sessionPayload);
+        $referenceToken = $referenceType === self::REFERENCE_NONE ? null : $this->selectionTokenPayload($action->sessionPayload);
+
+        try {
+            $referenceIds = $this->resolvedReferenceIds($action->userId, $referenceType, $referenceToken);
+        } catch (AuthorizationException) {
+            $this->showReferenceTypes($action, $category, 'telegram_support.business_reference.unavailable');
+
+            return;
+        }
+
         if (! $this->customerRateLimitAllows($action, TelegramSupportCustomerRateLimitScope::TicketCreation, 'creation-rate-limited')) {
             return;
         }
@@ -290,6 +393,9 @@ final readonly class TelegramSupportNavigationHandler
                 $title,
                 $body,
                 $this->idempotencyKey('create', $action->requestKey),
+                orderId: $referenceIds['order_id'],
+                paymentIntentId: $referenceIds['payment_intent_id'],
+                serviceSubscriptionId: $referenceIds['service_subscription_id'],
             ),
         );
         if ($committed === null) {
@@ -656,6 +762,161 @@ final readonly class TelegramSupportNavigationHandler
         $this->queue($action, $this->translation('ticket.category', $locale), 'categories', new TelegramInlineKeyboardSnapshot($rows));
     }
 
+    private function showReferenceTypes(
+        TelegramInteractionAction $action,
+        string $category,
+        ?string $noticeKey = null,
+    ): void {
+        $session = $this->transition(
+            $action,
+            self::STATE_CREATE_REFERENCE_TYPE,
+            ['category' => $category],
+            'reference-types',
+        );
+        if ($session === null) {
+            return;
+        }
+
+        $locale = $this->locale($action->userId);
+        $rows = [];
+        foreach ([
+            self::REFERENCE_NONE => 'no_reference',
+            self::REFERENCE_ORDER => 'order_reference',
+            self::REFERENCE_PAYMENT_INTENT => 'payment_reference',
+            self::REFERENCE_SERVICE => 'service_reference',
+        ] as $referenceType => $buttonKey) {
+            $callback = $this->callbacks->issue(
+                $action->sessionPublicId,
+                $session->version,
+                self::ACTION_REFERENCE_TYPE,
+                ['reference_type' => $referenceType],
+                'tg-support-reference-type:'.hash('sha256', $action->requestKey.':'.$referenceType),
+            );
+            $rows[] = [new TelegramInlineCallbackButton(
+                $this->translation('telegram_support.buttons.'.$buttonKey, $locale),
+                $callback->publicId,
+                $referenceType === self::REFERENCE_NONE ? TelegramInlineButtonStyle::Primary : null,
+            )];
+        }
+        $this->appendBack($action, $session->version, $rows, $locale);
+
+        $text = $this->translation('telegram_support.business_reference.prompt', $locale);
+        if ($noticeKey !== null) {
+            $text = $this->translation($noticeKey, $locale)."\n\n".$text;
+        }
+        $this->queue($action, $text, 'reference-types', new TelegramInlineKeyboardSnapshot($rows));
+    }
+
+    private function showReferenceList(
+        TelegramInteractionAction $action,
+        string $category,
+        string $referenceType,
+        int $page,
+    ): void {
+        if ($referenceType === self::REFERENCE_NONE) {
+            throw new RuntimeException('Telegram Support no-reference selection has no list.');
+        }
+
+        $locale = $this->locale($action->userId);
+        $projection = $this->businessReferencePage($action->userId, $referenceType, $page, $locale);
+        $session = $this->transition(
+            $action,
+            self::STATE_CREATE_REFERENCE_LIST,
+            [
+                'category' => $category,
+                'reference_type' => $referenceType,
+                'page' => $projection['page'],
+            ],
+            'reference-list-'.$referenceType.'-'.$projection['page'],
+        );
+        if ($session === null) {
+            return;
+        }
+
+        $rows = [];
+        foreach ($projection['items'] as $item) {
+            $callback = $this->callbacks->issue(
+                $action->sessionPublicId,
+                $session->version,
+                self::ACTION_REFERENCE_SELECT,
+                [
+                    'reference_type' => $referenceType,
+                    'selection_token' => $item['token'],
+                ],
+                'tg-support-reference-select:'.hash('sha256', $action->requestKey.':'.$referenceType.':'.$item['token']),
+            );
+            $rows[] = [new TelegramInlineCallbackButton($item['label'], $callback->publicId)];
+        }
+
+        $pageControls = [];
+        if ($projection['page'] > 1) {
+            $previous = $this->callbacks->issue(
+                $action->sessionPublicId,
+                $session->version,
+                self::ACTION_REFERENCE_PAGE,
+                ['reference_type' => $referenceType, 'page' => $projection['page'] - 1],
+                'tg-support-reference-page:'.hash('sha256', $action->requestKey.':'.$referenceType.':'.($projection['page'] - 1)),
+            );
+            $pageControls[] = new TelegramInlineCallbackButton(
+                $this->translation('telegram_support.buttons.previous_page', $locale),
+                $previous->publicId,
+            );
+        }
+        if ($projection['page'] < $projection['total_pages']) {
+            $next = $this->callbacks->issue(
+                $action->sessionPublicId,
+                $session->version,
+                self::ACTION_REFERENCE_PAGE,
+                ['reference_type' => $referenceType, 'page' => $projection['page'] + 1],
+                'tg-support-reference-page:'.hash('sha256', $action->requestKey.':'.$referenceType.':'.($projection['page'] + 1)),
+            );
+            $pageControls[] = new TelegramInlineCallbackButton(
+                $this->translation('telegram_support.buttons.next_page', $locale),
+                $next->publicId,
+            );
+        }
+        if ($pageControls !== []) {
+            $rows[] = $pageControls;
+        }
+        $this->appendBack($action, $session->version, $rows, $locale);
+
+        $text = $this->translation('telegram_support.business_reference.list_prompt', $locale, [
+            'type' => $this->referenceTypeLabel($referenceType, $locale),
+            'page' => $projection['page'],
+            'pages' => $projection['total_pages'],
+        ]);
+        if ($projection['total_items'] === 0) {
+            $text .= "\n\n".$this->translation('telegram_support.business_reference.empty', $locale, [
+                'type' => $this->referenceTypeLabel($referenceType, $locale),
+            ]);
+        }
+        $this->queue($action, $text, 'reference-list-'.$referenceType.'-'.$projection['page'], new TelegramInlineKeyboardSnapshot($rows));
+    }
+
+    private function beginCreateTitle(
+        TelegramInteractionAction $action,
+        string $category,
+        string $referenceType,
+        ?string $selectionToken,
+    ): void {
+        $session = $this->transition(
+            $action,
+            self::STATE_CREATE_TITLE,
+            $this->creationReferencePayload($category, $referenceType, $selectionToken),
+            'create-title',
+        );
+        if ($session === null) {
+            return;
+        }
+
+        $this->queue(
+            $action,
+            $this->translation('telegram_support.title_prompt', $this->locale($action->userId)),
+            'title-prompt',
+            $this->backKeyboard($action, $session->version),
+        );
+    }
+
     private function showTicket(TelegramInteractionAction $action, int $ticketId): void
     {
         $detail = $this->tickets->ticketForCustomer($ticketId, $action->userId);
@@ -927,6 +1188,16 @@ final readonly class TelegramSupportNavigationHandler
 
             return;
         }
+        if ($action->sessionState === self::STATE_CREATE_REFERENCE_TYPE) {
+            $this->showCategories($action);
+
+            return;
+        }
+        if ($action->sessionState === self::STATE_CREATE_REFERENCE_LIST) {
+            $this->showReferenceTypes($action, $this->stringPayload($action->sessionPayload, 'category'));
+
+            return;
+        }
         if (in_array($action->sessionState, [self::STATE_QUEUE_TICKET, self::STATE_QUEUE_REPLY, self::STATE_QUEUE_CANNED, self::STATE_QUEUE_NOTE, self::STATE_QUEUE_PRIORITY, self::STATE_QUEUE_STATE, self::STATE_QUEUE_CLOSE], true)) {
             $this->showQueue($action);
 
@@ -1191,6 +1462,200 @@ final readonly class TelegramSupportNavigationHandler
             && $session->publicId === $action->sessionPublicId
             && $session->userId === $action->userId
             && $session->version > $action->sessionVersion;
+    }
+
+    /**
+     * @return array{
+     *     items:list<array{token:string,label:string}>,
+     *     page:int,
+     *     total_pages:int,
+     *     total_items:int
+     * }
+     */
+    private function businessReferencePage(int $userId, string $referenceType, int $page, string $locale): array
+    {
+        if ($referenceType === self::REFERENCE_ORDER) {
+            $projection = $this->ownedOrders->pageForSelf($userId, $userId, $page, self::REFERENCE_PAGE_SIZE);
+            $items = [];
+            foreach ($projection->items as $item) {
+                $items[] = [
+                    'token' => $item->selectionToken,
+                    'label' => $this->boundedButtonText($this->translation(
+                        'telegram_support.business_reference.item',
+                        $locale,
+                        ['id' => $item->publicId, 'amount' => number_format($item->amountIrr, 0, '.', ','), 'currency' => $item->currency],
+                    )),
+                ];
+            }
+
+            return [
+                'items' => $items,
+                'page' => $projection->page,
+                'total_pages' => $projection->totalPages,
+                'total_items' => $projection->totalItems,
+            ];
+        }
+
+        if ($referenceType === self::REFERENCE_PAYMENT_INTENT) {
+            $projection = $this->ownedPaymentIntents->pageForSelf($userId, $userId, $page, self::REFERENCE_PAGE_SIZE);
+            $items = [];
+            foreach ($projection->items as $item) {
+                $items[] = [
+                    'token' => $item->selectionToken,
+                    'label' => $this->boundedButtonText($this->translation(
+                        'telegram_support.business_reference.item',
+                        $locale,
+                        ['id' => $item->publicId, 'amount' => number_format($item->amountIrr, 0, '.', ','), 'currency' => $item->currency],
+                    )),
+                ];
+            }
+
+            return [
+                'items' => $items,
+                'page' => $projection->page,
+                'total_pages' => $projection->totalPages,
+                'total_items' => $projection->totalItems,
+            ];
+        }
+
+        if ($referenceType === self::REFERENCE_SERVICE) {
+            $projection = $this->ownedServices->pageForSelf($userId, $userId, $page, self::REFERENCE_PAGE_SIZE);
+            $items = [];
+            foreach ($projection->items as $item) {
+                $items[] = [
+                    'token' => $item->selectionToken,
+                    'label' => $this->boundedButtonText($this->translation(
+                        'telegram_support.business_reference.service_item',
+                        $locale,
+                        [
+                            'id' => $item->publicId,
+                            'label' => $locale === 'en' && $item->planNameEn !== null ? $item->planNameEn : $item->planNameFa,
+                        ],
+                    )),
+                ];
+            }
+
+            return [
+                'items' => $items,
+                'page' => $projection->page,
+                'total_pages' => $projection->totalPages,
+                'total_items' => $projection->totalItems,
+            ];
+        }
+
+        throw new AuthorizationException('Telegram Support business-reference type is unavailable.');
+    }
+
+    private function resolveBusinessReference(
+        int $userId,
+        string $referenceType,
+        string $selectionToken,
+    ): TelegramSupportBusinessReferenceResolution {
+        return match ($referenceType) {
+            self::REFERENCE_ORDER => $this->ownedOrders->resolveForSelf($userId, $userId, $selectionToken),
+            self::REFERENCE_PAYMENT_INTENT => $this->ownedPaymentIntents->resolveForSelf($userId, $userId, $selectionToken),
+            self::REFERENCE_SERVICE => $this->ownedServiceReferences->resolveForSelf($userId, $userId, $selectionToken),
+            default => throw new AuthorizationException('Telegram Support business-reference type is unavailable.'),
+        };
+    }
+
+    /** @return array{order_id:?int,payment_intent_id:?int,service_subscription_id:?int} */
+    private function resolvedReferenceIds(int $userId, string $referenceType, ?string $selectionToken): array
+    {
+        $result = [
+            'order_id' => null,
+            'payment_intent_id' => null,
+            'service_subscription_id' => null,
+        ];
+        if ($referenceType === self::REFERENCE_NONE) {
+            if ($selectionToken !== null) {
+                throw new AuthorizationException('Telegram Support no-reference selection is invalid.');
+            }
+
+            return $result;
+        }
+        if ($selectionToken === null) {
+            throw new AuthorizationException('Telegram Support business-reference selection is unavailable.');
+        }
+
+        $resolution = $this->resolveBusinessReference($userId, $referenceType, $selectionToken);
+        $key = match ($referenceType) {
+            self::REFERENCE_ORDER => 'order_id',
+            self::REFERENCE_PAYMENT_INTENT => 'payment_intent_id',
+            self::REFERENCE_SERVICE => 'service_subscription_id',
+            default => throw new AuthorizationException('Telegram Support business-reference type is unavailable.'),
+        };
+        $result[$key] = $resolution->internalId;
+
+        return $result;
+    }
+
+    /** @return array<string,string> */
+    private function creationReferencePayload(string $category, string $referenceType, ?string $selectionToken): array
+    {
+        if (! in_array($referenceType, [
+            self::REFERENCE_NONE,
+            self::REFERENCE_ORDER,
+            self::REFERENCE_PAYMENT_INTENT,
+            self::REFERENCE_SERVICE,
+        ], true)) {
+            throw new AuthorizationException('Telegram Support business-reference type is unavailable.');
+        }
+
+        $payload = ['category' => $category, 'reference_type' => $referenceType];
+        if ($referenceType === self::REFERENCE_NONE) {
+            if ($selectionToken !== null) {
+                throw new AuthorizationException('Telegram Support no-reference selection is invalid.');
+            }
+
+            return $payload;
+        }
+        if ($selectionToken === null || preg_match('/\\A[0-9a-f]{40}\\z/', $selectionToken) !== 1) {
+            throw new AuthorizationException('Telegram Support business-reference selection is unavailable.');
+        }
+        $payload['selection_token'] = $selectionToken;
+
+        return $payload;
+    }
+
+    /** @param array<string,mixed> $payload */
+    private function referenceTypePayload(array $payload): string
+    {
+        $referenceType = $this->stringPayload($payload, 'reference_type');
+        if (! in_array($referenceType, [
+            self::REFERENCE_NONE,
+            self::REFERENCE_ORDER,
+            self::REFERENCE_PAYMENT_INTENT,
+            self::REFERENCE_SERVICE,
+        ], true)) {
+            throw new AuthorizationException('Telegram Support business-reference type is unavailable.');
+        }
+
+        return $referenceType;
+    }
+
+    /** @param array<string,mixed> $payload */
+    private function selectionTokenPayload(array $payload): string
+    {
+        $selectionToken = $this->stringPayload($payload, 'selection_token');
+        if (preg_match('/\\A[0-9a-f]{40}\\z/', $selectionToken) !== 1) {
+            throw new AuthorizationException('Telegram Support business-reference selection is unavailable.');
+        }
+
+        return $selectionToken;
+    }
+
+    private function referenceTypeLabel(string $referenceType, string $locale): string
+    {
+        if (! in_array($referenceType, [
+            self::REFERENCE_ORDER,
+            self::REFERENCE_PAYMENT_INTENT,
+            self::REFERENCE_SERVICE,
+        ], true)) {
+            throw new AuthorizationException('Telegram Support business-reference type is unavailable.');
+        }
+
+        return $this->translation('telegram_support.business_reference.types.'.$referenceType, $locale);
     }
 
     /** @param array<string,mixed> $payload */
