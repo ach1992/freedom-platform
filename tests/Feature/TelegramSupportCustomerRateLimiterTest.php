@@ -6,6 +6,7 @@ namespace Tests\Feature;
 
 use App\Modules\Telegram\Application\Contracts\TelegramSupportCustomerRateLimiter;
 use App\Modules\Telegram\Application\TelegramSupportCustomerRateLimitScope;
+use Illuminate\Redis\RedisManager;
 use RuntimeException;
 use Tests\TestCase;
 
@@ -51,7 +52,7 @@ final class TelegramSupportCustomerRateLimiterTest extends TestCase
         $prefix = config('support.rate_limits.prefix');
         self::assertIsString($prefix);
         $key = $prefix.hash('sha256', TelegramSupportCustomerRateLimitScope::CustomerContent->value."\0".$userId);
-        $this->app->make(\Illuminate\Redis\RedisManager::class)->connection()->command('set', [$key, '1']);
+        $this->app->make(RedisManager::class)->connection()->command('set', [$key, '1']);
 
         $this->expectException(RuntimeException::class);
         $this->app->make(TelegramSupportCustomerRateLimiter::class)->consume(
