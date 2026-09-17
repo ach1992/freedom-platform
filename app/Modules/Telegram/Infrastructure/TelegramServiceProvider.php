@@ -6,9 +6,11 @@ namespace App\Modules\Telegram\Infrastructure;
 
 use App\Modules\AccessControl\Application\AdministratorPermissionAuthorizer;
 use App\Modules\Localization\Application\LocalizationResolver;
+use App\Modules\Support\Application\SupportTicketAttachmentService;
 use App\Modules\Telegram\Application\Contracts\ProtectedTelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\ProtectedTelegramMessageSender;
 use App\Modules\Telegram\Application\Contracts\TelegramBotApi;
+use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCardToCardPayment;
 use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\TelegramInteractionHandler;
 use App\Modules\Telegram\Application\Contracts\TelegramMembershipLookup;
@@ -40,6 +42,7 @@ use App\Modules\Telegram\Application\TelegramMembershipJoinPresentationResolver;
 use App\Modules\Telegram\Application\TelegramNavigationCompositeHandler;
 use App\Modules\Telegram\Application\TelegramNavigationEntryGateway;
 use App\Modules\Telegram\Application\TelegramNavigationHandler;
+use App\Modules\Telegram\Application\TelegramPrivateMediaDeliveryResolver;
 use App\Modules\Telegram\Application\TelegramProtectedPresentationResolver;
 use App\Modules\Telegram\Application\TelegramProtectedReferenceDeliveryOutboxHandler;
 use App\Modules\Telegram\Application\TelegramReferralDeepLink;
@@ -240,7 +243,17 @@ final class TelegramServiceProvider extends ServiceProvider
             ),
         );
         $this->app->singleton(TelegramMembershipJoinPresentationResolver::class);
-        $this->app->singleton(TelegramProtectedPresentationResolver::class);
+        $this->app->singleton(
+            TelegramProtectedPresentationResolver::class,
+            fn (Application $application): TelegramProtectedPresentationResolver => new TelegramProtectedPresentationResolver(
+                $application->make(TelegramCustomerPurchaseCardToCardPayment::class),
+                $application->make(LocalizationResolver::class),
+                $application->make(TelegramMembershipJoinPresentationResolver::class),
+                $application->make(SupportTicketAttachmentService::class),
+                $application->make(TelegramSupportMembershipFreshnessGuard::class),
+                $application->make(TelegramPrivateMediaDeliveryResolver::class),
+            ),
+        );
         $this->app->singleton(
             TelegramMutationTransport::class,
             fn (Application $application): TelegramMutationTransport => new HttpTelegramMutationTransport(
