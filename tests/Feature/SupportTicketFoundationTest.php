@@ -11,6 +11,7 @@ use App\Modules\Support\Domain\SupportTicketState;
 use App\Shared\Application\Clock;
 use Database\Seeders\SupportTicketCategorySeeder;
 use DateTimeImmutable;
+use DateTimeZone;
 use DomainException;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\QueryException;
@@ -133,6 +134,24 @@ final class SupportTicketFoundationTest extends TestCase
         self::assertSame('2026-09-19 00:00:00.000000', $closed->reopenUntil);
         self::assertNotNull(DB::table('support_tickets')->where('id', $ticket->id)->value('resolved_at'));
 
+        $support = $this->user();
+        $operatorTicket = $service->create(new SupportTicketCreateRequest(
+            $user,
+            'other',
+            'Operator reopen default',
+            'Operator close must keep the 72-hour default.',
+            'create:operator-reopen-default',
+        ));
+        $service->transition($operatorTicket->id, SupportTicketState::Resolved, $support, 'support_resolved');
+        $operatorClosed = $service->transition(
+            $operatorTicket->id,
+            SupportTicketState::Closed,
+            $support,
+            'support_closed',
+            'Solved by support',
+        );
+        self::assertSame('2026-09-19 00:00:00.000000', $operatorClosed->reopenUntil);
+
         $clock->set(new DateTimeImmutable('2026-09-18T23:59:59+00:00'));
         $reopened = $service->reopenForCustomer($ticket->id, $user);
         self::assertSame(SupportTicketState::AwaitingSupport, $reopened->state);
@@ -143,6 +162,93 @@ final class SupportTicketFoundationTest extends TestCase
 
         $this->expectException(DomainException::class);
         $service->reopenForCustomer($ticket->id, $user);
+    }
+
+    public function test_configured_reopen_window_applies_to_customer_and_support_close_and_is_snapshotted(): void
+    {
+        $this->seed(SupportTicketCategorySeeder::class);
+        config(['support.reopen_window_hours' => '24']);
+        $closedAt = new DateTimeImmutable('now', new DateTimeZone('UTC'));
+        $expectedReopenUntil = $closedAt->modify('+24 hours')->format('Y-m-d H:i:s.u');
+        $clock = new MutableSupportClock($closedAt);
+        $service = new SupportTicketService($this->app->make(DatabaseManager::class), $clock);
+        $customer = $this->user();
+        $support = $this->user();
+
+        $customerTicket = $service->create(new SupportTicketCreateRequest(
+            $customer,
+            'other',
+            'Customer close window',
+            'Customer close must use configured window.',
+            'create:configured-reopen-customer',
+        ));
+        $service->transition($customerTicket->id, SupportTicketState::Resolved, $support, 'support_resolved');
+        $customerClosed = $service->closeForCustomer($customerTicket->id, $customer, 'Solved by customer');
+        self::assertSame($expectedReopenUntil, $customerClosed->reopenUntil);
+
+        $supportTicket = $service->create(new SupportTicketCreateRequest(
+            $customer,
+            'other',
+            'Support close window',
+            'Support close must use configured window.',
+            'create:configured-reopen-support',
+        ));
+        $service->transition($supportTicket->id, SupportTicketState::Resolved, $support, 'support_resolved');
+        $supportClosed = $service->transition(
+            $supportTicket->id,
+            SupportTicketState::Closed,
+            $support,
+            'support_closed',
+            'Solved by support',
+        );
+        self::assertSame($expectedReopenUntil, $supportClosed->reopenUntil);
+
+        config(['support.reopen_window_hours' => 1]);
+        self::assertSame(
+            $expectedReopenUntil,
+            DB::table('support_tickets')->where('id', $customerTicket->id)->value('reopen_until'),
+        );
+        self::assertSame(
+            $expectedReopenUntil,
+            DB::table('support_tickets')->where('id', $supportTicket->id)->value('reopen_until'),
+        );
+
+        $clock->set($closedAt->modify('+2 hours'));
+        self::assertSame(
+            SupportTicketState::AwaitingSupport,
+            $service->reopenForCustomer($customerTicket->id, $customer)->state,
+        );
+        self::assertSame(
+            SupportTicketState::AwaitingSupport,
+            $service->reopenForCustomer($supportTicket->id, $customer)->state,
+        );
+    }
+
+    public function test_invalid_reopen_window_configuration_fails_closed_before_customer_close_mutation(): void
+    {
+        $this->seed(SupportTicketCategorySeeder::class);
+        $clock = new MutableSupportClock(new DateTimeImmutable('2026-09-16T00:00:00+00:00'));
+        $service = new SupportTicketService($this->app->make(DatabaseManager::class), $clock);
+        $customer = $this->user();
+        $ticket = $service->create(new SupportTicketCreateRequest(
+            $customer,
+            'other',
+            'Invalid reopen config',
+            'Invalid configuration must not mutate the ticket.',
+            'create:invalid-reopen-config',
+        ));
+
+        foreach ([0, -1, 721, '0', '721', 'invalid', 1.5, true, null] as $invalid) {
+            config(['support.reopen_window_hours' => $invalid]);
+            try {
+                $service->closeForCustomer($ticket->id, $customer, 'Must not close');
+                self::fail('Invalid Support reopen configuration must fail closed.');
+            } catch (RuntimeException) {
+                self::assertSame(SupportTicketState::New->value, DB::table('support_tickets')->where('id', $ticket->id)->value('state'));
+                self::assertNull(DB::table('support_tickets')->where('id', $ticket->id)->value('reopen_until'));
+                self::assertSame(1, DB::table('support_ticket_state_histories')->where('ticket_id', $ticket->id)->count());
+            }
+        }
     }
 
     public function test_message_and_state_history_are_database_append_only(): void
