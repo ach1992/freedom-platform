@@ -421,8 +421,17 @@ final class TelegramSupportNavigationTest extends TestCase
         $this->accept($this->callbackPayload(8236, $supportTelegramId, 'support_canned_staff', 'en', $canned));
         $processor->process('123456789', 8236);
         self::assertSame('support_queue_canned', $this->supportSession($staff['account_id'])['state']);
-        self::assertStringContainsString('Acknowledge receipt', $this->latestConfidentialPresentation($supportTelegramId));
-        self::assertStringNotContainsString('تأیید دریافت', $this->latestConfidentialPresentation($supportTelegramId));
+        $operationPublicId = DB::table('telegram_delivery_operations')
+            ->where('recipient_chat_id', $supportTelegramId)
+            ->orderByDesc('id')
+            ->value('public_id');
+        self::assertIsString($operationPublicId);
+        $keyboardSnapshot = DB::table('telegram_delivery_interactive_presentations')
+            ->where('delivery_operation_public_id', $operationPublicId)
+            ->value('keyboard_snapshot');
+        self::assertIsString($keyboardSnapshot);
+        self::assertStringContainsString('Acknowledge receipt', $keyboardSnapshot);
+        self::assertStringNotContainsString('تأیید دریافت', $keyboardSnapshot);
 
         $defaultBody = trans('_mandatory.ticket.canned.acknowledge.body', [], 'fa');
         self::assertIsString($defaultBody);
