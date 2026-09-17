@@ -7,8 +7,6 @@ namespace App\Modules\Support\Application;
 use App\Modules\AccessControl\Application\AdministratorUserPermissionAuthorizer;
 use App\Modules\Support\Domain\SupportTicketPriority;
 use App\Modules\Support\Domain\SupportTicketState;
-use App\Shared\Application\Clock;
-use DateTimeZone;
 use DomainException;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
@@ -25,9 +23,25 @@ use stdClass;
  */
 final readonly class SupportTicketRoutingService
 {
+    /** @var list<string> */
+    private const SNAPSHOT_COLUMNS = [
+        'id',
+        'tracking_number',
+        'requester_user_id',
+        'category_id',
+        'state',
+        'priority',
+        'assigned_user_id',
+        'title',
+        'closed_at',
+        'reopen_until',
+        'created_at',
+        'updated_at',
+    ];
+
     public function __construct(
         private DatabaseManager $database,
-        private Clock $clock,
+        private SupportTicketService $tickets,
         private AdministratorUserPermissionAuthorizer $authorizer,
     ) {}
 
@@ -74,7 +88,7 @@ final readonly class SupportTicketRoutingService
             ->where($field->column(), $criterion)
             ->orderByDesc('id')
             ->limit($limit)
-            ->get();
+            ->get(self::SNAPSHOT_COLUMNS);
 
         $tickets = [];
         foreach ($rows as $row) {
@@ -98,11 +112,11 @@ final readonly class SupportTicketRoutingService
         $this->authorizer->authorizeUser($assigneeUserId, SupportTicketSupportService::PERMISSION);
 
         return $this->database->connection()->transaction(function (Connection $connection) use ($ticketId, $assigneeUserId): SupportTicketSnapshot {
-            /** @var object{id:int|string,assigned_user_id:int|string|null,state:string}|null $ticket */
+            /** @var object{assigned_user_id:int|string|null,state:string,priority:string}|null $ticket */
             $ticket = $connection->table('support_tickets')
                 ->where('id', $ticketId)
                 ->lockForUpdate()
-                ->first(['id', 'assigned_user_id', 'state']);
+                ->first(['assigned_user_id', 'state', 'priority']);
             if ($ticket === null) {
                 throw new RuntimeException('Support ticket does not exist.');
             }
@@ -110,19 +124,20 @@ final readonly class SupportTicketRoutingService
                 throw new DomainException('Closed support ticket cannot be assigned or transferred.');
             }
 
-            if ($ticket->assigned_user_id === null || (int) $ticket->assigned_user_id !== $assigneeUserId) {
-                $connection->table('support_tickets')->where('id', $ticketId)->update([
-                    'assigned_user_id' => $assigneeUserId,
-                    'updated_at' => $this->clock->now()->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s.u'),
-                ]);
+            if ($ticket->assigned_user_id !== null && (int) $ticket->assigned_user_id === $assigneeUserId) {
+                $row = $connection->table('support_tickets')->where('id', $ticketId)->first(self::SNAPSHOT_COLUMNS);
+                if (! $row instanceof stdClass) {
+                    throw new RuntimeException('Support ticket disappeared during assignment.');
+                }
+
+                return $this->snapshotFromRow($row);
             }
 
-            $row = $connection->table('support_tickets')->where('id', $ticketId)->first();
-            if (! $row instanceof stdClass) {
-                throw new RuntimeException('Support ticket disappeared during assignment.');
-            }
-
-            return $this->snapshotFromRow($row);
+            return $this->tickets->triage(
+                $ticketId,
+                $assigneeUserId,
+                SupportTicketPriority::from((string) $ticket->priority),
+            );
         });
     }
 
