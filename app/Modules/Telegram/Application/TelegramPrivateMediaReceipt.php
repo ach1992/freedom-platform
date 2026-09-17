@@ -20,7 +20,7 @@ final readonly class TelegramPrivateMediaReceipt
         if (! Str::isUlid($publicId)
             || ! hash_equals('telegram-private-media:'.strtoupper($publicId), $privateReference)
             || preg_match('/\A[0-9a-f]{64}\z/', $contentSha256) !== 1
-            || ! in_array($detectedMime, ['image/jpeg', 'image/png', 'image/webp'], true)
+            || ! TelegramPrivateMediaContentValidator::isApprovedMime($detectedMime)
             || $byteSize < 1) {
             throw new InvalidArgumentException('Telegram private-media receipt is invalid.');
         }

@@ -15,7 +15,9 @@ use Throwable;
 
 final readonly class HttpProtectedTelegramMessageSender implements ProtectedTelegramMessageSender
 {
-    /** @requirement SVC-002 SVC-014 SEC-002 SEC-008 INT-001 INT-002 OPS-003 QUA-001 QUA-004 */
+    private const MAX_DOCUMENT_BYTES = 20_000_000;
+
+    /** @requirement SVC-002 SVC-014 SUP-001 SUP-002 SEC-002 SEC-008 INT-001 INT-002 OPS-003 QUA-001 QUA-004 */
     public function __construct(
         private Factory $http,
         private TelegramRuntimeConfiguration $configuration,
@@ -87,7 +89,7 @@ final readonly class HttpProtectedTelegramMessageSender implements ProtectedTele
     private function sendDocument(int $telegramUserId, ProtectedTelegramPresentation $presentation): Response
     {
         $document = $presentation->documentContents();
-        if ($document === '' || strlen($document) > 1_048_576) {
+        if ($document === '' || strlen($document) > self::MAX_DOCUMENT_BYTES) {
             throw new InvalidArgumentException('Protected Telegram document exceeds the local safety bound.');
         }
 

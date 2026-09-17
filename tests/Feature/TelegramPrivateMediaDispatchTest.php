@@ -566,6 +566,41 @@ SQL);
         self::assertSame('associated', DB::table('telegram_private_media')->where('update_id', 89005)->value('state'));
     }
 
+    public function test_c2c_rejects_newly_approved_non_image_document_without_submission_effect(): void
+    {
+        $telegramUserId = 9828;
+        [, $accountId, $sessionPublicId] = $this->startActor($telegramUserId);
+        $paymentIntentPublicId = strtoupper((string) Str::ulid());
+        $reservationPublicId = strtoupper((string) Str::ulid());
+        $this->moveToC2cInstructions($accountId, $sessionPublicId, $paymentIntentPublicId, $reservationPublicId);
+
+        $content = "Support-only attachment text\n";
+        $fetcher = new TelegramPrivateMediaDispatchFetcher($content);
+        $submission = new TelegramPrivateMediaDispatchSubmission($paymentIntentPublicId, $reservationPublicId);
+        $this->bindMediaDependencies($fetcher, $submission);
+
+        $this->accept($this->documentPayload(
+            89008,
+            $telegramUserId,
+            'c2c-non-image-document-file-id',
+            'c2c-non-image-document-unique-id',
+            strlen($content),
+        ));
+        $this->app->make(TelegramUpdateProcessor::class)->process('123456789', 89008);
+
+        self::assertSame(1, $fetcher->calls);
+        self::assertSame([], $submission->calls);
+        self::assertSame('discarded', DB::table('telegram_private_media')->where('update_id', 89008)->value('state'));
+        self::assertSame('discarded_unassociated', DB::table('telegram_private_media')->where('update_id', 89008)->value('rejection_code'));
+        self::assertSame(
+            'purchase_card_to_card_instructions',
+            DB::table('telegram_interaction_sessions')
+                ->where('telegram_account_id', $accountId)
+                ->where('status', 'active')
+                ->value('state'),
+        );
+    }
+
     public function test_live_photo_compatibility_photo_is_rejected_before_private_media_effect(): void
     {
         $telegramUserId = 9826;

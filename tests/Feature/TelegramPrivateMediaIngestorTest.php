@@ -315,7 +315,8 @@ final class TelegramPrivateMediaIngestorTest extends TestCase
     public function test_unsafe_or_conflicting_media_fails_closed_without_accepted_private_file(): void
     {
         [$userId, $accountId] = $this->telegramIdentity(9812);
-        $fetcher = new TelegramPrivateMediaTestFetcher('not-an-image');
+        $unsafe = "<?php echo 'unsafe';";
+        $fetcher = new TelegramPrivateMediaTestFetcher($unsafe);
         $this->app->instance(TelegramPrivateMediaFetcher::class, $fetcher);
         $this->app->forgetInstance(TelegramPrivateMediaIngestor::class);
         $service = $this->app->make(TelegramPrivateMediaIngestor::class);
@@ -323,14 +324,14 @@ final class TelegramPrivateMediaIngestorTest extends TestCase
             'document',
             RestrictedValue::fromString('provider-file-secret-B'),
             RestrictedValue::fromString('provider-unique-secret-B'),
-            strlen('not-an-image'),
+            strlen($unsafe),
         );
 
         try {
             $service->ingest('123456789', 88002, $accountId, $userId, $input);
-            self::fail('Non-image private media must be rejected.');
+            self::fail('Executable/script-like private media must be rejected.');
         } catch (TelegramPrivateMediaRejected $exception) {
-            self::assertSame('unsupported_image_type', $exception->reasonCode);
+            self::assertSame('unsafe_media_type', $exception->reasonCode);
         }
         self::assertSame('rejected', DB::table('telegram_private_media')->where('update_id', 88002)->value('state'));
         self::assertSame([], Storage::disk('telegram_private_media')->allFiles());

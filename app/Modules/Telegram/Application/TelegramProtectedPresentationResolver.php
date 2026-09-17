@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Telegram\Application;
 
 use App\Modules\Localization\Application\LocalizationResolver;
+use App\Modules\Support\Application\SupportTicketAttachmentService;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCardToCardPayment;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
@@ -16,6 +17,9 @@ final readonly class TelegramProtectedPresentationResolver
         private TelegramCustomerPurchaseCardToCardPayment $cardToCardPayments,
         private LocalizationResolver $localization,
         private ?TelegramMembershipJoinPresentationResolver $membershipJoinPresentations = null,
+        private ?SupportTicketAttachmentService $supportAttachments = null,
+        private ?TelegramSupportMembershipFreshnessGuard $supportMembership = null,
+        private ?TelegramPrivateMediaDeliveryResolver $privateMedia = null,
     ) {}
 
     public function resolveForSelf(
@@ -31,6 +35,9 @@ final readonly class TelegramProtectedPresentationResolver
             }
 
             return $this->membershipJoinPresentations->resolveForSelf($userId, $reference);
+        }
+        if ($reference->isSupportAttachment()) {
+            return $this->supportAttachmentForSelf($userId, $reference);
         }
         if (! $reference->isCardToCardDestination()) {
             throw new RuntimeException('Protected Telegram presentation reference is unavailable.');
@@ -68,6 +75,56 @@ final readonly class TelegramProtectedPresentationResolver
         return ProtectedTelegramPresentation::plainTextWithCopyButton($text, $copyLabel, $cardNumber);
     }
 
+    private function supportAttachmentForSelf(
+        int $userId,
+        TelegramProtectedPresentationReference $reference,
+    ): ProtectedTelegramPresentation {
+        if ($this->supportAttachments === null
+            || $this->supportMembership === null
+            || $this->privateMedia === null) {
+            throw new RuntimeException('Protected Telegram Support attachment dependencies are unavailable.');
+        }
+
+        try {
+            $this->supportMembership->assertSupportView($userId);
+            $grant = $reference->supportAttachmentAudience() === 'support'
+                ? $this->supportAttachments->deliveryForSupport($userId, $reference->publicId)
+                : $this->supportAttachments->deliveryForCustomer($reference->publicId, $userId);
+        } catch (AuthorizationException $exception) {
+            throw new DomainException('Protected Telegram Support attachment is no longer authorized.', previous: $exception);
+        }
+
+        $payload = $this->privateMedia->resolveSupportAttachment(
+            $grant->privateMediaReference,
+            $grant->attachment->publicId,
+        );
+        $contents = $payload->bytes();
+        $contentSha256 = $grant->contentSha256->reveal();
+        if ($payload->detectedMime !== $grant->attachment->detectedMime
+            || $payload->byteSize !== $grant->attachment->byteSize
+            || preg_match('/\A[0-9a-f]{64}\z/', $contentSha256) !== 1
+            || ! hash_equals($contentSha256, hash('sha256', $contents))) {
+            throw new RuntimeException('Protected Telegram Support attachment metadata failed integrity verification.');
+        }
+
+        $caption = $this->translation(
+            'telegram_support.attachment_delivery_caption',
+            $reference->locale,
+            [
+                'attachment' => $grant->attachment->publicId,
+                'kind' => $grant->attachment->kind,
+                'mime' => $grant->attachment->detectedMime,
+                'size' => $grant->attachment->byteSize,
+            ],
+        );
+
+        return ProtectedTelegramPresentation::binaryDocument(
+            $contents,
+            'support-attachment-'.$grant->attachment->publicId.'.'.$this->extensionForMime($grant->attachment->detectedMime),
+            $caption,
+        );
+    }
+
     /** @param array<string,int|string> $replace */
     private function translation(string $key, string $locale, array $replace = []): string
     {
@@ -77,6 +134,19 @@ final readonly class TelegramProtectedPresentationResolver
         }
 
         return $text;
+    }
+
+    private function extensionForMime(string $mime): string
+    {
+        return match ($mime) {
+            'image/jpeg' => 'jpg',
+            'image/png' => 'png',
+            'image/webp' => 'webp',
+            'video/mp4' => 'mp4',
+            'application/pdf' => 'pdf',
+            'text/plain' => 'txt',
+            default => throw new RuntimeException('Protected Telegram Support attachment MIME type is invalid.'),
+        };
     }
 
     private function formatCardNumber(string $cardNumber): string

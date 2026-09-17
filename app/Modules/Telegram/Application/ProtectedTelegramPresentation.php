@@ -11,10 +11,12 @@ use Stringable;
 /**
  * Restricted payload held only until the one provider-boundary attempt.
  * Its string/debug/serialization representations cannot expose link, QR, copy,
- * or URL material.
+ * URL, or private document material.
  */
 final readonly class ProtectedTelegramPresentation implements Stringable
 {
+    private const MAX_DOCUMENT_BYTES = 20_000_000;
+
     /**
      * @param  list<ProtectedTelegramHttpsUrlButton>  $httpsUrlButtons
      */
@@ -71,11 +73,26 @@ final readonly class ProtectedTelegramPresentation implements Stringable
 
     public static function svgDocument(string $contents, string $caption): self
     {
-        if ($contents === '' || strlen($contents) > 1_048_576 || mb_strlen($caption) > 1024) {
+        if ($contents === '' || strlen($contents) > 1_048_576) {
+            throw new InvalidArgumentException('Protected Telegram SVG document presentation is invalid.');
+        }
+
+        return self::binaryDocument($contents, 'service-details.svg', $caption);
+    }
+
+    public static function binaryDocument(string $contents, string $filename, string $caption): self
+    {
+        if ($contents === ''
+            || strlen($contents) > self::MAX_DOCUMENT_BYTES
+            || preg_match('/\A[A-Za-z0-9][A-Za-z0-9._-]{0,126}\z/', $filename) !== 1
+            || str_contains($filename, '..')
+            || ! mb_check_encoding($caption, 'UTF-8')
+            || str_contains($caption, "\0")
+            || mb_strlen($caption) > 1024) {
             throw new InvalidArgumentException('Protected Telegram document presentation is invalid.');
         }
 
-        return new self($caption, $contents, 'service-details.svg', $caption);
+        return new self($caption, $contents, $filename, $caption);
     }
 
     public function isText(): bool

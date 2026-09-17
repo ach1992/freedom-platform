@@ -5,7 +5,10 @@ declare(strict_types=1);
 namespace App\Modules\Telegram\Application;
 
 use App\Modules\Customers\Application\CustomerAccountSummaryService;
+use App\Modules\Support\Application\SupportTicketAttachmentReceipt;
+use App\Modules\Support\Application\SupportTicketAttachmentService;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCardToCardReceiptSubmission;
+use App\Shared\Application\RestrictedValue;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\DatabaseManager;
@@ -20,6 +23,16 @@ final readonly class TelegramPrivateMediaInteractionGateway
 
     private const C2C_SUBMITTED_STATE = 'purchase_card_to_card_submitted';
 
+    private const SUPPORT_REPLY_STATE = 'support_reply';
+
+    private const SUPPORT_QUEUE_REPLY_STATE = 'support_queue_reply';
+
+    private const SUPPORT_MUTATING_STATE = 'support_mutating';
+
+    private const SUPPORT_TICKET_STATE = 'support_ticket';
+
+    private const SUPPORT_QUEUE_TICKET_STATE = 'support_queue_ticket';
+
     public function __construct(
         private DatabaseManager $database,
         private TelegramInteractionSessionService $sessions,
@@ -27,16 +40,33 @@ final readonly class TelegramPrivateMediaInteractionGateway
         private TelegramCustomerPurchaseCardToCardReceiptSubmission $cardToCardSubmissions,
         private CustomerAccountSummaryService $customers,
         private TelegramCardToCardReceiptStatusDelivery $statusDelivery,
+        private SupportTicketAttachmentService $supportAttachments,
+        private TelegramSupportMembershipFreshnessGuard $supportMembership,
+        private TelegramSupportAttachmentStatusDelivery $supportAttachmentStatus,
     ) {}
 
-    /** @requirement BUY-003 PAY-002 PAY-003 C2C-002 C2C-004 DAT-002 DAT-003 DAT-004 SEC-002 SEC-003 SEC-009 QUA-001 QUA-004 */
+    /** @requirement BUY-003 PAY-002 PAY-003 C2C-002 C2C-004 SUP-001 SUP-002 DAT-002 DAT-003 DAT-004 SEC-002 SEC-003 SEC-009 QUA-001 QUA-004 */
     public function handle(TelegramPrivateMediaInteraction $interaction): bool
     {
-        if ($interaction->flow !== TelegramNavigationEntryGateway::FLOW
-            || $interaction->sessionState !== self::C2C_INSTRUCTIONS_STATE) {
+        if ($interaction->flow !== TelegramNavigationEntryGateway::FLOW) {
             return false;
         }
 
+        if ($interaction->sessionState === self::C2C_INSTRUCTIONS_STATE) {
+            return $this->handleCardToCard($interaction);
+        }
+        if ($interaction->sessionState === self::SUPPORT_REPLY_STATE) {
+            return $this->handleSupportAttachment($interaction, false);
+        }
+        if ($interaction->sessionState === self::SUPPORT_QUEUE_REPLY_STATE) {
+            return $this->handleSupportAttachment($interaction, true);
+        }
+
+        return false;
+    }
+
+    private function handleCardToCard(TelegramPrivateMediaInteraction $interaction): bool
+    {
         $state = $this->c2cState($interaction->sessionPayload);
         $locale = $this->localeForActor($interaction->userId);
 
@@ -51,6 +81,13 @@ final readonly class TelegramPrivateMediaInteractionGateway
         } catch (TelegramPrivateMediaRejected $exception) {
             $status = $exception->reasonCode === 'discarded_unassociated' ? 'unavailable' : 'invalid';
             $this->statusDelivery->queue($interaction->telegramUserId, $interaction->requestKey, $locale, $status);
+
+            return true;
+        }
+
+        if (! TelegramPrivateMediaContentValidator::isImageMime($media->detectedMime)) {
+            $this->media->discardIfUnassociated($media, $interaction->userId);
+            $this->statusDelivery->queue($interaction->telegramUserId, $interaction->requestKey, $locale, 'invalid');
 
             return true;
         }
@@ -125,6 +162,150 @@ final readonly class TelegramPrivateMediaInteractionGateway
         return true;
     }
 
+    private function handleSupportAttachment(TelegramPrivateMediaInteraction $interaction, bool $staff): bool
+    {
+        $ticketId = $this->positivePayloadId($interaction->sessionPayload, 'ticket_id');
+        $locale = $this->localeForActor($interaction->userId);
+
+        try {
+            $this->supportMembership->assertSupportView($interaction->userId);
+        } catch (AuthorizationException) {
+            $this->supportAttachmentStatus->queue(
+                $interaction->telegramUserId,
+                $interaction->requestKey,
+                $locale,
+                'unavailable',
+            );
+
+            return true;
+        }
+
+        try {
+            $media = $this->media->ingest(
+                $interaction->botId,
+                $interaction->updateId,
+                $interaction->telegramAccountId,
+                $interaction->userId,
+                $interaction->media,
+            );
+        } catch (TelegramPrivateMediaRejected $exception) {
+            $status = $exception->reasonCode === 'discarded_unassociated' ? 'unavailable' : 'invalid';
+            $this->supportAttachmentStatus->queue(
+                $interaction->telegramUserId,
+                $interaction->requestKey,
+                $locale,
+                $status,
+            );
+
+            return true;
+        }
+
+        try {
+            $this->supportMembership->assertSupportView($interaction->userId);
+        } catch (AuthorizationException) {
+            $this->media->discardIfUnassociated($media, $interaction->userId);
+            $this->supportAttachmentStatus->queue(
+                $interaction->telegramUserId,
+                $interaction->requestKey,
+                $locale,
+                'unavailable',
+            );
+
+            return true;
+        }
+
+        $operation = $staff ? 'support-attachment' : 'customer-attachment';
+        $targetState = $staff ? self::SUPPORT_QUEUE_TICKET_STATE : self::SUPPORT_TICKET_STATE;
+        $operationKey = hash('sha256', $interaction->requestKey);
+        try {
+            $attachment = $this->database->connection()->transaction(function () use (
+                $interaction,
+                $staff,
+                $ticketId,
+                $media,
+                $operation,
+                $targetState,
+                $operationKey,
+                $locale,
+            ): SupportTicketAttachmentReceipt {
+                $claim = $this->sessions->transition(
+                    $interaction->sessionPublicId,
+                    $interaction->sessionVersion,
+                    self::SUPPORT_MUTATING_STATE,
+                    ['operation' => $operation],
+                    'tg-support-mutation-claim:'.hash('sha256', $interaction->requestKey.':'.$operation),
+                );
+                $this->assertActorBinding($interaction, $claim->userId);
+
+                $kind = TelegramPrivateMediaContentValidator::kindForMime($media->detectedMime);
+                $privateReference = RestrictedValue::fromString($media->privateReference);
+                $idempotencyKey = 'telegram-support-attachment:'.$operationKey;
+                $receipt = $staff
+                    ? $this->supportAttachments->addForSupport(
+                        $interaction->userId,
+                        $ticketId,
+                        $kind,
+                        $media->detectedMime,
+                        $media->byteSize,
+                        $media->contentSha256,
+                        $privateReference,
+                        $idempotencyKey,
+                    )
+                    : $this->supportAttachments->addForCustomer(
+                        $ticketId,
+                        $interaction->userId,
+                        $kind,
+                        $media->detectedMime,
+                        $media->byteSize,
+                        $media->contentSha256,
+                        $privateReference,
+                        $idempotencyKey,
+                    );
+
+                $this->media->associate(
+                    $media,
+                    $interaction->userId,
+                    'support_ticket_attachment',
+                    $receipt->attachment->publicId,
+                );
+
+                $completed = $this->sessions->transition(
+                    $interaction->sessionPublicId,
+                    $claim->version,
+                    $targetState,
+                    ['ticket_id' => $ticketId],
+                    'tg-support-mutation-complete:'.hash('sha256', $interaction->requestKey.':'.$operation),
+                );
+                $this->assertActorBinding($interaction, $completed->userId);
+                $this->supportAttachmentStatus->queue(
+                    $interaction->telegramUserId,
+                    $interaction->requestKey,
+                    $locale,
+                    'received',
+                    $receipt->attachment->publicId,
+                );
+
+                return $receipt;
+            }, 3);
+        } catch (AuthorizationException|DomainException) {
+            $this->media->discardIfUnassociated($media, $interaction->userId);
+            $this->supportAttachmentStatus->queue(
+                $interaction->telegramUserId,
+                $interaction->requestKey,
+                $locale,
+                'unavailable',
+            );
+
+            return true;
+        }
+
+        if (! Str::isUlid($attachment->attachment->publicId)) {
+            throw new RuntimeException('Telegram Support attachment identity is invalid.');
+        }
+
+        return true;
+    }
+
     /**
      * @param  array<string,mixed>  $payload
      * @return array{payment_intent_public_id:string,c2c_reservation_public_id:string}
@@ -149,6 +330,19 @@ final readonly class TelegramPrivateMediaInteractionGateway
             'payment_intent_public_id' => strtoupper($paymentIntentPublicId),
             'c2c_reservation_public_id' => strtoupper($reservationPublicId),
         ];
+    }
+
+    /** @param array<string,mixed> $payload */
+    private function positivePayloadId(array $payload, string $key): int
+    {
+        $value = $payload[$key] ?? null;
+        if ((! is_int($value) && ! is_string($value))
+            || filter_var($value, FILTER_VALIDATE_INT) === false
+            || (int) $value < 1) {
+            throw new RuntimeException('Telegram Support attachment payload identity is invalid.');
+        }
+
+        return (int) $value;
     }
 
     private function assertActorBinding(TelegramPrivateMediaInteraction $interaction, int $sessionUserId): void

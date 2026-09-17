@@ -112,10 +112,16 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
         $serviceNotificationCursorMigration = require database_path('migrations/2026_08_23_000210_enable_service_notification_scan_cursor.php');
         /** @var Migration $supportTicketMigration */
         $supportTicketMigration = require database_path('migrations/2026_09_16_000100_create_support_ticket_foundation.php');
+        /** @var Migration $supportAttachmentMigration */
+        $supportAttachmentMigration = require database_path('migrations/2026_09_16_000200_create_support_ticket_attachment_authority.php');
+        /** @var Migration $privateMediaGeneralizationMigration */
+        $privateMediaGeneralizationMigration = require database_path('migrations/2026_09_16_000300_generalize_telegram_private_media_authority.php');
 
         try {
             // Remove newer descendant authorities before replaying the historical provisioning bootstrap chain.
             // Support is a cross-domain descendant because its ticket FK can reference service_subscriptions.
+            $privateMediaGeneralizationMigration->down();
+            $supportAttachmentMigration->down();
             $supportTicketMigration->down();
             $serviceNotificationCursorMigration->down();
             $serviceNotificationMigration->down();
@@ -338,6 +344,8 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
             $serviceNotificationMigration->up();
             $serviceNotificationCursorMigration->up();
             $supportTicketMigration->up();
+            $supportAttachmentMigration->up();
+            $privateMediaGeneralizationMigration->up();
         }
     }
 

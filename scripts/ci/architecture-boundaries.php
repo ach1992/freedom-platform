@@ -52,6 +52,9 @@ return [
         'app/Modules/Telegram/Application/TelegramCardToCardReceiptStatusPresentation.php',
         'app/Modules/Telegram/Application/TelegramGiftCardNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramNavigationHandler.php',
+        'app/Modules/Telegram/Application/TelegramSupportAttachmentNavigationHandler.php',
+        'app/Modules/Telegram/Application/TelegramSupportAttachmentStatusDelivery.php',
+        'app/Modules/Telegram/Application/TelegramSupportAttachmentStatusPresentation.php',
         'app/Modules/Telegram/Application/TelegramSupportNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramTrialNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramUsdtNavigationHandler.php',
@@ -63,6 +66,7 @@ return [
         'app/Modules/Telegram/Application/TelegramProtectedReferenceDeliveryOutboxHandler.php',
         'app/Modules/Telegram/Application/TelegramNavigationEntryGateway.php',
         'app/Modules/Telegram/Application/TelegramNavigationHandler.php',
+        'app/Modules/Telegram/Application/TelegramSupportAttachmentNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramUsdtNavigationHandler.php',
     ],
 
@@ -631,6 +635,7 @@ return [
         'service_username_registry' => 'Catalog',
         'sessions' => 'Framework',
         'sms_delivery_attempts' => 'Identity',
+        'support_ticket_attachments' => 'Support',
         'support_ticket_categories' => 'Support',
         'support_ticket_messages' => 'Support',
         'support_ticket_state_histories' => 'Support',
@@ -684,6 +689,7 @@ return [
     'application_private_tables' => [
         'localization_override_versions',
         'localization_overrides',
+        'support_ticket_attachments',
         'support_ticket_categories',
         'support_ticket_messages',
         'support_ticket_state_histories',
