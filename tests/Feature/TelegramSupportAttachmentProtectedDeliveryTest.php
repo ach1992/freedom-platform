@@ -274,6 +274,16 @@ final class TelegramSupportAttachmentProtectedDeliveryTest extends TestCase
             'created_at' => $now,
             'updated_at' => $now,
         ]);
+        DB::table('customer_profiles')->insert([
+            'user_id' => $userId,
+            'current_tier_id' => null,
+            'tier_locked' => false,
+            'tier_lock_reason_code' => null,
+            'phone_verification_status' => 'unverified',
+            'identity_verification_status' => 'unverified',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
         $accountId = (int) DB::table('telegram_accounts')->insertGetId([
             'user_id' => $userId,
             'bot_id' => 123456789,
