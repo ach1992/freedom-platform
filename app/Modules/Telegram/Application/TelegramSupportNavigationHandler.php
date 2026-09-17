@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Telegram\Application;
 
 use App\Modules\Localization\Application\LocalizationResolver;
+use App\Modules\Localization\Application\LocalizationTemplateCatalog;
 use App\Modules\Support\Application\SupportTicketCreateRequest;
 use App\Modules\Support\Application\SupportTicketDetailSnapshot;
 use App\Modules\Support\Application\SupportTicketService;
@@ -46,6 +47,8 @@ final readonly class TelegramSupportNavigationHandler
 
     private const STATE_QUEUE_REPLY = 'support_queue_reply';
 
+    private const STATE_QUEUE_CANNED = 'support_queue_canned';
+
     private const STATE_QUEUE_NOTE = 'support_queue_note';
 
     private const STATE_QUEUE_PRIORITY = 'support_queue_priority';
@@ -78,6 +81,10 @@ final readonly class TelegramSupportNavigationHandler
 
     private const ACTION_QUEUE_REPLY = 'navigation.support.queue.reply';
 
+    private const ACTION_QUEUE_CANNED = 'navigation.support.queue.canned';
+
+    private const ACTION_QUEUE_CANNED_SEND = 'navigation.support.queue.canned.send';
+
     private const ACTION_QUEUE_NOTE = 'navigation.support.queue.note';
 
     private const ACTION_QUEUE_PRIORITY = 'navigation.support.queue.priority';
@@ -102,6 +109,7 @@ final readonly class TelegramSupportNavigationHandler
         self::STATE_QUEUE,
         self::STATE_QUEUE_TICKET,
         self::STATE_QUEUE_REPLY,
+        self::STATE_QUEUE_CANNED,
         self::STATE_QUEUE_NOTE,
         self::STATE_QUEUE_PRIORITY,
         self::STATE_QUEUE_STATE,
@@ -111,6 +119,7 @@ final readonly class TelegramSupportNavigationHandler
 
     public function __construct(
         private LocalizationResolver $localization,
+        private LocalizationTemplateCatalog $localizationTemplates,
         private ConfidentialTelegramPresentationFactory $presentations,
         private TelegramConfidentialDeliveryQueue $delivery,
         private TelegramInteractionSessionService $sessions,
@@ -173,6 +182,7 @@ final readonly class TelegramSupportNavigationHandler
             self::STATE_QUEUE => $this->handleQueue($action),
             self::STATE_QUEUE_TICKET => $this->handleQueueTicket($action),
             self::STATE_QUEUE_REPLY => $this->handleQueueReply($action),
+            self::STATE_QUEUE_CANNED => $this->handleQueueCanned($action),
             self::STATE_QUEUE_NOTE => $this->handleQueueNote($action),
             self::STATE_QUEUE_PRIORITY => $this->handleQueuePriority($action),
             self::STATE_QUEUE_STATE => $this->handleQueueState($action),
@@ -410,6 +420,11 @@ final readonly class TelegramSupportNavigationHandler
 
             return;
         }
+        if ($action->callbackAction === self::ACTION_QUEUE_CANNED && $action->callbackPayload === []) {
+            $this->showCannedChoices($action, $ticketId);
+
+            return;
+        }
         if ($action->callbackAction === self::ACTION_QUEUE_NOTE && $action->callbackPayload === []) {
             $this->beginQueueText($action, $ticketId, self::STATE_QUEUE_NOTE, 'telegram_support.internal_note_prompt', 'queue-note');
 
@@ -427,6 +442,42 @@ final readonly class TelegramSupportNavigationHandler
         }
 
         throw new RuntimeException('Telegram Support queue ticket callback is unsupported.');
+    }
+
+    private function handleQueueCanned(TelegramInteractionAction $action): void
+    {
+        $ticketId = $this->positivePayloadId($action->sessionPayload, 'ticket_id');
+        $this->requireCallback($action);
+        if ($action->callbackAction === self::ACTION_BACK && $action->callbackPayload === []) {
+            $this->showQueueTicket($action, $ticketId);
+
+            return;
+        }
+        if ($action->callbackAction !== self::ACTION_QUEUE_CANNED_SEND) {
+            throw new RuntimeException('Telegram Support canned response callback is unsupported.');
+        }
+        $template = $this->stringPayload($action->callbackPayload, 'template');
+        $bodyHash = $this->stringPayload($action->callbackPayload, 'body_hash');
+        if (preg_match('/\A[a-z][a-z0-9_-]{0,63}\z/', $template) !== 1
+            || preg_match('/\A[0-9a-f]{64}\z/', $bodyHash) !== 1
+            || ! in_array($template, $this->cannedResponseCodes(), true)) {
+            throw new AuthorizationException('Telegram Support canned response is invalid.');
+        }
+        $session = $this->commitTicketMutation(
+            $action,
+            $ticketId,
+            self::STATE_QUEUE_TICKET,
+            'support-canned-reply',
+            fn (): mixed => $this->support->reply(
+                $action->userId,
+                $ticketId,
+                $this->validatedCannedResponseBody($action->userId, $ticketId, $template, $bodyHash),
+                $this->idempotencyKey('support-canned-reply', $action->requestKey),
+            ),
+        );
+        if ($session !== null) {
+            $this->renderQueueTicket($action, $session->version, $this->support->detail($action->userId, $ticketId), 'support-canned-replied');
+        }
     }
 
     private function handleQueueReply(TelegramInteractionAction $action): void
@@ -669,6 +720,8 @@ final readonly class TelegramSupportNavigationHandler
         if (! in_array($detail->ticket->state, [SupportTicketState::Resolved, SupportTicketState::Closed], true)) {
             $reply = $this->callbacks->issue($action->sessionPublicId, $version, self::ACTION_QUEUE_REPLY, [], 'tg-support-staff-reply:'.hash('sha256', $action->requestKey));
             $rows[] = [new TelegramInlineCallbackButton($this->translation('telegram_support.buttons.reply', $locale), $reply->publicId, TelegramInlineButtonStyle::Primary)];
+            $canned = $this->callbacks->issue($action->sessionPublicId, $version, self::ACTION_QUEUE_CANNED, [], 'tg-support-canned:'.hash('sha256', $action->requestKey));
+            $rows[] = [new TelegramInlineCallbackButton($this->translation('telegram_support.buttons.canned', $locale), $canned->publicId)];
         }
         $note = $this->callbacks->issue($action->sessionPublicId, $version, self::ACTION_QUEUE_NOTE, [], 'tg-support-note:'.hash('sha256', $action->requestKey));
         $allowedStates = $this->support->allowedTransitions($action->userId, $detail->ticket->id);
@@ -696,6 +749,41 @@ final readonly class TelegramSupportNavigationHandler
         if ($session !== null) {
             $this->queue($action, $this->translation($translationKey, $this->locale($action->userId)), $surface, $this->backKeyboard($action, $session->version));
         }
+    }
+
+    private function showCannedChoices(TelegramInteractionAction $action, int $ticketId): void
+    {
+        $detail = $this->support->detail($action->userId, $ticketId);
+        $this->assertCannedReplyEligible($detail);
+        $session = $this->transition($action, self::STATE_QUEUE_CANNED, ['ticket_id' => $ticketId], 'canned-choices');
+        if ($session === null) {
+            return;
+        }
+        $operatorLocale = $this->locale($action->userId);
+        $customerLocale = $this->locale($detail->ticket->requesterUserId);
+        $rows = [];
+        foreach ($this->cannedResponseCodes() as $code) {
+            $body = $this->translation('ticket.canned.'.$code.'.body', $customerLocale);
+            $bodyHash = hash('sha256', $body);
+            $callback = $this->callbacks->issue(
+                $action->sessionPublicId,
+                $session->version,
+                self::ACTION_QUEUE_CANNED_SEND,
+                ['template' => $code, 'body_hash' => $bodyHash],
+                'tg-support-canned-choice:'.hash('sha256', $action->requestKey.':'.$code.':'.$bodyHash),
+            );
+            $rows[] = [new TelegramInlineCallbackButton(
+                $this->boundedButtonText($this->translation('ticket.canned.'.$code.'.label', $operatorLocale)),
+                $callback->publicId,
+            )];
+        }
+        $this->appendBack($action, $session->version, $rows, $operatorLocale);
+        $this->queue(
+            $action,
+            $this->translation('telegram_support.canned_prompt', $operatorLocale),
+            'canned-choices',
+            new TelegramInlineKeyboardSnapshot($rows),
+        );
     }
 
     private function showPriorityChoices(TelegramInteractionAction $action, int $ticketId): void
@@ -828,7 +916,7 @@ final readonly class TelegramSupportNavigationHandler
 
             return;
         }
-        if (in_array($action->sessionState, [self::STATE_QUEUE_TICKET, self::STATE_QUEUE_REPLY, self::STATE_QUEUE_NOTE, self::STATE_QUEUE_PRIORITY, self::STATE_QUEUE_STATE, self::STATE_QUEUE_CLOSE], true)) {
+        if (in_array($action->sessionState, [self::STATE_QUEUE_TICKET, self::STATE_QUEUE_REPLY, self::STATE_QUEUE_CANNED, self::STATE_QUEUE_NOTE, self::STATE_QUEUE_PRIORITY, self::STATE_QUEUE_STATE, self::STATE_QUEUE_CLOSE], true)) {
             $this->showQueue($action);
 
             return;
@@ -950,6 +1038,11 @@ final readonly class TelegramSupportNavigationHandler
         if ($action->sessionState === self::STATE_QUEUE_REPLY
             && $action->kind === TelegramInteractionActionKind::Message) {
             return [self::STATE_QUEUE_TICKET, 'support-replied', true];
+        }
+        if ($action->sessionState === self::STATE_QUEUE_CANNED
+            && $action->kind === TelegramInteractionActionKind::Callback
+            && $action->callbackAction === self::ACTION_QUEUE_CANNED_SEND) {
+            return [self::STATE_QUEUE_TICKET, 'support-canned-replied', true];
         }
         if ($action->sessionState === self::STATE_QUEUE_NOTE
             && $action->kind === TelegramInteractionActionKind::Message) {
@@ -1219,6 +1312,49 @@ final readonly class TelegramSupportNavigationHandler
         }
 
         return $value;
+    }
+
+    private function validatedCannedResponseBody(int $actorUserId, int $ticketId, string $code, string $expectedHash): string
+    {
+        $detail = $this->support->detail($actorUserId, $ticketId);
+        $this->assertCannedReplyEligible($detail);
+        $body = $this->translation('ticket.canned.'.$code.'.body', $this->locale($detail->ticket->requesterUserId));
+        if (! hash_equals($expectedHash, hash('sha256', $body))) {
+            throw new AuthorizationException('Telegram Support canned response changed before execution.');
+        }
+
+        return $body;
+    }
+
+    private function assertCannedReplyEligible(SupportTicketDetailSnapshot $detail): void
+    {
+        if (in_array($detail->ticket->state, [SupportTicketState::Resolved, SupportTicketState::Closed], true)) {
+            throw new AuthorizationException('Telegram Support ticket is not eligible for a canned reply.');
+        }
+    }
+
+    /** @return list<string> */
+    private function cannedResponseCodes(): array
+    {
+        $keys = $this->localizationTemplates->mandatoryKeys();
+        $keySet = array_fill_keys($keys, true);
+        $codes = [];
+        foreach ($keys as $key) {
+            if (preg_match('/\Aticket\.canned\.([a-z][a-z0-9_-]{0,63})\.body\z/', $key, $matches) !== 1) {
+                continue;
+            }
+            $labelKey = 'ticket.canned.'.$matches[1].'.label';
+            if (! isset($keySet[$labelKey])) {
+                throw new RuntimeException('Telegram Support canned response label contract is missing.');
+            }
+            $codes[] = $matches[1];
+        }
+        sort($codes, SORT_STRING);
+        if ($codes === []) {
+            throw new RuntimeException('Telegram Support canned response contract is empty.');
+        }
+
+        return $codes;
     }
 
     private function stateLabel(SupportTicketState $state, string $locale): string

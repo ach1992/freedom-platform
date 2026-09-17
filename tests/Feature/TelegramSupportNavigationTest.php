@@ -378,6 +378,140 @@ final class TelegramSupportNavigationTest extends TestCase
         ]);
     }
 
+    public function test_canned_support_reply_uses_customer_locale_observes_override_and_reauthorizes_execution(): void
+    {
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $customerTelegramId = 9823;
+        $supportTelegramId = 9824;
+
+        $this->accept($this->payload(8230, $customerTelegramId, 'support_canned_customer', 'fa', '/start'));
+        $processor->process('123456789', 8230);
+        $customer = $this->account($customerTelegramId);
+        $ticket = $this->app->make(SupportTicketService::class)->create(new SupportTicketCreateRequest(
+            $customer['user_id'],
+            'other',
+            'Canned response test',
+            'Customer-visible initial body',
+            'telegram-support-canned:create',
+        ));
+
+        $this->accept($this->payload(8231, $supportTelegramId, 'support_canned_staff', 'en', '/start'));
+        $processor->process('123456789', 8231);
+        $staff = $this->account($supportTelegramId);
+        $administratorId = $this->grantSupportRole($staff['user_id']);
+
+        $supportHome = $this->callbackToken('navigation.support', $staff['account_id']);
+        $this->accept($this->callbackPayload(8232, $supportTelegramId, 'support_canned_staff', 'en', $supportHome));
+        $processor->process('123456789', 8232);
+        $queue = $this->callbackToken('navigation.support.queue', $staff['account_id']);
+        $this->accept($this->callbackPayload(8233, $supportTelegramId, 'support_canned_staff', 'en', $queue));
+        $processor->process('123456789', 8233);
+        $detail = $this->callbackToken(
+            'navigation.support.queue.ticket',
+            $staff['account_id'],
+            json_encode(['ticket_id' => $ticket->id], JSON_THROW_ON_ERROR),
+        );
+        $this->accept($this->callbackPayload(8234, $supportTelegramId, 'support_canned_staff', 'en', $detail));
+        $processor->process('123456789', 8234);
+        $claim = $this->callbackToken('navigation.support.claim', $staff['account_id']);
+        $this->accept($this->callbackPayload(8235, $supportTelegramId, 'support_canned_staff', 'en', $claim));
+        $processor->process('123456789', 8235);
+
+        $canned = $this->callbackToken('navigation.support.queue.canned', $staff['account_id']);
+        $this->accept($this->callbackPayload(8236, $supportTelegramId, 'support_canned_staff', 'en', $canned));
+        $processor->process('123456789', 8236);
+        self::assertSame('support_queue_canned', $this->supportSession($staff['account_id'])['state']);
+        self::assertStringContainsString('Acknowledge receipt', $this->latestConfidentialPresentation($supportTelegramId));
+        self::assertStringNotContainsString('تأیید دریافت', $this->latestConfidentialPresentation($supportTelegramId));
+
+        $defaultBody = trans('_mandatory.ticket.canned.acknowledge.body', [], 'fa');
+        self::assertIsString($defaultBody);
+        $stalePayload = json_encode([
+            'template' => 'acknowledge',
+            'body_hash' => hash('sha256', $defaultBody),
+        ], JSON_THROW_ON_ERROR);
+        $staleSend = $this->callbackToken('navigation.support.queue.canned.send', $staff['account_id'], $stalePayload);
+        self::assertStringNotContainsString($defaultBody, $stalePayload);
+
+        $overrideBody = 'پاسخ آماده جدید برای مشتری فارسی‌زبان.';
+        $now = now('UTC');
+        DB::table('localization_overrides')->insert([
+            'translation_key' => 'ticket.canned.acknowledge.body',
+            'locale' => 'fa',
+            'override_value' => $overrideBody,
+            'version' => 1,
+            'updated_by_administrator_id' => $administratorId,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        $this->accept($this->callbackPayload(8237, $supportTelegramId, 'support_canned_staff', 'en', $staleSend));
+        try {
+            $processor->process('123456789', 8237);
+            self::fail('A canned-response callback must fail closed after its resolved customer text changes.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('Telegram update processing failed.', $exception->getMessage());
+        }
+        self::assertSame('support_queue_canned', $this->supportSession($staff['account_id'])['state']);
+        self::assertSame(0, DB::table('support_ticket_messages')->where('ticket_id', $ticket->id)->where('kind', 'support_reply')->count());
+        $this->assertDatabaseHas('processed_telegram_updates', [
+            'bot_id' => '123456789',
+            'update_id' => 8237,
+            'state' => 'failed',
+            'last_error_class' => AuthorizationException::class,
+        ]);
+
+        $back = $this->callbackToken('navigation.back', $staff['account_id']);
+        $this->accept($this->callbackPayload(8238, $supportTelegramId, 'support_canned_staff', 'en', $back));
+        $processor->process('123456789', 8238);
+        self::assertSame('support_queue_ticket', $this->supportSession($staff['account_id'])['state']);
+        $canned = $this->callbackToken('navigation.support.queue.canned', $staff['account_id']);
+        $this->accept($this->callbackPayload(8239, $supportTelegramId, 'support_canned_staff', 'en', $canned));
+        $processor->process('123456789', 8239);
+
+        $freshPayload = json_encode([
+            'template' => 'acknowledge',
+            'body_hash' => hash('sha256', $overrideBody),
+        ], JSON_THROW_ON_ERROR);
+        $freshSend = $this->callbackToken('navigation.support.queue.canned.send', $staff['account_id'], $freshPayload);
+        self::assertStringNotContainsString($overrideBody, $freshPayload);
+
+        $permissionId = (int) DB::table('permissions')->where('code', SupportTicketSupportService::PERMISSION)->value('id');
+        DB::table('administrator_permission_overrides')->insert([
+            'administrator_id' => $administratorId,
+            'permission_id' => $permissionId,
+            'effect' => 'deny',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $this->accept($this->callbackPayload(8240, $supportTelegramId, 'support_canned_staff', 'en', $freshSend));
+        try {
+            $processor->process('123456789', 8240);
+            self::fail('Revoked Support authority must fail canned-response execution.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('Telegram update processing failed.', $exception->getMessage());
+        }
+        self::assertSame('support_queue_canned', $this->supportSession($staff['account_id'])['state']);
+        self::assertSame(0, DB::table('support_ticket_messages')->where('ticket_id', $ticket->id)->where('kind', 'support_reply')->count());
+
+        DB::table('administrator_permission_overrides')
+            ->where('administrator_id', $administratorId)
+            ->where('permission_id', $permissionId)
+            ->delete();
+        $processor->process('123456789', 8240);
+        $processor->process('123456789', 8240);
+
+        $reply = DB::table('support_ticket_messages')
+            ->where('ticket_id', $ticket->id)
+            ->where('kind', 'support_reply')
+            ->get(['body', 'customer_visible']);
+        self::assertCount(1, $reply);
+        self::assertSame($overrideBody, (string) $reply[0]->body);
+        self::assertSame(1, (int) $reply[0]->customer_visible);
+        self::assertSame(SupportTicketState::AwaitingCustomer->value, DB::table('support_tickets')->where('id', $ticket->id)->value('state'));
+        self::assertSame('support_queue_ticket', $this->supportSession($staff['account_id'])['state']);
+    }
+
     public function test_long_domain_text_is_bounded_for_telegram_buttons_categories_and_recent_history(): void
     {
         $processor = $this->app->make(TelegramUpdateProcessor::class);

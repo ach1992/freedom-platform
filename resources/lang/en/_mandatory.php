@@ -160,6 +160,20 @@ return [
         'close' => 'Close this ticket with the selected reason.',
         'reopen' => 'Reopen this ticket while the reopen window is active.',
         'rating' => 'Rate the support you received for this ticket.',
+        'canned' => [
+            'acknowledge' => [
+                'label' => 'Acknowledge receipt',
+                'body' => 'Your request has been received and is being reviewed. We will update you in this ticket.',
+            ],
+            'details' => [
+                'label' => 'Request more details',
+                'body' => 'Please send any additional details that can help us investigate the issue, including what you expected and what happened instead.',
+            ],
+            'recheck' => [
+                'label' => 'Ask customer to recheck',
+                'body' => 'We applied the available fix. Please check again and let us know in this ticket if the issue is still happening.',
+            ],
+        ],
     ],
     'broadcast' => [
         'preview' => 'Broadcast preview',
