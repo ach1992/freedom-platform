@@ -25,6 +25,7 @@ final class TelegramConfidentialPresentationProvenanceGuard
         'app/Modules/Telegram/Application/TelegramSupportAttachmentNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramSupportAttachmentStatusDelivery.php',
         'app/Modules/Telegram/Application/TelegramSupportNavigationHandler.php',
+        'app/Modules/Telegram/Application/TelegramSupportRoutingNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramTrialNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramUsdtNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramZarinpalNavigationHandler.php',
