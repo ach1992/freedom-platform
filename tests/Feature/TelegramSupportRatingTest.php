@@ -82,13 +82,13 @@ final class TelegramSupportRatingTest extends TestCase
         $this->accept($this->payload(8702, $attackerTelegramId, 'rating_attacker', 'en', '/start'));
         $processor->process('123456789', 8702);
         $this->accept($this->callbackPayload(8703, $attackerTelegramId, 'rating_attacker', 'en', $ticketToken));
-        try {
-            $processor->process('123456789', 8703);
-            self::fail('A callback issued for another Telegram account must fail closed.');
-        } catch (\RuntimeException $exception) {
-            self::assertSame('Telegram update processing failed.', $exception->getMessage());
-        }
+        $processor->process('123456789', 8703);
         self::assertSame(0, DB::table('support_ticket_ratings')->count());
+        $this->assertDatabaseHas('telegram_interaction_callbacks', [
+            'token_hash' => hash('sha256', $ticketToken),
+            'state' => 'pending',
+            'accepted_update_id' => null,
+        ]);
 
         $this->accept($this->callbackPayload(8704, $customerTelegramId, 'rating_customer', 'en', $ticketToken));
         $processor->process('123456789', 8704);
