@@ -69,6 +69,7 @@ final class TelegramSupportMembershipFreshnessTest extends TestCase
         $this->seed();
         Queue::fake();
         config([
+            'support.rate_limits.prefix' => 'test:telegram-support-rate-limit:'.bin2hex(random_bytes(8)).':',
             'app.url' => 'https://bot.example.test',
             'telegram.bot_token' => '123456789:abcdefghijklmnopqrstuvwxyz_ABCDE',
             'telegram.webhook_secret' => self::SECRET,

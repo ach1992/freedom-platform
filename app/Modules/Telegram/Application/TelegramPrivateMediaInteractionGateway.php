@@ -8,6 +8,7 @@ use App\Modules\Customers\Application\CustomerAccountSummaryService;
 use App\Modules\Support\Application\SupportTicketAttachmentReceipt;
 use App\Modules\Support\Application\SupportTicketAttachmentService;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCardToCardReceiptSubmission;
+use App\Modules\Telegram\Application\Contracts\TelegramSupportCustomerRateLimiter;
 use App\Shared\Application\RestrictedValue;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
@@ -42,6 +43,7 @@ final readonly class TelegramPrivateMediaInteractionGateway
         private TelegramCardToCardReceiptStatusDelivery $statusDelivery,
         private SupportTicketAttachmentService $supportAttachments,
         private TelegramSupportMembershipFreshnessGuard $supportMembership,
+        private TelegramSupportCustomerRateLimiter $supportRateLimiter,
         private TelegramSupportAttachmentStatusDelivery $supportAttachmentStatus,
     ) {}
 
@@ -178,6 +180,28 @@ final readonly class TelegramPrivateMediaInteractionGateway
             );
 
             return true;
+        }
+
+        if (! $staff) {
+            $decision = $this->supportRateLimiter->consume(
+                $interaction->userId,
+                TelegramSupportCustomerRateLimitScope::CustomerContent,
+            );
+            if (! $decision->allowed) {
+                if ($decision->retryAfterSeconds === null) {
+                    throw new RuntimeException('Telegram Support rate-limit decision is incomplete.');
+                }
+                $this->supportAttachmentStatus->queue(
+                    $interaction->telegramUserId,
+                    $interaction->requestKey,
+                    $locale,
+                    'rate_limited',
+                    null,
+                    $decision->retryAfterSeconds,
+                );
+
+                return true;
+            }
         }
 
         try {
