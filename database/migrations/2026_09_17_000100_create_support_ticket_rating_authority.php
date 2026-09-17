@@ -20,8 +20,6 @@ return new class extends Migration
                 $table->unsignedTinyInteger('score');
                 $table->dateTime('created_at', 6);
 
-                $table->foreign('ticket_id', 'support_ticket_rating_ticket_fk')
-                    ->references('id')->on('support_tickets')->restrictOnDelete();
                 $table->foreign('requester_user_id', 'support_ticket_rating_requester_fk')
                     ->references('id')->on('users')->restrictOnDelete();
                 $table->unique('ticket_id', 'support_ticket_rating_ticket_unique');
