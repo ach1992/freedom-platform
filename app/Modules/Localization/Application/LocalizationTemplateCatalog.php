@@ -163,6 +163,10 @@ final class LocalizationTemplateCatalog
         if (array_key_exists($key, $renderedMaxLengths)) {
             $placeholderLimits = $placeholderMaxLengths[$key] ?? [];
             $this->assertRenderedBudgetConfiguration($placeholders, $placeholderLimits);
+            if (! $this->usesCanonicalBudgetPlaceholderCasing($english)
+                || ! $this->usesCanonicalBudgetPlaceholderCasing($persian)) {
+                throw new RuntimeException('Mandatory localization rendered budget requires lowercase placeholder spelling.');
+            }
             if ($this->renderedLengthUpperBound($english, $placeholderLimits) > $renderedMaxLengths[$key]
                 || $this->renderedLengthUpperBound($persian, $placeholderLimits) > $renderedMaxLengths[$key]) {
                 throw new RuntimeException('Mandatory localization default exceeds its rendered maximum length.');
@@ -206,6 +210,9 @@ final class LocalizationTemplateCatalog
         if (array_key_exists($key, $renderedMaxLengths)) {
             $placeholderLimits = $this->contractPlaceholderIntMap('placeholder_max_lengths')[$key] ?? [];
             $this->assertRenderedBudgetConfiguration($expectedPlaceholders, $placeholderLimits);
+            if (! $this->usesCanonicalBudgetPlaceholderCasing($value)) {
+                throw new InvalidArgumentException('Localization override rendered budget requires lowercase placeholder spelling.');
+            }
             if ($this->renderedLengthUpperBound($value, $placeholderLimits) > $renderedMaxLengths[$key]) {
                 throw new InvalidArgumentException('Localization override rendered value exceeds its documented maximum length.');
             }
@@ -438,6 +445,18 @@ final class LocalizationTemplateCatalog
         if ($configured !== $placeholders) {
             throw new RuntimeException('Mandatory localization rendered budget must define every placeholder limit exactly once.');
         }
+    }
+
+    private function usesCanonicalBudgetPlaceholderCasing(string $template): bool
+    {
+        preg_match_all('/:([A-Za-z_][A-Za-z0-9_]*)/', $template, $matches);
+        foreach ($matches[1] as $rawPlaceholder) {
+            if ($rawPlaceholder !== strtolower($rawPlaceholder)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /** @param array<string, int> $placeholderLimits */

@@ -113,6 +113,9 @@ final class MandatoryLocalizationNamespaceTest extends TestCase
         $usernameUnavailableKey = 'telegram.navigation.admin.customer_search.username_unavailable';
         $maximumHeaderTemplate = str_repeat('x', 506).':telegram_id :account_id :username';
         $tooLargeHeaderTemplate = str_repeat('x', 507).':telegram_id :account_id :username';
+        $repeatedHeaderTemplate = str_repeat('x', 454).':telegram_id :account_id :username :username';
+        $uppercaseHeaderTemplate = str_repeat('x', 506).':telegram_id :account_id :USERNAME';
+        $titleCaseHeaderTemplate = str_repeat('x', 506).':telegram_id :account_id :Username';
         $replacements = [
             'telegram_id' => str_repeat('9', 20),
             'account_id' => str_repeat('A', 26),
@@ -127,6 +130,35 @@ final class MandatoryLocalizationNamespaceTest extends TestCase
             $rendered = $catalog->render($maximumHeaderTemplate, $replacements);
             self::assertSame(594, mb_strlen($rendered));
             self::assertSame(4096, mb_strlen($rendered."\n\n".str_repeat('m', 3500)));
+
+            self::assertSame(
+                $repeatedHeaderTemplate,
+                $catalog->validateOverride($confirmationKey, $locale, $repeatedHeaderTemplate),
+            );
+            self::assertSame(582, mb_strlen($catalog->render($repeatedHeaderTemplate, $replacements)));
+
+            foreach ([$uppercaseHeaderTemplate, $titleCaseHeaderTemplate] as $caseTransformingTemplate) {
+                try {
+                    $catalog->validateOverride($confirmationKey, $locale, $caseTransformingTemplate);
+                    self::fail('Budgeted confirmation placeholders must use lowercase spelling.');
+                } catch (InvalidArgumentException) {
+                    self::assertTrue(true);
+                }
+            }
+
+            $expandingUnicodeFallback = str_repeat('ß', 40);
+            self::assertSame(40, mb_strlen($expandingUnicodeFallback));
+            self::assertSame(
+                $expandingUnicodeFallback,
+                $catalog->validateOverride($usernameUnavailableKey, $locale, $expandingUnicodeFallback),
+            );
+            $unicodeRendered = $catalog->render($maximumHeaderTemplate, [
+                'telegram_id' => str_repeat('9', 20),
+                'account_id' => str_repeat('A', 26),
+                'username' => $expandingUnicodeFallback,
+            ]);
+            self::assertSame(594, mb_strlen($unicodeRendered));
+            self::assertSame(4096, mb_strlen($unicodeRendered."\n\n".str_repeat('m', 3500)));
 
             try {
                 $catalog->validateOverride($confirmationKey, $locale, $tooLargeHeaderTemplate);
