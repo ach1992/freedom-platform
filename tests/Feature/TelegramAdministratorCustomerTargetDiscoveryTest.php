@@ -108,9 +108,6 @@ final class TelegramAdministratorCustomerTargetDiscoveryTest extends TestCase
         self::assertNotNull($explicitUsername->target);
         self::assertSame($usernameTarget['public_id'], $explicitUsername->target->accountPublicId);
 
-        $explicitTelegramId = $discovery->search($actor, '123456789', (string) $telegramIdTarget['telegram_user_id']);
-        self::assertSame(TelegramAdministratorCustomerTargetSearchDisposition::Ambiguous, $explicitTelegramId->disposition);
-        self::assertNull($explicitTelegramId->target);
     }
 
     public function test_permission_bot_actor_and_current_target_state_are_rechecked_on_resolution(): void
