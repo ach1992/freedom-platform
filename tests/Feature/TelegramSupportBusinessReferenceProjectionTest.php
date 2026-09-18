@@ -55,7 +55,7 @@ final class TelegramSupportBusinessReferenceProjectionTest extends TestCase
         $orderPage = $orders->pageForSelf($userId, $userId, 1, 6);
         $orderItem = $this->itemForPublicId($orderPage->items, $references['order_public_id']);
         self::assertMatchesRegularExpression('/\A[0-9a-f]{40}\z/', $orderItem->selectionToken);
-        self::assertStringNotContainsString((string) $references['order_id'], $orderItem->selectionToken);
+        self::assertNotSame((string) $references['order_id'], $orderItem->selectionToken);
         self::assertSame(
             $references['order_id'],
             $orders->resolveForSelf($userId, $userId, $orderItem->selectionToken)->internalId,
@@ -65,7 +65,7 @@ final class TelegramSupportBusinessReferenceProjectionTest extends TestCase
         $paymentPage = $payments->pageForSelf($userId, $userId, 1, 6);
         $paymentItem = $this->itemForPublicId($paymentPage->items, $references['payment_public_id']);
         self::assertMatchesRegularExpression('/\A[0-9a-f]{40}\z/', $paymentItem->selectionToken);
-        self::assertStringNotContainsString((string) $references['payment_intent_id'], $paymentItem->selectionToken);
+        self::assertNotSame((string) $references['payment_intent_id'], $paymentItem->selectionToken);
         self::assertSame(
             $references['payment_intent_id'],
             $payments->resolveForSelf($userId, $userId, $paymentItem->selectionToken)->internalId,
@@ -75,7 +75,7 @@ final class TelegramSupportBusinessReferenceProjectionTest extends TestCase
         $servicePage = $services->pageForSelf($userId, $userId, 1, 6);
         $serviceItem = $this->serviceItemForPublicId($servicePage->items, $references['service_public_id']);
         self::assertMatchesRegularExpression('/\A[0-9a-f]{40}\z/', $serviceItem->selectionToken);
-        self::assertStringNotContainsString((string) $references['service_subscription_id'], $serviceItem->selectionToken);
+        self::assertNotSame((string) $references['service_subscription_id'], $serviceItem->selectionToken);
         self::assertSame(
             $references['service_subscription_id'],
             $this->app->make(TelegramSupportOwnedServiceReferenceResolver::class)
