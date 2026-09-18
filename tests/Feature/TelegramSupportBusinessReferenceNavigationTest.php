@@ -192,7 +192,7 @@ final class TelegramSupportBusinessReferenceNavigationTest extends TestCase
         $this->accept($this->callbackPayload(8924, $telegramUserId, 'support_reference_stale', 'fa', $orderType));
         $processor->process('123456789', 8924);
         [$selection, $payload] = $this->latestSelectionCallback($account['account_id']);
-        self::assertSame(TelegramSupportStaleOrderProjection::TOKEN, $payload['selection_token']);
+        self::assertSame(TelegramSupportStaleOrderProjection::TOKEN, $payload['selection']);
         $this->accept($this->callbackPayload(8925, $telegramUserId, 'support_reference_stale', 'fa', $selection));
         $processor->process('123456789', 8925);
         self::assertSame(1, $projection->resolveCalls);
@@ -302,9 +302,9 @@ final class TelegramSupportBusinessReferenceNavigationTest extends TestCase
         }
 
         [$selection, $selectionPayload] = $this->latestSelectionCallback($accountId);
-        self::assertSame(['reference_type', 'selection_token'], array_keys($selectionPayload));
+        self::assertSame(['reference_type', 'selection'], array_keys($selectionPayload));
         self::assertSame($referenceType, $selectionPayload['reference_type']);
-        self::assertMatchesRegularExpression('/\A[0-9a-f]{40}\z/', (string) $selectionPayload['selection_token']);
+        self::assertMatchesRegularExpression('/\A[0-9a-f]{40}\z/', (string) $selectionPayload['selection']);
         self::assertArrayNotHasKey('order_id', $selectionPayload);
         self::assertArrayNotHasKey('payment_intent_id', $selectionPayload);
         self::assertArrayNotHasKey('service_subscription_id', $selectionPayload);
@@ -330,7 +330,7 @@ final class TelegramSupportBusinessReferenceNavigationTest extends TestCase
         $active = $this->app->make(TelegramInteractionSessionService::class)->activeForAccount($accountId);
         self::assertNotNull($active);
         self::assertSame($referenceType, $active->payload['reference_type'] ?? null);
-        self::assertSame($selectionPayload['selection_token'], $active->payload['selection_token'] ?? null);
+        self::assertSame($selectionPayload['selection'], $active->payload['selection'] ?? null);
         self::assertArrayNotHasKey('order_id', $active->payload);
         self::assertArrayNotHasKey('payment_intent_id', $active->payload);
         self::assertArrayNotHasKey('service_subscription_id', $active->payload);
