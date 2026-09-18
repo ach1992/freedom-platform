@@ -68,6 +68,51 @@ final class TelegramAdministratorCustomerTargetDiscoveryTest extends TestCase
         self::assertNull($otherBot->target);
     }
 
+    public function test_bare_identifier_overlap_across_public_id_and_username_fails_ambiguous(): void
+    {
+        $actor = $this->administrator('support');
+        $publicIdTarget = $this->customer(910010, 'public_id_owner', '123456789');
+        $usernameTarget = $this->customer(910011, $publicIdTarget['public_id'], '123456789');
+        $discovery = $this->app->make(TelegramAdministratorCustomerTargetDiscovery::class);
+
+        $ambiguous = $discovery->search($actor, '123456789', $publicIdTarget['public_id']);
+        self::assertSame(TelegramAdministratorCustomerTargetSearchDisposition::Ambiguous, $ambiguous->disposition);
+        self::assertNull($ambiguous->target);
+
+        $explicitUsername = $discovery->search($actor, '123456789', '@'.$publicIdTarget['public_id']);
+        self::assertSame(TelegramAdministratorCustomerTargetSearchDisposition::Matched, $explicitUsername->disposition);
+        self::assertNotNull($explicitUsername->target);
+        self::assertSame((string) $usernameTarget['public_id'], $explicitUsername->target->accountPublicId);
+
+        $usernameOnlyValue = (string) Str::ulid();
+        $usernameOnlyTarget = $this->customer(910012, $usernameOnlyValue, '123456789');
+        $usernameOnly = $discovery->search($actor, '123456789', $usernameOnlyValue);
+        self::assertSame(TelegramAdministratorCustomerTargetSearchDisposition::Matched, $usernameOnly->disposition);
+        self::assertNotNull($usernameOnly->target);
+        self::assertSame($usernameOnlyTarget['public_id'], $usernameOnly->target->accountPublicId);
+    }
+
+    public function test_bare_numeric_identifier_overlap_across_telegram_id_and_username_fails_ambiguous(): void
+    {
+        $actor = $this->administrator('support');
+        $telegramIdTarget = $this->customer(910020, 'telegram_id_owner', '123456789');
+        $usernameTarget = $this->customer(910021, '910020', '123456789');
+        $discovery = $this->app->make(TelegramAdministratorCustomerTargetDiscovery::class);
+
+        $ambiguous = $discovery->search($actor, '123456789', '910020');
+        self::assertSame(TelegramAdministratorCustomerTargetSearchDisposition::Ambiguous, $ambiguous->disposition);
+        self::assertNull($ambiguous->target);
+
+        $explicitUsername = $discovery->search($actor, '123456789', '@910020');
+        self::assertSame(TelegramAdministratorCustomerTargetSearchDisposition::Matched, $explicitUsername->disposition);
+        self::assertNotNull($explicitUsername->target);
+        self::assertSame($usernameTarget['public_id'], $explicitUsername->target->accountPublicId);
+
+        $explicitTelegramId = $discovery->search($actor, '123456789', (string) $telegramIdTarget['telegram_user_id']);
+        self::assertSame(TelegramAdministratorCustomerTargetSearchDisposition::Ambiguous, $explicitTelegramId->disposition);
+        self::assertNull($explicitTelegramId->target);
+    }
+
     public function test_permission_bot_actor_and_current_target_state_are_rechecked_on_resolution(): void
     {
         $actor = $this->administrator('support');
@@ -147,7 +192,7 @@ final class TelegramAdministratorCustomerTargetDiscoveryTest extends TestCase
         self::assertNull($ambiguous->target);
     }
 
-    /** @return array{user_id:int,public_id:string} */
+    /** @return array{user_id:int,public_id:string,telegram_user_id:int} */
     private function customer(int $telegramUserId, string $username, string $botId): array
     {
         $now = now('UTC');
@@ -175,7 +220,7 @@ final class TelegramAdministratorCustomerTargetDiscoveryTest extends TestCase
             'updated_at' => $now,
         ]);
 
-        return ['user_id' => $userId, 'public_id' => $publicId];
+        return ['user_id' => $userId, 'public_id' => $publicId, 'telegram_user_id' => $telegramUserId];
     }
 
     private function administrator(?string $roleCode = null, ?int $userId = null): int
