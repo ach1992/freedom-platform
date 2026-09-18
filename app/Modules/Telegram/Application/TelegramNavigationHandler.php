@@ -17,6 +17,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchasePaymentMe
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseQuote;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseWalletPayment;
 use App\Modules\Telegram\Application\Contracts\TelegramInteractionHandler;
+use App\Modules\Telegram\Application\Contracts\TelegramAdministratorCustomerTargetDiscovery;
 use App\Modules\Telegram\Application\Contracts\TelegramManagedUsdtRateSettings;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceDeliveryResender;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceProjection;
@@ -159,6 +160,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         private TelegramOwnedServiceProjection $services,
         private TelegramOwnedServiceDeliveryResender $serviceDeliveryResender,
         private TelegramManagedUsdtRateSettings $managedUsdtRateSettings,
+        private TelegramAdministratorCustomerTargetDiscovery $administratorCustomerTargets,
         private TelegramSupportContactConfiguration $supportContact,
         private DatabaseManager $database,
     ) {}
@@ -820,9 +822,10 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         }
     }
 
-    private function showAdminControl(TelegramInteractionAction $action): void
+    public function showAdminControl(TelegramInteractionAction $action): void
     {
-        if (! $this->managedUsdtRateSettings->availableFor($action->userId)) {
+        if (! $this->managedUsdtRateSettings->availableFor($action->userId)
+            && ! $this->administratorCustomerTargets->availableFor($action->userId)) {
             $this->returnHome($action);
 
             return;
@@ -1019,13 +1022,38 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         string $locale,
         string $requestKey,
     ): void {
-        $rate = $this->callbacks->issue(
-            $action->sessionPublicId,
-            $sessionVersion,
-            self::ACTION_ADMIN_USDT_RATE,
-            [],
-            'nav-admin-usdt-rate:'.$requestKey,
-        );
+        $rows = [];
+
+        if ($this->administratorCustomerTargets->availableFor($action->userId)) {
+            $customerSearch = $this->callbacks->issue(
+                $action->sessionPublicId,
+                $sessionVersion,
+                TelegramAdminCustomerNavigationHandler::ACTION_SEARCH,
+                [],
+                'nav-admin-customer-search:'.$requestKey,
+            );
+            $rows[] = [new TelegramInlineCallbackButton(
+                $this->translation('telegram.navigation.admin.buttons.customer_search', $locale),
+                $customerSearch->publicId,
+                TelegramInlineButtonStyle::Primary,
+            )];
+        }
+
+        if ($this->managedUsdtRateSettings->availableFor($action->userId)) {
+            $rate = $this->callbacks->issue(
+                $action->sessionPublicId,
+                $sessionVersion,
+                self::ACTION_ADMIN_USDT_RATE,
+                [],
+                'nav-admin-usdt-rate:'.$requestKey,
+            );
+            $rows[] = [new TelegramInlineCallbackButton(
+                $this->translation('telegram.navigation.admin.buttons.usdt_rate', $locale),
+                $rate->publicId,
+                TelegramInlineButtonStyle::Primary,
+            )];
+        }
+
         $back = $this->callbacks->issue(
             $action->sessionPublicId,
             $sessionVersion,
@@ -1033,24 +1061,17 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             [],
             'nav-admin-back:'.$requestKey,
         );
-        $keyboard = new TelegramInlineKeyboardSnapshot([
-            [new TelegramInlineCallbackButton(
-                $this->translation('telegram.navigation.admin.buttons.usdt_rate', $locale),
-                $rate->publicId,
-                TelegramInlineButtonStyle::Primary,
-            )],
-            [new TelegramInlineCallbackButton(
-                $this->translation('telegram.navigation.buttons.back', $locale),
-                $back->publicId,
-            )],
-        ]);
+        $rows[] = [new TelegramInlineCallbackButton(
+            $this->translation('telegram.navigation.buttons.back', $locale),
+            $back->publicId,
+        )];
 
         $this->queueConfidential(
             $action,
             $this->translation('telegram.navigation.admin.control', $locale),
             'nav-admin-delivery:'.$requestKey,
             'admin',
-            $keyboard,
+            new TelegramInlineKeyboardSnapshot($rows),
         );
     }
 
@@ -3184,7 +3205,8 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
                 TelegramInlineButtonStyle::Primary,
             )];
         }
-        if ($this->managedUsdtRateSettings->availableFor($action->userId)) {
+        if ($this->managedUsdtRateSettings->availableFor($action->userId)
+            || $this->administratorCustomerTargets->availableFor($action->userId)) {
             $admin = $this->callbacks->issue(
                 $action->sessionPublicId,
                 $sessionVersion,
