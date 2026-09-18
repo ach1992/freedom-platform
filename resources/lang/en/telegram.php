@@ -11,6 +11,7 @@ return [
             'trial_service' => 'Trial Service',
             'my_services' => 'My Services',
             'support' => 'Support',
+            'external_support' => 'External Support',
             'request_cooperation' => 'Request Cooperation',
             'agent_status' => 'Cooperation Status',
             'agent_menu' => 'Agent Menu',
