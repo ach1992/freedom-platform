@@ -135,7 +135,7 @@ final class MandatoryLocalizationNamespaceTest extends TestCase
                 $repeatedHeaderTemplate,
                 $catalog->validateOverride($confirmationKey, $locale, $repeatedHeaderTemplate),
             );
-            self::assertSame(582, mb_strlen($catalog->render($repeatedHeaderTemplate, $replacements)));
+            self::assertSame(583, mb_strlen($catalog->render($repeatedHeaderTemplate, $replacements)));
 
             foreach ([$uppercaseHeaderTemplate, $titleCaseHeaderTemplate] as $caseTransformingTemplate) {
                 try {
