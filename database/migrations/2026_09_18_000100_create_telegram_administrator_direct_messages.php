@@ -65,7 +65,7 @@ ALTER TABLE telegram_administrator_direct_messages
     ADD CONSTRAINT tg_admin_direct_message_type_chk CHECK (content_type = 'text'),
     ADD CONSTRAINT tg_admin_direct_message_cipher_chk CHECK (OCTET_LENGTH(content_ciphertext) BETWEEN 1 AND 65536),
     ADD CONSTRAINT tg_admin_direct_message_integrity_chk CHECK (content_integrity_hash REGEXP '^[0-9a-f]{64}$'),
-    ADD CONSTRAINT tg_admin_direct_message_length_chk CHECK (content_length BETWEEN 1 AND 4096),
+    ADD CONSTRAINT tg_admin_direct_message_length_chk CHECK (content_length BETWEEN 1 AND 3500),
     ADD CONSTRAINT tg_admin_direct_message_correlation_chk CHECK (correlation_id REGEXP '^[A-Za-z0-9_.:-]{8,64}$'),
     ADD CONSTRAINT tg_admin_direct_message_delivery_chk CHECK (
         delivery_operation_public_id IS NULL

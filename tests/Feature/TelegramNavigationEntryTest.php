@@ -4568,8 +4568,8 @@ SQL);
         $composePayload = json_decode((string) $composeSession->payload, true, 512, JSON_THROW_ON_ERROR);
         self::assertSame(['selection'], array_keys($composePayload));
 
-        $secretText = ':keep '.str_repeat('A', 4090);
-        self::assertSame(4096, mb_strlen($secretText));
+        $secretText = ':keep '.str_repeat('A', 3494);
+        self::assertSame(3500, mb_strlen($secretText));
         $targetDeliveryCountBefore = DB::table('telegram_delivery_operations')
             ->where('recipient_chat_id', $targetTelegramId)
             ->count();
@@ -4610,25 +4610,10 @@ SQL);
         $confirmation = $this->latestConfidentialPresentation();
         self::assertStringContainsString('تأیید نهایی پیام مستقیم', $confirmation);
         self::assertStringContainsString((string) $targetTelegramId, $confirmation);
-        self::assertStringContainsString('متن دقیق پیام بلافاصله در پیام بالایی', $confirmation);
+        self::assertStringContainsString($secretText, $confirmation);
         self::assertStringContainsString('di', $confirmation);
         self::assertStringContainsString('et', $confirmation);
-        self::assertStringNotContainsString($secretText, $confirmation);
-
-        $contentOperationPublicId = DB::table('telegram_delivery_operations')
-            ->where('recipient_chat_id', $adminTelegramId)
-            ->orderByDesc('id')
-            ->skip(1)
-            ->value('public_id');
-        self::assertIsString($contentOperationPublicId);
-        $contentCiphertext = DB::table('telegram_delivery_confidential_presentations')
-            ->where('delivery_operation_public_id', $contentOperationPublicId)
-            ->value('presentation_ciphertext');
-        self::assertIsString($contentCiphertext);
-        self::assertSame(
-            $secretText,
-            $this->app->make(StringEncrypter::class)->decryptString($contentCiphertext),
-        );
+        self::assertLessThanOrEqual(4096, mb_strlen($confirmation));
 
         $durableBeforeConfirm = $this->navigationCommonDurableEvidence((int) $confirmSession->id, $adminTelegramId);
         self::assertStringNotContainsString($secretText, $durableBeforeConfirm);

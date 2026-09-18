@@ -61,14 +61,14 @@ Account ID: :account_id
 Username: :username
 
 Send the text you want to deliver to this customer. Nothing is sent until the final confirmation step.',
-                'message_invalid' => 'Send a non-empty text message up to 4096 characters.',
+                'message_invalid' => 'Send a non-empty text message up to 3500 characters.',
                 'message_confirmation' => 'Final Direct Message Confirmation
 
 Telegram ID: :telegram_id
 Account ID: :account_id
 Username: :username
 
-The exact message is shown immediately above. Confirm below to queue it once.',
+Message to send:',
                 'message_confirm_button' => 'Confirm and queue',
                 'message_queued' => 'The direct message was queued once. Its Telegram result and message ID remain linked to the delivery record.',
                 'message_unavailable' => 'The draft expired or the selected target changed. Review the current target and compose a new message.',

@@ -49,7 +49,7 @@ final readonly class TelegramAdministratorDirectMessageService
 
     private const CONTENT_TYPE_TEXT = 'text';
 
-    private const MAX_TEXT_LENGTH = 4096;
+    private const MAX_TEXT_LENGTH = 3500;
 
     public function __construct(
         private DatabaseManager $database,

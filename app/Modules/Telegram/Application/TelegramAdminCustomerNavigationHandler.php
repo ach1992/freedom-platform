@@ -620,14 +620,12 @@ final readonly class TelegramAdminCustomerNavigationHandler
             'username' => $username,
         ]);
 
-        // Keep the exact user-authored text in its own confidential Telegram
-        // presentation. This preserves the full 4096-character delivery limit
-        // while the separately idempotent control message carries target context
-        // and the final confirmation buttons.
-        $this->queue($action, $draft->text, 'message-confirm-content');
+        // The bounded text limit reserves enough room for the target context so
+        // the administrator always reviews target + exact content + Confirm in
+        // one confidential Telegram presentation before any customer effect.
         $this->queue(
             $action,
-            $header,
+            $header."\n\n".$draft->text,
             'message-confirm',
             $this->messageConfirmationKeyboard($action, $sessionVersion, $locale, $draftPublicId),
         );
@@ -727,7 +725,7 @@ final readonly class TelegramAdminCustomerNavigationHandler
         TelegramInteractionAction $action,
         string $text,
         string $surface,
-        ?TelegramInlineKeyboardSnapshot $keyboard = null,
+        TelegramInlineKeyboardSnapshot $keyboard,
     ): void {
         $source = new readonly class($text) implements ConfidentialTelegramPresentationSource
         {
