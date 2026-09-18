@@ -266,6 +266,10 @@ final readonly class TelegramAdminCustomerNavigationHandler
                 return;
             }
             if ($action->callbackAction === self::ACTION_MESSAGE_CONFIRM && $action->callbackPayload === []) {
+                if ($action->replayed
+                    && $this->recoverAdvancedMessageSubmission($action, $selection, $draftPublicId)) {
+                    return;
+                }
                 $this->beginMessageSubmission($action, $selection, $draftPublicId);
 
                 return;
@@ -297,6 +301,42 @@ final readonly class TelegramAdminCustomerNavigationHandler
     {
         [$selection, $draftPublicId] = $this->submittingStateFromPayload($action->sessionPayload);
         $this->resumeMessageSubmission($action, $action->sessionVersion, $selection, $draftPublicId);
+    }
+
+    private function recoverAdvancedMessageSubmission(
+        TelegramInteractionAction $action,
+        string $selection,
+        string $draftPublicId,
+    ): bool {
+        $session = $this->sessions->activeForAccount($action->telegramAccountId);
+        if ($session === null
+            || $session->publicId !== $action->sessionPublicId
+            || $session->userId !== $action->userId
+            || $session->version <= $action->sessionVersion) {
+            return false;
+        }
+
+        // A newer durable session version proves that this accepted callback's
+        // original confirmation snapshot was already consumed. Never rerun the
+        // pre-acceptance authorization path against that stale snapshot.
+        if ($session->state !== self::STATE_MESSAGE_SUBMITTING) {
+            return true;
+        }
+
+        [$currentSelection, $currentDraftPublicId] = $this->submittingStateFromPayload($session->payload);
+        if (! hash_equals($selection, $currentSelection)
+            || ! hash_equals($draftPublicId, $currentDraftPublicId)) {
+            return true;
+        }
+
+        $this->resumeMessageSubmission(
+            $this->actionForSession($action, $session, 'message-submit-replay'),
+            $session->version,
+            $currentSelection,
+            $currentDraftPublicId,
+        );
+
+        return true;
     }
 
     private function beginMessageSubmission(
