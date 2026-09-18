@@ -192,6 +192,9 @@ final class TelegramInteractionAuthorityTest extends TestCase
             $this->app->forgetInstance('encrypter');
             $this->forgetInteractionServices();
 
+            $migration = require database_path('migrations/2026_08_25_000100_enable_telegram_interaction_authority.php');
+            $migration->up();
+
             $issueReplay = $this->callbacks()->issue(
                 $session->publicId,
                 $session->version,
