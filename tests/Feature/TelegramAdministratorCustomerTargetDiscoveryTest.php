@@ -189,7 +189,7 @@ final class TelegramAdministratorCustomerTargetDiscoveryTest extends TestCase
         self::assertNull($ambiguous->target);
     }
 
-    /** @return array{user_id:int,public_id:string,telegram_user_id:int} */
+    /** @return array{user_id:int,public_id:string} */
     private function customer(int $telegramUserId, string $username, string $botId): array
     {
         $now = now('UTC');
@@ -217,7 +217,7 @@ final class TelegramAdministratorCustomerTargetDiscoveryTest extends TestCase
             'updated_at' => $now,
         ]);
 
-        return ['user_id' => $userId, 'public_id' => $publicId, 'telegram_user_id' => $telegramUserId];
+        return ['user_id' => $userId, 'public_id' => $publicId];
     }
 
     private function administrator(?string $roleCode = null, ?int $userId = null): int
