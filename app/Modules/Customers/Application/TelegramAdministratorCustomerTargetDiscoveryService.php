@@ -11,6 +11,7 @@ use App\Modules\Telegram\Application\TelegramAdministratorCustomerTargetSearchRe
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\Query\Builder;
+use Illuminate\Support\Collection;
 use InvalidArgumentException;
 use RuntimeException;
 
@@ -66,7 +67,7 @@ final readonly class TelegramAdministratorCustomerTargetDiscoveryService impleme
             $builder->where('account.username', $username);
         }
 
-        /** @var \Illuminate\Support\Collection<int,CustomerTargetRow> $rows */
+        /** @var Collection<int,CustomerTargetRow> $rows */
         $rows = $builder
             ->orderBy('user.id')
             ->limit(3)
