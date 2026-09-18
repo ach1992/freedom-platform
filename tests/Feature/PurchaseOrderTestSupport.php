@@ -190,11 +190,11 @@ SQL);
         $this->app->forgetInstance(TargetCapacityAllocator::class);
     }
 
-    protected function createPurchaseOrderSettlement(string $suffix): PurchaseSettlementReceipt
+    protected function createPurchaseOrderSettlement(string $suffix, ?int $userId = null): PurchaseSettlementReceipt
     {
         $methodCode = 'order_gateway_'.$suffix;
         $administratorId = $this->ownerAdministrator();
-        $userId = $this->quoteUser('customer');
+        $userId ??= $this->quoteUser('customer');
         $offering = $this->quoteOffering();
         $quote = $this->app->make(QuoteService::class)->create(
             'purchase.order.quote.'.$suffix,
