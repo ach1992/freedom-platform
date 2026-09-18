@@ -394,6 +394,7 @@ final class LocalizationTemplateCatalog
             }
             $limits[$key] = $limit;
         }
+
         return $limits;
     }
 
@@ -423,11 +424,12 @@ final class LocalizationTemplateCatalog
                 $limits[$key][$placeholder] = $limit;
             }
         }
+
         return $limits;
     }
 
     /** @param list<string> $placeholders
-     * @param array<string, int> $placeholderLimits
+     * @param  array<string, int>  $placeholderLimits
      */
     private function assertRenderedBudgetConfiguration(array $placeholders, array $placeholderLimits): void
     {
@@ -451,6 +453,7 @@ final class LocalizationTemplateCatalog
             }
             $length += $limit - mb_strlen((string) $match[0]);
         }
+
         return $length;
     }
 
