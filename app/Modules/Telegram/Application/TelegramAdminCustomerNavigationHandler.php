@@ -287,7 +287,7 @@ final readonly class TelegramAdminCustomerNavigationHandler
             $action->telegramUserId,
             $presentation,
             'tg-admin-customer-delivery:'.hash('sha256', $action->requestKey.':'.$surface),
-            'tg-admin-customer:'.substr(hash('sha256', $action->botId.':'.$action->updateId.':'.$surface), 0, 48),
+            'tg-admin-customer:'.substr(hash('sha256', $action->botId.':'.$action->updateId.':'.$surface), 0, 40),
             $keyboard,
         );
     }
