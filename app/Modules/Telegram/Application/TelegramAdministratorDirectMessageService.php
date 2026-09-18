@@ -495,16 +495,14 @@ final readonly class TelegramAdministratorDirectMessageService
 
         $text = $this->decrypt((string) $row->content_ciphertext);
         if ((int) $row->content_length !== mb_strlen($text)
-            || ! hash_equals(
+            || ! $this->integrityHashMatches(
                 (string) $row->content_integrity_hash,
-                $this->integrityHash(
-                    $publicId,
-                    $administratorId,
-                    $botId,
-                    $targetAccountPublicId,
-                    $targetTelegramUserId,
-                    $text,
-                ),
+                $publicId,
+                $administratorId,
+                $botId,
+                $targetAccountPublicId,
+                $targetTelegramUserId,
+                $text,
             )) {
             throw new DomainException('Telegram administrator direct-message content integrity validation failed.');
         }
@@ -581,6 +579,59 @@ final readonly class TelegramAdministratorDirectMessageService
         string $targetTelegramUserId,
         #[SensitiveParameter] string $text,
     ): string {
+        return $this->integrityHashWithKey(
+            $publicId,
+            $administratorId,
+            $botId,
+            $targetAccountPublicId,
+            $targetTelegramUserId,
+            $text,
+            $this->integrityKeys()[0],
+        );
+    }
+
+    private function integrityHashMatches(
+        string $storedHash,
+        string $publicId,
+        int $administratorId,
+        string $botId,
+        string $targetAccountPublicId,
+        string $targetTelegramUserId,
+        #[SensitiveParameter] string $text,
+    ): bool {
+        if (preg_match('/\\A[0-9a-f]{64}\\z/', $storedHash) !== 1) {
+            return false;
+        }
+
+        foreach ($this->integrityKeys() as $key) {
+            if (hash_equals(
+                $storedHash,
+                $this->integrityHashWithKey(
+                    $publicId,
+                    $administratorId,
+                    $botId,
+                    $targetAccountPublicId,
+                    $targetTelegramUserId,
+                    $text,
+                    $key,
+                ),
+            )) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function integrityHashWithKey(
+        string $publicId,
+        int $administratorId,
+        string $botId,
+        string $targetAccountPublicId,
+        string $targetTelegramUserId,
+        #[SensitiveParameter] string $text,
+        #[SensitiveParameter] string $key,
+    ): string {
         return hash_hmac(
             'sha256',
             implode("\0", [
@@ -592,18 +643,30 @@ final readonly class TelegramAdministratorDirectMessageService
                 $targetTelegramUserId,
                 $text,
             ]),
-            $this->integrityKey(),
+            $key,
         );
     }
 
-    private function integrityKey(): string
+    /** @return non-empty-list<string> */
+    private function integrityKeys(): array
     {
-        $key = $this->config->get('app.key');
-        if (! is_string($key) || strlen($key) < 16) {
-            throw new RuntimeException('Telegram administrator direct-message integrity key is unavailable.');
+        $currentKey = $this->config->get('app.key');
+        $previousKeys = $this->config->get('app.previous_keys', []);
+        if (! is_string($currentKey) || strlen($currentKey) < 16 || ! is_array($previousKeys)) {
+            throw new RuntimeException('Telegram administrator direct-message integrity keyring is unavailable.');
         }
 
-        return $key;
+        $keys = [$currentKey];
+        foreach ($previousKeys as $previousKey) {
+            if (! is_string($previousKey) || strlen($previousKey) < 16) {
+                throw new RuntimeException('Telegram administrator direct-message integrity keyring is unavailable.');
+            }
+            if (! in_array($previousKey, $keys, true)) {
+                $keys[] = $previousKey;
+            }
+        }
+
+        return $keys;
     }
 
     private function draftTtlSeconds(): int
