@@ -14,6 +14,17 @@ use Illuminate\Database\Query\Builder;
 use InvalidArgumentException;
 use RuntimeException;
 
+/**
+ * @phpstan-type CustomerTargetRow object{
+ *     internal_user_id:int|string,
+ *     public_id:string,
+ *     account_type:string,
+ *     account_status:string,
+ *     locale:string,
+ *     telegram_user_id:int|string,
+ *     username:string|null
+ * }
+ */
 final readonly class TelegramAdministratorCustomerTargetDiscoveryService implements TelegramAdministratorCustomerTargetDiscovery
 {
     private const PERMISSION = 'identity.customers.view';
@@ -52,9 +63,10 @@ final readonly class TelegramAdministratorCustomerTargetDiscoveryService impleme
             if (preg_match('/\A[A-Za-z0-9_]{5,32}\z/', $username) !== 1) {
                 return TelegramAdministratorCustomerTargetSearchResult::notFound();
             }
-            $builder->whereRaw('LOWER(account.username) = ?', [strtolower($username)]);
+            $builder->where('account.username', $username);
         }
 
+        /** @var \Illuminate\Support\Collection<int,CustomerTargetRow> $rows */
         $rows = $builder
             ->orderBy('user.id')
             ->limit(3)
@@ -72,6 +84,7 @@ final readonly class TelegramAdministratorCustomerTargetDiscoveryService impleme
             return TelegramAdministratorCustomerTargetSearchResult::notFound();
         }
 
+        /** @var array<int,CustomerTargetRow> $byUser */
         $byUser = [];
         foreach ($rows as $row) {
             $internalUserId = $this->positiveDatabaseInt($row->internal_user_id ?? null, 'Customer target internal user ID');
@@ -97,6 +110,7 @@ final readonly class TelegramAdministratorCustomerTargetDiscoveryService impleme
             throw new AuthorizationException('Telegram administrator customer target is unavailable.');
         }
 
+        /** @var CustomerTargetRow|null $row */
         $row = $this->baseQuery($botId)
             ->whereRaw(
                 "LEFT(SHA2(CONCAT('telegram-admin-customer-target-v1:', ?, ':', ?, ':', user.public_id), 256), 40) = ?",
@@ -129,6 +143,7 @@ final readonly class TelegramAdministratorCustomerTargetDiscoveryService impleme
             ->where('user.account_status', '<>', 'deleted');
     }
 
+    /** @param CustomerTargetRow $row */
     private function target(int $actorUserId, string $botId, object $row): TelegramAdministratorCustomerTarget
     {
         $publicId = $this->databaseString($row->public_id ?? null, 'Customer target public ID');
