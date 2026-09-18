@@ -271,6 +271,22 @@ final class TelegramSupportBusinessReferenceNavigationTest extends TestCase
         self::assertSame('support_create_reference_type', $this->supportSession($accountId)['state']);
         if ($exerciseBackAndCrossActor) {
             self::assertStringContainsString('در صورت تمایل', $this->latestConfidentialPresentation($telegramUserId));
+
+            $back = $this->callbackToken('navigation.back', $accountId);
+            $updateId++;
+            $this->accept($this->callbackPayload($updateId, $telegramUserId, 'support_reference_owner', 'fa', $back));
+            $processor->process('123456789', $updateId);
+            self::assertSame('support_create_category', $this->supportSession($accountId)['state']);
+
+            $category = $this->callbackToken(
+                'navigation.support.category',
+                $accountId,
+                json_encode(['category' => 'other'], JSON_THROW_ON_ERROR),
+            );
+            $updateId++;
+            $this->accept($this->callbackPayload($updateId, $telegramUserId, 'support_reference_owner', 'fa', $category));
+            $processor->process('123456789', $updateId);
+            self::assertSame('support_create_reference_type', $this->supportSession($accountId)['state']);
         }
 
         $referenceTypeCallback = $this->callbackToken(
