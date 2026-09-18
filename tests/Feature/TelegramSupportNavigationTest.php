@@ -119,45 +119,58 @@ final class TelegramSupportNavigationTest extends TestCase
         $category = $this->callbackToken('navigation.support.category', $account['account_id'], json_encode(['category' => 'other'], JSON_THROW_ON_ERROR));
         $this->accept($this->callbackPayload(8105, $telegramUserId, 'support_customer', 'fa', $category));
         $processor->process('123456789', 8105);
+        self::assertSame('support_create_reference_type', $this->supportSession($account['account_id'])['state']);
+        $noReference = $this->callbackToken(
+            'navigation.support.reference.type',
+            $account['account_id'],
+            json_encode(['reference_type' => 'none'], JSON_THROW_ON_ERROR),
+        );
+        $this->accept($this->callbackPayload(8106, $telegramUserId, 'support_customer', 'fa', $noReference));
+        $processor->process('123456789', 8106);
         self::assertSame('support_create_title', $this->supportSession($account['account_id'])['state']);
 
-        $this->accept($this->payload(8106, $telegramUserId, 'support_customer', 'fa', 'Connection issue'));
-        $processor->process('123456789', 8106);
+        $this->accept($this->payload(8107, $telegramUserId, 'support_customer', 'fa', 'Connection issue'));
+        $processor->process('123456789', 8107);
         self::assertSame('support_create_description', $this->supportSession($account['account_id'])['state']);
 
-        $this->accept($this->payload(8107, $telegramUserId, 'support_customer', 'fa', 'My service cannot connect.'));
-        $processor->process('123456789', 8107);
-        $ticket = DB::table('support_tickets')->where('requester_user_id', $account['user_id'])->first(['id', 'state']);
+        $this->accept($this->payload(8108, $telegramUserId, 'support_customer', 'fa', 'My service cannot connect.'));
+        $processor->process('123456789', 8108);
+        $ticket = DB::table('support_tickets')->where('requester_user_id', $account['user_id'])->first([
+            'id', 'state', 'order_id', 'payment_intent_id', 'service_subscription_id',
+        ]);
         self::assertNotNull($ticket);
+        self::assertNull($ticket->order_id);
+        self::assertNull($ticket->payment_intent_id);
+        self::assertNull($ticket->service_subscription_id);
         self::assertSame('support_ticket', $this->supportSession($account['account_id'])['state']);
         self::assertSame(1, DB::table('support_tickets')->where('requester_user_id', $account['user_id'])->count());
         self::assertSame(1, DB::table('support_ticket_messages')->where('ticket_id', (int) $ticket->id)->count());
-        $processor->process('123456789', 8107);
+        $processor->process('123456789', 8108);
         self::assertSame(1, DB::table('support_tickets')->where('requester_user_id', $account['user_id'])->count());
         self::assertSame(1, DB::table('support_ticket_messages')->where('ticket_id', (int) $ticket->id)->count());
 
         $reply = $this->callbackToken('navigation.support.reply', $account['account_id']);
-        $this->accept($this->callbackPayload(8108, $telegramUserId, 'support_customer', 'fa', $reply));
-        $processor->process('123456789', 8108);
+        $this->accept($this->callbackPayload(8109, $telegramUserId, 'support_customer', 'fa', $reply));
+        $processor->process('123456789', 8109);
         self::assertSame('support_reply', $this->supportSession($account['account_id'])['state']);
-        $this->accept($this->payload(8109, $telegramUserId, 'support_customer', 'fa', 'Additional detail'));
-        $processor->process('123456789', 8109);
-        $processor->process('123456789', 8109);
+        $this->accept($this->payload(8110, $telegramUserId, 'support_customer', 'fa', 'Additional detail'));
+        $processor->process('123456789', 8110);
+        $processor->process('123456789', 8110);
         self::assertSame(2, DB::table('support_ticket_messages')->where('ticket_id', (int) $ticket->id)->count());
         self::assertSame('support_ticket', $this->supportSession($account['account_id'])['state']);
 
         $close = $this->callbackToken('navigation.support.close', $account['account_id']);
-        $this->accept($this->callbackPayload(8110, $telegramUserId, 'support_customer', 'fa', $close));
-        $processor->process('123456789', 8110);
-        self::assertSame('support_close', $this->supportSession($account['account_id'])['state']);
-        $this->accept($this->payload(8111, $telegramUserId, 'support_customer', 'fa', 'Issue solved'));
+        $this->accept($this->callbackPayload(8111, $telegramUserId, 'support_customer', 'fa', $close));
         $processor->process('123456789', 8111);
+        self::assertSame('support_close', $this->supportSession($account['account_id'])['state']);
+        $this->accept($this->payload(8112, $telegramUserId, 'support_customer', 'fa', 'Issue solved'));
+        $processor->process('123456789', 8112);
         self::assertSame(SupportTicketState::Closed->value, DB::table('support_tickets')->where('id', (int) $ticket->id)->value('state'));
         self::assertNotNull(DB::table('support_tickets')->where('id', (int) $ticket->id)->value('reopen_until'));
 
         $reopen = $this->callbackToken('navigation.support.reopen', $account['account_id']);
-        $this->accept($this->callbackPayload(8112, $telegramUserId, 'support_customer', 'fa', $reopen));
-        $processor->process('123456789', 8112);
+        $this->accept($this->callbackPayload(8113, $telegramUserId, 'support_customer', 'fa', $reopen));
+        $processor->process('123456789', 8113);
         self::assertSame(SupportTicketState::AwaitingSupport->value, DB::table('support_tickets')->where('id', (int) $ticket->id)->value('state'));
         self::assertSame('support_ticket', $this->supportSession($account['account_id'])['state']);
     }
@@ -549,42 +562,56 @@ final class TelegramSupportNavigationTest extends TestCase
         );
         $this->accept($this->callbackPayload(8263, $telegramUserId, 'support_rate_create', 'fa', $category));
         $processor->process('123456789', 8263);
-        $this->accept($this->payload(8264, $telegramUserId, 'support_rate_create', 'fa', 'First rate-limited ticket'));
+        $noReference = $this->callbackToken(
+            'navigation.support.reference.type',
+            $account['account_id'],
+            json_encode(['reference_type' => 'none'], JSON_THROW_ON_ERROR),
+        );
+        $this->accept($this->callbackPayload(8264, $telegramUserId, 'support_rate_create', 'fa', $noReference));
         $processor->process('123456789', 8264);
-        $this->accept($this->payload(8265, $telegramUserId, 'support_rate_create', 'fa', 'First body'));
+        $this->accept($this->payload(8265, $telegramUserId, 'support_rate_create', 'fa', 'First rate-limited ticket'));
         $processor->process('123456789', 8265);
+        $this->accept($this->payload(8266, $telegramUserId, 'support_rate_create', 'fa', 'First body'));
+        $processor->process('123456789', 8266);
         self::assertSame(1, DB::table('support_tickets')->where('requester_user_id', $account['user_id'])->count());
 
         $back = $this->callbackToken('navigation.back', $account['account_id']);
-        $this->accept($this->callbackPayload(8266, $telegramUserId, 'support_rate_create', 'fa', $back));
-        $processor->process('123456789', 8266);
+        $this->accept($this->callbackPayload(8267, $telegramUserId, 'support_rate_create', 'fa', $back));
+        $processor->process('123456789', 8267);
         self::assertSame('support_home', $this->supportSession($account['account_id'])['state']);
         $create = $this->callbackToken('navigation.support.create', $account['account_id']);
-        $this->accept($this->callbackPayload(8267, $telegramUserId, 'support_rate_create', 'fa', $create));
-        $processor->process('123456789', 8267);
+        $this->accept($this->callbackPayload(8268, $telegramUserId, 'support_rate_create', 'fa', $create));
+        $processor->process('123456789', 8268);
         $category = $this->callbackToken(
             'navigation.support.category',
             $account['account_id'],
             json_encode(['category' => 'other'], JSON_THROW_ON_ERROR),
         );
-        $this->accept($this->callbackPayload(8268, $telegramUserId, 'support_rate_create', 'fa', $category));
-        $processor->process('123456789', 8268);
-        $this->accept($this->payload(8269, $telegramUserId, 'support_rate_create', 'fa', 'Second rate-limited ticket'));
+        $this->accept($this->callbackPayload(8269, $telegramUserId, 'support_rate_create', 'fa', $category));
         $processor->process('123456789', 8269);
-        $this->accept($this->payload(8270, $telegramUserId, 'support_rate_create', 'fa', 'Second body'));
+        $noReference = $this->callbackToken(
+            'navigation.support.reference.type',
+            $account['account_id'],
+            json_encode(['reference_type' => 'none'], JSON_THROW_ON_ERROR),
+        );
+        $this->accept($this->callbackPayload(8270, $telegramUserId, 'support_rate_create', 'fa', $noReference));
         $processor->process('123456789', 8270);
+        $this->accept($this->payload(8271, $telegramUserId, 'support_rate_create', 'fa', 'Second rate-limited ticket'));
+        $processor->process('123456789', 8271);
+        $this->accept($this->payload(8272, $telegramUserId, 'support_rate_create', 'fa', 'Second body'));
+        $processor->process('123456789', 8272);
 
         self::assertSame(1, DB::table('support_tickets')->where('requester_user_id', $account['user_id'])->count());
         self::assertSame('support_create_description', $this->supportSession($account['account_id'])['state']);
         self::assertStringContainsString('ثانیه', $this->latestConfidentialPresentation($telegramUserId));
         $this->assertDatabaseHas('processed_telegram_updates', [
             'bot_id' => '123456789',
-            'update_id' => 8270,
+            'update_id' => 8272,
             'state' => 'processed',
             'last_error_class' => null,
         ]);
         $deliveryCount = DB::table('telegram_delivery_operations')->where('recipient_chat_id', $telegramUserId)->count();
-        $processor->process('123456789', 8270);
+        $processor->process('123456789', 8272);
         self::assertSame($deliveryCount, DB::table('telegram_delivery_operations')->where('recipient_chat_id', $telegramUserId)->count());
     }
 
@@ -844,7 +871,7 @@ final class TelegramSupportNavigationTest extends TestCase
         );
         $this->accept($this->callbackPayload(8406, $telegramUserId, 'support_recovery', 'fa', $category));
         $processor->process('123456789', 8406);
-        self::assertSame('support_create_title', $this->supportSession($account['account_id'])['state']);
+        self::assertSame('support_create_reference_type', $this->supportSession($account['account_id'])['state']);
 
         $this->accept($this->payload(8407, $telegramUserId, 'support_recovery', 'fa', '/cancel'));
         $processor->process('123456789', 8407);
@@ -879,7 +906,7 @@ final class TelegramSupportNavigationTest extends TestCase
         );
         $this->accept($this->callbackPayload(8503, $telegramUserId, 'support_timeout', 'fa', $category));
         $processor->process('123456789', 8503);
-        self::assertSame('support_create_title', $this->supportSession($account['account_id'])['state']);
+        self::assertSame('support_create_reference_type', $this->supportSession($account['account_id'])['state']);
 
         $clock->advance('+31 minutes');
         self::assertNull($this->app->make(TelegramInteractionSessionService::class)->activeForAccount($account['account_id']));
