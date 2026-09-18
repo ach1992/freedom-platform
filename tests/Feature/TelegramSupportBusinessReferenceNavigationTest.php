@@ -14,7 +14,6 @@ use App\Modules\Telegram\Application\TelegramDeliveryConfidentialPresentationDat
 use App\Modules\Telegram\Application\TelegramInteractionCallbackService;
 use App\Modules\Telegram\Application\TelegramInteractionRejected;
 use App\Modules\Telegram\Application\TelegramInteractionSessionService;
-use App\Modules\Telegram\Application\TelegramNavigationEntryGateway;
 use App\Modules\Telegram\Application\TelegramSupportBusinessReferenceListItem;
 use App\Modules\Telegram\Application\TelegramSupportBusinessReferencePage;
 use App\Modules\Telegram\Application\TelegramSupportBusinessReferenceResolution;
@@ -107,13 +106,23 @@ final class TelegramSupportBusinessReferenceNavigationTest extends TestCase
 
     public function test_customer_can_link_one_owned_order_payment_or_service_without_persisting_raw_ids_in_interaction_state(): void
     {
-        $references = $this->referenceBundle('telegram-support-navigation');
         $telegramUserId = 9890;
         $otherTelegramUserId = 9891;
-        $account = $this->primeSupportHome($references['user_id'], $telegramUserId, 'fa');
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+
+        $this->accept($this->payload(8800, $otherTelegramUserId, 'support_reference_other', 'fa', '/start'));
+        $processor->process('123456789', 8800);
+
+        $this->accept($this->payload(8810, $telegramUserId, 'support_reference_owner', 'fa', '/start'));
+        $processor->process('123456789', 8810);
+        $account = $this->account($telegramUserId);
+        $references = $this->referenceBundle($account['user_id'], 'telegram-support-navigation');
         self::assertSame($references['user_id'], $account['user_id']);
 
-        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $support = $this->callbackToken('navigation.support', $account['account_id']);
+        $this->accept($this->callbackPayload(8811, $telegramUserId, 'support_reference_owner', 'fa', $support));
+        $processor->process('123456789', 8811);
+
         $updateId = 8811;
         foreach ([
             ['type' => 'order', 'column' => 'order_id', 'id' => $references['order_id'], 'title' => 'Order reference'],
@@ -158,7 +167,13 @@ final class TelegramSupportBusinessReferenceNavigationTest extends TestCase
         $this->app->instance(TelegramSupportOwnedOrderProjection::class, $projection);
         $processor = $this->app->make(TelegramUpdateProcessor::class);
         $telegramUserId = 9892;
-        $account = $this->primeSupportHome($this->quoteUser('customer'), $telegramUserId, 'fa');
+
+        $this->accept($this->payload(8920, $telegramUserId, 'support_reference_stale', 'fa', '/start'));
+        $processor->process('123456789', 8920);
+        $account = $this->account($telegramUserId);
+        $support = $this->callbackToken('navigation.support', $account['account_id']);
+        $this->accept($this->callbackPayload(8921, $telegramUserId, 'support_reference_stale', 'fa', $support));
+        $processor->process('123456789', 8921);
         $create = $this->callbackToken('navigation.support.create', $account['account_id']);
         $this->accept($this->callbackPayload(8922, $telegramUserId, 'support_reference_stale', 'fa', $create));
         $processor->process('123456789', 8922);
@@ -197,7 +212,13 @@ final class TelegramSupportBusinessReferenceNavigationTest extends TestCase
     {
         $processor = $this->app->make(TelegramUpdateProcessor::class);
         $telegramUserId = 9893;
-        $account = $this->primeSupportHome($this->quoteUser('customer'), $telegramUserId, 'en');
+
+        $this->accept($this->payload(8930, $telegramUserId, 'support_reference_en', 'en', '/start'));
+        $processor->process('123456789', 8930);
+        $account = $this->account($telegramUserId);
+        $support = $this->callbackToken('navigation.support', $account['account_id']);
+        $this->accept($this->callbackPayload(8931, $telegramUserId, 'support_reference_en', 'en', $support));
+        $processor->process('123456789', 8931);
         $create = $this->callbackToken('navigation.support.create', $account['account_id']);
         $this->accept($this->callbackPayload(8932, $telegramUserId, 'support_reference_en', 'en', $create));
         $processor->process('123456789', 8932);
@@ -354,51 +375,6 @@ final class TelegramSupportBusinessReferenceNavigationTest extends TestCase
     }
 
     /** @return array{account_id:int,user_id:int} */
-    private function primeSupportHome(int $userId, int $telegramUserId, string $locale): array
-    {
-        $this->bindTelegramAccount($userId, $telegramUserId, $locale);
-        $account = $this->account($telegramUserId);
-        $session = $this->app->make(TelegramInteractionSessionService::class)->start(
-            $account['account_id'],
-            TelegramNavigationEntryGateway::FLOW,
-            'support_home',
-            [],
-            'test-support-business-reference-home:'.$telegramUserId,
-        );
-        $this->app->make(TelegramInteractionCallbackService::class)->issue(
-            $session->publicId,
-            $session->version,
-            'navigation.support.create',
-            [],
-            'test-support-business-reference-create:'.$telegramUserId,
-        );
-
-        return $account;
-    }
-
-    private function bindTelegramAccount(int $userId, int $telegramUserId, string $locale): void
-    {
-        $now = now('UTC');
-        DB::table('telegram_accounts')->insert([
-            'user_id' => $userId,
-            'bot_id' => 123456789,
-            'telegram_user_id' => $telegramUserId,
-            'username' => 'support_reference_owner',
-            'language_code' => $locale,
-            'is_bot' => false,
-            'first_seen_at' => $now,
-            'last_seen_at' => $now,
-            'created_at' => $now,
-            'updated_at' => $now,
-        ]);
-        DB::table('users')->where('id', $userId)->update([
-            'locale' => $locale,
-            'last_seen_at' => $now,
-            'updated_at' => $now,
-        ]);
-    }
-
-    /** @return array{account_id:int,user_id:int} */
     private function account(int $telegramUserId): array
     {
         $account = DB::table('telegram_accounts')->where('telegram_user_id', $telegramUserId)->first(['id', 'user_id']);
@@ -452,9 +428,9 @@ final class TelegramSupportBusinessReferenceNavigationTest extends TestCase
      *     service_subscription_id:int
      * }
      */
-    private function referenceBundle(string $suffix): array
+    private function referenceBundle(int $userId, string $suffix): array
     {
-        $settlement = $this->createPurchaseOrderSettlement($suffix);
+        $settlement = $this->createPurchaseOrderSettlement($suffix, $userId);
         $order = $this->app->make(PurchaseOrderService::class)->createFromSettlement(
             $settlement->settlementPublicId,
             $this->purchaseOrderCorrelation('order-'.$suffix),
