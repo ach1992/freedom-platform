@@ -841,7 +841,7 @@ final readonly class TelegramSupportNavigationHandler
                 self::ACTION_REFERENCE_SELECT,
                 [
                     'reference_type' => $referenceType,
-                    'selection_token' => $item['token'],
+                    'selection' => $item['token'],
                 ],
                 'tg-support-reference-select:'.hash('sha256', $action->requestKey.':'.$referenceType.':'.$item['token']),
             );
@@ -1613,7 +1613,7 @@ final readonly class TelegramSupportNavigationHandler
         if ($selectionToken === null || preg_match('/\\A[0-9a-f]{40}\\z/', $selectionToken) !== 1) {
             throw new AuthorizationException('Telegram Support business-reference selection is unavailable.');
         }
-        $payload['selection_token'] = $selectionToken;
+        $payload['selection'] = $selectionToken;
 
         return $payload;
     }
@@ -1637,7 +1637,7 @@ final readonly class TelegramSupportNavigationHandler
     /** @param array<string,mixed> $payload */
     private function selectionTokenPayload(array $payload): string
     {
-        $selectionToken = $this->stringPayload($payload, 'selection_token');
+        $selectionToken = $this->stringPayload($payload, 'selection');
         if (preg_match('/\\A[0-9a-f]{40}\\z/', $selectionToken) !== 1) {
             throw new AuthorizationException('Telegram Support business-reference selection is unavailable.');
         }
