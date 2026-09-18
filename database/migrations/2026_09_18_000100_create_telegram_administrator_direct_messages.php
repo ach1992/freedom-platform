@@ -39,6 +39,7 @@ return new class extends Migration
             $table->ulid('delivery_operation_public_id')->nullable();
             $table->unique('delivery_operation_public_id', 'tg_admin_direct_message_delivery_unique');
             $table->dateTime('expires_at', 6);
+            $table->dateTime('confirmed_at', 6)->nullable();
             $table->dateTime('queued_at', 6)->nullable();
             $table->dateTime('created_at', 6);
             $table->dateTime('updated_at', 6);
@@ -72,9 +73,16 @@ ALTER TABLE telegram_administrator_direct_messages
         OR (delivery_operation_public_id REGEXP '^[0-9A-HJKMNP-TV-Z]{26}$'
             AND BINARY delivery_operation_public_id = BINARY UPPER(delivery_operation_public_id))
     ),
+    ADD CONSTRAINT tg_admin_direct_message_confirmation_chk CHECK (
+        confirmed_at IS NULL
+        OR (confirmed_at >= created_at AND confirmed_at < expires_at AND updated_at >= confirmed_at)
+    ),
     ADD CONSTRAINT tg_admin_direct_message_queue_shape_chk CHECK (
         (delivery_operation_public_id IS NULL AND queued_at IS NULL)
-        OR (delivery_operation_public_id IS NOT NULL AND queued_at IS NOT NULL)
+        OR (delivery_operation_public_id IS NOT NULL
+            AND confirmed_at IS NOT NULL
+            AND queued_at IS NOT NULL
+            AND queued_at >= confirmed_at)
     ),
     ADD CONSTRAINT tg_admin_direct_message_time_chk CHECK (expires_at > created_at AND updated_at >= created_at)
 SQL);

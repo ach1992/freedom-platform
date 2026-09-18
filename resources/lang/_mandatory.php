@@ -47,6 +47,10 @@ return [
             'canned.details.label', 'canned.details.body',
             'canned.recheck.label', 'canned.recheck.body',
         ],
+        'telegram' => [
+            'navigation.admin.customer_search.message_confirmation',
+            'navigation.admin.customer_search.username_unavailable',
+        ],
         'broadcast' => ['preview', 'schedule', 'progress', 'pause', 'resume', 'cancel', 'edit', 'pin', 'unpin', 'delete'],
         'admin' => ['user_search', 'receipt_review', 'service_repair', 'batch_grant', 'reports', 'configuration'],
         'alert' => ['customer_impacting', 'financial', 'security', 'integration', 'queue', 'backup', 'update'],
@@ -64,5 +68,19 @@ return [
     ],
     'media_caption_keys' => [
         'broadcast.preview',
+    ],
+    'key_max_lengths' => [
+        'telegram.navigation.admin.customer_search.message_confirmation' => 594,
+        'telegram.navigation.admin.customer_search.username_unavailable' => 40,
+    ],
+    'rendered_max_lengths' => [
+        'telegram.navigation.admin.customer_search.message_confirmation' => 594,
+    ],
+    'placeholder_max_lengths' => [
+        'telegram.navigation.admin.customer_search.message_confirmation' => [
+            'telegram_id' => 20,
+            'account_id' => 26,
+            'username' => 40,
+        ],
     ],
 ];

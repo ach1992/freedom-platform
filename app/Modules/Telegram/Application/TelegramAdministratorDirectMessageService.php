@@ -38,6 +38,7 @@ use Throwable;
  *     correlation_id:string,
  *     delivery_operation_public_id:string|null,
  *     expires_at:string,
+ *     confirmed_at:string|null,
  *     queued_at:string|null,
  *     created_at:string,
  *     updated_at:string
@@ -77,7 +78,7 @@ final readonly class TelegramAdministratorDirectMessageService
     ): TelegramAdministratorDirectMessageDraft {
         $administratorId = $this->administrators->authorizeUser($actorUserId, self::PERMISSION);
         $target = $this->targets->resolve($actorUserId, $botId, $selectionToken);
-        $normalizedText = $this->normalizedText($text);
+        $validatedText = $this->validatedText($text);
         $requestHash = $this->requestHash($requestKey);
         $connection = $this->database->connection();
 
@@ -86,7 +87,7 @@ final readonly class TelegramAdministratorDirectMessageService
                 $administratorId,
                 $botId,
                 $target,
-                $normalizedText,
+                $validatedText,
                 $requestHash,
             ): TelegramAdministratorDirectMessageDraft {
                 $existing = $this->rowByRequestHash($connection, $requestHash, true);
@@ -96,7 +97,7 @@ final readonly class TelegramAdministratorDirectMessageService
                         $administratorId,
                         $botId,
                         $target,
-                        $normalizedText,
+                        $validatedText,
                         true,
                     );
                 }
@@ -104,7 +105,7 @@ final readonly class TelegramAdministratorDirectMessageService
                 $now = $this->clock->now();
                 $publicId = (string) Str::ulid();
                 $correlationId = 'tg-admin-dm:'.substr(hash('sha256', $publicId), 0, 40);
-                $ciphertext = $this->encrypt($normalizedText);
+                $ciphertext = $this->encrypt($validatedText);
                 $timestamp = $this->formatTime($now);
                 $expiresAt = $this->formatTime($now->modify('+'.$this->draftTtlSeconds().' seconds'));
 
@@ -123,12 +124,13 @@ final readonly class TelegramAdministratorDirectMessageService
                         $botId,
                         $target->accountPublicId,
                         $target->telegramUserId,
-                        $normalizedText,
+                        $validatedText,
                     ),
-                    'content_length' => mb_strlen($normalizedText),
+                    'content_length' => mb_strlen($validatedText),
                     'correlation_id' => $correlationId,
                     'delivery_operation_public_id' => null,
                     'expires_at' => $expiresAt,
+                    'confirmed_at' => null,
                     'queued_at' => null,
                     'created_at' => $timestamp,
                     'updated_at' => $timestamp,
@@ -144,7 +146,7 @@ final readonly class TelegramAdministratorDirectMessageService
                     $administratorId,
                     $botId,
                     $target,
-                    $normalizedText,
+                    $validatedText,
                     false,
                 );
             }, 3);
@@ -163,7 +165,7 @@ final readonly class TelegramAdministratorDirectMessageService
                 $administratorId,
                 $botId,
                 $target,
-                $normalizedText,
+                $validatedText,
                 true,
             );
         }
@@ -186,6 +188,54 @@ final readonly class TelegramAdministratorDirectMessageService
         return $this->draftFromRow($row, $administratorId, $botId, $target, null, false);
     }
 
+    /** @requirement COM-001 ACL-001 ACL-002 SEC-002 SEC-003 DAT-002 DAT-003 QUA-001 QUA-004 */
+    public function acceptTextConfirmation(
+        int $actorUserId,
+        string $botId,
+        string $selectionToken,
+        string $publicId,
+    ): TelegramAdministratorDirectMessageDraft {
+        $administratorId = $this->administrators->authorizeUser($actorUserId, self::PERMISSION);
+        $target = $this->targets->resolve($actorUserId, $botId, $selectionToken);
+        $connection = $this->database->connection();
+
+        return $connection->transaction(function (Connection $connection) use (
+            $administratorId,
+            $botId,
+            $target,
+            $publicId,
+        ): TelegramAdministratorDirectMessageDraft {
+            $row = $this->rowByPublicId($connection, $publicId, true);
+            if ($row === null) {
+                throw new DomainException('Telegram administrator direct-message draft is unavailable.');
+            }
+
+            $draft = $this->draftFromRow($row, $administratorId, $botId, $target, null, false);
+            if ($row->confirmed_at !== null) {
+                return $draft;
+            }
+
+            $now = $this->clock->now();
+            if ($this->parseTime((string) $row->expires_at) <= $now) {
+                throw new DomainException('Telegram administrator direct-message draft has expired.');
+            }
+
+            $timestamp = $this->formatTime($now);
+            $updated = $connection->table('telegram_administrator_direct_messages')
+                ->where('id', (int) $row->id)
+                ->whereNull('confirmed_at')
+                ->update([
+                    'confirmed_at' => $timestamp,
+                    'updated_at' => $timestamp,
+                ]);
+            if ($updated !== 1) {
+                throw new RuntimeException('Telegram administrator direct-message confirmation acceptance was not persisted.');
+            }
+
+            return $draft;
+        }, 3);
+    }
+
     /** @requirement COM-001 ACL-001 ACL-002 SEC-002 SEC-003 DAT-002 DAT-003 OPS-003 QUA-001 QUA-004 */
     public function confirmText(
         int $actorUserId,
@@ -198,6 +248,9 @@ final readonly class TelegramAdministratorDirectMessageService
         $row = $this->rowByPublicId($this->database->connection(), $publicId, false);
         if ($row === null) {
             throw new DomainException('Telegram administrator direct-message draft is unavailable.');
+        }
+        if ($row->confirmed_at === null) {
+            throw new DomainException('Telegram administrator direct-message confirmation has not been accepted.');
         }
         $draft = $this->draftFromRow($row, $administratorId, $botId, $target, null, false);
 
@@ -338,9 +391,19 @@ final readonly class TelegramAdministratorDirectMessageService
             || (string) $row->content_type !== self::CONTENT_TYPE_TEXT) {
             throw new DomainException('Telegram administrator direct-message draft does not match the current actor or target.');
         }
-        if ($row->delivery_operation_public_id === null
+        if ($row->confirmed_at === null
             && $this->parseTime((string) $row->expires_at) <= $this->clock->now()) {
             throw new DomainException('Telegram administrator direct-message draft has expired.');
+        }
+        if ($row->confirmed_at !== null) {
+            if (! is_string($row->confirmed_at)) {
+                throw new RuntimeException('Telegram administrator direct-message confirmation timestamp is invalid.');
+            }
+            $confirmedAt = $this->parseTime($row->confirmed_at);
+            if ($confirmedAt < $this->parseTime((string) $row->created_at)
+                || $confirmedAt >= $this->parseTime((string) $row->expires_at)) {
+                throw new DomainException('Telegram administrator direct-message confirmation evidence is invalid.');
+            }
         }
 
         $text = $this->decrypt((string) $row->content_ciphertext);
@@ -383,17 +446,16 @@ final readonly class TelegramAdministratorDirectMessageService
         }
     }
 
-    private function normalizedText(#[SensitiveParameter] string $text): string
+    private function validatedText(#[SensitiveParameter] string $text): string
     {
         if (! mb_check_encoding($text, 'UTF-8')) {
             throw new DomainException('Telegram administrator direct-message text must be valid UTF-8.');
         }
-        $normalized = trim($text);
-        if ($normalized === '' || mb_strlen($normalized) > self::MAX_TEXT_LENGTH) {
+        if (trim($text) === '' || mb_strlen($text) > self::MAX_TEXT_LENGTH) {
             throw new DomainException('Telegram administrator direct-message text length is invalid.');
         }
 
-        return $normalized;
+        return $text;
     }
 
     private function encrypt(#[SensitiveParameter] string $text): string
@@ -417,7 +479,7 @@ final readonly class TelegramAdministratorDirectMessageService
         } catch (Throwable) {
             throw new DomainException('Telegram administrator direct-message content integrity validation failed.');
         }
-        if ($text === '' || ! mb_check_encoding($text, 'UTF-8') || mb_strlen($text) > self::MAX_TEXT_LENGTH) {
+        if (trim($text) === '' || ! mb_check_encoding($text, 'UTF-8') || mb_strlen($text) > self::MAX_TEXT_LENGTH) {
             throw new DomainException('Telegram administrator direct-message content integrity validation failed.');
         }
 
@@ -537,7 +599,7 @@ final readonly class TelegramAdministratorDirectMessageService
             'id', 'public_id', 'create_request_hash', 'actor_administrator_id', 'bot_id',
             'target_account_public_id', 'target_telegram_user_id', 'content_type', 'content_ciphertext',
             'content_integrity_hash', 'content_length', 'correlation_id', 'delivery_operation_public_id',
-            'expires_at', 'queued_at', 'created_at', 'updated_at',
+            'expires_at', 'confirmed_at', 'queued_at', 'created_at', 'updated_at',
         ];
     }
 

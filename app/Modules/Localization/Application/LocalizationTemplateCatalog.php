@@ -134,7 +134,10 @@ final class LocalizationTemplateCatalog
 
         $buttonKeys = $this->contractKeyList('button_keys');
         $mediaCaptionKeys = $this->contractKeyList('media_caption_keys');
-        foreach (array_merge($buttonKeys, $mediaCaptionKeys) as $configuredKey) {
+        $keyMaxLengths = $this->contractKeyIntMap('key_max_lengths');
+        $renderedMaxLengths = $this->contractKeyIntMap('rendered_max_lengths');
+        $placeholderMaxLengths = $this->contractPlaceholderIntMap('placeholder_max_lengths');
+        foreach (array_merge($buttonKeys, $mediaCaptionKeys, array_keys($keyMaxLengths), array_keys($renderedMaxLengths), array_keys($placeholderMaxLengths)) as $configuredKey) {
             if (! in_array($configuredKey, $this->mandatoryKeys(), true)) {
                 throw new RuntimeException('Mandatory localization metadata references an undeclared key.');
             }
@@ -152,9 +155,20 @@ final class LocalizationTemplateCatalog
         }
 
         $isButton = in_array($key, $buttonKeys, true);
-        $maxLength = $isButton ? $buttonMaxLength : $messageMaxLength;
+        $maxLength = $keyMaxLengths[$key] ?? ($isButton ? $buttonMaxLength : $messageMaxLength);
         if (mb_strlen($english) > $maxLength || mb_strlen($persian) > $maxLength) {
             throw new RuntimeException('Mandatory localization default exceeds its documented maximum length.');
+        }
+
+        if (array_key_exists($key, $renderedMaxLengths)) {
+            $placeholderLimits = $placeholderMaxLengths[$key] ?? [];
+            $this->assertRenderedBudgetConfiguration($placeholders, $placeholderLimits);
+            if ($this->renderedLengthUpperBound($english, $placeholderLimits) > $renderedMaxLengths[$key]
+                || $this->renderedLengthUpperBound($persian, $placeholderLimits) > $renderedMaxLengths[$key]) {
+                throw new RuntimeException('Mandatory localization default exceeds its rendered maximum length.');
+            }
+        } elseif (array_key_exists($key, $placeholderMaxLengths)) {
+            throw new RuntimeException('Mandatory localization placeholder limits require a rendered maximum length.');
         }
 
         $contexts = $isButton ? ['button'] : ['message'];
@@ -186,6 +200,15 @@ final class LocalizationTemplateCatalog
         $expectedPlaceholders = $metadata['placeholders'] ?? $this->placeholders($default);
         if ($this->placeholders($value) !== $expectedPlaceholders) {
             throw new InvalidArgumentException('Localization override placeholders must exactly match the file-backed template.');
+        }
+
+        $renderedMaxLengths = $this->contractKeyIntMap('rendered_max_lengths');
+        if (array_key_exists($key, $renderedMaxLengths)) {
+            $placeholderLimits = $this->contractPlaceholderIntMap('placeholder_max_lengths')[$key] ?? [];
+            $this->assertRenderedBudgetConfiguration($expectedPlaceholders, $placeholderLimits);
+            if ($this->renderedLengthUpperBound($value, $placeholderLimits) > $renderedMaxLengths[$key]) {
+                throw new InvalidArgumentException('Localization override rendered value exceeds its documented maximum length.');
+            }
         }
 
         return $value;
@@ -351,6 +374,84 @@ final class LocalizationTemplateCatalog
         }
 
         return $keys;
+    }
+
+    /** @return array<string, int> */
+    private function contractKeyIntMap(string $name): array
+    {
+        $value = $this->mandatoryContract()[$name] ?? [];
+        if (! is_array($value)) {
+            throw new RuntimeException('Mandatory localization metadata key limit map is invalid.');
+        }
+        $limits = [];
+        foreach ($value as $key => $limit) {
+            if (! is_string($key) || ! is_int($limit) || $limit < 1 || $limit > self::MAX_TEMPLATE_LENGTH) {
+                throw new RuntimeException('Mandatory localization metadata key limit map is invalid.');
+            }
+            $this->assertKey($key);
+            if (! in_array($key, $this->mandatoryKeys(), true)) {
+                throw new RuntimeException('Mandatory localization metadata references an undeclared key.');
+            }
+            $limits[$key] = $limit;
+        }
+        return $limits;
+    }
+
+    /** @return array<string, array<string, int>> */
+    private function contractPlaceholderIntMap(string $name): array
+    {
+        $value = $this->mandatoryContract()[$name] ?? [];
+        if (! is_array($value)) {
+            throw new RuntimeException('Mandatory localization placeholder limit map is invalid.');
+        }
+        $limits = [];
+        foreach ($value as $key => $placeholderLimits) {
+            if (! is_string($key) || ! is_array($placeholderLimits)) {
+                throw new RuntimeException('Mandatory localization placeholder limit map is invalid.');
+            }
+            $this->assertKey($key);
+            if (! in_array($key, $this->mandatoryKeys(), true)) {
+                throw new RuntimeException('Mandatory localization metadata references an undeclared key.');
+            }
+            $limits[$key] = [];
+            foreach ($placeholderLimits as $placeholder => $limit) {
+                if (! is_string($placeholder) || preg_match('/\A[A-Za-z_][A-Za-z0-9_]*\z/', $placeholder) !== 1
+                    || $placeholder !== strtolower($placeholder) || ! is_int($limit)
+                    || $limit < 1 || $limit > self::MAX_TEMPLATE_LENGTH) {
+                    throw new RuntimeException('Mandatory localization placeholder limit map is invalid.');
+                }
+                $limits[$key][$placeholder] = $limit;
+            }
+        }
+        return $limits;
+    }
+
+    /** @param list<string> $placeholders
+     * @param array<string, int> $placeholderLimits
+     */
+    private function assertRenderedBudgetConfiguration(array $placeholders, array $placeholderLimits): void
+    {
+        $configured = array_keys($placeholderLimits);
+        sort($configured);
+        if ($configured !== $placeholders) {
+            throw new RuntimeException('Mandatory localization rendered budget must define every placeholder limit exactly once.');
+        }
+    }
+
+    /** @param array<string, int> $placeholderLimits */
+    private function renderedLengthUpperBound(string $template, array $placeholderLimits): int
+    {
+        preg_match_all('/:([A-Za-z_][A-Za-z0-9_]*)/', $template, $matches, PREG_SET_ORDER);
+        $length = mb_strlen($template);
+        foreach ($matches as $match) {
+            $placeholder = strtolower((string) $match[1]);
+            $limit = $placeholderLimits[$placeholder] ?? null;
+            if (! is_int($limit)) {
+                throw new RuntimeException('Mandatory localization rendered budget is missing a placeholder limit.');
+            }
+            $length += $limit - mb_strlen((string) $match[0]);
+        }
+        return $length;
     }
 
     private function resourceRoot(): string

@@ -37,6 +37,10 @@ final readonly class TelegramAdminCustomerNavigationHandler
 
     private const ACTION_MESSAGE_CONFIRM = 'navigation.admin.customer.message.confirm';
 
+    private const MESSAGE_CONFIRMATION_HEADER_MAX_LENGTH = 594;
+
+    private const TELEGRAM_TEXT_MAX_LENGTH = 4096;
+
     public function __construct(
         private LocalizationResolver $localization,
         private ConfidentialTelegramPresentationFactory $presentations,
@@ -317,19 +321,35 @@ final readonly class TelegramAdminCustomerNavigationHandler
             return;
         }
 
+        $connection = $this->database->connection();
         try {
-            $session = $this->sessions->transition(
-                $action->sessionPublicId,
-                $action->sessionVersion,
-                self::STATE_MESSAGE_SUBMITTING,
-                [
-                    'cancel_locked' => true,
-                    'draft' => $draftPublicId,
-                    'expiry_locked' => true,
-                    'selection' => $selection,
-                ],
-                'tg-admin-customer-message-submit:'.hash('sha256', $draftPublicId),
-            );
+            $session = $connection->transaction(function () use ($action, $selection, $draftPublicId) {
+                $session = $this->sessions->transition(
+                    $action->sessionPublicId,
+                    $action->sessionVersion,
+                    self::STATE_MESSAGE_SUBMITTING,
+                    [
+                        'cancel_locked' => true,
+                        'draft' => $draftPublicId,
+                        'expiry_locked' => true,
+                        'selection' => $selection,
+                    ],
+                    'tg-admin-customer-message-submit:'.hash('sha256', $draftPublicId),
+                );
+
+                $this->directMessages->acceptTextConfirmation(
+                    $action->userId,
+                    $action->botId,
+                    $selection,
+                    $draftPublicId,
+                );
+
+                return $session;
+            }, 3);
+        } catch (AuthorizationException) {
+            $this->showPreviewState($action, $selection, 'message-authorization-lost');
+
+            return;
         } catch (DomainException) {
             return;
         }
@@ -619,13 +639,19 @@ final readonly class TelegramAdminCustomerNavigationHandler
             'account_id' => $target->accountPublicId,
             'username' => $username,
         ]);
+        if (mb_strlen($header) > self::MESSAGE_CONFIRMATION_HEADER_MAX_LENGTH) {
+            throw new RuntimeException('Telegram administrator direct-message confirmation localization exceeds its reserved header budget.');
+        }
+        $confirmation = $header."\n\n".$draft->text;
+        if (mb_strlen($confirmation) > self::TELEGRAM_TEXT_MAX_LENGTH) {
+            throw new RuntimeException('Telegram administrator direct-message confirmation exceeds the single-presentation limit.');
+        }
 
-        // The bounded text limit reserves enough room for the target context so
-        // the administrator always reviews target + exact content + Confirm in
-        // one confidential Telegram presentation before any customer effect.
+        // The bounded text and localization budgets keep target context + exact
+        // authored content in one confidential presentation before any effect.
         $this->queue(
             $action,
-            $header."\n\n".$draft->text,
+            $confirmation,
             'message-confirm',
             $this->messageConfirmationKeyboard($action, $sessionVersion, $locale, $draftPublicId),
         );
