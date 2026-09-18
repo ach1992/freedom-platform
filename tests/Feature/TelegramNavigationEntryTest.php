@@ -4698,7 +4698,7 @@ SQL);
     public function test_admin_direct_message_confirmed_submission_survives_draft_ttl_after_pre_queue_failure(): void
     {
         Config::set('telegram.interaction_session_ttl_seconds', 60);
-        $clock = new class(new DateTimeImmutable('2026-09-18T12:00:00+00:00')) implements Clock
+        $clock = new class(new DateTimeImmutable('now', new \DateTimeZone('UTC'))) implements Clock
         {
             public function __construct(private DateTimeImmutable $current) {}
 
@@ -4788,7 +4788,7 @@ SQL);
     public function test_admin_direct_message_replays_existing_delivery_after_link_failure_beyond_draft_ttl(): void
     {
         Config::set('telegram.interaction_session_ttl_seconds', 60);
-        $clock = new class(new DateTimeImmutable('2026-09-18T13:00:00+00:00')) implements Clock
+        $clock = new class(new DateTimeImmutable('now', new \DateTimeZone('UTC'))) implements Clock
         {
             public function __construct(private DateTimeImmutable $current) {}
 
