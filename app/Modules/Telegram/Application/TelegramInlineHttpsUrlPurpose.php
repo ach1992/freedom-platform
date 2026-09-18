@@ -7,4 +7,6 @@ namespace App\Modules\Telegram\Application;
 enum TelegramInlineHttpsUrlPurpose: string
 {
     case ZarinpalStartPay = 'zarinpal_start_pay';
+
+    case SupportContact = 'support_contact';
 }
