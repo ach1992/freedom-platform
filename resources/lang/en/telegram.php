@@ -52,6 +52,26 @@ return [
                 'ambiguous' => 'That value does not identify one unique customer. No target was selected.',
                 'preview' => "Customer Target Preview\n\nTelegram ID: :telegram_id\nAccount ID: :account_id\nUsername: :username\nType: :account_type\nStatus: :account_status\n\nNo direct message has been sent. This step only verifies the selected target.",
                 'username_unavailable' => 'Not available',
+                'preview_after_message' => "Customer Target Preview\n\nTelegram ID: :telegram_id\nAccount ID: :account_id\nUsername: :username\nType: :account_type\nStatus: :account_status\n\nThe confirmed direct message has been queued once. Its Telegram result and message ID remain linked to the delivery record.",
+                'message_button' => 'Send direct message',
+                'message_prompt' => 'Direct Message
+
+Telegram ID: :telegram_id
+Account ID: :account_id
+Username: :username
+
+Send the text you want to deliver to this customer. Nothing is sent until the final confirmation step.',
+                'message_invalid' => 'Send a non-empty text message up to 4096 characters.',
+                'message_confirmation' => 'Final Direct Message Confirmation
+
+Telegram ID: :telegram_id
+Account ID: :account_id
+Username: :username
+
+The exact message is shown immediately above. Confirm below to queue it once.',
+                'message_confirm_button' => 'Confirm and queue',
+                'message_queued' => 'The direct message was queued once. Its Telegram result and message ID remain linked to the delivery record.',
+                'message_unavailable' => 'The draft expired or the selected target changed. Review the current target and compose a new message.',
             ],
             'usdt_rate' => [
                 'view' => "Manual USDT Rate\n\nCurrent rate: :rate IRR per USDT\nSource: :source\nManaged version: :version\n\nThe same rate is used for direct USDT and, under the current Owner policy, as the USD pricing proxy for NOWPayments.",
