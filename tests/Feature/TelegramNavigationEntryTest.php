@@ -20,7 +20,9 @@ use App\Modules\Telegram\Application\Contracts\TelegramCustomerTrialProvisioning
 use App\Modules\Telegram\Application\Contracts\TelegramMembershipLookup;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceDeliveryResender;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceProjection;
+use App\Modules\Telegram\Application\TelegramAdminCustomerNavigationHandler;
 use App\Modules\Telegram\Application\TelegramAdministratorDirectMessageService;
+use App\Modules\Telegram\Application\TelegramConfidentialPresentationHasher;
 use App\Modules\Telegram\Application\TelegramChannelMembershipEvaluationDecision;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseCardToCardDestination;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseCardToCardReservation;
@@ -50,9 +52,11 @@ use App\Modules\Telegram\Application\TelegramDeliveryQueueService;
 use App\Modules\Telegram\Application\TelegramInteractionAction;
 use App\Modules\Telegram\Application\TelegramInteractionCallbackReceipt;
 use App\Modules\Telegram\Application\TelegramInteractionCallbackService;
+use App\Modules\Telegram\Application\TelegramInteractionHandlerRegistry;
 use App\Modules\Telegram\Application\TelegramInteractionUpdateBindingReceipt;
 use App\Modules\Telegram\Application\TelegramInteractionUpdateBindingService;
 use App\Modules\Telegram\Application\TelegramMembershipLookupResult;
+use App\Modules\Telegram\Application\TelegramNavigationCompositeHandler;
 use App\Modules\Telegram\Application\TelegramNavigationEntryGateway;
 use App\Modules\Telegram\Application\TelegramNavigationHandler;
 use App\Modules\Telegram\Application\TelegramOwnedServiceDeliveryResendStatus;
@@ -6574,10 +6578,10 @@ SQL);
     private function rebuildTelegramDirectMessageRuntimeForKeyRotation(): void
     {
         $this->app->forgetInstance('encrypter');
-        $this->app->forgetInstance(\App\Modules\Telegram\Application\TelegramConfidentialPresentationHasher::class);
-        $this->app->forgetInstance(\App\Modules\Telegram\Application\TelegramAdminCustomerNavigationHandler::class);
-        $this->app->forgetInstance(\App\Modules\Telegram\Application\TelegramNavigationCompositeHandler::class);
-        $this->app->forgetInstance(\App\Modules\Telegram\Application\TelegramInteractionHandlerRegistry::class);
+        $this->app->forgetInstance(TelegramConfidentialPresentationHasher::class);
+        $this->app->forgetInstance(TelegramAdminCustomerNavigationHandler::class);
+        $this->app->forgetInstance(TelegramNavigationCompositeHandler::class);
+        $this->app->forgetInstance(TelegramInteractionHandlerRegistry::class);
     }
 
     private function salesContentAdministratorForUser(int $userId): int
