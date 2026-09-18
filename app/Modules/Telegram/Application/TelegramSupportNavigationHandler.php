@@ -282,6 +282,11 @@ final readonly class TelegramSupportNavigationHandler
     private function handleCreateReferenceType(TelegramInteractionAction $action): void
     {
         $this->requireCallback($action);
+        if ($action->callbackAction === self::ACTION_BACK && $action->callbackPayload === []) {
+            $this->showCategories($action);
+
+            return;
+        }
         if ($action->callbackAction !== self::ACTION_REFERENCE_TYPE) {
             throw new RuntimeException('Telegram Support business-reference type callback is unsupported.');
         }
@@ -302,6 +307,12 @@ final readonly class TelegramSupportNavigationHandler
         $this->requireCallback($action);
         $category = $this->stringPayload($action->sessionPayload, 'category');
         $referenceType = $this->referenceTypePayload($action->sessionPayload);
+
+        if ($action->callbackAction === self::ACTION_BACK && $action->callbackPayload === []) {
+            $this->showReferenceTypes($action, $category);
+
+            return;
+        }
 
         if ($action->callbackAction === self::ACTION_REFERENCE_PAGE) {
             $callbackType = $this->referenceTypePayload($action->callbackPayload);
