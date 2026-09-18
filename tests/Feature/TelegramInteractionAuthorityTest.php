@@ -158,6 +158,97 @@ final class TelegramInteractionAuthorityTest extends TestCase
         $this->assertInteractionCapabilityCleared();
     }
 
+    public function test_runtime_authority_survives_application_key_rotation_while_previous_key_is_retained(): void
+    {
+        $oldKey = config('app.key');
+        $oldPreviousKeys = config('app.previous_keys', []);
+        self::assertIsString($oldKey);
+        self::assertNotSame('', $oldKey);
+        self::assertIsArray($oldPreviousKeys);
+
+        $account = $this->account('key-rotation', 123456, 900009);
+        $session = $this->sessions()->start(
+            $account['telegram_account_id'],
+            'customer.purchase',
+            'confirm',
+            ['safe' => 'rotation'],
+            'rotation-session-start',
+        );
+        $callback = $this->callbacks()->issue(
+            $session->publicId,
+            $session->version,
+            'purchase.confirm',
+            ['selection' => 'plan-basic'],
+            'rotation-callback-issue',
+        );
+        $newKey = 'base64:'.base64_encode(str_repeat('i', 32));
+        self::assertNotSame($oldKey, $newKey);
+
+        try {
+            config([
+                'app.key' => $newKey,
+                'app.previous_keys' => [$oldKey],
+            ]);
+            $this->app->forgetInstance('encrypter');
+            $this->forgetInteractionServices();
+
+            $migration = require database_path('migrations/2026_08_25_000100_enable_telegram_interaction_authority.php');
+            $migration->up();
+
+            $issueReplay = $this->callbacks()->issue(
+                $session->publicId,
+                $session->version,
+                'purchase.confirm',
+                ['selection' => 'plan-basic'],
+                'rotation-callback-issue',
+            );
+            self::assertTrue($issueReplay->replayed);
+            self::assertSame($callback->token, $issueReplay->token);
+
+            $accepted = $this->callbacks()->accept(
+                '123456',
+                $account['telegram_user_id'],
+                $callback->token,
+                5090,
+            );
+            self::assertTrue($accepted->accepted);
+            $this->callbacks()->complete($callback->publicId);
+
+            $transitioned = $this->sessions()->transition(
+                $session->publicId,
+                $session->version,
+                'complete',
+                ['safe' => 'rotation'],
+                'rotation-session-transition',
+            );
+            self::assertSame(2, $transitioned->version);
+
+            config(['app.previous_keys' => []]);
+            $this->app->forgetInstance('encrypter');
+            $this->forgetInteractionServices();
+
+            try {
+                $this->sessions()->transition(
+                    $session->publicId,
+                    $transitioned->version,
+                    'blocked',
+                    ['safe' => 'rotation'],
+                    'rotation-session-after-retirement',
+                );
+                self::fail('Retiring the historical application key must fail closed against the persisted interaction capability.');
+            } catch (RuntimeException $exception) {
+                self::assertStringContainsString('not accepting runtime work', $exception->getMessage());
+            }
+        } finally {
+            config([
+                'app.key' => $oldKey,
+                'app.previous_keys' => $oldPreviousKeys,
+            ]);
+            $this->app->forgetInstance('encrypter');
+            $this->forgetInteractionServices();
+        }
+    }
+
     public function test_absolute_evidence_deadline_transition_replays_exactly_without_relative_ttl_drift(): void
     {
         $account = $this->account('evidence-deadline');

@@ -28,6 +28,21 @@ final readonly class TelegramInteractionDatabaseCapability
         return hash('sha256', $this->value());
     }
 
+    public function valueMatchingHash(string $capabilityHash): ?string
+    {
+        if (preg_match('/\\A[0-9a-f]{64}\\z/', $capabilityHash) !== 1) {
+            return null;
+        }
+
+        foreach ($this->configuredValues() as $value) {
+            if (hash_equals(hash('sha256', $value), $capabilityHash)) {
+                return $value;
+            }
+        }
+
+        return null;
+    }
+
     /**
      * @template T
      *
@@ -46,6 +61,7 @@ final readonly class TelegramInteractionDatabaseCapability
         ?int $updateId,
         Closure $operation,
     ): mixed {
+        $capabilityValue = $this->activeValue($connection);
         $armed = false;
         try {
             $connection->statement(<<<'SQL'
@@ -59,7 +75,7 @@ SET @app_telegram_interaction_capability = ?,
     @app_telegram_interaction_callback_hash = ?,
     @app_telegram_interaction_update_id = ?
 SQL, [
-                $this->value(),
+                $capabilityValue,
                 $authority,
                 $telegramAccountId,
                 $sessionId,
@@ -83,6 +99,54 @@ SQL, [
                 }
             }
         }
+    }
+
+    private function activeValue(Connection $connection): string
+    {
+        try {
+            $row = $connection->selectOne(<<<'SQL'
+SELECT id, capability_hash
+FROM telegram_interaction_authority_capability
+WHERE id = 1
+SQL, [], false);
+        } catch (Throwable $exception) {
+            throw new RuntimeException('Telegram interaction database authority is not accepting runtime work.', 0, $exception);
+        }
+
+        $capabilityHash = $row !== null && is_string($row->capability_hash ?? null)
+            ? $row->capability_hash
+            : '';
+        $value = $this->valueMatchingHash($capabilityHash);
+        if ($row === null || (int) ($row->id ?? 0) !== 1 || $value === null) {
+            throw new RuntimeException('Telegram interaction database authority is not accepting runtime work.');
+        }
+
+        return $value;
+    }
+
+    /** @return list<string> */
+    private function configuredValues(): array
+    {
+        $currentKey = config('app.key');
+        $previousKeys = config('app.previous_keys', []);
+        if (! is_string($currentKey) || $currentKey === '' || ! is_array($previousKeys)) {
+            throw new RuntimeException('Telegram interaction database capability keyring is unavailable.');
+        }
+
+        $keys = [$currentKey];
+        foreach ($previousKeys as $previousKey) {
+            if (! is_string($previousKey) || $previousKey === '') {
+                throw new RuntimeException('Telegram interaction database capability keyring is unavailable.');
+            }
+            if (! in_array($previousKey, $keys, true)) {
+                $keys[] = $previousKey;
+            }
+        }
+
+        return array_map(
+            static fn (string $key): string => hash_hmac('sha256', self::CONTEXT, $key),
+            $keys,
+        );
     }
 
     private function clear(Connection $connection): void

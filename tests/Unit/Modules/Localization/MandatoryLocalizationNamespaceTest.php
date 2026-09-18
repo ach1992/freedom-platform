@@ -21,7 +21,7 @@ final class MandatoryLocalizationNamespaceTest extends TestCase
         self::assertNotEmpty($keys);
         foreach ([
             'onboarding', 'identity', 'menu', 'catalog', 'quote', 'payment', 'order', 'service', 'agent',
-            'wallet', 'promotion', 'ticket', 'broadcast', 'admin', 'alert', 'installer', 'updater', 'backup', 'error',
+            'wallet', 'promotion', 'ticket', 'telegram', 'broadcast', 'admin', 'alert', 'installer', 'updater', 'backup', 'error',
         ] as $family) {
             self::assertNotEmpty(
                 array_filter($keys, static fn (string $key): bool => str_starts_with($key, $family.'.')),
@@ -103,6 +103,80 @@ final class MandatoryLocalizationNamespaceTest extends TestCase
             self::fail('Mandatory override must preserve the documented placeholder contract.');
         } catch (InvalidArgumentException) {
             self::assertTrue(true);
+        }
+    }
+
+    public function test_direct_message_confirmation_override_reserves_the_full_3500_character_body_budget(): void
+    {
+        $catalog = new LocalizationTemplateCatalog(new Filesystem, dirname(__DIR__, 4).'/resources/lang');
+        $confirmationKey = 'telegram.navigation.admin.customer_search.message_confirmation';
+        $usernameUnavailableKey = 'telegram.navigation.admin.customer_search.username_unavailable';
+        $maximumHeaderTemplate = str_repeat('x', 506).':telegram_id :account_id :username';
+        $tooLargeHeaderTemplate = str_repeat('x', 507).':telegram_id :account_id :username';
+        $repeatedHeaderTemplate = str_repeat('x', 454).':telegram_id :account_id :username :username';
+        $uppercaseHeaderTemplate = str_repeat('x', 506).':telegram_id :account_id :USERNAME';
+        $titleCaseHeaderTemplate = str_repeat('x', 506).':telegram_id :account_id :Username';
+        $replacements = [
+            'telegram_id' => str_repeat('9', 20),
+            'account_id' => str_repeat('A', 26),
+            'username' => str_repeat('u', 40),
+        ];
+
+        foreach (['fa', 'en'] as $locale) {
+            self::assertSame(
+                $maximumHeaderTemplate,
+                $catalog->validateOverride($confirmationKey, $locale, $maximumHeaderTemplate),
+            );
+            $rendered = $catalog->render($maximumHeaderTemplate, $replacements);
+            self::assertSame(594, mb_strlen($rendered));
+            self::assertSame(4096, mb_strlen($rendered."\n\n".str_repeat('m', 3500)));
+
+            self::assertSame(
+                $repeatedHeaderTemplate,
+                $catalog->validateOverride($confirmationKey, $locale, $repeatedHeaderTemplate),
+            );
+            self::assertSame(583, mb_strlen($catalog->render($repeatedHeaderTemplate, $replacements)));
+
+            foreach ([$uppercaseHeaderTemplate, $titleCaseHeaderTemplate] as $caseTransformingTemplate) {
+                try {
+                    $catalog->validateOverride($confirmationKey, $locale, $caseTransformingTemplate);
+                    self::fail('Budgeted confirmation placeholders must use lowercase spelling.');
+                } catch (InvalidArgumentException) {
+                    self::assertTrue(true);
+                }
+            }
+
+            $expandingUnicodeFallback = str_repeat('ß', 40);
+            self::assertSame(40, mb_strlen($expandingUnicodeFallback));
+            self::assertSame(
+                $expandingUnicodeFallback,
+                $catalog->validateOverride($usernameUnavailableKey, $locale, $expandingUnicodeFallback),
+            );
+            $unicodeRendered = $catalog->render($maximumHeaderTemplate, [
+                'telegram_id' => str_repeat('9', 20),
+                'account_id' => str_repeat('A', 26),
+                'username' => $expandingUnicodeFallback,
+            ]);
+            self::assertSame(594, mb_strlen($unicodeRendered));
+            self::assertSame(4096, mb_strlen($unicodeRendered."\n\n".str_repeat('m', 3500)));
+
+            try {
+                $catalog->validateOverride($confirmationKey, $locale, $tooLargeHeaderTemplate);
+                self::fail('Direct-message confirmation override must preserve the reserved 3500-character body budget.');
+            } catch (InvalidArgumentException) {
+                self::assertTrue(true);
+            }
+
+            self::assertSame(
+                str_repeat('u', 40),
+                $catalog->validateOverride($usernameUnavailableKey, $locale, str_repeat('u', 40)),
+            );
+            try {
+                $catalog->validateOverride($usernameUnavailableKey, $locale, str_repeat('u', 41));
+                self::fail('Unavailable-username override must fit the confirmation replacement budget.');
+            } catch (InvalidArgumentException) {
+                self::assertTrue(true);
+            }
         }
     }
 

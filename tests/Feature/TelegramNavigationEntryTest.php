@@ -20,7 +20,10 @@ use App\Modules\Telegram\Application\Contracts\TelegramCustomerTrialProvisioning
 use App\Modules\Telegram\Application\Contracts\TelegramMembershipLookup;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceDeliveryResender;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceProjection;
+use App\Modules\Telegram\Application\TelegramAdminCustomerNavigationHandler;
+use App\Modules\Telegram\Application\TelegramAdministratorDirectMessageService;
 use App\Modules\Telegram\Application\TelegramChannelMembershipEvaluationDecision;
+use App\Modules\Telegram\Application\TelegramConfidentialPresentationHasher;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseCardToCardDestination;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseCardToCardReservation;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseCatalogPage;
@@ -49,9 +52,11 @@ use App\Modules\Telegram\Application\TelegramDeliveryQueueService;
 use App\Modules\Telegram\Application\TelegramInteractionAction;
 use App\Modules\Telegram\Application\TelegramInteractionCallbackReceipt;
 use App\Modules\Telegram\Application\TelegramInteractionCallbackService;
+use App\Modules\Telegram\Application\TelegramInteractionHandlerRegistry;
 use App\Modules\Telegram\Application\TelegramInteractionUpdateBindingReceipt;
 use App\Modules\Telegram\Application\TelegramInteractionUpdateBindingService;
 use App\Modules\Telegram\Application\TelegramMembershipLookupResult;
+use App\Modules\Telegram\Application\TelegramNavigationCompositeHandler;
 use App\Modules\Telegram\Application\TelegramNavigationEntryGateway;
 use App\Modules\Telegram\Application\TelegramNavigationHandler;
 use App\Modules\Telegram\Application\TelegramOwnedServiceDeliveryResendStatus;
@@ -66,6 +71,7 @@ use App\Modules\Wallet\Application\LedgerEntryDraft;
 use App\Modules\Wallet\Application\LedgerPostingService;
 use App\Modules\Wallet\Domain\IrrMoney;
 use App\Modules\Wallet\Domain\LedgerDirection;
+use App\Shared\Application\Clock;
 use App\Shared\Application\RestrictedValue;
 use DateTimeImmutable;
 use DomainException;
@@ -1150,6 +1156,8 @@ final class TelegramNavigationEntryTest extends TestCase
                 DB::unprepared('DROP TRIGGER IF EXISTS telegram_navigation_test_fail_processed_6903');
                 DB::unprepared('DROP TRIGGER IF EXISTS telegram_navigation_test_fail_processed_7013');
                 DB::unprepared('DROP TRIGGER IF EXISTS telegram_navigation_test_fail_admin_rate_finalize');
+                DB::unprepared('DROP TRIGGER IF EXISTS telegram_navigation_test_fail_direct_message_queue');
+                DB::unprepared('DROP TRIGGER IF EXISTS telegram_navigation_test_fail_direct_message_link');
                 DB::unprepared('DROP TRIGGER IF EXISTS telegram_navigation_test_fail_processed_6105');
                 $this->truncateTablesForAllConnections();
             }
@@ -4518,6 +4526,510 @@ SQL);
         ]);
     }
 
+    /** @requirement COM-001 ADM-001 ACL-001 ACL-002 SEC-002 SEC-003 DAT-002 DAT-003 CNT-001 OPS-003 QUA-001 QUA-004 */
+    public function test_admin_customer_direct_text_message_is_confirmed_encrypted_and_exactly_once_on_replay(): void
+    {
+        $adminTelegramId = 9781;
+        $targetTelegramId = 888777666556;
+        $targetUsername = 'direct_message_target';
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+
+        $this->accept($this->payload(7420, $adminTelegramId, 'admin_direct_operator', 'fa', '/start'));
+        $processor->process('123456789', 7420);
+        $adminAccount = DB::table('telegram_accounts')
+            ->where('telegram_user_id', $adminTelegramId)
+            ->first(['id', 'user_id']);
+        self::assertNotNull($adminAccount);
+        $administratorId = $this->salesContentAdministratorForUser((int) $adminAccount->user_id);
+        self::assertGreaterThan(0, $administratorId);
+
+        $this->accept($this->payload(7430, $targetTelegramId, $targetUsername, 'en', '/start'));
+        $processor->process('123456789', 7430);
+        $target = DB::table('telegram_accounts as account')
+            ->join('users as user', 'user.id', '=', 'account.user_id')
+            ->where('account.bot_id', 123456789)
+            ->where('account.telegram_user_id', $targetTelegramId)
+            ->first(['user.public_id']);
+        self::assertNotNull($target);
+
+        $this->accept($this->payload(7421, $adminTelegramId, 'admin_direct_operator', 'fa', '/menu'));
+        $processor->process('123456789', 7421);
+        $adminToken = $this->callbackToken('navigation.admin', (int) $adminAccount->id);
+        $this->accept($this->callbackPayload(7422, $adminTelegramId, 'admin_direct_operator', 'fa', $adminToken));
+        $processor->process('123456789', 7422);
+
+        $searchToken = $this->callbackToken('navigation.admin.customer_search', (int) $adminAccount->id);
+        $this->accept($this->callbackPayload(7423, $adminTelegramId, 'admin_direct_operator', 'fa', $searchToken));
+        $processor->process('123456789', 7423);
+        $this->accept($this->payload(7424, $adminTelegramId, 'admin_direct_operator', 'fa', '@'.$targetUsername));
+        $processor->process('123456789', 7424);
+
+        $messageToken = $this->callbackToken('navigation.admin.customer.message', (int) $adminAccount->id);
+        $this->accept($this->callbackPayload(7425, $adminTelegramId, 'admin_direct_operator', 'fa', $messageToken));
+        $processor->process('123456789', 7425);
+        $composeSession = DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', (int) $adminAccount->id)
+            ->first(['id', 'state', 'version', 'payload']);
+        self::assertNotNull($composeSession);
+        self::assertSame('admin_customer_message_compose', (string) $composeSession->state);
+        $composePayload = json_decode((string) $composeSession->payload, true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame(['selection'], array_keys($composePayload));
+
+        $tooLongAfterTrim = ' '.str_repeat('B', 3500).' ';
+        self::assertSame(3502, mb_strlen($tooLongAfterTrim));
+        self::assertSame(3500, mb_strlen(trim($tooLongAfterTrim)));
+        $this->accept($this->payload(7426, $adminTelegramId, 'admin_direct_operator', 'fa', $tooLongAfterTrim));
+        $processor->process('123456789', 7426);
+        self::assertSame(0, DB::table('telegram_administrator_direct_messages')->count());
+        self::assertSame(
+            'admin_customer_message_compose',
+            DB::table('telegram_interaction_sessions')
+                ->where('telegram_account_id', (int) $adminAccount->id)
+                ->value('state'),
+        );
+
+        $secretText = " \n:keep ".str_repeat('A', 3490)."\n ";
+        self::assertSame(3500, mb_strlen($secretText));
+        $targetDeliveryCountBefore = DB::table('telegram_delivery_operations')
+            ->where('recipient_chat_id', $targetTelegramId)
+            ->count();
+        $this->accept($this->payload(7427, $adminTelegramId, 'admin_direct_operator', 'fa', $secretText));
+        $processor->process('123456789', 7427);
+
+        $confirmSession = DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', (int) $adminAccount->id)
+            ->first(['id', 'state', 'version', 'payload']);
+        self::assertNotNull($confirmSession);
+        self::assertSame('admin_customer_message_confirm', (string) $confirmSession->state);
+        $confirmPayload = json_decode((string) $confirmSession->payload, true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame(['draft', 'selection'], array_keys($confirmPayload));
+        self::assertMatchesRegularExpression('/\A[0-9A-HJKMNP-TV-Z]{26}\z/', (string) $confirmPayload['draft']);
+        self::assertSame($composePayload['selection'], $confirmPayload['selection']);
+        self::assertStringNotContainsString($secretText, (string) $confirmSession->payload);
+
+        $direct = DB::table('telegram_administrator_direct_messages')
+            ->where('public_id', (string) $confirmPayload['draft'])
+            ->first();
+        self::assertNotNull($direct);
+        self::assertSame($administratorId, (int) $direct->actor_administrator_id);
+        self::assertSame((string) $target->public_id, (string) $direct->target_account_public_id);
+        self::assertSame((string) $targetTelegramId, (string) $direct->target_telegram_user_id);
+        self::assertSame('text', (string) $direct->content_type);
+        self::assertNull($direct->delivery_operation_public_id);
+        self::assertNotSame($secretText, (string) $direct->content_ciphertext);
+        self::assertStringNotContainsString($secretText, (string) $direct->content_ciphertext);
+        self::assertSame(
+            $secretText,
+            $this->app->make(StringEncrypter::class)->decryptString((string) $direct->content_ciphertext),
+        );
+        self::assertSame(
+            $targetDeliveryCountBefore,
+            DB::table('telegram_delivery_operations')->where('recipient_chat_id', $targetTelegramId)->count(),
+        );
+
+        $confirmation = $this->latestConfidentialPresentation();
+        self::assertStringContainsString('تأیید نهایی پیام مستقیم', $confirmation);
+        self::assertStringContainsString((string) $targetTelegramId, $confirmation);
+        self::assertStringContainsString($secretText, $confirmation);
+        self::assertStringContainsString('di', $confirmation);
+        self::assertStringContainsString('et', $confirmation);
+        self::assertLessThanOrEqual(4096, mb_strlen($confirmation));
+
+        $durableBeforeConfirm = $this->navigationCommonDurableEvidence((int) $confirmSession->id, $adminTelegramId);
+        self::assertStringNotContainsString($secretText, $durableBeforeConfirm);
+
+        $confirmToken = $this->callbackToken('navigation.admin.customer.message.confirm', (int) $adminAccount->id);
+        $this->accept($this->callbackPayload(7428, $adminTelegramId, 'admin_direct_operator', 'fa', $confirmToken));
+        $processor->process('123456789', 7428);
+        $processor->process('123456789', 7428);
+
+        $finalSession = DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', (int) $adminAccount->id)
+            ->first(['state', 'payload']);
+        self::assertNotNull($finalSession);
+        self::assertSame('admin_customer_preview', (string) $finalSession->state);
+        self::assertSame(['selection' => $composePayload['selection']], json_decode(
+            (string) $finalSession->payload,
+            true,
+            512,
+            JSON_THROW_ON_ERROR,
+        ));
+        self::assertStringContainsString('یک‌بار برای ارسال ثبت شده است', $this->latestConfidentialPresentation());
+        self::assertStringNotContainsString('هیچ پیام مستقیمی ارسال نشده است', $this->latestConfidentialPresentation());
+
+        self::assertSame(1, DB::table('telegram_administrator_direct_messages')->count());
+        self::assertSame(
+            $targetDeliveryCountBefore + 1,
+            DB::table('telegram_delivery_operations')->where('recipient_chat_id', $targetTelegramId)->count(),
+        );
+        $direct = DB::table('telegram_administrator_direct_messages')
+            ->where('public_id', (string) $confirmPayload['draft'])
+            ->first(['delivery_operation_public_id', 'queued_at', 'correlation_id']);
+        self::assertNotNull($direct);
+        self::assertIsString($direct->delivery_operation_public_id);
+        self::assertNotNull($direct->queued_at);
+        $targetDelivery = DB::table('telegram_delivery_operations')
+            ->where('public_id', (string) $direct->delivery_operation_public_id)
+            ->first(['recipient_chat_id', 'presentation_text', 'correlation_id', 'state']);
+        self::assertNotNull($targetDelivery);
+        self::assertSame($targetTelegramId, (int) $targetDelivery->recipient_chat_id);
+        self::assertSame('[CONFIDENTIAL_TELEGRAM_PRESENTATION]', (string) $targetDelivery->presentation_text);
+        self::assertSame((string) $direct->correlation_id, (string) $targetDelivery->correlation_id);
+        self::assertSame('prepared', (string) $targetDelivery->state);
+        $targetCiphertext = DB::table('telegram_delivery_confidential_presentations')
+            ->where('delivery_operation_public_id', (string) $direct->delivery_operation_public_id)
+            ->value('presentation_ciphertext');
+        self::assertIsString($targetCiphertext);
+        self::assertSame(
+            $secretText,
+            $this->app->make(StringEncrypter::class)->decryptString($targetCiphertext),
+        );
+        self::assertSame(1, DB::table('telegram_delivery_confidential_presentations')
+            ->where('delivery_operation_public_id', (string) $direct->delivery_operation_public_id)
+            ->count());
+
+        $deliveryResult = $this->app
+            ->make(TelegramAdministratorDirectMessageService::class)
+            ->deliveryResultForSender((int) $adminAccount->user_id, (string) $confirmPayload['draft']);
+        self::assertSame((string) $confirmPayload['draft'], $deliveryResult->directMessagePublicId);
+        self::assertSame((string) $direct->delivery_operation_public_id, $deliveryResult->deliveryOperationPublicId);
+        self::assertSame('prepared', $deliveryResult->state->value);
+        self::assertNull($deliveryResult->messageId);
+        self::assertNull($deliveryResult->resultCode);
+        self::assertSame((string) $direct->correlation_id, $deliveryResult->correlationId);
+    }
+
+    public function test_admin_direct_message_confirmed_submission_survives_draft_ttl_after_pre_queue_failure(): void
+    {
+        Config::set([
+            'telegram.interaction_session_ttl_seconds' => 60,
+            'telegram.interaction_callback_ttl_seconds' => 60,
+        ]);
+        $clock = new class(new DateTimeImmutable('now', new \DateTimeZone('UTC'))) implements Clock
+        {
+            public function __construct(private DateTimeImmutable $current) {}
+
+            public function now(): DateTimeImmutable
+            {
+                return $this->current;
+            }
+
+            public function advance(string $modifier): void
+            {
+                $this->current = $this->current->modify($modifier);
+            }
+        };
+        $this->app->instance(Clock::class, $clock);
+
+        $adminTelegramId = 9783;
+        $targetTelegramId = 888777666558;
+        $fixture = $this->prepareAdminDirectMessageConfirmation(
+            7460,
+            $adminTelegramId,
+            $targetTelegramId,
+            'direct_restart_target',
+            'admin_direct_restart',
+        );
+        $confirmUpdateId = 7467;
+        $this->accept($this->callbackPayload(
+            $confirmUpdateId,
+            $adminTelegramId,
+            'admin_direct_restart',
+            'en',
+            $fixture['confirm_token'],
+        ));
+
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER telegram_navigation_test_fail_direct_message_queue
+BEFORE INSERT ON telegram_delivery_operations
+FOR EACH ROW
+BEGIN
+    IF NEW.recipient_chat_id = 888777666558 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'simulated-direct-message-pre-queue-failure';
+    END IF;
+END
+SQL);
+        try {
+            try {
+                $fixture['processor']->process('123456789', $confirmUpdateId);
+                self::fail('The simulated pre-queue failure must leave the accepted submission retryable.');
+            } catch (RuntimeException $exception) {
+                self::assertSame('Telegram update processing failed.', $exception->getMessage());
+            }
+        } finally {
+            DB::unprepared('DROP TRIGGER IF EXISTS telegram_navigation_test_fail_direct_message_queue');
+        }
+
+        $direct = DB::table('telegram_administrator_direct_messages')
+            ->where('public_id', $fixture['draft_public_id'])
+            ->first(['confirmed_at', 'delivery_operation_public_id', 'expires_at']);
+        self::assertNotNull($direct);
+        self::assertNotNull($direct->confirmed_at);
+        self::assertNull($direct->delivery_operation_public_id);
+        $session = DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', $fixture['admin_account_id'])
+            ->first(['state', 'payload']);
+        self::assertNotNull($session);
+        self::assertSame('admin_customer_message_submitting', (string) $session->state);
+        $submissionPayload = json_decode((string) $session->payload, true, 512, JSON_THROW_ON_ERROR);
+        self::assertTrue((bool) ($submissionPayload['expiry_locked'] ?? false));
+        self::assertIsString($submissionPayload['selection'] ?? null);
+
+        $clock->advance('+2 minutes');
+        self::assertGreaterThan(new DateTimeImmutable((string) $direct->expires_at), $clock->now());
+
+        $adminUserId = DB::table('telegram_accounts')
+            ->where('id', $fixture['admin_account_id'])
+            ->value('user_id');
+        self::assertIsNumeric($adminUserId);
+        $administratorId = DB::table('administrators')->where('user_id', (int) $adminUserId)->value('id');
+        self::assertIsNumeric($administratorId);
+        self::assertSame(1, DB::table('administrator_role_assignments')
+            ->where('administrator_id', (int) $administratorId)
+            ->whereNull('revoked_at')
+            ->update(['revoked_at' => now('UTC'), 'updated_at' => now('UTC')]));
+
+        $keyring = $this->rotateApplicationKeyForDirectMessageRecovery();
+        try {
+            try {
+                $this->app->make(TelegramAdministratorDirectMessageService::class)->confirmText(
+                    (int) $adminUserId,
+                    '123456789',
+                    (string) $submissionPayload['selection'],
+                    $fixture['draft_public_id'],
+                );
+                self::fail('Revocation after accepted confirmation must still block creation of a new delivery operation.');
+            } catch (AuthorizationException) {
+                // Expected: key-rotation recovery reached current authorization, and no outbound operation exists yet.
+            }
+            self::assertSame(
+                $fixture['target_delivery_count'],
+                DB::table('telegram_delivery_operations')->where('recipient_chat_id', $targetTelegramId)->count(),
+            );
+            self::assertSame(1, DB::table('administrator_role_assignments')
+                ->where('administrator_id', (int) $administratorId)
+                ->whereNotNull('revoked_at')
+                ->update(['revoked_at' => null, 'updated_at' => now('UTC')]));
+
+            $this->app->make(TelegramUpdateProcessor::class)->process('123456789', $confirmUpdateId);
+
+            self::assertSame(
+                $fixture['target_delivery_count'] + 1,
+                DB::table('telegram_delivery_operations')->where('recipient_chat_id', $targetTelegramId)->count(),
+            );
+            self::assertIsString(DB::table('telegram_administrator_direct_messages')
+                ->where('public_id', $fixture['draft_public_id'])
+                ->value('delivery_operation_public_id'));
+            $this->assertDatabaseHas('processed_telegram_updates', [
+                'update_id' => $confirmUpdateId,
+                'state' => 'processed',
+                'attempt_count' => 2,
+            ]);
+        } finally {
+            $this->restoreApplicationKeyAfterDirectMessageRecovery($keyring);
+        }
+    }
+
+    public function test_admin_direct_message_replays_existing_delivery_after_link_failure_beyond_draft_ttl(): void
+    {
+        Config::set([
+            'telegram.interaction_session_ttl_seconds' => 60,
+            'telegram.interaction_callback_ttl_seconds' => 60,
+        ]);
+        $clock = new class(new DateTimeImmutable('now', new \DateTimeZone('UTC'))) implements Clock
+        {
+            public function __construct(private DateTimeImmutable $current) {}
+
+            public function now(): DateTimeImmutable
+            {
+                return $this->current;
+            }
+
+            public function advance(string $modifier): void
+            {
+                $this->current = $this->current->modify($modifier);
+            }
+        };
+        $this->app->instance(Clock::class, $clock);
+
+        $adminTelegramId = 9784;
+        $targetTelegramId = 888777666559;
+        $fixture = $this->prepareAdminDirectMessageConfirmation(
+            7480,
+            $adminTelegramId,
+            $targetTelegramId,
+            'direct_link_target',
+            'admin_direct_link',
+        );
+        $confirmUpdateId = 7487;
+        $this->accept($this->callbackPayload(
+            $confirmUpdateId,
+            $adminTelegramId,
+            'admin_direct_link',
+            'en',
+            $fixture['confirm_token'],
+        ));
+
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER telegram_navigation_test_fail_direct_message_link
+BEFORE UPDATE ON telegram_administrator_direct_messages
+FOR EACH ROW
+BEGIN
+    IF OLD.delivery_operation_public_id IS NULL AND NEW.delivery_operation_public_id IS NOT NULL THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'simulated-direct-message-link-failure';
+    END IF;
+END
+SQL);
+        try {
+            try {
+                $fixture['processor']->process('123456789', $confirmUpdateId);
+                self::fail('The simulated post-queue linkage failure must leave the accepted submission retryable.');
+            } catch (RuntimeException $exception) {
+                self::assertSame('Telegram update processing failed.', $exception->getMessage());
+            }
+        } finally {
+            DB::unprepared('DROP TRIGGER IF EXISTS telegram_navigation_test_fail_direct_message_link');
+        }
+
+        self::assertSame(
+            $fixture['target_delivery_count'] + 1,
+            DB::table('telegram_delivery_operations')->where('recipient_chat_id', $targetTelegramId)->count(),
+        );
+        $existingOperation = DB::table('telegram_delivery_operations')
+            ->where('recipient_chat_id', $targetTelegramId)
+            ->orderByDesc('id')
+            ->value('public_id');
+        self::assertIsString($existingOperation);
+        $direct = DB::table('telegram_administrator_direct_messages')
+            ->where('public_id', $fixture['draft_public_id'])
+            ->first(['confirmed_at', 'delivery_operation_public_id', 'expires_at']);
+        self::assertNotNull($direct);
+        self::assertNotNull($direct->confirmed_at);
+        self::assertNull($direct->delivery_operation_public_id);
+
+        $clock->advance('+2 minutes');
+        self::assertGreaterThan(new DateTimeImmutable((string) $direct->expires_at), $clock->now());
+
+        $permissionId = DB::table('permissions')->where('code', 'telegram.direct_messages.send')->value('id');
+        $salesContentRoleId = DB::table('roles')->where('code', 'sales_content')->value('id');
+        self::assertIsNumeric($permissionId);
+        self::assertIsNumeric($salesContentRoleId);
+        self::assertSame(1, DB::table('role_permissions')
+            ->where('role_id', (int) $salesContentRoleId)
+            ->where('permission_id', (int) $permissionId)
+            ->delete());
+
+        $keyring = $this->rotateApplicationKeyForDirectMessageRecovery();
+        try {
+            $this->app->make(TelegramUpdateProcessor::class)->process('123456789', $confirmUpdateId);
+
+            self::assertSame(
+                $fixture['target_delivery_count'] + 1,
+                DB::table('telegram_delivery_operations')->where('recipient_chat_id', $targetTelegramId)->count(),
+            );
+            $recoveredDirect = DB::table('telegram_administrator_direct_messages')
+                ->where('public_id', $fixture['draft_public_id'])
+                ->first(['delivery_operation_public_id', 'queued_at']);
+            self::assertNotNull($recoveredDirect);
+            self::assertSame($existingOperation, $recoveredDirect->delivery_operation_public_id);
+            self::assertNotNull($recoveredDirect->queued_at);
+            $this->assertDatabaseHas('processed_telegram_updates', [
+                'update_id' => $confirmUpdateId,
+                'state' => 'processed',
+                'attempt_count' => 2,
+            ]);
+        } finally {
+            $this->restoreApplicationKeyAfterDirectMessageRecovery($keyring);
+        }
+
+        DB::table('role_permissions')->insert([
+            'role_id' => (int) $salesContentRoleId,
+            'permission_id' => (int) $permissionId,
+            'created_at' => now('UTC'),
+            'updated_at' => now('UTC'),
+        ]);
+        $adminUserId = DB::table('telegram_accounts')
+            ->where('id', $fixture['admin_account_id'])
+            ->value('user_id');
+        self::assertIsNumeric($adminUserId);
+        $deliveryResult = $this->app->make(TelegramAdministratorDirectMessageService::class)
+            ->deliveryResultForSender((int) $adminUserId, $fixture['draft_public_id']);
+        self::assertSame($existingOperation, $deliveryResult->deliveryOperationPublicId);
+    }
+
+    /** @requirement COM-001 ACL-001 ACL-002 SEC-002 SEC-003 DAT-003 QUA-004 */
+    public function test_admin_customer_direct_message_permission_is_rechecked_before_external_effect(): void
+    {
+        $adminTelegramId = 9782;
+        $targetTelegramId = 888777666557;
+        $targetUsername = 'direct_permission_target';
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+
+        $this->accept($this->payload(7440, $adminTelegramId, 'admin_direct_revoke', 'fa', '/start'));
+        $processor->process('123456789', 7440);
+        $adminAccount = DB::table('telegram_accounts')
+            ->where('telegram_user_id', $adminTelegramId)
+            ->first(['id', 'user_id']);
+        self::assertNotNull($adminAccount);
+        $this->salesContentAdministratorForUser((int) $adminAccount->user_id);
+
+        $this->accept($this->payload(7450, $targetTelegramId, $targetUsername, 'fa', '/start'));
+        $processor->process('123456789', 7450);
+
+        $this->accept($this->payload(7441, $adminTelegramId, 'admin_direct_revoke', 'fa', '/menu'));
+        $processor->process('123456789', 7441);
+        $adminToken = $this->callbackToken('navigation.admin', (int) $adminAccount->id);
+        $this->accept($this->callbackPayload(7442, $adminTelegramId, 'admin_direct_revoke', 'fa', $adminToken));
+        $processor->process('123456789', 7442);
+        $searchToken = $this->callbackToken('navigation.admin.customer_search', (int) $adminAccount->id);
+        $this->accept($this->callbackPayload(7443, $adminTelegramId, 'admin_direct_revoke', 'fa', $searchToken));
+        $processor->process('123456789', 7443);
+        $this->accept($this->payload(7444, $adminTelegramId, 'admin_direct_revoke', 'fa', '@'.$targetUsername));
+        $processor->process('123456789', 7444);
+        $messageToken = $this->callbackToken('navigation.admin.customer.message', (int) $adminAccount->id);
+        $this->accept($this->callbackPayload(7445, $adminTelegramId, 'admin_direct_revoke', 'fa', $messageToken));
+        $processor->process('123456789', 7445);
+        $this->accept($this->payload(7446, $adminTelegramId, 'admin_direct_revoke', 'fa', 'پیام نباید ارسال شود'));
+        $processor->process('123456789', 7446);
+
+        $direct = DB::table('telegram_administrator_direct_messages')->first(['public_id']);
+        self::assertNotNull($direct);
+        $targetDeliveryCount = DB::table('telegram_delivery_operations')
+            ->where('recipient_chat_id', $targetTelegramId)
+            ->count();
+
+        $permissionId = DB::table('permissions')->where('code', 'telegram.direct_messages.send')->value('id');
+        $salesContentRoleId = DB::table('roles')->where('code', 'sales_content')->value('id');
+        self::assertIsNumeric($permissionId);
+        self::assertIsNumeric($salesContentRoleId);
+        self::assertSame(1, DB::table('role_permissions')
+            ->where('role_id', (int) $salesContentRoleId)
+            ->where('permission_id', (int) $permissionId)
+            ->delete());
+
+        $confirmToken = $this->callbackToken('navigation.admin.customer.message.confirm', (int) $adminAccount->id);
+        $this->accept($this->callbackPayload(7447, $adminTelegramId, 'admin_direct_revoke', 'fa', $confirmToken));
+        $processor->process('123456789', 7447);
+
+        self::assertSame(
+            $targetDeliveryCount,
+            DB::table('telegram_delivery_operations')->where('recipient_chat_id', $targetTelegramId)->count(),
+        );
+        self::assertNull(DB::table('telegram_administrator_direct_messages')
+            ->where('public_id', (string) $direct->public_id)
+            ->value('delivery_operation_public_id'));
+        $session = DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', (int) $adminAccount->id)
+            ->first(['state', 'payload']);
+        self::assertNotNull($session);
+        self::assertSame('admin_customer_preview', (string) $session->state);
+        self::assertSame(0, DB::table('telegram_interaction_callbacks')
+            ->where('telegram_account_id', (int) $adminAccount->id)
+            ->where('action', 'navigation.admin.customer.message')
+            ->where('state', 'active')
+            ->count());
+    }
+
     public function test_admin_usdt_rate_journey_is_permission_filtered_confidential_and_crash_replay_idempotent(): void
     {
         Config::set('usdt.rate.min_irr', '100000');
@@ -5960,6 +6472,143 @@ SQL);
             $callback->replayed,
             $callback->acceptedAt,
         );
+    }
+
+    /**
+     * @return array{
+     *     processor:TelegramUpdateProcessor,
+     *     admin_account_id:int,
+     *     draft_public_id:string,
+     *     confirm_token:string,
+     *     target_delivery_count:int
+     * }
+     */
+    private function prepareAdminDirectMessageConfirmation(
+        int $baseUpdateId,
+        int $adminTelegramId,
+        int $targetTelegramId,
+        string $targetUsername,
+        string $adminUsername,
+    ): array {
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+
+        $this->accept($this->payload($baseUpdateId, $adminTelegramId, $adminUsername, 'en', '/start'));
+        $processor->process('123456789', $baseUpdateId);
+        $adminAccount = DB::table('telegram_accounts')
+            ->where('telegram_user_id', $adminTelegramId)
+            ->first(['id', 'user_id']);
+        self::assertNotNull($adminAccount);
+        $this->salesContentAdministratorForUser((int) $adminAccount->user_id);
+
+        $this->accept($this->payload($baseUpdateId + 20, $targetTelegramId, $targetUsername, 'en', '/start'));
+        $processor->process('123456789', $baseUpdateId + 20);
+
+        $this->accept($this->payload($baseUpdateId + 1, $adminTelegramId, $adminUsername, 'en', '/menu'));
+        $processor->process('123456789', $baseUpdateId + 1);
+        $adminToken = $this->callbackToken('navigation.admin', (int) $adminAccount->id);
+        $this->accept($this->callbackPayload($baseUpdateId + 2, $adminTelegramId, $adminUsername, 'en', $adminToken));
+        $processor->process('123456789', $baseUpdateId + 2);
+
+        $searchToken = $this->callbackToken('navigation.admin.customer_search', (int) $adminAccount->id);
+        $this->accept($this->callbackPayload($baseUpdateId + 3, $adminTelegramId, $adminUsername, 'en', $searchToken));
+        $processor->process('123456789', $baseUpdateId + 3);
+        $this->accept($this->payload($baseUpdateId + 4, $adminTelegramId, $adminUsername, 'en', '@'.$targetUsername));
+        $processor->process('123456789', $baseUpdateId + 4);
+
+        $messageToken = $this->callbackToken('navigation.admin.customer.message', (int) $adminAccount->id);
+        $this->accept($this->callbackPayload($baseUpdateId + 5, $adminTelegramId, $adminUsername, 'en', $messageToken));
+        $processor->process('123456789', $baseUpdateId + 5);
+        $this->accept($this->payload(
+            $baseUpdateId + 6,
+            $adminTelegramId,
+            $adminUsername,
+            'en',
+            'restart-safe direct message',
+        ));
+        $processor->process('123456789', $baseUpdateId + 6);
+
+        $confirmSession = DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', (int) $adminAccount->id)
+            ->first(['state', 'payload']);
+        self::assertNotNull($confirmSession);
+        self::assertSame('admin_customer_message_confirm', (string) $confirmSession->state);
+        $confirmPayload = json_decode((string) $confirmSession->payload, true, 512, JSON_THROW_ON_ERROR);
+        self::assertIsString($confirmPayload['draft'] ?? null);
+        $confirmToken = $this->callbackToken('navigation.admin.customer.message.confirm', (int) $adminAccount->id);
+
+        return [
+            'processor' => $processor,
+            'admin_account_id' => (int) $adminAccount->id,
+            'draft_public_id' => (string) $confirmPayload['draft'],
+            'confirm_token' => $confirmToken,
+            'target_delivery_count' => DB::table('telegram_delivery_operations')
+                ->where('recipient_chat_id', $targetTelegramId)
+                ->count(),
+        ];
+    }
+
+    /** @return array{key:string,previous_keys:array<array-key,mixed>} */
+    private function rotateApplicationKeyForDirectMessageRecovery(): array
+    {
+        $oldKey = config('app.key');
+        $oldPreviousKeys = config('app.previous_keys', []);
+        self::assertIsString($oldKey);
+        self::assertNotSame('', $oldKey);
+        self::assertIsArray($oldPreviousKeys);
+
+        config([
+            'app.key' => 'base64:'.base64_encode(str_repeat('r', 32)),
+            'app.previous_keys' => [$oldKey],
+        ]);
+        $this->rebuildTelegramDirectMessageRuntimeForKeyRotation();
+
+        return ['key' => $oldKey, 'previous_keys' => $oldPreviousKeys];
+    }
+
+    /** @param array{key:string,previous_keys:array<array-key,mixed>} $keyring */
+    private function restoreApplicationKeyAfterDirectMessageRecovery(array $keyring): void
+    {
+        config([
+            'app.key' => $keyring['key'],
+            'app.previous_keys' => $keyring['previous_keys'],
+        ]);
+        $this->rebuildTelegramDirectMessageRuntimeForKeyRotation();
+    }
+
+    private function rebuildTelegramDirectMessageRuntimeForKeyRotation(): void
+    {
+        $this->app->forgetInstance('encrypter');
+        $this->app->forgetInstance(TelegramConfidentialPresentationHasher::class);
+        $this->app->forgetInstance(TelegramAdminCustomerNavigationHandler::class);
+        $this->app->forgetInstance(TelegramNavigationCompositeHandler::class);
+        $this->app->forgetInstance(TelegramInteractionHandlerRegistry::class);
+    }
+
+    private function salesContentAdministratorForUser(int $userId): int
+    {
+        $now = now('UTC');
+        $administratorId = (int) DB::table('administrators')->insertGetId([
+            'user_id' => $userId,
+            'status' => 'active',
+            'is_owner' => false,
+            'permission_version' => 1,
+            'last_authenticated_at' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $roleId = DB::table('roles')->where('code', 'sales_content')->where('is_active', true)->value('id');
+        self::assertIsNumeric($roleId);
+        DB::table('administrator_role_assignments')->insert([
+            'administrator_id' => $administratorId,
+            'role_id' => (int) $roleId,
+            'granted_by_administrator_id' => null,
+            'granted_at' => $now,
+            'revoked_at' => null,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        return $administratorId;
     }
 
     private function financeAdministratorForUser(int $userId): int

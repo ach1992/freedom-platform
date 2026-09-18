@@ -51,6 +51,7 @@ return [
     // their protected/reference delivery authority instead.
     'telegram_confidential_presentation_sources' => [
         'app/Modules/Telegram/Application/TelegramAdminCustomerNavigationHandler.php',
+        'app/Modules/Telegram/Application/TelegramAdministratorDirectMessageService.php',
         'app/Modules/Telegram/Application/TelegramAgentNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramCardToCardReceiptStatusDelivery.php',
         'app/Modules/Telegram/Application/TelegramCardToCardReceiptStatusPresentation.php',
@@ -649,6 +650,7 @@ return [
         'support_ticket_state_histories' => 'Support',
         'support_tickets' => 'Support',
         'telegram_accounts' => 'Identity',
+        'telegram_administrator_direct_messages' => 'Telegram',
         'telegram_delivery_authority_capability' => 'Telegram',
         'telegram_delivery_confidential_presentations' => 'Telegram',
         'telegram_delivery_interactive_presentations' => 'Telegram',
