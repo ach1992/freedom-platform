@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\Modules\Telegram\Application\TelegramInteractionDatabaseCapability;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
@@ -174,7 +175,7 @@ return new class extends Migration
         $capability = DB::table('telegram_interaction_authority_capability')->where('id', 1)->first(['capability_hash']);
         if ($capability === null
             || ! is_string($capability->capability_hash)
-            || ! hash_equals($this->capabilityHash(), $capability->capability_hash)) {
+            || $this->capabilityValueMatchingHash($capability->capability_hash) === null) {
             return false;
         }
 
@@ -308,8 +309,8 @@ SQL);
             if ($rows->count() !== 1
                 || (int) $rows->first()->id !== 1
                 || ! is_string($rows->first()->capability_hash)
-                || ! hash_equals($expectedHash, $rows->first()->capability_hash)) {
-                throw new RuntimeException('Telegram interaction database capability does not match the application key.');
+                || $this->capabilityValueMatchingHash($rows->first()->capability_hash) === null) {
+                throw new RuntimeException('Telegram interaction database capability does not match the configured application keyring.');
             }
         }
 
@@ -619,11 +620,11 @@ SQL);
 
     private function capabilityHash(): string
     {
-        $key = config('app.key');
-        if (! is_string($key) || $key === '') {
-            throw new RuntimeException('Telegram interaction database capability key is unavailable.');
-        }
+        return (new TelegramInteractionDatabaseCapability)->expectedHash();
+    }
 
-        return hash('sha256', hash_hmac('sha256', 'telegram-interaction-database-authority-v1', $key));
+    private function capabilityValueMatchingHash(string $capabilityHash): ?string
+    {
+        return (new TelegramInteractionDatabaseCapability)->valueMatchingHash($capabilityHash);
     }
 };
