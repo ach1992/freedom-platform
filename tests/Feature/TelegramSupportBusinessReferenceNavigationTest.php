@@ -114,10 +114,6 @@ final class TelegramSupportBusinessReferenceNavigationTest extends TestCase
         self::assertSame($references['user_id'], $account['user_id']);
 
         $processor = $this->app->make(TelegramUpdateProcessor::class);
-        $support = $this->callbackToken('navigation.support', $account['account_id']);
-        $this->accept($this->callbackPayload(8811, $telegramUserId, 'support_reference_owner', 'fa', $support));
-        $processor->process('123456789', 8811);
-
         $updateId = 8811;
         foreach ([
             ['type' => 'order', 'column' => 'order_id', 'id' => $references['order_id'], 'title' => 'Order reference'],
@@ -163,9 +159,6 @@ final class TelegramSupportBusinessReferenceNavigationTest extends TestCase
         $processor = $this->app->make(TelegramUpdateProcessor::class);
         $telegramUserId = 9892;
         $account = $this->primeSupportHome($this->quoteUser('customer'), $telegramUserId, 'fa');
-        $support = $this->callbackToken('navigation.support', $account['account_id']);
-        $this->accept($this->callbackPayload(8921, $telegramUserId, 'support_reference_stale', 'fa', $support));
-        $processor->process('123456789', 8921);
         $create = $this->callbackToken('navigation.support.create', $account['account_id']);
         $this->accept($this->callbackPayload(8922, $telegramUserId, 'support_reference_stale', 'fa', $create));
         $processor->process('123456789', 8922);
@@ -205,9 +198,6 @@ final class TelegramSupportBusinessReferenceNavigationTest extends TestCase
         $processor = $this->app->make(TelegramUpdateProcessor::class);
         $telegramUserId = 9893;
         $account = $this->primeSupportHome($this->quoteUser('customer'), $telegramUserId, 'en');
-        $support = $this->callbackToken('navigation.support', $account['account_id']);
-        $this->accept($this->callbackPayload(8931, $telegramUserId, 'support_reference_en', 'en', $support));
-        $processor->process('123456789', 8931);
         $create = $this->callbackToken('navigation.support.create', $account['account_id']);
         $this->accept($this->callbackPayload(8932, $telegramUserId, 'support_reference_en', 'en', $create));
         $processor->process('123456789', 8932);
@@ -371,16 +361,16 @@ final class TelegramSupportBusinessReferenceNavigationTest extends TestCase
         $session = $this->app->make(TelegramInteractionSessionService::class)->start(
             $account['account_id'],
             TelegramNavigationEntryGateway::FLOW,
-            TelegramNavigationEntryGateway::STATE,
+            'support_home',
             [],
             'test-support-business-reference-home:'.$telegramUserId,
         );
         $this->app->make(TelegramInteractionCallbackService::class)->issue(
             $session->publicId,
             $session->version,
-            'navigation.support',
+            'navigation.support.create',
             [],
-            'test-support-business-reference-entry:'.$telegramUserId,
+            'test-support-business-reference-create:'.$telegramUserId,
         );
 
         return $account;
