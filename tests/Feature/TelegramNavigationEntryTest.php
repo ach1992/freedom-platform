@@ -4767,10 +4767,43 @@ SQL);
             ->first(['state', 'payload']);
         self::assertNotNull($session);
         self::assertSame('admin_customer_message_submitting', (string) $session->state);
-        self::assertTrue((bool) (json_decode((string) $session->payload, true, 512, JSON_THROW_ON_ERROR)['expiry_locked'] ?? false));
+        $submissionPayload = json_decode((string) $session->payload, true, 512, JSON_THROW_ON_ERROR);
+        self::assertTrue((bool) ($submissionPayload['expiry_locked'] ?? false));
+        self::assertIsString($submissionPayload['selection'] ?? null);
 
         $clock->advance('+2 minutes');
         self::assertGreaterThan(new DateTimeImmutable((string) $direct->expires_at), $clock->now());
+
+        $adminUserId = DB::table('telegram_accounts')
+            ->where('id', $fixture['admin_account_id'])
+            ->value('user_id');
+        self::assertIsNumeric($adminUserId);
+        $administratorId = DB::table('administrators')->where('user_id', (int) $adminUserId)->value('id');
+        self::assertIsNumeric($administratorId);
+        self::assertSame(1, DB::table('administrator_role_assignments')
+            ->where('administrator_id', (int) $administratorId)
+            ->whereNull('revoked_at')
+            ->update(['revoked_at' => now('UTC'), 'updated_at' => now('UTC')]));
+
+        try {
+            $this->app->make(TelegramAdministratorDirectMessageService::class)->confirmText(
+                (int) $adminUserId,
+                '123456789',
+                (string) $submissionPayload['selection'],
+                $fixture['draft_public_id'],
+            );
+            self::fail('Revocation after accepted confirmation must still block creation of a new delivery operation.');
+        } catch (AuthorizationException) {
+            // Expected: no outbound operation exists yet, so recovery may not bypass current authorization.
+        }
+        self::assertSame(
+            $fixture['target_delivery_count'],
+            DB::table('telegram_delivery_operations')->where('recipient_chat_id', $targetTelegramId)->count(),
+        );
+        self::assertSame(1, DB::table('administrator_role_assignments')
+            ->where('administrator_id', (int) $administratorId)
+            ->whereNotNull('revoked_at')
+            ->update(['revoked_at' => null, 'updated_at' => now('UTC')]));
 
         $fixture['processor']->process('123456789', $confirmUpdateId);
 
@@ -4868,23 +4901,46 @@ SQL);
         $clock->advance('+2 minutes');
         self::assertGreaterThan(new DateTimeImmutable((string) $direct->expires_at), $clock->now());
 
+        $permissionId = DB::table('permissions')->where('code', 'telegram.direct_messages.send')->value('id');
+        $salesContentRoleId = DB::table('roles')->where('code', 'sales_content')->value('id');
+        self::assertIsNumeric($permissionId);
+        self::assertIsNumeric($salesContentRoleId);
+        self::assertSame(1, DB::table('role_permissions')
+            ->where('role_id', (int) $salesContentRoleId)
+            ->where('permission_id', (int) $permissionId)
+            ->delete());
+
         $fixture['processor']->process('123456789', $confirmUpdateId);
 
         self::assertSame(
             $fixture['target_delivery_count'] + 1,
             DB::table('telegram_delivery_operations')->where('recipient_chat_id', $targetTelegramId)->count(),
         );
-        self::assertSame(
-            $existingOperation,
-            DB::table('telegram_administrator_direct_messages')
-                ->where('public_id', $fixture['draft_public_id'])
-                ->value('delivery_operation_public_id'),
-        );
+        $recoveredDirect = DB::table('telegram_administrator_direct_messages')
+            ->where('public_id', $fixture['draft_public_id'])
+            ->first(['delivery_operation_public_id', 'queued_at']);
+        self::assertNotNull($recoveredDirect);
+        self::assertSame($existingOperation, $recoveredDirect->delivery_operation_public_id);
+        self::assertNotNull($recoveredDirect->queued_at);
         $this->assertDatabaseHas('processed_telegram_updates', [
             'update_id' => $confirmUpdateId,
             'state' => 'processed',
             'attempt_count' => 2,
         ]);
+
+        DB::table('role_permissions')->insert([
+            'role_id' => (int) $salesContentRoleId,
+            'permission_id' => (int) $permissionId,
+            'created_at' => now('UTC'),
+            'updated_at' => now('UTC'),
+        ]);
+        $adminUserId = DB::table('telegram_accounts')
+            ->where('id', $fixture['admin_account_id'])
+            ->value('user_id');
+        self::assertIsNumeric($adminUserId);
+        $deliveryResult = $this->app->make(TelegramAdministratorDirectMessageService::class)
+            ->deliveryResultForSender((int) $adminUserId, $fixture['draft_public_id']);
+        self::assertSame($existingOperation, $deliveryResult->deliveryOperationPublicId);
     }
 
     /** @requirement COM-001 ACL-001 ACL-002 SEC-002 SEC-003 DAT-003 QUA-004 */

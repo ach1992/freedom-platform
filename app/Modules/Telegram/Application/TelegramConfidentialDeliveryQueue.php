@@ -17,6 +17,24 @@ final readonly class TelegramConfidentialDeliveryQueue
 {
     public function __construct(private TelegramDeliveryQueueService $delivery) {}
 
+    public function findExistingSend(
+        int $recipientChatId,
+        ConfidentialTelegramPresentation $presentation,
+        string $requestKey,
+        string $correlationId,
+        ?TelegramInlineKeyboardSnapshot $inlineKeyboard = null,
+    ): ?TelegramDeliveryOperationReceipt {
+        return $this->delivery->findExistingConfidential(
+            TelegramDeliveryAction::Send,
+            $recipientChatId,
+            null,
+            $presentation,
+            $requestKey,
+            $correlationId,
+            $inlineKeyboard,
+        );
+    }
+
     public function send(
         int $recipientChatId,
         ConfidentialTelegramPresentation $presentation,

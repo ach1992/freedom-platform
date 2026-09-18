@@ -126,6 +126,38 @@ final readonly class TelegramDeliveryQueueService
         );
     }
 
+    /** @requirement ARCH-003 ARCH-004 DAT-003 SEC-002 SEC-008 OPS-003 QUA-001 QUA-004 QUA-007 */
+    public function findExistingConfidential(
+        TelegramDeliveryAction $action,
+        int $recipientChatId,
+        ?int $targetMessageId,
+        ConfidentialTelegramPresentation $presentation,
+        string $requestKey,
+        string $correlationId,
+        ?TelegramInlineKeyboardSnapshot $inlineKeyboard = null,
+    ): ?TelegramDeliveryOperationReceipt {
+        TelegramConfidentialPresentationProvenanceGuard::assertQueueSource($this->database->connection());
+        if ($action === TelegramDeliveryAction::Delete) {
+            throw new DomainException('Confidential Telegram delivery supports send/edit presentation mutations only.');
+        }
+
+        $request = new TelegramMutationRequest($action, $recipientChatId, $targetMessageId, $presentation);
+        $requestKeyHash = $this->requestKeyHash($requestKey);
+        $this->assertToken($correlationId, 'Telegram delivery correlation ID', 8, 64);
+        $botId = $this->runtime->botId();
+        $this->assertBotId($botId);
+        $fingerprintCandidates = TelegramDeliveryRequestFingerprint::candidates(
+            $request,
+            $botId,
+            $correlationId,
+            $inlineKeyboard?->hash(),
+            $this->confidentialPresentations->fingerprintHashCandidates($presentation),
+        );
+        $existing = $this->operationByRequestHash($this->database->connection(), $requestKeyHash, false);
+
+        return $existing === null ? null : $this->replayReceipt($existing, $fingerprintCandidates);
+    }
+
     private function queueRequest(
         TelegramMutationRequest $request,
         ?string $durablePresentationText,

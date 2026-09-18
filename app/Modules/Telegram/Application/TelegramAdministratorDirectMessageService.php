@@ -243,8 +243,6 @@ final readonly class TelegramAdministratorDirectMessageService
         string $selectionToken,
         string $publicId,
     ): TelegramDeliveryOperationReceipt {
-        $administratorId = $this->administrators->authorizeUser($actorUserId, self::PERMISSION);
-        $target = $this->targets->resolve($actorUserId, $botId, $selectionToken);
         $row = $this->rowByPublicId($this->database->connection(), $publicId, false);
         if ($row === null) {
             throw new DomainException('Telegram administrator direct-message draft is unavailable.');
@@ -252,39 +250,60 @@ final readonly class TelegramAdministratorDirectMessageService
         if ($row->confirmed_at === null) {
             throw new DomainException('Telegram administrator direct-message confirmation has not been accepted.');
         }
-        $draft = $this->draftFromRow($row, $administratorId, $botId, $target, null, false);
 
-        // Re-authorize and re-resolve at the immediate external-effect boundary.
-        $recheckedAdministratorId = $this->administrators->authorizeUser($actorUserId, self::PERMISSION);
-        if ($recheckedAdministratorId !== $administratorId) {
-            throw new RuntimeException('Telegram administrator direct-message actor changed during confirmation.');
-        }
-        $currentTarget = $this->targets->resolve($actorUserId, $botId, $selectionToken);
-        $this->assertTargetMatches($currentTarget, $draft->targetAccountPublicId, $draft->targetTelegramUserId);
+        $administratorId = $this->assertStoredActor($row, $actorUserId);
+        $draft = $this->draftFromStoredRow($row, $administratorId, $botId, null, false);
+        $recipientChatId = $this->recipientChatId($draft->targetTelegramUserId);
+        $presentation = $this->presentationForText($draft->text);
+        $requestKey = 'tg-admin-direct-message-send:'.$publicId;
 
-        $recipientChatId = filter_var(
-            $currentTarget->telegramUserId,
-            FILTER_VALIDATE_INT,
-            ['options' => ['min_range' => 1]],
+        $existing = $this->delivery->findExistingSend(
+            $recipientChatId,
+            $presentation,
+            $requestKey,
+            $draft->correlationId,
         );
-        if ($recipientChatId === false) {
-            throw new DomainException('Telegram administrator direct-message target is not addressable.');
+        if ($existing !== null) {
+            $this->linkDeliveryOperation($publicId, $administratorId, $existing->publicId);
+
+            return $existing;
         }
 
-        $source = new readonly class($draft->text) implements ConfidentialTelegramPresentationSource
-        {
-            public function __construct(#[SensitiveParameter] private string $text) {}
-
-            public function confidentialTelegramText(): string
-            {
-                return $this->text;
+        try {
+            $authorizedAdministratorId = $this->administrators->authorizeUser($actorUserId, self::PERMISSION);
+            if ($authorizedAdministratorId !== $administratorId) {
+                throw new RuntimeException('Telegram administrator direct-message actor changed during confirmation.');
             }
-        };
-        $presentation = $this->presentations->fromSource($source);
+            $target = $this->targets->resolve($actorUserId, $botId, $selectionToken);
+            $this->assertTargetMatches($target, $draft->targetAccountPublicId, $draft->targetTelegramUserId);
+
+            // Re-authorize and re-resolve at the immediate new external-effect boundary.
+            $recheckedAdministratorId = $this->administrators->authorizeUser($actorUserId, self::PERMISSION);
+            if ($recheckedAdministratorId !== $administratorId) {
+                throw new RuntimeException('Telegram administrator direct-message actor changed during confirmation.');
+            }
+            $currentTarget = $this->targets->resolve($actorUserId, $botId, $selectionToken);
+            $this->assertTargetMatches($currentTarget, $draft->targetAccountPublicId, $draft->targetTelegramUserId);
+        } catch (Throwable $exception) {
+            $existing = $this->delivery->findExistingSend(
+                $recipientChatId,
+                $presentation,
+                $requestKey,
+                $draft->correlationId,
+            );
+            if ($existing !== null) {
+                $this->linkDeliveryOperation($publicId, $administratorId, $existing->publicId);
+
+                return $existing;
+            }
+
+            throw $exception;
+        }
+
         $receipt = $this->delivery->send(
             $recipientChatId,
             $presentation,
-            'tg-admin-direct-message-send:'.$publicId,
+            $requestKey,
             $draft->correlationId,
         );
 
@@ -338,6 +357,55 @@ final readonly class TelegramAdministratorDirectMessageService
         );
     }
 
+    /** @param DirectMessageRow $row */
+    private function assertStoredActor(object $row, int $actorUserId): int
+    {
+        if ($actorUserId < 1) {
+            throw new DomainException('Telegram administrator direct-message record is unavailable.');
+        }
+
+        $administratorId = (int) $row->actor_administrator_id;
+        $storedUserId = $this->database->connection()
+            ->table('administrators')
+            ->where('id', $administratorId)
+            ->value('user_id');
+        if ((! is_int($storedUserId) && ! is_string($storedUserId))
+            || (int) $storedUserId !== $actorUserId) {
+            throw new DomainException('Telegram administrator direct-message record is unavailable.');
+        }
+
+        return $administratorId;
+    }
+
+    private function recipientChatId(string $telegramUserId): int
+    {
+        $recipientChatId = filter_var(
+            $telegramUserId,
+            FILTER_VALIDATE_INT,
+            ['options' => ['min_range' => 1]],
+        );
+        if ($recipientChatId === false) {
+            throw new DomainException('Telegram administrator direct-message target is not addressable.');
+        }
+
+        return $recipientChatId;
+    }
+
+    private function presentationForText(#[SensitiveParameter] string $text): ConfidentialTelegramPresentation
+    {
+        $source = new readonly class($text) implements ConfidentialTelegramPresentationSource
+        {
+            public function __construct(#[SensitiveParameter] private string $text) {}
+
+            public function confidentialTelegramText(): string
+            {
+                return $this->text;
+            }
+        };
+
+        return $this->presentations->fromSource($source);
+    }
+
     private function linkDeliveryOperation(string $publicId, int $administratorId, string $operationPublicId): void
     {
         $this->assertPublicId($publicId, 'Telegram administrator direct-message identity');
@@ -382,14 +450,33 @@ final readonly class TelegramAdministratorDirectMessageService
         ?string $expectedText,
         bool $replayed,
     ): TelegramAdministratorDirectMessageDraft {
-        $publicId = (string) $row->public_id;
-        $this->assertPublicId($publicId, 'Telegram administrator direct-message identity');
         if ((int) $row->actor_administrator_id !== $administratorId
             || ! hash_equals((string) $row->bot_id, $botId)
             || ! hash_equals((string) $row->target_account_public_id, $target->accountPublicId)
             || ! hash_equals((string) $row->target_telegram_user_id, $target->telegramUserId)
             || (string) $row->content_type !== self::CONTENT_TYPE_TEXT) {
             throw new DomainException('Telegram administrator direct-message draft does not match the current actor or target.');
+        }
+
+        return $this->draftFromStoredRow($row, $administratorId, $botId, $expectedText, $replayed);
+    }
+
+    /** @param DirectMessageRow $row */
+    private function draftFromStoredRow(
+        object $row,
+        int $administratorId,
+        string $botId,
+        ?string $expectedText,
+        bool $replayed,
+    ): TelegramAdministratorDirectMessageDraft {
+        $publicId = (string) $row->public_id;
+        $targetAccountPublicId = (string) $row->target_account_public_id;
+        $targetTelegramUserId = (string) $row->target_telegram_user_id;
+        $this->assertPublicId($publicId, 'Telegram administrator direct-message identity');
+        if ((int) $row->actor_administrator_id !== $administratorId
+            || ! hash_equals((string) $row->bot_id, $botId)
+            || (string) $row->content_type !== self::CONTENT_TYPE_TEXT) {
+            throw new DomainException('Telegram administrator direct-message draft does not match the stored actor or bot.');
         }
         if ($row->confirmed_at === null
             && $this->parseTime((string) $row->expires_at) <= $this->clock->now()) {
@@ -414,8 +501,8 @@ final readonly class TelegramAdministratorDirectMessageService
                     $publicId,
                     $administratorId,
                     $botId,
-                    $target->accountPublicId,
-                    $target->telegramUserId,
+                    $targetAccountPublicId,
+                    $targetTelegramUserId,
                     $text,
                 ),
             )) {
@@ -427,8 +514,8 @@ final readonly class TelegramAdministratorDirectMessageService
 
         return new TelegramAdministratorDirectMessageDraft(
             $publicId,
-            $target->accountPublicId,
-            $target->telegramUserId,
+            $targetAccountPublicId,
+            $targetTelegramUserId,
             $text,
             (string) $row->correlation_id,
             $replayed,
