@@ -103,7 +103,10 @@ final class TelegramAdministratorCustomerTargetDiscoveryTest extends TestCase
             // Expected.
         }
 
-        $this->administrator('support', userId: $actor);
+        DB::table('administrator_role_assignments')
+            ->where('administrator_id', $this->administratorIdForUser($actor))
+            ->update(['revoked_at' => null, 'updated_at' => now('UTC')]);
+
         DB::table('users')->where('id', $target['user_id'])->update([
             'account_status' => 'deleted',
             'updated_at' => now('UTC'),
