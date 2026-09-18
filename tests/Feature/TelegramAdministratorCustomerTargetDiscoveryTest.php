@@ -35,7 +35,7 @@ final class TelegramAdministratorCustomerTargetDiscoveryTest extends TestCase
 
         foreach ([
             '910001',
-            '@target_user',
+            '@Target_User',
             strtolower($target['public_id']),
         ] as $query) {
             $result = $discovery->search($actor, '123456789', $query);
