@@ -4399,6 +4399,125 @@ SQL);
         self::assertSame($before, $this->purchaseMutationCounts());
     }
 
+    /** @requirement COM-001 ADM-001 ACL-001 ACL-002 SEC-002 SEC-003 DAT-002 DAT-003 CNT-001 QUA-001 QUA-004 */
+    public function test_admin_customer_target_search_is_permission_filtered_transient_masked_and_reauthorized(): void
+    {
+        $adminTelegramId = 9780;
+        $targetTelegramId = 888777666555;
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+
+        $this->accept($this->payload(7400, $adminTelegramId, 'admin_customer_operator', 'fa', '/start'));
+        $processor->process('123456789', 7400);
+        $adminAccount = DB::table('telegram_accounts')
+            ->where('telegram_user_id', $adminTelegramId)
+            ->first(['id', 'user_id']);
+        self::assertNotNull($adminAccount);
+        self::assertSame(0, DB::table('telegram_interaction_callbacks')
+            ->where('telegram_account_id', (int) $adminAccount->id)
+            ->where('action', 'navigation.admin')
+            ->count());
+
+        $administratorId = $this->financeAdministratorForUser((int) $adminAccount->user_id);
+        self::assertGreaterThan(0, $administratorId);
+
+        $targetUsername = 'admin_target_customer';
+        $this->accept($this->payload(7410, $targetTelegramId, $targetUsername, 'en', '/start'));
+        $processor->process('123456789', 7410);
+        $target = DB::table('telegram_accounts as account')
+            ->join('users as user', 'user.id', '=', 'account.user_id')
+            ->where('account.bot_id', 123456789)
+            ->where('account.telegram_user_id', $targetTelegramId)
+            ->first(['user.id as internal_user_id', 'user.public_id']);
+        self::assertNotNull($target);
+
+        $this->accept($this->payload(7401, $adminTelegramId, 'admin_customer_operator', 'fa', '/menu'));
+        $processor->process('123456789', 7401);
+        $adminToken = $this->callbackToken('navigation.admin', (int) $adminAccount->id);
+        $this->accept($this->callbackPayload(7402, $adminTelegramId, 'admin_customer_operator', 'fa', $adminToken));
+        $processor->process('123456789', 7402);
+
+        $searchToken = $this->callbackToken('navigation.admin.customer_search', (int) $adminAccount->id);
+        self::assertStringContainsString('مرکز مدیریت', $this->latestConfidentialPresentation());
+        $this->accept($this->callbackPayload(7403, $adminTelegramId, 'admin_customer_operator', 'fa', $searchToken));
+        $processor->process('123456789', 7403);
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'telegram_account_id' => (int) $adminAccount->id,
+            'state' => 'admin_customer_search',
+            'payload' => '{}',
+        ]);
+        self::assertStringContainsString('جستجوی مشتری', $this->latestConfidentialPresentation());
+
+        $rawQuery = '@'.$targetUsername;
+        $this->accept($this->payload(7404, $adminTelegramId, 'admin_customer_operator', 'fa', $rawQuery));
+        $processor->process('123456789', 7404);
+
+        $session = DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', (int) $adminAccount->id)
+            ->first(['id', 'state', 'version', 'payload']);
+        self::assertNotNull($session);
+        self::assertSame('admin_customer_preview', (string) $session->state);
+        $payload = json_decode((string) $session->payload, true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame(['selection'], array_keys($payload));
+        self::assertIsString($payload['selection']);
+        self::assertMatchesRegularExpression('/\A[0-9a-f]{40}\z/', $payload['selection']);
+        self::assertNotSame((string) $target->internal_user_id, $payload['selection']);
+        self::assertNotSame((string) $targetTelegramId, $payload['selection']);
+
+        $preview = $this->latestConfidentialPresentation();
+        self::assertStringContainsString('پیش‌نمایش مشتری هدف', $preview);
+        self::assertStringContainsString((string) $targetTelegramId, $preview);
+        self::assertStringContainsString((string) $target->public_id, $preview);
+        self::assertStringNotContainsString($targetUsername, $preview);
+        self::assertStringContainsString('ad', $preview);
+        self::assertStringContainsString('er', $preview);
+        self::assertStringContainsString('هیچ پیام مستقیمی ارسال نشده است', $preview);
+
+        $durable = $this->navigationCommonDurableEvidence((int) $session->id, $adminTelegramId);
+        self::assertStringNotContainsString($rawQuery, $durable);
+        self::assertStringNotContainsString($targetUsername, $durable);
+        self::assertStringNotContainsString((string) $targetTelegramId, $durable);
+
+        $backToken = $this->callbackToken('navigation.back', (int) $adminAccount->id);
+        $this->accept($this->callbackPayload(7405, $adminTelegramId, 'admin_customer_operator', 'fa', $backToken));
+        $processor->process('123456789', 7405);
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'telegram_account_id' => (int) $adminAccount->id,
+            'state' => 'admin_customer_search',
+            'payload' => '{}',
+        ]);
+
+        DB::table('administrator_role_assignments')
+            ->where('administrator_id', $administratorId)
+            ->update(['revoked_at' => now('UTC'), 'updated_at' => now('UTC')]);
+        $deliveryCount = DB::table('telegram_delivery_operations')
+            ->where('recipient_chat_id', $adminTelegramId)
+            ->count();
+
+        $this->accept($this->payload(7406, $adminTelegramId, 'admin_customer_operator', 'fa', (string) $targetTelegramId));
+        try {
+            $processor->process('123456789', 7406);
+            self::fail('Revoked administrator customer-view permission must fail at execution time.');
+        } catch (RuntimeException $exception) {
+            self::assertSame('Telegram update processing failed.', $exception->getMessage());
+        }
+
+        self::assertSame(
+            $deliveryCount,
+            DB::table('telegram_delivery_operations')->where('recipient_chat_id', $adminTelegramId)->count(),
+        );
+        $this->assertDatabaseHas('processed_telegram_updates', [
+            'bot_id' => '123456789',
+            'update_id' => 7406,
+            'state' => 'failed',
+            'last_error_class' => AuthorizationException::class,
+        ]);
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'telegram_account_id' => (int) $adminAccount->id,
+            'state' => 'admin_customer_search',
+            'payload' => '{}',
+        ]);
+    }
+
     public function test_admin_usdt_rate_journey_is_permission_filtered_confidential_and_crash_replay_idempotent(): void
     {
         Config::set('usdt.rate.min_irr', '100000');
