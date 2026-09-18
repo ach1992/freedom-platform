@@ -7,6 +7,7 @@ namespace App\Providers;
 use App\Modules\Catalog\Application\TelegramCustomerPurchaseCatalogService;
 use App\Modules\Catalog\Application\TelegramCustomerTrialCatalogService;
 use App\Modules\Customers\Application\CustomerIdentityProfilePersistence;
+use App\Modules\Customers\Application\TelegramAdministratorCustomerTargetDiscoveryService;
 use App\Modules\Identity\Application\Contracts\CustomerIdentityProfileWriter;
 use App\Modules\Orders\Application\AgentPurchaseCountService;
 use App\Modules\Orders\Application\Contracts\QuoteDiscountAuthority;
@@ -41,6 +42,7 @@ use App\Modules\Provisioning\Application\TelegramCustomerTrialProvisioningStatus
 use App\Modules\Provisioning\Application\TelegramOwnedServiceDeliveryResendService;
 use App\Modules\Provisioning\Application\TelegramOwnedServiceProjectionService;
 use App\Modules\Telegram\Application\Contracts\TelegramAgentPurchaseCount;
+use App\Modules\Telegram\Application\Contracts\TelegramAdministratorCustomerTargetDiscovery;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCardToCardPayment;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCardToCardReceiptSubmission;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCatalog;
@@ -78,6 +80,7 @@ class AppServiceProvider extends ServiceProvider
     {
         $this->app->bind(CustomerIdentityProfileWriter::class, CustomerIdentityProfilePersistence::class);
         $this->app->bind(TelegramAgentPurchaseCount::class, AgentPurchaseCountService::class);
+        $this->app->bind(TelegramAdministratorCustomerTargetDiscovery::class, TelegramAdministratorCustomerTargetDiscoveryService::class);
         $this->app->bind(TelegramCustomerPurchaseCatalog::class, TelegramCustomerPurchaseCatalogService::class);
         $this->app->bind(TelegramCustomerTrialCatalog::class, TelegramCustomerTrialCatalogService::class);
         $this->app->bind(TelegramCustomerTrialClaim::class, TelegramCustomerTrialClaimService::class);
