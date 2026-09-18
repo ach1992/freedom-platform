@@ -4785,40 +4785,45 @@ SQL);
             ->whereNull('revoked_at')
             ->update(['revoked_at' => now('UTC'), 'updated_at' => now('UTC')]));
 
+        $keyring = $this->rotateApplicationKeyForDirectMessageRecovery();
         try {
-            $this->app->make(TelegramAdministratorDirectMessageService::class)->confirmText(
-                (int) $adminUserId,
-                '123456789',
-                (string) $submissionPayload['selection'],
-                $fixture['draft_public_id'],
+            try {
+                $this->app->make(TelegramAdministratorDirectMessageService::class)->confirmText(
+                    (int) $adminUserId,
+                    '123456789',
+                    (string) $submissionPayload['selection'],
+                    $fixture['draft_public_id'],
+                );
+                self::fail('Revocation after accepted confirmation must still block creation of a new delivery operation.');
+            } catch (AuthorizationException) {
+                // Expected: key-rotation recovery reached current authorization, and no outbound operation exists yet.
+            }
+            self::assertSame(
+                $fixture['target_delivery_count'],
+                DB::table('telegram_delivery_operations')->where('recipient_chat_id', $targetTelegramId)->count(),
             );
-            self::fail('Revocation after accepted confirmation must still block creation of a new delivery operation.');
-        } catch (AuthorizationException) {
-            // Expected: no outbound operation exists yet, so recovery may not bypass current authorization.
+            self::assertSame(1, DB::table('administrator_role_assignments')
+                ->where('administrator_id', (int) $administratorId)
+                ->whereNotNull('revoked_at')
+                ->update(['revoked_at' => null, 'updated_at' => now('UTC')]));
+
+            $this->app->make(TelegramUpdateProcessor::class)->process('123456789', $confirmUpdateId);
+
+            self::assertSame(
+                $fixture['target_delivery_count'] + 1,
+                DB::table('telegram_delivery_operations')->where('recipient_chat_id', $targetTelegramId)->count(),
+            );
+            self::assertIsString(DB::table('telegram_administrator_direct_messages')
+                ->where('public_id', $fixture['draft_public_id'])
+                ->value('delivery_operation_public_id'));
+            $this->assertDatabaseHas('processed_telegram_updates', [
+                'update_id' => $confirmUpdateId,
+                'state' => 'processed',
+                'attempt_count' => 2,
+            ]);
+        } finally {
+            $this->restoreApplicationKeyAfterDirectMessageRecovery($keyring);
         }
-        self::assertSame(
-            $fixture['target_delivery_count'],
-            DB::table('telegram_delivery_operations')->where('recipient_chat_id', $targetTelegramId)->count(),
-        );
-        self::assertSame(1, DB::table('administrator_role_assignments')
-            ->where('administrator_id', (int) $administratorId)
-            ->whereNotNull('revoked_at')
-            ->update(['revoked_at' => null, 'updated_at' => now('UTC')]));
-
-        $fixture['processor']->process('123456789', $confirmUpdateId);
-
-        self::assertSame(
-            $fixture['target_delivery_count'] + 1,
-            DB::table('telegram_delivery_operations')->where('recipient_chat_id', $targetTelegramId)->count(),
-        );
-        self::assertIsString(DB::table('telegram_administrator_direct_messages')
-            ->where('public_id', $fixture['draft_public_id'])
-            ->value('delivery_operation_public_id'));
-        $this->assertDatabaseHas('processed_telegram_updates', [
-            'update_id' => $confirmUpdateId,
-            'state' => 'processed',
-            'attempt_count' => 2,
-        ]);
     }
 
     public function test_admin_direct_message_replays_existing_delivery_after_link_failure_beyond_draft_ttl(): void
@@ -4910,23 +4915,28 @@ SQL);
             ->where('permission_id', (int) $permissionId)
             ->delete());
 
-        $fixture['processor']->process('123456789', $confirmUpdateId);
+        $keyring = $this->rotateApplicationKeyForDirectMessageRecovery();
+        try {
+            $this->app->make(TelegramUpdateProcessor::class)->process('123456789', $confirmUpdateId);
 
-        self::assertSame(
-            $fixture['target_delivery_count'] + 1,
-            DB::table('telegram_delivery_operations')->where('recipient_chat_id', $targetTelegramId)->count(),
-        );
-        $recoveredDirect = DB::table('telegram_administrator_direct_messages')
-            ->where('public_id', $fixture['draft_public_id'])
-            ->first(['delivery_operation_public_id', 'queued_at']);
-        self::assertNotNull($recoveredDirect);
-        self::assertSame($existingOperation, $recoveredDirect->delivery_operation_public_id);
-        self::assertNotNull($recoveredDirect->queued_at);
-        $this->assertDatabaseHas('processed_telegram_updates', [
-            'update_id' => $confirmUpdateId,
-            'state' => 'processed',
-            'attempt_count' => 2,
-        ]);
+            self::assertSame(
+                $fixture['target_delivery_count'] + 1,
+                DB::table('telegram_delivery_operations')->where('recipient_chat_id', $targetTelegramId)->count(),
+            );
+            $recoveredDirect = DB::table('telegram_administrator_direct_messages')
+                ->where('public_id', $fixture['draft_public_id'])
+                ->first(['delivery_operation_public_id', 'queued_at']);
+            self::assertNotNull($recoveredDirect);
+            self::assertSame($existingOperation, $recoveredDirect->delivery_operation_public_id);
+            self::assertNotNull($recoveredDirect->queued_at);
+            $this->assertDatabaseHas('processed_telegram_updates', [
+                'update_id' => $confirmUpdateId,
+                'state' => 'processed',
+                'attempt_count' => 2,
+            ]);
+        } finally {
+            $this->restoreApplicationKeyAfterDirectMessageRecovery($keyring);
+        }
 
         DB::table('role_permissions')->insert([
             'role_id' => (int) $salesContentRoleId,
@@ -6531,6 +6541,43 @@ SQL);
                 ->where('recipient_chat_id', $targetTelegramId)
                 ->count(),
         ];
+    }
+
+    /** @return array{key:string,previous_keys:array<array-key,mixed>} */
+    private function rotateApplicationKeyForDirectMessageRecovery(): array
+    {
+        $oldKey = config('app.key');
+        $oldPreviousKeys = config('app.previous_keys', []);
+        self::assertIsString($oldKey);
+        self::assertNotSame('', $oldKey);
+        self::assertIsArray($oldPreviousKeys);
+
+        config([
+            'app.key' => 'base64:'.base64_encode(str_repeat('r', 32)),
+            'app.previous_keys' => [$oldKey],
+        ]);
+        $this->rebuildTelegramDirectMessageRuntimeForKeyRotation();
+
+        return ['key' => $oldKey, 'previous_keys' => $oldPreviousKeys];
+    }
+
+    /** @param array{key:string,previous_keys:array<array-key,mixed>} $keyring */
+    private function restoreApplicationKeyAfterDirectMessageRecovery(array $keyring): void
+    {
+        config([
+            'app.key' => $keyring['key'],
+            'app.previous_keys' => $keyring['previous_keys'],
+        ]);
+        $this->rebuildTelegramDirectMessageRuntimeForKeyRotation();
+    }
+
+    private function rebuildTelegramDirectMessageRuntimeForKeyRotation(): void
+    {
+        $this->app->forgetInstance('encrypter');
+        $this->app->forgetInstance(\App\Modules\Telegram\Application\TelegramConfidentialPresentationHasher::class);
+        $this->app->forgetInstance(\App\Modules\Telegram\Application\TelegramAdminCustomerNavigationHandler::class);
+        $this->app->forgetInstance(\App\Modules\Telegram\Application\TelegramNavigationCompositeHandler::class);
+        $this->app->forgetInstance(\App\Modules\Telegram\Application\TelegramInteractionHandlerRegistry::class);
     }
 
     private function salesContentAdministratorForUser(int $userId): int
