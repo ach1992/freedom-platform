@@ -14,6 +14,7 @@ final readonly class TelegramNavigationCompositeHandler implements TelegramInter
 {
     public function __construct(
         private TelegramNavigationHandler $navigation,
+        private TelegramAdminCustomerNavigationHandler $adminCustomers,
         private TelegramAgentNavigationHandler $agent,
         private TelegramTrialNavigationHandler $trial,
         private TelegramSupportNavigationHandler $support,
@@ -34,6 +35,11 @@ final readonly class TelegramNavigationCompositeHandler implements TelegramInter
 
     public function handle(TelegramInteractionAction $action): void
     {
+        if ($this->adminCustomers->supports($action)) {
+            $this->adminCustomers->handle($action);
+
+            return;
+        }
         if ($this->supportAttachments->supports($action)) {
             $this->supportMembership->assertCurrent($action);
             $this->supportAttachments->handle($action);
