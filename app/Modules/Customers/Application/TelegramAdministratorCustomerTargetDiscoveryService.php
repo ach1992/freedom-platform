@@ -55,16 +55,38 @@ final readonly class TelegramAdministratorCustomerTargetDiscoveryService impleme
 
         $builder = $this->baseQuery($botId);
 
-        if (preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/i', $normalized) === 1) {
-            $builder->where('user.public_id', strtoupper($normalized));
-        } elseif (preg_match('/\A[1-9][0-9]{0,19}\z/', $normalized) === 1) {
-            $builder->where('account.telegram_user_id', $normalized);
-        } else {
-            $username = str_starts_with($normalized, '@') ? substr($normalized, 1) : $normalized;
+        if (str_starts_with($normalized, '@')) {
+            $username = substr($normalized, 1);
             if (preg_match('/\A[A-Za-z0-9_]{5,32}\z/', $username) !== 1) {
                 return TelegramAdministratorCustomerTargetSearchResult::notFound();
             }
             $builder->where('account.username', $username);
+        } else {
+            $publicId = preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/i', $normalized) === 1
+                ? strtoupper($normalized)
+                : null;
+            $telegramUserId = preg_match('/\A[1-9][0-9]{0,19}\z/', $normalized) === 1
+                ? $normalized
+                : null;
+            $username = preg_match('/\A[A-Za-z0-9_]{5,32}\z/', $normalized) === 1
+                ? $normalized
+                : null;
+
+            if ($publicId === null && $telegramUserId === null && $username === null) {
+                return TelegramAdministratorCustomerTargetSearchResult::notFound();
+            }
+
+            $builder->where(function (Builder $exact) use ($publicId, $telegramUserId, $username): void {
+                if ($publicId !== null) {
+                    $exact->orWhere('user.public_id', $publicId);
+                }
+                if ($telegramUserId !== null) {
+                    $exact->orWhere('account.telegram_user_id', $telegramUserId);
+                }
+                if ($username !== null) {
+                    $exact->orWhere('account.username', $username);
+                }
+            });
         }
 
         /** @var Collection<int,CustomerTargetRow> $rows */
