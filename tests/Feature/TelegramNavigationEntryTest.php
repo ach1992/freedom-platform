@@ -1225,6 +1225,112 @@ final class TelegramNavigationEntryTest extends TestCase
         ]);
     }
 
+    /** @requirement SUP-002 CNT-001 CNT-002 SEC-002 QUA-001 QUA-004 */
+    public function test_home_internal_support_contact_mode_preserves_existing_callback_only(): void
+    {
+        config([
+            'support.contact.display_mode' => 'internal',
+            'support.contact.external_username' => null,
+        ]);
+        $telegramUserId = 9610;
+        $this->accept($this->payload(6110, $telegramUserId, 'support_contact_internal', 'fa', '/start'));
+        $this->app->make(TelegramUpdateProcessor::class)->process('123456789', 6110);
+
+        $account = DB::table('telegram_accounts')->where('telegram_user_id', $telegramUserId)->first(['id']);
+        self::assertNotNull($account);
+        $sessionId = (int) DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', (int) $account->id)
+            ->value('id');
+        self::assertSame(1, DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', $sessionId)
+            ->where('session_version', 1)
+            ->where('action', 'navigation.support')
+            ->count());
+
+        $operationPublicId = DB::table('telegram_delivery_operations')
+            ->where('recipient_chat_id', $telegramUserId)
+            ->value('public_id');
+        self::assertIsString($operationPublicId);
+        $keyboard = DB::table(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)
+            ->where('delivery_operation_public_id', $operationPublicId)
+            ->value('keyboard_snapshot');
+        self::assertIsString($keyboard);
+        self::assertStringContainsString(trans('telegram.navigation.buttons.support', locale: 'fa'), $keyboard);
+        self::assertStringNotContainsString('support_contact', $keyboard);
+        self::assertStringNotContainsString('https://t.me/', $keyboard);
+    }
+
+    /** @requirement SUP-002 CNT-001 CNT-002 SEC-002 QUA-001 QUA-004 */
+    public function test_home_external_support_contact_mode_uses_typed_url_without_internal_callback(): void
+    {
+        config([
+            'support.contact.display_mode' => 'external',
+            'support.contact.external_username' => 'Freedom_Support',
+        ]);
+        $telegramUserId = 9611;
+        $this->accept($this->payload(6120, $telegramUserId, 'support_contact_external', 'en', '/start'));
+        $this->app->make(TelegramUpdateProcessor::class)->process('123456789', 6120);
+
+        $account = DB::table('telegram_accounts')->where('telegram_user_id', $telegramUserId)->first(['id']);
+        self::assertNotNull($account);
+        $sessionId = (int) DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', (int) $account->id)
+            ->value('id');
+        self::assertSame(0, DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', $sessionId)
+            ->where('session_version', 1)
+            ->where('action', 'navigation.support')
+            ->count());
+
+        $operationPublicId = DB::table('telegram_delivery_operations')
+            ->where('recipient_chat_id', $telegramUserId)
+            ->value('public_id');
+        self::assertIsString($operationPublicId);
+        $keyboard = DB::table(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)
+            ->where('delivery_operation_public_id', $operationPublicId)
+            ->value('keyboard_snapshot');
+        self::assertIsString($keyboard);
+        self::assertStringContainsString('"text":"External Support"', $keyboard);
+        self::assertStringContainsString('"https_url":"https://t.me/Freedom_Support"', $keyboard);
+        self::assertStringContainsString('"https_url_purpose":"support_contact"', $keyboard);
+    }
+
+    /** @requirement SUP-002 CNT-001 CNT-002 SEC-002 QUA-001 QUA-004 */
+    public function test_home_both_support_contact_mode_renders_internal_and_external_paths(): void
+    {
+        config([
+            'support.contact.display_mode' => 'both',
+            'support.contact.external_username' => 'Freedom_Support',
+        ]);
+        $telegramUserId = 9612;
+        $this->accept($this->payload(6130, $telegramUserId, 'support_contact_both', 'fa', '/start'));
+        $this->app->make(TelegramUpdateProcessor::class)->process('123456789', 6130);
+
+        $account = DB::table('telegram_accounts')->where('telegram_user_id', $telegramUserId)->first(['id']);
+        self::assertNotNull($account);
+        $sessionId = (int) DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', (int) $account->id)
+            ->value('id');
+        self::assertSame(1, DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', $sessionId)
+            ->where('session_version', 1)
+            ->where('action', 'navigation.support')
+            ->count());
+
+        $operationPublicId = DB::table('telegram_delivery_operations')
+            ->where('recipient_chat_id', $telegramUserId)
+            ->value('public_id');
+        self::assertIsString($operationPublicId);
+        $keyboard = DB::table(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)
+            ->where('delivery_operation_public_id', $operationPublicId)
+            ->value('keyboard_snapshot');
+        self::assertIsString($keyboard);
+        self::assertStringContainsString(trans('telegram.navigation.buttons.support', locale: 'fa'), $keyboard);
+        self::assertStringContainsString('"text":"پشتیبانی در تلگرام"', $keyboard);
+        self::assertStringContainsString('"https_url":"https://t.me/Freedom_Support"', $keyboard);
+        self::assertStringContainsString('"https_url_purpose":"support_contact"', $keyboard);
+    }
+
     public function test_my_account_uses_same_session_confidential_v3_owner_boundaries_and_back_without_common_plaintext_leakage(): void
     {
         $telegramUserId = 9620;

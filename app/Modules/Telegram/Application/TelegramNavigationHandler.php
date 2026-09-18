@@ -159,6 +159,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         private TelegramOwnedServiceProjection $services,
         private TelegramOwnedServiceDeliveryResender $serviceDeliveryResender,
         private TelegramManagedUsdtRateSettings $managedUsdtRateSettings,
+        private TelegramSupportContactConfiguration $supportContact,
         private DatabaseManager $database,
     ) {}
 
@@ -3138,18 +3139,31 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             $services->publicId,
             TelegramInlineButtonStyle::Primary,
         )];
-        $support = $this->callbacks->issue(
-            $action->sessionPublicId,
-            $sessionVersion,
-            self::ACTION_SUPPORT,
-            [],
-            'nav-home-support:'.$requestKey,
-        );
-        $rows[] = [new TelegramInlineCallbackButton(
-            $this->translation('telegram.navigation.buttons.support', $locale),
-            $support->publicId,
-            TelegramInlineButtonStyle::Primary,
-        )];
+        if ($this->supportContact->mode->showsInternal()) {
+            $support = $this->callbacks->issue(
+                $action->sessionPublicId,
+                $sessionVersion,
+                self::ACTION_SUPPORT,
+                [],
+                'nav-home-support:'.$requestKey,
+            );
+            $rows[] = [new TelegramInlineCallbackButton(
+                $this->translation('telegram.navigation.buttons.support', $locale),
+                $support->publicId,
+                TelegramInlineButtonStyle::Primary,
+            )];
+        }
+        if ($this->supportContact->mode->showsExternal()) {
+            if ($this->supportContact->externalUrl === null) {
+                throw new RuntimeException('Telegram Support external contact URL is unavailable.');
+            }
+            $rows[] = [new TelegramInlineHttpsUrlButton(
+                $this->translation('telegram.navigation.buttons.external_support', $locale),
+                $this->supportContact->externalUrl,
+                TelegramInlineHttpsUrlPurpose::SupportContact,
+                TelegramInlineButtonStyle::Primary,
+            )];
+        }
         if (($customer->accountType === 'customer' && $customer->accountStatus === 'active')
             || ($customer->accountType === 'agent' && $customer->agentStatus !== null)) {
             $agent = $this->callbacks->issue(

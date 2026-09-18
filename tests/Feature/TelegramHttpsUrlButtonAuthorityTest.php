@@ -145,6 +145,59 @@ final class TelegramHttpsUrlButtonAuthorityTest extends TestCase
         }
     }
 
+    public function test_support_contact_url_purpose_is_exact_and_snapshot_restore_revalidates_it(): void
+    {
+        $url = 'https://t.me/Freedom_Support';
+        $button = new TelegramInlineHttpsUrlButton(
+            'External Support',
+            $url,
+            TelegramInlineHttpsUrlPurpose::SupportContact,
+            TelegramInlineButtonStyle::Primary,
+        );
+        $snapshot = new TelegramInlineKeyboardSnapshot([[$button]]);
+
+        self::assertSame([], $snapshot->callbackPublicIds());
+        self::assertSame($snapshot->json(), TelegramInlineKeyboardSnapshot::restore($snapshot->json())->json());
+        self::assertSame([
+            'inline_keyboard' => [[
+                ['text' => 'External Support', 'url' => $url, 'style' => 'primary'],
+            ]],
+        ], TelegramResolvedInlineKeyboardMarkup::resolve($snapshot, [])->providerPayload());
+
+        foreach ([
+            'http://t.me/Freedom_Support',
+            'tg://resolve?domain=Freedom_Support',
+            'https://telegram.me/Freedom_Support',
+            'https://T.ME/Freedom_Support',
+            'https://user@t.me/Freedom_Support',
+            'https://t.me:443/Freedom_Support',
+            'https://t.me/Freedom_Support?start=1',
+            'https://t.me/Freedom_Support#fragment',
+            'https://t.me/Freedom-Support',
+            'https://t.me/abcd',
+            'https://t.me/Freedom_Support/',
+        ] as $candidate) {
+            try {
+                new TelegramInlineHttpsUrlButton(
+                    'External Support',
+                    $candidate,
+                    TelegramInlineHttpsUrlPurpose::SupportContact,
+                );
+                self::fail('Unsafe Telegram Support contact URL must be rejected.');
+            } catch (InvalidArgumentException $exception) {
+                self::assertStringNotContainsString($candidate, $exception->getMessage());
+            }
+        }
+
+        $tampered = '{"rows":[[{"text":"External Support","https_url":"https://evil.example/Freedom_Support","https_url_purpose":"support_contact","style":null}]]}';
+        try {
+            TelegramInlineKeyboardSnapshot::restore($tampered);
+            self::fail('Persisted non-allowlisted Support contact URL must fail restoration.');
+        } catch (InvalidArgumentException) {
+            // Expected.
+        }
+    }
+
     public function test_url_only_keyboard_persists_replays_conflicts_and_dispatches_without_callback_rows(): void
     {
         $url = $this->zarinpalUrl('A'.str_repeat('2', 20));

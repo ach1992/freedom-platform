@@ -38,6 +38,7 @@ final readonly class TelegramInlineHttpsUrlPolicy
 
         match ($purpose) {
             TelegramInlineHttpsUrlPurpose::ZarinpalStartPay => self::assertZarinpalStartPay($url, $parts['host'], $path),
+            TelegramInlineHttpsUrlPurpose::SupportContact => self::assertSupportContact($url, $parts['host'], $path),
         };
     }
 
@@ -46,6 +47,15 @@ final readonly class TelegramInlineHttpsUrlPolicy
         if ($host !== 'payment.zarinpal.com'
             || preg_match('/\A\/pg\/StartPay\/A[A-Za-z0-9]{20,63}\z/', $path) !== 1
             || ! hash_equals('https://payment.zarinpal.com'.$path, $url)) {
+            throw new InvalidArgumentException('Telegram inline HTTPS URL is not allowed for its purpose.');
+        }
+    }
+
+    private static function assertSupportContact(string $url, string $host, string $path): void
+    {
+        if ($host !== 't.me'
+            || preg_match('/\A\/[A-Za-z0-9_]{5,32}\z/', $path) !== 1
+            || ! hash_equals('https://t.me'.$path, $url)) {
             throw new InvalidArgumentException('Telegram inline HTTPS URL is not allowed for its purpose.');
         }
     }

@@ -5,6 +5,11 @@ declare(strict_types=1);
 return [
     'reopen_window_hours' => env('SUPPORT_TICKET_REOPEN_WINDOW_HOURS', 72),
 
+    'contact' => [
+        'display_mode' => env('SUPPORT_CONTACT_DISPLAY_MODE', 'internal'),
+        'external_username' => env('SUPPORT_EXTERNAL_USERNAME'),
+    ],
+
     'rate_limits' => [
         'prefix' => 'freedom:telegram-support-rate-limit:',
         'ticket_creation' => [
