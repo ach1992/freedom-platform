@@ -23,6 +23,9 @@ return [
     // consumer-owned Application contract without creating a broad module edge.
     // Each entry is source-path plus exact imported symbol.
     'module_dependency_reference_exceptions' => [
+        'app/Modules/Customers/Application/TelegramAdministratorCustomerTargetDiscoveryService.php|App\\Modules\\Telegram\\Application\\Contracts\\TelegramAdministratorCustomerTargetDiscovery',
+        'app/Modules/Customers/Application/TelegramAdministratorCustomerTargetDiscoveryService.php|App\\Modules\\Telegram\\Application\\TelegramAdministratorCustomerTarget',
+        'app/Modules/Customers/Application/TelegramAdministratorCustomerTargetDiscoveryService.php|App\\Modules\\Telegram\\Application\\TelegramAdministratorCustomerTargetSearchResult',
         'app/Modules/Promotions/Application/BenefitCodeDiscountQuoteAuthority.php|App\\Modules\\Orders\\Application\\Contracts\\QuoteDiscountAuthority',
         'app/Modules/Promotions/Application/BenefitCodeDiscountQuoteAuthority.php|App\\Modules\\Orders\\Application\\QuoteDiscountAuthorization',
         'app/Modules/Promotions/Application/BenefitCodeDiscountQuoteAuthority.php|App\\Modules\\Orders\\Application\\QuoteDiscountAuthorizationRequest',
@@ -47,6 +50,7 @@ return [
     // data-classification review boundary; RESTRICTED owners must keep using
     // their protected/reference delivery authority instead.
     'telegram_confidential_presentation_sources' => [
+        'app/Modules/Telegram/Application/TelegramAdminCustomerNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramAgentNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramCardToCardReceiptStatusDelivery.php',
         'app/Modules/Telegram/Application/TelegramCardToCardReceiptStatusPresentation.php',
