@@ -11,7 +11,7 @@ return [
             'trial_service' => 'سرویس آزمایشی',
             'my_services' => 'سرویس‌های من',
             'support' => 'پشتیبانی',
-            'external_support' => 'پشتیبانی بیرونی',
+            'external_support' => 'پشتیبانی در تلگرام',
             'request_cooperation' => 'درخواست همکاری',
             'agent_status' => 'وضعیت درخواست همکاری',
             'agent_menu' => 'منوی نماینده',
