@@ -43,7 +43,15 @@ return [
         'admin' => [
             'control' => "Administrator Control Center\n\nAdministrative settings and tools are shown only when your current permission allows them and are re-authorized when executed.",
             'buttons' => [
+                'customer_search' => 'Customer Search',
                 'usdt_rate' => 'USDT / NOWPayments rate',
+            ],
+            'customer_search' => [
+                'prompt' => "Customer Search\n\nSend one exact Telegram ID, Telegram username, or public account ID. The search is exact and permission-gated; broad or fuzzy listing is not available.",
+                'not_found' => 'No customer matched that exact value.',
+                'ambiguous' => 'That value does not identify one unique customer. No target was selected.',
+                'preview' => "Customer Target Preview\n\nTelegram ID: :telegram_id\nAccount ID: :account_id\nUsername: :username\nType: :account_type\nStatus: :account_status\n\nNo direct message has been sent. This step only verifies the selected target.",
+                'username_unavailable' => 'Not available',
             ],
             'usdt_rate' => [
                 'view' => "Manual USDT Rate\n\nCurrent rate: :rate IRR per USDT\nSource: :source\nManaged version: :version\n\nThe same rate is used for direct USDT and, under the current Owner policy, as the USD pricing proxy for NOWPayments.",
