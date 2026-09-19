@@ -120,6 +120,79 @@ final readonly class TelegramBroadcastMessageDefinition
         );
     }
 
+    public static function restoreStored(
+        string $mode,
+        ?string $sourceKind,
+        ?string $text,
+        ?string $captionOverride,
+        int|string|null $sourceChatId,
+        int|string|null $sourceMessageId,
+        ?string $inlineKeyboardSnapshot,
+    ): self {
+        $resolvedMode = TelegramBroadcastMessageMode::tryFrom($mode)
+            ?? throw new DomainException('Stored broadcast message mode is invalid.');
+        $resolvedKind = $sourceKind === null
+            ? null
+            : TelegramBroadcastSourceKind::tryFrom($sourceKind);
+        if ($sourceKind !== null && $resolvedKind === null) {
+            throw new DomainException('Stored broadcast source kind is invalid.');
+        }
+        $chatId = self::nullablePositiveInt($sourceChatId, 'Stored broadcast source chat ID');
+        $messageId = self::nullablePositiveInt($sourceMessageId, 'Stored broadcast source message ID');
+        $keyboard = $inlineKeyboardSnapshot === null
+            ? null
+            : TelegramInlineKeyboardSnapshot::restore($inlineKeyboardSnapshot);
+
+        return new self(
+            $resolvedMode,
+            $resolvedKind,
+            $text,
+            $captionOverride,
+            $chatId,
+            $messageId,
+            $keyboard,
+        );
+    }
+
+    public function withInlineKeyboard(?TelegramInlineKeyboardSnapshot $inlineKeyboard): self
+    {
+        return new self(
+            $this->mode,
+            $this->sourceKind,
+            $this->text,
+            $this->captionOverride,
+            $this->sourceChatId,
+            $this->sourceMessageId,
+            $inlineKeyboard,
+        );
+    }
+
+    public function withText(string $text): self
+    {
+        if ($this->mode !== TelegramBroadcastMessageMode::NewText) {
+            throw new DomainException('Only a text broadcast can replace its text body.');
+        }
+
+        return self::newText($text, $this->inlineKeyboard);
+    }
+
+    public function withCaptionOverride(?string $captionOverride): self
+    {
+        if ($this->mode !== TelegramBroadcastMessageMode::Copy
+            || $this->sourceKind?->supportsCaption() !== true
+        ) {
+            throw new DomainException('Only copied media broadcasts can replace their caption.');
+        }
+
+        return self::copy(
+            $this->sourceChatId ?? throw new DomainException('Broadcast copy source chat is unavailable.'),
+            $this->sourceMessageId ?? throw new DomainException('Broadcast copy source message is unavailable.'),
+            $this->sourceKind,
+            $captionOverride,
+            $this->inlineKeyboard,
+        );
+    }
+
     public function contentHash(): string
     {
         try {
@@ -142,6 +215,20 @@ final readonly class TelegramBroadcastMessageDefinition
     public function inlineKeyboardJson(): ?string
     {
         return $this->inlineKeyboard?->json();
+    }
+
+    private static function nullablePositiveInt(int|string|null $value, string $label): ?int
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        $validated = filter_var($value, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+        if ($validated === false) {
+            throw new DomainException($label.' is invalid.');
+        }
+
+        return $validated;
     }
 
     /** @return array{redacted:true,type:string,mode:string,has_inline_keyboard:bool} */
