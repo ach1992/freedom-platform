@@ -172,6 +172,27 @@ final readonly class TelegramAdministratorDirectMessageService
         }
     }
 
+    /** @requirement COM-001 ACL-001 ACL-002 SEC-002 SEC-003 DAT-002 DAT-003 DAT-004 QUA-001 QUA-004 */
+    public function createMediaDraft(
+        int $actorUserId,
+        string $botId,
+        string $selectionToken,
+        string $sourceKind,
+        TelegramPrivateMediaReceipt $media,
+        #[SensitiveParameter] string $caption,
+        string $requestKey,
+    ): TelegramAdministratorDirectMessageDraft {
+        return $this->mediaMessages->createDraft(
+            $actorUserId,
+            $botId,
+            $selectionToken,
+            $sourceKind,
+            $media,
+            $caption,
+            $requestKey,
+        );
+    }
+
     /** @requirement COM-001 ACL-002 SEC-002 SEC-003 DAT-002 DAT-003 */
     public function draftForConfirmation(
         int $actorUserId,
