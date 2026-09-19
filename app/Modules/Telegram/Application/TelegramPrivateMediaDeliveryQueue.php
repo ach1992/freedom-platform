@@ -15,6 +15,7 @@ final readonly class TelegramPrivateMediaDeliveryQueue
         TelegramPrivateMediaPresentationReference $reference,
         string $requestKey,
         string $correlationId,
+        ?TelegramInlineKeyboardSnapshot $inlineKeyboard = null,
     ): ?TelegramDeliveryOperationReceipt {
         return $this->delivery->findExistingPrivateMediaReference(
             TelegramDeliveryAction::Send,
@@ -22,6 +23,7 @@ final readonly class TelegramPrivateMediaDeliveryQueue
             $reference,
             $requestKey,
             $correlationId,
+            $inlineKeyboard,
         );
     }
 
@@ -30,6 +32,7 @@ final readonly class TelegramPrivateMediaDeliveryQueue
         TelegramPrivateMediaPresentationReference $reference,
         string $requestKey,
         string $correlationId,
+        ?TelegramInlineKeyboardSnapshot $inlineKeyboard = null,
     ): TelegramDeliveryOperationReceipt {
         return $this->delivery->queuePrivateMediaReference(
             TelegramDeliveryAction::Send,
@@ -37,6 +40,7 @@ final readonly class TelegramPrivateMediaDeliveryQueue
             $reference,
             $requestKey,
             $correlationId,
+            $inlineKeyboard,
         );
     }
 }

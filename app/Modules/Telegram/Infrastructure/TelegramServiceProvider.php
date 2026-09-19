@@ -18,10 +18,12 @@ use App\Modules\Telegram\Application\Contracts\TelegramMutationTransport;
 use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaFetcher;
 use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaMessageSender;
 use App\Modules\Telegram\Application\Contracts\TelegramRuntime;
+use App\Modules\Telegram\Application\Contracts\TelegramSourceMessageSender;
 use App\Modules\Telegram\Application\Contracts\TelegramSupportCustomerRateLimiter;
 use App\Modules\Telegram\Application\NonRestrictedTelegramPresentationFactory;
 use App\Modules\Telegram\Application\TelegramAdminCustomerNavigationHandler;
 use App\Modules\Telegram\Application\TelegramAdministratorDirectMessageService;
+use App\Modules\Telegram\Application\TelegramAdministratorDirectSourceMessageService;
 use App\Modules\Telegram\Application\TelegramAgentNavigationHandler;
 use App\Modules\Telegram\Application\TelegramBotEntryMembershipGateHandler;
 use App\Modules\Telegram\Application\TelegramChannelMembershipEvaluator;
@@ -52,6 +54,8 @@ use App\Modules\Telegram\Application\TelegramProtectedPresentationResolver;
 use App\Modules\Telegram\Application\TelegramProtectedReferenceDeliveryOutboxHandler;
 use App\Modules\Telegram\Application\TelegramReferralDeepLink;
 use App\Modules\Telegram\Application\TelegramRequiredChannelService;
+use App\Modules\Telegram\Application\TelegramSourceMessageInteractionGateway;
+use App\Modules\Telegram\Application\TelegramSourceMessageReferenceDeliveryOutboxHandler;
 use App\Modules\Telegram\Application\TelegramSupportMembershipFreshnessGuard;
 use App\Modules\Telegram\Application\TelegramSupportNavigationHandler;
 use App\Modules\Telegram\Application\TelegramTrialNavigationHandler;
@@ -252,10 +256,22 @@ final class TelegramServiceProvider extends ServiceProvider
                 $application->make(TelegramRuntimeConfiguration::class),
             ),
         );
+        $this->app->singleton(
+            TelegramSourceMessageSender::class,
+            fn (Application $application): TelegramSourceMessageSender => new HttpTelegramSourceMessageSender(
+                $application->make(Factory::class),
+                $application->make(TelegramRuntimeConfiguration::class),
+            ),
+        );
         $this->app->bind(
             TelegramAdministratorDirectMessageService::class,
             TelegramAdministratorDirectMessageService::class,
         );
+        $this->app->bind(
+            TelegramAdministratorDirectSourceMessageService::class,
+            TelegramAdministratorDirectSourceMessageService::class,
+        );
+        $this->app->singleton(TelegramSourceMessageInteractionGateway::class);
         $this->app->singleton(
             ProtectedTelegramMessageSender::class,
             fn (Application $application): ProtectedTelegramMessageSender => new HttpProtectedTelegramMessageSender(
@@ -312,12 +328,19 @@ final class TelegramServiceProvider extends ServiceProvider
                 fn (): TelegramDeliveryOperationExecutor => $application->make(TelegramDeliveryOperationExecutor::class),
             ),
         );
+        $this->app->singleton(
+            TelegramSourceMessageReferenceDeliveryOutboxHandler::class,
+            fn (Application $application): TelegramSourceMessageReferenceDeliveryOutboxHandler => new TelegramSourceMessageReferenceDeliveryOutboxHandler(
+                fn (): TelegramDeliveryOperationExecutor => $application->make(TelegramDeliveryOperationExecutor::class),
+            ),
+        );
         $this->app->tag([
             TelegramDeliveryOutboxHandler::class,
             TelegramInteractiveDeliveryOutboxHandler::class,
             TelegramConfidentialDeliveryOutboxHandler::class,
             TelegramProtectedReferenceDeliveryOutboxHandler::class,
             TelegramPrivateMediaReferenceDeliveryOutboxHandler::class,
+            TelegramSourceMessageReferenceDeliveryOutboxHandler::class,
         ], OutboxEventHandler::class);
     }
 }

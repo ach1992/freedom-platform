@@ -2671,6 +2671,9 @@ final class ArchitectureBoundaryChecker
             'app/Modules/Telegram/Application/TelegramPrivateMediaDeliveryProvenanceGuard.php',
             'app/Modules/Telegram/Application/TelegramPrivateMediaDeliveryQueue.php',
             'app/Modules/Telegram/Application/TelegramPrivateMediaReferenceDeliveryOutboxHandler.php',
+            'app/Modules/Telegram/Application/TelegramAdministratorDirectSourceMessageService.php',
+            'app/Modules/Telegram/Application/TelegramSourceMessageDeliveryProvenanceGuard.php',
+            'app/Modules/Telegram/Application/TelegramSourceMessageReferenceDeliveryOutboxHandler.php',
             'app/Modules/Telegram/Application/TelegramMutationRequest.php',
             'app/Modules/Telegram/Application/TelegramPresentationProvenanceGuard.php',
             'app/Modules/Telegram/Application/ConfidentialTelegramPresentation.php',
@@ -2802,6 +2805,7 @@ final class ArchitectureBoundaryChecker
                 'app/Modules/Telegram/Application/TelegramInteractiveDeliveryOutboxHandler.php',
                 'app/Modules/Telegram/Application/TelegramPresentationProvenanceGuard.php',
                 'app/Modules/Telegram/Application/TelegramPrivateMediaDeliveryProvenanceGuard.php',
+                'app/Modules/Telegram/Application/TelegramSourceMessageDeliveryProvenanceGuard.php',
                 'app/Modules/Telegram/Infrastructure/TelegramServiceProvider.php',
             ],
             'TelegramConfidentialDeliveryOutboxHandler' => [

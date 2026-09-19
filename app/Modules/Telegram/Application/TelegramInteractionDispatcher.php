@@ -37,6 +37,7 @@ final readonly class TelegramInteractionDispatcher
         private TelegramInteractionHandlerRegistry $handlers,
         private TelegramNavigationEntryGateway $navigationEntry,
         private TelegramPrivateMediaInteractionGateway $privateMediaGateway,
+        private TelegramSourceMessageInteractionGateway $sourceMessageGateway,
     ) {}
 
     /** @param array<string, mixed> $update */
@@ -69,6 +70,27 @@ final readonly class TelegramInteractionDispatcher
             return new TelegramInteractionDispatchResult(TelegramInteractionDispatchStatus::Ignored);
         }
 
+        $text = $message['text'] ?? null;
+        if (! $this->isSourceCaptureNavigationCommand($text)
+            && $this->sourceMessageGateway->awaitingSource((int) $account->id)) {
+            if (! $this->isPrivateActorChat($message, (int) $account->telegram_user_id)) {
+                return new TelegramInteractionDispatchResult(TelegramInteractionDispatchStatus::Rejected);
+            }
+
+            $sourceMessageId = $message['message_id'] ?? null;
+            if (! is_int($sourceMessageId) || $sourceMessageId < 1) {
+                return new TelegramInteractionDispatchResult(TelegramInteractionDispatchStatus::Rejected);
+            }
+
+            return $this->dispatchSourceMessage(
+                $botId,
+                $updateId,
+                $sourceMessageId,
+                (int) $account->id,
+                (int) $account->telegram_user_id,
+            );
+        }
+
         try {
             $privateMedia = $this->privateMediaFromMessage($message);
             $privateMediaCaption = $privateMedia === null
@@ -77,7 +99,6 @@ final readonly class TelegramInteractionDispatcher
         } catch (TelegramPrivateMediaRejected) {
             return new TelegramInteractionDispatchResult(TelegramInteractionDispatchStatus::Rejected);
         }
-        $text = $message['text'] ?? null;
         if ($privateMedia !== null) {
             if (is_string($text)
                 || ! $this->isPrivateActorChat($message, (int) $account->telegram_user_id)) {
@@ -195,6 +216,51 @@ final readonly class TelegramInteractionDispatcher
         ));
 
         return new TelegramInteractionDispatchResult(TelegramInteractionDispatchStatus::Handled, $binding->sessionPublicId);
+    }
+
+    private function dispatchSourceMessage(
+        string $botId,
+        int $updateId,
+        int $sourceMessageId,
+        int $telegramAccountId,
+        int $telegramUserId,
+    ): TelegramInteractionDispatchResult {
+        $requestKey = $this->updateRequestKey($botId, $updateId, 'message');
+        $binding = $this->updateBindings->bind(
+            $botId,
+            $updateId,
+            $telegramAccountId,
+            'message',
+            $requestKey,
+        );
+        if ($binding->sessionPublicId === null
+            || $binding->flow === null
+            || $binding->sessionState === null
+            || $binding->sessionVersion === null) {
+            return new TelegramInteractionDispatchResult(TelegramInteractionDispatchStatus::Ignored);
+        }
+
+        $handled = $this->sourceMessageGateway->handle(new TelegramSourceMessageInteraction(
+            $requestKey,
+            $botId,
+            $updateId,
+            $binding->telegramAccountId,
+            $binding->userId,
+            $binding->telegramUserId,
+            $binding->sessionPublicId,
+            $binding->flow,
+            $binding->sessionState,
+            $binding->sessionVersion,
+            $binding->sessionPayload,
+            $telegramUserId,
+            $sourceMessageId,
+            $binding->replayed,
+        ));
+
+        return new TelegramInteractionDispatchResult(
+            $handled ? TelegramInteractionDispatchStatus::Handled : TelegramInteractionDispatchStatus::Rejected,
+            $binding->sessionPublicId,
+        );
     }
 
     /**
@@ -470,6 +536,20 @@ final readonly class TelegramInteractionDispatcher
             && $fromId > 0
             && $chatId === $telegramUserId
             && $fromId === $telegramUserId;
+    }
+
+    private function isSourceCaptureNavigationCommand(mixed $text): bool
+    {
+        if (! is_string($text)) {
+            return false;
+        }
+
+        $trimmed = trim($text);
+
+        return preg_match('/\A\/cancel(?:@[A-Za-z0-9_]+)?\z/u', $trimmed) === 1
+            || preg_match('/\A\/back(?:@[A-Za-z0-9_]+)?\z/u', $trimmed) === 1
+            || preg_match('/\A\/menu(?:@[A-Za-z0-9_]+)?\z/u', $trimmed) === 1
+            || preg_match('/\A\/start(?:@[A-Za-z0-9_]+)?(?:\s+[A-Za-z0-9_-]{1,64})?\z/u', $trimmed) === 1;
     }
 
     private function updateRequestKey(string $botId, int $updateId, string $kind): string

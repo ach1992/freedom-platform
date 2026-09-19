@@ -291,6 +291,7 @@ final readonly class TelegramAdministratorDirectMediaMessageService
         string $botId,
         string $selectionToken,
         string $publicId,
+        ?TelegramInlineKeyboardSnapshot $inlineKeyboard = null,
     ): TelegramDeliveryOperationReceipt {
         $row = $this->rowByPublicId($this->database->connection(), $publicId, false);
         if ($row === null) {
@@ -311,6 +312,7 @@ final readonly class TelegramAdministratorDirectMediaMessageService
             $reference,
             $requestKey,
             $draft->correlationId,
+            $inlineKeyboard,
         );
         if ($existing !== null) {
             $this->linkDeliveryOperation($publicId, $administratorId, $existing->publicId);
@@ -344,6 +346,7 @@ final readonly class TelegramAdministratorDirectMediaMessageService
                 $reference,
                 $requestKey,
                 $draft->correlationId,
+                $inlineKeyboard,
             );
             if ($existing !== null) {
                 $this->linkDeliveryOperation($publicId, $administratorId, $existing->publicId);
@@ -359,6 +362,7 @@ final readonly class TelegramAdministratorDirectMediaMessageService
             $reference,
             $requestKey,
             $draft->correlationId,
+            $inlineKeyboard,
         );
         $this->linkDeliveryOperation($publicId, $administratorId, $receipt->publicId);
 

@@ -22,7 +22,9 @@ use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceDeliveryResen
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceProjection;
 use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaFetcher;
 use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaMessageSender;
+use App\Modules\Telegram\Application\Contracts\TelegramSourceMessageSender;
 use App\Modules\Telegram\Application\TelegramAdminCustomerNavigationHandler;
+use App\Modules\Telegram\Application\TelegramAdministratorDirectMessageButtonBuilder;
 use App\Modules\Telegram\Application\TelegramAdministratorDirectMessageService;
 use App\Modules\Telegram\Application\TelegramChannelMembershipEvaluationDecision;
 use App\Modules\Telegram\Application\TelegramConfidentialPresentationHasher;
@@ -76,7 +78,10 @@ use App\Modules\Telegram\Application\TelegramPrivateMediaDownload;
 use App\Modules\Telegram\Application\TelegramPrivateMediaIngestor;
 use App\Modules\Telegram\Application\TelegramPrivateMediaInteractionGateway;
 use App\Modules\Telegram\Application\TelegramProtectedPresentationReference;
+use App\Modules\Telegram\Application\TelegramResolvedInlineKeyboardMarkup;
 use App\Modules\Telegram\Application\TelegramResolvedPrivateMediaPresentation;
+use App\Modules\Telegram\Application\TelegramResolvedSourceMessagePresentation;
+use App\Modules\Telegram\Application\TelegramSourceMessageMode;
 use App\Modules\Telegram\Application\TelegramUpdateProcessor;
 use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
 use App\Modules\Wallet\Application\LedgerEntryDraft;
@@ -1158,6 +1163,9 @@ final class TelegramNavigationPrivateMediaSender implements TelegramPrivateMedia
     /** @var list<TelegramResolvedPrivateMediaPresentation> */
     public array $presentations = [];
 
+    /** @var list<TelegramResolvedInlineKeyboardMarkup|null> */
+    public array $keyboards = [];
+
     public function __construct(
         private readonly int $expectedRecipientChatId,
         private readonly int $messageId,
@@ -1166,6 +1174,7 @@ final class TelegramNavigationPrivateMediaSender implements TelegramPrivateMedia
     public function send(
         int $recipientChatId,
         TelegramResolvedPrivateMediaPresentation $presentation,
+        ?TelegramResolvedInlineKeyboardMarkup $inlineKeyboard = null,
     ): TelegramMutationResult {
         if ($recipientChatId !== $this->expectedRecipientChatId) {
             throw new RuntimeException('Navigation private-media sender received an unexpected recipient.');
@@ -1173,6 +1182,7 @@ final class TelegramNavigationPrivateMediaSender implements TelegramPrivateMedia
 
         $this->attempts++;
         $this->presentations[] = $presentation;
+        $this->keyboards[] = $inlineKeyboard;
 
         if ($this->uncertain) {
             return new TelegramMutationResult(
@@ -1184,6 +1194,51 @@ final class TelegramNavigationPrivateMediaSender implements TelegramPrivateMedia
         return new TelegramMutationResult(
             TelegramMutationOutcome::Success,
             'telegram_success',
+            messageId: $this->messageId,
+        );
+    }
+}
+
+final class TelegramNavigationSourceMessageSender implements TelegramSourceMessageSender
+{
+    public int $attempts = 0;
+
+    public bool $uncertain = false;
+
+    /** @var list<TelegramResolvedSourceMessagePresentation> */
+    public array $presentations = [];
+
+    /** @var list<TelegramResolvedInlineKeyboardMarkup|null> */
+    public array $keyboards = [];
+
+    public function __construct(
+        private readonly int $expectedRecipientChatId,
+        private readonly int $messageId,
+    ) {}
+
+    public function send(
+        int $recipientChatId,
+        TelegramResolvedSourceMessagePresentation $source,
+        ?TelegramResolvedInlineKeyboardMarkup $inlineKeyboard = null,
+    ): TelegramMutationResult {
+        if ($recipientChatId !== $this->expectedRecipientChatId) {
+            throw new RuntimeException('Navigation source-message sender received an unexpected recipient.');
+        }
+
+        $this->attempts++;
+        $this->presentations[] = $source;
+        $this->keyboards[] = $inlineKeyboard;
+
+        if ($this->uncertain) {
+            return new TelegramMutationResult(
+                TelegramMutationOutcome::UncertainResult,
+                'telegram_source_message_transport_uncertain',
+            );
+        }
+
+        return new TelegramMutationResult(
+            TelegramMutationOutcome::Success,
+            'telegram_source_message_success',
             messageId: $this->messageId,
         );
     }
@@ -4602,6 +4657,435 @@ SQL);
         ]);
     }
 
+    /** @requirement COM-001 ADM-001 ACL-001 ACL-002 SEC-002 SEC-003 DAT-002 DAT-003 OPS-003 QUA-001 QUA-004 */
+    public function test_admin_customer_direct_forward_is_private_confirmed_and_exactly_once_at_provider_boundary(): void
+    {
+        $baseUpdateId = 7720;
+        $adminTelegramId = 98120;
+        $targetTelegramId = 888777666572;
+        $targetUsername = 'direct_forward_target';
+        $adminUsername = 'admin_direct_forward';
+        $sender = new TelegramNavigationSourceMessageSender($targetTelegramId, 99201);
+        $this->app->instance(TelegramSourceMessageSender::class, $sender);
+
+        $journey = $this->prepareAdminDirectMediaCompose(
+            $baseUpdateId,
+            $adminTelegramId,
+            $targetTelegramId,
+            $targetUsername,
+            $adminUsername,
+        );
+        $processor = $journey['processor'];
+        $adminAccountId = $journey['admin_account_id'];
+        $adminUserId = $journey['admin_user_id'];
+        $selection = $journey['selection'];
+        $targetDeliveryCountBefore = $journey['target_delivery_count'];
+
+        $forwardToken = $this->callbackToken(
+            'navigation.admin.customer.message.forward',
+            $adminAccountId,
+        );
+        $this->accept($this->callbackPayload(
+            $baseUpdateId + 6,
+            $adminTelegramId,
+            $adminUsername,
+            'fa',
+            $forwardToken,
+        ));
+        $this->processTelegramUpdateOrFail($processor, $baseUpdateId + 6);
+
+        $sourceSession = DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', $adminAccountId)
+            ->first(['state', 'payload']);
+        self::assertNotNull($sourceSession);
+        self::assertSame('admin_customer_message_source', (string) $sourceSession->state);
+        self::assertSame(
+            ['mode' => 'forward', 'selection' => $selection],
+            json_decode((string) $sourceSession->payload, true, 512, JSON_THROW_ON_ERROR),
+        );
+
+        $sourceText = 'forward source content must not be copied into durable generic evidence';
+        $sourceUpdateId = $baseUpdateId + 7;
+        $this->accept($this->payload(
+            $sourceUpdateId,
+            $adminTelegramId,
+            $adminUsername,
+            'fa',
+            $sourceText,
+        ));
+        $this->processTelegramUpdateOrFail($processor, $sourceUpdateId);
+        $this->processTelegramUpdateOrFail($processor, $sourceUpdateId);
+
+        $confirmSession = DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', $adminAccountId)
+            ->first(['id', 'state', 'payload']);
+        self::assertNotNull($confirmSession);
+        self::assertSame('admin_customer_message_confirm', (string) $confirmSession->state);
+        $confirmPayload = json_decode((string) $confirmSession->payload, true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame(['draft', 'selection'], array_keys($confirmPayload));
+        self::assertSame($selection, $confirmPayload['selection']);
+        self::assertIsString($confirmPayload['draft']);
+
+        $direct = DB::table('telegram_administrator_direct_messages')
+            ->where('public_id', (string) $confirmPayload['draft'])
+            ->first();
+        self::assertNotNull($direct);
+        self::assertSame('forward', (string) $direct->content_type);
+        self::assertSame(0, (int) $direct->content_length);
+        self::assertNull($direct->media_public_id);
+        self::assertNull($direct->inline_keyboard_ciphertext);
+        self::assertNull($direct->inline_keyboard_hash);
+        self::assertNull($direct->delivery_operation_public_id);
+        self::assertStringNotContainsString($sourceText, (string) $direct->content_ciphertext);
+        self::assertStringNotContainsString((string) $sourceUpdateId, (string) $direct->content_ciphertext);
+
+        $sourceIdentity = $this->app->make(StringEncrypter::class)
+            ->decryptString((string) $direct->content_ciphertext);
+        self::assertSame(
+            ['source_chat_id' => $adminTelegramId, 'source_message_id' => $sourceUpdateId],
+            json_decode($sourceIdentity, true, 512, JSON_THROW_ON_ERROR),
+        );
+
+        try {
+            DB::table('telegram_administrator_direct_messages')
+                ->where('public_id', (string) $direct->public_id)
+                ->update([
+                    'inline_keyboard_ciphertext' => 'forbidden-forward-keyboard',
+                    'inline_keyboard_hash' => str_repeat('a', 64),
+                ]);
+            self::fail('MariaDB must reject authored reply markup on a forward direct message.');
+        } catch (QueryException) {
+            self::assertNull(DB::table('telegram_administrator_direct_messages')
+                ->where('public_id', (string) $direct->public_id)
+                ->value('inline_keyboard_ciphertext'));
+        }
+
+        self::assertSame(0, DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $confirmSession->id)
+            ->where('action', 'navigation.admin.customer.message.buttons')
+            ->count());
+        $confirmation = $this->latestConfidentialPresentation();
+        self::assertStringContainsString((string) $targetTelegramId, $confirmation);
+        self::assertStringContainsString((string) $sourceUpdateId, $confirmation);
+        self::assertStringNotContainsString($sourceText, $this->navigationCommonDurableEvidence(
+            (int) $confirmSession->id,
+            $adminTelegramId,
+        ));
+
+        $confirmToken = $this->callbackToken(
+            'navigation.admin.customer.message.confirm',
+            $adminAccountId,
+        );
+        $confirmUpdateId = $baseUpdateId + 8;
+        $this->accept($this->callbackPayload(
+            $confirmUpdateId,
+            $adminTelegramId,
+            $adminUsername,
+            'fa',
+            $confirmToken,
+        ));
+        $this->processTelegramUpdateOrFail($processor, $confirmUpdateId);
+        $this->processTelegramUpdateOrFail($processor, $confirmUpdateId);
+
+        self::assertSame(
+            $targetDeliveryCountBefore + 1,
+            DB::table('telegram_delivery_operations')->where('recipient_chat_id', $targetTelegramId)->count(),
+        );
+        $direct = DB::table('telegram_administrator_direct_messages')
+            ->where('public_id', (string) $direct->public_id)
+            ->first(['public_id', 'delivery_operation_public_id', 'correlation_id']);
+        self::assertNotNull($direct);
+        self::assertIsString($direct->delivery_operation_public_id);
+        $operation = DB::table('telegram_delivery_operations')
+            ->where('public_id', (string) $direct->delivery_operation_public_id)
+            ->first(['public_id', 'presentation_text', 'state']);
+        self::assertNotNull($operation);
+        self::assertSame(
+            '[TELEGRAM_SOURCE_MESSAGE_REFERENCE:v1:administrator_direct_message:'.(string) $direct->public_id.']',
+            (string) $operation->presentation_text,
+        );
+        self::assertStringNotContainsString((string) $adminTelegramId, (string) $operation->presentation_text);
+        self::assertStringNotContainsString((string) $sourceUpdateId, (string) $operation->presentation_text);
+        $outbox = DB::table('outbox_messages')
+            ->where('aggregate_id', (string) $operation->public_id)
+            ->first(['id', 'payload', 'contract_version']);
+        self::assertNotNull($outbox);
+        self::assertSame(
+            TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_SOURCE_MESSAGE_REFERENCE,
+            (int) $outbox->contract_version,
+        );
+        self::assertStringNotContainsString((string) $sourceUpdateId, (string) $outbox->payload);
+
+        try {
+            $this->app->make(TelegramAdministratorDirectMessageService::class)
+                ->sourceMessagePresentationForDelivery((string) $direct->public_id, $targetTelegramId);
+            self::fail('Source-message identity must not resolve outside the canonical delivery executor.');
+        } catch (\LogicException) {
+            self::assertSame(0, $sender->attempts);
+        }
+
+        $this->app->forgetInstance(TelegramDeliveryOperationExecutor::class);
+        $executor = $this->app->make(TelegramDeliveryOperationExecutor::class);
+        $first = $executor->execute(
+            (string) $operation->public_id,
+            (string) $outbox->id,
+            (string) $direct->correlation_id,
+            TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_SOURCE_MESSAGE_REFERENCE,
+        );
+        $second = $executor->execute(
+            (string) $operation->public_id,
+            (string) $outbox->id,
+            (string) $direct->correlation_id,
+            TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_SOURCE_MESSAGE_REFERENCE,
+        );
+
+        self::assertSame('succeeded', $first->state->value);
+        self::assertSame('succeeded', $second->state->value);
+        self::assertSame(99201, $first->messageId);
+        self::assertSame(1, $sender->attempts);
+        self::assertCount(1, $sender->presentations);
+        self::assertSame(TelegramSourceMessageMode::Forward, $sender->presentations[0]->mode);
+        self::assertSame($adminTelegramId, $sender->presentations[0]->sourceChatId);
+        self::assertSame($sourceUpdateId, $sender->presentations[0]->sourceMessageId);
+        self::assertNull($sender->keyboards[0]);
+
+        $deliveryResult = $this->app->make(TelegramAdministratorDirectMessageService::class)
+            ->deliveryResultForSender($adminUserId, (string) $direct->public_id);
+        self::assertSame('succeeded', $deliveryResult->state->value);
+        self::assertSame(99201, $deliveryResult->messageId);
+    }
+
+    /** @requirement COM-001 ADM-001 ACL-001 ACL-002 SEC-002 SEC-003 DAT-002 DAT-003 OPS-003 QUA-001 QUA-004 */
+    public function test_admin_customer_direct_copy_supports_bounded_safe_buttons_and_exact_replay(): void
+    {
+        $baseUpdateId = 7740;
+        $adminTelegramId = 98140;
+        $targetTelegramId = 888777666574;
+        $targetUsername = 'direct_copy_target';
+        $adminUsername = 'admin_direct_copy';
+        $sender = new TelegramNavigationSourceMessageSender($targetTelegramId, 99202);
+        $this->app->instance(TelegramSourceMessageSender::class, $sender);
+
+        $journey = $this->prepareAdminDirectMediaCompose(
+            $baseUpdateId,
+            $adminTelegramId,
+            $targetTelegramId,
+            $targetUsername,
+            $adminUsername,
+        );
+        $processor = $journey['processor'];
+        $adminAccountId = $journey['admin_account_id'];
+        $adminUserId = $journey['admin_user_id'];
+        $selection = $journey['selection'];
+        $targetDeliveryCountBefore = $journey['target_delivery_count'];
+
+        $copyToken = $this->callbackToken(
+            'navigation.admin.customer.message.copy',
+            $adminAccountId,
+        );
+        $this->accept($this->callbackPayload(
+            $baseUpdateId + 6,
+            $adminTelegramId,
+            $adminUsername,
+            'en',
+            $copyToken,
+        ));
+        $this->processTelegramUpdateOrFail($processor, $baseUpdateId + 6);
+
+        $sourceText = 'copy source content must remain provider-owned';
+        $sourceUpdateId = $baseUpdateId + 7;
+        $this->accept($this->payload(
+            $sourceUpdateId,
+            $adminTelegramId,
+            $adminUsername,
+            'en',
+            $sourceText,
+        ));
+        $this->processTelegramUpdateOrFail($processor, $sourceUpdateId);
+
+        $confirmSession = DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', $adminAccountId)
+            ->first(['id', 'state', 'payload']);
+        self::assertNotNull($confirmSession);
+        self::assertSame('admin_customer_message_confirm', (string) $confirmSession->state);
+        $confirmPayload = json_decode((string) $confirmSession->payload, true, 512, JSON_THROW_ON_ERROR);
+        self::assertIsString($confirmPayload['draft'] ?? null);
+        $draftPublicId = (string) $confirmPayload['draft'];
+
+        $buttonsToken = $this->callbackToken(
+            'navigation.admin.customer.message.buttons',
+            $adminAccountId,
+        );
+        $this->accept($this->callbackPayload(
+            $baseUpdateId + 8,
+            $adminTelegramId,
+            $adminUsername,
+            'en',
+            $buttonsToken,
+        ));
+        $this->processTelegramUpdateOrFail($processor, $baseUpdateId + 8);
+        self::assertSame(
+            'admin_customer_message_buttons',
+            DB::table('telegram_interaction_sessions')
+                ->where('telegram_account_id', $adminAccountId)
+                ->value('state'),
+        );
+
+        $this->accept($this->payload(
+            $baseUpdateId + 9,
+            $adminTelegramId,
+            $adminUsername,
+            'en',
+            'Unsafe | https://evil.example/path',
+        ));
+        $this->processTelegramUpdateOrFail($processor, $baseUpdateId + 9);
+        self::assertSame(
+            'admin_customer_message_buttons',
+            DB::table('telegram_interaction_sessions')
+                ->where('telegram_account_id', $adminAccountId)
+                ->value('state'),
+        );
+        self::assertNull(DB::table('telegram_administrator_direct_messages')
+            ->where('public_id', $draftPublicId)
+            ->value('inline_keyboard_ciphertext'));
+
+        $safeButtons = "Support | https://t.me/example_support\nNews | https://t.me/example_news";
+        $safeKeyboard = (new TelegramAdministratorDirectMessageButtonBuilder)
+            ->fromAdministratorInput($safeButtons);
+        $directMessages = $this->app->make(TelegramAdministratorDirectMessageService::class);
+        $serviceDraft = $directMessages->setInlineKeyboard(
+            $adminUserId,
+            '123456789',
+            $selection,
+            $draftPublicId,
+            $safeKeyboard,
+        );
+        self::assertSame($safeKeyboard->hash(), $serviceDraft->inlineKeyboard?->hash());
+        $clearedDraft = $directMessages->clearInlineKeyboard(
+            $adminUserId,
+            '123456789',
+            $selection,
+            $draftPublicId,
+        );
+        self::assertNull($clearedDraft->inlineKeyboard);
+
+        $this->accept($this->payload(
+            $baseUpdateId + 10,
+            $adminTelegramId,
+            $adminUsername,
+            'en',
+            $safeButtons,
+        ));
+        $this->processTelegramUpdateOrFail($processor, $baseUpdateId + 10);
+
+        $confirmSession = DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', $adminAccountId)
+            ->first(['id', 'state', 'payload']);
+        self::assertNotNull($confirmSession);
+        self::assertSame('admin_customer_message_confirm', (string) $confirmSession->state);
+        $direct = DB::table('telegram_administrator_direct_messages')
+            ->where('public_id', $draftPublicId)
+            ->first(['content_type', 'content_ciphertext', 'inline_keyboard_ciphertext', 'inline_keyboard_hash']);
+        self::assertNotNull($direct);
+        self::assertSame('copy', (string) $direct->content_type);
+        self::assertIsString($direct->inline_keyboard_ciphertext);
+        self::assertIsString($direct->inline_keyboard_hash);
+        self::assertStringNotContainsString('example_support', (string) $direct->inline_keyboard_ciphertext);
+        self::assertStringNotContainsString('example_news', (string) $direct->inline_keyboard_ciphertext);
+        $keyboardJson = $this->app->make(StringEncrypter::class)
+            ->decryptString((string) $direct->inline_keyboard_ciphertext);
+        self::assertStringContainsString('https://t.me/example_support', $keyboardJson);
+        self::assertStringContainsString('https://t.me/example_news', $keyboardJson);
+        self::assertStringNotContainsString($sourceText, $this->navigationCommonDurableEvidence(
+            (int) $confirmSession->id,
+            $adminTelegramId,
+        ));
+        $confirmation = $this->latestConfidentialPresentation();
+        self::assertStringContainsString('@example_support', $confirmation);
+        self::assertStringContainsString('@example_news', $confirmation);
+        self::assertStringContainsString((string) $sourceUpdateId, $confirmation);
+
+        $confirmToken = $this->callbackToken(
+            'navigation.admin.customer.message.confirm',
+            $adminAccountId,
+        );
+        $confirmUpdateId = $baseUpdateId + 11;
+        $this->accept($this->callbackPayload(
+            $confirmUpdateId,
+            $adminTelegramId,
+            $adminUsername,
+            'en',
+            $confirmToken,
+        ));
+        $this->processTelegramUpdateOrFail($processor, $confirmUpdateId);
+        $this->processTelegramUpdateOrFail($processor, $confirmUpdateId);
+
+        self::assertSame(
+            $targetDeliveryCountBefore + 1,
+            DB::table('telegram_delivery_operations')->where('recipient_chat_id', $targetTelegramId)->count(),
+        );
+        $linked = DB::table('telegram_administrator_direct_messages')
+            ->where('public_id', $draftPublicId)
+            ->first(['public_id', 'delivery_operation_public_id', 'correlation_id']);
+        self::assertNotNull($linked);
+        self::assertIsString($linked->delivery_operation_public_id);
+        $operation = DB::table('telegram_delivery_operations')
+            ->where('public_id', (string) $linked->delivery_operation_public_id)
+            ->first(['public_id', 'presentation_text']);
+        self::assertNotNull($operation);
+        self::assertSame(
+            '[TELEGRAM_SOURCE_MESSAGE_REFERENCE:v1:administrator_direct_message:'.$draftPublicId.']',
+            (string) $operation->presentation_text,
+        );
+        $storedKeyboard = DB::table(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)
+            ->where('delivery_operation_public_id', (string) $operation->public_id)
+            ->first(['keyboard_snapshot', 'keyboard_snapshot_hash']);
+        self::assertNotNull($storedKeyboard);
+        self::assertSame(hash('sha256', (string) $storedKeyboard->keyboard_snapshot), (string) $storedKeyboard->keyboard_snapshot_hash);
+        self::assertStringContainsString('https://t.me/example_support', (string) $storedKeyboard->keyboard_snapshot);
+        self::assertStringContainsString('https://t.me/example_news', (string) $storedKeyboard->keyboard_snapshot);
+
+        $outbox = DB::table('outbox_messages')
+            ->where('aggregate_id', (string) $operation->public_id)
+            ->first(['id', 'contract_version']);
+        self::assertNotNull($outbox);
+        self::assertSame(
+            TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_SOURCE_MESSAGE_REFERENCE,
+            (int) $outbox->contract_version,
+        );
+
+        $this->app->forgetInstance(TelegramDeliveryOperationExecutor::class);
+        $executor = $this->app->make(TelegramDeliveryOperationExecutor::class);
+        $first = $executor->execute(
+            (string) $operation->public_id,
+            (string) $outbox->id,
+            (string) $linked->correlation_id,
+            TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_SOURCE_MESSAGE_REFERENCE,
+        );
+        $second = $executor->execute(
+            (string) $operation->public_id,
+            (string) $outbox->id,
+            (string) $linked->correlation_id,
+            TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_SOURCE_MESSAGE_REFERENCE,
+        );
+
+        self::assertSame('succeeded', $first->state->value);
+        self::assertSame('succeeded', $second->state->value);
+        self::assertSame(99202, $first->messageId);
+        self::assertSame(1, $sender->attempts);
+        self::assertCount(1, $sender->presentations);
+        self::assertSame(TelegramSourceMessageMode::Copy, $sender->presentations[0]->mode);
+        self::assertSame($adminTelegramId, $sender->presentations[0]->sourceChatId);
+        self::assertSame($sourceUpdateId, $sender->presentations[0]->sourceMessageId);
+        self::assertNotNull($sender->keyboards[0]);
+        $providerKeyboard = $sender->keyboards[0]->providerPayload();
+        self::assertSame('Support', $providerKeyboard['inline_keyboard'][0][0]['text']);
+        self::assertSame('https://t.me/example_support', $providerKeyboard['inline_keyboard'][0][0]['url']);
+        self::assertSame('News', $providerKeyboard['inline_keyboard'][1][0]['text']);
+        self::assertSame('https://t.me/example_news', $providerKeyboard['inline_keyboard'][1][0]['url']);
+        self::assertArrayNotHasKey('callback_data', $providerKeyboard['inline_keyboard'][0][0]);
+    }
+
     /** @requirement COM-001 ADM-001 ACL-001 ACL-002 SEC-002 SEC-003 DAT-002 DAT-003 DAT-004 SEC-009 CNT-001 OPS-003 QUA-001 QUA-004 */
     public function test_admin_customer_direct_photo_is_private_confirmed_and_exactly_once_at_provider_boundary(): void
     {
@@ -4765,12 +5249,47 @@ SQL);
         self::assertStringNotContainsString($fileUniqueId, (string) $media->encrypted_file_unique_id);
         Storage::disk('telegram_private_media')->assertExists((string) $media->storage_path);
 
+        $buttonsToken = $this->callbackToken(
+            'navigation.admin.customer.message.buttons',
+            $adminAccountId,
+        );
+        $this->accept($this->callbackPayload(
+            7490,
+            $adminTelegramId,
+            $adminUsername,
+            'fa',
+            $buttonsToken,
+        ));
+        $processor->process('123456789', 7490);
+        $this->accept($this->payload(
+            7491,
+            $adminTelegramId,
+            $adminUsername,
+            'fa',
+            'Photo support | https://t.me/photo_support',
+        ));
+        $processor->process('123456789', 7491);
+        self::assertSame(
+            'admin_customer_message_confirm',
+            DB::table('telegram_interaction_sessions')
+                ->where('telegram_account_id', $adminAccountId)
+                ->value('state'),
+        );
+        $storedDirectKeyboard = DB::table('telegram_administrator_direct_messages')
+            ->where('public_id', (string) $direct->public_id)
+            ->first(['inline_keyboard_ciphertext', 'inline_keyboard_hash']);
+        self::assertNotNull($storedDirectKeyboard);
+        self::assertIsString($storedDirectKeyboard->inline_keyboard_ciphertext);
+        self::assertIsString($storedDirectKeyboard->inline_keyboard_hash);
+        self::assertStringNotContainsString('photo_support', (string) $storedDirectKeyboard->inline_keyboard_ciphertext);
+
         $confirmation = $this->latestConfidentialPresentation();
         self::assertStringContainsString('تأیید نهایی پیام مستقیم', $confirmation);
         self::assertStringContainsString('عکس', $confirmation);
         self::assertStringContainsString('image/png', $confirmation);
         self::assertStringContainsString($caption, $confirmation);
         self::assertStringContainsString((string) $targetTelegramId, $confirmation);
+        self::assertStringContainsString('@photo_support', $confirmation);
 
         $durableBeforeConfirm = $this->navigationCommonDurableEvidence((int) $confirmSession->id, $adminTelegramId);
         foreach ([$fileId, $fileUniqueId, $caption, base64_encode($png)] as $secret) {
@@ -4779,14 +5298,14 @@ SQL);
 
         $confirmToken = $this->callbackToken('navigation.admin.customer.message.confirm', $adminAccountId);
         $this->accept($this->callbackPayload(
-            7489,
+            7492,
             $adminTelegramId,
             $adminUsername,
             'fa',
             $confirmToken,
         ));
-        $processor->process('123456789', 7489);
-        $processor->process('123456789', 7489);
+        $processor->process('123456789', 7492);
+        $processor->process('123456789', 7492);
 
         $finalSession = DB::table('telegram_interaction_sessions')
             ->where('telegram_account_id', $adminAccountId)
@@ -4832,6 +5351,15 @@ SQL);
         self::assertSame(
             '{"telegram_delivery_operation_public_id":"'.(string) $operation->public_id.'"}',
             (string) $outbox->payload,
+        );
+        $storedDeliveryKeyboard = DB::table(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)
+            ->where('delivery_operation_public_id', (string) $operation->public_id)
+            ->first(['keyboard_snapshot', 'keyboard_snapshot_hash']);
+        self::assertNotNull($storedDeliveryKeyboard);
+        self::assertStringContainsString('https://t.me/photo_support', (string) $storedDeliveryKeyboard->keyboard_snapshot);
+        self::assertSame(
+            hash('sha256', (string) $storedDeliveryKeyboard->keyboard_snapshot),
+            (string) $storedDeliveryKeyboard->keyboard_snapshot_hash,
         );
 
         $ordinaryCustomerEvidence = json_encode([
@@ -4902,6 +5430,11 @@ SQL);
         self::assertSame($caption, $sender->presentations[0]->captionForProvider());
         self::assertSame($png, $sender->presentations[0]->revealBytesForProvider());
         self::assertSame(hash('sha256', $png), $sender->presentations[0]->contentSha256());
+        self::assertNotNull($sender->keyboards[0]);
+        self::assertSame(
+            'https://t.me/photo_support',
+            $sender->keyboards[0]->providerPayload()['inline_keyboard'][0][0]['url'],
+        );
         $this->assertDatabaseHas('telegram_delivery_operations', [
             'public_id' => (string) $operation->public_id,
             'state' => 'succeeded',
@@ -5387,21 +5920,55 @@ SQL);
             DB::table('telegram_delivery_operations')->where('recipient_chat_id', $targetTelegramId)->count(),
         );
 
+        $buttonsToken = $this->callbackToken(
+            'navigation.admin.customer.message.buttons',
+            (int) $adminAccount->id,
+        );
+        $this->accept($this->callbackPayload(
+            7440,
+            $adminTelegramId,
+            'admin_direct_operator',
+            'fa',
+            $buttonsToken,
+        ));
+        $processor->process('123456789', 7440);
+        $this->accept($this->payload(
+            7441,
+            $adminTelegramId,
+            'admin_direct_operator',
+            'fa',
+            'Text support | https://t.me/text_support',
+        ));
+        $processor->process('123456789', 7441);
+        self::assertSame(
+            'admin_customer_message_confirm',
+            DB::table('telegram_interaction_sessions')
+                ->where('telegram_account_id', (int) $adminAccount->id)
+                ->value('state'),
+        );
+        $textKeyboardCiphertext = DB::table('telegram_administrator_direct_messages')
+            ->where('public_id', (string) $confirmPayload['draft'])
+            ->value('inline_keyboard_ciphertext');
+        self::assertIsString($textKeyboardCiphertext);
+        self::assertStringNotContainsString('text_support', $textKeyboardCiphertext);
+
         $confirmation = $this->latestConfidentialPresentation();
         self::assertStringContainsString('تأیید نهایی پیام مستقیم', $confirmation);
         self::assertStringContainsString((string) $targetTelegramId, $confirmation);
-        self::assertStringContainsString($secretText, $confirmation);
+        self::assertStringNotContainsString($secretText, $confirmation);
+        self::assertStringContainsString(mb_substr($secretText, 0, 2400), $confirmation);
         self::assertStringContainsString('di', $confirmation);
         self::assertStringContainsString('et', $confirmation);
+        self::assertStringContainsString('@text_support', $confirmation);
         self::assertLessThanOrEqual(4096, mb_strlen($confirmation));
 
         $durableBeforeConfirm = $this->navigationCommonDurableEvidence((int) $confirmSession->id, $adminTelegramId);
         self::assertStringNotContainsString($secretText, $durableBeforeConfirm);
 
         $confirmToken = $this->callbackToken('navigation.admin.customer.message.confirm', (int) $adminAccount->id);
-        $this->accept($this->callbackPayload(7428, $adminTelegramId, 'admin_direct_operator', 'fa', $confirmToken));
-        $processor->process('123456789', 7428);
-        $processor->process('123456789', 7428);
+        $this->accept($this->callbackPayload(7442, $adminTelegramId, 'admin_direct_operator', 'fa', $confirmToken));
+        $processor->process('123456789', 7442);
+        $processor->process('123456789', 7442);
 
         $finalSession = DB::table('telegram_interaction_sessions')
             ->where('telegram_account_id', (int) $adminAccount->id)
@@ -5447,6 +6014,15 @@ SQL);
         self::assertSame(1, DB::table('telegram_delivery_confidential_presentations')
             ->where('delivery_operation_public_id', (string) $direct->delivery_operation_public_id)
             ->count());
+        $textDeliveryKeyboard = DB::table(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)
+            ->where('delivery_operation_public_id', (string) $direct->delivery_operation_public_id)
+            ->first(['keyboard_snapshot', 'keyboard_snapshot_hash']);
+        self::assertNotNull($textDeliveryKeyboard);
+        self::assertStringContainsString('https://t.me/text_support', (string) $textDeliveryKeyboard->keyboard_snapshot);
+        self::assertSame(
+            hash('sha256', (string) $textDeliveryKeyboard->keyboard_snapshot),
+            (string) $textDeliveryKeyboard->keyboard_snapshot_hash,
+        );
 
         $deliveryResult = $this->app
             ->make(TelegramAdministratorDirectMessageService::class)
@@ -7572,6 +8148,21 @@ SQL);
         }
 
         return $decoded;
+    }
+
+    private function processTelegramUpdateOrFail(TelegramUpdateProcessor $processor, int $updateId): void
+    {
+        try {
+            $processor->process('123456789', $updateId);
+        } catch (RuntimeException $exception) {
+            $failure = DB::table('processed_telegram_updates')
+                ->where('bot_id', '123456789')
+                ->where('update_id', $updateId)
+                ->first(['last_error_class', 'last_error_code']);
+            $class = $failure === null ? 'missing' : (string) $failure->last_error_class;
+            $code = $failure === null ? 'missing' : (string) $failure->last_error_code;
+            self::fail('Telegram update '.$updateId.' failed: '.$class.' / '.$code);
+        }
     }
 
     private function callbackToken(string $action, int $telegramAccountId, string $expectedActionPayload = '{}'): string
