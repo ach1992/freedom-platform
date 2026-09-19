@@ -370,6 +370,11 @@ final readonly class TelegramAdministratorDirectMediaMessageService
         string $publicId,
         int $recipientChatId,
     ): TelegramResolvedPrivateMediaPresentation {
+        TelegramPresentationProvenanceGuard::assertExactInternalCaller(
+            TelegramAdministratorDirectMessageService::class,
+            __DIR__.'/TelegramAdministratorDirectMessageService.php',
+        );
+
         $row = $this->rowByPublicId($this->database->connection(), $publicId, false);
         if ($row === null || $row->confirmed_at === null) {
             throw new DomainException('Telegram administrator direct-media delivery reference is unavailable.');
