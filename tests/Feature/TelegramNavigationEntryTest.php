@@ -70,6 +70,7 @@ use App\Modules\Telegram\Application\TelegramOwnedServiceDetail;
 use App\Modules\Telegram\Application\TelegramOwnedServiceListItem;
 use App\Modules\Telegram\Application\TelegramOwnedServicePage;
 use App\Modules\Telegram\Application\TelegramOwnedServiceSearchResult;
+use App\Modules\Telegram\Application\TelegramPrivateMediaDeliveryResolver;
 use App\Modules\Telegram\Application\TelegramPrivateMediaDownload;
 use App\Modules\Telegram\Application\TelegramPrivateMediaIngestor;
 use App\Modules\Telegram\Application\TelegramPrivateMediaInteractionGateway;
@@ -4850,7 +4851,7 @@ SQL);
         }
 
         try {
-            $this->app->make(\App\Modules\Telegram\Application\TelegramPrivateMediaDeliveryResolver::class)
+            $this->app->make(TelegramPrivateMediaDeliveryResolver::class)
                 ->resolveAdministratorDirectMessage((string) $media->public_id, (string) $direct->public_id);
             self::fail('Private direct-media bytes must not resolve by bypassing the direct-message authority.');
         } catch (\LogicException) {
