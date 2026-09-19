@@ -48,7 +48,9 @@ ALTER TABLE telegram_administrator_direct_messages
             AND media_byte_size BETWEEN 1 AND 20000000
             AND media_content_sha256 REGEXP '^[0-9a-f]{64}$'
             AND (
-                (content_type = 'photo' AND media_detected_mime IN ('image/jpeg','image/png','image/webp'))
+                (content_type = 'photo'
+                    AND media_byte_size <= 10000000
+                    AND media_detected_mime IN ('image/jpeg','image/png','image/webp'))
                 OR (content_type = 'video' AND media_detected_mime = 'video/mp4')
                 OR (content_type = 'document' AND media_detected_mime IN (
                     'image/jpeg','image/png','image/webp','video/mp4','application/pdf','text/plain'
