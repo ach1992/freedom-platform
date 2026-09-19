@@ -41,7 +41,7 @@ When a Task Issue exists, keep it limited to the implementation/review facts req
 
 A Task Issue represents its **whole meaningful outcome**, not merely the first PR or first technical seam. Keep it open across cohesive partial PRs when the acceptance/dependency/risk/rollback/validation boundary remains the same. Use `Refs #...` for a partial PR and `Closes #...` only when that PR actually satisfies the full Task acceptance. Prefer updating the existing contract/revision for bounded in-outcome refinement over closing it and creating a mechanically similar sibling.
 
-After verified integration/closure, reconcile any acceptance checklist or explicit mutable current-state text in an owning Issue when one exists. Keep exact commit/run/review receipts in GitHub comments, PRs, and CI rather than copying them into repository status documents; an `Initial state` field remains historical contract input and does not need rewriting.
+After verified integration/closure, reconcile any acceptance checklist or explicit mutable current-state text in an owning Issue when one exists. Exact commit/run identity belongs to native Git/PR/check state; do not create a comment ledger for every candidate or CI rerun. Use comments for material decisions/blockers/review results/approval boundaries/explicit pauses or a recovery summary that native state cannot express. An `Initial state` field remains historical contract input and does not need rewriting.
 
 Pull requests use `.github/pull_request_template.md`: identify the durable authority (and owning Issue when one exists), summarize the change, state material risk/impact, and provide the focused verification or applicable CI result. Record a nonclaim only when adjacent scope could otherwise be misunderstood.
 
