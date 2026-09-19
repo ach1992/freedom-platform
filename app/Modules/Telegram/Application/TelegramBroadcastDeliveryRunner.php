@@ -342,7 +342,12 @@ final readonly class TelegramBroadcastDeliveryRunner
         try {
             $result = $this->sourceMessages->send(
                 $context['telegram_user_id'],
-                new TelegramResolvedSourceMessagePresentation($sourceMode, $sourceChatId, $sourceMessageId),
+                new TelegramResolvedSourceMessagePresentation(
+                    $sourceMode,
+                    $sourceChatId,
+                    $sourceMessageId,
+                    $context['caption_override'],
+                ),
                 $resolvedKeyboard,
             );
         } catch (Throwable) {
@@ -1027,7 +1032,9 @@ final readonly class TelegramBroadcastDeliveryRunner
                 'recipient.claim_token_hash',
                 'recipient_message.state as recipient_message_state',
                 'message.mode as message_mode',
+                'message.source_kind',
                 'message.text as message_text',
+                'message.caption_override',
                 'message.source_chat_id',
                 'message.source_message_id',
                 'message.inline_keyboard_snapshot',
@@ -1049,7 +1056,9 @@ final readonly class TelegramBroadcastDeliveryRunner
             'correlation_id' => (string) $row->correlation_id,
             'telegram_user_id' => $this->positiveInt($row->telegram_user_id, 'Broadcast recipient Telegram ID'),
             'message_mode' => (string) $row->message_mode,
+            'source_kind' => $row->source_kind === null ? null : (string) $row->source_kind,
             'message_text' => $row->message_text === null ? null : (string) $row->message_text,
+            'caption_override' => $row->caption_override === null ? null : (string) $row->caption_override,
             'source_chat_id' => $row->source_chat_id === null ? null : $this->positiveInt($row->source_chat_id, 'Broadcast source chat ID'),
             'source_message_id' => $row->source_message_id === null ? null : $this->positiveInt($row->source_message_id, 'Broadcast source message ID'),
             'inline_keyboard_snapshot' => $row->inline_keyboard_snapshot === null ? null : (string) $row->inline_keyboard_snapshot,
