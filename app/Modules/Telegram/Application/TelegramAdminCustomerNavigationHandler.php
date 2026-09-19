@@ -118,15 +118,30 @@ final readonly class TelegramAdminCustomerNavigationHandler
         }
 
         try {
-            $draft = $this->directMessages->createMediaDraft(
-                $interaction->userId,
-                $interaction->botId,
+            [$draft, $session] = $this->database->connection()->transaction(function () use (
+                $interaction,
                 $selection,
-                $interaction->media->sourceKind,
                 $media,
-                $interaction->caption ?? '',
-                $interaction->requestKey,
-            );
+            ): array {
+                $draft = $this->directMessages->createMediaDraft(
+                    $interaction->userId,
+                    $interaction->botId,
+                    $selection,
+                    $interaction->media->sourceKind,
+                    $media,
+                    $interaction->caption ?? '',
+                    $interaction->requestKey,
+                );
+                $session = $this->sessions->transition(
+                    $interaction->sessionPublicId,
+                    $interaction->sessionVersion,
+                    self::STATE_MESSAGE_CONFIRM,
+                    ['draft' => $draft->publicId, 'selection' => $selection],
+                    'tg-admin-customer-message-confirm:'.hash('sha256', $interaction->requestKey.':'.$draft->publicId),
+                );
+
+                return [$draft, $session];
+            }, 3);
         } catch (AuthorizationException) {
             $this->privateMedia->discardIfUnassociated($media, $interaction->userId);
             $this->showPreviewState($action, $selection, 'message-media-authorization-lost');
@@ -137,18 +152,6 @@ final readonly class TelegramAdminCustomerNavigationHandler
             $target = $this->targets->resolve($interaction->userId, $interaction->botId, $selection);
             $this->renderMessageCompose($action, $interaction->sessionVersion, $target, 'message_invalid');
 
-            return true;
-        }
-
-        try {
-            $session = $this->sessions->transition(
-                $interaction->sessionPublicId,
-                $interaction->sessionVersion,
-                self::STATE_MESSAGE_CONFIRM,
-                ['draft' => $draft->publicId, 'selection' => $selection],
-                'tg-admin-customer-message-confirm:'.hash('sha256', $interaction->requestKey.':'.$draft->publicId),
-            );
-        } catch (DomainException) {
             return true;
         }
         $this->assertActor($action, $session->userId);
