@@ -74,7 +74,7 @@ When a Task Contract Issue is warranted, record:
 - validation strategy;
 - change risk and initial state.
 
-Add protected areas, security/privacy, financial/provider, schema/migration, compatibility, runtime/operations, performance, or release constraints **only when they materially affect the task**. Do not require headings filled with `N/A`, repeated handoff prose, copied CI logs, or a separate completion report.
+Add protected areas, security/privacy, financial/provider, schema/migration, compatibility, runtime/operations, performance, or release constraints **only when they materially affect the task**. Keep the Task Issue contract-like, not an investigation/status diary: implementation discoveries stay in code/PR/review unless they materially change goal, scope, acceptance, dependency, risk, or validation. Increment a Contract Revision only for such material contract change, not for ordinary commits, self-review corrections, rebases, candidate SHAs, or CI reruns. Do not require headings filled with `N/A`, repeated handoff prose, copied CI logs, or a separate completion report.
 
 Every PR still names its authority and review boundary. When there is no dedicated Task Issue, the PR links the existing requirement/Phase/Program authority and carries the bounded scope, risk, and verification needed to review the change safely. PRs use `.github/pull_request_template.md`. Sensitive paths are assigned in `.github/CODEOWNERS`; CODEOWNERS expresses intended ownership but does not by itself prove branch/ruleset enforcement.
 
