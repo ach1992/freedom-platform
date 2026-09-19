@@ -50,6 +50,7 @@ final class TelegramResolvedPrivateMediaPresentation implements JsonSerializable
             || ! mb_check_encoding($caption, 'UTF-8')
             || str_contains($caption, "\0")
             || mb_strlen($caption) > 1024
+            || ($contentType !== 'photo' && $caption !== '')
             || ($contentType === 'photo' && ! TelegramPrivateMediaContentValidator::isImageMime($detectedMime))
             || ($contentType === 'video' && $detectedMime !== 'video/mp4')) {
             throw new InvalidArgumentException('Resolved private Telegram media presentation is invalid.');
