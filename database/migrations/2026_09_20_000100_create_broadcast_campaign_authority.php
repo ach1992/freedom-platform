@@ -166,6 +166,8 @@ return new class extends Migration
             $table->ulid('delivery_operation_public_id')->nullable()->unique();
             $table->unsignedBigInteger('telegram_message_id')->nullable();
             $table->string('result_code', 128)->nullable();
+            $table->dateTime('provider_boundary_started_at', 6)->nullable();
+            $table->dateTime('provider_boundary_finished_at', 6)->nullable();
             $table->dateTime('created_at', 6);
             $table->dateTime('updated_at', 6);
         });
@@ -311,9 +313,40 @@ ALTER TABLE broadcast_campaign_tests
     ADD CONSTRAINT broadcast_campaign_test_delivery_chk CHECK (
         delivery_operation_public_id IS NULL
         OR (
-            delivery_operation_public_id REGEXP '^[0-9A-HJKMNP-TV-Z]{26}$'
+            delivery_operation_public_id REGEXP '^[0-9A-HJKMNP-TV-Z]{26}
+SQL);
+    }
+
+    public function down(): void
+    {
+        foreach ([
+            'broadcast_campaign_tests',
+            'broadcast_recipient_messages',
+            'broadcast_recipients',
+            'broadcast_message_versions',
+            'broadcast_audiences',
+            'broadcast_campaigns',
+        ] as $table) {
+            if (Schema::hasTable($table) && DB::table($table)->exists()) {
+                throw new RuntimeException('Broadcast campaign records must be retained; rollback requires empty authority tables.');
+            }
+        }
+
+        Schema::dropIfExists('broadcast_campaign_tests');
+        Schema::dropIfExists('broadcast_recipient_messages');
+        Schema::dropIfExists('broadcast_recipients');
+        Schema::dropIfExists('broadcast_message_versions');
+        Schema::dropIfExists('broadcast_audiences');
+        Schema::dropIfExists('broadcast_campaigns');
+    }
+};
+
             AND BINARY delivery_operation_public_id = BINARY UPPER(delivery_operation_public_id)
         )
+    ),
+    ADD CONSTRAINT broadcast_campaign_test_boundary_chk CHECK (
+        (state = 'sending' AND provider_boundary_started_at IS NOT NULL AND provider_boundary_finished_at IS NULL)
+        OR state <> 'sending'
     )
 SQL);
     }
