@@ -104,7 +104,6 @@ Schedule::command('services:notifications', [
     ->withoutOverlapping(30)
     ->onOneServer();
 
-
 Schedule::command('telegram:process-broadcasts', [
     '--activation-limit' => 10,
     '--recipient-limit' => 10,
