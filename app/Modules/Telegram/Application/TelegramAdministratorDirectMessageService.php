@@ -389,10 +389,7 @@ final readonly class TelegramAdministratorDirectMessageService
         string $publicId,
         int $recipientChatId,
     ): TelegramResolvedPrivateMediaPresentation {
-        TelegramPresentationProvenanceGuard::assertExactInternalCaller(
-            TelegramDeliveryOperationExecutor::class,
-            __DIR__.'/TelegramDeliveryOperationExecutor.php',
-        );
+        TelegramPrivateMediaDeliveryProvenanceGuard::assertExecutorCaller();
 
         return $this->mediaMessages->mediaPresentationForDelivery($publicId, $recipientChatId);
     }
