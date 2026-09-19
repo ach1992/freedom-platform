@@ -83,6 +83,7 @@ final class ArchitectureBoundaryChecker
             $this->scanUnattributablePersistenceMechanisms($relativePath, $source, $violations);
             $this->scanTelegramGenericDeliveryBoundary($relativePath, $source, $violations);
             $this->scanTelegramConfidentialDeliveryBoundary($relativePath, $source, $violations);
+            $this->scanTelegramAdministratorDirectDeliveryBoundary($relativePath, $source, $violations);
         }
 
         foreach ($this->phpFiles('app/Shared') as $relativePath => $source) {
@@ -92,6 +93,7 @@ final class ArchitectureBoundaryChecker
             $this->scanUnattributablePersistenceMechanisms($relativePath, $source, $violations);
             $this->scanTelegramGenericDeliveryBoundary($relativePath, $source, $violations);
             $this->scanTelegramConfidentialDeliveryBoundary($relativePath, $source, $violations);
+            $this->scanTelegramAdministratorDirectDeliveryBoundary($relativePath, $source, $violations);
         }
 
         foreach ($this->phpFiles('routes') as $relativePath => $source) {
@@ -100,6 +102,7 @@ final class ArchitectureBoundaryChecker
             $this->scanUnattributablePersistenceMechanisms($relativePath, $source, $violations);
             $this->scanTelegramGenericDeliveryBoundary($relativePath, $source, $violations);
             $this->scanTelegramConfidentialDeliveryBoundary($relativePath, $source, $violations);
+            $this->scanTelegramAdministratorDirectDeliveryBoundary($relativePath, $source, $violations);
         }
 
         $edges = array_values(array_unique($edges));
@@ -2616,6 +2619,38 @@ final class ArchitectureBoundaryChecker
     }
 
     /** @param list<string> $violations */
+    private function scanTelegramAdministratorDirectDeliveryBoundary(
+        string $relativePath,
+        string $source,
+        array &$violations,
+    ): void {
+        $restrictedInternalSymbols = [
+            'TelegramAdministratorDirectSourceMessageService' => [
+                'app/Modules/Telegram/Application/TelegramAdministratorDirectMessageService.php',
+                'app/Modules/Telegram/Application/TelegramAdministratorDirectSourceMessageService.php',
+                'app/Modules/Telegram/Application/TelegramSourceMessageDeliveryProvenanceGuard.php',
+                'app/Modules/Telegram/Infrastructure/TelegramServiceProvider.php',
+            ],
+            'TelegramAdministratorDirectMediaMessageService' => [
+                'app/Modules/Telegram/Application/TelegramAdministratorDirectMessageService.php',
+                'app/Modules/Telegram/Application/TelegramAdministratorDirectMediaMessageService.php',
+                'app/Modules/Telegram/Application/TelegramPrivateMediaDeliveryProvenanceGuard.php',
+            ],
+        ];
+
+        foreach ($restrictedInternalSymbols as $symbol => $allowedPaths) {
+            if ($this->containsCodeTokenText($source, $symbol)
+                && ! in_array($relativePath, $allowedPaths, true)) {
+                $violations[] = sprintf(
+                    '%s may not reference internal administrator direct-delivery authority %s; use TelegramAdministratorDirectMessageService.',
+                    $relativePath,
+                    $symbol,
+                );
+            }
+        }
+    }
+
+    /** @param list<string> $violations */
     private function scanTelegramGenericDeliveryBoundary(string $relativePath, string $source, array &$violations): void
     {
         $restrictedMethods = [
@@ -2671,6 +2706,9 @@ final class ArchitectureBoundaryChecker
             'app/Modules/Telegram/Application/TelegramPrivateMediaDeliveryProvenanceGuard.php',
             'app/Modules/Telegram/Application/TelegramPrivateMediaDeliveryQueue.php',
             'app/Modules/Telegram/Application/TelegramPrivateMediaReferenceDeliveryOutboxHandler.php',
+            'app/Modules/Telegram/Application/TelegramAdministratorDirectSourceMessageService.php',
+            'app/Modules/Telegram/Application/TelegramSourceMessageDeliveryProvenanceGuard.php',
+            'app/Modules/Telegram/Application/TelegramSourceMessageReferenceDeliveryOutboxHandler.php',
             'app/Modules/Telegram/Application/TelegramMutationRequest.php',
             'app/Modules/Telegram/Application/TelegramPresentationProvenanceGuard.php',
             'app/Modules/Telegram/Application/ConfidentialTelegramPresentation.php',
@@ -2802,6 +2840,7 @@ final class ArchitectureBoundaryChecker
                 'app/Modules/Telegram/Application/TelegramInteractiveDeliveryOutboxHandler.php',
                 'app/Modules/Telegram/Application/TelegramPresentationProvenanceGuard.php',
                 'app/Modules/Telegram/Application/TelegramPrivateMediaDeliveryProvenanceGuard.php',
+                'app/Modules/Telegram/Application/TelegramSourceMessageDeliveryProvenanceGuard.php',
                 'app/Modules/Telegram/Infrastructure/TelegramServiceProvider.php',
             ],
             'TelegramConfidentialDeliveryOutboxHandler' => [

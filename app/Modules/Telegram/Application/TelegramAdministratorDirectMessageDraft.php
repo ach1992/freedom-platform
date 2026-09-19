@@ -20,6 +20,9 @@ final readonly class TelegramAdministratorDirectMessageDraft
         public ?string $mediaDetectedMime = null,
         public ?int $mediaByteSize = null,
         public ?string $mediaContentSha256 = null,
+        public ?int $sourceChatId = null,
+        public ?int $sourceMessageId = null,
+        public ?TelegramInlineKeyboardSnapshot $inlineKeyboard = null,
     ) {
         $commonInvalid = preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/', $publicId) !== 1
             || preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/', $targetAccountPublicId) !== 1
@@ -28,7 +31,8 @@ final readonly class TelegramAdministratorDirectMessageDraft
             || str_contains($text, "\0")
             || preg_match('/\A[A-Za-z0-9_.:-]{8,64}\z/', $correlationId) !== 1;
 
-        if ($commonInvalid || ! in_array($contentType, ['text', 'photo', 'video', 'document'], true)) {
+        if ($commonInvalid
+            || ! in_array($contentType, ['text', 'photo', 'video', 'document', 'forward', 'copy'], true)) {
             throw new InvalidArgumentException('Telegram administrator direct-message draft is invalid.');
         }
 
@@ -38,8 +42,27 @@ final readonly class TelegramAdministratorDirectMessageDraft
                 || $mediaPublicId !== null
                 || $mediaDetectedMime !== null
                 || $mediaByteSize !== null
-                || $mediaContentSha256 !== null) {
+                || $mediaContentSha256 !== null
+                || $sourceChatId !== null
+                || $sourceMessageId !== null) {
                 throw new InvalidArgumentException('Telegram administrator direct-message draft is invalid.');
+            }
+
+            return;
+        }
+
+        if (in_array($contentType, ['forward', 'copy'], true)) {
+            if ($text !== ''
+                || $mediaPublicId !== null
+                || $mediaDetectedMime !== null
+                || $mediaByteSize !== null
+                || $mediaContentSha256 !== null
+                || $sourceChatId === null
+                || $sourceChatId < 1
+                || $sourceMessageId === null
+                || $sourceMessageId < 1
+                || ($contentType === 'forward' && $inlineKeyboard !== null)) {
+                throw new InvalidArgumentException('Telegram administrator direct source-message draft is invalid.');
             }
 
             return;
@@ -55,6 +78,8 @@ final readonly class TelegramAdministratorDirectMessageDraft
             || $mediaByteSize > 20_000_000
             || $mediaContentSha256 === null
             || preg_match('/\A[0-9a-f]{64}\z/', $mediaContentSha256) !== 1
+            || $sourceChatId !== null
+            || $sourceMessageId !== null
             || ($contentType === 'photo' && ! TelegramPrivateMediaContentValidator::isImageMime($mediaDetectedMime))
             || ($contentType === 'video' && $mediaDetectedMime !== 'video/mp4')
             || ($contentType !== 'photo' && $text !== '')) {
@@ -64,6 +89,16 @@ final readonly class TelegramAdministratorDirectMessageDraft
 
     public function isMedia(): bool
     {
-        return $this->contentType !== 'text';
+        return in_array($this->contentType, ['photo', 'video', 'document'], true);
+    }
+
+    public function isSourceMessage(): bool
+    {
+        return in_array($this->contentType, ['forward', 'copy'], true);
+    }
+
+    public function supportsInlineKeyboard(): bool
+    {
+        return $this->contentType !== 'forward';
     }
 }

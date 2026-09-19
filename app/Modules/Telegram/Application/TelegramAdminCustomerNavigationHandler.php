@@ -27,6 +27,10 @@ final readonly class TelegramAdminCustomerNavigationHandler
 
     private const STATE_MESSAGE_COMPOSE = 'admin_customer_message_compose';
 
+    private const STATE_MESSAGE_SOURCE = 'admin_customer_message_source';
+
+    private const STATE_MESSAGE_BUTTONS = 'admin_customer_message_buttons';
+
     private const STATE_MESSAGE_CONFIRM = 'admin_customer_message_confirm';
 
     private const STATE_MESSAGE_SUBMITTING = 'admin_customer_message_submitting';
@@ -35,9 +39,17 @@ final readonly class TelegramAdminCustomerNavigationHandler
 
     private const ACTION_MESSAGE = 'navigation.admin.customer.message';
 
+    private const ACTION_MESSAGE_FORWARD = 'navigation.admin.customer.message.forward';
+
+    private const ACTION_MESSAGE_COPY = 'navigation.admin.customer.message.copy';
+
+    private const ACTION_MESSAGE_BUTTONS = 'navigation.admin.customer.message.buttons';
+
+    private const ACTION_MESSAGE_BUTTONS_CLEAR = 'navigation.admin.customer.message.buttons.clear';
+
     private const ACTION_MESSAGE_CONFIRM = 'navigation.admin.customer.message.confirm';
 
-    private const MESSAGE_CONFIRMATION_HEADER_MAX_LENGTH = 594;
+    private const MESSAGE_CONFIRMATION_HEADER_MAX_LENGTH = 640;
 
     private const TELEGRAM_TEXT_MAX_LENGTH = 4096;
 
@@ -52,6 +64,7 @@ final readonly class TelegramAdminCustomerNavigationHandler
         private TelegramPrivateMediaIngestor $privateMedia,
         private TelegramNavigationHandler $navigation,
         private DatabaseManager $database,
+        private ?TelegramAdministratorDirectMessageButtonBuilder $directMessageButtons = null,
     ) {}
 
     public function supports(TelegramInteractionAction $action): bool
@@ -63,6 +76,8 @@ final readonly class TelegramAdminCustomerNavigationHandler
                 self::STATE_SEARCH,
                 self::STATE_PREVIEW,
                 self::STATE_MESSAGE_COMPOSE,
+                self::STATE_MESSAGE_SOURCE,
+                self::STATE_MESSAGE_BUTTONS,
                 self::STATE_MESSAGE_CONFIRM,
                 self::STATE_MESSAGE_SUBMITTING,
             ], true);
@@ -85,6 +100,8 @@ final readonly class TelegramAdminCustomerNavigationHandler
             self::STATE_SEARCH => $this->handleSearch($action),
             self::STATE_PREVIEW => $this->handlePreview($action),
             self::STATE_MESSAGE_COMPOSE => $this->handleMessageCompose($action),
+            self::STATE_MESSAGE_SOURCE => $this->handleMessageSourceNavigation($action),
+            self::STATE_MESSAGE_BUTTONS => $this->handleMessageButtons($action),
             self::STATE_MESSAGE_CONFIRM => $this->handleMessageConfirm($action),
             self::STATE_MESSAGE_SUBMITTING => $this->handleMessageSubmitting($action),
             default => throw new RuntimeException('Telegram administrator customer navigation state is unsupported.'),
@@ -167,6 +184,161 @@ final readonly class TelegramAdminCustomerNavigationHandler
         $this->renderMessageConfirmation($action, $session->version, $selection, $draft->publicId);
 
         return true;
+    }
+
+    /** @requirement COM-001 ACL-001 ACL-002 SEC-002 SEC-003 DAT-002 DAT-003 QUA-001 QUA-004 */
+    public function handleSourceMessage(TelegramSourceMessageInteraction $interaction): bool
+    {
+        if ($interaction->flow !== TelegramNavigationEntryGateway::FLOW
+            || $interaction->sessionState !== self::STATE_MESSAGE_SOURCE) {
+            return false;
+        }
+
+        [$mode, $selection] = $this->sourceStateFromPayload($interaction->sessionPayload);
+        $action = $this->actionForSourceMessage($interaction);
+
+        try {
+            [$draft, $session] = $this->database->connection()->transaction(function () use (
+                $interaction,
+                $mode,
+                $selection,
+            ): array {
+                $draft = $this->directMessages->createSourceMessageDraft(
+                    $interaction->userId,
+                    $interaction->botId,
+                    $selection,
+                    $mode,
+                    $interaction->sourceChatId,
+                    $interaction->sourceMessageId,
+                    $interaction->requestKey,
+                );
+                $session = $this->sessions->transition(
+                    $interaction->sessionPublicId,
+                    $interaction->sessionVersion,
+                    self::STATE_MESSAGE_CONFIRM,
+                    ['draft' => $draft->publicId, 'selection' => $selection],
+                    'tg-admin-customer-message-confirm:'.hash(
+                        'sha256',
+                        $interaction->requestKey.':'.$draft->publicId,
+                    ),
+                );
+
+                return [$draft, $session];
+            }, 3);
+        } catch (AuthorizationException) {
+            $this->showPreviewState($action, $selection, 'message-source-authorization-lost');
+
+            return true;
+        } catch (DomainException) {
+            $target = $this->targets->resolve($interaction->userId, $interaction->botId, $selection);
+            $this->renderMessageSource(
+                $action,
+                $interaction->sessionVersion,
+                $target,
+                $mode,
+                'message_source_invalid',
+            );
+
+            return true;
+        }
+
+        $this->assertActor($action, $session->userId);
+        $this->renderMessageConfirmation($action, $session->version, $selection, $draft->publicId);
+
+        return true;
+    }
+
+    private function handleMessageSourceNavigation(TelegramInteractionAction $action): void
+    {
+        [$mode, $selection] = $this->sourceStateFromPayload($action->sessionPayload);
+
+        if ($action->kind === TelegramInteractionActionKind::Callback) {
+            if ($action->callbackAction === self::ACTION_BACK && $action->callbackPayload === []) {
+                $this->showMessageCompose($action, $selection);
+
+                return;
+            }
+
+            throw new RuntimeException('Telegram administrator direct source-message callback is unsupported.');
+        }
+        if ($action->kind === TelegramInteractionActionKind::Back) {
+            $this->showMessageCompose($action, $selection);
+
+            return;
+        }
+        if ($this->isEntryCommand($action->messageText)) {
+            $this->returnHome($action);
+
+            return;
+        }
+
+        $target = $this->targets->resolve($action->userId, $action->botId, $selection);
+        $this->renderMessageSource(
+            $action,
+            $action->sessionVersion,
+            $target,
+            $mode,
+            'message_source_invalid',
+        );
+    }
+
+    private function handleMessageButtons(TelegramInteractionAction $action): void
+    {
+        [$selection, $draftPublicId] = $this->messageStateFromPayload($action->sessionPayload);
+
+        if ($action->kind === TelegramInteractionActionKind::Callback) {
+            if ($action->callbackAction === self::ACTION_BACK && $action->callbackPayload === []) {
+                $this->returnToMessageConfirmation($action, $selection, $draftPublicId, 'buttons-back');
+
+                return;
+            }
+
+            throw new RuntimeException('Telegram administrator direct-message button callback is unsupported.');
+        }
+        if ($action->kind === TelegramInteractionActionKind::Back) {
+            $this->returnToMessageConfirmation($action, $selection, $draftPublicId, 'buttons-back');
+
+            return;
+        }
+        if ($this->isEntryCommand($action->messageText)) {
+            $this->returnHome($action);
+
+            return;
+        }
+        if ($action->messageText === null) {
+            $this->renderMessageButtons($action, $action->sessionVersion, $selection, $draftPublicId);
+
+            return;
+        }
+
+        try {
+            $inlineKeyboard = ($this->directMessageButtons
+                ?? new TelegramAdministratorDirectMessageButtonBuilder)
+                ->fromAdministratorInput($action->messageText);
+            $this->directMessages->setInlineKeyboard(
+                $action->userId,
+                $action->botId,
+                $selection,
+                $draftPublicId,
+                $inlineKeyboard,
+            );
+        } catch (AuthorizationException) {
+            $this->showPreviewState($action, $selection, 'message-buttons-authorization-lost');
+
+            return;
+        } catch (DomainException) {
+            $this->renderMessageButtons(
+                $action,
+                $action->sessionVersion,
+                $selection,
+                $draftPublicId,
+                'message_buttons_invalid',
+            );
+
+            return;
+        }
+
+        $this->returnToMessageConfirmation($action, $selection, $draftPublicId, 'buttons-saved');
     }
 
     private function handleSearch(TelegramInteractionAction $action): void
@@ -283,6 +455,16 @@ final readonly class TelegramAdminCustomerNavigationHandler
 
                 return;
             }
+            if ($action->callbackAction === self::ACTION_MESSAGE_FORWARD && $action->callbackPayload === []) {
+                $this->showMessageSource($action, $selection, TelegramSourceMessageMode::Forward);
+
+                return;
+            }
+            if ($action->callbackAction === self::ACTION_MESSAGE_COPY && $action->callbackPayload === []) {
+                $this->showMessageSource($action, $selection, TelegramSourceMessageMode::Copy);
+
+                return;
+            }
 
             throw new RuntimeException('Telegram administrator direct-message composition callback is unsupported.');
         }
@@ -341,6 +523,33 @@ final readonly class TelegramAdminCustomerNavigationHandler
         if ($action->kind === TelegramInteractionActionKind::Callback) {
             if ($action->callbackAction === self::ACTION_BACK && $action->callbackPayload === []) {
                 $this->showMessageCompose($action, $selection);
+
+                return;
+            }
+            if ($action->callbackAction === self::ACTION_MESSAGE_BUTTONS && $action->callbackPayload === []) {
+                $this->showMessageButtons($action, $selection, $draftPublicId);
+
+                return;
+            }
+            if ($action->callbackAction === self::ACTION_MESSAGE_BUTTONS_CLEAR && $action->callbackPayload === []) {
+                try {
+                    $this->directMessages->clearInlineKeyboard(
+                        $action->userId,
+                        $action->botId,
+                        $selection,
+                        $draftPublicId,
+                    );
+                    $this->renderMessageConfirmation(
+                        $action,
+                        $action->sessionVersion,
+                        $selection,
+                        $draftPublicId,
+                    );
+                } catch (AuthorizationException) {
+                    $this->showPreviewState($action, $selection, 'message-buttons-authorization-lost');
+                } catch (DomainException) {
+                    $this->showPreviewState($action, $selection, 'message-unavailable', 'message_unavailable');
+                }
 
                 return;
             }
@@ -628,6 +837,110 @@ final readonly class TelegramAdminCustomerNavigationHandler
         $this->renderMessageCompose($action, $session->version, $target);
     }
 
+    private function showMessageSource(
+        TelegramInteractionAction $action,
+        string $selection,
+        TelegramSourceMessageMode $mode,
+    ): void {
+        if (! $this->directMessages->availableFor($action->userId)) {
+            $this->showPreviewState($action, $selection, 'message-permission-unavailable');
+
+            return;
+        }
+
+        try {
+            $target = $this->targets->resolve($action->userId, $action->botId, $selection);
+            $session = $this->sessions->transition(
+                $action->sessionPublicId,
+                $action->sessionVersion,
+                self::STATE_MESSAGE_SOURCE,
+                ['mode' => $mode->value, 'selection' => $selection],
+                'tg-admin-customer-message-source:'.hash(
+                    'sha256',
+                    $action->requestKey.':'.$mode->value,
+                ),
+            );
+        } catch (AuthorizationException) {
+            $this->navigation->showAdminControl($action);
+
+            return;
+        } catch (DomainException) {
+            return;
+        }
+
+        $this->assertActor($action, $session->userId);
+        $this->renderMessageSource($action, $session->version, $target, $mode);
+    }
+
+    private function showMessageButtons(
+        TelegramInteractionAction $action,
+        string $selection,
+        string $draftPublicId,
+    ): void {
+        try {
+            $draft = $this->directMessages->draftForConfirmation(
+                $action->userId,
+                $action->botId,
+                $selection,
+                $draftPublicId,
+            );
+        } catch (AuthorizationException) {
+            $this->showPreviewState($action, $selection, 'message-buttons-authorization-lost');
+
+            return;
+        } catch (DomainException) {
+            $this->showPreviewState($action, $selection, 'message-unavailable', 'message_unavailable');
+
+            return;
+        }
+
+        if (! $draft->supportsInlineKeyboard()) {
+            throw new RuntimeException(
+                'Telegram administrator direct-message mode does not support authored buttons.',
+            );
+        }
+
+        try {
+            $session = $this->sessions->transition(
+                $action->sessionPublicId,
+                $action->sessionVersion,
+                self::STATE_MESSAGE_BUTTONS,
+                ['draft' => $draftPublicId, 'selection' => $selection],
+                'tg-admin-customer-message-buttons:'.hash('sha256', $draftPublicId.':'.$action->requestKey),
+            );
+        } catch (DomainException) {
+            return;
+        }
+
+        $this->assertActor($action, $session->userId);
+        $this->renderMessageButtons($action, $session->version, $selection, $draftPublicId);
+    }
+
+    private function returnToMessageConfirmation(
+        TelegramInteractionAction $action,
+        string $selection,
+        string $draftPublicId,
+        string $suffix,
+    ): void {
+        try {
+            $session = $this->sessions->transition(
+                $action->sessionPublicId,
+                $action->sessionVersion,
+                self::STATE_MESSAGE_CONFIRM,
+                ['draft' => $draftPublicId, 'selection' => $selection],
+                'tg-admin-customer-message-confirm-return:'.hash(
+                    'sha256',
+                    $draftPublicId.':'.$action->requestKey.':'.$suffix,
+                ),
+            );
+        } catch (DomainException) {
+            return;
+        }
+
+        $this->assertActor($action, $session->userId);
+        $this->renderMessageConfirmation($action, $session->version, $selection, $draftPublicId);
+    }
+
     private function showPreviewState(
         TelegramInteractionAction $action,
         string $selection,
@@ -733,7 +1046,73 @@ final readonly class TelegramAdminCustomerNavigationHandler
             $action,
             $text,
             'message-compose',
-            $this->backKeyboard($action, $sessionVersion, $locale, 'message-compose'),
+            $this->messageComposeKeyboard($action, $sessionVersion, $locale),
+        );
+    }
+
+    private function renderMessageSource(
+        TelegramInteractionAction $action,
+        int $sessionVersion,
+        TelegramAdministratorCustomerTarget $target,
+        TelegramSourceMessageMode $mode,
+        ?string $notice = null,
+    ): void {
+        $locale = $this->locale($action->userId);
+        $username = $target->maskedUsername
+            ?? $this->translation('telegram.navigation.admin.customer_search.username_unavailable', $locale);
+        $text = $this->translation('telegram.navigation.admin.customer_search.message_source_prompt', $locale, [
+            'telegram_id' => $target->telegramUserId,
+            'account_id' => $target->accountPublicId,
+            'username' => $username,
+            'mode' => $this->translation(
+                'telegram.navigation.admin.customer_search.message_mode_'.$mode->value,
+                $locale,
+            ),
+        ]);
+        if ($notice !== null) {
+            $text .= "\n\n".$this->translation('telegram.navigation.admin.customer_search.'.$notice, $locale);
+        }
+
+        $this->queue(
+            $action,
+            $text,
+            'message-source-'.$mode->value,
+            $this->backKeyboard($action, $sessionVersion, $locale, 'message-source'),
+        );
+    }
+
+    private function renderMessageButtons(
+        TelegramInteractionAction $action,
+        int $sessionVersion,
+        string $selection,
+        string $draftPublicId,
+        ?string $notice = null,
+    ): void {
+        $target = $this->targets->resolve($action->userId, $action->botId, $selection);
+        $draft = $this->directMessages->draftForConfirmation(
+            $action->userId,
+            $action->botId,
+            $selection,
+            $draftPublicId,
+        );
+        if (! $draft->supportsInlineKeyboard()) {
+            throw new DomainException('Telegram direct-message mode does not support authored buttons.');
+        }
+
+        $locale = $this->locale($action->userId);
+        $text = $this->translation('telegram.navigation.admin.customer_search.message_buttons_prompt', $locale, [
+            'telegram_id' => $target->telegramUserId,
+            'count' => (string) ($draft->inlineKeyboard === null ? 0 : count($draft->inlineKeyboard->rows())),
+        ]);
+        if ($notice !== null) {
+            $text .= "\n\n".$this->translation('telegram.navigation.admin.customer_search.'.$notice, $locale);
+        }
+
+        $this->queue(
+            $action,
+            $text,
+            'message-buttons',
+            $this->backKeyboard($action, $sessionVersion, $locale, 'message-buttons'),
         );
     }
 
@@ -753,16 +1132,42 @@ final readonly class TelegramAdminCustomerNavigationHandler
         $locale = $this->locale($action->userId);
         $username = $target->maskedUsername
             ?? $this->translation('telegram.navigation.admin.customer_search.username_unavailable', $locale);
+        $mode = $this->translation(
+            'telegram.navigation.admin.customer_search.message_mode_'.$draft->contentType,
+            $locale,
+        );
         $header = $this->translation('telegram.navigation.admin.customer_search.message_confirmation', $locale, [
             'telegram_id' => $target->telegramUserId,
             'account_id' => $target->accountPublicId,
             'username' => $username,
         ]);
+        $header .= "\n".$this->translation(
+            'telegram.navigation.admin.customer_search.message_mode_summary',
+            $locale,
+            ['mode' => $mode],
+        );
         if (mb_strlen($header) > self::MESSAGE_CONFIRMATION_HEADER_MAX_LENGTH) {
-            throw new RuntimeException('Telegram administrator direct-message confirmation localization exceeds its reserved header budget.');
+            throw new RuntimeException(
+                'Telegram administrator direct-message confirmation localization exceeds its reserved header budget.',
+            );
         }
+
         $body = $draft->text;
-        if ($draft->isMedia()) {
+        if ($draft->isSourceMessage()) {
+            if ($draft->sourceMessageId === null) {
+                throw new RuntimeException(
+                    'Telegram administrator direct source-message confirmation metadata is incomplete.',
+                );
+            }
+            $body = $this->translation(
+                'telegram.navigation.admin.customer_search.message_source_confirmation',
+                $locale,
+                [
+                    'mode' => $mode,
+                    'message_id' => (string) $draft->sourceMessageId,
+                ],
+            );
+        } elseif ($draft->isMedia()) {
             if ($draft->mediaDetectedMime === null || $draft->mediaByteSize === null) {
                 throw new RuntimeException('Telegram administrator direct-media confirmation metadata is incomplete.');
             }
@@ -770,28 +1175,43 @@ final readonly class TelegramAdminCustomerNavigationHandler
                 ? $this->translation('telegram.navigation.admin.customer_search.message_media_caption_none', $locale)
                 : $draft->text;
             $body = $this->translation('telegram.navigation.admin.customer_search.message_media_confirmation', $locale, [
-                'type' => $this->translation(
-                    'telegram.navigation.admin.customer_search.message_media_type_'.$draft->contentType,
-                    $locale,
-                ),
+                'type' => $mode,
                 'mime' => $draft->mediaDetectedMime,
                 'size' => (string) $draft->mediaByteSize,
                 'caption' => $caption,
             ]);
+        } elseif ($draft->inlineKeyboard !== null && mb_strlen($body) > 2400) {
+            $body = mb_substr($body, 0, 2400)
+                ."\n"
+                .$this->translation(
+                    'telegram.navigation.admin.customer_search.message_text_preview_truncated',
+                    $locale,
+                );
+        }
+
+        if ($draft->inlineKeyboard !== null) {
+            $body .= "\n\n".$this->translation(
+                'telegram.navigation.admin.customer_search.message_buttons_summary',
+                $locale,
+                [
+                    'count' => (string) count($draft->inlineKeyboard->rows()),
+                    'buttons' => $this->directMessageButtonSummary($draft->inlineKeyboard),
+                ],
+            );
         }
 
         $confirmation = $header."\n\n".$body;
         if (mb_strlen($confirmation) > self::TELEGRAM_TEXT_MAX_LENGTH) {
-            throw new RuntimeException('Telegram administrator direct-message confirmation exceeds the single-presentation limit.');
+            throw new RuntimeException(
+                'Telegram administrator direct-message confirmation exceeds the single-presentation limit.',
+            );
         }
 
-        // Target context plus exact text/caption and bounded media metadata stay
-        // in one confidential confirmation before any customer-facing effect.
         $this->queue(
             $action,
             $confirmation,
             'message-confirm',
-            $this->messageConfirmationKeyboard($action, $sessionVersion, $locale, $draftPublicId),
+            $this->messageConfirmationKeyboard($action, $sessionVersion, $locale, $draft),
         );
     }
 
@@ -830,18 +1250,98 @@ final readonly class TelegramAdminCustomerNavigationHandler
         return new TelegramInlineKeyboardSnapshot($rows);
     }
 
+    private function messageComposeKeyboard(
+        TelegramInteractionAction $action,
+        int $sessionVersion,
+        string $locale,
+    ): TelegramInlineKeyboardSnapshot {
+        $forward = $this->callbacks->issue(
+            $action->sessionPublicId,
+            $sessionVersion,
+            self::ACTION_MESSAGE_FORWARD,
+            [],
+            'tg-admin-customer-message-forward:'.hash('sha256', $action->requestKey),
+        );
+        $copy = $this->callbacks->issue(
+            $action->sessionPublicId,
+            $sessionVersion,
+            self::ACTION_MESSAGE_COPY,
+            [],
+            'tg-admin-customer-message-copy:'.hash('sha256', $action->requestKey),
+        );
+        $back = $this->callbacks->issue(
+            $action->sessionPublicId,
+            $sessionVersion,
+            self::ACTION_BACK,
+            [],
+            'tg-admin-customer-back:'.hash('sha256', $action->requestKey.':message-compose'),
+        );
+
+        return new TelegramInlineKeyboardSnapshot([
+            [new TelegramInlineCallbackButton(
+                $this->translation('telegram.navigation.admin.customer_search.message_forward_button', $locale),
+                $forward->publicId,
+            )],
+            [new TelegramInlineCallbackButton(
+                $this->translation('telegram.navigation.admin.customer_search.message_copy_button', $locale),
+                $copy->publicId,
+            )],
+            [new TelegramInlineCallbackButton(
+                $this->translation('telegram.navigation.buttons.back', $locale),
+                $back->publicId,
+            )],
+        ]);
+    }
+
     private function messageConfirmationKeyboard(
         TelegramInteractionAction $action,
         int $sessionVersion,
         string $locale,
-        string $draftPublicId,
+        TelegramAdministratorDirectMessageDraft $draft,
     ): TelegramInlineKeyboardSnapshot {
+        $rows = [];
+        if ($draft->supportsInlineKeyboard()) {
+            $buttons = $this->callbacks->issue(
+                $action->sessionPublicId,
+                $sessionVersion,
+                self::ACTION_MESSAGE_BUTTONS,
+                [],
+                'tg-admin-customer-message-buttons-button:'.hash('sha256', $draft->publicId.':'.$sessionVersion),
+            );
+            $rows[] = [new TelegramInlineCallbackButton(
+                $this->translation(
+                    $draft->inlineKeyboard === null
+                        ? 'telegram.navigation.admin.customer_search.message_buttons_add_button'
+                        : 'telegram.navigation.admin.customer_search.message_buttons_edit_button',
+                    $locale,
+                ),
+                $buttons->publicId,
+            )];
+
+            if ($draft->inlineKeyboard !== null) {
+                $clear = $this->callbacks->issue(
+                    $action->sessionPublicId,
+                    $sessionVersion,
+                    self::ACTION_MESSAGE_BUTTONS_CLEAR,
+                    [],
+                    'tg-admin-customer-message-buttons-clear:'.hash('sha256', $draft->publicId.':'.$sessionVersion),
+                );
+                $rows[] = [new TelegramInlineCallbackButton(
+                    $this->translation(
+                        'telegram.navigation.admin.customer_search.message_buttons_clear_button',
+                        $locale,
+                    ),
+                    $clear->publicId,
+                )];
+            }
+        }
+
         $confirm = $this->callbacks->issue(
             $action->sessionPublicId,
             $sessionVersion,
             self::ACTION_MESSAGE_CONFIRM,
             [],
-            'tg-admin-customer-message-confirm-button:'.hash('sha256', $draftPublicId),
+            'tg-admin-customer-message-confirm-button:'.hash('sha256', $draft->publicId.':'.$sessionVersion),
         );
         $back = $this->callbacks->issue(
             $action->sessionPublicId,
@@ -850,17 +1350,47 @@ final readonly class TelegramAdminCustomerNavigationHandler
             [],
             'tg-admin-customer-back:'.hash('sha256', $action->requestKey.':message-confirm'),
         );
+        $rows[] = [new TelegramInlineCallbackButton(
+            $this->translation('telegram.navigation.admin.customer_search.message_confirm_button', $locale),
+            $confirm->publicId,
+        )];
+        $rows[] = [new TelegramInlineCallbackButton(
+            $this->translation('telegram.navigation.buttons.back', $locale),
+            $back->publicId,
+        )];
 
-        return new TelegramInlineKeyboardSnapshot([
-            [new TelegramInlineCallbackButton(
-                $this->translation('telegram.navigation.admin.customer_search.message_confirm_button', $locale),
-                $confirm->publicId,
-            )],
-            [new TelegramInlineCallbackButton(
-                $this->translation('telegram.navigation.buttons.back', $locale),
-                $back->publicId,
-            )],
-        ]);
+        return new TelegramInlineKeyboardSnapshot($rows);
+    }
+
+    private function directMessageButtonSummary(
+        TelegramInlineKeyboardSnapshot $inlineKeyboard,
+    ): string {
+        $lines = [];
+        foreach ($inlineKeyboard->rows() as $row) {
+            $button = $row[0] ?? null;
+            if (! $button instanceof TelegramInlineHttpsUrlButton
+                || $button->purpose !== TelegramInlineHttpsUrlPurpose::SupportContact) {
+                throw new RuntimeException(
+                    'Telegram administrator direct-message keyboard summary contains an unsupported action.',
+                );
+            }
+
+            $path = parse_url($button->url, PHP_URL_PATH);
+            $username = is_string($path) ? ltrim($path, '/') : '';
+            if (preg_match('/\A[A-Za-z0-9_]{5,32}\z/', $username) !== 1) {
+                throw new RuntimeException(
+                    'Telegram administrator direct-message keyboard summary URL is invalid.',
+                );
+            }
+
+            $lines[] = '• '.$button->text.' → @'.$username;
+        }
+
+        if ($lines === []) {
+            throw new RuntimeException('Telegram administrator direct-message keyboard summary is empty.');
+        }
+
+        return implode("\n", $lines);
     }
 
     private function backKeyboard(
@@ -907,6 +1437,32 @@ final readonly class TelegramAdminCustomerNavigationHandler
             'tg-admin-customer-delivery:'.hash('sha256', $action->requestKey.':'.$surface),
             'tg-admin-customer:'.substr(hash('sha256', $action->botId.':'.$action->updateId.':'.$surface), 0, 40),
             $keyboard,
+        );
+    }
+
+    private function actionForSourceMessage(
+        TelegramSourceMessageInteraction $interaction,
+    ): TelegramInteractionAction {
+        return new TelegramInteractionAction(
+            TelegramInteractionActionKind::Message,
+            $interaction->requestKey,
+            $interaction->botId,
+            $interaction->updateId,
+            $interaction->telegramAccountId,
+            $interaction->userId,
+            $interaction->telegramUserId,
+            $interaction->sessionPublicId,
+            $interaction->flow,
+            $interaction->sessionState,
+            $interaction->sessionVersion,
+            $interaction->sessionPayload,
+            null,
+            null,
+            null,
+            [],
+            $interaction->replayed,
+            null,
+            null,
         );
     }
 
@@ -1012,6 +1568,27 @@ final readonly class TelegramAdminCustomerNavigationHandler
         }
 
         return $payload['selection'];
+    }
+
+    /**
+     * @param  array<string,mixed>  $payload
+     * @return array{0:TelegramSourceMessageMode,1:string}
+     */
+    private function sourceStateFromPayload(array $payload): array
+    {
+        if (array_keys($payload) !== ['mode', 'selection']
+            || ! is_string($payload['mode'] ?? null)
+            || ! is_string($payload['selection'] ?? null)
+            || preg_match('/\A[0-9a-f]{40}\z/', $payload['selection']) !== 1) {
+            throw new RuntimeException('Telegram administrator direct source-message state is invalid.');
+        }
+
+        $mode = TelegramSourceMessageMode::tryFrom($payload['mode']);
+        if ($mode === null) {
+            throw new RuntimeException('Telegram administrator direct source-message mode is invalid.');
+        }
+
+        return [$mode, $payload['selection']];
     }
 
     /** @param array<string,mixed> $payload

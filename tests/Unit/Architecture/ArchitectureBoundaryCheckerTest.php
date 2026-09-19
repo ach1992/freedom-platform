@@ -1399,6 +1399,72 @@ PHP);
         self::assertSame([], $result['violations']);
     }
 
+    public function test_administrator_direct_source_and_media_services_are_not_general_application_authorities(): void
+    {
+        $path = 'app/Modules/Telegram/Application/UnsafeAdministratorDirectDeliveryBypass.php';
+        $this->write($path, <<<'PHP'
+<?php
+namespace App\Modules\Telegram\Application;
+final readonly class UnsafeAdministratorDirectDeliveryBypass
+{
+    public function __construct(
+        private TelegramAdministratorDirectSourceMessageService $sourceMessages,
+        private TelegramAdministratorDirectMediaMessageService $mediaMessages,
+    ) {}
+}
+PHP);
+
+        $result = $this->checker()->check();
+        $violations = implode("\n", $result['violations']);
+
+        self::assertStringContainsString(
+            'may not reference internal administrator direct-delivery authority TelegramAdministratorDirectSourceMessageService',
+            $violations,
+        );
+        self::assertStringContainsString(
+            'may not reference internal administrator direct-delivery authority TelegramAdministratorDirectMediaMessageService',
+            $violations,
+        );
+    }
+
+    public function test_source_message_delivery_trampolines_are_internal_not_generic_reviewed_sources(): void
+    {
+        $this->write('app/Modules/Telegram/Application/TelegramAdministratorDirectSourceMessageService.php', <<<'PHP'
+<?php
+namespace App\Modules\Telegram\Application;
+final readonly class TelegramAdministratorDirectSourceMessageService
+{
+    public function __construct(private TelegramDeliveryQueueService $delivery) {}
+}
+PHP);
+        $this->write('app/Modules/Telegram/Application/TelegramSourceMessageDeliveryProvenanceGuard.php', <<<'PHP'
+<?php
+namespace App\Modules\Telegram\Application;
+final class TelegramSourceMessageDeliveryProvenanceGuard
+{
+    public function executorClass(): string
+    {
+        return TelegramDeliveryOperationExecutor::class;
+    }
+}
+PHP);
+        $this->write('app/Modules/Telegram/Application/TelegramSourceMessageReferenceDeliveryOutboxHandler.php', <<<'PHP'
+<?php
+namespace App\Modules\Telegram\Application;
+final class TelegramSourceMessageReferenceDeliveryOutboxHandler
+{
+    public function contractVersion(): int
+    {
+        return TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_SOURCE_MESSAGE_REFERENCE;
+    }
+}
+PHP);
+
+        $result = $this->checker()->check();
+
+        self::assertSame([], $result['violations']);
+    }
+
     public function test_confidential_telegram_source_allowlist_rejects_non_telegram_and_stale_entries(): void
     {
         $result = $this->checker([], [], [

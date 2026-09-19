@@ -54,29 +54,41 @@ return [
                 'username_unavailable' => 'ثبت نشده',
                 'preview_after_message' => "پیش‌نمایش مشتری هدف\n\nشناسه تلگرام: :telegram_id\nشناسه حساب: :account_id\nنام کاربری: :username\nنوع حساب: :account_type\nوضعیت: :account_status\n\nپیام مستقیم تأییدشده یک‌بار برای ارسال ثبت شده است. نتیجه تلگرام و شناسه پیام از طریق رکورد ارسال قابل پیگیری است.",
                 'message_button' => 'ارسال پیام مستقیم',
-                'message_prompt' => 'پیام مستقیم
-
-شناسه تلگرام: :telegram_id
-شناسه حساب: :account_id
-نام کاربری: :username
-
-یک متن، عکس، ویدیو یا سند ارسال کنید. متن می‌تواند حداکثر ۳۵۰۰ نویسه داشته باشد. فقط عکس می‌تواند کپشن ساده تا ۱۰۲۴ نویسه داشته باشد. تا مرحله تأیید نهایی هیچ چیزی برای مشتری ارسال نمی‌شود.',
+                'message_prompt' => "پیام مستقیم\n\nشناسه تلگرام: :telegram_id\nشناسه حساب: :account_id\nنام کاربری: :username\n\nیک متن، عکس، ویدیو یا سند ارسال کنید، یا از دکمه‌های زیر Forward/Copy را انتخاب کنید و سپس پیام منبع را در همین گفتگوی خصوصی با ربات بفرستید. متن می‌تواند حداکثر ۳۵۰۰ نویسه داشته باشد و فقط عکس می‌تواند کپشن ساده تا ۱۰۲۴ نویسه داشته باشد. پیش از تأیید نهایی می‌توانید دکمه‌های امن تماس تلگرامی اضافه کنید. تا تأیید نهایی چیزی برای مشتری ارسال نمی‌شود.",
                 'message_invalid' => 'یک متن تا ۳۵۰۰ نویسه یا یک عکس، ویدیو یا سند پشتیبانی‌شده ارسال کنید. فقط عکس می‌تواند کپشن ساده تا ۱۰۲۴ نویسه داشته باشد.',
-                'message_confirmation' => 'تأیید نهایی پیام مستقیم
-
-شناسه تلگرام: :telegram_id
-شناسه حساب: :account_id
-نام کاربری: :username
-
-متن پیام:',
+                'message_confirmation' => "تأیید نهایی پیام مستقیم\n\nشناسه تلگرام: :telegram_id\nشناسه حساب: :account_id\nنام کاربری: :username\n\nمتن پیام:",
+                'message_mode_summary' => 'حالت ارسال: :mode',
+                'message_forward_button' => 'Forward پیام',
+                'message_copy_button' => 'Copy پیام',
+                'message_source_prompt' => "پیام مستقیم — :mode\n\nشناسه تلگرام: :telegram_id\nشناسه حساب: :account_id\nنام کاربری: :username\n\nاکنون پیام منبع را در همین گفتگوی خصوصی با ربات ارسال کنید. فقط شناسه chat/message تلگرامِ متصل به مدیر برای تحویل ثبت می‌شود و محتوای منبع داخل session یا Outbox عمومی کپی نمی‌شود.",
+                'message_source_invalid' => 'یک پیام تلگرام را از همین گفتگوی خصوصی مدیر ارسال کنید یا «بازگشت» را بزنید.',
+                'message_source_confirmation' => "حالت: :mode\nشناسه پیام منبع در گفتگوی خصوصی مدیر با ربات: :message_id",
+                'message_mode_text' => 'متن',
+                'message_mode_photo' => 'عکس',
+                'message_mode_video' => 'ویدیو',
+                'message_mode_document' => 'سند',
+                'message_mode_forward' => 'Forward',
+                'message_mode_copy' => 'Copy',
                 'message_media_confirmation' => "نوع: :type\nMIME: :mime\nاندازه: :size بایت\nکپشن: :caption",
                 'message_media_type_photo' => 'عکس',
                 'message_media_type_video' => 'ویدیو',
                 'message_media_type_document' => 'سند',
                 'message_media_caption_none' => 'بدون کپشن',
+                'message_buttons_add_button' => 'افزودن دکمه امن',
+                'message_buttons_edit_button' => 'ویرایش دکمه‌ها',
+                'message_buttons_clear_button' => 'حذف دکمه‌ها',
+                'message_buttons_prompt' => "دکمه‌های امن پیام مستقیم\n\nشناسه تلگرام: :telegram_id\nتعداد فعلی: :count\n\nبین ۱ تا ۸ خط دقیقاً با این قالب بفرستید:\nعنوان | https://t.me/username\n\nفقط لینک تماس تلگرامی تأییدشده پذیرفته می‌شود. callback، URL دلخواه، style و عملیات پرداخت در این بخش مجاز نیست.",
+                'message_buttons_invalid' => 'فهرست دکمه‌ها معتبر نیست. بین ۱ تا ۸ خط با قالب «عنوان | https://t.me/username» ارسال کنید.',
+                'message_buttons_summary' => "دکمه‌های امن (:count):\n:buttons",
+                'message_text_preview_truncated' => '[پیش‌نمایش متن طولانی در اینجا کوتاه شده است؛ پیش‌نویس پایدار تغییری نکرده است.]',
                 'message_confirm_button' => 'تأیید و ثبت برای ارسال',
                 'message_queued' => 'پیام مستقیم یک‌بار برای ارسال ثبت شد. نتیجه تلگرام و شناسه پیام از طریق رکورد ارسال قابل پیگیری است.',
                 'message_unavailable' => 'پیش‌نویس منقضی شده یا هدف انتخاب‌شده تغییر کرده است. هدف فعلی را دوباره بررسی و پیام جدیدی آماده کنید.',
+                'message-permission-unavailable' => 'مجوز پیام مستقیم در حال حاضر در دسترس نیست.',
+                'message-authorization-lost' => 'مجوز پیام مستقیم تغییر کرده است. هدف را دوباره بررسی کنید.',
+                'message-media-authorization-lost' => 'مجوز ارسال رسانه مستقیم تغییر کرده است. هدف را دوباره بررسی کنید.',
+                'message-source-authorization-lost' => 'مجوز ارسال پیام منبع تغییر کرده است. هدف را دوباره بررسی کنید.',
+                'message-buttons-authorization-lost' => 'مجوز دکمه‌های پیام مستقیم تغییر کرده است. هدف را دوباره بررسی کنید.',
             ],
             'usdt_rate' => [
                 'view' => "نرخ دستی USDT\n\nنرخ فعلی: :rate ریال برای هر USDT\nمنبع: :source\nنسخه مدیریت‌شده: :version\n\nاین نرخ مشترک برای پرداخت مستقیم USDT و طبق سیاست فعلی مالک، به‌عنوان نرخ مبنای قیمت‌گذاری USD در NOWPayments استفاده می‌شود.",

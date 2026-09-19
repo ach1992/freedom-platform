@@ -291,7 +291,10 @@ final readonly class TelegramAdministratorDirectMediaMessageService
         string $botId,
         string $selectionToken,
         string $publicId,
+        ?TelegramInlineKeyboardSnapshot $inlineKeyboard = null,
     ): TelegramDeliveryOperationReceipt {
+        TelegramPrivateMediaDeliveryProvenanceGuard::assertDirectMessageFacadeCaller();
+
         $row = $this->rowByPublicId($this->database->connection(), $publicId, false);
         if ($row === null) {
             throw new DomainException('Telegram administrator direct-media draft is unavailable.');
@@ -311,6 +314,7 @@ final readonly class TelegramAdministratorDirectMediaMessageService
             $reference,
             $requestKey,
             $draft->correlationId,
+            $inlineKeyboard,
         );
         if ($existing !== null) {
             $this->linkDeliveryOperation($publicId, $administratorId, $existing->publicId);
@@ -344,6 +348,7 @@ final readonly class TelegramAdministratorDirectMediaMessageService
                 $reference,
                 $requestKey,
                 $draft->correlationId,
+                $inlineKeyboard,
             );
             if ($existing !== null) {
                 $this->linkDeliveryOperation($publicId, $administratorId, $existing->publicId);
@@ -359,6 +364,7 @@ final readonly class TelegramAdministratorDirectMediaMessageService
             $reference,
             $requestKey,
             $draft->correlationId,
+            $inlineKeyboard,
         );
         $this->linkDeliveryOperation($publicId, $administratorId, $receipt->publicId);
 

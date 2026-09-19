@@ -254,6 +254,57 @@ BEGIN
       AND operation_row.state_version = 1
       AND operation_row.provider_attempts = 0
       AND BINARY outbox_row.event_type = BINARY 'telegram.delivery.requested'
+      AND outbox_row.contract_version IN (2, 3, 5, 6)
+      AND BINARY outbox_row.aggregate_type = BINARY 'telegram_delivery_operation'
+      AND BINARY outbox_row.aggregate_id = BINARY operation_row.public_id
+      AND BINARY outbox_row.correlation_id = BINARY operation_row.correlation_id
+      AND outbox_row.dispatch_state = 'authority_pending'
+      AND outbox_row.processed_at IS NULL;
+
+    IF valid_operation_count <> 1 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Telegram interactive presentation requires one prepared v2/v3/v5/v6 delivery operation.';
+    END IF;
+END
+SQL;
+    }
+
+    /** @return literal-string */
+    public static function legacyV3InsertTriggerBody(): string
+    {
+        return <<<'SQL'
+BEGIN
+    DECLARE capability_fence_rows INT DEFAULT 0;
+    DECLARE valid_operation_count INT DEFAULT 0;
+
+    SELECT COUNT(*) INTO capability_fence_rows
+    FROM telegram_delivery_authority_capability
+    WHERE id = 1
+    LOCK IN SHARE MODE;
+
+    IF capability_fence_rows <> 1
+       OR NOT EXISTS (
+        SELECT 1
+        FROM telegram_delivery_authority_capability capability_row
+        WHERE capability_row.id = 1
+          AND capability_row.schema_version = 1
+          AND capability_row.activated_at IS NOT NULL
+          AND BINARY capability_row.capability_hash = BINARY SHA2(COALESCE(@app_telegram_delivery_capability, ''), 256)
+    )
+       OR COALESCE(@app_telegram_delivery_interactive_authority, '') <> 'telegram_delivery_interactive_queue_v1'
+       OR BINARY NEW.delivery_operation_public_id <> BINARY COALESCE(@app_telegram_delivery_interactive_public_id, '')
+       OR BINARY NEW.keyboard_snapshot_hash <> BINARY COALESCE(@app_telegram_delivery_interactive_snapshot_hash, '')
+       OR BINARY NEW.keyboard_snapshot_hash <> BINARY LOWER(SHA2(NEW.keyboard_snapshot, 256)) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Telegram interactive presentation creation authority is invalid.';
+    END IF;
+
+    SELECT COUNT(*) INTO valid_operation_count
+    FROM telegram_delivery_operations operation_row
+    INNER JOIN outbox_messages outbox_row ON outbox_row.id = operation_row.outbox_event_id
+    WHERE BINARY operation_row.public_id = BINARY NEW.delivery_operation_public_id
+      AND operation_row.state = 'prepared'
+      AND operation_row.state_version = 1
+      AND operation_row.provider_attempts = 0
+      AND BINARY outbox_row.event_type = BINARY 'telegram.delivery.requested'
       AND outbox_row.contract_version IN (2, 3)
       AND BINARY outbox_row.aggregate_type = BINARY 'telegram_delivery_operation'
       AND BINARY outbox_row.aggregate_id = BINARY operation_row.public_id

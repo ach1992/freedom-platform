@@ -54,29 +54,41 @@ return [
                 'username_unavailable' => 'Not available',
                 'preview_after_message' => "Customer Target Preview\n\nTelegram ID: :telegram_id\nAccount ID: :account_id\nUsername: :username\nType: :account_type\nStatus: :account_status\n\nThe confirmed direct message has been queued once. Its Telegram result and message ID remain linked to the delivery record.",
                 'message_button' => 'Send direct message',
-                'message_prompt' => 'Direct Message
-
-Telegram ID: :telegram_id
-Account ID: :account_id
-Username: :username
-
-Send text, a photo, a video, or a document. Text may contain up to 3500 characters. A photo may include a plain caption up to 1024 characters. Nothing is sent until the final confirmation step.',
+                'message_prompt' => "Direct Message\n\nTelegram ID: :telegram_id\nAccount ID: :account_id\nUsername: :username\n\nSend text, a photo, a video, or a document, or choose Forward/Copy below and then send the source message to this private bot chat. Text may contain up to 3500 characters. A photo may include a plain caption up to 1024 characters. Safe Telegram contact buttons can be added before final confirmation. Nothing is sent to the customer until the final confirmation step.",
                 'message_invalid' => 'Send text up to 3500 characters, or one supported photo, video, or document. Only a photo may include a plain caption up to 1024 characters.',
-                'message_confirmation' => 'Final Direct Message Confirmation
-
-Telegram ID: :telegram_id
-Account ID: :account_id
-Username: :username
-
-Message to send:',
+                'message_confirmation' => "Final Direct Message Confirmation\n\nTelegram ID: :telegram_id\nAccount ID: :account_id\nUsername: :username\n\nMessage to send:",
+                'message_mode_summary' => 'Mode: :mode',
+                'message_forward_button' => 'Forward a message',
+                'message_copy_button' => 'Copy a message',
+                'message_source_prompt' => "Direct Message — :mode\n\nTelegram ID: :telegram_id\nAccount ID: :account_id\nUsername: :username\n\nNow send the source message to this private bot chat. Only its bound Telegram chat/message identity is retained for delivery; source content is not copied into generic session or Outbox state.",
+                'message_source_invalid' => 'Send one Telegram message from this private administrator chat, or use Back.',
+                'message_source_confirmation' => "Mode: :mode\nSource message ID in the administrator private bot chat: :message_id",
+                'message_mode_text' => 'Text',
+                'message_mode_photo' => 'Photo',
+                'message_mode_video' => 'Video',
+                'message_mode_document' => 'Document',
+                'message_mode_forward' => 'Forward',
+                'message_mode_copy' => 'Copy',
                 'message_media_confirmation' => "Type: :type\nMIME: :mime\nSize: :size bytes\nCaption: :caption",
                 'message_media_type_photo' => 'Photo',
                 'message_media_type_video' => 'Video',
                 'message_media_type_document' => 'Document',
                 'message_media_caption_none' => 'None',
+                'message_buttons_add_button' => 'Add safe buttons',
+                'message_buttons_edit_button' => 'Edit safe buttons',
+                'message_buttons_clear_button' => 'Remove buttons',
+                'message_buttons_prompt' => "Safe Direct-Message Buttons\n\nTelegram ID: :telegram_id\nCurrent buttons: :count\n\nSend 1-8 lines in this exact format:\nLabel | https://t.me/username\n\nOnly approved Telegram contact URLs are accepted. Callbacks, arbitrary URLs, styles, and payment actions are not available here.",
+                'message_buttons_invalid' => 'The button list is invalid. Use 1-8 lines as: Label | https://t.me/username.',
+                'message_buttons_summary' => "Safe buttons (:count):\n:buttons",
+                'message_text_preview_truncated' => '[Long text preview truncated here; the durable draft remains unchanged.]',
                 'message_confirm_button' => 'Confirm and queue',
                 'message_queued' => 'The direct message was queued once. Its Telegram result and message ID remain linked to the delivery record.',
                 'message_unavailable' => 'The draft expired or the selected target changed. Review the current target and compose a new message.',
+                'message-permission-unavailable' => 'Direct-message permission is not currently available.',
+                'message-authorization-lost' => 'Direct-message authorization changed. Review the target again.',
+                'message-media-authorization-lost' => 'Direct-media authorization changed. Review the target again.',
+                'message-source-authorization-lost' => 'Direct source-message authorization changed. Review the target again.',
+                'message-buttons-authorization-lost' => 'Direct-message button authorization changed. Review the target again.',
             ],
             'usdt_rate' => [
                 'view' => "Manual USDT Rate\n\nCurrent rate: :rate IRR per USDT\nSource: :source\nManaged version: :version\n\nThe same rate is used for direct USDT and, under the current Owner policy, as the USD pricing proxy for NOWPayments.",

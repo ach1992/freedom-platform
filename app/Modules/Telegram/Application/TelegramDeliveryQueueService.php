@@ -36,6 +36,8 @@ final readonly class TelegramDeliveryQueueService
 
     public const OUTBOX_CONTRACT_VERSION_PRIVATE_MEDIA_REFERENCE = 5;
 
+    public const OUTBOX_CONTRACT_VERSION_SOURCE_MESSAGE_REFERENCE = 6;
+
     public const OUTBOX_AGGREGATE_TYPE = 'telegram_delivery_operation';
 
     public const OUTBOX_EVENT_KEY_PREFIX = 'telegram-delivery-requested:';
@@ -109,6 +111,7 @@ final readonly class TelegramDeliveryQueueService
         TelegramPrivateMediaPresentationReference $reference,
         string $requestKey,
         string $correlationId,
+        ?TelegramInlineKeyboardSnapshot $inlineKeyboard = null,
     ): TelegramDeliveryOperationReceipt {
         TelegramPrivateMediaDeliveryProvenanceGuard::assertQueueSource();
         if ($action !== TelegramDeliveryAction::Send) {
@@ -121,7 +124,7 @@ final readonly class TelegramDeliveryQueueService
             null,
             $requestKey,
             $correlationId,
-            null,
+            $inlineKeyboard,
             self::OUTBOX_CONTRACT_VERSION_PRIVATE_MEDIA_REFERENCE,
         );
     }
@@ -133,6 +136,7 @@ final readonly class TelegramDeliveryQueueService
         TelegramPrivateMediaPresentationReference $reference,
         string $requestKey,
         string $correlationId,
+        ?TelegramInlineKeyboardSnapshot $inlineKeyboard = null,
     ): ?TelegramDeliveryOperationReceipt {
         TelegramPrivateMediaDeliveryProvenanceGuard::assertQueueSource();
         if ($action !== TelegramDeliveryAction::Send) {
@@ -148,6 +152,62 @@ final readonly class TelegramDeliveryQueueService
             $request,
             $botId,
             $correlationId,
+            $inlineKeyboard?->hash(),
+        );
+        $existing = $this->operationByRequestHash($this->database->connection(), $requestKeyHash, false);
+
+        return $existing === null ? null : $this->replayReceipt($existing, $fingerprintCandidates);
+    }
+
+    /** @requirement COM-001 ARCH-003 ARCH-004 DAT-003 SEC-002 SEC-003 SEC-008 OPS-003 QUA-001 QUA-004 QUA-007 */
+    public function queueSourceMessageReference(
+        TelegramDeliveryAction $action,
+        int $recipientChatId,
+        TelegramSourceMessagePresentationReference $reference,
+        string $requestKey,
+        string $correlationId,
+        ?TelegramInlineKeyboardSnapshot $inlineKeyboard = null,
+    ): TelegramDeliveryOperationReceipt {
+        TelegramSourceMessageDeliveryProvenanceGuard::assertQueueSource();
+        if ($action !== TelegramDeliveryAction::Send) {
+            throw new DomainException('Source-message-reference Telegram delivery supports send mutations only.');
+        }
+
+        return $this->queueRequest(
+            new TelegramMutationRequest($action, $recipientChatId, null, $reference),
+            $reference->durableText(),
+            null,
+            $requestKey,
+            $correlationId,
+            $inlineKeyboard,
+            self::OUTBOX_CONTRACT_VERSION_SOURCE_MESSAGE_REFERENCE,
+        );
+    }
+
+    /** @requirement COM-001 ARCH-003 ARCH-004 DAT-003 SEC-002 SEC-003 SEC-008 OPS-003 QUA-001 QUA-004 QUA-007 */
+    public function findExistingSourceMessageReference(
+        TelegramDeliveryAction $action,
+        int $recipientChatId,
+        TelegramSourceMessagePresentationReference $reference,
+        string $requestKey,
+        string $correlationId,
+        ?TelegramInlineKeyboardSnapshot $inlineKeyboard = null,
+    ): ?TelegramDeliveryOperationReceipt {
+        TelegramSourceMessageDeliveryProvenanceGuard::assertQueueSource();
+        if ($action !== TelegramDeliveryAction::Send) {
+            throw new DomainException('Source-message-reference Telegram delivery supports send mutations only.');
+        }
+
+        $request = new TelegramMutationRequest($action, $recipientChatId, null, $reference);
+        $requestKeyHash = $this->requestKeyHash($requestKey);
+        $this->assertToken($correlationId, 'Telegram delivery correlation ID', 8, 64);
+        $botId = $this->runtime->botId();
+        $this->assertBotId($botId);
+        $fingerprintCandidates = TelegramDeliveryRequestFingerprint::candidates(
+            $request,
+            $botId,
+            $correlationId,
+            $inlineKeyboard?->hash(),
         );
         $existing = $this->operationByRequestHash($this->database->connection(), $requestKeyHash, false);
 
@@ -242,15 +302,22 @@ final readonly class TelegramDeliveryQueueService
         } elseif ($contractVersion === self::OUTBOX_CONTRACT_VERSION_PRIVATE_MEDIA_REFERENCE) {
             if (! $request->presentation instanceof TelegramPrivateMediaPresentationReference
                 || $confidentialPresentation !== null
-                || $inlineKeyboard !== null
                 || $durablePresentationText !== $request->presentation->durableText()
             ) {
                 throw new RuntimeException('Telegram private-media-reference queue contract is internally inconsistent.');
+            }
+        } elseif ($contractVersion === self::OUTBOX_CONTRACT_VERSION_SOURCE_MESSAGE_REFERENCE) {
+            if (! $request->presentation instanceof TelegramSourceMessagePresentationReference
+                || $confidentialPresentation !== null
+                || $durablePresentationText !== $request->presentation->durableText()
+            ) {
+                throw new RuntimeException('Telegram source-message-reference queue contract is internally inconsistent.');
             }
         } elseif ($confidentialPresentation !== null
             || $request->presentation instanceof ConfidentialTelegramPresentation
             || $request->presentation instanceof TelegramProtectedPresentationReference
             || $request->presentation instanceof TelegramPrivateMediaPresentationReference
+            || $request->presentation instanceof TelegramSourceMessagePresentationReference
             || $durablePresentationText !== ($request->presentation instanceof NonRestrictedTelegramPresentation
                 ? $request->presentation->text()
                 : null)

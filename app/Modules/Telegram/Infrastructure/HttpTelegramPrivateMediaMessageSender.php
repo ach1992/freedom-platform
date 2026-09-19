@@ -7,6 +7,7 @@ namespace App\Modules\Telegram\Infrastructure;
 use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaMessageSender;
 use App\Modules\Telegram\Application\TelegramMutationOutcome;
 use App\Modules\Telegram\Application\TelegramMutationResult;
+use App\Modules\Telegram\Application\TelegramResolvedInlineKeyboardMarkup;
 use App\Modules\Telegram\Application\TelegramResolvedPrivateMediaPresentation;
 use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Client\Response;
@@ -24,13 +25,14 @@ final readonly class HttpTelegramPrivateMediaMessageSender implements TelegramPr
     public function send(
         int $recipientChatId,
         TelegramResolvedPrivateMediaPresentation $presentation,
+        ?TelegramResolvedInlineKeyboardMarkup $inlineKeyboard = null,
     ): TelegramMutationResult {
         if ($recipientChatId < 1) {
             throw new InvalidArgumentException('Private Telegram media recipient identity is invalid.');
         }
 
         try {
-            $response = $this->request($recipientChatId, $presentation);
+            $response = $this->request($recipientChatId, $presentation, $inlineKeyboard);
         } catch (Throwable) {
             return $this->uncertain('telegram_transport_uncertain');
         }
@@ -41,6 +43,7 @@ final readonly class HttpTelegramPrivateMediaMessageSender implements TelegramPr
     private function request(
         int $recipientChatId,
         TelegramResolvedPrivateMediaPresentation $presentation,
+        ?TelegramResolvedInlineKeyboardMarkup $inlineKeyboard,
     ): Response {
         $bytes = $presentation->revealBytesForProvider();
         $contentType = $presentation->contentType();
@@ -60,6 +63,12 @@ final readonly class HttpTelegramPrivateMediaMessageSender implements TelegramPr
         if ($contentType === 'document') {
             // Multipart scalar parts are strings; use the Bot API's explicit boolean literal.
             $payload['disable_content_type_detection'] = 'true';
+        }
+        if ($inlineKeyboard !== null) {
+            $payload['reply_markup'] = json_encode(
+                $inlineKeyboard->providerPayload(),
+                JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES,
+            );
         }
 
         return $this->http

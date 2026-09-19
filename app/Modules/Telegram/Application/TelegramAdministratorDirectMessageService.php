@@ -35,6 +35,8 @@ use Throwable;
  *     content_ciphertext:string,
  *     content_integrity_hash:string,
  *     content_length:int|string,
+ *     inline_keyboard_ciphertext:string|null,
+ *     inline_keyboard_hash:string|null,
  *     correlation_id:string,
  *     delivery_operation_public_id:string|null,
  *     expires_at:string,
@@ -62,6 +64,7 @@ final readonly class TelegramAdministratorDirectMessageService
         private ConfidentialTelegramPresentationFactory $presentations,
         private TelegramConfidentialDeliveryQueue $delivery,
         private TelegramAdministratorDirectMediaMessageService $mediaMessages,
+        private TelegramAdministratorDirectSourceMessageService $sourceMessages,
     ) {}
 
     public function availableFor(int $actorUserId): bool
@@ -193,6 +196,27 @@ final readonly class TelegramAdministratorDirectMessageService
         );
     }
 
+    /** @requirement COM-001 ACL-001 ACL-002 SEC-002 SEC-003 DAT-002 DAT-003 QUA-001 QUA-004 */
+    public function createSourceMessageDraft(
+        int $actorUserId,
+        string $botId,
+        string $selectionToken,
+        TelegramSourceMessageMode $mode,
+        int $sourceChatId,
+        int $sourceMessageId,
+        string $requestKey,
+    ): TelegramAdministratorDirectMessageDraft {
+        return $this->sourceMessages->createDraft(
+            $actorUserId,
+            $botId,
+            $selectionToken,
+            $mode,
+            $sourceChatId,
+            $sourceMessageId,
+            $requestKey,
+        );
+    }
+
     /** @requirement COM-001 ACL-002 SEC-002 SEC-003 DAT-002 DAT-003 */
     public function draftForConfirmation(
         int $actorUserId,
@@ -206,8 +230,19 @@ final readonly class TelegramAdministratorDirectMessageService
         if ($row === null) {
             throw new DomainException('Telegram administrator direct-message draft is unavailable.');
         }
-        if ((string) $row->content_type !== self::CONTENT_TYPE_TEXT) {
-            return $this->mediaMessages->draftForConfirmation(
+
+        $contentType = (string) $row->content_type;
+        if ($contentType === self::CONTENT_TYPE_TEXT) {
+            $draft = $this->draftFromRow($row, $administratorId, $botId, $target, null, false);
+        } elseif (TelegramSourceMessageMode::tryFrom($contentType) !== null) {
+            $draft = $this->sourceMessages->draftForConfirmation(
+                $actorUserId,
+                $botId,
+                $selectionToken,
+                $publicId,
+            );
+        } else {
+            $draft = $this->mediaMessages->draftForConfirmation(
                 $actorUserId,
                 $botId,
                 $selectionToken,
@@ -215,7 +250,7 @@ final readonly class TelegramAdministratorDirectMessageService
             );
         }
 
-        return $this->draftFromRow($row, $administratorId, $botId, $target, null, false);
+        return $this->withInlineKeyboard($draft, $this->inlineKeyboardFromRow($row));
     }
 
     /** @requirement COM-001 ACL-001 ACL-002 SEC-002 SEC-003 DAT-002 DAT-003 QUA-001 QUA-004 */
@@ -230,8 +265,19 @@ final readonly class TelegramAdministratorDirectMessageService
         if ($row === null) {
             throw new DomainException('Telegram administrator direct-message draft is unavailable.');
         }
-        if ((string) $row->content_type !== self::CONTENT_TYPE_TEXT) {
-            return $this->mediaMessages->acceptConfirmation(
+
+        $contentType = (string) $row->content_type;
+        if ($contentType === self::CONTENT_TYPE_TEXT) {
+            $draft = $this->acceptTextConfirmation($actorUserId, $botId, $selectionToken, $publicId);
+        } elseif (TelegramSourceMessageMode::tryFrom($contentType) !== null) {
+            $draft = $this->sourceMessages->acceptConfirmation(
+                $actorUserId,
+                $botId,
+                $selectionToken,
+                $publicId,
+            );
+        } else {
+            $draft = $this->mediaMessages->acceptConfirmation(
                 $actorUserId,
                 $botId,
                 $selectionToken,
@@ -239,7 +285,12 @@ final readonly class TelegramAdministratorDirectMessageService
             );
         }
 
-        return $this->acceptTextConfirmation($actorUserId, $botId, $selectionToken, $publicId);
+        $current = $this->rowByPublicId($this->database->connection(), $publicId, false);
+        if ($current === null) {
+            throw new RuntimeException('Telegram administrator direct-message confirmation disappeared.');
+        }
+
+        return $this->withInlineKeyboard($draft, $this->inlineKeyboardFromRow($current));
     }
 
     /** @requirement COM-001 ACL-001 ACL-002 SEC-002 SEC-003 DAT-002 DAT-003 QUA-001 QUA-004 */
@@ -301,8 +352,26 @@ final readonly class TelegramAdministratorDirectMessageService
         if ($row === null) {
             throw new DomainException('Telegram administrator direct-message draft is unavailable.');
         }
-        if ((string) $row->content_type !== self::CONTENT_TYPE_TEXT) {
-            return $this->mediaMessages->confirm($actorUserId, $botId, $selectionToken, $publicId);
+
+        $inlineKeyboard = $this->inlineKeyboardFromRow($row);
+        $contentType = (string) $row->content_type;
+        if (TelegramSourceMessageMode::tryFrom($contentType) !== null) {
+            return $this->sourceMessages->confirm(
+                $actorUserId,
+                $botId,
+                $selectionToken,
+                $publicId,
+                $inlineKeyboard,
+            );
+        }
+        if ($contentType !== self::CONTENT_TYPE_TEXT) {
+            return $this->mediaMessages->confirm(
+                $actorUserId,
+                $botId,
+                $selectionToken,
+                $publicId,
+                $inlineKeyboard,
+            );
         }
 
         return $this->confirmText($actorUserId, $botId, $selectionToken, $publicId);
@@ -325,6 +394,7 @@ final readonly class TelegramAdministratorDirectMessageService
 
         $administratorId = $this->assertStoredActor($row, $actorUserId);
         $draft = $this->draftFromStoredRow($row, $administratorId, $botId, null, false);
+        $inlineKeyboard = $this->inlineKeyboardFromRow($row);
         $recipientChatId = $this->recipientChatId($draft->targetTelegramUserId);
         $presentation = $this->presentationForText($draft->text);
         $requestKey = 'tg-admin-direct-message-send:'.$publicId;
@@ -334,6 +404,7 @@ final readonly class TelegramAdministratorDirectMessageService
             $presentation,
             $requestKey,
             $draft->correlationId,
+            $inlineKeyboard,
         );
         if ($existing !== null) {
             $this->linkDeliveryOperation($publicId, $administratorId, $existing->publicId);
@@ -362,6 +433,7 @@ final readonly class TelegramAdministratorDirectMessageService
                 $presentation,
                 $requestKey,
                 $draft->correlationId,
+                $inlineKeyboard,
             );
             if ($existing !== null) {
                 $this->linkDeliveryOperation($publicId, $administratorId, $existing->publicId);
@@ -377,6 +449,7 @@ final readonly class TelegramAdministratorDirectMessageService
             $presentation,
             $requestKey,
             $draft->correlationId,
+            $inlineKeyboard,
         );
 
         $this->linkDeliveryOperation($publicId, $administratorId, $receipt->publicId);
@@ -392,6 +465,116 @@ final readonly class TelegramAdministratorDirectMessageService
         TelegramPrivateMediaDeliveryProvenanceGuard::assertExecutorCaller();
 
         return $this->mediaMessages->mediaPresentationForDelivery($publicId, $recipientChatId);
+    }
+
+    /** @requirement COM-001 ACL-001 ACL-002 SEC-002 SEC-003 DAT-002 DAT-003 QUA-001 QUA-004 */
+    public function setInlineKeyboard(
+        int $actorUserId,
+        string $botId,
+        string $selectionToken,
+        string $publicId,
+        TelegramInlineKeyboardSnapshot $inlineKeyboard,
+    ): TelegramAdministratorDirectMessageDraft {
+        $this->assertAdministratorInlineKeyboard($inlineKeyboard);
+        $administratorId = $this->administrators->authorizeUser($actorUserId, self::PERMISSION);
+        $target = $this->targets->resolve($actorUserId, $botId, $selectionToken);
+        $connection = $this->database->connection();
+
+        $connection->transaction(function (Connection $connection) use (
+            $administratorId,
+            $botId,
+            $target,
+            $publicId,
+            $inlineKeyboard,
+        ): void {
+            $row = $this->rowByPublicId($connection, $publicId, true);
+            if ($row === null) {
+                throw new DomainException('Telegram administrator direct-message draft is unavailable.');
+            }
+            $this->assertKeyboardDraftEditable($row, $administratorId, $botId, $target, true);
+
+            $existing = $this->inlineKeyboardFromRow($row);
+            if ($existing !== null && hash_equals($existing->hash(), $inlineKeyboard->hash())) {
+                return;
+            }
+
+            $json = $inlineKeyboard->json();
+            $timestamp = $this->formatTime($this->clock->now());
+            $updated = $connection->table('telegram_administrator_direct_messages')
+                ->where('id', (int) $row->id)
+                ->whereNull('confirmed_at')
+                ->whereNull('delivery_operation_public_id')
+                ->update([
+                    'inline_keyboard_ciphertext' => $this->encryptKeyboard($json),
+                    'inline_keyboard_hash' => $this->keyboardIntegrityHash($publicId, $json),
+                    'updated_at' => $timestamp,
+                ]);
+            if ($updated !== 1) {
+                throw new RuntimeException(
+                    'Telegram administrator direct-message keyboard was not persisted.',
+                );
+            }
+        }, 3);
+
+        return $this->draftForConfirmation($actorUserId, $botId, $selectionToken, $publicId);
+    }
+
+    /** @requirement COM-001 ACL-001 ACL-002 SEC-002 SEC-003 DAT-002 DAT-003 QUA-001 QUA-004 */
+    public function clearInlineKeyboard(
+        int $actorUserId,
+        string $botId,
+        string $selectionToken,
+        string $publicId,
+    ): TelegramAdministratorDirectMessageDraft {
+        $administratorId = $this->administrators->authorizeUser($actorUserId, self::PERMISSION);
+        $target = $this->targets->resolve($actorUserId, $botId, $selectionToken);
+        $connection = $this->database->connection();
+
+        $connection->transaction(function (Connection $connection) use (
+            $administratorId,
+            $botId,
+            $target,
+            $publicId,
+        ): void {
+            $row = $this->rowByPublicId($connection, $publicId, true);
+            if ($row === null) {
+                throw new DomainException('Telegram administrator direct-message draft is unavailable.');
+            }
+            $this->assertKeyboardDraftEditable($row, $administratorId, $botId, $target, false);
+
+            $existing = $this->inlineKeyboardFromRow($row);
+            if ($existing === null) {
+                return;
+            }
+
+            $timestamp = $this->formatTime($this->clock->now());
+            $updated = $connection->table('telegram_administrator_direct_messages')
+                ->where('id', (int) $row->id)
+                ->whereNull('confirmed_at')
+                ->whereNull('delivery_operation_public_id')
+                ->update([
+                    'inline_keyboard_ciphertext' => null,
+                    'inline_keyboard_hash' => null,
+                    'updated_at' => $timestamp,
+                ]);
+            if ($updated !== 1) {
+                throw new RuntimeException(
+                    'Telegram administrator direct-message keyboard removal was not persisted.',
+                );
+            }
+        }, 3);
+
+        return $this->draftForConfirmation($actorUserId, $botId, $selectionToken, $publicId);
+    }
+
+    /** @requirement COM-001 SEC-002 SEC-003 DAT-002 DAT-003 OPS-003 */
+    public function sourceMessagePresentationForDelivery(
+        string $publicId,
+        int $recipientChatId,
+    ): TelegramResolvedSourceMessagePresentation {
+        TelegramSourceMessageDeliveryProvenanceGuard::assertExecutorCaller();
+
+        return $this->sourceMessages->presentationForDelivery($publicId, $recipientChatId);
     }
 
     /** @requirement COM-001 ACL-002 SEC-002 DAT-003 OPS-003 */
@@ -436,6 +619,204 @@ final readonly class TelegramAdministratorDirectMessageService
             $messageId === null ? null : (int) $messageId,
             $resultCode,
             (string) $operation->correlation_id,
+        );
+    }
+
+    private function assertAdministratorInlineKeyboard(TelegramInlineKeyboardSnapshot $inlineKeyboard): void
+    {
+        $rows = $inlineKeyboard->rows();
+        if (count($rows) > 8) {
+            throw new DomainException(
+                'Telegram administrator direct-message keyboard exceeds the supported button limit.',
+            );
+        }
+
+        foreach ($rows as $row) {
+            if (count($row) !== 1) {
+                throw new DomainException(
+                    'Telegram administrator direct-message keyboard supports one safe URL button per row.',
+                );
+            }
+
+            $button = $row[0];
+            if (! $button instanceof TelegramInlineHttpsUrlButton
+                || $button->purpose !== TelegramInlineHttpsUrlPurpose::SupportContact
+                || $button->style !== null
+                || preg_match('/[\x00-\x1F\x7F]/u', $button->text) === 1) {
+                throw new DomainException(
+                    'Telegram administrator direct-message keyboard contains an unsupported action.',
+                );
+            }
+        }
+    }
+
+    /** @param DirectMessageRow $row */
+    private function assertKeyboardDraftEditable(
+        object $row,
+        int $administratorId,
+        string $botId,
+        TelegramAdministratorCustomerTarget $target,
+        bool $adding,
+    ): void {
+        if ((int) $row->actor_administrator_id !== $administratorId
+            || ! hash_equals((string) $row->bot_id, $botId)
+            || ! hash_equals((string) $row->target_account_public_id, $target->accountPublicId)
+            || ! hash_equals((string) $row->target_telegram_user_id, $target->telegramUserId)
+            || $row->confirmed_at !== null
+            || $row->delivery_operation_public_id !== null
+            || $this->parseTime((string) $row->expires_at) <= $this->clock->now()) {
+            throw new DomainException(
+                'Telegram administrator direct-message keyboard draft is no longer editable.',
+            );
+        }
+
+        if ($adding && (string) $row->content_type === TelegramSourceMessageMode::Forward->value) {
+            throw new DomainException('Telegram forward direct messages do not support authored buttons.');
+        }
+    }
+
+    /** @param DirectMessageRow $row */
+    private function inlineKeyboardFromRow(object $row): ?TelegramInlineKeyboardSnapshot
+    {
+        $ciphertext = $row->inline_keyboard_ciphertext;
+        $storedHash = $row->inline_keyboard_hash;
+        if ($ciphertext === null && $storedHash === null) {
+            return null;
+        }
+        if (! is_string($ciphertext) || ! is_string($storedHash)) {
+            throw new DomainException(
+                'Telegram administrator direct-message keyboard integrity validation failed.',
+            );
+        }
+
+        $json = $this->decryptKeyboard($ciphertext);
+        if (! $this->keyboardIntegrityHashMatches($storedHash, (string) $row->public_id, $json)) {
+            throw new DomainException(
+                'Telegram administrator direct-message keyboard integrity validation failed.',
+            );
+        }
+
+        try {
+            $inlineKeyboard = TelegramInlineKeyboardSnapshot::restore($json);
+        } catch (InvalidArgumentException) {
+            throw new DomainException(
+                'Telegram administrator direct-message keyboard integrity validation failed.',
+            );
+        }
+
+        $this->assertAdministratorInlineKeyboard($inlineKeyboard);
+        if ((string) $row->content_type === TelegramSourceMessageMode::Forward->value) {
+            throw new DomainException(
+                'Telegram forward direct-message record cannot carry authored buttons.',
+            );
+        }
+
+        return $inlineKeyboard;
+    }
+
+    private function withInlineKeyboard(
+        TelegramAdministratorDirectMessageDraft $draft,
+        ?TelegramInlineKeyboardSnapshot $inlineKeyboard,
+    ): TelegramAdministratorDirectMessageDraft {
+        return new TelegramAdministratorDirectMessageDraft(
+            $draft->publicId,
+            $draft->targetAccountPublicId,
+            $draft->targetTelegramUserId,
+            $draft->text,
+            $draft->correlationId,
+            $draft->replayed,
+            $draft->contentType,
+            $draft->mediaPublicId,
+            $draft->mediaDetectedMime,
+            $draft->mediaByteSize,
+            $draft->mediaContentSha256,
+            $draft->sourceChatId,
+            $draft->sourceMessageId,
+            $inlineKeyboard,
+        );
+    }
+
+    private function encryptKeyboard(string $json): string
+    {
+        if ($json === '' || strlen($json) > 16_384) {
+            throw new DomainException('Telegram administrator direct-message keyboard snapshot is invalid.');
+        }
+
+        try {
+            $ciphertext = $this->encrypter->encryptString($json);
+        } catch (Throwable) {
+            throw new RuntimeException(
+                'Telegram administrator direct-message keyboard could not be encrypted.',
+            );
+        }
+
+        if ($ciphertext === '' || strlen($ciphertext) > 65_536 || hash_equals($ciphertext, $json)) {
+            throw new RuntimeException(
+                'Telegram administrator direct-message keyboard ciphertext is invalid.',
+            );
+        }
+
+        return $ciphertext;
+    }
+
+    private function decryptKeyboard(string $ciphertext): string
+    {
+        try {
+            $json = $this->encrypter->decryptString($ciphertext);
+        } catch (Throwable) {
+            throw new DomainException(
+                'Telegram administrator direct-message keyboard integrity validation failed.',
+            );
+        }
+
+        if ($json === '' || strlen($json) > 16_384 || str_contains($json, "\0")) {
+            throw new DomainException(
+                'Telegram administrator direct-message keyboard integrity validation failed.',
+            );
+        }
+
+        return $json;
+    }
+
+    private function keyboardIntegrityHash(string $publicId, string $json): string
+    {
+        return $this->keyboardIntegrityHashWithKey($publicId, $json, $this->integrityKeys()[0]);
+    }
+
+    private function keyboardIntegrityHashMatches(
+        string $storedHash,
+        string $publicId,
+        string $json,
+    ): bool {
+        if (preg_match('/\A[0-9a-f]{64}\z/', $storedHash) !== 1) {
+            return false;
+        }
+
+        foreach ($this->integrityKeys() as $key) {
+            if (hash_equals(
+                $storedHash,
+                $this->keyboardIntegrityHashWithKey($publicId, $json, $key),
+            )) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function keyboardIntegrityHashWithKey(
+        string $publicId,
+        string $json,
+        #[SensitiveParameter] string $key,
+    ): string {
+        return hash_hmac(
+            'sha256',
+            implode("\0", [
+                'telegram-admin-direct-message-keyboard-v1',
+                $publicId,
+                $json,
+            ]),
+            $key,
         );
     }
 
@@ -830,8 +1211,9 @@ final readonly class TelegramAdministratorDirectMessageService
         return [
             'id', 'public_id', 'create_request_hash', 'actor_administrator_id', 'bot_id',
             'target_account_public_id', 'target_telegram_user_id', 'content_type', 'content_ciphertext',
-            'content_integrity_hash', 'content_length', 'correlation_id', 'delivery_operation_public_id',
-            'expires_at', 'confirmed_at', 'queued_at', 'created_at', 'updated_at',
+            'content_integrity_hash', 'content_length', 'inline_keyboard_ciphertext', 'inline_keyboard_hash',
+            'correlation_id', 'delivery_operation_public_id', 'expires_at', 'confirmed_at', 'queued_at',
+            'created_at', 'updated_at',
         ];
     }
 

@@ -470,7 +470,7 @@ final class TelegramConfidentialDeliveryAuthorityTest extends TestCase
         }
         sort($versions, SORT_NUMERIC);
 
-        self::assertSame([1, 2, 3, 4, 5], $versions);
+        self::assertSame([1, 2, 3, 4, 5, 6], $versions);
     }
 
     public function test_confidential_plaintext_is_absent_from_common_durable_and_debug_surfaces(): void

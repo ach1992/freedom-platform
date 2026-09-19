@@ -6,17 +6,13 @@ namespace App\Modules\Telegram\Application\Contracts;
 
 use App\Modules\Telegram\Application\TelegramMutationResult;
 use App\Modules\Telegram\Application\TelegramResolvedInlineKeyboardMarkup;
-use App\Modules\Telegram\Application\TelegramResolvedPrivateMediaPresentation;
+use App\Modules\Telegram\Application\TelegramResolvedSourceMessagePresentation;
 
-interface TelegramPrivateMediaMessageSender
+interface TelegramSourceMessageSender
 {
-    /**
-     * Perform exactly one Telegram media send attempt. Implementations must not
-     * hide transport retries because timeout-after-send is externally ambiguous.
-     */
     public function send(
         int $recipientChatId,
-        TelegramResolvedPrivateMediaPresentation $presentation,
+        TelegramResolvedSourceMessagePresentation $source,
         ?TelegramResolvedInlineKeyboardMarkup $inlineKeyboard = null,
     ): TelegramMutationResult;
 }

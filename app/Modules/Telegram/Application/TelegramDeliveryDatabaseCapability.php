@@ -82,6 +82,8 @@ final readonly class TelegramDeliveryDatabaseCapability
             TelegramConfidentialPresentationProvenanceGuard::assertQueueSource($connection);
         } elseif ($request->presentation instanceof TelegramPrivateMediaPresentationReference) {
             TelegramPrivateMediaDeliveryProvenanceGuard::assertQueueSource();
+        } elseif ($request->presentation instanceof TelegramSourceMessagePresentationReference) {
+            TelegramSourceMessageDeliveryProvenanceGuard::assertQueueSource();
         } else {
             TelegramPresentationProvenanceGuard::assertQueueSource($connection);
         }
