@@ -7,8 +7,10 @@ namespace Tests\Feature;
 use App\Modules\Telegram\Application\TelegramBroadcastAudienceDefinition;
 use App\Modules\Telegram\Application\TelegramBroadcastCampaignReceipt;
 use App\Modules\Telegram\Application\TelegramBroadcastCampaignService;
+use App\Modules\Telegram\Application\TelegramBroadcastLifecycleRunner;
 use App\Modules\Telegram\Application\TelegramBroadcastLifecycleService;
 use App\Modules\Telegram\Application\TelegramBroadcastMessageDefinition;
+use App\Modules\Telegram\Application\TelegramBroadcastOwnerTestService;
 use App\Modules\Telegram\Application\TelegramBroadcastRetryService;
 use App\Modules\Telegram\Domain\TelegramBroadcastCampaignState;
 use App\Modules\Telegram\Domain\TelegramBroadcastLifecycleAction;
@@ -247,6 +249,140 @@ final class TelegramBroadcastAuthorityTest extends TestCase
             DB::table('broadcast_campaigns')
                 ->where('public_id', $campaign->publicId)
                 ->value('state'),
+        );
+    }
+
+    public function test_fresh_owner_source_boundary_is_not_misclassified_but_stale_boundary_is_uncertain(): void
+    {
+        $actor = $this->owner(910071);
+        $service = $this->app->make(TelegramBroadcastCampaignService::class);
+        $campaign = $service->createDraft(
+            $actor['user_id'],
+            TelegramBroadcastMessageDefinition::copy(
+                $actor['telegram_user_id'],
+                71,
+                TelegramBroadcastSourceKind::Photo,
+            ),
+            new TelegramBroadcastAudienceDefinition,
+            'broadcast-owner-test-boundary',
+        );
+        $campaignId = $this->campaignId($campaign->publicId);
+        $messageVersionId = DB::table('broadcast_message_versions')
+            ->where('broadcast_campaign_id', $campaignId)
+            ->where('version', 1)
+            ->value('id');
+        self::assertIsNumeric($messageVersionId);
+        $now = now('UTC');
+
+        DB::table('broadcast_campaign_tests')->insert([
+            'public_id' => (string) Str::ulid(),
+            'broadcast_campaign_id' => $campaignId,
+            'broadcast_message_version_id' => (int) $messageVersionId,
+            'owner_administrator_id' => $actor['administrator_id'],
+            'telegram_account_id' => $actor['telegram_account_id'],
+            'request_key_hash' => hash('sha256', 'fresh-owner-boundary'),
+            'state' => 'sending',
+            'delivery_operation_public_id' => null,
+            'telegram_message_id' => null,
+            'result_code' => null,
+            'provider_boundary_started_at' => $now,
+            'provider_boundary_finished_at' => null,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        $ownerTests = $this->app->make(TelegramBroadcastOwnerTestService::class);
+        $fresh = $ownerTests->reconcileCurrent($actor['user_id'], $campaign->publicId);
+        self::assertNotNull($fresh);
+        self::assertSame('sending', $fresh->state);
+
+        DB::table('broadcast_campaign_tests')
+            ->where('public_id', $fresh->publicId)
+            ->update([
+                'provider_boundary_started_at' => now('UTC')->subMinutes(10),
+                'updated_at' => now('UTC'),
+            ]);
+
+        $stale = $ownerTests->reconcileCurrent($actor['user_id'], $campaign->publicId);
+        self::assertNotNull($stale);
+        self::assertSame('uncertain', $stale->state);
+        self::assertSame(
+            'broadcast_owner_test_interrupted_source_effect',
+            $stale->resultCode,
+        );
+    }
+
+    public function test_fresh_direct_lifecycle_boundary_waits_for_worker_but_stale_boundary_becomes_uncertain(): void
+    {
+        $actor = $this->owner(910081);
+        $this->telegramUser(910082);
+        $campaign = $this->startedCampaign($actor, 'broadcast-lifecycle-boundary');
+        $campaignId = $this->campaignId($campaign->publicId);
+        $now = now('UTC');
+
+        $recipients = DB::table('broadcast_recipients')
+            ->where('broadcast_campaign_id', $campaignId)
+            ->orderBy('id')
+            ->get(['id']);
+        foreach ($recipients as $index => $recipient) {
+            DB::table('broadcast_recipients')->where('id', (int) $recipient->id)->update([
+                'delivery_state' => 'sent',
+                'telegram_message_id' => 8200 + $index,
+                'failure_code' => null,
+                'sent_at' => $now,
+                'updated_at' => $now,
+            ]);
+        }
+
+        $campaignService = $this->app->make(TelegramBroadcastCampaignService::class);
+        self::assertTrue($campaignService->completeIfFinished($campaign->publicId));
+        $completed = $campaignService->current($actor['user_id'], $campaign->publicId);
+
+        $lifecycle = $this->app->make(TelegramBroadcastLifecycleService::class);
+        $batch = $lifecycle->queueAction(
+            $actor['user_id'],
+            $campaign->publicId,
+            $completed->stateVersion,
+            TelegramBroadcastLifecycleAction::Pin,
+            'broadcast-lifecycle-boundary-pin',
+        );
+        $operationId = DB::table('broadcast_recipient_messages')
+            ->where('operation_group_public_id', $batch->groupPublicId)
+            ->orderBy('id')
+            ->value('id');
+        self::assertIsNumeric($operationId);
+
+        DB::table('broadcast_recipient_messages')
+            ->where('id', (int) $operationId)
+            ->update([
+                'state' => 'sending',
+                'provider_boundary_started_at' => $now,
+                'provider_boundary_finished_at' => null,
+                'updated_at' => $now,
+            ]);
+
+        $runner = $this->app->make(TelegramBroadcastLifecycleRunner::class);
+        self::assertSame(0, $runner->reconcile());
+        self::assertSame('sending', DB::table('broadcast_recipient_messages')
+            ->where('id', (int) $operationId)
+            ->value('state'));
+
+        DB::table('broadcast_recipient_messages')
+            ->where('id', (int) $operationId)
+            ->update([
+                'provider_boundary_started_at' => now('UTC')->subMinutes(10),
+                'updated_at' => now('UTC'),
+            ]);
+
+        self::assertSame(1, $runner->reconcile());
+        self::assertSame('uncertain', DB::table('broadcast_recipient_messages')
+            ->where('id', (int) $operationId)
+            ->value('state'));
+        self::assertSame(
+            'broadcast_lifecycle_interrupted_after_boundary',
+            DB::table('broadcast_recipient_messages')
+                ->where('id', (int) $operationId)
+                ->value('result_code'),
         );
     }
 
