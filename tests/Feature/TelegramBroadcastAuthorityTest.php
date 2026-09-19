@@ -5,10 +5,12 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Modules\Telegram\Application\Contracts\TelegramBroadcastLifecycleTransport;
+use App\Modules\Telegram\Application\Contracts\TelegramMutationTransport;
 use App\Modules\Telegram\Application\Contracts\TelegramSourceMessageSender;
 use App\Modules\Telegram\Application\TelegramBroadcastAudienceDefinition;
 use App\Modules\Telegram\Application\TelegramBroadcastCampaignReceipt;
 use App\Modules\Telegram\Application\TelegramBroadcastCampaignService;
+use App\Modules\Telegram\Application\TelegramBroadcastDeliveryEffectGuard;
 use App\Modules\Telegram\Application\TelegramBroadcastDeliveryRunner;
 use App\Modules\Telegram\Application\TelegramBroadcastLifecycleMutationRequest;
 use App\Modules\Telegram\Application\TelegramBroadcastLifecycleRunner;
@@ -16,13 +18,16 @@ use App\Modules\Telegram\Application\TelegramBroadcastLifecycleService;
 use App\Modules\Telegram\Application\TelegramBroadcastMessageDefinition;
 use App\Modules\Telegram\Application\TelegramBroadcastOwnerTestService;
 use App\Modules\Telegram\Application\TelegramBroadcastRetryService;
+use App\Modules\Telegram\Application\TelegramDeliveryOperationExecutor;
 use App\Modules\Telegram\Application\TelegramMutationOutcome;
+use App\Modules\Telegram\Application\TelegramMutationRequest;
 use App\Modules\Telegram\Application\TelegramMutationResult;
 use App\Modules\Telegram\Application\TelegramResolvedInlineKeyboardMarkup;
 use App\Modules\Telegram\Application\TelegramResolvedSourceMessagePresentation;
 use App\Modules\Telegram\Domain\TelegramBroadcastCampaignState;
 use App\Modules\Telegram\Domain\TelegramBroadcastLifecycleAction;
 use App\Modules\Telegram\Domain\TelegramBroadcastSourceKind;
+use App\Modules\Telegram\Domain\TelegramDeliveryOperationState;
 use DateTimeImmutable;
 use DateTimeZone;
 use DomainException;
@@ -430,6 +435,107 @@ final class TelegramBroadcastAuthorityTest extends TestCase
         self::assertSame($actor['telegram_user_id'], (int) DB::table('broadcast_message_versions')
             ->where('broadcast_campaign_id', $this->campaignId($accepted->publicId))
             ->value('source_chat_id'));
+    }
+
+    public function test_paused_text_delivery_is_rejected_before_generic_provider_effect_and_requeued(): void
+    {
+        $actor = $this->owner(910171);
+        $target = $this->telegramUser(910172);
+        $targetPublicId = DB::table('users')->where('id', $target['user_id'])->value('public_id');
+        self::assertIsString($targetPublicId);
+
+        $campaigns = $this->app->make(TelegramBroadcastCampaignService::class);
+        $created = $campaigns->createDraft(
+            $actor['user_id'],
+            TelegramBroadcastMessageDefinition::newText('paused before provider effect'),
+            new TelegramBroadcastAudienceDefinition(manualUserPublicIds: [$targetPublicId]),
+            'broadcast-paused-before-generic-effect',
+        );
+        $this->successfulOwnerTest($created->publicId, $actor);
+        $started = $campaigns->startNow(
+            $actor['user_id'],
+            $created->publicId,
+            $created->stateVersion,
+        );
+        self::assertSame(1, $started->recipientCount);
+
+        $transport = new class implements TelegramMutationTransport
+        {
+            public int $attempts = 0;
+
+            public function mutate(TelegramMutationRequest $request): TelegramMutationResult
+            {
+                $this->attempts++;
+
+                return new TelegramMutationResult(
+                    TelegramMutationOutcome::Success,
+                    'telegram_send_success',
+                    messageId: 99171,
+                );
+            }
+        };
+        $this->app->instance(TelegramMutationTransport::class, $transport);
+
+        $runner = $this->app->make(TelegramBroadcastDeliveryRunner::class);
+        self::assertSame(1, $runner->processBatch(1));
+
+        $recipient = DB::table('broadcast_recipients')
+            ->where('broadcast_campaign_id', $this->campaignId($created->publicId))
+            ->first(['id', 'delivery_state', 'delivery_operation_public_id']);
+        self::assertNotNull($recipient);
+        self::assertSame('sending', $recipient->delivery_state);
+        self::assertIsString($recipient->delivery_operation_public_id);
+        $firstOperationPublicId = $recipient->delivery_operation_public_id;
+
+        $operation = DB::table('telegram_delivery_operations')
+            ->where('public_id', $firstOperationPublicId)
+            ->first(['outbox_event_id', 'correlation_id']);
+        self::assertNotNull($operation);
+        self::assertIsString($operation->outbox_event_id);
+        self::assertIsString($operation->correlation_id);
+        self::assertStringStartsWith('tgb:', $operation->correlation_id);
+
+        $paused = $campaigns->pause(
+            $actor['user_id'],
+            $created->publicId,
+            $started->stateVersion,
+        );
+        self::assertSame(TelegramBroadcastCampaignState::Paused, $paused->state);
+
+        $receipt = $this->app->make(TelegramDeliveryOperationExecutor::class)->execute(
+            $firstOperationPublicId,
+            $operation->outbox_event_id,
+            $operation->correlation_id,
+        );
+        self::assertSame(TelegramDeliveryOperationState::FailedFinal, $receipt->state);
+        self::assertSame(
+            TelegramBroadcastDeliveryEffectGuard::PAUSED_BEFORE_EFFECT,
+            $receipt->resultCode,
+        );
+        self::assertSame(0, $transport->attempts);
+
+        self::assertGreaterThanOrEqual(1, $runner->reconcile(10));
+        $recipient = DB::table('broadcast_recipients')
+            ->where('id', (int) $recipient->id)
+            ->first(['delivery_state', 'delivery_operation_public_id']);
+        self::assertNotNull($recipient);
+        self::assertSame('queued', $recipient->delivery_state);
+        self::assertNull($recipient->delivery_operation_public_id);
+
+        $resumed = $campaigns->resume(
+            $actor['user_id'],
+            $created->publicId,
+            $paused->stateVersion,
+        );
+        self::assertSame(TelegramBroadcastCampaignState::Active, $resumed->state);
+        self::assertSame(1, $runner->processBatch(1));
+
+        $nextOperationPublicId = DB::table('broadcast_recipients')
+            ->where('id', (int) $recipient->id)
+            ->value('delivery_operation_public_id');
+        self::assertIsString($nextOperationPublicId);
+        self::assertNotSame($firstOperationPublicId, $nextOperationPublicId);
+        self::assertSame(0, $transport->attempts);
     }
 
     public function test_source_retry_after_is_persisted_and_blocks_failed_recipient_retry_until_due(): void
