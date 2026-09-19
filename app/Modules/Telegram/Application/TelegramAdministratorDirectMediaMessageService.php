@@ -370,10 +370,7 @@ final readonly class TelegramAdministratorDirectMediaMessageService
         string $publicId,
         int $recipientChatId,
     ): TelegramResolvedPrivateMediaPresentation {
-        TelegramPresentationProvenanceGuard::assertExactInternalCaller(
-            TelegramAdministratorDirectMessageService::class,
-            __DIR__.'/TelegramAdministratorDirectMessageService.php',
-        );
+        TelegramPrivateMediaDeliveryProvenanceGuard::assertDirectMessageFacadeCaller();
 
         $row = $this->rowByPublicId($this->database->connection(), $publicId, false);
         if ($row === null || $row->confirmed_at === null) {
