@@ -18,6 +18,8 @@ use RuntimeException;
 
 final readonly class TelegramPrivateMediaInteractionGateway
 {
+    private const ADMIN_DIRECT_MESSAGE_COMPOSE_STATE = 'admin_customer_message_compose';
+
     private const C2C_INSTRUCTIONS_STATE = 'purchase_card_to_card_instructions';
 
     private const C2C_SUBMITTING_STATE = 'purchase_card_to_card_receipt_submitting';
@@ -38,6 +40,7 @@ final readonly class TelegramPrivateMediaInteractionGateway
         private DatabaseManager $database,
         private TelegramInteractionSessionService $sessions,
         private TelegramPrivateMediaIngestor $media,
+        private TelegramAdminCustomerNavigationHandler $adminCustomers,
         private TelegramCustomerPurchaseCardToCardReceiptSubmission $cardToCardSubmissions,
         private CustomerAccountSummaryService $customers,
         private TelegramCardToCardReceiptStatusDelivery $statusDelivery,
@@ -47,21 +50,24 @@ final readonly class TelegramPrivateMediaInteractionGateway
         private TelegramSupportAttachmentStatusDelivery $supportAttachmentStatus,
     ) {}
 
-    /** @requirement BUY-003 PAY-002 PAY-003 C2C-002 C2C-004 SUP-001 SUP-002 DAT-002 DAT-003 DAT-004 SEC-002 SEC-003 SEC-009 QUA-001 QUA-004 */
+    /** @requirement COM-001 BUY-003 PAY-002 PAY-003 C2C-002 C2C-004 SUP-001 SUP-002 DAT-002 DAT-003 DAT-004 SEC-002 SEC-003 SEC-009 QUA-001 QUA-004 */
     public function handle(TelegramPrivateMediaInteraction $interaction): bool
     {
         if ($interaction->flow !== TelegramNavigationEntryGateway::FLOW) {
             return false;
         }
 
+        if ($interaction->sessionState === self::ADMIN_DIRECT_MESSAGE_COMPOSE_STATE) {
+            return $this->adminCustomers->handlePrivateMedia($interaction);
+        }
         if ($interaction->sessionState === self::C2C_INSTRUCTIONS_STATE) {
-            return $this->handleCardToCard($interaction);
+            return $interaction->caption === null && $this->handleCardToCard($interaction);
         }
         if ($interaction->sessionState === self::SUPPORT_REPLY_STATE) {
-            return $this->handleSupportAttachment($interaction, false);
+            return $interaction->caption === null && $this->handleSupportAttachment($interaction, false);
         }
         if ($interaction->sessionState === self::SUPPORT_QUEUE_REPLY_STATE) {
-            return $this->handleSupportAttachment($interaction, true);
+            return $interaction->caption === null && $this->handleSupportAttachment($interaction, true);
         }
 
         return false;
