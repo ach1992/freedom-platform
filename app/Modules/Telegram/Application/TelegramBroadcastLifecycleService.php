@@ -71,6 +71,11 @@ final readonly class TelegramBroadcastLifecycleService
                 throw new DomainException('Broadcast campaign state version is stale.');
             }
             $this->assertNoPendingLifecycleActions($connection, (int) $campaign->id);
+            $this->assertProviderRetryWindowElapsed(
+                $connection,
+                (int) $campaign->id,
+                $recipientPublicIds,
+            );
 
             /** @var object{
              *     id:int|string,
@@ -465,6 +470,29 @@ final readonly class TelegramBroadcastLifecycleService
             && $mode === TelegramBroadcastMessageMode::Forward
         ) {
             throw new DomainException('Forwarded broadcast messages do not support authored button mutation.');
+        }
+    }
+
+    /** @param list<string> $recipientPublicIds */
+    private function assertProviderRetryWindowElapsed(
+        Connection $connection,
+        int $campaignId,
+        array $recipientPublicIds,
+    ): void {
+        $now = $this->timestamp();
+        $query = $connection->table('broadcast_recipient_messages as operation')
+            ->join('broadcast_recipients as recipient', 'recipient.id', '=', 'operation.broadcast_recipient_id')
+            ->where('recipient.broadcast_campaign_id', $campaignId)
+            ->whereIn('operation.action', ['edit', 'buttons', 'pin', 'unpin', 'delete'])
+            ->where('operation.state', 'retryable')
+            ->whereNotNull('operation.retry_not_before')
+            ->where('operation.retry_not_before', '>', $now);
+        if ($recipientPublicIds !== []) {
+            $query->whereIn('recipient.public_id', $recipientPublicIds);
+        }
+
+        if ($query->exists()) {
+            throw new DomainException('Broadcast lifecycle provider retry window has not elapsed.');
         }
     }
 
