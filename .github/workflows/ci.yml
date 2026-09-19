@@ -234,9 +234,10 @@ jobs:
         run: |
           set -euo pipefail
           changed=build/evidence/preflight/changed-files.txt
-          if [[ ! -s "$changed" ]] || grep -Eq '^(\.github/workflows/(ci|staging-readiness)\.yml|scripts/ci/(classify-validation-plan|test-validation-plan|select-feature-integration-scope|test-feature-integration-scope|scan-git-secrets|test-secret-scan|verify-project-control|verify-readonly-staging-workflow)\.sh)$' "$changed"; then
+          if [[ ! -s "$changed" ]] || grep -Eq '^(\.github/workflows/(ci|staging-readiness)\.yml|scripts/ci/(classify-validation-plan|test-validation-plan|select-feature-integration-scope|test-feature-integration-scope|select-feature-shard|test-feature-sharding|scan-git-secrets|test-secret-scan|verify-project-control|verify-readonly-staging-workflow)\.sh)$' "$changed"; then
             bash scripts/ci/test-validation-plan.sh
             bash scripts/ci/test-feature-integration-scope.sh
+            bash scripts/ci/test-feature-sharding.sh
             bash scripts/ci/test-secret-scan.sh
             bash scripts/ci/verify-readonly-staging-workflow.sh
           fi
@@ -373,29 +374,83 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-  integration:
-    name: MariaDB 10.11 and Redis tests
+  integration_shards:
+    name: MariaDB 10.11 and Redis shard ${{ matrix.shard_index }}
     needs: preflight
     if: ${{ needs.preflight.outputs.integration == 'true' }}
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        shard_index: [0, 1, 2, 3, 4, 5, 6, 7]
     env:
       MARIADB_VERSION: '10.11'
-      COMPOSE_PROJECT_NAME: freedom-platform-ci-${{ github.run_id }}
+      COMPOSE_PROJECT_NAME: freedom-platform-ci-${{ github.run_id }}-${{ matrix.shard_index }}
       PHPUNIT_FILTER: ${{ inputs.phpunit_filter }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
 
-      - name: Set up PHP 8.4 with PCOV
+      - name: Plan integration execution
+        id: integration_plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/evidence/tests
+          plan=build/evidence/tests/integration-plan.txt
+          : > "$plan"
+
+          integration_scope=FULL
+          shard_count=1
+          run=true
+          shard_index=${{ matrix.shard_index }}
+
+          if [[ "$GITHUB_EVENT_NAME" == 'pull_request' ]] && git rev-parse --verify HEAD^1 >/dev/null 2>&1; then
+            bash scripts/ci/select-feature-integration-scope.sh HEAD^1 HEAD > "$plan"
+            integration_scope=$(awk -F= '$1 == "scope" { print $2; exit }' "$plan")
+            case "$integration_scope" in
+              FULL)
+                shard_count=8
+                ;;
+              TARGETED)
+                ((shard_index == 0)) || run=false
+                ;;
+              *)
+                echo "Invalid pull-request integration scope: $integration_scope" >&2
+                exit 1
+                ;;
+            esac
+          elif [[ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' && -n "$PHPUNIT_FILTER" ]]; then
+            integration_scope=DIAGNOSTIC
+            printf '%s\n' 'scope=DIAGNOSTIC' > "$plan"
+            ((shard_index == 0)) || run=false
+          elif [[ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' ]]; then
+            integration_scope=FULL
+            printf '%s\n' 'scope=FULL' > "$plan"
+            ((shard_index == 0)) || run=false
+          else
+            printf '%s\n' 'scope=FULL' > "$plan"
+            ((shard_index == 0)) || run=false
+          fi
+
+          {
+            echo "scope=$integration_scope"
+            echo "shard_count=$shard_count"
+            echo "run=$run"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up PHP 8.4
+        if: ${{ steps.integration_plan.outputs.run == 'true' }}
         uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
         with:
           php-version: '8.4'
           extensions: bcmath, ctype, curl, dom, fileinfo, filter, gd, hash, intl, json, libxml, mbstring, openssl, pcntl, pdo, pdo_mysql, redis, session, sodium, tokenizer, xml, xmlwriter
-          coverage: pcov
+          coverage: ${{ github.event_name == 'workflow_dispatch' && inputs.phpunit_filter == '' && 'pcov' || 'none' }}
           tools: composer:2.10.2
 
       - name: Validate CI PHP toolchain
+        if: ${{ steps.integration_plan.outputs.run == 'true' }}
         timeout-minutes: 2
         shell: bash
         run: |
@@ -405,13 +460,14 @@ jobs:
           bash scripts/ci/bootstrap-ci-toolchain.sh "$mode"
 
       - name: Install locked dependencies
+        if: ${{ steps.integration_plan.outputs.run == 'true' }}
         timeout-minutes: 10
         run: |
           composer install --no-interaction --prefer-dist --no-progress --no-scripts
           php artisan package:discover --ansi
 
       - name: Code style for integration-only PHP changes
-        if: ${{ needs.preflight.outputs.style == 'true' && needs.preflight.outputs.static_analysis != 'true' }}
+        if: ${{ steps.integration_plan.outputs.run == 'true' && matrix.shard_index == 0 && needs.preflight.outputs.style == 'true' && needs.preflight.outputs.static_analysis != 'true' }}
         shell: bash
         env:
           VALIDATION_PROFILE: ${{ needs.preflight.outputs.profile }}
@@ -426,6 +482,7 @@ jobs:
           php vendor/bin/pint "${pint_args[@]}"
 
       - name: Start disposable dependencies
+        if: ${{ steps.integration_plan.outputs.run == 'true' }}
         timeout-minutes: 5
         shell: bash
         run: |
@@ -440,6 +497,7 @@ jobs:
           printf 'DB_PORT=%s\nREDIS_PORT=%s\n' "$mariadb_port" "$redis_port" >> "$GITHUB_ENV"
 
       - name: Run planned PHPUnit suite
+        if: ${{ steps.integration_plan.outputs.run == 'true' }}
         timeout-minutes: 30
         shell: bash
         run: |
@@ -449,27 +507,27 @@ jobs:
           test -f .env || cp .env.example .env
           php artisan config:clear --ansi
 
-          integration_scope=FULL
+          integration_scope=${{ steps.integration_plan.outputs.scope }}
+          shard_count=${{ steps.integration_plan.outputs.shard_count }}
+          shard_index=${{ matrix.shard_index }}
           targeted_tests=()
-          if [[ "$GITHUB_EVENT_NAME" == 'pull_request' ]] && git rev-parse --verify HEAD^1 >/dev/null 2>&1; then
-            while IFS='=' read -r key value; do
-              case "$key" in
-                scope)
-                  integration_scope=$value
-                  ;;
-                target)
-                  [[ -n "$value" ]] || { echo 'Focused integration selector returned an empty target.' >&2; exit 1; }
-                  targeted_tests+=("$value")
-                  ;;
-                *)
-                  echo "Focused integration selector returned an unknown key: $key" >&2
-                  exit 1
-                  ;;
-              esac
-            done < <(bash scripts/ci/select-feature-integration-scope.sh HEAD^1 HEAD)
-          elif [[ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' && -n "$PHPUNIT_FILTER" ]]; then
-            integration_scope=DIAGNOSTIC
-          fi
+
+          while IFS='=' read -r key value; do
+            case "$key" in
+              scope)
+                ;;
+              target)
+                [[ -n "$value" ]] || { echo 'Focused integration selector returned an empty target.' >&2; exit 1; }
+                targeted_tests+=("$value")
+                ;;
+              '')
+                ;;
+              *)
+                echo "Focused integration selector returned an unknown key: $key" >&2
+                exit 1
+                ;;
+            esac
+          done < build/evidence/tests/integration-plan.txt
 
           case "$integration_scope" in
             FULL|DIAGNOSTIC)
@@ -485,6 +543,8 @@ jobs:
 
           {
             echo "scope=$integration_scope"
+            echo "shard_index=$shard_index"
+            echo "shard_count=$shard_count"
             printf 'target=%s\n' "${targeted_tests[@]}"
           } > build/evidence/tests/integration-scope.txt
 
@@ -499,6 +559,10 @@ jobs:
             phpunit_args+=(--stop-on-error --stop-on-failure)
             if [[ "$integration_scope" == 'TARGETED' ]]; then
               phpunit_args+=("${targeted_tests[@]}")
+            elif [[ "$integration_scope" == 'FULL' && "$shard_count" -gt 1 ]]; then
+              mapfile -t shard_tests < <(bash scripts/ci/select-feature-shard.sh "$shard_count" "$shard_index")
+              ((${#shard_tests[@]} > 0)) || { echo "Feature shard $shard_index/$shard_count is empty." >&2; exit 1; }
+              phpunit_args+=("${shard_tests[@]}")
             else
               phpunit_args+=(--testsuite Feature)
             fi
@@ -517,7 +581,7 @@ jobs:
           fi
 
       - name: Summarize slow tests
-        if: ${{ success() }}
+        if: ${{ steps.integration_plan.outputs.run == 'true' && success() }}
         shell: bash
         run: |
           php <<'PHP'
@@ -558,26 +622,45 @@ jobs:
           PHP
 
       - name: Capture dependency service logs
-        if: ${{ failure() || github.event_name == 'workflow_dispatch' }}
+        if: ${{ steps.integration_plan.outputs.run == 'true' && (failure() || github.event_name == 'workflow_dispatch') }}
         run: |
           mkdir -p build/evidence/services
           docker compose -f docker-compose.ci.yml logs --no-color > build/evidence/services/compose.log 2>&1 || true
 
       - name: Stop disposable dependencies
-        if: always()
+        if: ${{ always() && steps.integration_plan.outputs.run == 'true' }}
         run: docker compose -f docker-compose.ci.yml down --volumes --remove-orphans
 
       - name: Upload diagnostic test evidence
-        if: ${{ failure() || github.event_name == 'workflow_dispatch' }}
+        if: ${{ steps.integration_plan.outputs.run == 'true' && (failure() || github.event_name == 'workflow_dispatch') }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: test-evidence-${{ github.run_id }}-mariadb-10-11
+          name: test-evidence-${{ github.run_id }}-mariadb-10-11-shard-${{ matrix.shard_index }}
           path: |
             build/evidence/tests
             build/evidence/coverage
             build/evidence/services
           if-no-files-found: warn
           retention-days: 14
+
+  integration:
+    name: MariaDB 10.11 and Redis tests
+    needs:
+      - preflight
+      - integration_shards
+    if: ${{ always() && needs.preflight.outputs.integration == 'true' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every planned integration shard
+        shell: bash
+        env:
+          SHARD_RESULT: ${{ needs.integration_shards.result }}
+        run: |
+          set -euo pipefail
+          [[ "$SHARD_RESULT" == 'success' ]] || {
+            echo "Integration shards must all succeed; observed aggregate result: ${SHARD_RESULT:-missing}" >&2
+            exit 1
+          }
 
   operations:
     name: Operational syntax and entrypoints
