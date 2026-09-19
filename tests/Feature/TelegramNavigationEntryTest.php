@@ -6674,6 +6674,33 @@ SQL);
         ];
     }
 
+    /** @return array<string,mixed> */
+    private function photoMediaPayload(
+        int $updateId,
+        int $telegramUserId,
+        string $username,
+        string $languageCode,
+        string $fileId,
+        string $fileUniqueId,
+        int $fileSize,
+        ?string $caption = null,
+    ): array {
+        $payload = $this->payload($updateId, $telegramUserId, $username, $languageCode, 'unused');
+        unset($payload['message']['text']);
+        $payload['message']['photo'] = [[
+            'file_id' => $fileId,
+            'file_unique_id' => $fileUniqueId,
+            'width' => 1,
+            'height' => 1,
+            'file_size' => $fileSize,
+        ]];
+        if ($caption !== null) {
+            $payload['message']['caption'] = $caption;
+        }
+
+        return $payload;
+    }
+
     /** @return array<string, mixed> */
     private function callbackPayload(
         int $updateId,
@@ -6763,6 +6790,90 @@ SQL);
             $callback->replayed,
             $callback->acceptedAt,
         );
+    }
+
+    /**
+     * @return array{
+     *     processor:TelegramUpdateProcessor,
+     *     admin_account_id:int,
+     *     admin_user_id:int,
+     *     selection:string,
+     *     target_delivery_count:int
+     * }
+     */
+    private function prepareAdminDirectMediaCompose(
+        int $baseUpdateId,
+        int $adminTelegramId,
+        int $targetTelegramId,
+        string $targetUsername,
+        string $adminUsername,
+    ): array {
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+
+        $this->accept($this->payload($baseUpdateId, $adminTelegramId, $adminUsername, 'fa', '/start'));
+        $processor->process('123456789', $baseUpdateId);
+        $adminAccount = DB::table('telegram_accounts')
+            ->where('telegram_user_id', $adminTelegramId)
+            ->first(['id', 'user_id']);
+        self::assertNotNull($adminAccount);
+        $this->salesContentAdministratorForUser((int) $adminAccount->user_id);
+
+        $this->accept($this->payload($baseUpdateId + 20, $targetTelegramId, $targetUsername, 'en', '/start'));
+        $processor->process('123456789', $baseUpdateId + 20);
+
+        $this->accept($this->payload($baseUpdateId + 1, $adminTelegramId, $adminUsername, 'fa', '/menu'));
+        $processor->process('123456789', $baseUpdateId + 1);
+        $adminToken = $this->callbackToken('navigation.admin', (int) $adminAccount->id);
+        $this->accept($this->callbackPayload($baseUpdateId + 2, $adminTelegramId, $adminUsername, 'fa', $adminToken));
+        $processor->process('123456789', $baseUpdateId + 2);
+
+        $searchToken = $this->callbackToken('navigation.admin.customer_search', (int) $adminAccount->id);
+        $this->accept($this->callbackPayload($baseUpdateId + 3, $adminTelegramId, $adminUsername, 'fa', $searchToken));
+        $processor->process('123456789', $baseUpdateId + 3);
+        $this->accept($this->payload($baseUpdateId + 4, $adminTelegramId, $adminUsername, 'fa', '@'.$targetUsername));
+        $processor->process('123456789', $baseUpdateId + 4);
+
+        $messageToken = $this->callbackToken('navigation.admin.customer.message', (int) $adminAccount->id);
+        $this->accept($this->callbackPayload($baseUpdateId + 5, $adminTelegramId, $adminUsername, 'fa', $messageToken));
+        $processor->process('123456789', $baseUpdateId + 5);
+
+        $composeSession = DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', (int) $adminAccount->id)
+            ->first(['state', 'payload']);
+        self::assertNotNull($composeSession);
+        self::assertSame('admin_customer_message_compose', (string) $composeSession->state);
+        $composePayload = json_decode((string) $composeSession->payload, true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame(['selection'], array_keys($composePayload));
+        self::assertIsString($composePayload['selection']);
+
+        return [
+            'processor' => $processor,
+            'admin_account_id' => (int) $adminAccount->id,
+            'admin_user_id' => (int) $adminAccount->user_id,
+            'selection' => $composePayload['selection'],
+            'target_delivery_count' => DB::table('telegram_delivery_operations')
+                ->where('recipient_chat_id', $targetTelegramId)
+                ->count(),
+        ];
+    }
+
+    private function bindAdminDirectMediaDependencies(
+        TelegramPrivateMediaFetcher $fetcher,
+        TelegramPrivateMediaMessageSender $sender,
+    ): void {
+        $this->app->instance(TelegramPrivateMediaFetcher::class, $fetcher);
+        $this->app->instance(TelegramPrivateMediaMessageSender::class, $sender);
+
+        foreach ([
+            TelegramPrivateMediaIngestor::class,
+            TelegramAdminCustomerNavigationHandler::class,
+            TelegramPrivateMediaInteractionGateway::class,
+            TelegramInteractionDispatcher::class,
+            TelegramUpdateProcessor::class,
+            TelegramDeliveryOperationExecutor::class,
+        ] as $service) {
+            $this->app->forgetInstance($service);
+        }
     }
 
     /**
@@ -6979,6 +7090,19 @@ SQL);
         );
 
         return [$processor, $accountId];
+    }
+
+    private function navigationOnePixelPng(): string
+    {
+        $decoded = base64_decode(
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNg+A8AAQIBANEay48AAAAASUVORK5CYII=',
+            true,
+        );
+        if (! is_string($decoded)) {
+            throw new RuntimeException('Navigation PNG test fixture could not be decoded.');
+        }
+
+        return $decoded;
     }
 
     private function callbackToken(string $action, int $telegramAccountId, string $expectedActionPayload = '{}'): string
