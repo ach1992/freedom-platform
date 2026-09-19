@@ -87,6 +87,7 @@ use DateTimeImmutable;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Contracts\Encryption\StringEncrypter;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\DB;
@@ -4721,6 +4722,20 @@ SQL);
             $caption,
             $this->app->make(StringEncrypter::class)->decryptString((string) $direct->content_ciphertext),
         );
+
+        try {
+            DB::table('telegram_administrator_direct_messages')
+                ->where('public_id', (string) $direct->public_id)
+                ->update(['media_byte_size' => 10_000_001]);
+            self::fail('MariaDB must reject a persisted direct photo above the sendPhoto size limit.');
+        } catch (QueryException) {
+            self::assertSame(
+                strlen($png),
+                (int) DB::table('telegram_administrator_direct_messages')
+                    ->where('public_id', (string) $direct->public_id)
+                    ->value('media_byte_size'),
+            );
+        }
 
         $media = DB::table('telegram_private_media')->first();
         self::assertNotNull($media);
