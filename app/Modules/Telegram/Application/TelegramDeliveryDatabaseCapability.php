@@ -80,6 +80,8 @@ final readonly class TelegramDeliveryDatabaseCapability
     ): mixed {
         if ($request->presentation instanceof ConfidentialTelegramPresentation) {
             TelegramConfidentialPresentationProvenanceGuard::assertQueueSource($connection);
+        } elseif ($request->presentation instanceof TelegramPrivateMediaPresentationReference) {
+            TelegramPrivateMediaDeliveryProvenanceGuard::assertQueueSource();
         } else {
             TelegramPresentationProvenanceGuard::assertQueueSource($connection);
         }
