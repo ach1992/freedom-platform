@@ -20,6 +20,8 @@ use App\Modules\Telegram\Application\Contracts\TelegramCustomerTrialProvisioning
 use App\Modules\Telegram\Application\Contracts\TelegramMembershipLookup;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceDeliveryResender;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceProjection;
+use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaFetcher;
+use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaMessageSender;
 use App\Modules\Telegram\Application\TelegramAdminCustomerNavigationHandler;
 use App\Modules\Telegram\Application\TelegramAdministratorDirectMessageService;
 use App\Modules\Telegram\Application\TelegramChannelMembershipEvaluationDecision;
@@ -48,14 +50,18 @@ use App\Modules\Telegram\Application\TelegramCustomerTrialProvisioningStatusSnap
 use App\Modules\Telegram\Application\TelegramCustomerTrialRouteOption;
 use App\Modules\Telegram\Application\TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1;
 use App\Modules\Telegram\Application\TelegramDeliveryInteractivePresentationDatabaseSurfaceV1;
+use App\Modules\Telegram\Application\TelegramDeliveryOperationExecutor;
 use App\Modules\Telegram\Application\TelegramDeliveryQueueService;
 use App\Modules\Telegram\Application\TelegramInteractionAction;
 use App\Modules\Telegram\Application\TelegramInteractionCallbackReceipt;
 use App\Modules\Telegram\Application\TelegramInteractionCallbackService;
+use App\Modules\Telegram\Application\TelegramInteractionDispatcher;
 use App\Modules\Telegram\Application\TelegramInteractionHandlerRegistry;
 use App\Modules\Telegram\Application\TelegramInteractionUpdateBindingReceipt;
 use App\Modules\Telegram\Application\TelegramInteractionUpdateBindingService;
 use App\Modules\Telegram\Application\TelegramMembershipLookupResult;
+use App\Modules\Telegram\Application\TelegramMutationOutcome;
+use App\Modules\Telegram\Application\TelegramMutationResult;
 use App\Modules\Telegram\Application\TelegramNavigationCompositeHandler;
 use App\Modules\Telegram\Application\TelegramNavigationEntryGateway;
 use App\Modules\Telegram\Application\TelegramNavigationHandler;
@@ -64,7 +70,11 @@ use App\Modules\Telegram\Application\TelegramOwnedServiceDetail;
 use App\Modules\Telegram\Application\TelegramOwnedServiceListItem;
 use App\Modules\Telegram\Application\TelegramOwnedServicePage;
 use App\Modules\Telegram\Application\TelegramOwnedServiceSearchResult;
+use App\Modules\Telegram\Application\TelegramPrivateMediaDownload;
+use App\Modules\Telegram\Application\TelegramPrivateMediaIngestor;
+use App\Modules\Telegram\Application\TelegramPrivateMediaInteractionGateway;
 use App\Modules\Telegram\Application\TelegramProtectedPresentationReference;
+use App\Modules\Telegram\Application\TelegramResolvedPrivateMediaPresentation;
 use App\Modules\Telegram\Application\TelegramUpdateProcessor;
 use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
 use App\Modules\Wallet\Application\LedgerEntryDraft;
@@ -81,6 +91,7 @@ use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Facades\Storage;
 use RuntimeException;
 use Tests\TestCase;
 
@@ -1114,6 +1125,58 @@ final class TelegramNavigationOwnedServiceDeliveryResender implements TelegramOw
     }
 }
 
+final class TelegramNavigationPrivateMediaFetcher implements TelegramPrivateMediaFetcher
+{
+    public int $calls = 0;
+
+    public function __construct(private readonly string $content) {}
+
+    public function fetch(
+        RestrictedValue $fileId,
+        RestrictedValue $expectedFileUniqueId,
+        int $maximumBytes,
+    ): TelegramPrivateMediaDownload {
+        $this->calls++;
+
+        if (strlen($this->content) > $maximumBytes) {
+            throw new RuntimeException('Navigation private-media fixture exceeds the configured maximum.');
+        }
+
+        return TelegramPrivateMediaDownload::fromBytes($this->content, strlen($this->content));
+    }
+}
+
+final class TelegramNavigationPrivateMediaSender implements TelegramPrivateMediaMessageSender
+{
+    public int $attempts = 0;
+
+    /** @var list<TelegramResolvedPrivateMediaPresentation> */
+    public array $presentations = [];
+
+    public function __construct(
+        private readonly int $expectedRecipientChatId,
+        private readonly int $messageId,
+    ) {}
+
+    public function send(
+        int $recipientChatId,
+        TelegramResolvedPrivateMediaPresentation $presentation,
+    ): TelegramMutationResult {
+        if ($recipientChatId !== $this->expectedRecipientChatId) {
+            throw new RuntimeException('Navigation private-media sender received an unexpected recipient.');
+        }
+
+        $this->attempts++;
+        $this->presentations[] = $presentation;
+
+        return new TelegramMutationResult(
+            TelegramMutationOutcome::Success,
+            'telegram_success',
+            messageId: $this->messageId,
+        );
+    }
+}
+
 /** @requirement ONB-002 ONB-003 USR-001 BUY-001 BUY-003 AGT-001 CAT-002 CAT-003 CAT-008 ADM-002 ACL-001 ACL-002 ACL-003 USDT-002 IPG-002 ARCH-003 ARCH-004 DAT-002 DAT-003 SEC-002 SEC-003 LOC-001 OPS-003 QUA-001 QUA-004 */
 final class TelegramNavigationEntryTest extends TestCase
 {
@@ -1145,6 +1208,7 @@ final class TelegramNavigationEntryTest extends TestCase
             'telegram.processing_lease_seconds' => 120,
             'telegram.api_base_url' => 'https://api.telegram.org',
             'telegram.api_timeout_seconds' => 15,
+            'telegram.private_media_max_bytes' => 1_048_576,
         ]);
     }
 
