@@ -183,7 +183,9 @@ control_paths="$tmpdir/control.paths"
 control_plan="$tmpdir/control.plan"
 printf '%s\n' \
     scripts/ci/select-feature-integration-scope.sh \
-    scripts/ci/test-feature-integration-scope.sh > "$control_paths"
+    scripts/ci/test-feature-integration-scope.sh \
+    scripts/ci/select-feature-shard.sh \
+    scripts/ci/test-feature-sharding.sh > "$control_paths"
 GITHUB_EVENT_NAME= GITHUB_EVENT_PATH= GITHUB_SHA= \
 bash "$classifier" "$control_paths" > "$control_plan"
 grep -Fx 'profile=CONTROL_PLANE' "$control_plan" >/dev/null || fail 'focused integration controls must classify as CONTROL_PLANE'
@@ -200,7 +202,10 @@ for fragment in \
     'phpunit_args+=(--stop-on-error --stop-on-failure)' \
     'phpunit_args+=("${targeted_tests[@]}")' \
     'phpunit_args+=(--testsuite Feature)' \
-    'bash scripts/ci/test-feature-integration-scope.sh'; do
+    'bash scripts/ci/select-feature-shard.sh "$shard_count" "$shard_index"' \
+    'shard_index: [0, 1]' \
+    'bash scripts/ci/test-feature-integration-scope.sh' \
+    'bash scripts/ci/test-feature-sharding.sh'; do
     grep -F "$fragment" "$ci_workflow" >/dev/null || fail "CI workflow missing focused integration contract: $fragment"
 done
 
