@@ -588,6 +588,7 @@ final readonly class TelegramBroadcastCampaignService
                         'state',
                         'state_version',
                         'current_message_version',
+                        'recipient_count',
                         'scheduled_at',
                         'audience_materialized_at',
                     ]);
@@ -606,14 +607,22 @@ final readonly class TelegramBroadcastCampaignService
                 );
 
                 $version = $this->positiveInt($campaign->state_version, 'Broadcast state version');
+                $recipientCount = $this->nonNegativeInt(
+                    $campaign->recipient_count,
+                    'Broadcast recipient count',
+                );
+                $nextState = $recipientCount === 0
+                    ? TelegramBroadcastCampaignState::Completed
+                    : TelegramBroadcastCampaignState::Active;
                 $updated = $connection->table('broadcast_campaigns')
                     ->where('id', (int) $campaign->id)
                     ->where('state', TelegramBroadcastCampaignState::Scheduled->value)
                     ->where('state_version', $version)
                     ->update([
-                        'state' => TelegramBroadcastCampaignState::Active->value,
+                        'state' => $nextState->value,
                         'state_version' => $version + 1,
                         'started_at' => $now,
+                        'completed_at' => $recipientCount === 0 ? $now : null,
                         'updated_at' => $now,
                     ]);
 
@@ -718,14 +727,21 @@ final readonly class TelegramBroadcastCampaignService
                 (int) $campaign->current_message_version,
             );
 
-            $state = $scheduledAt === null
-                ? TelegramBroadcastCampaignState::Active
-                : TelegramBroadcastCampaignState::Scheduled;
+            $recipientCount = $this->nonNegativeInt(
+                $campaign->recipient_count,
+                'Broadcast recipient count',
+            );
+            $state = match (true) {
+                $scheduledAt !== null => TelegramBroadcastCampaignState::Scheduled,
+                $recipientCount === 0 => TelegramBroadcastCampaignState::Completed,
+                default => TelegramBroadcastCampaignState::Active,
+            };
             $values = [
                 'state' => $state->value,
                 'state_version' => $expectedStateVersion + 1,
                 'scheduled_at' => $scheduledAt?->format('Y-m-d H:i:s.u'),
                 'started_at' => $scheduledAt === null ? $now : null,
+                'completed_at' => $scheduledAt === null && $recipientCount === 0 ? $now : null,
                 'updated_at' => $now,
             ];
 
