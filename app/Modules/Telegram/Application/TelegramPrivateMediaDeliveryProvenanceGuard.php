@@ -39,11 +39,11 @@ final class TelegramPrivateMediaDeliveryProvenanceGuard
 
     private static function assertExactInternalCaller(string $expectedClass, string $expectedFile): void
     {
-        $trace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 3);
-        $directInvocation = $trace[1] ?? null;
-        $gatewayFrame = $trace[2] ?? null;
-        $callerClass = is_array($gatewayFrame) ? ($gatewayFrame['class'] ?? null) : null;
-        $callerFile = is_array($directInvocation) ? ($directInvocation['file'] ?? null) : null;
+        $trace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 4);
+        $guardedFrame = $trace[2] ?? null;
+        $callerFrame = $trace[3] ?? null;
+        $callerClass = is_array($callerFrame) ? ($callerFrame['class'] ?? null) : null;
+        $callerFile = is_array($guardedFrame) ? ($guardedFrame['file'] ?? null) : null;
         $resolvedExpected = realpath($expectedFile);
         $resolvedCaller = is_string($callerFile) ? realpath($callerFile) : false;
 
