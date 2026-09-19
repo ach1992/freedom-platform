@@ -571,6 +571,7 @@ final readonly class TelegramBroadcastDeliveryRunner
             $this->database->connection()->transaction(function (Connection $connection) use ($claim, $code): void {
                 $campaign = $connection->table('broadcast_campaigns')
                     ->where('public_id', $claim->campaignPublicId)
+                    ->where('bot_id', $this->runtime->botId())
                     ->lockForUpdate()
                     ->first(['id']);
                 if ($campaign === null) {
@@ -801,6 +802,7 @@ final readonly class TelegramBroadcastDeliveryRunner
             $recipient = $connection->table('broadcast_recipients as recipient')
                 ->join('broadcast_campaigns as campaign', 'campaign.id', '=', 'recipient.broadcast_campaign_id')
                 ->where('recipient.public_id', $recipientPublicId)
+                ->where('campaign.bot_id', $this->runtime->botId())
                 ->lockForUpdate()
                 ->first([
                     'recipient.id',
