@@ -4802,6 +4802,25 @@ SQL);
         }
 
         $executor = $this->app->make(TelegramDeliveryOperationExecutor::class);
+        Storage::disk('telegram_private_media')->put((string) $media->storage_path, 'tampered-private-media');
+        try {
+            $executor->execute(
+                (string) $operation->public_id,
+                (string) $outbox->id,
+                (string) $direct->correlation_id,
+                TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_PRIVATE_MEDIA_REFERENCE,
+            );
+            self::fail('Tampered private media must fail before entering the provider boundary.');
+        } catch (DomainException) {
+            self::assertSame(0, $sender->attempts);
+            $this->assertDatabaseHas('telegram_delivery_operations', [
+                'public_id' => (string) $operation->public_id,
+                'state' => 'prepared',
+                'provider_attempts' => 0,
+            ]);
+        }
+        Storage::disk('telegram_private_media')->put((string) $media->storage_path, $png);
+
         $first = $executor->execute(
             (string) $operation->public_id,
             (string) $outbox->id,
