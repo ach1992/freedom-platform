@@ -15,7 +15,7 @@ This file owns the repository's **development workflow**: branches, Issues/PRs, 
 
 When a temporary branch appears no longer needed, the Master reports its name to the Owner. Branch cleanup is Owner-operated; do not delete branches automatically or add branch-deletion automation unless the Owner explicitly changes this policy later.
 
-Do not insert a human checkpoint between ordinary reversible steps. When the current objective is authorized and READY work exists, continue implementation, targeted validation, PR maintenance, self-review/correction, and dependency-safe follow-on task selection. Stop only for a real blocker/decision/capability boundary or for the specific action that is explicitly approval-gated.
+Do not insert a human checkpoint between ordinary reversible steps. When the current objective is authorized and dependency-safe executable work exists, continue implementation, targeted validation, PR maintenance, self-review/correction, and outcome-linked follow-on work. Stop only for a real blocker/decision/capability boundary or for the specific action that is explicitly approval-gated.
 
 ## Execution and validation routing
 
@@ -47,7 +47,7 @@ Pull requests use `.github/pull_request_template.md`: identify the durable autho
 
 Sensitive paths are assigned in `.github/CODEOWNERS`. CODEOWNERS identifies intended ownership; actual merge enforcement depends on repository protection/rulesets. Verify live repository settings before relying on protection as an enforced fact.
 
-High/Critical work involving financial integrity, authorization, security controls, provider semantics, schema, deployment/release behavior, secrets, or irreversible operations requires independent review and explicit Owner approval before merge unless that exact merge/action was already authorized. This gate does not by itself block reversible implementation, testing, review preparation, or continuation to another dependency-safe READY task.
+High/Critical work involving financial integrity, authorization, security controls, provider semantics, schema, deployment/release behavior, secrets, or irreversible operations requires independent review and explicit Owner approval before merge unless that exact merge/action was already authorized. This gate does not by itself block reversible implementation, testing, review preparation, or continuation to other dependency-safe executable work.
 
 ## Independent review relay
 
