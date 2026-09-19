@@ -132,6 +132,7 @@ return new class extends Migration
                 ->constrained('broadcast_message_versions', indexName: 'broadcast_recipient_message_version_fk')
                 ->restrictOnDelete();
             $table->string('action', 24);
+            $table->ulid('operation_group_public_id')->nullable();
             $table->char('request_key_hash', 64)->unique();
             $table->string('state', 24)->default('prepared');
             $table->ulid('delivery_operation_public_id')->nullable()->unique();
@@ -146,6 +147,7 @@ return new class extends Migration
             $table->dateTime('created_at', 6);
             $table->dateTime('updated_at', 6);
             $table->index(['broadcast_recipient_id', 'action', 'created_at'], 'broadcast_recipient_message_action_idx');
+            $table->index(['operation_group_public_id', 'state'], 'broadcast_recipient_message_group_idx');
             $table->index(['state', 'created_at'], 'broadcast_recipient_message_state_idx');
         });
 
@@ -302,6 +304,77 @@ ALTER TABLE broadcast_recipient_messages
     ),
     ADD CONSTRAINT broadcast_recipient_message_action_chk CHECK (
         action IN ('send','retry','edit','buttons','pin','unpin','delete')
+    ),
+    ADD CONSTRAINT broadcast_recipient_message_group_chk CHECK (
+        operation_group_public_id IS NULL
+        OR (
+            operation_group_public_id REGEXP '^[0-9A-HJKMNP-TV-Z]{26}
+    ADD CONSTRAINT broadcast_recipient_message_request_chk CHECK (request_key_hash REGEXP '^[0-9a-f]{64}$'),
+    ADD CONSTRAINT broadcast_recipient_message_state_chk CHECK (
+        state IN ('prepared','queued','sending','succeeded','retryable','failed','uncertain','skipped')
+    ),
+    ADD CONSTRAINT broadcast_recipient_message_delivery_chk CHECK (
+        delivery_operation_public_id IS NULL
+        OR (
+            delivery_operation_public_id REGEXP '^[0-9A-HJKMNP-TV-Z]{26}$'
+            AND BINARY delivery_operation_public_id = BINARY UPPER(delivery_operation_public_id)
+        )
+    ),
+    ADD CONSTRAINT broadcast_recipient_message_boundary_chk CHECK (
+        (state = 'sending' AND provider_boundary_started_at IS NOT NULL AND provider_boundary_finished_at IS NULL)
+        OR (state <> 'sending')
+    )
+SQL);
+
+        DB::statement(<<<'SQL'
+ALTER TABLE broadcast_campaign_tests
+    ADD CONSTRAINT broadcast_campaign_test_public_chk CHECK (
+        public_id REGEXP '^[0-9A-HJKMNP-TV-Z]{26}$' AND BINARY public_id = BINARY UPPER(public_id)
+    ),
+    ADD CONSTRAINT broadcast_campaign_test_request_chk CHECK (request_key_hash REGEXP '^[0-9a-f]{64}$'),
+    ADD CONSTRAINT broadcast_campaign_test_state_chk CHECK (
+        state IN ('prepared','queued','sending','succeeded','failed','uncertain')
+    ),
+    ADD CONSTRAINT broadcast_campaign_test_delivery_chk CHECK (
+        delivery_operation_public_id IS NULL
+        OR (
+            delivery_operation_public_id REGEXP '^[0-9A-HJKMNP-TV-Z]{26}$'
+            AND BINARY delivery_operation_public_id = BINARY UPPER(delivery_operation_public_id)
+        )
+    ),
+    ADD CONSTRAINT broadcast_campaign_test_boundary_chk CHECK (
+        (state = 'sending' AND provider_boundary_started_at IS NOT NULL AND provider_boundary_finished_at IS NULL)
+        OR state <> 'sending'
+    )
+SQL);
+    }
+
+    public function down(): void
+    {
+        foreach ([
+            'broadcast_campaign_tests',
+            'broadcast_recipient_messages',
+            'broadcast_recipients',
+            'broadcast_message_versions',
+            'broadcast_audiences',
+            'broadcast_campaigns',
+        ] as $table) {
+            if (Schema::hasTable($table) && DB::table($table)->exists()) {
+                throw new RuntimeException('Broadcast campaign records must be retained; rollback requires empty authority tables.');
+            }
+        }
+
+        Schema::dropIfExists('broadcast_campaign_tests');
+        Schema::dropIfExists('broadcast_recipient_messages');
+        Schema::dropIfExists('broadcast_recipients');
+        Schema::dropIfExists('broadcast_message_versions');
+        Schema::dropIfExists('broadcast_audiences');
+        Schema::dropIfExists('broadcast_campaigns');
+    }
+};
+
+            AND BINARY operation_group_public_id = BINARY UPPER(operation_group_public_id)
+        )
     ),
     ADD CONSTRAINT broadcast_recipient_message_request_chk CHECK (request_key_hash REGEXP '^[0-9a-f]{64}$'),
     ADD CONSTRAINT broadcast_recipient_message_state_chk CHECK (
