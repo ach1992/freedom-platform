@@ -457,15 +457,35 @@ final readonly class TelegramBroadcastLifecycleRunner
                 return false;
             }
 
-            /** @var object{state:string,result_code:?string}|null $delivery */
+            /** @var object{state:string,outbox_event_id:string,result_code:?string}|null $delivery */
             $delivery = $connection->table('telegram_delivery_operations')
                 ->where('public_id', $operation->delivery_operation_public_id)
-                ->first(['state', 'result_code']);
+                ->first(['state', 'outbox_event_id', 'result_code']);
             if ($delivery === null) {
                 throw new RuntimeException('Broadcast lifecycle linked delivery operation is missing.');
             }
             $deliveryState = TelegramDeliveryOperationState::tryFrom($delivery->state)
                 ?? throw new RuntimeException('Broadcast lifecycle linked delivery state is invalid.');
+
+            if ($deliveryState === TelegramDeliveryOperationState::Prepared
+                && $connection->table('outbox_messages')
+                    ->where('id', $delivery->outbox_event_id)
+                    ->whereNull('processed_at')
+                    ->where('dispatch_state', 'review_required')
+                    ->exists()
+            ) {
+                $now = $this->timestamp();
+                $connection->table('broadcast_recipient_messages')
+                    ->where('id', (int) $operation->id)
+                    ->update([
+                        'state' => 'failed',
+                        'result_code' => 'telegram_broadcast_lifecycle_pre_effect_review_required',
+                        'retry_not_before' => null,
+                        'updated_at' => $now,
+                    ]);
+
+                return true;
+            }
 
             if (in_array($deliveryState, [
                 TelegramDeliveryOperationState::Prepared,
