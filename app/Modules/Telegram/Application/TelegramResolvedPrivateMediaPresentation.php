@@ -5,24 +5,37 @@ declare(strict_types=1);
 namespace App\Modules\Telegram\Application;
 
 use InvalidArgumentException;
+use JsonSerializable;
 use LogicException;
 use SensitiveParameter;
 use Stringable;
 use WeakMap;
 
-final class TelegramResolvedPrivateMediaPresentation implements Stringable
+final class TelegramResolvedPrivateMediaPresentation implements JsonSerializable, Stringable
 {
     /** @var WeakMap<self,string>|null */
     private static ?WeakMap $bytesByInstance = null;
 
+    private readonly string $contentType;
+
+    private readonly string $filename;
+
+    private readonly string $caption;
+
+    private readonly string $detectedMime;
+
+    private readonly int $byteSize;
+
+    private readonly string $contentSha256;
+
     public function __construct(
-        public readonly string $contentType,
+        string $contentType,
         #[SensitiveParameter] string $bytes,
-        public readonly string $filename,
-        public readonly string $caption,
-        public readonly string $detectedMime,
-        public readonly int $byteSize,
-        public readonly string $contentSha256,
+        string $filename,
+        #[SensitiveParameter] string $caption,
+        string $detectedMime,
+        int $byteSize,
+        string $contentSha256,
     ) {
         if (! in_array($contentType, ['photo', 'video', 'document'], true)
             || $bytes === ''
@@ -41,7 +54,43 @@ final class TelegramResolvedPrivateMediaPresentation implements Stringable
             throw new InvalidArgumentException('Resolved private Telegram media presentation is invalid.');
         }
 
+        $this->contentType = $contentType;
+        $this->filename = $filename;
+        $this->caption = $caption;
+        $this->detectedMime = $detectedMime;
+        $this->byteSize = $byteSize;
+        $this->contentSha256 = $contentSha256;
         self::bytesByInstance()[$this] = $bytes;
+    }
+
+    public function contentType(): string
+    {
+        return $this->contentType;
+    }
+
+    public function filename(): string
+    {
+        return $this->filename;
+    }
+
+    public function captionForProvider(): string
+    {
+        return $this->caption;
+    }
+
+    public function detectedMime(): string
+    {
+        return $this->detectedMime;
+    }
+
+    public function byteSize(): int
+    {
+        return $this->byteSize;
+    }
+
+    public function contentSha256(): string
+    {
+        return $this->contentSha256;
     }
 
     public function revealBytesForProvider(): string
@@ -62,12 +111,13 @@ final class TelegramResolvedPrivateMediaPresentation implements Stringable
     /** @return array{redacted:true,type:string,mime:string,size:int} */
     public function __debugInfo(): array
     {
-        return [
-            'redacted' => true,
-            'type' => $this->contentType,
-            'mime' => $this->detectedMime,
-            'size' => $this->byteSize,
-        ];
+        return $this->redactedMetadata();
+    }
+
+    /** @return array{redacted:true,type:string,mime:string,size:int} */
+    public function jsonSerialize(): array
+    {
+        return $this->redactedMetadata();
     }
 
     /** @return never */
@@ -80,6 +130,17 @@ final class TelegramResolvedPrivateMediaPresentation implements Stringable
     public function __unserialize(array $data): void
     {
         throw new LogicException('Resolved private Telegram media presentations cannot be unserialized.');
+    }
+
+    /** @return array{redacted:true,type:string,mime:string,size:int} */
+    private function redactedMetadata(): array
+    {
+        return [
+            'redacted' => true,
+            'type' => $this->contentType,
+            'mime' => $this->detectedMime,
+            'size' => $this->byteSize,
+        ];
     }
 
     /** @return WeakMap<self,string> */
