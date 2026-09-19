@@ -146,6 +146,65 @@ final class TelegramPrivateMediaMessageSenderTest extends TestCase
         }
     }
 
+    public function test_retry_after_is_preserved_without_a_hidden_second_attempt(): void
+    {
+        Http::fake([
+            '*' => Http::response([
+                'ok' => false,
+                'error_code' => 429,
+                'parameters' => ['retry_after' => 60],
+            ], 429),
+        ]);
+
+        $bytes = $this->onePixelPng();
+        $result = $this->sender()->send(
+            self::TELEGRAM_USER_ID,
+            new TelegramResolvedPrivateMediaPresentation(
+                'photo',
+                $bytes,
+                'admin-direct-photo.png',
+                '',
+                'image/png',
+                strlen($bytes),
+                hash('sha256', $bytes),
+            ),
+        );
+
+        self::assertSame(TelegramMutationOutcome::RetryAfter, $result->outcome);
+        self::assertSame('telegram_retry_after', $result->resultCode);
+        self::assertSame(60, $result->retryAfterSeconds);
+        Http::assertSentCount(1);
+    }
+
+    public function test_explicit_permanent_rejection_is_definitive_after_one_attempt(): void
+    {
+        Http::fake([
+            '*' => Http::response([
+                'ok' => false,
+                'error_code' => 403,
+                'description' => 'Forbidden',
+            ], 403),
+        ]);
+
+        $bytes = $this->onePixelPng();
+        $result = $this->sender()->send(
+            self::TELEGRAM_USER_ID,
+            new TelegramResolvedPrivateMediaPresentation(
+                'photo',
+                $bytes,
+                'admin-direct-photo.png',
+                '',
+                'image/png',
+                strlen($bytes),
+                hash('sha256', $bytes),
+            ),
+        );
+
+        self::assertSame(TelegramMutationOutcome::DefinitiveFailure, $result->outcome);
+        self::assertSame('telegram_api_error_403', $result->resultCode);
+        Http::assertSentCount(1);
+    }
+
     public function test_success_for_a_different_recipient_is_uncertain(): void
     {
         Http::fake([
