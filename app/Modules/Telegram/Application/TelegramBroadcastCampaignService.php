@@ -8,6 +8,7 @@ use App\Modules\AccessControl\Application\AdministratorPermissionAuthorizer;
 use App\Modules\AccessControl\Application\AdministratorUserPermissionAuthorizer;
 use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
 use App\Modules\Telegram\Domain\TelegramBroadcastCampaignState;
+use App\Modules\Telegram\Domain\TelegramBroadcastMessageMode;
 use App\Shared\Application\Clock;
 use DateTimeImmutable;
 use DateTimeZone;
@@ -718,7 +719,7 @@ final readonly class TelegramBroadcastCampaignService
     }
 
     /**
-     * @param array<string,int> $values
+     * @param  array<string,int>  $values
      */
     private function updateDraftVersion(
         Connection $connection,
@@ -771,7 +772,7 @@ final readonly class TelegramBroadcastCampaignService
     private function lockedCampaign(Connection $connection, string $publicId): object
     {
         /** @var CampaignRow|null $campaign */
-$campaign = $connection->table('broadcast_campaigns')
+        $campaign = $connection->table('broadcast_campaigns')
             ->where('public_id', $publicId)
             ->lockForUpdate()
             ->first([
@@ -822,7 +823,7 @@ $campaign = $connection->table('broadcast_campaigns')
             throw new RuntimeException('Broadcast campaign receipt cannot be reconstructed.');
         }
 
-        $mode = \App\Modules\Telegram\Domain\TelegramBroadcastMessageMode::tryFrom((string) $row->mode);
+        $mode = TelegramBroadcastMessageMode::tryFrom((string) $row->mode);
         if ($mode === null) {
             throw new RuntimeException('Broadcast message mode is invalid.');
         }
