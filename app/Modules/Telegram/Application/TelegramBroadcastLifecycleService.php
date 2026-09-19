@@ -165,7 +165,7 @@ final readonly class TelegramBroadcastLifecycleService
         TelegramBroadcastLifecycleAction $action,
         #[SensitiveParameter] string $requestKey,
         array $recipientPublicIds = [],
-    ): int {
+    ): TelegramBroadcastLifecycleBatchReceipt {
         $administratorId = $this->administrators->authorizeUser(
             $actorUserId,
             TelegramBroadcastCampaignService::PERMISSION,
@@ -182,7 +182,7 @@ final readonly class TelegramBroadcastLifecycleService
             $action,
             $recipientPublicIds,
             $requestHash,
-        ): int {
+        ): TelegramBroadcastLifecycleBatchReceipt {
             /** @var object{id:int|string,state:string,state_version:int|string,current_message_version:int|string}|null $campaign */
             $campaign = $connection->table('broadcast_campaigns')
                 ->where('public_id', $campaignPublicId)
@@ -263,6 +263,7 @@ final readonly class TelegramBroadcastLifecycleService
             }
 
             $now = $this->timestamp();
+            $groupPublicId = (string) Str::ulid();
             $rows = [];
             foreach ($recipients as $recipient) {
                 $rows[] = [
@@ -270,6 +271,7 @@ final readonly class TelegramBroadcastLifecycleService
                     'broadcast_recipient_id' => (int) $recipient->id,
                     'broadcast_message_version_id' => (int) $message->id,
                     'action' => $action->value,
+                    'operation_group_public_id' => $groupPublicId,
                     'request_key_hash' => hash(
                         'sha256',
                         'telegram-broadcast-lifecycle-v1|'.$action->value.'|'.$requestHash.'|'.$recipient->public_id,
@@ -301,8 +303,92 @@ final readonly class TelegramBroadcastLifecycleService
                 throw new RuntimeException('Broadcast lifecycle queue transition was lost.');
             }
 
-            return $recipients->count();
+            return new TelegramBroadcastLifecycleBatchReceipt(
+                $campaignPublicId,
+                $groupPublicId,
+                $action,
+                $recipients->count(),
+                $expectedStateVersion + 1,
+            );
         }, 3);
+    }
+
+    /** @requirement COM-003 ACL-002 DAT-003 OPS-003 */
+    public function progress(
+        int $actorUserId,
+        string $campaignPublicId,
+        string $groupPublicId,
+    ): TelegramBroadcastLifecycleProgress {
+        $this->administrators->authorizeUser(
+            $actorUserId,
+            TelegramBroadcastCampaignService::PERMISSION,
+        );
+        $this->assertPublicId($campaignPublicId);
+        $this->assertPublicId($groupPublicId);
+
+        /** @var Collection<int,object{action:string,state:string,aggregate_count:int|string}> $rows */
+        $rows = $this->database->connection()->table('broadcast_recipient_messages as operation')
+            ->join('broadcast_recipients as recipient', 'recipient.id', '=', 'operation.broadcast_recipient_id')
+            ->join('broadcast_campaigns as campaign', 'campaign.id', '=', 'recipient.broadcast_campaign_id')
+            ->where('campaign.public_id', $campaignPublicId)
+            ->where('operation.operation_group_public_id', $groupPublicId)
+            ->selectRaw('operation.action, operation.state, COUNT(*) AS aggregate_count')
+            ->groupBy('operation.action', 'operation.state')
+            ->get();
+        if ($rows->isEmpty()) {
+            throw new DomainException('Broadcast lifecycle operation group is unavailable.');
+        }
+
+        $counts = [
+            'prepared' => 0,
+            'queued' => 0,
+            'sending' => 0,
+            'succeeded' => 0,
+            'retryable' => 0,
+            'failed' => 0,
+            'uncertain' => 0,
+            'skipped' => 0,
+        ];
+        $action = null;
+        foreach ($rows as $row) {
+            $rowAction = TelegramBroadcastLifecycleAction::tryFrom($row->action)
+                ?? throw new RuntimeException('Broadcast lifecycle progress action is invalid.');
+            if ($action !== null && $action !== $rowAction) {
+                throw new RuntimeException('Broadcast lifecycle group contains multiple action types.');
+            }
+            $action = $rowAction;
+
+            if (! array_key_exists($row->state, $counts)) {
+                throw new RuntimeException('Broadcast lifecycle progress state is invalid.');
+            }
+            $count = filter_var(
+                $row->aggregate_count,
+                FILTER_VALIDATE_INT,
+                ['options' => ['min_range' => 0]],
+            );
+            if ($count === false) {
+                throw new RuntimeException('Broadcast lifecycle progress count is invalid.');
+            }
+            $counts[$row->state] = $count;
+        }
+        if ($action === null) {
+            throw new RuntimeException('Broadcast lifecycle progress action is unavailable.');
+        }
+
+        return new TelegramBroadcastLifecycleProgress(
+            $campaignPublicId,
+            $groupPublicId,
+            $action,
+            array_sum($counts),
+            $counts['prepared'],
+            $counts['queued'],
+            $counts['sending'],
+            $counts['succeeded'],
+            $counts['retryable'],
+            $counts['failed'],
+            $counts['uncertain'],
+            $counts['skipped'],
+        );
     }
 
     /** @param object{mode:string,source_kind:?string,source_chat_id:int|string|null,source_message_id:int|string|null} $current */
