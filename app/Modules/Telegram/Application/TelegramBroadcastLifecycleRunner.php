@@ -271,12 +271,8 @@ final readonly class TelegramBroadcastLifecycleRunner
                 throw new DomainException('Broadcast lifecycle operation is unavailable.');
             }
             if ((string) $operation->state === 'sending') {
-                $this->markOperationUncertain(
-                    $connection,
-                    (int) $operation->id,
-                    'broadcast_lifecycle_interrupted_after_boundary',
-                );
-
+                // A concurrent worker may observe an in-flight provider call.
+                // Only the bounded stale-boundary recovery path may classify it as uncertain.
                 return false;
             }
             if ((string) $operation->state !== 'prepared') {
