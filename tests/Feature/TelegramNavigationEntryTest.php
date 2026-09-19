@@ -5130,6 +5130,118 @@ SQL);
         ]);
     }
 
+    /** @requirement COM-001 ARCH-004 ACL-001 ACL-002 SEC-002 SEC-003 DAT-002 DAT-003 DAT-004 OPS-003 QUA-001 QUA-004 */
+    public function test_admin_customer_direct_media_recovers_existing_operation_after_link_failure_without_reauthorization(): void
+    {
+        Storage::fake('telegram_private_media');
+
+        $adminTelegramId = 9790;
+        $targetTelegramId = 888777666566;
+        $adminUsername = 'admin_direct_media_recover';
+        $png = $this->navigationOnePixelPng();
+        $fetcher = new TelegramNavigationPrivateMediaFetcher($png);
+        $sender = new TelegramNavigationPrivateMediaSender($targetTelegramId, 99105);
+        $this->bindAdminDirectMediaDependencies($fetcher, $sender);
+
+        $journey = $this->prepareAdminDirectMediaCompose(
+            7640,
+            $adminTelegramId,
+            $targetTelegramId,
+            'direct_media_recover_target',
+            $adminUsername,
+        );
+        $this->accept($this->photoMediaPayload(
+            7646,
+            $adminTelegramId,
+            $adminUsername,
+            'fa',
+            'private-provider-file-direct-media-recover',
+            'private-provider-unique-direct-media-recover',
+            strlen($png),
+        ));
+        $journey['processor']->process('123456789', 7646);
+
+        $direct = DB::table('telegram_administrator_direct_messages')->first(['public_id']);
+        self::assertNotNull($direct);
+        $confirmToken = $this->callbackToken(
+            'navigation.admin.customer.message.confirm',
+            $journey['admin_account_id'],
+        );
+        $confirmUpdateId = 7647;
+        $this->accept($this->callbackPayload(
+            $confirmUpdateId,
+            $adminTelegramId,
+            $adminUsername,
+            'fa',
+            $confirmToken,
+        ));
+
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER telegram_navigation_test_fail_direct_message_link
+BEFORE UPDATE ON telegram_administrator_direct_messages
+FOR EACH ROW
+BEGIN
+    IF OLD.delivery_operation_public_id IS NULL AND NEW.delivery_operation_public_id IS NOT NULL THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'simulated-direct-media-link-failure';
+    END IF;
+END
+SQL);
+        try {
+            try {
+                $journey['processor']->process('123456789', $confirmUpdateId);
+                self::fail('The simulated direct-media linkage failure must leave the accepted update retryable.');
+            } catch (RuntimeException $exception) {
+                self::assertSame('Telegram update processing failed.', $exception->getMessage());
+            }
+        } finally {
+            DB::unprepared('DROP TRIGGER IF EXISTS telegram_navigation_test_fail_direct_message_link');
+        }
+
+        self::assertSame(
+            $journey['target_delivery_count'] + 1,
+            DB::table('telegram_delivery_operations')->where('recipient_chat_id', $targetTelegramId)->count(),
+        );
+        $existingOperation = DB::table('telegram_delivery_operations')
+            ->where('recipient_chat_id', $targetTelegramId)
+            ->orderByDesc('id')
+            ->value('public_id');
+        self::assertIsString($existingOperation);
+        $afterFailure = DB::table('telegram_administrator_direct_messages')
+            ->where('public_id', (string) $direct->public_id)
+            ->first(['confirmed_at', 'delivery_operation_public_id']);
+        self::assertNotNull($afterFailure);
+        self::assertNotNull($afterFailure->confirmed_at);
+        self::assertNull($afterFailure->delivery_operation_public_id);
+
+        $permissionId = DB::table('permissions')->where('code', 'telegram.direct_messages.send')->value('id');
+        $salesContentRoleId = DB::table('roles')->where('code', 'sales_content')->value('id');
+        self::assertIsNumeric($permissionId);
+        self::assertIsNumeric($salesContentRoleId);
+        self::assertSame(1, DB::table('role_permissions')
+            ->where('role_id', (int) $salesContentRoleId)
+            ->where('permission_id', (int) $permissionId)
+            ->delete());
+
+        $journey['processor']->process('123456789', $confirmUpdateId);
+
+        self::assertSame(
+            $journey['target_delivery_count'] + 1,
+            DB::table('telegram_delivery_operations')->where('recipient_chat_id', $targetTelegramId)->count(),
+        );
+        self::assertSame(
+            $existingOperation,
+            DB::table('telegram_administrator_direct_messages')
+                ->where('public_id', (string) $direct->public_id)
+                ->value('delivery_operation_public_id'),
+        );
+        self::assertSame(0, $sender->attempts);
+        $this->assertDatabaseHas('processed_telegram_updates', [
+            'update_id' => $confirmUpdateId,
+            'state' => 'processed',
+            'attempt_count' => 2,
+        ]);
+    }
+
     /** @requirement COM-001 ADM-001 ACL-001 ACL-002 SEC-002 SEC-003 DAT-002 DAT-003 CNT-001 OPS-003 QUA-001 QUA-004 */
     public function test_admin_customer_direct_text_message_is_confirmed_encrypted_and_exactly_once_on_replay(): void
     {
