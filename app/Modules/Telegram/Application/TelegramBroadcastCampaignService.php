@@ -390,6 +390,33 @@ final readonly class TelegramBroadcastCampaignService
                 throw new DomainException('Broadcast campaign changed before cancellation completed.');
             }
 
+            $queuedRecipientIds = $connection->table('broadcast_recipients')
+                ->where('broadcast_campaign_id', (int) $campaign->id)
+                ->where('delivery_state', 'queued')
+                ->pluck('id')
+                ->map(static fn (mixed $id): int => (int) $id)
+                ->all();
+            if ($queuedRecipientIds !== []) {
+                $connection->table('broadcast_recipient_messages')
+                    ->whereIn('broadcast_recipient_id', $queuedRecipientIds)
+                    ->where('state', 'prepared')
+                    ->update([
+                        'state' => 'skipped',
+                        'result_code' => 'broadcast_cancelled_before_effect',
+                        'updated_at' => $now,
+                    ]);
+                $connection->table('broadcast_recipients')
+                    ->whereIn('id', $queuedRecipientIds)
+                    ->where('delivery_state', 'queued')
+                    ->update([
+                        'delivery_state' => 'skipped',
+                        'failure_code' => 'broadcast_cancelled_before_effect',
+                        'claim_token_hash' => null,
+                        'claim_expires_at' => null,
+                        'updated_at' => $now,
+                    ]);
+            }
+
             return $this->receiptById($connection, (int) $campaign->id, false);
         }, 3);
     }
