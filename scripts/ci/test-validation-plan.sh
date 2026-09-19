@@ -74,6 +74,7 @@ assert_plan editor_style_policy APPLICATION false false false false true false f
 assert_plan deployment_mutation_workflow FULL true true true true true true true true true true .github/workflows/deploy-production.yml
 assert_plan security_sensitive APPLICATION false false false true true true false true false false app/Modules/AccessControl/Application/AuthorizationService.php
 assert_plan ci_policy CONTROL_PLANE true false true false false false false false false false .github/workflows/ci.yml scripts/ci/classify-validation-plan.sh
+assert_plan feature_sharding_control CONTROL_PLANE true false true false false false false false false false scripts/ci/select-feature-shard.sh scripts/ci/test-feature-sharding.sh
 assert_plan secret_scan_control CONTROL_PLANE true false true false false false false false false false scripts/ci/scan-git-secrets.sh scripts/ci/test-secret-scan.sh
 assert_plan operations_only OPERATIONS false false false false false false false false false true deploy/bin/queue-worker-with-heartbeat.sh
 assert_plan unknown_view FULL true true true true true true true true true true resources/views/home.blade.php
@@ -168,6 +169,10 @@ if 'PUSH_BEFORE_SHA' in text:
     raise SystemExit('generic CI retains retired push secret-scan input')
 
 require('  preflight:\n    name: Validation plan and repository control\n', 'early preflight job must not satisfy the required final status context')
+require('  integration_shards:\n', 'parallel real-engine shard job is missing')
+require('        shard_index: [0, 1]\n', 'normal FULL integration must retain the two-shard matrix')
+require('  integration:\n    name: MariaDB 10.11 and Redis tests\n', 'stable aggregate integration gate is missing')
+require('          SHARD_RESULT: ${{ needs.integration_shards.result }}\n', 'aggregate integration gate must consume every shard result')
 require('  required:\n    name: Repository preflight\n', 'final aggregate required gate is missing')
 required = text.split('\n  required:\n', 1)[1]
 for dependency in ('preflight', 'quality', 'dependencies', 'integration', 'operations', 'secrets'):
@@ -189,7 +194,9 @@ if "needs.preflight.outputs.unit == 'true'" not in text:
 if '      - name: Unit tests\n' not in text or '        run: composer test:quick\n' not in text:
     raise SystemExit('quality job must execute the canonical fast Unit suite')
 if '            phpunit_args+=(--testsuite Feature)\n' not in text:
-    raise SystemExit('normal real-engine CI must own the Feature suite after Unit separation')
+    raise SystemExit('manual/unsharded fallback must retain the Feature suite entrypoint')
+if 'bash scripts/ci/select-feature-shard.sh "$shard_count" "$shard_index"' not in text:
+    raise SystemExit('normal FULL real-engine CI must partition the complete Feature suite through the shard selector')
 if "if [[ \"$GITHUB_EVENT_NAME\" != 'workflow_dispatch' ]]; then" not in text:
     raise SystemExit('Feature-only CI selection must preserve intentional manual full-suite validation')
 if text.count('--diff=HEAD^1') < 2:
