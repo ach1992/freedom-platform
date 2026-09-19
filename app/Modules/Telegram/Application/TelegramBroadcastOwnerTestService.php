@@ -474,17 +474,16 @@ final readonly class TelegramBroadcastOwnerTestService
         ];
     }
 
-    /**
-     * @param object{
-     *     broadcast_campaign_id:int|string,
-     *     broadcast_message_version_id:int|string,
-     *     owner_administrator_id:int|string,
-     *     telegram_account_id:int|string
-     * } $row
-     * @param array<string,mixed> $context
-     */
+    /** @param array<string,mixed> $context */
     private function assertReplayMatches(object $row, array $context): void
     {
+        /** @var object{
+         *     broadcast_campaign_id:int|string,
+         *     broadcast_message_version_id:int|string,
+         *     owner_administrator_id:int|string,
+         *     telegram_account_id:int|string
+         * } $row
+         */
         if ((int) $row->broadcast_campaign_id !== $context['campaign_id']
             || (int) $row->broadcast_message_version_id !== $context['message_version_id']
             || (int) $row->owner_administrator_id !== $context['administrator_id']
