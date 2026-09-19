@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Application;
 
+use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
 use App\Modules\Localization\Application\LocalizationResolver;
 use App\Modules\Telegram\Domain\TelegramBroadcastCampaignState;
 use App\Modules\Telegram\Domain\TelegramBroadcastLifecycleAction;
@@ -123,6 +124,7 @@ final readonly class TelegramBroadcastNavigationHandler
         private TelegramBroadcastButtonParser $buttonParser,
         private TelegramNavigationHandler $navigation,
         private DatabaseManager $database,
+        private TelegramDeliveryRuntime $runtime,
     ) {}
 
     public function supports(TelegramInteractionAction $action): bool
@@ -1350,6 +1352,7 @@ final readonly class TelegramBroadcastNavigationHandler
 
         /** @var Collection<int,object{public_id:string,state:string}> $campaigns */
         $campaigns = $this->database->connection()->table('broadcast_campaigns')
+            ->where('bot_id', $this->runtime->botId())
             ->orderByDesc('id')
             ->limit(5)
             ->get(['public_id', 'state']);
