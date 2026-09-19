@@ -16,6 +16,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramInteractionHandler;
 use App\Modules\Telegram\Application\Contracts\TelegramMembershipLookup;
 use App\Modules\Telegram\Application\Contracts\TelegramMutationTransport;
 use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaFetcher;
+use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaMessageSender;
 use App\Modules\Telegram\Application\Contracts\TelegramRuntime;
 use App\Modules\Telegram\Application\Contracts\TelegramSupportCustomerRateLimiter;
 use App\Modules\Telegram\Application\NonRestrictedTelegramPresentationFactory;
@@ -45,6 +46,7 @@ use App\Modules\Telegram\Application\TelegramNavigationCompositeHandler;
 use App\Modules\Telegram\Application\TelegramNavigationEntryGateway;
 use App\Modules\Telegram\Application\TelegramNavigationHandler;
 use App\Modules\Telegram\Application\TelegramPrivateMediaDeliveryResolver;
+use App\Modules\Telegram\Application\TelegramPrivateMediaReferenceDeliveryOutboxHandler;
 use App\Modules\Telegram\Application\TelegramProtectedPresentationResolver;
 use App\Modules\Telegram\Application\TelegramProtectedReferenceDeliveryOutboxHandler;
 use App\Modules\Telegram\Application\TelegramReferralDeepLink;
@@ -243,6 +245,13 @@ final class TelegramServiceProvider extends ServiceProvider
             ),
         );
         $this->app->singleton(
+            TelegramPrivateMediaMessageSender::class,
+            fn (Application $application): TelegramPrivateMediaMessageSender => new HttpTelegramPrivateMediaMessageSender(
+                $application->make(Factory::class),
+                $application->make(TelegramRuntimeConfiguration::class),
+            ),
+        );
+        $this->app->singleton(
             ProtectedTelegramMessageSender::class,
             fn (Application $application): ProtectedTelegramMessageSender => new HttpProtectedTelegramMessageSender(
                 $application->make(Factory::class),
@@ -292,11 +301,18 @@ final class TelegramServiceProvider extends ServiceProvider
                 fn (): TelegramDeliveryOperationExecutor => $application->make(TelegramDeliveryOperationExecutor::class),
             ),
         );
+        $this->app->singleton(
+            TelegramPrivateMediaReferenceDeliveryOutboxHandler::class,
+            fn (Application $application): TelegramPrivateMediaReferenceDeliveryOutboxHandler => new TelegramPrivateMediaReferenceDeliveryOutboxHandler(
+                fn (): TelegramDeliveryOperationExecutor => $application->make(TelegramDeliveryOperationExecutor::class),
+            ),
+        );
         $this->app->tag([
             TelegramDeliveryOutboxHandler::class,
             TelegramInteractiveDeliveryOutboxHandler::class,
             TelegramConfidentialDeliveryOutboxHandler::class,
             TelegramProtectedReferenceDeliveryOutboxHandler::class,
+            TelegramPrivateMediaReferenceDeliveryOutboxHandler::class,
         ], OutboxEventHandler::class);
     }
 }
